@@ -31,7 +31,7 @@ pub(crate) fn main() {
                 let _ = robot.mouse_move(x, y);
                 let _ = robot.mouse_down();
 
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(100));
 
                 let _ = robot.mouse_up();
                 println!("Clicked Async Runtime tab");
@@ -66,7 +66,7 @@ pub(crate) fn main() {
                 let _ = robot.mouse_down();
                 println!("Counter App button clicked");
 
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(100));
 
                 let _ = robot.mouse_up();
                 println!("Clicked Counter App tab");
@@ -92,5 +92,5 @@ pub(crate) fn main() {
                 let _ = robot.exit();
             }
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

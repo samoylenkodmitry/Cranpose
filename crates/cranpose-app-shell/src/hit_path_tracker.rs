@@ -4,7 +4,7 @@ use cranpose_core::{NodeId, collections::map::HashMap};
 pub struct PointerId(pub u32);
 
 impl PointerId {
-    pub const PRIMARY: PointerId = PointerId(0);
+    pub const PRIMARY: Self = Self(0);
 }
 
 pub struct HitPathTracker {

@@ -26,7 +26,7 @@ impl DigestAlgorithm {
     /// answers to.
     pub fn name(self) -> &'static str {
         match self {
-            DigestAlgorithm::Sha256 => "sha256",
+            Self::Sha256 => "sha256",
         }
     }
 
@@ -35,7 +35,7 @@ impl DigestAlgorithm {
     /// a digest nobody checks is worse than no digest at all.
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "sha256" | "sha-256" => Some(DigestAlgorithm::Sha256),
+            "sha256" | "sha-256" => Some(Self::Sha256),
             _ => None,
         }
     }

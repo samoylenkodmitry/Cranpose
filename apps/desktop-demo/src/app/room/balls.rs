@@ -189,7 +189,7 @@ fn flames(time: f32) -> RenderEffect {
 /// toward the top.
 fn flames_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
-    SOURCE
+    Arc::clone(SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
                 r"{RUNTIME_SHADER_PRELUDE_WGSL}{WGSL_HELPERS}
@@ -252,6 +252,5 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
 }}
 "
             ))
-        })
-        .clone()
+        }))
 }

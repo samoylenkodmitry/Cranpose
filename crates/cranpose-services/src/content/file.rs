@@ -124,7 +124,7 @@ impl ContentFolder for FileFolder {
                     .map_or_else(|_| child_path.is_dir(), |kind| kind.is_dir());
                 if is_dir {
                     entries.push(ContentEntry::Folder(
-                        Rc::new(FileFolder::new(child_path)) as ContentFolderRef
+                        Rc::new(Self::new(child_path)) as ContentFolderRef
                     ));
                 } else {
                     entries.push(ContentEntry::File(

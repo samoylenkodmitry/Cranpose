@@ -58,5 +58,5 @@ pub(crate) fn main() {
             println!("✓ Recursive Layout reached depth 6 without crashing");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

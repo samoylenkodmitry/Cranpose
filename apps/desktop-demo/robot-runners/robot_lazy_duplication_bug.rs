@@ -84,7 +84,7 @@ pub(crate) fn main() {
             println!("\n=== Test Complete ===");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn count_text_starting_with(tree: &[SemanticElement], prefix: &str) -> usize {

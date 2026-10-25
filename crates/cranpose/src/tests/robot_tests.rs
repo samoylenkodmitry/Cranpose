@@ -256,7 +256,7 @@ fn robot_snapshots_report_the_controls_a_canvas_published() {
         details.canvas_children = vec![
             CanvasSemanticsNode::control(
                 1,
-                cranpose_ui::Rect {
+                Rect {
                     x: 4.0,
                     y: 8.0,
                     width: 100.0,
@@ -268,7 +268,7 @@ fn robot_snapshots_report_the_controls_a_canvas_published() {
             .with_state_description("On"),
             CanvasSemanticsNode::text(
                 2,
-                cranpose_ui::Rect {
+                Rect {
                     x: 4.0,
                     y: 70.0,
                     width: 100.0,

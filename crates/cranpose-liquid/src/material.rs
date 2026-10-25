@@ -58,10 +58,8 @@ impl LiquidShape {
     /// The clip shape handed to the graphics layer.
     pub fn clip_shape(&self) -> RoundedCornerShape {
         match self {
-            LiquidShape::Capsule | LiquidShape::Circle => {
-                RoundedCornerShape::uniform(CAPSULE_CLIP_RADIUS)
-            }
-            LiquidShape::RoundedRect(radius) => RoundedCornerShape::uniform(*radius),
+            Self::Capsule | Self::Circle => RoundedCornerShape::uniform(CAPSULE_CLIP_RADIUS),
+            Self::RoundedRect(radius) => RoundedCornerShape::uniform(*radius),
         }
     }
 
@@ -72,16 +70,16 @@ impl LiquidShape {
 
     fn shader_radius_px(&self, density: f32) -> f32 {
         match self {
-            LiquidShape::Capsule | LiquidShape::Circle => CAPSULE_SHADER_RADIUS,
-            LiquidShape::RoundedRect(radius) => radius * density,
+            Self::Capsule | Self::Circle => CAPSULE_SHADER_RADIUS,
+            Self::RoundedRect(radius) => radius * density,
         }
     }
 
     /// The corner radius in dp, the largest one making a capsule.
     fn radius_dp(&self) -> f32 {
         match self {
-            LiquidShape::Capsule | LiquidShape::Circle => f32::MAX,
-            LiquidShape::RoundedRect(radius) => *radius,
+            Self::Capsule | Self::Circle => f32::MAX,
+            Self::RoundedRect(radius) => *radius,
         }
     }
 }

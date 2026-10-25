@@ -23,9 +23,9 @@ fn keyed_app(key: MutableState<&'static str>, init_runs: Rc<Cell<u32>>, seen: Rc
 
 #[test]
 fn remember_keyed_recomputes_on_key_change_only() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();

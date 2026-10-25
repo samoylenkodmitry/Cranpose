@@ -320,7 +320,7 @@ fn optical_projection_preserves_the_native_capsule_and_unmagnified_source() {
     use cranpose_liquid::prelude::*;
     let mut renderer = support::headless_renderer().expect("GPU optical projection must run");
     let bounds = Rect::from_size(cranpose_ui_graphics::Size::new(402.0, 120.0));
-    let color = cranpose_liquid::LiquidColors::light(Color::BLUE);
+    let color = LiquidColors::light(Color::BLUE);
     let projection = (1.2, 0.75);
     let glass = Glass::clear().no_clip();
     let dynamics = GlassDynamics {
@@ -529,7 +529,7 @@ fn VibrantTabScene(backdrop: TabBackdrop) {
                                     + 0.15
                                         * (std::f32::consts::TAU * position / period + phase).cos();
                                 scope.draw_rect_at(
-                                    cranpose_ui::Rect {
+                                    Rect {
                                         x: if horizontal { pixel as f32 / 3.0 } else { 0.0 },
                                         y: if horizontal { 0.0 } else { pixel as f32 / 3.0 },
                                         width: if horizontal { 1.0 / 3.0 } else { 402.0 },

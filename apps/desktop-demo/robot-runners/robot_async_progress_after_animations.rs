@@ -118,5 +118,5 @@ pub(crate) fn main() {
             );
             exit_with_timeout(&robot, Duration::from_secs(2));
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

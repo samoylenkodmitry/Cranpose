@@ -186,7 +186,7 @@ fn a_target_that_leaves_the_tree_is_forgotten() {
 
 #[test]
 fn the_target_modifier_registers_its_node_while_attached() {
-    let node = Rc::new(std::cell::Cell::new(None));
+    let node = Rc::new(Cell::new(None));
     let captured = Rc::clone(&node);
     let composition = crate::run_test_composition(move || {
         let id = crate::widgets::Box(

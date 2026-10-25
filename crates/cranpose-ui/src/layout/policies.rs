@@ -81,11 +81,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
     }
 
     /// A box reads only where each child aligns.
-    fn reads_parent_data_change(
-        &self,
-        before: &cranpose_ui_layout::ParentData,
-        after: &cranpose_ui_layout::ParentData,
-    ) -> bool {
+    fn reads_parent_data_change(&self, before: &ParentData, after: &ParentData) -> bool {
         before.box_alignment != after.box_alignment
     }
 
@@ -316,9 +312,9 @@ impl CrossAxisAlignment {
     /// Where a child sits in `available` space: see [`bias_offset`].
     fn align(&self, available: f32, child: f32, density: f32) -> f32 {
         let bias = match self {
-            CrossAxisAlignment::Start => -1.0,
-            CrossAxisAlignment::Center => 0.0,
-            CrossAxisAlignment::End => 1.0,
+            Self::Start => -1.0,
+            Self::Center => 0.0,
+            Self::End => 1.0,
         };
         bias_offset(bias, available, child, density)
     }
@@ -327,9 +323,9 @@ impl CrossAxisAlignment {
 impl From<HorizontalAlignment> for CrossAxisAlignment {
     fn from(alignment: HorizontalAlignment) -> Self {
         match alignment {
-            HorizontalAlignment::Start => CrossAxisAlignment::Start,
-            HorizontalAlignment::CenterHorizontally => CrossAxisAlignment::Center,
-            HorizontalAlignment::End => CrossAxisAlignment::End,
+            HorizontalAlignment::Start => Self::Start,
+            HorizontalAlignment::CenterHorizontally => Self::Center,
+            HorizontalAlignment::End => Self::End,
         }
     }
 }
@@ -337,9 +333,9 @@ impl From<HorizontalAlignment> for CrossAxisAlignment {
 impl From<VerticalAlignment> for CrossAxisAlignment {
     fn from(alignment: VerticalAlignment) -> Self {
         match alignment {
-            VerticalAlignment::Top => CrossAxisAlignment::Start,
-            VerticalAlignment::CenterVertically => CrossAxisAlignment::Center,
-            VerticalAlignment::Bottom => CrossAxisAlignment::End,
+            VerticalAlignment::Top => Self::Start,
+            VerticalAlignment::CenterVertically => Self::Center,
+            VerticalAlignment::Bottom => Self::End,
         }
     }
 }

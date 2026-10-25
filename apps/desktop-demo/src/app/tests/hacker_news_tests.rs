@@ -943,10 +943,10 @@ fn single_pane_back_navigation_settles_after_opening_comments() {
     let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new()).as_client();
 
     let mut robot = create_headless_robot_test(390, 844, {
-        let mock_client = mock_client.clone();
+        let mock_client = Arc::clone(&mock_client);
         move || {
             let local = cranpose_services::local_http_client();
-            CompositionLocalProvider([local.provides(mock_client.clone())], move || {
+            CompositionLocalProvider([local.provides(Arc::clone(&mock_client))], move || {
                 HackerNewsTab();
             });
         }
@@ -1106,10 +1106,10 @@ fn restored_single_pane_story_list_keeps_same_host_during_drag() {
         Arc::new(RegressionHttpClient::new_with_story_count(60)).as_client();
 
     let mut robot = create_headless_robot_test(390, 844, {
-        let mock_client = mock_client.clone();
+        let mock_client = Arc::clone(&mock_client);
         move || {
             let local = cranpose_services::local_http_client();
-            CompositionLocalProvider([local.provides(mock_client.clone())], move || {
+            CompositionLocalProvider([local.provides(Arc::clone(&mock_client))], move || {
                 HackerNewsTab();
             });
         }
@@ -1209,10 +1209,10 @@ fn restored_single_pane_programmatic_scroll_keeps_same_list_host() {
         Arc::new(RegressionHttpClient::new_with_story_count(60)).as_client();
 
     let mut robot = create_headless_robot_test(390, 844, {
-        let mock_client = mock_client.clone();
+        let mock_client = Arc::clone(&mock_client);
         move || {
             let local = cranpose_services::local_http_client();
-            CompositionLocalProvider([local.provides(mock_client.clone())], move || {
+            CompositionLocalProvider([local.provides(Arc::clone(&mock_client))], move || {
                 HackerNewsTab();
             });
         }

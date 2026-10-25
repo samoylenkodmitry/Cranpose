@@ -96,7 +96,7 @@ fn a_state_map_can_be_seeded_with_pairs() {
 fn an_updated_state_follows_the_value_it_was_given_this_pass() {
     let observed = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&observed);
-    let pass = Rc::new(std::cell::Cell::new(0u32));
+    let pass = Rc::new(Cell::new(0u32));
     compose(3, move || {
         pass.set(pass.get() + 1);
         let latest = rememberUpdatedState(pass.get());
@@ -108,7 +108,7 @@ fn an_updated_state_follows_the_value_it_was_given_this_pass() {
 
 #[test]
 fn a_never_equal_state_notifies_even_when_the_value_does_not_change() {
-    let writes = Rc::new(std::cell::Cell::new(0u32));
+    let writes = Rc::new(Cell::new(0u32));
     let counter = Rc::clone(&writes);
     compose(1, move || {
         let state = rememberMutableStateOfNeverEqual(|| 7u32);
@@ -121,7 +121,7 @@ fn a_never_equal_state_notifies_even_when_the_value_does_not_change() {
 
 #[test]
 fn a_structurally_equal_state_holds_the_value_it_was_given() {
-    let seen = Rc::new(std::cell::Cell::new(0u32));
+    let seen = Rc::new(Cell::new(0u32));
     let sink = Rc::clone(&seen);
     compose(2, move || {
         let state = rememberMutableStateOf(|| 1u32);
@@ -157,7 +157,7 @@ fn a_fallible_state_allocation_answers_none_with_no_runtime() {
 
 #[test]
 fn a_fallible_state_allocation_succeeds_inside_a_composition() {
-    let made = Rc::new(std::cell::Cell::new(false));
+    let made = Rc::new(Cell::new(false));
     let flag = Rc::clone(&made);
     compose(1, move || {
         flag.set(try_mutableStateOf(0u32).is_some());

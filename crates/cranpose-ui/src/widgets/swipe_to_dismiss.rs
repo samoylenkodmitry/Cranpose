@@ -827,7 +827,7 @@ pub fn SwipeToDismiss<D, F>(
     spec: SwipeToDismissSpec,
     on_dismiss: D,
     content: F,
-) -> cranpose_core::NodeId
+) -> NodeId
 where
     D: Fn() + 'static,
     F: FnMut() + 'static,
@@ -960,7 +960,7 @@ fn dismiss_semantics(
             .push(cranpose_foundation::SemanticsCustomAction::new(
                 "Dismiss",
                 {
-                    let fling = fling.clone();
+                    let fling = Rc::clone(&fling);
                     move || {
                         fling();
                     }

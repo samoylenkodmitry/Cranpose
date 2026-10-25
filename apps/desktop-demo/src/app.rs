@@ -621,10 +621,11 @@ fn cached_recursive_static_text(value: &'static str) -> Rc<cranpose_ui::text::An
 
     TEXTS.with(|texts| {
         let mut texts = texts.borrow_mut();
-        texts
-            .entry(value)
-            .or_insert_with(|| Rc::new(cranpose_ui::text::AnnotatedString::from(value)))
-            .clone()
+        Rc::clone(
+            texts
+                .entry(value)
+                .or_insert_with(|| Rc::new(cranpose_ui::text::AnnotatedString::from(value))),
+        )
     })
 }
 
@@ -641,7 +642,7 @@ fn cached_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedString> {
                 "Depth {next_depth}"
             ))));
         }
-        texts[depth].clone()
+        Rc::clone(&texts[depth])
     })
 }
 
@@ -658,13 +659,13 @@ fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedStr
                 "Current depth: {next_depth}"
             ))));
         }
-        texts[depth].clone()
+        Rc::clone(&texts[depth])
     })
 }
 
 #[composable]
 pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
-    let scroll_state = cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| *s);
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| *s);
     let modifier = Modifier::empty()
         .fill_max_size()
         .vertical_scroll(scroll_state, false);
@@ -676,7 +677,7 @@ pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
 }
 
 #[composable]
-fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
+fn TabButton(tab: DemoTab, active_tab: MutableState<DemoTab>, padding: f32) {
     let is_active = active_tab.get() == tab;
     let documentation = active_tab.get() == DemoTab::Guide;
     Button(
@@ -723,10 +724,9 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
 }
 
 #[composable]
-fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
+fn TabBarHorizontal(active_tab: MutableState<DemoTab>) {
     let documentation = active_tab.get() == DemoTab::Guide;
-    let tabs_scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
+    let tabs_scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -773,10 +773,7 @@ fn compact_tab_row_background(is_active: bool) -> Color {
 }
 
 #[composable]
-fn CompactAppBar(
-    active_tab: cranpose_core::MutableState<DemoTab>,
-    picker_open: cranpose_core::MutableState<bool>,
-) {
+fn CompactAppBar(active_tab: MutableState<DemoTab>, picker_open: MutableState<bool>) {
     Row(
         Modifier::empty().fill_max_width().padding_each(
             DEMO_PAGE_PADDING,
@@ -828,12 +825,8 @@ fn CompactAppBar(
 }
 
 #[composable]
-fn CompactTabPicker(
-    active_tab: cranpose_core::MutableState<DemoTab>,
-    picker_open: cranpose_core::MutableState<bool>,
-) {
-    let scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
+fn CompactTabPicker(active_tab: MutableState<DemoTab>, picker_open: MutableState<bool>) {
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     Column(
         Modifier::empty()
             .fill_max_width()
@@ -870,10 +863,10 @@ fn CompactTabPicker(
 
 #[composable]
 fn TabContent(
-    active_tab: cranpose_core::MutableState<DemoTab>,
+    active_tab: MutableState<DemoTab>,
     startup: StartupSelection,
     wsz_tab_state: WszTabState,
-    showing_source: cranpose_core::MutableState<bool>,
+    showing_source: MutableState<bool>,
     modifier: Modifier,
 ) {
     let active = active_tab.get();
@@ -949,7 +942,7 @@ pub(crate) fn NestedDemoApp() {
 
 /// The demo's header and the tab `active_tab` names under it.
 #[composable]
-fn DemoApp(active_tab: cranpose_core::MutableState<DemoTab>, startup: StartupSelection) {
+fn DemoApp(active_tab: MutableState<DemoTab>, startup: StartupSelection) {
     let wsz_tab_state = remember_wsz_tab_state();
     let showing_source = cranpose_core::rememberMutableStateOf(|| false);
     let picker_open = cranpose_core::rememberMutableStateOf(|| false);
@@ -1001,9 +994,9 @@ fn DemoApp(active_tab: cranpose_core::MutableState<DemoTab>, startup: StartupSel
 
 #[composable]
 fn AppHeader(
-    active_tab: cranpose_core::MutableState<DemoTab>,
-    picker_open: cranpose_core::MutableState<bool>,
-    showing_source: cranpose_core::MutableState<bool>,
+    active_tab: MutableState<DemoTab>,
+    picker_open: MutableState<bool>,
+    showing_source: MutableState<bool>,
     is_compact: bool,
 ) {
     cranpose_ui::Box(
@@ -1035,9 +1028,9 @@ fn AppHeader(
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct AppHeaderState {
-    active_tab: cranpose_core::MutableState<DemoTab>,
-    picker_open: cranpose_core::MutableState<bool>,
-    showing_source: cranpose_core::MutableState<bool>,
+    active_tab: MutableState<DemoTab>,
+    picker_open: MutableState<bool>,
+    showing_source: MutableState<bool>,
     is_compact: bool,
 }
 
@@ -1562,7 +1555,7 @@ fn text_input_example() {
 
             Spacer(Modifier::empty().size_points(0.0, 8.0));
 
-            cranpose_core::CompositionLocalProvider(
+            CompositionLocalProvider(
                 [cranpose_ui::local_on_light_surface().provides(true)],
                 || {
                     let state = cranpose_core::remember(|| {
@@ -2115,7 +2108,7 @@ pub(crate) fn AsyncRuntimeEngine(
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    cranpose_core::LaunchedEffect((reset_key,), move |_scope| {
+    LaunchedEffect((reset_key,), move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
             animation.set(AnimationState::default());
@@ -2597,12 +2590,12 @@ enum ShowcaseType {
 impl ShowcaseType {
     fn label(self) -> &'static str {
         match self {
-            ShowcaseType::SimpleCard => "Simple Card",
-            ShowcaseType::PositionedBoxes => "Positioned Boxes",
-            ShowcaseType::ItemList => "Item List (5)",
-            ShowcaseType::ComplexChain => "Complex Chain",
-            ShowcaseType::DynamicModifiers => "Dynamic Modifiers",
-            ShowcaseType::LongList => "Long List (50)",
+            Self::SimpleCard => "Simple Card",
+            Self::PositionedBoxes => "Positioned Boxes",
+            Self::ItemList => "Item List (5)",
+            Self::ComplexChain => "Complex Chain",
+            Self::DynamicModifiers => "Dynamic Modifiers",
+            Self::LongList => "Long List (50)",
         }
     }
 }

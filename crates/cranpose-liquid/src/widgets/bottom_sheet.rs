@@ -380,7 +380,7 @@ pub fn LiquidModalBottomSheet(
             let sheet = Rc::clone(&sheet);
             let content = Rc::clone(&content);
             let surface_drag = surface_drag.clone();
-            NestedScroll(connection.clone(), move || {
+            NestedScroll(Rc::clone(&connection), move || {
                 let layer_sheet = Rc::clone(&sheet);
                 let modifier = Modifier::empty()
                     .width_in(0.0, MAX_WIDTH)

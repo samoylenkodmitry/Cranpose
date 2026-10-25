@@ -155,7 +155,7 @@ impl SlotWriteSession<'_> {
 }
 
 impl DetachedSubtree {
-    pub(crate) fn split_off_nested_movables(&mut self) -> Vec<DetachedSubtree> {
+    pub(crate) fn split_off_nested_movables(&mut self) -> Vec<Self> {
         let mut split = Vec::new();
         let mut index = 1;
         while index < self.groups.len() {
@@ -185,7 +185,7 @@ impl DetachedSubtree {
         split
     }
 
-    fn split_range(&mut self, index: usize, end: usize) -> DetachedSubtree {
+    fn split_range(&mut self, index: usize, end: usize) -> Self {
         let mut groups = self.groups.drain(index..end).collect::<Vec<_>>();
         let payloads = extract_subtree_segment::<PayloadSegment, _>(
             &mut self.groups,
@@ -211,7 +211,7 @@ impl DetachedSubtree {
             checked_usize_to_i64(groups.len(), "split movable span"),
             checked_usize_to_i64(nodes.len(), "split movable node count"),
         );
-        let subtree = DetachedSubtree {
+        let subtree = Self {
             groups,
             payloads,
             nodes,

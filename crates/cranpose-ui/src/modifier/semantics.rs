@@ -278,11 +278,11 @@ impl ModifierNodeElement for SemanticsElement {
     type Node = SemanticsModifierNode;
 
     fn create(&self) -> Self::Node {
-        SemanticsModifierNode::new(self.recorder.clone(), self.reads_live_state)
+        SemanticsModifierNode::new(Rc::clone(&self.recorder), self.reads_live_state)
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.recorder = self.recorder.clone();
+        node.recorder = Rc::clone(&self.recorder);
         node.reads_live_state = self.reads_live_state;
     }
 

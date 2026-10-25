@@ -3258,7 +3258,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         match self.window_base(&pass.page, load_op) {
             (load_op, Some(fill)) => {
-                let segments: smallvec::SmallVec<[PassSegment<'_>; MAX_DAMAGE_RECTS]> =
+                let segments: SmallVec<[PassSegment<'_>; MAX_DAMAGE_RECTS]> =
                     fill_segments(&self.empty_scene, &fill, &pass.page, pass.scale).collect();
                 self.renderer
                     .encode_pass(
@@ -4115,7 +4115,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         );
         let blur_scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
-        let device = self.renderer.device.clone();
+        let device = Arc::clone(&self.renderer.device);
         self.renderer.effect_renderer.record_substrates(
             members
                 .iter()
@@ -4497,7 +4497,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         layer_pixel_rect: [f32; 4],
         reads: EffectReads,
     ) -> Result<(), String> {
-        let device = self.renderer.device.clone();
+        let device = Arc::clone(&self.renderer.device);
         let format = self.renderer.composition_format;
         let scratch = self
             .renderer

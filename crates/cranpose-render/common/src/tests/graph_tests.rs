@@ -212,9 +212,9 @@ fn motion_source_content_hash_ignores_translated_content_offset() {
 #[test]
 fn render_nodes_stay_small_enough_to_walk_densely() {
     assert!(
-        std::mem::size_of::<RenderNode>() <= 48,
+        size_of::<RenderNode>() <= 48,
         "a layer's children are walked every frame; keep large payloads boxed, got {} bytes",
-        std::mem::size_of::<RenderNode>()
+        size_of::<RenderNode>()
     );
 }
 

@@ -125,11 +125,11 @@ fn child_parent(composition: &mut Composition<MemoryApplier>, child: NodeId) -> 
 #[composable]
 fn holder(label: &'static str, show: bool) -> NodeId {
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
-    cranpose_core::push_parent(id);
+    push_parent(id);
     if show {
         movable(MOVABLE_ID, movable_content);
     }
-    cranpose_core::pop_parent();
+    pop_parent();
     let _ = label;
     id
 }
@@ -267,11 +267,11 @@ fn framed_movable_content() {
 #[composable]
 fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>, framed: bool) -> NodeId {
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
-    cranpose_core::push_parent(id);
+    push_parent(id);
     if show {
         with_current_composer(|composer| {
             let _before =
-                composer.remember(|| ReentrantDropState::new(2, payload_drops.clone(), false));
+                composer.remember(|| ReentrantDropState::new(2, Rc::clone(&payload_drops), false));
             composer.emit_node(TrackingChild::default);
         });
         if framed {
@@ -281,11 +281,11 @@ fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>, framed: bool) -> Node
         }
         with_current_composer(|composer| {
             let _after =
-                composer.remember(|| ReentrantDropState::new(3, payload_drops.clone(), false));
+                composer.remember(|| ReentrantDropState::new(3, Rc::clone(&payload_drops), false));
             composer.emit_node(TrackingChild::default);
         });
     }
-    cranpose_core::pop_parent();
+    pop_parent();
     id
 }
 
@@ -443,7 +443,7 @@ fn leaf(counter: MutableState<i32>) {
     let value = counter.value();
     LEAF_RUNS.with(|runs| runs.set(runs.get() + 1));
     let id = with_current_composer(|composer| composer.emit_node(TrackingChild::default));
-    cranpose_core::with_node_mut::<TrackingChild, _>(id, |node| node.label = value.to_string())
+    with_node_mut::<TrackingChild, _>(id, |node| node.label = value.to_string())
         .expect("leaf node should accept its label");
     LEAF_NODE.with(|node| node.set(Some(id)));
     if value > 0 {
@@ -462,11 +462,11 @@ fn inner(counter: MutableState<i32>) {
 #[composable]
 fn scope_holder(show: bool, counter: MutableState<i32>) -> NodeId {
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
-    cranpose_core::push_parent(id);
+    push_parent(id);
     if show {
         movable("inner-scope", move || inner(counter));
     }
-    cranpose_core::pop_parent();
+    pop_parent();
     id
 }
 
@@ -537,9 +537,9 @@ fn wrapped_rich_holder(
 ) -> NodeId {
     let _ = pass;
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
-    cranpose_core::push_parent(id);
+    push_parent(id);
     inner.set(Some(rich_holder(true, payload_drops, true)));
-    cranpose_core::pop_parent();
+    pop_parent();
     id
 }
 
@@ -733,10 +733,10 @@ fn movable_content_written_once_moves_between_parents() {
 #[composable]
 fn holder_showing(show: bool, pane: MovableContent) -> NodeId {
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
-    cranpose_core::push_parent(id);
+    push_parent(id);
     if show {
         pane.show();
     }
-    cranpose_core::pop_parent();
+    pop_parent();
     id
 }

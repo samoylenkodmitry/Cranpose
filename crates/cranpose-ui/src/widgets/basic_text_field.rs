@@ -74,7 +74,7 @@ struct LongPressWatcher {
 
 impl LongPressWatcher {
     fn arm(self: &Rc<Self>) {
-        let weak: Weak<LongPressWatcher> = Rc::downgrade(self);
+        let weak: Weak<Self> = Rc::downgrade(self);
         let registration = self.frame_clock.with_frame_nanos(move |now| {
             let Some(watcher) = weak.upgrade() else {
                 return;

@@ -69,7 +69,7 @@ fn document_info(uri: &str) -> Option<ContentMetadata> {
                 jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
                 &[JValue::Object(argument_obj)],
             )
-            .and_then(jni::JValueOwned::l)
+            .and_then(JValueOwned::l)
             .map_err(|error| error.to_string())?;
         optional_jstring(env, value)
     })
@@ -480,7 +480,7 @@ impl AndroidSink {
                     jni_sig!("(Ljava/lang/String;)I"),
                     &[JValue::Object(uri_obj)],
                 )
-                .and_then(jni::JValueOwned::i)
+                .and_then(JValueOwned::i)
                 .map_err(|error| error.to_string())
             })
             .map_err(ContentError::Io)?;
@@ -570,7 +570,7 @@ impl AndroidFolder {
                     jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
                     &[JValue::Object(tree_obj), JValue::Object(document_obj)],
                 )
-                .and_then(jni::JValueOwned::l)
+                .and_then(JValueOwned::l)
                 .map_err(|error| error.to_string())?;
             optional_jstring(env, value)
         })
@@ -599,7 +599,7 @@ impl ContentFolder for AndroidFolder {
                 .into_iter()
                 .map(|metadata| {
                     if is_directory(&metadata) {
-                        ContentEntry::Folder(Rc::new(AndroidFolder {
+                        ContentEntry::Folder(Rc::new(Self {
                             tree_uri: metadata.identifier,
                         }))
                     } else {
@@ -723,7 +723,7 @@ pub fn content_uri_length(uri: &str) -> Option<u64> {
             jni_sig!("(Ljava/lang/String;)J"),
             &[JValue::Object(argument)],
         )
-        .and_then(jni::JValueOwned::j)
+        .and_then(JValueOwned::j)
         .map_err(|error| error.to_string())
     })
     .ok()?;
@@ -745,7 +745,7 @@ pub fn open_content_uri(uri: &str) -> io::Result<File> {
             jni_sig!("(Ljava/lang/String;)I"),
             &[JValue::Object(argument)],
         )
-        .and_then(jni::JValueOwned::i)
+        .and_then(JValueOwned::i)
         .map_err(|error| error.to_string())
     })
     .map_err(io::Error::other)?;

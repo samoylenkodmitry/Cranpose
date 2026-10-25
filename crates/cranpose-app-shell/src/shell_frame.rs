@@ -334,14 +334,14 @@ where
     /// app. The default, [`FrameRatePreference::Auto`], mirrors Compose: the
     /// panel's fastest rate while frames are being produced, no preference
     /// when the scene is still.
-    pub fn set_frame_rate_preference(&mut self, preference: crate::FrameRatePreference) {
+    pub fn set_frame_rate_preference(&mut self, preference: FrameRatePreference) {
         self.surfaces[0].frame_rate_preference = preference;
     }
 
     /// The app's current display frame-rate preference. Read by platform
     /// backends each frame; the vote itself is applied by the backend that
     /// owns the native window.
-    pub fn frame_rate_preference(&self) -> crate::FrameRatePreference {
+    pub fn frame_rate_preference(&self) -> FrameRatePreference {
         self.surfaces[0].frame_rate_preference
     }
 
@@ -758,7 +758,7 @@ where
         for surface in &mut self.surfaces {
             let mut frame = render_surface(&mut self.app, surface, &frame);
             frame.result.visual_changed |=
-                crate::inspector::refresh(&mut self.app, surface, inspector_revision);
+                inspector::refresh(&mut self.app, surface, inspector_revision);
             surface.last_update = frame.result;
             surface.frame_owed |= frame.result.visual_changed;
             result.visual_changed |= frame.result.visual_changed;
@@ -1284,7 +1284,7 @@ fn take_redraw_flag(applier: &mut MemoryApplier, id: NodeId) -> bool {
 
 fn refresh_layout_box_data(
     applier: &mut MemoryApplier,
-    layout: &mut cranpose_ui::layout::LayoutBox,
+    layout: &mut LayoutBox,
     refresh_scope: &HashSet<NodeId>,
     dirty_nodes: &HashSet<NodeId>,
 ) {
@@ -1318,7 +1318,7 @@ fn refresh_layout_box_data(
             layout.node_data.modifier = modifier;
             layout.node_data.resolved_modifiers = resolved_modifiers;
             layout.node_data.modifier_slices = slices;
-            layout.node_data.semantics = semantics.map(std::rc::Rc::new);
+            layout.node_data.semantics = semantics.map(Rc::new);
         }
     }
 

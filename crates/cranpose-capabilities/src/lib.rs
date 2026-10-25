@@ -55,22 +55,22 @@ impl Service {
     /// The name this service carries in the build's own files.
     pub const fn name(self) -> &'static str {
         match self {
-            Service::Camera => "camera",
-            Service::PhotoLibrary => "photo-library",
-            Service::PhotoLibraryAdd => "photo-library-add",
-            Service::Microphone => "microphone",
-            Service::Location => "location",
-            Service::Notifications => "notifications",
-            Service::Background => "background",
-            Service::Media => "media",
-            Service::Billing => "billing",
-            Service::Overlay => "overlay",
-            Service::Haptics => "haptics",
-            Service::Update => "update",
-            Service::Network => "network",
-            Service::HeartRate => "heart-rate",
-            Service::MicrophoneStandby => "microphone-standby",
-            Service::Wearable => "wearable",
+            Self::Camera => "camera",
+            Self::PhotoLibrary => "photo-library",
+            Self::PhotoLibraryAdd => "photo-library-add",
+            Self::Microphone => "microphone",
+            Self::Location => "location",
+            Self::Notifications => "notifications",
+            Self::Background => "background",
+            Self::Media => "media",
+            Self::Billing => "billing",
+            Self::Overlay => "overlay",
+            Self::Haptics => "haptics",
+            Self::Update => "update",
+            Self::Network => "network",
+            Self::HeartRate => "heart-rate",
+            Self::MicrophoneStandby => "microphone-standby",
+            Self::Wearable => "wearable",
         }
     }
 
@@ -81,40 +81,40 @@ impl Service {
     /// and needs no permission from the application.
     pub const fn android_permissions(self) -> &'static [&'static str] {
         match self {
-            Service::Camera => &["android.permission.CAMERA"],
-            Service::PhotoLibrary => &[],
-            Service::PhotoLibraryAdd => &[],
-            Service::Microphone => &["android.permission.RECORD_AUDIO"],
-            Service::Location => &["android.permission.ACCESS_COARSE_LOCATION"],
-            Service::Notifications => &["android.permission.POST_NOTIFICATIONS"],
-            Service::Background => &[
+            Self::Camera => &["android.permission.CAMERA"],
+            Self::PhotoLibrary => &[],
+            Self::PhotoLibraryAdd => &[],
+            Self::Microphone => &["android.permission.RECORD_AUDIO"],
+            Self::Location => &["android.permission.ACCESS_COARSE_LOCATION"],
+            Self::Notifications => &["android.permission.POST_NOTIFICATIONS"],
+            Self::Background => &[
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
             ],
-            Service::Media => &[
+            Self::Media => &[
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
             ],
-            Service::Billing => &["com.android.vending.BILLING"],
-            Service::Overlay => &["android.permission.SYSTEM_ALERT_WINDOW"],
-            Service::Haptics => &["android.permission.VIBRATE"],
-            Service::Update => &["android.permission.REQUEST_INSTALL_PACKAGES"],
-            Service::Network => &[
+            Self::Billing => &["com.android.vending.BILLING"],
+            Self::Overlay => &["android.permission.SYSTEM_ALERT_WINDOW"],
+            Self::Haptics => &["android.permission.VIBRATE"],
+            Self::Update => &["android.permission.REQUEST_INSTALL_PACKAGES"],
+            Self::Network => &[
                 "android.permission.INTERNET",
                 "android.permission.ACCESS_NETWORK_STATE",
             ],
             // Android 16 split the body sensors into the health
             // permissions; older releases read the same sensor under
             // BODY_SENSORS, which `android_permissions_up_to` carries.
-            Service::HeartRate => &["android.permission.health.READ_HEART_RATE"],
-            Service::MicrophoneStandby => &[
+            Self::HeartRate => &["android.permission.health.READ_HEART_RATE"],
+            Self::MicrophoneStandby => &[
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.RECORD_AUDIO",
             ],
             // The Data Layer runs through Google Play services and asks for
             // nothing.
-            Service::Wearable => &[],
+            Self::Wearable => &[],
         }
     }
 
@@ -123,7 +123,7 @@ impl Service {
     /// `android:maxSdkVersion` so a newer device is never asked for it.
     pub const fn android_permissions_up_to(self) -> &'static [(&'static str, u32)] {
         match self {
-            Service::HeartRate => &[("android.permission.BODY_SENSORS", 35)],
+            Self::HeartRate => &[("android.permission.BODY_SENSORS", 35)],
             _ => &[],
         }
     }
@@ -131,12 +131,12 @@ impl Service {
     /// The key an Apple platform reads the sentence from.
     pub const fn apple_key(self) -> Option<&'static str> {
         match self {
-            Service::Camera => Some("NSCameraUsageDescription"),
-            Service::PhotoLibrary => Some("NSPhotoLibraryUsageDescription"),
-            Service::PhotoLibraryAdd => Some("NSPhotoLibraryAddUsageDescription"),
-            Service::Microphone => Some("NSMicrophoneUsageDescription"),
-            Service::Location => Some("NSLocationWhenInUseUsageDescription"),
-            Service::HeartRate => Some("NSHealthShareUsageDescription"),
+            Self::Camera => Some("NSCameraUsageDescription"),
+            Self::PhotoLibrary => Some("NSPhotoLibraryUsageDescription"),
+            Self::PhotoLibraryAdd => Some("NSPhotoLibraryAddUsageDescription"),
+            Self::Microphone => Some("NSMicrophoneUsageDescription"),
+            Self::Location => Some("NSLocationWhenInUseUsageDescription"),
+            Self::HeartRate => Some("NSHealthShareUsageDescription"),
             _ => None,
         }
     }
@@ -147,7 +147,7 @@ impl Service {
     /// and starting one asks to save workouts, under a key of its own.
     pub const fn apple_more_keys(self) -> &'static [&'static str] {
         match self {
-            Service::HeartRate => &["NSHealthUpdateUsageDescription"],
+            Self::HeartRate => &["NSHealthUpdateUsageDescription"],
             _ => &[],
         }
     }
@@ -156,7 +156,7 @@ impl Service {
     /// workout that the heart rate is read through.
     pub const fn watch_background_modes(self) -> &'static [&'static str] {
         match self {
-            Service::HeartRate => &["workout-processing"],
+            Self::HeartRate => &["workout-processing"],
             _ => &[],
         }
     }
@@ -347,14 +347,14 @@ impl Demand {
     /// The Android feature name this demand becomes.
     pub const fn android_feature(self) -> &'static str {
         match self {
-            Demand::Camera => "android.hardware.camera",
-            Demand::Microphone => "android.hardware.microphone",
-            Demand::Watch => "android.hardware.type.watch",
-            Demand::Telephony => "android.hardware.telephony",
-            Demand::Bluetooth => "android.hardware.bluetooth",
-            Demand::Nfc => "android.hardware.nfc",
-            Demand::Wifi => "android.hardware.wifi",
-            Demand::Location => "android.hardware.location",
+            Self::Camera => "android.hardware.camera",
+            Self::Microphone => "android.hardware.microphone",
+            Self::Watch => "android.hardware.type.watch",
+            Self::Telephony => "android.hardware.telephony",
+            Self::Bluetooth => "android.hardware.bluetooth",
+            Self::Nfc => "android.hardware.nfc",
+            Self::Wifi => "android.hardware.wifi",
+            Self::Location => "android.hardware.location",
         }
     }
 
@@ -426,7 +426,7 @@ pub const fn declare(uses: &[Use]) -> Declaration<'_> {
 
 impl<'a> Declaration<'a> {
     /// Adds the hardware the application cannot run without.
-    pub const fn demanding(self, demands: &'a [Demand]) -> Declaration<'a> {
+    pub const fn demanding(self, demands: &'a [Demand]) -> Self {
         Declaration {
             capabilities: Capabilities {
                 demands,
@@ -437,7 +437,7 @@ impl<'a> Declaration<'a> {
 
     /// Adds the media types of the files the application opens, such as
     /// `"audio/*"`, so the platform offers it for them.
-    pub const fn opening(self, opens: &'a [&'a str]) -> Declaration<'a> {
+    pub const fn opening(self, opens: &'a [&'a str]) -> Self {
         Declaration {
             capabilities: Capabilities {
                 opens,
@@ -448,7 +448,7 @@ impl<'a> Declaration<'a> {
 
     /// Adds the URL schemes of the links that open the application, such as
     /// `"myapp"`, so the platform opens it for them.
-    pub const fn linking(self, links: &'a [&'a str]) -> Declaration<'a> {
+    pub const fn linking(self, links: &'a [&'a str]) -> Self {
         Declaration {
             capabilities: Capabilities {
                 links,
@@ -699,7 +699,7 @@ pub fn android_permissions(capabilities: &Capabilities<'_>) -> Vec<&'static str>
 /// names.
 pub fn android_permissions_up_to(capabilities: &Capabilities<'_>) -> Vec<(&'static str, u32)> {
     let plain = android_permissions(capabilities);
-    let mut named = std::collections::BTreeMap::new();
+    let mut named = BTreeMap::new();
     for entry in capabilities.uses {
         for (permission, level) in entry.service.android_permissions_up_to() {
             if !plain.contains(permission) {

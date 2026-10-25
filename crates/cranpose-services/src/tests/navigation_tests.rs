@@ -3,7 +3,7 @@ use std::sync::{Arc, PoisonError};
 use super::*;
 
 fn navigation_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

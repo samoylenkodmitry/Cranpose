@@ -808,7 +808,7 @@ impl GraphicsLayerNode {
         modifier_index: usize,
     ) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
         self.layer_resolver.as_ref().map(|resolve| {
-            let resolve = resolve.clone();
+            let resolve = Rc::clone(resolve);
             let node_id = Rc::clone(&self.node_id);
             Rc::new(move || {
                 if let Some(node_id) = node_id.get() {
@@ -941,11 +941,11 @@ impl ModifierNodeElement for LazyGraphicsLayerElement {
     type Node = GraphicsLayerNode;
 
     fn create(&self) -> Self::Node {
-        GraphicsLayerNode::new_lazy(self.layer_resolver.clone())
+        GraphicsLayerNode::new_lazy(Rc::clone(&self.layer_resolver))
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.set_lazy(self.layer_resolver.clone());
+        node.set_lazy(Rc::clone(&self.layer_resolver));
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -1379,8 +1379,11 @@ impl ClickableNode {
     /// on a click. Both get the pointer position.
     pub fn with_handlers(on_press: Option<Rc<dyn Fn(Point)>>, on_click: Rc<dyn Fn(Point)>) -> Self {
         let press_position = Rc::new(Cell::new(ClickPress::Idle));
-        let cached_handler =
-            Self::create_handler(on_press.clone(), on_click.clone(), press_position.clone());
+        let cached_handler = Self::create_handler(
+            on_press.clone(),
+            Rc::clone(&on_click),
+            Rc::clone(&press_position),
+        );
         Self {
             on_press,
             on_click,
@@ -1448,7 +1451,7 @@ impl ClickableNode {
 
     /// Returns the click callback.
     pub fn handler(&self) -> Rc<dyn Fn(Point)> {
-        self.on_click.clone()
+        Rc::clone(&self.on_click)
     }
 }
 
@@ -1460,7 +1463,7 @@ impl DelegatableNode for ClickableNode {
 
 impl ModifierNode for ClickableNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::PointerInput);
+        context.invalidate(InvalidationKind::PointerInput);
     }
 
     fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
@@ -1487,7 +1490,7 @@ impl PointerInputNode for ClickableNode {
     }
 
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
-        Some(self.cached_handler.clone())
+        Some(Rc::clone(&self.cached_handler))
     }
 }
 
@@ -1549,7 +1552,7 @@ impl ModifierNodeElement for ClickableElement {
     type Node = ClickableNode;
 
     fn create(&self) -> Self::Node {
-        ClickableNode::with_handlers(self.on_press.clone(), self.on_click.clone())
+        ClickableNode::with_handlers(self.on_press.clone(), Rc::clone(&self.on_click))
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -1557,8 +1560,8 @@ impl ModifierNodeElement for ClickableElement {
         node.on_click.clone_from(&self.on_click);
         node.cached_handler = ClickableNode::create_handler(
             node.on_press.clone(),
-            node.on_click.clone(),
-            node.press_position.clone(),
+            Rc::clone(&node.on_click),
+            Rc::clone(&node.press_position),
         );
     }
 
@@ -1605,7 +1608,7 @@ impl DelegatableNode for PointerIconNode {
 
 impl ModifierNode for PointerIconNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::PointerInput);
+        context.invalidate(InvalidationKind::PointerInput);
     }
 
     fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
@@ -1780,13 +1783,13 @@ pub trait WindowRectSink {
 
 impl WindowRectSink for Cell<cranpose_ui_graphics::Rect> {
     fn set(&self, coordinates: cranpose_ui_graphics::WindowCoordinates) {
-        Cell::set(self, coordinates.bounds());
+        Self::set(self, coordinates.bounds());
     }
 }
 
 impl WindowRectSink for Cell<cranpose_ui_graphics::WindowCoordinates> {
     fn set(&self, coordinates: cranpose_ui_graphics::WindowCoordinates) {
-        Cell::set(self, coordinates);
+        Self::set(self, coordinates);
     }
 }
 
@@ -1812,7 +1815,7 @@ impl WindowRectReporterNode {
     }
 
     pub(crate) fn window_rect_sink(&self) -> Rc<dyn WindowRectSink> {
-        self.sink.clone()
+        Rc::clone(&self.sink)
     }
 }
 
@@ -1955,7 +1958,7 @@ pub trait SizeSink {
 
 impl SizeSink for Cell<Size> {
     fn set(&self, size: Size) {
-        Cell::set(self, size);
+        Self::set(self, size);
     }
 }
 
@@ -2212,7 +2215,7 @@ impl PartialEq for DrawCommandElement {
 
 impl Eq for DrawCommandElement {}
 
-impl std::hash::Hash for DrawCommandElement {
+impl Hash for DrawCommandElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         "draw_commands".hash(state);
         self.commands.len().hash(state);
@@ -2759,7 +2762,7 @@ impl DelegatableNode for WeightNode {
 
 impl ModifierNode for WeightNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
+        context.invalidate(InvalidationKind::Layout);
     }
 }
 
@@ -2852,7 +2855,7 @@ impl DelegatableNode for AlignmentNode {
 
 impl ModifierNode for AlignmentNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
+        context.invalidate(InvalidationKind::Layout);
     }
 }
 

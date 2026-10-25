@@ -332,12 +332,7 @@ impl RasterScene {
     /// Pushes the items and records of the subtrees `old` recorded at
     /// `records`, siblings one after another, which pushed their items there
     /// up to `stop`.
-    pub(crate) fn copy_subtrees(
-        &mut self,
-        old: &RasterScene,
-        records: Range<usize>,
-        stop: ItemCounts,
-    ) {
+    pub(crate) fn copy_subtrees(&mut self, old: &Self, records: Range<usize>, stop: ItemCounts) {
         let Some(from) = old.subtrees.get(records.start).map(|first| first.start) else {
             return;
         };
@@ -443,12 +438,7 @@ impl RasterScene {
     /// this scene's subtree at `record`, which must have the same extent:
     /// its items, records and passed-down entries take the old ones' places,
     /// and every other part of the scene stays as it was.
-    pub(crate) fn replace_subtree(
-        &mut self,
-        record: usize,
-        from: &RasterScene,
-        from_record: usize,
-    ) {
+    pub(crate) fn replace_subtree(&mut self, record: usize, from: &Self, from_record: usize) {
         let (Some((old, old_first)), Some((new, new_first))) =
             (self.subtree_span(record), from.subtree_span(from_record))
         else {

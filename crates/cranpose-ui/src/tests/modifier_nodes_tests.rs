@@ -80,7 +80,7 @@ fn padding_node_adds_space_to_content() {
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Layout));
 
     let node = chain.node_mut::<PaddingNode>(0).unwrap();
     let measurable = TestMeasurable {
@@ -187,8 +187,8 @@ fn background_node_is_draw_only() {
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
-    assert!(!chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Draw));
+    assert!(!chain.has_nodes_for_invalidation(InvalidationKind::Layout));
 }
 
 #[test]
@@ -202,8 +202,8 @@ fn corner_shape_node_is_draw_only() {
     ))];
     chain.update_from_slice(&elements, &mut context);
 
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
-    assert!(!chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Draw));
+    assert!(!chain.has_nodes_for_invalidation(InvalidationKind::Layout));
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn modifier_chain_reuses_padding_nodes() {
 /// A layout pass's context whose grid has the given device pixels a point.
 struct GridContext(f32);
 
-impl cranpose_foundation::ModifierNodeContext for GridContext {
+impl ModifierNodeContext for GridContext {
     fn density(&self) -> f32 {
         self.0
     }
@@ -306,14 +306,14 @@ fn clickable_node_handles_pointer_events() {
     let mut context = BasicModifierNodeContext::new();
 
     let clicked = Rc::new(Cell::new(false));
-    let clicked_clone = clicked.clone();
+    let clicked_clone = Rc::clone(&clicked);
 
     let elements = vec![modifier_element(ClickableElement::new(move |_point| {
         clicked_clone.set(true);
     }))];
     chain.update_from_slice(&elements, &mut context);
 
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::PointerInput));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::PointerInput));
 
     let mut node = chain.node_mut::<ClickableNode>(0).unwrap();
     let mut down_event = PointerEvent::new(
@@ -375,7 +375,7 @@ fn clickable_node_cancels_click_on_drag() {
     let mut context = BasicModifierNodeContext::new();
 
     let clicked = Rc::new(Cell::new(false));
-    let clicked_clone = clicked.clone();
+    let clicked_clone = Rc::clone(&clicked);
 
     let elements = vec![modifier_element(ClickableElement::new(move |_point| {
         clicked_clone.set(true);
@@ -447,8 +447,8 @@ fn alpha_node_is_draw_only() {
     let elements = vec![modifier_element(AlphaElement::new(0.5))];
     chain.update_from_slice(&elements, &mut context);
 
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
-    assert!(!chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Draw));
+    assert!(!chain.has_nodes_for_invalidation(InvalidationKind::Layout));
 }
 
 #[test]
@@ -470,9 +470,9 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 4);
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::PointerInput));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Layout));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Draw));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::PointerInput));
 
     let mut layout_nodes = 0;
     chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |_| {
@@ -574,9 +574,9 @@ fn pointer_input_coroutine_receives_events() {
     let mut context = BasicModifierNodeContext::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
     let modifier = Modifier::empty().pointer_input((), {
-        let recorded = recorded.clone();
+        let recorded = Rc::clone(&recorded);
         move |scope: PointerInputScope| {
-            let recorded = recorded.clone();
+            let recorded = Rc::clone(&recorded);
             async move {
                 scope
                     .await_pointer_event_scope(|await_scope| async move {
@@ -594,7 +594,7 @@ fn pointer_input_coroutine_receives_events() {
     chain.update_from_slice(&elements, &mut context);
     let slices = collect_slices_from_modifier(&modifier);
     assert_eq!(slices.pointer_inputs().len(), 1);
-    let handler = slices.pointer_inputs()[0].clone();
+    let handler = Rc::clone(&slices.pointer_inputs()[0]);
 
     handler(PointerEvent::new(
         PointerEventKind::Down,
@@ -621,9 +621,9 @@ fn pointer_input_waker_reenters_owning_app_context() {
         let mut chain = ModifierNodeChain::new();
         let mut context = BasicModifierNodeContext::new();
         let modifier = Modifier::empty().pointer_input((), {
-            let recorded = recorded.clone();
+            let recorded = Rc::clone(&recorded);
             move |scope: PointerInputScope| {
-                let recorded = recorded.clone();
+                let recorded = Rc::clone(&recorded);
                 async move {
                     scope
                         .await_pointer_event_scope(|await_scope| async move {
@@ -641,7 +641,7 @@ fn pointer_input_waker_reenters_owning_app_context() {
         chain.update_from_slice(&elements, &mut context);
         let slices = collect_modifier_slices(&chain);
         assert_eq!(slices.pointer_inputs().len(), 1);
-        (slices.pointer_inputs()[0].clone(), chain)
+        (Rc::clone(&slices.pointer_inputs()[0]), chain)
     });
 
     handler(PointerEvent::new(
@@ -661,9 +661,9 @@ fn pointer_input_restarts_on_key_change() {
     let starts = Rc::new(Cell::new(0));
 
     let modifier = Modifier::empty().pointer_input(0u32, {
-        let starts = starts.clone();
+        let starts = Rc::clone(&starts);
         move |_scope: PointerInputScope| {
-            let starts = starts.clone();
+            let starts = Rc::clone(&starts);
             async move {
                 starts.set(starts.get() + 1);
                 pending::<()>().await;
@@ -676,9 +676,9 @@ fn pointer_input_restarts_on_key_change() {
     assert_eq!(starts.get(), 1);
 
     let modifier_updated = Modifier::empty().pointer_input(1u32, {
-        let starts = starts.clone();
+        let starts = Rc::clone(&starts);
         move |_scope: PointerInputScope| {
-            let starts = starts.clone();
+            let starts = Rc::clone(&starts);
             async move {
                 starts.set(starts.get() + 1);
                 pending::<()>().await;
@@ -700,11 +700,11 @@ fn pointer_input_scope_reports_published_layout_size() {
     let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
     let event_sizes: Rc<RefCell<Vec<Size>>> = Rc::new(RefCell::new(Vec::new()));
     let modifier = Modifier::empty().pointer_input((), {
-        let captured = captured.clone();
-        let event_sizes = event_sizes.clone();
+        let captured = Rc::clone(&captured);
+        let event_sizes = Rc::clone(&event_sizes);
         move |scope: PointerInputScope| {
-            let captured = captured.clone();
-            let event_sizes = event_sizes.clone();
+            let captured = Rc::clone(&captured);
+            let event_sizes = Rc::clone(&event_sizes);
             async move {
                 *captured.borrow_mut() = Some(scope.clone());
                 scope
@@ -791,9 +791,9 @@ fn pointer_input_scope_size_survives_handler_restart() {
 
     let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
     let handler = {
-        let captured = captured.clone();
+        let captured = Rc::clone(&captured);
         move |scope: PointerInputScope| {
-            let captured = captured.clone();
+            let captured = Rc::clone(&captured);
             async move {
                 *captured.borrow_mut() = Some(scope.clone());
                 pending::<()>().await;
@@ -832,13 +832,13 @@ fn pointer_input_scope_size_survives_handler_restart() {
 fn pointer_input_scope_size_is_filled_by_the_layout_pass() {
     let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
     let mut composition = crate::run_test_composition({
-        let captured = captured.clone();
+        let captured = Rc::clone(&captured);
         move || {
             crate::Box(
                 Modifier::empty().fill_max_size().pointer_input((), {
-                    let captured = captured.clone();
+                    let captured = Rc::clone(&captured);
                     move |scope: PointerInputScope| {
-                        let captured = captured.clone();
+                        let captured = Rc::clone(&captured);
                         async move {
                             *captured.borrow_mut() = Some(scope.clone());
                             pending::<()>().await;
@@ -917,9 +917,9 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
     let received_events = Rc::new(RefCell::new(Vec::new()));
 
     let modifier = Modifier::empty().pointer_input(42u32, {
-        let events = received_events.clone();
+        let events = Rc::clone(&received_events);
         move |scope: PointerInputScope| {
-            let events = events.clone();
+            let events = Rc::clone(&events);
             async move {
                 loop {
                     let event = scope
@@ -939,7 +939,7 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
         "Should have extracted one pointer input handler"
     );
 
-    let handler = slices.pointer_inputs()[0].clone();
+    let handler = Rc::clone(&slices.pointer_inputs()[0]);
 
     handler(PointerEvent::new(
         PointerEventKind::Move,
@@ -980,9 +980,9 @@ fn multiple_temporary_chains_dont_interfere() {
     let events2 = Rc::new(RefCell::new(Vec::new()));
 
     let modifier1 = Modifier::empty().pointer_input(1u32, {
-        let events = events1.clone();
+        let events = Rc::clone(&events1);
         move |scope: PointerInputScope| {
-            let events = events.clone();
+            let events = Rc::clone(&events);
             async move {
                 loop {
                     let event = scope
@@ -995,9 +995,9 @@ fn multiple_temporary_chains_dont_interfere() {
     });
 
     let modifier2 = Modifier::empty().pointer_input(2u32, {
-        let events = events2.clone();
+        let events = Rc::clone(&events2);
         move |scope: PointerInputScope| {
-            let events = events.clone();
+            let events = Rc::clone(&events);
             async move {
                 loop {
                     let event = scope
@@ -1012,8 +1012,8 @@ fn multiple_temporary_chains_dont_interfere() {
     let slices1 = collect_slices_from_modifier(&modifier1);
     let slices2 = collect_slices_from_modifier(&modifier2);
 
-    let handler1 = slices1.pointer_inputs()[0].clone();
-    let handler2 = slices2.pointer_inputs()[0].clone();
+    let handler1 = Rc::clone(&slices1.pointer_inputs()[0]);
+    let handler2 = Rc::clone(&slices2.pointer_inputs()[0]);
 
     handler1(PointerEvent::new(
         PointerEventKind::Move,
@@ -1077,7 +1077,7 @@ fn custom_layout_modifier_works_through_retained_chain() {
 
     impl ModifierNode for CustomWidthNode {
         fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-            context.invalidate(cranpose_foundation::InvalidationKind::Layout);
+            context.invalidate(InvalidationKind::Layout);
         }
 
         fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
@@ -1158,7 +1158,7 @@ fn custom_layout_modifier_works_through_retained_chain() {
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
-    assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
+    assert!(chain.has_nodes_for_invalidation(InvalidationKind::Layout));
 
     let node = chain.node_mut::<CustomWidthNode>(0).unwrap();
     let measurable = TestMeasurable {
@@ -1191,14 +1191,14 @@ fn draw_command_updates_on_closure_change() {
     let mut context = BasicModifierNodeContext::new();
     let executed = Rc::new(Cell::new(0));
 
-    let executed_1 = executed.clone();
+    let executed_1 = Rc::clone(&executed);
     let element_1 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
         move |_scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
             executed_1.set(executed_1.get() + 1);
         },
     ))));
 
-    let executed_2 = executed.clone();
+    let executed_2 = Rc::clone(&executed);
     let element_2 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
         move |_scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
             executed_2.set(executed_2.get() + 10);

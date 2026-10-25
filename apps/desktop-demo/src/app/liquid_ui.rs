@@ -199,10 +199,7 @@ fn touched_up_action_spec() -> GlassButtonSpec {
 }
 
 #[composable]
-fn TouchedUpButtonGroup(
-    confirmed: cranpose_core::MutableState<bool>,
-    action_spec: GlassButtonSpec,
-) {
+fn TouchedUpButtonGroup(confirmed: MutableState<bool>, action_spec: GlassButtonSpec) {
     let more_confirmed = confirmed;
     let check_confirmed = confirmed;
     let show_confirm = !confirmed.get();
@@ -1458,7 +1455,7 @@ fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) 
                 let colors = liquid_colors();
                 Box(
                     Modifier::empty()
-                        .size(cranpose::Size::new(68.0, 68.0))
+                        .size(Size::new(68.0, 68.0))
                         .draw_behind(move |scope| {
                             let size = scope.size();
                             scope.draw_round_rect(
@@ -1510,7 +1507,7 @@ fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) 
 
 #[composable]
 fn FeaturedVideosReferenceStage(
-    menu_open: cranpose_core::MutableState<bool>,
+    menu_open: MutableState<bool>,
     menu_gesture: LiquidMenuGesture,
     anchor_sink: std::rc::Rc<std::cell::Cell<Rect>>,
     absorbed_sink: std::rc::Rc<std::cell::Cell<Rect>>,
@@ -1537,7 +1534,7 @@ fn FeaturedVideosReferenceStage(
 
 #[composable]
 fn FeaturedVideosReferenceCard(
-    menu_open: cranpose_core::MutableState<bool>,
+    menu_open: MutableState<bool>,
     menu_gesture: LiquidMenuGesture,
     anchor_sink: std::rc::Rc<std::cell::Cell<Rect>>,
     absorbed_sink: std::rc::Rc<std::cell::Cell<Rect>>,
@@ -1913,7 +1910,7 @@ pub fn LiquidUiTab() {
             super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
                 *cell.borrow_mut() = Some(scroll);
             });
-            let menu_anchor_rect = cranpose_core::remember(|| {
+            let menu_anchor_rect = remember(|| {
                 std::rc::Rc::new(std::cell::Cell::new(Rect {
                     x: 0.0,
                     y: 0.0,
@@ -1922,7 +1919,7 @@ pub fn LiquidUiTab() {
                 }))
             })
             .with(std::rc::Rc::clone);
-            let menu_absorbed_rect = cranpose_core::remember(|| {
+            let menu_absorbed_rect = remember(|| {
                 std::rc::Rc::new(std::cell::Cell::new(Rect {
                     x: 0.0,
                     y: 0.0,
@@ -1945,7 +1942,7 @@ pub fn LiquidUiTab() {
             let stage_absorbed = std::rc::Rc::clone(&menu_absorbed_rect);
             let stage_button_spec = absorbed_button_spec.clone();
 
-            cranpose::widgets::Box(
+            Box(
                 Modifier::empty()
                     .semantics(|config: &mut SemanticsConfiguration| {
                         config.content_description = Some(LIQUID_SCROLL_VIEWPORT_TAG.to_string());
@@ -1955,7 +1952,7 @@ pub fn LiquidUiTab() {
                     .draw_behind(move |scope| {
                         scope.draw_rect(Brush::solid(colors.background));
                     }),
-                cranpose::widgets::BoxSpec::default(),
+                BoxSpec::default(),
                 move || {
                     let dark_for_chip = dark;
                     let toggle_a = toggle_a;

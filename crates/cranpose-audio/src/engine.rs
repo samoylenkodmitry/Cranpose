@@ -56,19 +56,19 @@ pub struct AudioEngine {
 
 impl AudioEngine {
     /// Creates an engine that opens the platform output device on first use.
-    pub fn new() -> AudioEngine {
-        AudioEngine::with_sink_opener(Box::new(backend::open_mixer))
+    pub fn new() -> Self {
+        Self::with_sink_opener(Box::new(backend::open_mixer))
     }
 
     /// Creates an engine over a caller-supplied device opener. The platform
     /// backends and the crate's own tests both go through this.
-    pub fn with_sink_opener(open_sink: SinkOpener) -> AudioEngine {
+    pub fn with_sink_opener(open_sink: SinkOpener) -> Self {
         let (command_tx, command_rx) = ring::channel::<Command>(COMMAND_CAPACITY);
         let (retired_tx, retired_rx) = ring::channel::<ClipData>(RETIRE_CAPACITY);
         let leaked_clips = Arc::new(AtomicU32::new(0));
         let underruns = Arc::new(AtomicU32::new(0));
         let streaming = Arc::new(AtomicBool::new(false));
-        AudioEngine {
+        Self {
             operation: Mutex::new(()),
             commands: Mutex::new(command_tx),
             retired: Mutex::new(retired_rx),
@@ -329,8 +329,8 @@ fn survives_a_stopped_stream(command: &Command) -> bool {
 }
 
 impl Default for AudioEngine {
-    fn default() -> AudioEngine {
-        AudioEngine::new()
+    fn default() -> Self {
+        Self::new()
     }
 }
 

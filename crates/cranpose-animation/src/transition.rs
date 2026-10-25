@@ -33,7 +33,7 @@ trait TransitionChild {
 
 impl<T: SpringScalar + 'static> TransitionChild for Animatable<T> {
     fn is_running(&self) -> bool {
-        Animatable::is_running(self)
+        Self::is_running(self)
     }
 }
 
@@ -150,7 +150,7 @@ impl<S: Clone + 'static> Transition<S> {
                 },
             );
 
-            anim.with(super::animation::Animatable::state)
+            anim.with(Animatable::state)
         })
     }
 

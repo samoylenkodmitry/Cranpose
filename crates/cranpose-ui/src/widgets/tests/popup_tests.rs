@@ -23,8 +23,8 @@ fn refreshing_popup_content_does_not_invalidate_the_popup_list() {
                 let revision = registry.inner.revision.as_ref().expect("hosted revision");
                 let before = revision.get_non_reactive();
                 let calls = Rc::new(Cell::new(0));
-                let content_calls = calls.clone();
-                let dismiss_calls = calls.clone();
+                let content_calls = Rc::clone(&calls);
+                let dismiss_calls = Rc::clone(&calls);
                 registry.upsert(
                     id,
                     Point::new(10.0, 20.0),
@@ -78,7 +78,7 @@ fn dismiss_scrim_consumes_the_whole_tap_before_dismissing() {
     let modifier = popup_scrim_pointer_input(7, action);
     let slices = collect_slices_from_modifier(&modifier);
     assert_eq!(slices.pointer_inputs().len(), 1);
-    let handler = slices.pointer_inputs()[0].clone();
+    let handler = Rc::clone(&slices.pointer_inputs()[0]);
 
     let event = |kind| PointerEvent::new(kind, Point::new(12.0, 18.0), Point::new(12.0, 18.0));
     let down = event(PointerEventKind::Down);

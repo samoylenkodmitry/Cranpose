@@ -11,12 +11,12 @@ const CURVE_ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![
 pub(crate) fn record_vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
     [
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<ShapeRecordBody>() as u64,
+            array_stride: size_of::<ShapeRecordBody>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &BODY_ATTRIBUTES,
         },
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<ShapeRecordCurve>() as u64,
+            array_stride: size_of::<ShapeRecordCurve>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &CURVE_ATTRIBUTES,
         },

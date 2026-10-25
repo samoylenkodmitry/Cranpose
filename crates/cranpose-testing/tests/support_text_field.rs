@@ -59,7 +59,7 @@ pub(crate) fn shell_with_keyboard(
     shell.set_viewport(320.0, 200.0);
     shell.set_buffer_size(320, 200);
     let keyboard = Rc::new(RecordingKeyboard::default());
-    shell.set_platform_text_input(keyboard.clone());
+    shell.set_platform_text_input(Rc::<RecordingKeyboard>::clone(&keyboard));
     shell.update();
     (shell, keyboard)
 }
@@ -90,7 +90,7 @@ impl FocusedField {
     ) -> Self {
         let requester = FocusRequester::new();
         let state = Rc::new(std::cell::Cell::new(None));
-        let (content_requester, content_state) = (requester.clone(), state.clone());
+        let (content_requester, content_state) = (requester.clone(), Rc::clone(&state));
         let (shell, _keyboard) = shell_with_keyboard(move || {
             let text_state = remember(|| TextFieldState::new(text)).with(|state| *state);
             content_state.set(Some(text_state));

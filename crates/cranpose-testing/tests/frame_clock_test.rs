@@ -29,12 +29,12 @@ impl CounterApp {
     fn new() -> Self {
         let times = FrameTimes::default();
         let input = InputState::default();
-        let app_times = times.clone();
-        let app_input = input.clone();
+        let app_times = Rc::clone(&times);
+        let app_input = Rc::clone(&input);
         let mut shell = AppShell::new_with_size(
             TestRenderer::default(),
             location_key(file!(), line!(), column!()),
-            move || frame_counter(app_times.clone(), app_input.clone()),
+            move || frame_counter(Rc::clone(&app_times), Rc::clone(&app_input)),
             (320, 100),
             (320.0, 100.0),
         );

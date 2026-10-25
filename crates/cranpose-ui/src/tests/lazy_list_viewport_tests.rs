@@ -52,11 +52,7 @@ fn lazy_column_unbounded_height_matches_effective_viewport() {
     );
 }
 
-fn measure_tree(
-    composition: &mut TestComposition,
-    root: NodeId,
-    size: ViewportSize,
-) -> crate::LayoutTree {
+fn measure_tree(composition: &mut TestComposition, root: NodeId, size: ViewportSize) -> LayoutTree {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
@@ -134,13 +130,10 @@ fn assert_visible_items_stay_ordered(
     *last_top_item = Some(visible[0].0);
 }
 
-fn collect_visible_item_texts(
-    scene: &crate::renderer::RecordedRenderScene,
-    viewport: Rect,
-) -> Vec<(usize, f32)> {
+fn collect_visible_item_texts(scene: &RecordedRenderScene, viewport: Rect) -> Vec<(usize, f32)> {
     let mut items = Vec::new();
     for operation in scene.operations() {
-        let crate::renderer::RenderOp::Text { rect, value, .. } = operation else {
+        let RenderOp::Text { rect, value, .. } = operation else {
             continue;
         };
         if !value.starts_with("Item ") {
@@ -164,12 +157,12 @@ fn collect_visible_item_texts(
 }
 
 fn collect_visible_item_state_texts(
-    scene: &crate::renderer::RecordedRenderScene,
+    scene: &RecordedRenderScene,
     viewport: Rect,
 ) -> Vec<(usize, i32, f32)> {
     let mut items = Vec::new();
     for operation in scene.operations() {
-        let crate::renderer::RenderOp::Text { rect, value, .. } = operation else {
+        let RenderOp::Text { rect, value, .. } = operation else {
             continue;
         };
         let Some(rest) = value.strip_prefix("Item ") else {
@@ -193,14 +186,14 @@ fn collect_visible_item_state_texts(
 }
 
 fn find_nearest_draw_ancestor_for_text<'a>(
-    node: &'a crate::LayoutBox,
+    node: &'a LayoutBox,
     text: &str,
-) -> Option<&'a crate::LayoutBox> {
+) -> Option<&'a LayoutBox> {
     fn visit<'a>(
-        node: &'a crate::LayoutBox,
+        node: &'a LayoutBox,
         text: &str,
-        draw_ancestors: &mut Vec<&'a crate::LayoutBox>,
-    ) -> Option<&'a crate::LayoutBox> {
+        draw_ancestors: &mut Vec<&'a LayoutBox>,
+    ) -> Option<&'a LayoutBox> {
         let has_draw_content = !node.node_data.modifier_slices().draw_commands().is_empty();
         if has_draw_content {
             draw_ancestors.push(node);
@@ -911,9 +904,7 @@ fn a_skipped_badge_in_a_reused_row_follows_its_state() {
         .operations()
         .iter()
         .filter_map(|operation| match operation {
-            crate::renderer::RenderOp::Text { value, .. } if value.starts_with("tick ") => {
-                Some(value.clone())
-            }
+            RenderOp::Text { value, .. } if value.starts_with("tick ") => Some(value.clone()),
             _ => None,
         })
         .collect();

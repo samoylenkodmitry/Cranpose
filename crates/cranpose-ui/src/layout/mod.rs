@@ -398,7 +398,7 @@ pub struct SemanticsNode {
     /// Actions that the input system and assistive technology can invoke on this node.
     pub actions: Vec<SemanticsAction>,
     /// Child semantics nodes, in layout order.
-    pub children: Vec<SemanticsNode>,
+    pub children: Vec<Self>,
     /// Content description that a screen reader announces for the node, if one was set.
     pub description: Option<String>,
     /// Direct activation callback for keyboard and assistive technology.
@@ -669,7 +669,7 @@ pub struct LayoutBox {
     /// Modifier, semantics and kind data captured with the node.
     pub node_data: LayoutNodeData,
     /// Layout boxes of the node's placed children.
-    pub children: Vec<LayoutBox>,
+    pub children: Vec<Self>,
 }
 
 impl LayoutBox {
@@ -679,7 +679,7 @@ impl LayoutBox {
         rect: GeometryRect,
         content_offset: Point,
         node_data: LayoutNodeData,
-        children: Vec<LayoutBox>,
+        children: Vec<Self>,
     ) -> Self {
         Self {
             node_id,
@@ -775,11 +775,11 @@ pub enum LayoutNodeKind {
 impl fmt::Debug for LayoutNodeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LayoutNodeKind::Layout => f.write_str("Layout"),
-            LayoutNodeKind::Subcompose => f.write_str("Subcompose"),
-            LayoutNodeKind::Spacer => f.write_str("Spacer"),
-            LayoutNodeKind::Button { .. } => f.write_str("Button"),
-            LayoutNodeKind::Unknown => f.write_str("Unknown"),
+            Self::Layout => f.write_str("Layout"),
+            Self::Subcompose => f.write_str("Subcompose"),
+            Self::Spacer => f.write_str("Spacer"),
+            Self::Button { .. } => f.write_str("Button"),
+            Self::Unknown => f.write_str("Unknown"),
         }
     }
 }
@@ -1440,11 +1440,9 @@ fn process_pending_layout_repasses(
     for node_id in context.take_modifier_slice_repass_nodes() {
         if let Ok(node) = applier.get_mut(node_id) {
             let any = node.as_any_mut();
-            if let Some(layout) = any.downcast_mut::<crate::widgets::nodes::LayoutNode>() {
+            if let Some(layout) = any.downcast_mut::<LayoutNode>() {
                 layout.mark_modifier_slices_dirty();
-            } else if let Some(subcompose) =
-                any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
-            {
+            } else if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
                 subcompose.mark_modifier_slices_dirty();
             }
         }
@@ -1821,9 +1819,7 @@ impl LayoutBuilderState {
                 Err(err) => return Err(err),
             };
             let any = node.as_any_mut();
-            if let Some(subcompose) =
-                any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
-            {
+            if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
                 let handle = subcompose.handle();
                 let resolved_modifiers = handle
                     .resolved_modifiers()
@@ -2716,7 +2712,7 @@ impl MeasuredNode {
 
     /// The measurement in `spare`'s memory, or in a new allocation when
     /// there is no spare.
-    fn into_rc(self, spare: Option<Rc<MeasuredNode>>) -> Rc<MeasuredNode> {
+    fn into_rc(self, spare: Option<Rc<Self>>) -> Rc<Self> {
         let Some(mut spare) = spare else {
             return Rc::new(self);
         };

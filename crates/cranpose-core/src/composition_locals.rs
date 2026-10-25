@@ -34,7 +34,7 @@ impl ProvidedValue {
         composer: &Composer,
         site: crate::Key,
     ) -> (LocalKey, Rc<dyn Any>, bool) {
-        let ProvidedValue { key, apply } = self;
+        let Self { key, apply } = self;
         let (entry, static_changed) = apply(composer, site);
         (key, entry, static_changed)
     }
@@ -218,7 +218,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
                     ))
                 });
                 entry_ref.update(|entry| entry.set(value.clone()));
-                entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, false))
+                entry_ref.with(|entry| (Rc::clone(entry) as Rc<dyn Any>, false))
             }),
         }
     }
@@ -253,7 +253,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
                     })
                 });
                 entry_ref.update(|entry| entry.compute.replace(Rc::clone(&compute)));
-                entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, false))
+                entry_ref.with(|entry| (Rc::clone(entry) as Rc<dyn Any>, false))
             }),
         }
     }
@@ -275,7 +275,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
 fn malformed_provided_value_for_test(key: LocalKey, entry: Rc<dyn Any>) -> ProvidedValue {
     ProvidedValue {
         key,
-        apply: Box::new(move |_, _| (entry.clone(), false)),
+        apply: Box::new(move |_, _| (Rc::clone(&entry), false)),
     }
 }
 
@@ -471,7 +471,7 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
                 let entry_ref = composer
                     .remember_internal(source, || Rc::new(StaticLocalEntry::new(value.clone())));
                 let changed = entry_ref.update(|entry| entry.set(value.clone(), &*equivalent));
-                entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, changed))
+                entry_ref.with(|entry| (Rc::clone(entry) as Rc<dyn Any>, changed))
             }),
         }
     }

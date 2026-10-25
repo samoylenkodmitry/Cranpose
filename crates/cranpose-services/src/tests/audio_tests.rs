@@ -222,7 +222,7 @@ fn sound_bank_loads_applies_base_volume_and_unloads_on_drop() {
         SoundSpec::new("music", &wav).bus(AudioBus::Music),
         SoundSpec::new("broken", b"not audio"),
     ];
-    let player_ref: AudioPlayerRef = player.clone();
+    let player_ref: AudioPlayerRef = Arc::<RecordingPlayer>::clone(&player);
     let bank = SoundBank::load(player_ref, &specs);
 
     assert_eq!(bank.len(), 3);
@@ -325,7 +325,7 @@ fn remember_sound_bank_loads_once_across_recompositions() {
     let _guard = crate::registry::test_service_guard();
     clear_platform_audio();
     let player = Arc::new(RecordingPlayer::default());
-    let player_ref: AudioPlayerRef = player.clone();
+    let player_ref: AudioPlayerRef = Arc::<RecordingPlayer>::clone(&player);
     set_platform_audio(player_ref);
 
     let wav = tiny_wav();

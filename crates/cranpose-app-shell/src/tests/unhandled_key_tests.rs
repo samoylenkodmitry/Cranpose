@@ -65,8 +65,7 @@ fn a_key_typed_into_a_text_field_never_reaches_the_handlers() {
     let mut shell = key_logging_shell(Rc::clone(&log), true);
     shell.set_semantics_enabled(true);
     shell.update();
-    let placed =
-        crate::placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed field");
+    let placed = placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed field");
     let field = placed
         .flatten()
         .into_iter()

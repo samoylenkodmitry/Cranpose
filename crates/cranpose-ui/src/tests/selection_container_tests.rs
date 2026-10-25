@@ -30,12 +30,10 @@ fn page_styled(texts: &[(&str, Rect)], style: TextStyle) -> Page {
         .map(|(text, rect)| {
             let key = registrar.subscribe();
             let geometry = Rc::new(SelectableGeometry::default());
-            geometry
-                .window
-                .set(cranpose_ui_graphics::WindowCoordinates {
-                    size: Size::default(),
-                    local_to_window: ProjectiveTransform::translation(rect.x, rect.y),
-                });
+            geometry.window.set(WindowCoordinates {
+                size: Size::default(),
+                local_to_window: ProjectiveTransform::translation(rect.x, rect.y),
+            });
             geometry.set_content_size(Size {
                 width: rect.width,
                 height: rect.height,

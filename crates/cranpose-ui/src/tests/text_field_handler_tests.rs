@@ -44,7 +44,7 @@ fn focused_state(
         },
     );
     let focus = Rc::new(RefCell::new(false));
-    text_field_focus::request_focus(focus.clone(), handler, 0);
+    text_field_focus::request_focus(Rc::clone(&focus), handler, 0);
     (state, focus)
 }
 
@@ -130,7 +130,7 @@ fn select_all_dispatch_selects_entire_field() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
-        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
+        state.edit(TextFieldBuffer::place_cursor_at_end);
 
         assert!(text_field_focus::dispatch_select_all());
         assert_eq!(state.selection(), TextRange::new(0, "hello world".len()));
@@ -155,7 +155,7 @@ fn spacebar_swipe_arrow_keys_scrub_caret() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("hello", TextFieldLineLimits::SingleLine);
-        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
+        state.edit(TextFieldBuffer::place_cursor_at_end);
         assert_eq!(state.selection(), TextRange::new(5, 5));
 
         assert!(text_field_focus::dispatch_key_event(&key_down(
@@ -186,7 +186,7 @@ fn cursor_move_via_set_selection_resets_blink_to_solid() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
-        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
+        state.edit(TextFieldBuffer::place_cursor_at_end);
 
         start_cursor_blink();
         let hidden_at =
@@ -210,7 +210,7 @@ fn ime_set_selection_scrubs_caret_without_editing() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
-        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
+        state.edit(TextFieldBuffer::place_cursor_at_end);
 
         assert!(text_field_focus::dispatch_ime_set_selection(2, 2));
         assert_eq!(state.selection(), TextRange::new(2, 2));
@@ -229,7 +229,7 @@ fn successive_preedit_updates_replace_previous_composition() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("ab", TextFieldLineLimits::SingleLine);
-        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
+        state.edit(TextFieldBuffer::place_cursor_at_end);
 
         assert!(text_field_focus::dispatch_ime_preedit("k", Some((1, 1))));
         assert_eq!(state.text(), "abk");
@@ -310,7 +310,7 @@ fn editor_state_reflects_text_selection_and_composition() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("hi", TextFieldLineLimits::SingleLine);
-        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
+        state.edit(TextFieldBuffer::place_cursor_at_end);
 
         let snapshot = text_field_focus::focused_editor_state().expect("focused field");
         assert_eq!(snapshot.text, "hi");

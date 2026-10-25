@@ -19,7 +19,7 @@ impl PlatformTextInputHandler for RecordingHandler {
 
 fn install_recording_handler() -> Rc<RecordingHandler> {
     let handler = Rc::new(RecordingHandler::default());
-    set_platform_text_input_handler(handler.clone());
+    set_platform_text_input_handler(Rc::<RecordingHandler>::clone(&handler));
     handler
 }
 
@@ -101,8 +101,8 @@ impl crate::text_field_focus::FocusedTextFieldHandler for NoopFocusHandler {
     fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {}
 }
 
-fn focus_a_field() -> Rc<std::cell::RefCell<bool>> {
-    let focus = Rc::new(std::cell::RefCell::new(false));
+fn focus_a_field() -> Rc<RefCell<bool>> {
+    let focus = Rc::new(RefCell::new(false));
     crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler), 0);
     focus
 }

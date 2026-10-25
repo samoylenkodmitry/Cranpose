@@ -75,7 +75,7 @@ pub trait NestedScrollConnection {
 #[derive(Clone)]
 pub(crate) struct NestedScrollParent {
     connection: Rc<dyn NestedScrollConnection>,
-    outer: Option<Rc<NestedScrollParent>>,
+    outer: Option<Rc<Self>>,
 }
 
 /// The same connections in the same order: a recomposed container that

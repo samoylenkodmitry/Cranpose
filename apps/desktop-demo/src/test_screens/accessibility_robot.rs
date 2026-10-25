@@ -123,7 +123,7 @@ fn RobotValueControls(volume: MutableState<f32>, notes: TextFieldState, password
 fn RobotDialog(
     title: &'static str,
     close_label: &'static str,
-    visible: cranpose_core::MutableState<bool>,
+    visible: MutableState<bool>,
     content: impl Fn() + 'static,
 ) {
     let content = std::rc::Rc::new(content);
@@ -132,7 +132,7 @@ fn RobotDialog(
         cranpose_ui::widgets::dialog::DialogSpec::default(),
         move |_| visible.set(false),
         move || {
-            let content = content.clone();
+            let content = std::rc::Rc::clone(&content);
             Column(
                 Modifier::empty()
                     .width(280.0)

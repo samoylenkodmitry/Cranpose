@@ -36,10 +36,10 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     let first = Rc::new(String::from("first"));
     let second = Rc::new(String::from("second"));
     let delivered = Rc::new(RefCell::new(Vec::new()));
-    let mut entry = ScopeEntry::new(0, first.clone(), Rc::new(|_| panic!("stale callback")));
+    let mut entry = ScopeEntry::new(0, Rc::clone(&first), Rc::new(|_| panic!("stale callback")));
     let stored = &entry.scope;
     let address = stored.downcast_ref::<Rc<String>>().unwrap() as *const Rc<String>;
-    let received = delivered.clone();
+    let received = Rc::clone(&delivered);
     entry.update(
         &second,
         Rc::new(move |scope| {
@@ -94,7 +94,7 @@ fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
     let state = SnapshotMutableState::new_in_rc(0, Rc::new(NeverEqual));
     let delivered = Rc::new(RefCell::new(Vec::new()));
     let callback = |generation| {
-        let delivered = delivered.clone();
+        let delivered = Rc::clone(&delivered);
         move |scope: &TestScope| delivered.borrow_mut().push((generation, scope.0))
     };
     let scope = TestScope("callback");
@@ -104,7 +104,7 @@ fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
     };
     observer.observe_reads(scope.clone(), callback(1), read);
     let entry = observer.inner.find_scope_entry(&scope).unwrap();
-    let held = entry.borrow().on_changed.clone();
+    let held = Rc::clone(&entry.borrow().on_changed);
     observer.observe_reads(scope.clone(), callback(2), read);
     held(&scope);
     entry.borrow().notify();
@@ -118,7 +118,7 @@ fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
     ));
     entry.borrow().notify();
 
-    let received = delivered.clone();
+    let received = Rc::clone(&delivered);
     observer.observe_reads(
         scope,
         move |scope| received.borrow_mut().push((4, scope.0)),
@@ -149,7 +149,7 @@ fn reobservation_across_storage_thresholds_replaces_dependencies_and_callbacks()
         .into_iter()
         .enumerate()
     {
-        let recorded = notifications.clone();
+        let recorded = Rc::clone(&notifications);
         observer.observe_reads(
             TestScope("changing"),
             move |scope| {
@@ -191,7 +191,7 @@ fn reobservation_preserves_notifications_when_dependencies_repeat_or_change() {
         .into_iter()
         .enumerate()
     {
-        let received = notifications.clone();
+        let received = Rc::clone(&notifications);
         observer.observe_reads(
             TestScope("repeated"),
             move |_| received.borrow_mut().push(generation),
@@ -230,9 +230,9 @@ fn stateless_scope_can_start_observing_and_replace_its_callback_before_the_block
     let _guard = reset_runtime_for_tests();
     let observer = SnapshotStateObserver::new(|callback| callback());
     let state = SnapshotMutableState::new_in_rc(0, Rc::new(NeverEqual));
-    let observed: Rc<dyn StateObject> = state.clone();
+    let observed: Rc<dyn StateObject> = Rc::<SnapshotMutableState<i32>>::clone(&state);
     let notifications = Rc::new(RefCell::new(Vec::new()));
-    let discarded = notifications.clone();
+    let discarded = Rc::clone(&notifications);
     observer.observe_reads(
         TestScope("changing"),
         move |_| discarded.borrow_mut().push(0),
@@ -241,7 +241,7 @@ fn stateless_scope_can_start_observing_and_replace_its_callback_before_the_block
     assert_eq!(Rc::strong_count(&notifications), 1);
     assert_eq!(observer.debug_stats().scopes_len, 0);
     for generation in 1..=2 {
-        let delivered = notifications.clone();
+        let delivered = Rc::clone(&notifications);
         observer.observe_reads(
             TestScope("changing"),
             move |_| delivered.borrow_mut().push(generation),
@@ -264,7 +264,7 @@ fn callback_captures_are_released_on_replacement_and_clear() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     let owners = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
     for owner in &owners {
-        let captured = owner.clone();
+        let captured = Rc::clone(owner);
         observer.observe_reads(
             TestScope("owner"),
             move |_| captured.set(captured.get() + 1),
@@ -439,7 +439,7 @@ fn recycled_observation_does_not_retain_written_state() {
     let owners = Rc::strong_count(&state);
     observer.inner.run_with_read_observer(|| {
         let current = crate::snapshot_v2::current_snapshot().unwrap();
-        current.record_write(state.clone());
+        current.record_write(Rc::<SnapshotMutableState<i32>>::clone(&state));
     });
     assert_eq!(Rc::strong_count(&state), owners);
 }

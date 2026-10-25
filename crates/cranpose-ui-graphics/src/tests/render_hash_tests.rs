@@ -1,11 +1,11 @@
 #[test]
 fn runtime_shader_overrides_change_the_render_hash() {
-    let plain = crate::RuntimeShader::new("// hash-overrides");
+    let plain = RuntimeShader::new("// hash-overrides");
     let mut raised = plain.clone();
     raised.set_override("FLAG", 1.0);
     assert_ne!(
-        crate::RenderEffect::runtime_shader(plain).render_hash(),
-        crate::RenderEffect::runtime_shader(raised).render_hash(),
+        RenderEffect::runtime_shader(plain).render_hash(),
+        RenderEffect::runtime_shader(raised).render_hash(),
         "a specialized pipeline renders through different code, so cached output keyed \
          without the overrides would serve the wrong program"
     );
@@ -315,8 +315,8 @@ fn arc_render_hash_differs_from_rect_with_same_bounds() {
 
 #[test]
 fn a_shaders_declared_support_and_sample_domain_are_part_of_its_hash() {
-    let plain = crate::RuntimeShader::new("fn effect_fs() {}");
-    let rect = crate::Rect {
+    let plain = RuntimeShader::new("fn effect_fs() {}");
+    let rect = Rect {
         x: 1.0,
         y: 2.0,
         width: 3.0,

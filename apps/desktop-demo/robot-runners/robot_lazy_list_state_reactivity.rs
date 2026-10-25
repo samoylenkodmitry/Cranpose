@@ -160,5 +160,5 @@ pub(crate) fn main() {
                 std::process::exit(1);
             }
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

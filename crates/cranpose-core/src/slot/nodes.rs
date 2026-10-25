@@ -1,5 +1,3 @@
-use std::mem;
-
 use super::{
     GroupNodeRange, GroupRecord, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
     checked_usize_to_i64,
@@ -140,7 +138,7 @@ impl SlotTable {
     }
 
     pub(super) fn node_heap_bytes(&self) -> usize {
-        self.nodes.capacity() * mem::size_of::<NodeRecord>()
+        self.nodes.capacity() * size_of::<NodeRecord>()
     }
 
     pub(super) fn node_debug_capacity(&self) -> usize {

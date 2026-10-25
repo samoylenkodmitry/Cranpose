@@ -141,12 +141,12 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         renderer.draw_glyph_cmds(
-            &mut crate::draw_pass::TrackedPass::new(&mut pass),
+            &mut TrackedPass::new(&mut pass),
             (None, None),
             0,
             commands,
             None,
-            crate::render::PassFrame {
+            PassFrame {
                 size: (8, 8),
                 depth: false,
             },
@@ -303,14 +303,14 @@ fn the_viewport_uniform_lays_out_as_the_shaders_declare_it() {
     let identity = Uniforms::of(
         viewport(SegmentTransform::IDENTITY),
         PlacementData::zeroed(),
-        super::RunTier::Arena,
+        RunTier::Arena,
     );
     assert_eq!(identity.transform, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(identity.translation, [0.0, 0.0]);
     let turned = Uniforms::of(
         viewport(quarter_turn()),
         PlacementData::zeroed(),
-        super::RunTier::Arena,
+        RunTier::Arena,
     );
     assert_eq!(turned.transform, [0.0, -1.0, 1.0, 0.0]);
     assert_eq!(turned.translation, [100.0, 0.0]);
@@ -598,7 +598,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         color,
         {
             let hash = style.render_hash();
-            (std::sync::Arc::new(style), hash)
+            (Arc::new(style), hash)
         },
         18.0,
         1.0,
@@ -623,7 +623,7 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
     renderer.run_store.begin_frame(false);
     renderer.text_glyph_run_arena.begin_frame();
     renderer.frame_stats.draw_calls.set(0);
-    let segments = [crate::draw_pass::PassSegment {
+    let segments = [PassSegment {
         scene,
         ops: &scene.draw_ops,
         composites: &[],
@@ -638,12 +638,12 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
     graph.add_fallible_command_pass(None, &[], &[], |recorder| {
         renderer.encode_pass(
             recorder,
-            crate::draw_pass::PassTarget {
+            PassTarget {
                 view: &view,
                 width: 128,
                 height: 32,
             },
-            (&segments, crate::draw_pass::SegmentLayout::Stacked),
+            (&segments, SegmentLayout::Stacked),
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             "Batched text test",
         )?;

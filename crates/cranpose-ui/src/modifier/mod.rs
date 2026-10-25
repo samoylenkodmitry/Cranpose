@@ -422,7 +422,7 @@ impl Modifier {
         let modifier = crate::thread_state::with(|state| {
             state
                 .clip_to_bounds
-                .get_or_init(|| Modifier::with_element(ClipToBoundsElement::new()))
+                .get_or_init(|| Self::with_element(ClipToBoundsElement::new()))
                 .clone()
         });
         let modifier =
@@ -440,7 +440,7 @@ impl Modifier {
         F: Fn() -> T + 'static,
     {
         let element = ModifierLocalProviderElement::new(key, value);
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -451,7 +451,7 @@ impl Modifier {
         F: for<'scope> Fn(&mut ModifierLocalReadScope<'scope>) + 'static,
     {
         let element = ModifierLocalConsumerElement::new(consumer);
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -477,7 +477,7 @@ impl Modifier {
     where
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
-        self.semantics_recorder(std::rc::Rc::new(recorder), true)
+        self.semantics_recorder(Rc::new(recorder), true)
     }
 
     /// [`Modifier::semantics`] for a recorder that reads nothing but what it
@@ -490,12 +490,12 @@ impl Modifier {
     where
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
-        self.semantics_recorder(std::rc::Rc::new(recorder), false)
+        self.semantics_recorder(Rc::new(recorder), false)
     }
 
     fn semantics_recorder(
         self,
-        recorder: std::rc::Rc<dyn Fn(&mut SemanticsConfiguration)>,
+        recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
         reads_live_state: bool,
     ) -> Self {
         let metadata = if inspector_metadata_enabled() {
@@ -528,7 +528,7 @@ impl Modifier {
         };
         let element = SemanticsElement::new(recorder, reads_live_state);
         let modifier =
-            Modifier::from_dyn_element(modifier_element(element)).with_inspector_metadata(metadata);
+            Self::from_dyn_element(modifier_element(element)).with_inspector_metadata(metadata);
         self.then(modifier)
     }
 
@@ -764,7 +764,7 @@ impl Modifier {
     /// can be focused programmatically.
     pub fn focus_target(self) -> Self {
         let element = FocusTargetElement::new();
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -777,7 +777,7 @@ impl Modifier {
         F: Fn(FocusState) + 'static,
     {
         let element = FocusTargetElement::with_callback(callback);
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -789,7 +789,7 @@ impl Modifier {
     /// `request_focus` moves whichever focus targets are attached there.
     pub fn focus_requester(self, requester: &FocusRequester) -> Self {
         let element = FocusRequesterElement::new(requester.clone());
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -802,7 +802,7 @@ impl Modifier {
     /// signal for itself.
     pub fn semantics_requester(self, requester: &SemanticsRequester) -> Self {
         let element = SemanticsRequesterElement::new(requester.clone());
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -904,7 +904,7 @@ impl Modifier {
         }
 
         let element = DebugChainElement { tag };
-        let modifier = Modifier::from_dyn_element(modifier_element(element));
+        let modifier = Self::from_dyn_element(modifier_element(element));
         self.then(modifier)
             .with_inspector_metadata(inspector_metadata("debugChain", move |info| {
                 info.add_property("tag", tag);
@@ -916,7 +916,7 @@ impl Modifier {
     /// It takes `self`: a modifier built link by link owns its elements
     /// alone, so each link joins them in place instead of copying the chain.
     /// Clone a modifier first to keep using it; the join then copies it.
-    pub fn then(self, next: Modifier) -> Modifier {
+    pub fn then(self, next: Self) -> Self {
         let ModifierKind::Single {
             elements,
             inspector,
@@ -929,7 +929,7 @@ impl Modifier {
             inspector: next_inspector,
         } = next.kind
         else {
-            return Modifier {
+            return Self {
                 kind: ModifierKind::Single {
                     elements,
                     inspector,
@@ -946,7 +946,7 @@ impl Modifier {
                 inspector_slice(&next_inspector),
             )
         };
-        Modifier {
+        Self {
             kind: ModifierKind::Single {
                 elements: elements.joined(next_elements),
                 inspector,

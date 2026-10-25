@@ -92,7 +92,7 @@ fn audit_files(
             widgets,
             ignored,
             findings: Vec::new(),
-            seen: std::collections::BTreeSet::new(),
+            seen: BTreeSet::new(),
         };
         visitor.visit_file(&syntax);
         findings.extend(visitor.findings);
@@ -146,9 +146,9 @@ fn visit_rust_files(path: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<
 struct UiVisitor<'a> {
     file: String,
     widgets: &'a BTreeMap<String, Vec<usize>>,
-    ignored: &'a std::collections::BTreeSet<String>,
+    ignored: &'a BTreeSet<String>,
     findings: Vec<UiTextFinding>,
-    seen: std::collections::BTreeSet<(usize, usize)>,
+    seen: BTreeSet<(usize, usize)>,
 }
 
 impl UiVisitor<'_> {
@@ -213,7 +213,7 @@ impl<'ast> Visit<'ast> for UiVisitor<'_> {
 
 struct LiteralVisitor<'a> {
     file: String,
-    ignored: &'a std::collections::BTreeSet<String>,
+    ignored: &'a BTreeSet<String>,
     findings: Vec<UiTextFinding>,
 }
 

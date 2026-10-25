@@ -144,9 +144,9 @@ fn combined_switching_app(
 
 #[test]
 fn test_switching_between_views_doesnt_duplicate_content() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -280,9 +280,9 @@ fn test_switching_between_views_doesnt_duplicate_content() {
 
 #[test]
 fn test_node_cleanup_on_view_switch() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -345,9 +345,9 @@ fn test_node_cleanup_on_view_switch() {
 
 #[test]
 fn test_multiple_switches_with_state_changes() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -461,9 +461,9 @@ fn test_multiple_switches_with_state_changes() {
 
 #[test]
 fn test_deeply_nested_conditional_switching() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -518,9 +518,9 @@ fn test_deeply_nested_conditional_switching() {
 
 #[test]
 fn test_switching_with_different_node_counts() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -590,9 +590,9 @@ fn test_switching_with_different_node_counts() {
 
 #[test]
 fn test_conditional_with_complex_button_structure() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -683,9 +683,9 @@ fn test_conditional_with_complex_button_structure() {
 
 #[test]
 fn test_clicking_same_switch_button_twice_no_duplication() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -880,9 +880,9 @@ fn test_composition_local_demo(
 
 #[test]
 fn composition_local_increment_keeps_node_count_stable() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 

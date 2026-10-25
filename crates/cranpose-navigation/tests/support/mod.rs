@@ -25,7 +25,7 @@ pub fn serial() -> MutexGuard<'static, ()> {
 /// Empty preferences for the platform to save in.
 pub fn fresh_store() -> Arc<MemoryPreferences> {
     let store = Arc::new(MemoryPreferences::new());
-    set_platform_preferences(store.clone());
+    set_platform_preferences(Arc::<MemoryPreferences>::clone(&store));
     store
 }
 

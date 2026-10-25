@@ -133,7 +133,7 @@ impl ModifierLocalProviderNode {
     }
 
     fn value(&self) -> Rc<dyn Any> {
-        self.value.clone()
+        Rc::clone(&self.value)
     }
 
     fn version(&self) -> u64 {
@@ -192,7 +192,7 @@ impl ResolvedModifierLocal {
     }
 
     pub(crate) fn value(&self) -> Rc<dyn Any> {
-        self.value.clone()
+        Rc::clone(&self.value)
     }
 
     pub(crate) fn version(&self) -> u64 {
@@ -375,11 +375,11 @@ impl ModifierNodeElement for ModifierLocalProviderElement {
     type Node = ModifierLocalProviderNode;
 
     fn create(&self) -> Self::Node {
-        ModifierLocalProviderNode::new(self.token.clone(), self.factory.clone())
+        ModifierLocalProviderNode::new(self.token.clone(), Rc::clone(&self.factory))
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.set_factory(self.factory.clone());
+        node.set_factory(Rc::clone(&self.factory));
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -431,11 +431,11 @@ impl ModifierNodeElement for ModifierLocalConsumerElement {
     type Node = ModifierLocalConsumerNode;
 
     fn create(&self) -> Self::Node {
-        ModifierLocalConsumerNode::new(self.callback.clone())
+        ModifierLocalConsumerNode::new(Rc::clone(&self.callback))
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.callback = self.callback.clone();
+        node.callback = Rc::clone(&self.callback);
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -606,7 +606,7 @@ impl ModifierLocalManager {
     pub(crate) fn resolve(&self, token: &ModifierLocalToken) -> Option<ResolvedModifierLocal> {
         self.providers.get(&token.id()).map(|record| {
             ResolvedModifierLocal::new(
-                record.value().clone(),
+                Rc::clone(record.value()),
                 record.version(),
                 ModifierLocalSource::Chain,
             )

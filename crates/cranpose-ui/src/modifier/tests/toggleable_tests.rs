@@ -22,7 +22,7 @@ fn a_click_reports_the_new_value_not_the_old_one() {
     let _app_context = crate::render_state::app_context_test_scope();
     for start in [false, true] {
         let seen: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
-        let sink = seen.clone();
+        let sink = Rc::clone(&seen);
         let modifier =
             Modifier::empty().toggleable(start, None, None, move |next| sink.set(Some(next)));
         tap(&modifier);
@@ -45,10 +45,7 @@ fn a_toggleable_row_reads_as_clickable_and_carries_its_description() {
         semantics.content_description.as_deref(),
         Some("Haptics, on")
     );
-    assert_eq!(
-        semantics.toggled,
-        Some(cranpose_foundation::ToggleableState::On)
-    );
+    assert_eq!(semantics.toggled, Some(ToggleableState::On));
     assert_eq!(semantics.role, None);
 }
 
@@ -63,10 +60,7 @@ fn a_role_reaches_the_semantics_so_a_reader_can_say_what_the_control_is() {
     let semantics = collect_semantics_from_modifier(&modifier).expect("semantics");
     assert_eq!(semantics.role, Some(SemanticsWidgetRole::Switch));
     assert!(semantics.is_clickable);
-    assert_eq!(
-        semantics.toggled,
-        Some(cranpose_foundation::ToggleableState::Off)
-    );
+    assert_eq!(semantics.toggled, Some(ToggleableState::Off));
     assert_eq!(
         semantics.content_description.as_deref(),
         Some("Haptics, off")

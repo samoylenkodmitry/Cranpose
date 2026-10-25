@@ -113,7 +113,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
 
     cranpose_core::LaunchedEffect(tab, move |scope| {
         state.set(SourceState::Loading);
-        let client = http_client.clone();
+        let client = std::sync::Arc::clone(&http_client);
         let url = source_url(tab);
         scope.launch_background(
             move |_token| async move {
@@ -161,11 +161,11 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
                         LazyColumnSpec::new()
                             .vertical_arrangement(LinearArrangement::SpacedBy(1.0)),
                         move |scope| {
-                            let lines = lines.clone();
+                            let lines = Rc::clone(&lines);
                             scope.items(
                                 LazyItems::new(count).key(|index: usize| index as u64),
                                 move |index| {
-                                    SourceLine(index + 1, lines[index].clone());
+                                    SourceLine(index + 1, Rc::clone(&lines[index]));
                                 },
                             );
                         },
@@ -193,7 +193,7 @@ fn SourceLine(number: usize, line: Rc<AnnotatedString>) {
                     ..Default::default()
                 },
             );
-            Text(line.clone(), Modifier::empty(), TextStyle::default());
+            Text(Rc::clone(&line), Modifier::empty(), TextStyle::default());
         },
     );
 }

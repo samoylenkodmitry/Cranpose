@@ -54,9 +54,9 @@ fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>)
 
 #[test]
 fn test_pointer_input_async_handler_lifecycle() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -133,9 +133,9 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
 
 #[test]
 fn test_pause_button_with_dynamic_content() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 

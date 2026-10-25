@@ -32,7 +32,7 @@ pub fn headless_renderer(label: &'static str) -> Option<WgpuRenderer> {
     device.attach(
         &mut renderer,
         wgpu::TextureFormat::Bgra8UnormSrgb,
-        crate::gpu_test_device::Pipelines::Inline,
+        gpu_test_device::Pipelines::Inline,
     );
     Some(renderer)
 }

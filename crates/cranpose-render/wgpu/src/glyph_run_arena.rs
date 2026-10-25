@@ -517,7 +517,7 @@ fn span_quads(span: &StagedSpan) -> u32 {
 }
 
 fn instance_offset(quads: u32) -> u64 {
-    u64::from(quads) * std::mem::size_of::<GlyphInstance>() as u64
+    u64::from(quads) * size_of::<GlyphInstance>() as u64
 }
 
 #[cfg(test)]

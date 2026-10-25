@@ -56,8 +56,8 @@ fn test_merge_read_observers_both_none() {
 
 #[test]
 fn test_merge_read_observers_one_some() {
-    let observer = Rc::new(|_: &dyn StateObject| {});
-    let result = merge_read_observers(Some(observer.clone()), None);
+    let observer: ReadObserver = Rc::new(|_: &dyn StateObject| {});
+    let result = merge_read_observers(Some(Rc::clone(&observer)), None);
     assert!(result.is_some());
 
     let result = merge_read_observers(None, Some(observer));
@@ -72,8 +72,8 @@ fn test_merge_write_observers_both_none() {
 
 #[test]
 fn test_merge_write_observers_one_some() {
-    let observer = Rc::new(|_: &dyn StateObject| {});
-    let result = merge_write_observers(Some(observer.clone()), None);
+    let observer: WriteObserver = Rc::new(|_: &dyn StateObject| {});
+    let result = merge_write_observers(Some(Rc::clone(&observer)), None);
     assert!(result.is_some());
 
     let result = merge_write_observers(None, Some(observer));
@@ -101,7 +101,7 @@ impl StateObject for TestStateObject {
         crate::state::ObjectId(self.id)
     }
 
-    fn first_record(&self) -> Rc<crate::state::StateRecord> {
+    fn first_record(&self) -> Rc<StateRecord> {
         unimplemented!("Not needed for observer tests")
     }
 
@@ -109,7 +109,7 @@ impl StateObject for TestStateObject {
         &self,
         _snapshot_id: SnapshotId,
         _invalid: &SnapshotIdSet,
-    ) -> Option<Rc<crate::state::StateRecord>> {
+    ) -> Option<Rc<StateRecord>> {
         None
     }
 
@@ -117,11 +117,11 @@ impl StateObject for TestStateObject {
         &self,
         _snapshot_id: SnapshotId,
         _invalid: &SnapshotIdSet,
-    ) -> Rc<crate::state::StateRecord> {
+    ) -> Rc<StateRecord> {
         unimplemented!("Not needed for observer tests")
     }
 
-    fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
+    fn prepend_state_record(&self, _record: Rc<StateRecord>) {
         unimplemented!("Not needed for observer tests")
     }
 
@@ -141,8 +141,8 @@ fn test_apply_observer_receives_correct_modified_objects() {
     let received_count = Rc::new(Mutex::new(0));
     let received_snapshot_id = Rc::new(Mutex::new(0));
 
-    let received_count_clone = received_count.clone();
-    let received_snapshot_id_clone = received_snapshot_id.clone();
+    let received_count_clone = Rc::clone(&received_count);
+    let received_snapshot_id_clone = Rc::clone(&received_snapshot_id);
 
     let _handle = register_apply_observer(Rc::new(move |modified, snapshot_id| {
         *received_snapshot_id_clone.lock().unwrap() = snapshot_id;
@@ -164,7 +164,7 @@ fn test_apply_observer_receives_correct_snapshot_id() {
     use std::sync::Mutex;
 
     let received_id = Rc::new(Mutex::new(0));
-    let received_id_clone = received_id.clone();
+    let received_id_clone = Rc::clone(&received_id);
 
     let _handle = register_apply_observer(Rc::new(move |_, snapshot_id| {
         *received_id_clone.lock().unwrap() = snapshot_id;
@@ -183,9 +183,9 @@ fn test_multiple_apply_observers_all_called() {
     let call_count2 = Rc::new(Mutex::new(0));
     let call_count3 = Rc::new(Mutex::new(0));
 
-    let call_count1_clone = call_count1.clone();
-    let call_count2_clone = call_count2.clone();
-    let call_count3_clone = call_count3.clone();
+    let call_count1_clone = Rc::clone(&call_count1);
+    let call_count2_clone = Rc::clone(&call_count2);
+    let call_count3_clone = Rc::clone(&call_count3);
 
     let _handle1 = register_apply_observer(Rc::new(move |_, _| {
         *call_count1_clone.lock().unwrap() += 1;
@@ -217,7 +217,7 @@ fn test_apply_observer_not_called_for_empty_modifications() {
     use std::sync::Mutex;
 
     let call_count = Rc::new(Mutex::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Rc::clone(&call_count);
 
     let _handle = register_apply_observer(Rc::new(move |modified, _| {
         *call_count_clone.lock().unwrap() += 1;
@@ -230,7 +230,7 @@ fn test_apply_observer_not_called_for_empty_modifications() {
 }
 
 fn register_counting_observer(calls: &Rc<Mutex<Vec<i32>>>, tag: i32) -> ObserverHandle {
-    let calls = calls.clone();
+    let calls = Rc::clone(calls);
     register_apply_observer(Rc::new(move |_, _| {
         calls.lock().unwrap().push(tag);
     }))
@@ -335,12 +335,12 @@ fn test_remaining_observers_still_work_after_drop() {
 
     let calls = Rc::new(Mutex::new(Vec::new()));
 
-    let calls1 = calls.clone();
+    let calls1 = Rc::clone(&calls);
     let handle1 = register_apply_observer(Rc::new(move |_, snapshot_id| {
         calls1.lock().unwrap().push((1, snapshot_id));
     }));
 
-    let calls2 = calls.clone();
+    let calls2 = Rc::clone(&calls);
     let handle2 = register_apply_observer(Rc::new(move |_, snapshot_id| {
         calls2.lock().unwrap().push((2, snapshot_id));
     }));
@@ -355,7 +355,7 @@ fn test_remaining_observers_still_work_after_drop() {
     assert_eq!(*calls.lock().unwrap(), vec![(2, 200)]);
     calls.lock().unwrap().clear();
 
-    let calls3 = calls.clone();
+    let calls3 = Rc::clone(&calls);
     let _handle3 = register_apply_observer(Rc::new(move |_, snapshot_id| {
         calls3.lock().unwrap().push((3, snapshot_id));
     }));
@@ -378,7 +378,7 @@ fn test_observer_ids_are_unique() {
     let mut handles = Vec::new();
 
     for i in 0..100 {
-        let ids_clone = ids.clone();
+        let ids_clone = Rc::clone(&ids);
         let handle = register_apply_observer(Rc::new(move |_, _| {
             ids_clone.lock().unwrap().insert(i);
         }));
@@ -403,7 +403,7 @@ fn test_state_object_storage_in_modified_set() {
 
     let state_obj = TestStateObject::new(12345) as Rc<dyn StateObject>;
 
-    state.record_write(state_obj.clone(), 1);
+    state.record_write(Rc::clone(&state_obj), 1);
 
     let modified = state.modified.borrow();
     assert_eq!(modified.len(), 1);
@@ -419,10 +419,10 @@ fn test_multiple_writes_to_same_state_object() {
     let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
     let state_obj = TestStateObject::new(99999) as Rc<dyn StateObject>;
 
-    state.record_write(state_obj.clone(), 1);
+    state.record_write(Rc::clone(&state_obj), 1);
     assert_eq!(state.modified.borrow().len(), 1);
 
-    state.record_write(state_obj.clone(), 2);
+    state.record_write(Rc::clone(&state_obj), 2);
     let modified = state.modified.borrow();
     assert_eq!(modified.len(), 1);
     assert!(modified.contains_key(&99999));

@@ -661,9 +661,9 @@ impl RenderNode {
     /// of a layout node, which is a child of the layer.
     pub fn draw_phase(&self) -> Option<PrimitivePhase> {
         match self {
-            RenderNode::Primitive(entry) => Some(entry.phase),
-            RenderNode::DrawRun(run) => Some(run.phase),
-            RenderNode::Layer(layer) => layer.draw_phase,
+            Self::Primitive(entry) => Some(entry.phase),
+            Self::DrawRun(run) => Some(run.phase),
+            Self::Layer(layer) => layer.draw_phase,
         }
     }
 
@@ -879,7 +879,7 @@ fn render_node_heap_bytes(node: &RenderNode) -> usize {
         RenderNode::Primitive(entry) => primitive_entry_heap_bytes(entry),
         RenderNode::DrawRun(run) => {
             run.recording.pod_heap_bytes()
-                + std::mem::size_of_val(run.recording.others())
+                + size_of_val(run.recording.others())
                 + run
                     .recording
                     .others()
@@ -918,11 +918,7 @@ fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
         DrawPrimitive::Text(text) => {
             size_of::<cranpose_ui_graphics::TextPrimitive>()
                 + text.text.len()
-                + text
-                    .style
-                    .font_family
-                    .as_ref()
-                    .map_or(0, std::string::String::capacity)
+                + text.style.font_family.as_ref().map_or(0, String::capacity)
         }
         DrawPrimitive::Shadow(shadow) => shadow_primitive_heap_bytes(shadow),
     }

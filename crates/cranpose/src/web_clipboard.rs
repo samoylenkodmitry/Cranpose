@@ -58,7 +58,7 @@ impl PlatformClipboard for WebClipboard {
             return false;
         };
         let promise = clipboard.read_text();
-        let app = self.app.clone();
+        let app = Weak::clone(&self.app);
         let request_frame = Rc::clone(&self.request_frame);
         spawn_local(async move {
             let text = match JsFuture::from(promise).await {

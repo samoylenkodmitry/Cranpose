@@ -13,15 +13,11 @@ fn hash_of(element: &TextModifierElement) -> u64 {
 }
 
 struct RecordingPreparedLayoutMeasurer {
-    recorded: std::rc::Rc<std::cell::RefCell<Vec<Option<NodeId>>>>,
+    recorded: Rc<RefCell<Vec<Option<NodeId>>>>,
 }
 
 impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
-    fn measure(
-        &self,
-        _text: &crate::text::AnnotatedString,
-        _style: &TextStyle,
-    ) -> crate::text::TextMetrics {
+    fn measure(&self, _text: &AnnotatedString, _style: &TextStyle) -> crate::text::TextMetrics {
         crate::text::TextMetrics {
             width: 12.0,
             height: 18.0,
@@ -33,15 +29,15 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
     fn prepare_with_options_for_node(
         &self,
         node_id: Option<NodeId>,
-        text: &Rc<crate::text::AnnotatedString>,
-        _style: &std::sync::Arc<TextStyle>,
+        text: &Rc<AnnotatedString>,
+        _style: &Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> crate::text::PreparedTextLayout {
         self.recorded.borrow_mut().push(node_id);
         crate::text::PreparedTextLayout {
             text: Rc::clone(text),
-            visual_style: std::sync::Arc::new(TextStyle::default()),
+            visual_style: Arc::new(TextStyle::default()),
             metrics: crate::text::TextMetrics {
                 width: 12.0,
                 height: 18.0,
@@ -58,7 +54,7 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
 
     fn get_offset_for_position(
         &self,
-        _text: &crate::text::AnnotatedString,
+        _text: &AnnotatedString,
         _style: &TextStyle,
         _x: f32,
         _y: f32,
@@ -68,14 +64,14 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        _text: &crate::text::AnnotatedString,
+        _text: &AnnotatedString,
         _style: &TextStyle,
         _offset: usize,
     ) -> f32 {
         0.0
     }
 
-    fn layout(&self, _text: &crate::text::AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
+    fn layout(&self, _text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
         panic!("layout is not used in this test");
     }
 }
@@ -90,11 +86,7 @@ struct FontSizePreparedLayoutMeasurer {
 }
 
 impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
-    fn measure(
-        &self,
-        _text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> crate::text::TextMetrics {
+    fn measure(&self, _text: &AnnotatedString, style: &TextStyle) -> crate::text::TextMetrics {
         let size = style.resolve_font_size(14.0);
         crate::text::TextMetrics {
             width: size,
@@ -107,8 +99,8 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &Rc<crate::text::AnnotatedString>,
-        style: &std::sync::Arc<TextStyle>,
+        text: &Rc<AnnotatedString>,
+        style: &Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> crate::text::PreparedTextLayout {
@@ -116,7 +108,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
         self.recorded.borrow_mut().push(size);
         crate::text::PreparedTextLayout {
             text: Rc::clone(text),
-            visual_style: std::sync::Arc::clone(style),
+            visual_style: Arc::clone(style),
             metrics: crate::text::TextMetrics {
                 width: size,
                 height: size,
@@ -133,7 +125,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
 
     fn get_offset_for_position(
         &self,
-        _text: &crate::text::AnnotatedString,
+        _text: &AnnotatedString,
         _style: &TextStyle,
         _x: f32,
         _y: f32,
@@ -143,24 +135,20 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        _text: &crate::text::AnnotatedString,
+        _text: &AnnotatedString,
         _style: &TextStyle,
         _offset: usize,
     ) -> f32 {
         0.0
     }
 
-    fn layout(&self, _text: &crate::text::AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
+    fn layout(&self, _text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
         panic!("layout is not used in this test");
     }
 }
 
 impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
-    fn measure(
-        &self,
-        _text: &crate::text::AnnotatedString,
-        _style: &TextStyle,
-    ) -> crate::text::TextMetrics {
+    fn measure(&self, _text: &AnnotatedString, _style: &TextStyle) -> crate::text::TextMetrics {
         crate::text::TextMetrics {
             width: 24.0,
             height: self.height,
@@ -172,14 +160,14 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &Rc<crate::text::AnnotatedString>,
-        _style: &std::sync::Arc<TextStyle>,
+        text: &Rc<AnnotatedString>,
+        _style: &Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> crate::text::PreparedTextLayout {
         crate::text::PreparedTextLayout {
             text: Rc::clone(text),
-            visual_style: std::sync::Arc::new(TextStyle::default()),
+            visual_style: Arc::new(TextStyle::default()),
             metrics: crate::text::TextMetrics {
                 width: 24.0,
                 height: self.height,
@@ -196,7 +184,7 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
 
     fn get_offset_for_position(
         &self,
-        _text: &crate::text::AnnotatedString,
+        _text: &AnnotatedString,
         _style: &TextStyle,
         _x: f32,
         _y: f32,
@@ -206,14 +194,14 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        _text: &crate::text::AnnotatedString,
+        _text: &AnnotatedString,
         _style: &TextStyle,
         _offset: usize,
     ) -> f32 {
         0.0
     }
 
-    fn layout(&self, _text: &crate::text::AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
+    fn layout(&self, _text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
         panic!("layout is not used in this test");
     }
 }
@@ -231,13 +219,12 @@ fn hash_matches_for_equal_elements() {
     let options = TextLayoutOptions::default();
     let text = Rc::new(AnnotatedString::from("Hash me"));
     let element_a = TextModifierElement::new(
-        text.clone(),
+        Rc::clone(&text),
         style.clone(),
         options,
-        crate::density::Density::new(1.0, 1.0),
+        Density::new(1.0, 1.0),
     );
-    let element_b =
-        TextModifierElement::new(text, style, options, crate::density::Density::new(1.0, 1.0));
+    let element_b = TextModifierElement::new(text, style, options, Density::new(1.0, 1.0));
 
     assert_eq!(element_a, element_b);
     assert_eq!(hash_of(&element_a), hash_of(&element_b));
@@ -248,18 +235,18 @@ fn measure_uses_attached_node_identity() {
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = Rc::new(RefCell::new(Vec::new()));
         let app_context = crate::AppContext::new();
         app_context.enter(|| {
             crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
-                recorded: recorded.clone(),
+                recorded: Rc::clone(&recorded),
             });
 
             let mut node = TextModifierNode::new(
                 Rc::new(AnnotatedString::from("identity")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
             let mut context = BasicModifierNodeContext::new();
             context.set_node_id(Some(77));
@@ -282,18 +269,18 @@ fn prepared_layout_cache_reuses_node_snapshot() {
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = Rc::new(RefCell::new(Vec::new()));
         let app_context = crate::AppContext::new();
         app_context.enter(|| {
             crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
-                recorded: recorded.clone(),
+                recorded: Rc::clone(&recorded),
             });
 
             let mut node = TextModifierNode::new(
                 Rc::new(AnnotatedString::from("reuse")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
             let mut context = BasicModifierNodeContext::new();
             context.set_node_id(Some(88));
@@ -338,7 +325,7 @@ fn prepared_layout_cache_refreshes_when_text_service_changes() {
                 Rc::new(AnnotatedString::from("a\nb\nc")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
 
             let first = node.measure_text_content(Some(160.0));
@@ -378,7 +365,7 @@ fn prepared_layout_cache_refreshes_when_system_font_scale_changes() {
                     ..Default::default()
                 },
                 TextLayoutOptions::default(),
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
 
             let first = node.measure_text_content(None);
@@ -408,7 +395,7 @@ fn semantics_uses_source_text_for_scaled_overflow() {
             max_lines: 1,
             min_lines: 1,
         },
-        crate::density::Density::new(1.0, 1.0),
+        Density::new(1.0, 1.0),
     );
     let mut config = SemanticsConfiguration::default();
 
@@ -425,17 +412,17 @@ fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = Rc::new(RefCell::new(Vec::new()));
         let app_context = crate::AppContext::new();
         app_context.enter(|| {
             crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
-                recorded: recorded.clone(),
+                recorded: Rc::clone(&recorded),
             });
             let node = TextModifierNode::new(
                 Rc::new(AnnotatedString::from("label")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
             let mut prepares = Vec::new();
             for width in [Some(120.0), Some(200.0), None, Some(12.0), Some(10.0)] {
@@ -470,7 +457,7 @@ fn layouts_kept_at(
                 Rc::new(AnnotatedString::from(text)),
                 TextStyle::default(),
                 options,
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
             let layout_at = |width: f32| {
                 node.layout.measure_layout(Some(width));
@@ -538,7 +525,7 @@ fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
         Rc::new(AnnotatedString::from("Label")),
         TextStyle::default(),
         TextLayoutOptions::default(),
-        crate::density::Density::new(1.0, 1.0),
+        Density::new(1.0, 1.0),
     );
     assert_eq!(node.reach(), cranpose_foundation::SemanticsReach::default());
 }
@@ -554,7 +541,7 @@ fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
                 Rc::clone(&source),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
-                crate::density::Density::new(1.0, 1.0),
+                Density::new(1.0, 1.0),
             );
             let layout_at = |width: f32| {
                 node.layout.measure_layout(Some(width));
@@ -567,7 +554,7 @@ fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
                 Rc::ptr_eq(&whole.text, &source),
                 Rc::ptr_eq(&wrapped.text, &source),
                 wrapped.text.text.clone(),
-                std::sync::Arc::ptr_eq(&whole.visual_style, &wrapped.visual_style),
+                Arc::ptr_eq(&whole.visual_style, &wrapped.visual_style),
             ))
             .expect("send layouts");
         });
@@ -602,7 +589,7 @@ fn an_update_to_an_equal_style_keeps_the_layout_and_a_new_style_lays_out_again()
                     Rc::clone(&text),
                     style,
                     TextLayoutOptions::default(),
-                    crate::density::Density::new(1.0, 1.0),
+                    Density::new(1.0, 1.0),
                 )
             };
             let first = element(TextStyle::default());

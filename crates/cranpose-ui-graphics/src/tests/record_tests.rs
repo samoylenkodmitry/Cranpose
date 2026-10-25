@@ -150,7 +150,7 @@ fn every_primitive() -> Vec<DrawPrimitive> {
             center: Point::new(0.0, 0.0),
             radius: 5.0,
             start_angle: 0.0,
-            sweep_angle: crate::TAU,
+            sweep_angle: TAU,
             stroke: None,
             inner_radius: 2.0,
         },
@@ -794,9 +794,9 @@ fn empty_recordings_share_their_shapes() {
 
 #[test]
 fn the_record_is_seven_rows() {
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 112);
-    assert_eq!(std::mem::size_of::<BrushRecord>(), 48);
-    assert_eq!(std::mem::size_of::<GradientStopRecord>(), 32);
+    assert_eq!(size_of::<ShapeRecord>(), 112);
+    assert_eq!(size_of::<BrushRecord>(), 48);
+    assert_eq!(size_of::<GradientStopRecord>(), 32);
 }
 
 fn only_segment_occluders(record: impl FnOnce(&mut ShapeRecorder)) -> bool {
@@ -1123,7 +1123,7 @@ fn a_segment_keeps_every_interior_flag_its_records_would_set() {
 #[test]
 fn a_drawn_line_records_as_a_line_and_its_slanted_square_ends_widen_the_bounds() {
     let mut recording = CommandRecording::default();
-    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0), &mut recording);
+    let mut scope = DrawScopeDefault::new(Size::new(64.0, 64.0), &mut recording);
     let stroke = Stroke {
         width: 10.0,
         cap: StrokeCap::Square,
@@ -1131,7 +1131,7 @@ fn a_drawn_line_records_as_a_line_and_its_slanted_square_ends_widen_the_bounds()
     };
     let (start, end) = (Point::new(20.0, 20.0), Point::new(50.0, 60.0));
     scope.draw_line(solid(), start, end, stroke);
-    let line = crate::LineGeometry::new(start, end, stroke);
+    let line = LineGeometry::new(start, end, stroke);
     assert_eq!(
         scope.into_primitives(),
         vec![DrawPrimitive::Line {
@@ -1160,7 +1160,7 @@ fn a_drawn_line_records_as_a_line_and_its_slanted_square_ends_widen_the_bounds()
 #[test]
 fn a_draw_scope_skips_a_line_that_covers_nothing() {
     let mut recording = CommandRecording::default();
-    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0), &mut recording);
+    let mut scope = DrawScopeDefault::new(Size::new(64.0, 64.0), &mut recording);
     let point = Point::new(8.0, 8.0);
     scope.draw_line(solid(), point, point, Stroke::new(4.0));
     scope.draw_line(solid(), point, Point::new(20.0, 8.0), Stroke::new(0.0));
@@ -1170,7 +1170,7 @@ fn a_draw_scope_skips_a_line_that_covers_nothing() {
 #[test]
 fn a_blended_line_keeps_its_blend_mode() {
     let mut recording = CommandRecording::default();
-    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0), &mut recording);
+    let mut scope = DrawScopeDefault::new(Size::new(64.0, 64.0), &mut recording);
     let (start, end, stroke) = (
         Point::new(4.0, 4.0),
         Point::new(40.0, 4.0),
@@ -1181,7 +1181,7 @@ fn a_blended_line_keeps_its_blend_mode() {
         scope.into_primitives(),
         vec![DrawPrimitive::Blend {
             primitive: Box::new(DrawPrimitive::Line {
-                rect: crate::LineGeometry::new(start, end, stroke).end_bounds(),
+                rect: LineGeometry::new(start, end, stroke).end_bounds(),
                 brush: solid(),
                 start,
                 end,

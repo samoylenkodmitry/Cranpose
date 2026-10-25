@@ -97,11 +97,7 @@ impl AppContextTextMeasurer {
     /// [`DrawScopeDefault::with_text_measurer`](cranpose_ui_graphics::DrawScopeDefault::with_text_measurer).
     pub fn shared() -> Rc<dyn DrawTextMeasurer> {
         crate::thread_state::with(|state| {
-            Rc::clone(
-                state
-                    .draw_text_measurer
-                    .get_or_init(|| Rc::new(AppContextTextMeasurer)),
-            )
+            Rc::clone(state.draw_text_measurer.get_or_init(|| Rc::new(Self)))
         })
     }
 }

@@ -60,7 +60,7 @@ fn without_a_sensor_nothing_is_read_and_nothing_is_asked() {
 fn reading_never_asks_and_asking_is_explicit() {
     let _guard = crate::registry::test_service_guard();
     let sensor = Sensor::present(HeartRatePermission::NotAsked);
-    set_platform_heart_rate(sensor.clone());
+    set_platform_heart_rate(Arc::<Sensor>::clone(&sensor));
     let reader = observe_heart_rate(true, |_| {});
     assert_eq!(heart_rate().status, HeartRateStatus::NeedsPermission);
     assert_eq!(sensor.requests.load(Ordering::SeqCst), 0, "observing asked");
@@ -101,7 +101,7 @@ fn reading_never_asks_and_asking_is_explicit() {
 fn the_sensor_runs_only_while_something_reads_it() {
     let _guard = crate::registry::test_service_guard();
     let sensor = Sensor::present(HeartRatePermission::Granted);
-    set_platform_heart_rate(sensor.clone());
+    set_platform_heart_rate(Arc::<Sensor>::clone(&sensor));
     let watcher = observe_heart_rate(false, |_| {});
     assert_eq!(
         sensor.starts.load(Ordering::SeqCst),
@@ -127,7 +127,7 @@ fn the_sensor_runs_only_while_something_reads_it() {
 fn a_refusal_is_reported_and_the_sensor_stays_off() {
     let _guard = crate::registry::test_service_guard();
     let sensor = Sensor::present(HeartRatePermission::Denied);
-    set_platform_heart_rate(sensor.clone());
+    set_platform_heart_rate(Arc::<Sensor>::clone(&sensor));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
     let reader = observe_heart_rate(true, move |reading| {

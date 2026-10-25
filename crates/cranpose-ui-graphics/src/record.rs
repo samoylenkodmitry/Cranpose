@@ -880,10 +880,10 @@ impl RecordTables {
     /// The heap the tables hold, capacity included.
     pub fn heap_bytes(&self) -> usize {
         self.shapes.heap_bytes()
-            + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
-            + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
-            + self.explicit_stops.capacity() * std::mem::size_of::<f32>()
-            + self.segments.capacity() * std::mem::size_of::<RecordSegment>()
+            + self.brushes.capacity() * size_of::<BrushRecord>()
+            + self.stops.capacity() * size_of::<GradientStopRecord>()
+            + self.explicit_stops.capacity() * size_of::<f32>()
+            + self.segments.capacity() * size_of::<RecordSegment>()
     }
 }
 
@@ -1886,7 +1886,7 @@ impl CommandRecording {
     }
 
     fn recorder(&mut self, fresh_shapes: bool) -> CommandRecorder<'_> {
-        let CommandRecording {
+        let Self {
             shapes,
             content,
             fingerprint,

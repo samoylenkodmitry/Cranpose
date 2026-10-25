@@ -215,8 +215,8 @@ impl ColorFilter {
     }
 
     /// Returns a filter that applies `self` first and then `next`, as a single color matrix.
-    pub fn compose(&self, next: &ColorFilter) -> ColorFilter {
-        ColorFilter::matrix(compose_color_matrices(self.as_matrix(), next.as_matrix()))
+    pub fn compose(&self, next: &Self) -> Self {
+        Self::matrix(compose_color_matrices(self.as_matrix(), next.as_matrix()))
     }
 
     /// Returns the filter as a 4x5 color matrix in row-major order, in the layout

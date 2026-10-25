@@ -379,7 +379,7 @@ impl WindowState {
     }
 
     fn sized(position: Option<Point>, size: Size) -> Self {
-        WindowState {
+        Self {
             position: cranpose_core::mutableStateOf(position),
             size: cranpose_core::mutableStateOf(size),
             frame: cranpose_core::mutableStateOf(size),
@@ -683,8 +683,8 @@ impl WindowModifierExt for Modifier {
         let on_started: Rc<dyn Fn()> = Rc::new(on_started);
         let on_finished: Rc<dyn Fn()> = Rc::new(on_finished);
         self.pointer_input((), move |scope: PointerInputScope| {
-            let on_started = on_started.clone();
-            let on_finished = on_finished.clone();
+            let on_started = Rc::clone(&on_started);
+            let on_finished = Rc::clone(&on_finished);
             async move {
                 scope
                     .await_pointer_event_scope(|await_scope| async move {

@@ -324,7 +324,7 @@ impl TextModifierNode {
     }
 
     pub(crate) fn prepared_layout_handle(&self) -> TextPreparedLayoutHandle {
-        TextPreparedLayoutHandle::new(self.layout.clone())
+        TextPreparedLayoutHandle::new(Rc::clone(&self.layout))
     }
 }
 
@@ -568,7 +568,7 @@ impl ModifierNodeElement for TextModifierElement {
 
     fn create(&self) -> Self::Node {
         TextModifierNode::new(
-            self.text.clone(),
+            Rc::clone(&self.text),
             Arc::clone(&self.style),
             self.options,
             self.density,

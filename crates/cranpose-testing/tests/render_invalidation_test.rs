@@ -14,9 +14,9 @@ fn conditional_text_app(counter: MutableState<i32>) {
 
 #[test]
 fn test_render_invalidation_on_conditional_change() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -36,9 +36,9 @@ fn test_render_invalidation_on_conditional_change() {
     })
     .expect("initial render succeeds");
 
-    rule.with_app_context(cranpose_ui::take_render_invalidation);
+    rule.with_app_context(take_render_invalidation);
 
-    let before_change = rule.with_app_context(cranpose_ui::peek_render_invalidation);
+    let before_change = rule.with_app_context(peek_render_invalidation);
     eprintln!("Before state change - render invalidated: {before_change}");
     assert!(
         !before_change,
@@ -51,7 +51,7 @@ fn test_render_invalidation_on_conditional_change() {
     eprintln!("=== Running recomposition ===");
     rule.pump_until_idle().expect("recompose");
 
-    let after_change = rule.with_app_context(cranpose_ui::peek_render_invalidation);
+    let after_change = rule.with_app_context(peek_render_invalidation);
     eprintln!("\nAfter recomposition - render invalidated: {after_change}");
 
     assert!(

@@ -9,7 +9,7 @@ struct MockMeasurable {
     width: f32,
     height: f32,
     node_id: usize,
-    parent_data: cranpose_ui_layout::ParentData,
+    parent_data: ParentData,
 }
 
 impl MockMeasurable {
@@ -18,11 +18,11 @@ impl MockMeasurable {
             width,
             height,
             node_id,
-            parent_data: cranpose_ui_layout::ParentData::default(),
+            parent_data: ParentData::default(),
         }
     }
 
-    fn with_parent_data(mut self, parent_data: cranpose_ui_layout::ParentData) -> Self {
+    fn with_parent_data(mut self, parent_data: ParentData) -> Self {
         self.parent_data = parent_data;
         self
     }
@@ -51,7 +51,7 @@ impl Measurable for MockMeasurable {
         self.height
     }
 
-    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+    fn parent_data(&self) -> ParentData {
         self.parent_data.clone()
     }
 }
@@ -84,8 +84,8 @@ impl Measurable for FillWidthMeasurable {
         10.0
     }
 
-    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        cranpose_ui_layout::ParentData::default()
+    fn parent_data(&self) -> ParentData {
+        ParentData::default()
     }
 }
 
@@ -158,7 +158,7 @@ fn box_measure_policy_takes_max_size() {
 fn box_child_alignment_overrides_content_alignment() {
     let policy = BoxMeasurePolicy::new(Alignment::TOP_START, false);
     let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
-        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
+        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(ParentData {
             box_alignment: Some(Alignment::BOTTOM_END),
             ..Default::default()
         }),
@@ -178,7 +178,7 @@ fn box_child_alignment_overrides_content_alignment() {
 fn row_child_alignment_overrides_vertical_alignment() {
     let policy = FlexMeasurePolicy::row(LinearArrangement::Start, VerticalAlignment::Top, 1.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
-        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
+        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(ParentData {
             row_alignment: Some(VerticalAlignment::Bottom),
             ..Default::default()
         }),
@@ -198,7 +198,7 @@ fn column_child_alignment_overrides_horizontal_alignment() {
     let policy =
         FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
-        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
+        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(ParentData {
             column_alignment: Some(HorizontalAlignment::End),
             ..Default::default()
         }),

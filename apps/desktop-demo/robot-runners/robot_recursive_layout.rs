@@ -211,5 +211,5 @@ pub(crate) fn main() {
         println!("✓ Recursive Layout rects are within viewport");
         robot.exit().ok();
     })
-    .run(crate::robot_launch::counter_demo);
+    .run(robot_launch::counter_demo);
 }

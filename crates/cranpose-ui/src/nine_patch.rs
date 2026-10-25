@@ -29,7 +29,7 @@ pub enum PatchFill {
 impl PatchFill {
     /// Whether this fill repeats rather than scales.
     pub fn is_tiled(self) -> bool {
-        matches!(self, PatchFill::Tile)
+        matches!(self, Self::Tile)
     }
 }
 

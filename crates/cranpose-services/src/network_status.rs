@@ -88,9 +88,7 @@ fn registered_network_monitor() -> NetworkMonitorRef {
     PLATFORM_NETWORK_MONITOR
         .get_or_warn("network monitor")
         .unwrap_or_else(|| {
-            DEFAULT_NETWORK_MONITOR
-                .get_or_init(|| Arc::new(DefaultNetworkMonitor))
-                .clone()
+            Arc::clone(DEFAULT_NETWORK_MONITOR.get_or_init(|| Arc::new(DefaultNetworkMonitor)))
         })
 }
 
@@ -138,9 +136,7 @@ pub fn clear_platform_network_monitor() {
 /// The active network monitor: the platform one if installed, else a default
 /// that knows nothing.
 pub fn network_monitor() -> NetworkMonitorRef {
-    NETWORK_MONITOR_HANDLE
-        .get_or_init(|| Arc::new(PlatformNetworkMonitor))
-        .clone()
+    Arc::clone(NETWORK_MONITOR_HANDLE.get_or_init(|| Arc::new(PlatformNetworkMonitor)))
 }
 
 /// The current network status. A stopped platform monitor gets a reconnect

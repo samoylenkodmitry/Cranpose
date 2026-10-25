@@ -56,7 +56,7 @@ fn insert_moves_one_order_entry_per_later_payload() {
 
     store.insert_item(10, payload(100));
 
-    assert_eq!(store.shift_bytes() - before, 90 * mem::size_of::<u32>());
+    assert_eq!(store.shift_bytes() - before, 90 * size_of::<u32>());
 }
 
 #[test]
@@ -166,8 +166,8 @@ fn heap_bytes_counts_order_slots_and_free_list() {
 
     assert_eq!(
         store.heap_bytes(),
-        (store.order.capacity() + store.free.capacity()) * mem::size_of::<u32>()
-            + store.slots.capacity() * mem::size_of::<Option<PayloadRecord>>()
+        (store.order.capacity() + store.free.capacity()) * size_of::<u32>()
+            + store.slots.capacity() * size_of::<Option<PayloadRecord>>()
     );
 }
 

@@ -34,11 +34,11 @@ impl<T> SegmentItems for Vec<T> {
         self.insert(index, item);
     }
 
-    fn remove_items(&mut self, range: Range<usize>) -> Vec<T> {
+    fn remove_items(&mut self, range: Range<usize>) -> Self {
         self.drain(range).collect()
     }
 
-    fn insert_items(&mut self, index: usize, items: Vec<T>) {
+    fn insert_items(&mut self, index: usize, items: Self) {
         self.splice(index..index, items);
     }
 

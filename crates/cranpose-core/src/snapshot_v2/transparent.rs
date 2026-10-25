@@ -11,7 +11,7 @@ use super::*;
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct TransparentObserverMutableSnapshot {
     pub(super) state: SnapshotState,
-    parent: Option<Weak<TransparentObserverMutableSnapshot>>,
+    parent: Option<Weak<Self>>,
     nested_count: Cell<usize>,
     applied: Cell<bool>,
     reusable: Cell<bool>,
@@ -26,7 +26,7 @@ impl TransparentObserverMutableSnapshot {
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-        parent: Option<Weak<TransparentObserverMutableSnapshot>>,
+        parent: Option<Weak<Self>>,
     ) -> Rc<Self> {
         Self::new_reusing(None, id, invalid, read_observer, write_observer, parent)
     }
@@ -119,10 +119,11 @@ impl TransparentObserverMutableSnapshot {
     /// Returns the outermost parent that is still alive, or this snapshot when it has none.
     pub fn root_transparent_mutable(self: &Rc<Self>) -> Rc<Self> {
         match &self.parent {
-            Some(weak) => weak
-                .upgrade()
-                .map_or_else(|| self.clone(), |parent| parent.root_transparent_mutable()),
-            None => self.clone(),
+            Some(weak) => weak.upgrade().map_or_else(
+                || Rc::clone(self),
+                |parent| parent.root_transparent_mutable(),
+            ),
+            None => Rc::clone(self),
         }
     }
 
@@ -138,7 +139,7 @@ impl TransparentObserverMutableSnapshot {
             return f();
         }
 
-        enter_snapshot_scope(AnySnapshot::TransparentMutable(self.clone()), f)
+        enter_snapshot_scope(AnySnapshot::TransparentMutable(Rc::clone(self)), f)
     }
 
     /// Takes a read-only snapshot of this snapshot's view of state. Reads inside the new snapshot
@@ -202,7 +203,7 @@ impl TransparentObserverMutableSnapshot {
         &self,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> Rc<TransparentObserverMutableSnapshot> {
+    ) -> Rc<Self> {
         let merged_read =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
         let merged_write =
@@ -212,7 +213,7 @@ impl TransparentObserverMutableSnapshot {
         let new_id = self.state.id.get() + 1;
         invalid = invalid.set(new_id);
 
-        TransparentObserverMutableSnapshot::new(
+        Self::new(
             new_id,
             invalid,
             merged_read,
@@ -232,7 +233,7 @@ impl TransparentObserverMutableSnapshot {
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct TransparentObserverSnapshot {
     pub(super) state: SnapshotState,
-    parent: Option<Weak<TransparentObserverSnapshot>>,
+    parent: Option<Weak<Self>>,
     reusable: Cell<bool>,
 }
 
@@ -244,7 +245,7 @@ impl TransparentObserverSnapshot {
         id: SnapshotId,
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
-        parent: Option<Weak<TransparentObserverSnapshot>>,
+        parent: Option<Weak<Self>>,
     ) -> Rc<Self> {
         Rc::new(Self {
             state: SnapshotState::new_with_pinning(id, invalid, read_observer, None, false, false),
@@ -285,10 +286,11 @@ impl TransparentObserverSnapshot {
     /// Returns the outermost parent that is still alive, or this snapshot when it has none.
     pub fn root_transparent_readonly(self: &Rc<Self>) -> Rc<Self> {
         match &self.parent {
-            Some(weak) => weak
-                .upgrade()
-                .map_or_else(|| self.clone(), |parent| parent.root_transparent_readonly()),
-            None => self.clone(),
+            Some(weak) => weak.upgrade().map_or_else(
+                || Rc::clone(self),
+                |parent| parent.root_transparent_readonly(),
+            ),
+            None => Rc::clone(self),
         }
     }
 
@@ -304,18 +306,15 @@ impl TransparentObserverSnapshot {
             return f();
         }
 
-        enter_snapshot_scope(AnySnapshot::TransparentReadonly(self.clone()), f)
+        enter_snapshot_scope(AnySnapshot::TransparentReadonly(Rc::clone(self)), f)
     }
 
     /// Takes another transparent read-only snapshot with the same view of state. Reads inside the
     /// new snapshot call both `read_observer` and this snapshot's own read observer.
-    pub fn take_nested_snapshot(
-        &self,
-        read_observer: Option<ReadObserver>,
-    ) -> Rc<TransparentObserverSnapshot> {
+    pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Rc<Self> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
-        TransparentObserverSnapshot::new(
+        Self::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
             merged_observer,

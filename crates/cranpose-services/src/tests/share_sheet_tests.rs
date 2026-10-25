@@ -38,7 +38,7 @@ fn registered_share_sheet_takes_precedence() {
         shared: RefCell::new(None),
         supported: true,
     });
-    set_platform_share_sheet(recorder.clone());
+    set_platform_share_sheet(Rc::<RecordingShareSheet>::clone(&recorder));
 
     let sheet = default_share_sheet();
     assert!(sheet.is_supported());

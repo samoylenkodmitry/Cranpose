@@ -49,11 +49,11 @@ impl LazyLayoutKey {
     #[inline]
     pub fn to_slot_id(self) -> u64 {
         match self {
-            LazyLayoutKey::User(k) => {
+            Self::User(k) => {
                 let value = Self::normalize_value(k, "User");
                 Self::USER_TAG | value
             }
-            LazyLayoutKey::Index(i) => {
+            Self::Index(i) => {
                 let value = Self::normalize_value(i as u64, "Index");
                 Self::INDEX_TAG | value
             }
@@ -85,7 +85,7 @@ impl LazyLayoutKey {
     /// Returns true if this is a user-provided key.
     #[inline]
     pub fn is_user_key(self) -> bool {
-        matches!(self, LazyLayoutKey::User(_))
+        matches!(self, Self::User(_))
     }
 }
 
@@ -533,11 +533,11 @@ impl LazyLayoutItemProvider for LazyListIntervalContent {
     }
 
     fn get_key(&self, index: usize) -> u64 {
-        LazyListIntervalContent::get_key(self, index).to_slot_id()
+        Self::get_key(self, index).to_slot_id()
     }
 
     fn get_content_type(&self, index: usize) -> Option<u64> {
-        LazyListIntervalContent::get_content_type(self, index)
+        Self::get_content_type(self, index)
     }
 
     fn get_index(&self, key: u64) -> Option<usize> {

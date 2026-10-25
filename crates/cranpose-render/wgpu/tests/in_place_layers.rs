@@ -59,7 +59,7 @@ impl Scene {
     /// The surfaces the scene renders when its turned layers may draw in
     /// place.
     fn surfaces_in_place(self) -> u32 {
-        u32::from(self == Scene::InSurface)
+        u32::from(self == Self::InSurface)
     }
 }
 

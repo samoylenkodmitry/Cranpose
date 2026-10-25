@@ -109,7 +109,7 @@ fn a_named_adjustable_range_preserves_its_web_control_role() {
     let mut element = AccessibilityElement {
         details: Some(Box::new(AccessibilityDetails {
             pane_title: Some("Volume".into()),
-            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0)),
+            progress: Some(ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0)),
             adjustable: true,
             ..Default::default()
         })),
@@ -701,7 +701,7 @@ fn a_tab_pages_the_list_around_its_group() {
         vec![tab_group(2, vec![tab(3, "Home", true)])],
     );
     list.update_details(|details| {
-        details.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+        details.vertical_scroll = Some(ScrollAxisRange::new(0.0, 900.0, false));
     });
     let bounds = HashMap::from_iter([
         (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
@@ -1072,7 +1072,7 @@ fn live_text(node_id: NodeId, text: &str) -> AccessibilityElement {
         label: text.into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
         details: Some(Box::new(AccessibilityDetails {
-            live_region: Some(cranpose_ui::LiveRegionMode::Polite),
+            live_region: Some(LiveRegionMode::Polite),
             ..Default::default()
         })),
         ..AccessibilityElement::default()
@@ -1310,7 +1310,7 @@ fn the_way_out_sits_after_the_actions_the_app_named() {
     let ran = Rc::new(Cell::new(String::new()));
     let mut row = text_node(2, "Milk");
     row.update_details(|details| {
-        details.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pin", {
+        details.custom_actions = vec![SemanticsCustomAction::new("Pin", {
             let ran = Rc::clone(&ran);
             move || ran.set("Pin".into())
         })];
@@ -1340,7 +1340,7 @@ fn a_long_press_is_named_and_sits_after_the_custom_actions() {
     let ran = Rc::new(Cell::new(0));
     let mut row = text_node(2, "Milk");
     row.update_details(|details| {
-        details.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pause", || {})];
+        details.custom_actions = vec![SemanticsCustomAction::new("Pause", || {})];
     });
     row.update_details(|details| details.on_long_click_label = Some("Remove receipt".into()));
     row.update_details(|details| {
@@ -1484,13 +1484,13 @@ fn a_live_region_reaches_every_control_under_it() {
         )],
     );
     root.update_details(|details| {
-        details.live_region = Some(cranpose_ui::LiveRegionMode::Assertive);
+        details.live_region = Some(LiveRegionMode::Assertive);
     });
     let elements = project_semantics(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
     assert_eq!(
         elements[0].details().live_region,
-        Some(cranpose_ui::LiveRegionMode::Assertive)
+        Some(LiveRegionMode::Assertive)
     );
 }
 
@@ -1507,7 +1507,7 @@ fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
         Vec::new(),
     );
     root.update_details(|details| {
-        details.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+        details.progress = Some(ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
     });
     root.update_details(|details| {
         details.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |value| {
@@ -1755,14 +1755,14 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
 
 #[test]
 fn a_step_moves_one_stop_and_stops_at_the_ends() {
-    let ten = cranpose_ui::ProgressBarRangeInfo::new(0.5, 0.0, 1.0, 0);
+    let ten = ProgressBarRangeInfo::new(0.5, 0.0, 1.0, 0);
     assert!((stepped_value(&ten, true) - 0.6).abs() < 1e-6);
     assert!((stepped_value(&ten, false) - 0.4).abs() < 1e-6);
 
-    let top = cranpose_ui::ProgressBarRangeInfo::new(1.0, 0.0, 1.0, 0);
+    let top = ProgressBarRangeInfo::new(1.0, 0.0, 1.0, 0);
     assert_eq!(stepped_value(&top, true), 1.0, "a step up stays at the end");
 
-    let four_stops = cranpose_ui::ProgressBarRangeInfo::new(0.0, 0.0, 1.0, 4);
+    let four_stops = ProgressBarRangeInfo::new(0.0, 0.0, 1.0, 4);
     assert!((four_stops.step() - 0.2).abs() < 1e-6);
 }
 
@@ -1771,7 +1771,7 @@ fn scroll_box(node_id: NodeId, scroll_parent: Option<NodeId>, height: f32) -> Ac
         node_id,
         bounds: AccessibilityRect::new(0.0, 0.0, 400.0, height),
         details: Some(Box::new(AccessibilityDetails {
-            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            vertical_scroll: Some(ScrollAxisRange::new(0.0, 900.0, false)),
             ..Default::default()
         })),
         scroll_parent,
@@ -1819,10 +1819,10 @@ fn a_list_publishes_its_rows_and_takes_a_row_number() {
     let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 400.0, 600.0))]);
     let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
     root.update_details(|details| {
-        details.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 1.0, false));
+        details.vertical_scroll = Some(ScrollAxisRange::new(0.0, 1.0, false));
     });
     root.update_details(|details| {
-        details.collection = Some(cranpose_ui::CollectionInfo {
+        details.collection = Some(CollectionInfo {
             rows: 500,
             columns: 1,
         });
@@ -1879,7 +1879,7 @@ fn the_projection_names_the_list_above_each_row() {
         vec![node(2, SemanticsRole::Button, vec![], Some("Milk"), vec![])],
     );
     list.update_details(|details| {
-        details.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+        details.vertical_scroll = Some(ScrollAxisRange::new(0.0, 900.0, false));
     });
     let root = node(
         0,

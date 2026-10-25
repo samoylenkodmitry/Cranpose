@@ -26,7 +26,7 @@ pub enum ShaderSection {
 }
 
 impl ShaderSection {
-    pub const ALL: [ShaderSection; 5] = [
+    pub const ALL: [Self; 5] = [
         Self::SweepGradient,
         Self::InteractiveEffects,
         Self::EffectSemantics,

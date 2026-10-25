@@ -247,7 +247,7 @@ fn an_atlas_whose_kept_surfaces_mostly_left_goes_back_to_its_pool() {
     let mut cache = LayerCache::with_budget(1 << 20);
     let atlas = texture(&device, 80);
     for index in 0..5 {
-        let region = crate::frame::DeviceRect {
+        let region = DeviceRect {
             x: index as f32 * 16.0,
             y: 0.0,
             width: 16.0,

@@ -193,8 +193,8 @@ fn camera_at(eye_x: f32) -> Camera {
 
 #[test]
 fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
-    let eye_x = Rc::new(std::cell::Cell::new(0.0f32));
-    let scene_node = Rc::new(std::cell::Cell::new(None));
+    let eye_x = Rc::new(Cell::new(0.0f32));
+    let scene_node = Rc::new(Cell::new(None));
     let (eye, node) = (Rc::clone(&eye_x), Rc::clone(&scene_node));
     let mut composition = cranpose_ui::run_test_composition(move || {
         let eye = Rc::clone(&eye);
@@ -590,7 +590,7 @@ pub(crate) fn walk_room(start: Vec3) -> WalkRoom {
             EYE_RADIUS,
         );
         let seen = eye.clone();
-        let nested = Rc::new(std::cell::Cell::new(None));
+        let nested = Rc::new(Cell::new(None));
         let inner = Rc::clone(&nested);
         let scene = Box(
             Modifier::empty()

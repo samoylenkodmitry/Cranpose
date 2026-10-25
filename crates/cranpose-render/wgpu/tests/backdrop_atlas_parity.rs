@@ -1405,7 +1405,7 @@ fn two_atlas_stage(marked: bool) -> RenderGraph {
             rect(0.0, 0.0, 900.0, 900.0),
             ProjectiveTransform::translation(2400.0, 400.0),
             GraphicsLayer::default(),
-            vec![support::solid_rect(
+            vec![solid_rect(
                 rect(0.0, 0.0, 900.0, 900.0),
                 if marked {
                     Color(0.95, 0.30, 0.10, 1.0)

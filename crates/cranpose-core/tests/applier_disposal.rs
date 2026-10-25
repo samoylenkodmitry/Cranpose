@@ -220,7 +220,7 @@ fn retained_host_fixture() -> RetainedHostFixture {
     }));
     let root_slots = Rc::new(SlotsHost::new(SlotTable::default()));
     let secondary_slots = Rc::new(SlotsHost::new(SlotTable::default()));
-    let applier: Rc<dyn ApplierHost> = host.clone();
+    let applier: Rc<dyn ApplierHost> = Rc::<ConcreteApplierHost<RetryApplier>>::clone(&host);
     let runtime = Runtime::new(scheduler_ref(DefaultScheduler));
     let composer = Composer::new(root_slots, applier, runtime.handle(), None);
     composer.enter_phase(Phase::Measure);

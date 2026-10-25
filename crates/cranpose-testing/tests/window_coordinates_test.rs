@@ -37,16 +37,16 @@ fn reported_window_bounds_reach_a_scaled_hover_target() {
         rememberMutableInteractionSource,
     };
     let bounds = Rc::new(Cell::new(Rect::from_size(cranpose_ui::Size::default())));
-    let report = bounds.clone();
+    let report = Rc::clone(&bounds);
     let mouse = Rc::new(RefCell::new(None));
-    let mouse_slot = mouse.clone();
+    let mouse_slot = Rc::clone(&mouse);
     let scale = Rc::new(Cell::new(None::<cranpose_core::MutableState<f32>>));
-    let scale_slot = scale.clone();
+    let scale_slot = Rc::clone(&scale);
     let mut shell = AppShell::new_with_size(
         TestRenderer::default(),
         cranpose_core::location_key(file!(), line!(), column!()),
         move || {
-            let report = report.clone();
+            let report = Rc::clone(&report);
             let current_scale = cranpose_core::rememberMutableStateOf(|| 0.5);
             scale_slot.set(Some(current_scale));
             *mouse_slot.borrow_mut() = Some(cranpose_ui::mouse_input::local_mouse_input());
@@ -60,7 +60,7 @@ fn reported_window_bounds_reach_a_scaled_hover_target() {
                         Modifier::empty()
                             .offset(40.0, 20.0)
                             .size_points(40.0, 40.0)
-                            .report_window_rect(report.clone())
+                            .report_window_rect(Rc::clone(&report))
                             .hoverable(interaction, true),
                         BoxSpec::default(),
                         move || {
@@ -183,32 +183,32 @@ fn scaled_scroll_container_reveals_a_target_in_window_coordinates() {
     };
     let target = Rc::new(Cell::new(Rect::from_size(Size::default())));
     let responder = Rc::new(RefCell::new(None::<cranpose_ui::BringIntoViewResponder>));
-    let content_target = target.clone();
-    let content_responder = responder.clone();
+    let content_target = Rc::clone(&target);
+    let content_responder = Rc::clone(&responder);
     let mut shell = AppShell::new_with_size(
         TestRenderer::default(),
         cranpose_core::location_key(file!(), line!(), column!()),
         move || {
-            let target = content_target.clone();
-            let responder = content_responder.clone();
+            let target = Rc::clone(&content_target);
+            let responder = Rc::clone(&content_responder);
             Box(
                 transformed_modifier(200.0, 100.0, || 0.5),
                 BoxSpec::default(),
                 move || {
-                    let target = target.clone();
-                    let responder = responder.clone();
+                    let target = Rc::clone(&target);
+                    let responder = Rc::clone(&responder);
                     LazyColumn(
                         Modifier::empty().fill_max_size(),
                         rememberLazyListState(),
                         LazyColumnSpec::new(),
                         move |scope| {
-                            let target = target.clone();
+                            let target = Rc::clone(&target);
                             scope.items(LazyItems::new(20), move |index| {
                                 *responder.borrow_mut() =
                                     cranpose_ui::local_bring_into_view_responder().current();
                                 let modifier = Modifier::empty().height(32.0);
                                 let modifier = if index == 2 {
-                                    modifier.report_window_rect(target.clone())
+                                    modifier.report_window_rect(Rc::clone(&target))
                                 } else {
                                     modifier
                                 };

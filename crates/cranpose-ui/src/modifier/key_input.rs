@@ -84,13 +84,13 @@ impl ModifierNodeElement for KeyInputElement {
         KeyInputNode {
             state: NodeState::new(),
             pass: self.pass,
-            handler: self.handler.clone(),
+            handler: Rc::clone(&self.handler),
         }
     }
 
     fn update(&self, node: &mut Self::Node) {
         node.pass = self.pass;
-        node.handler = self.handler.clone();
+        node.handler = Rc::clone(&self.handler);
     }
 
     fn always_update(&self) -> bool {

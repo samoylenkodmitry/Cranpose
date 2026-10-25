@@ -138,7 +138,7 @@ pub(crate) fn main() {
             }
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn find_element_with_text<'a>(

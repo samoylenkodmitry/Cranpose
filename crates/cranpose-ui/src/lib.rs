@@ -323,7 +323,7 @@ pub use zoom::ZoomState;
 
 /// In-memory composition helper used by tests.
 pub struct TestComposition {
-    _scope: render_state::AppContextScope,
+    _scope: AppContextScope,
     app_context: Rc<AppContext>,
     composition: Composition<MemoryApplier>,
     /// The root content and its key, which a root render composes again, as
@@ -402,7 +402,7 @@ impl TestComposition {
 /// Mutable access to the applier of a [`TestComposition`], with the app context of that composition
 /// active while the guard lives.
 pub struct TestApplierGuard<'a> {
-    _scope: render_state::AppContextScope,
+    _scope: AppContextScope,
     applier: ApplierGuard<'a, MemoryApplier>,
 }
 

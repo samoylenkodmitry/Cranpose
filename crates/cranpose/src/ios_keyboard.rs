@@ -386,7 +386,7 @@ impl TextPosition {
         unsafe { msg_send![super(this), init] }
     }
     fn offset(pos: &UITextPosition) -> usize {
-        pos.downcast_ref::<TextPosition>().map_or(0, |p| *p.ivars())
+        pos.downcast_ref::<Self>().map_or(0, |p| *p.ivars())
     }
 }
 
@@ -431,9 +431,7 @@ impl TextRange {
         unsafe { msg_send![super(this), init] }
     }
     fn bounds(range: &UITextRange) -> (usize, usize) {
-        range
-            .downcast_ref::<TextRange>()
-            .map_or((0, 0), |r| *r.ivars())
+        range.downcast_ref::<Self>().map_or((0, 0), |r| *r.ivars())
     }
 }
 
@@ -576,14 +574,14 @@ define_class!(
         #[unsafe(method_id(markedTextStyle))]
         fn marked_text_style(
             &self,
-        ) -> Option<Retained<objc2_foundation::NSDictionary<NSString, objc2::runtime::AnyObject>>> {
+        ) -> Option<Retained<objc2_foundation::NSDictionary<NSString, AnyObject>>> {
             None
         }
 
         #[unsafe(method(setMarkedTextStyle:))]
         fn set_marked_text_style(
             &self,
-            _style: Option<&objc2_foundation::NSDictionary<NSString, objc2::runtime::AnyObject>>,
+            _style: Option<&objc2_foundation::NSDictionary<NSString, AnyObject>>,
         ) {
         }
 

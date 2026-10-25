@@ -565,5 +565,5 @@ pub(crate) fn main() {
             println!("=== ALL TESTS PASSED (0 bytes growth) ===");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

@@ -24,16 +24,16 @@ struct SessionPlayer {
 }
 
 impl SessionPlayer {
-    fn install(capabilities: MediaCapabilities) -> Arc<SessionPlayer> {
+    fn install(capabilities: MediaCapabilities) -> Arc<Self> {
         clear_platform_media_player();
-        let player = Arc::new(SessionPlayer {
+        let player = Arc::new(Self {
             capabilities,
             calls: Mutex::new(Vec::new()),
             volume: Mutex::new(1.0),
             position: Mutex::new(Duration::ZERO),
             duration: Mutex::new(None),
         });
-        set_platform_media_player(player.clone());
+        set_platform_media_player(Arc::<Self>::clone(&player));
         player
     }
 

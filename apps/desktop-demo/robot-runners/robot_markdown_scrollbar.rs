@@ -328,7 +328,7 @@ pub(crate) fn main() {
                 Arc::new(StubHttpClient::with_body(MarkdownFixture::new().body));
             move || {
                 let local = local_http_client();
-                let client = mock_client.clone();
+                let client = Arc::clone(&mock_client);
                 CompositionLocalProvider([local.provides(client)], || {
                     app::MarkdownViewerRobotApp();
                 });

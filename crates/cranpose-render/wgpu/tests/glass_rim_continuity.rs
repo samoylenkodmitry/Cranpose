@@ -109,7 +109,7 @@ fn TabBarScene() {
             Box(
                 Modifier::empty()
                     .fill_max_size()
-                    .background(cranpose_ui::Color::from_rgb_u8(242, 242, 247)),
+                    .background(Color::from_rgb_u8(242, 242, 247)),
                 BoxSpec::default(),
                 move || {
                     Box(

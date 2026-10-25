@@ -34,7 +34,7 @@ fn default_is_noop_then_registered_takes_over() {
     clear_platform_notifier();
     default_notifier().notify(NotifyRequest::new("a", "t", "b"));
     let rec = Arc::new(Recorder::default());
-    set_platform_notifier(rec.clone());
+    set_platform_notifier(Arc::<Recorder>::clone(&rec));
     default_notifier().notify(NotifyRequest::new("done", "t", "b").with_deeplink("doc/1"));
     assert_eq!(rec.posted.lock().as_slice(), &["done".to_string()]);
     clear_platform_notifier();

@@ -453,7 +453,7 @@ fn cancel_springs_back() {
     assert!(harness.offset().abs() <= 0.5);
 }
 
-fn pointer_handler_for(modifier: crate::Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
+fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
     let elements = modifier.elements();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
@@ -493,14 +493,14 @@ impl NestedHarness {
         let harness = Harness::new(200.0, 0.5);
 
         let (swipe, swipe_chain) = pointer_handler_for(swipe_gesture_modifier(
-            crate::Modifier::empty(),
+            Modifier::empty(),
             Rc::clone(&harness.controller),
         ));
 
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (scroll, scroll_chain) =
-            pointer_handler_for(crate::Modifier::empty().vertical_scroll(scroll_state, false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         Self {
             harness,

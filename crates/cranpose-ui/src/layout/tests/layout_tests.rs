@@ -889,8 +889,8 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
 
 #[test]
 fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
-    let first_context = crate::render_state::AppContext::new();
-    let second_context = crate::render_state::AppContext::new();
+    let first_context = AppContext::new();
+    let second_context = AppContext::new();
     let mut first_applier = MemoryApplier::new();
     let mut second_applier = MemoryApplier::new();
 
@@ -1079,7 +1079,7 @@ fn a_global_cache_invalidation_remeasures_a_clean_child() -> Result<(), NodeErro
         ..
     } = measured_dirty_clean_leaves()?;
 
-    super::invalidate_all_layout_caches();
+    invalidate_all_layout_caches();
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.mark_needs_measure();
         node.mark_needs_layout();
@@ -1137,7 +1137,7 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
 
     crate::schedule_layout_repass(dirty_child);
     let context = crate::render_state::require_current_app_context("a layout test");
-    super::process_pending_layout_repasses(&context, &mut applier, root_id)?;
+    process_pending_layout_repasses(&context, &mut applier, root_id)?;
 
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
@@ -1210,16 +1210,17 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
     let mut applier = MemoryApplier::new();
     let composition = cranpose_core::Composition::new(MemoryApplier::new());
     applier.set_runtime_handle(composition.runtime_handle());
-    let child_id = applier.create(Box::new(
-        crate::subcompose_layout::SubcomposeLayoutNode::new(Modifier::empty(), policy),
-    ));
+    let child_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        Modifier::empty(),
+        policy,
+    )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
     root.children.push(child_id);
     let root_id = applier.create(Box::new(root));
 
     applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
-    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+    applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
         node.set_node_id(child_id);
         node.set_parent_for_bubbling(root_id);
     })?;
@@ -1234,10 +1235,9 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
     let root_clean = applier.with_node::<LayoutNode, _>(root_id, |node| {
         !node.needs_measure() && !node.needs_layout()
     })?;
-    let child_clean = applier
-        .with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
-            !node.needs_measure() && !node.needs_layout()
-        })?;
+    let child_clean = applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
+        !node.needs_measure() && !node.needs_layout()
+    })?;
     assert!(
         root_clean,
         "root should be clean after the initial measure pass"
@@ -1251,13 +1251,13 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
         applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
 
     child_size.set(Size::new(10.0, 20.0));
-    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+    applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
         node.mark_needs_layout_flag();
     })?;
 
     crate::schedule_layout_repass(child_id);
     let context = crate::render_state::require_current_app_context("a layout test");
-    super::process_pending_layout_repasses(&context, &mut applier, root_id)?;
+    process_pending_layout_repasses(&context, &mut applier, root_id)?;
 
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
@@ -1379,16 +1379,17 @@ fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Resul
     let mut applier = MemoryApplier::new();
     let composition = cranpose_core::Composition::new(MemoryApplier::new());
     applier.set_runtime_handle(composition.runtime_handle());
-    let child_id = applier.create(Box::new(
-        crate::subcompose_layout::SubcomposeLayoutNode::new(Modifier::empty(), policy),
-    ));
+    let child_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        Modifier::empty(),
+        policy,
+    )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
     root.children.push(child_id);
     let root_id = applier.create(Box::new(root));
 
     applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
-    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+    applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
         node.set_node_id(child_id);
         node.set_parent_for_bubbling(root_id);
     })?;
@@ -1399,7 +1400,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Resul
         applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
 
     child_size.set(Size::new(10.0, 20.0));
-    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+    applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
         node.mark_needs_layout_flag();
     })?;
     crate::schedule_layout_repass(child_id);
@@ -2225,7 +2226,7 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     let button_node = LayoutNode::new(
         Modifier::empty().semantics(|config| {
-            config.role = Some(cranpose_foundation::SemanticsWidgetRole::Button);
+            config.role = Some(SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some("My Button".into());
         }),
@@ -2242,10 +2243,7 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
     assert!(matches!(root.role, SemanticsRole::Button));
 
     assert_eq!(root.actions.len(), 1);
-    assert!(matches!(
-        root.actions[0],
-        crate::layout::SemanticsAction::Click { .. }
-    ));
+    assert!(matches!(root.actions[0], SemanticsAction::Click { .. }));
 
     assert_eq!(root.description.as_deref(), Some("My Button"));
 
@@ -2377,7 +2375,7 @@ fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
             .as_deref(),
         Some("Off")
     );
-    assert!(!crate::layout::tree_needs_semantics(&mut applier, node_id)?);
+    assert!(!tree_needs_semantics(&mut applier, node_id)?);
 
     state.set(true);
     applier.with_node::<LayoutNode, _>(node_id, |node| {
@@ -2385,7 +2383,7 @@ fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
     })?;
 
     assert!(
-        crate::layout::tree_needs_semantics(&mut applier, node_id)?,
+        tree_needs_semantics(&mut applier, node_id)?,
         "re-recording semantics should dirty the snapshot"
     );
     let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
@@ -2548,7 +2546,7 @@ fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), N
     );
     let node_id = applier.create(Box::new(node));
 
-    let skipped = super::measure_layout_with_options(
+    let skipped = measure_layout_with_options(
         &mut applier,
         node_id,
         Size::new(100.0, 100.0),
@@ -2668,7 +2666,7 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
         )));
         let button_id = applier.create(Box::new(LayoutNode::new(
             Modifier::empty().semantics(|config| {
-                config.role = Some(cranpose_foundation::SemanticsWidgetRole::Button);
+                config.role = Some(SemanticsWidgetRole::Button);
                 config.is_clickable = true;
                 config.content_description = Some("action".into());
             }),
@@ -2699,7 +2697,7 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
     }
 
     let (mut with_layout_tree_applier, with_layout_tree_root) = build_fixture()?;
-    let with_layout_tree = super::measure_layout_with_options(
+    let with_layout_tree = measure_layout_with_options(
         &mut with_layout_tree_applier,
         with_layout_tree_root,
         Size::new(100.0, 100.0),
@@ -2713,7 +2711,7 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
     .expect("semantics with layout tree");
 
     let (mut live_node_applier, live_node_root) = build_fixture()?;
-    let live_node_measurements = super::measure_layout_with_options(
+    let live_node_measurements = measure_layout_with_options(
         &mut live_node_applier,
         live_node_root,
         Size::new(100.0, 100.0),
@@ -3216,7 +3214,7 @@ fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), Nod
     });
     let (root, window_node, _) = window_root_tree(&mut applier, window)?;
 
-    let measurements = super::measure_layout_with_options(
+    let measurements = measure_layout_with_options(
         &mut applier,
         root,
         Size::new(100.0, 100.0),
@@ -3233,7 +3231,7 @@ fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), Nod
         "the parent's layout tree leaves the window subtree out: {child_ids:?}"
     );
 
-    let tree = super::build_layout_tree_from_applier(&mut applier, root)?.expect("tree");
+    let tree = build_layout_tree_from_applier(&mut applier, root)?.expect("tree");
     let child_ids: Vec<NodeId> = tree.root().children.iter().map(|b| b.node_id).collect();
     assert_eq!(child_ids.len(), 1, "one child stays: {child_ids:?}");
     assert!(
@@ -3270,7 +3268,7 @@ fn placed_content_reads_the_layout_trees_boxes_without_building_it() -> Result<(
     };
     let unmeasured = applier.create(Box::new(leaf(10.0, 10.0)));
     assert!(
-        !super::has_placed_content(&mut applier, unmeasured)?,
+        !has_placed_content(&mut applier, unmeasured)?,
         "a root never placed has no content"
     );
 
@@ -3307,8 +3305,8 @@ fn placed_content_reads_the_layout_trees_boxes_without_building_it() -> Result<(
         Some(Size::new(28.0, 38.0)),
         "the padded column is the farthest box; the window's 300 by 200 is not the root's"
     );
-    assert_eq!(super::placed_content_extent(&mut applier, root)?, expected);
-    assert!(super::has_placed_content(&mut applier, root)?);
+    assert_eq!(placed_content_extent(&mut applier, root)?, expected);
+    assert!(has_placed_content(&mut applier, root)?);
 
     let mut bare = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
     let flat_only = applier.create(Box::new(leaf(0.0, 10.0)));
@@ -3316,10 +3314,10 @@ fn placed_content_reads_the_layout_trees_boxes_without_building_it() -> Result<(
     let bare = applier.create(Box::new(bare));
     measure_layout(&mut applier, bare, Size::new(100.0, 100.0))?;
     assert!(
-        !super::has_placed_content(&mut applier, bare)?,
+        !has_placed_content(&mut applier, bare)?,
         "a box without area is not content"
     );
-    assert_eq!(super::placed_content_extent(&mut applier, bare)?, None);
+    assert_eq!(placed_content_extent(&mut applier, bare)?, None);
     Ok(())
 }
 
@@ -3331,7 +3329,7 @@ fn window_root_subtree_is_left_out_of_the_parent_semantics_tree() -> Result<(), 
         size: Cell::new(Size::new(300.0, 200.0)),
     });
     let (root, window_node, _) = window_root_tree(&mut applier, window)?;
-    super::measure_layout_with_options(
+    measure_layout_with_options(
         &mut applier,
         root,
         Size::new(100.0, 100.0),
@@ -3341,7 +3339,7 @@ fn window_root_subtree_is_left_out_of_the_parent_semantics_tree() -> Result<(), 
         },
     )?;
 
-    let tree = super::build_semantics_tree_from_applier(&mut applier, root)?.expect("semantics");
+    let tree = build_semantics_tree_from_applier(&mut applier, root)?.expect("semantics");
     let child_ids: Vec<NodeId> = tree.root().children.iter().map(|n| n.node_id).collect();
     assert_eq!(child_ids.len(), 1, "one child stays: {child_ids:?}");
     assert!(
@@ -3385,7 +3383,7 @@ fn semantics_bounds_are_the_layout_rects_on_every_path() -> Result<(), NodeError
     root.children.push(column);
     let root = applier.create(Box::new(root));
 
-    let measurements = super::measure_layout_with_options(
+    let measurements = measure_layout_with_options(
         &mut applier,
         root,
         Size::new(100.0, 100.0),

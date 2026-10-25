@@ -174,9 +174,9 @@ fn BadgeRow(index: usize, state: cranpose_core::MutableState<bool>) {
         );
         if busy {
             Row(Modifier::empty(), RowSpec::new(), move || {
-                crate::widgets::CircularProgressIndicator(
+                widgets::CircularProgressIndicator(
                     Modifier::empty(),
-                    cranpose_ui_graphics::Color(0.2, 0.5, 0.9, 1.0),
+                    Color(0.2, 0.5, 0.9, 1.0),
                     1.8,
                 );
                 let pulse = rememberInfiniteTransition("recognizing").animateFloat(
@@ -337,9 +337,9 @@ fn CapturedBadgeRow(index: usize, busy: bool) {
         );
         if busy {
             Row(Modifier::empty(), RowSpec::new(), move || {
-                crate::widgets::CircularProgressIndicator(
+                widgets::CircularProgressIndicator(
                     Modifier::empty(),
-                    cranpose_ui_graphics::Color(0.2, 0.5, 0.9, 1.0),
+                    Color(0.2, 0.5, 0.9, 1.0),
                     1.8,
                 );
                 let pulse = rememberInfiniteTransition("recognizing").animateFloat(
@@ -383,9 +383,9 @@ fn CapturedBadgeItemList(state: cranpose_core::MutableState<bool>) {
                 );
                 if busy_now {
                     Row(Modifier::empty(), RowSpec::new(), move || {
-                        crate::widgets::CircularProgressIndicator(
+                        widgets::CircularProgressIndicator(
                             Modifier::empty(),
-                            cranpose_ui_graphics::Color(0.2, 0.5, 0.9, 1.0),
+                            Color(0.2, 0.5, 0.9, 1.0),
                             1.8,
                         );
                         let pulse = rememberInfiniteTransition("recognizing").animateFloat(
@@ -471,21 +471,15 @@ fn ToastHost(state: cranpose_core::MutableState<bool>) {
                 Modifier::empty().height(ROW_HEIGHT),
                 TextStyle::default(),
             );
-            crate::widgets::AnimatedVisibility(
+            AnimatedVisibility(
                 shown,
-                crate::fade_in().with_animation(cranpose_animation::tween(
-                    180,
-                    cranpose_animation::Easing::EaseOut,
-                )),
-                crate::fade_out().with_animation(cranpose_animation::tween(
-                    140,
-                    cranpose_animation::Easing::EaseIn,
-                )),
+                fade_in().with_animation(cranpose_animation::tween(180, Easing::EaseOut)),
+                fade_out().with_animation(cranpose_animation::tween(140, Easing::EaseIn)),
                 move || {
                     Row(Modifier::empty(), RowSpec::new(), move || {
-                        crate::widgets::CircularProgressIndicator(
+                        widgets::CircularProgressIndicator(
                             Modifier::empty(),
-                            cranpose_ui_graphics::Color(0.2, 0.5, 0.9, 1.0),
+                            Color(0.2, 0.5, 0.9, 1.0),
                             1.8,
                         );
                         let pulse = rememberInfiniteTransition("recognizing").animateFloat(
@@ -584,9 +578,9 @@ fn ShiftingBadgeList(state: cranpose_core::MutableState<bool>) {
             }
             scope.item(move || {
                 Row(Modifier::empty(), RowSpec::new(), move || {
-                    crate::widgets::CircularProgressIndicator(
+                    widgets::CircularProgressIndicator(
                         Modifier::empty(),
-                        cranpose_ui_graphics::Color(0.2, 0.5, 0.9, 1.0),
+                        Color(0.2, 0.5, 0.9, 1.0),
                         1.8,
                     );
                     let pulse = rememberInfiniteTransition("recognizing").animateFloat(
@@ -861,15 +855,15 @@ fn BadgeSwipeScreen(state: cranpose_core::MutableState<bool>) {
 
 #[composable]
 fn BadgeConstraintsScreen(state: cranpose_core::MutableState<bool>) {
-    crate::widgets::BoxWithConstraints(Modifier::empty().fill_max_width(), move |_scope| {
+    BoxWithConstraints(Modifier::empty().fill_max_width(), move |_scope| {
         BadgeRow(0, state);
     });
 }
 
 #[composable]
 fn BadgeTwoConstraintsScreen(state: cranpose_core::MutableState<bool>) {
-    crate::widgets::BoxWithConstraints(Modifier::empty().fill_max_width(), move |_outer| {
-        crate::widgets::BoxWithConstraints(Modifier::empty().fill_max_width(), move |_inner| {
+    BoxWithConstraints(Modifier::empty().fill_max_width(), move |_outer| {
+        BoxWithConstraints(Modifier::empty().fill_max_width(), move |_inner| {
             BadgeRow(0, state);
         });
     });
@@ -967,13 +961,13 @@ fn PlainScreen() {
 #[composable]
 fn ScreenHost(on_list: cranpose_core::MutableState<bool>, busy: cranpose_core::MutableState<bool>) {
     let on_list_now = on_list.get();
-    crate::widgets::Box(
+    Box(
         Modifier::empty().fill_max_size(),
-        crate::widgets::BoxSpec::default(),
+        BoxSpec::default(),
         move || {
-            crate::widgets::Box(
+            Box(
                 Modifier::empty().fill_max_size(),
-                crate::widgets::BoxSpec::default(),
+                BoxSpec::default(),
                 move || match on_list_now {
                     true => BadgeListScreen(busy),
                     false => PlainScreen(),
@@ -1053,11 +1047,7 @@ fn EarlyReturnBanner(count: usize) {
         return;
     }
     Row(Modifier::empty(), RowSpec::new(), move || {
-        crate::widgets::CircularProgressIndicator(
-            Modifier::empty(),
-            cranpose_ui_graphics::Color(0.2, 0.5, 0.9, 1.0),
-            1.8,
-        );
+        widgets::CircularProgressIndicator(Modifier::empty(), Color(0.2, 0.5, 0.9, 1.0), 1.8);
         let pulse = rememberInfiniteTransition("banner").animateFloat(
             0.45,
             1.0,

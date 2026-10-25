@@ -187,7 +187,7 @@ fn edge_lens_stages_preserve_intermediate_images_and_final_support() {
             _ => panic!("glass must contain shader stages"),
         }
     }
-    let support = crate::Rect {
+    let support = Rect {
         x: -2.0,
         y: -3.0,
         width: 120.0,

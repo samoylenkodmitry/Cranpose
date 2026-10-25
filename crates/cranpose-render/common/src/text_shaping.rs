@@ -87,7 +87,7 @@ impl ShapingCache {
             variations: variations
                 .iter()
                 .map(|(tag, value)| Variation {
-                    tag: rustybuzz::ttf_parser::Tag::from_bytes(tag),
+                    tag: ttf_parser::Tag::from_bytes(tag),
                     value: *value,
                 })
                 .collect(),
@@ -142,11 +142,7 @@ impl ShapingCache {
             .into_iter()
             .flat_map(font_feature_settings)
             .map(|feature| {
-                Feature::new(
-                    rustybuzz::ttf_parser::Tag::from_bytes(&feature.tag),
-                    feature.value,
-                    ..,
-                )
+                Feature::new(ttf_parser::Tag::from_bytes(&feature.tag), feature.value, ..)
             })
             .collect();
         let shaped = rustybuzz::shape(&face, &features, buffer);

@@ -205,7 +205,7 @@ fn lazy_edge_drag_updates_shared_effect() {
             reverse_scrolling: false,
         });
         let callback_count = Rc::new(Cell::new(0_u32));
-        let callback_count_for_effect = callback_count.clone();
+        let callback_count_for_effect = Rc::clone(&callback_count);
         context
             .overscroll()
             .add_invalidate_callback(Box::new(move || {
@@ -853,7 +853,7 @@ fn lazy_scroll_motion_context_survives_modifier_recomposition_with_stale_pointer
         let _composition = crate::run_test_composition({
             let list_state = Rc::clone(&list_state);
             move || {
-                list_state.set(Some(cranpose_foundation::lazy::rememberLazyListState()));
+                list_state.set(Some(rememberLazyListState()));
             }
         });
         let list_state = list_state
@@ -1490,7 +1490,7 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
             measure_layout(
                 &mut applier,
                 root,
-                cranpose_ui_graphics::Size {
+                Size {
                     width: 320.0,
                     height: viewport_dp,
                 },
@@ -1569,7 +1569,7 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
                     None,
                     if index == 10 { 800.0 } else { 50.0 },
                     320.0,
-                    std::rc::Rc::default(),
+                    Rc::default(),
                 )
             },
         );
@@ -1944,7 +1944,7 @@ fn centered_child_top() -> f32 {
     measure_layout(
         &mut applier,
         root,
-        cranpose_ui_graphics::Size {
+        Size {
             width: 320.0,
             height: 300.0,
         },

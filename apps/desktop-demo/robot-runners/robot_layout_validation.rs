@@ -318,5 +318,5 @@ pub(crate) fn main() {
         println!("\n=== Layout Validation Complete ===");
         robot.exit().ok();
     })
-    .run(crate::robot_launch::counter_demo);
+    .run(robot_launch::counter_demo);
 }

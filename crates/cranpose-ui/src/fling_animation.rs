@@ -34,7 +34,7 @@ fn schedule_next_frame<F, G>(
     F: Fn(f32) -> f32 + 'static,
     G: FnOnce() + 'static,
 {
-    let state_for_closure = state.clone();
+    let state_for_closure = Rc::clone(&state);
     let frame_clock_for_closure = frame_clock.clone();
     let on_end = RefCell::new(Some(on_end));
 
@@ -108,7 +108,7 @@ fn schedule_next_frame<F, G>(
         if should_continue {
             if let Some(on_end_fn) = on_end.borrow_mut().take() {
                 schedule_next_frame(
-                    state_for_closure.clone(),
+                    Rc::clone(&state_for_closure),
                     frame_clock_for_closure.clone(),
                     on_scroll,
                     on_end_fn,
@@ -188,7 +188,7 @@ impl FlingAnimation {
         *self.state.borrow_mut() = Some(anim_state);
 
         schedule_next_frame(
-            self.state.clone(),
+            Rc::clone(&self.state),
             self.frame_clock.clone(),
             on_scroll,
             on_end,
@@ -215,7 +215,7 @@ impl FlingAnimation {
 impl Clone for FlingAnimation {
     fn clone(&self) -> Self {
         Self {
-            state: self.state.clone(),
+            state: Rc::clone(&self.state),
             frame_clock: self.frame_clock.clone(),
         }
     }
@@ -332,7 +332,7 @@ impl SettleAnimation {
             is_running: Cell::new(true),
         });
         schedule_next_settle_frame(
-            self.state.clone(),
+            Rc::clone(&self.state),
             self.frame_clock.clone(),
             on_scroll,
             on_end,
@@ -359,7 +359,7 @@ impl SettleAnimation {
 impl Clone for SettleAnimation {
     fn clone(&self) -> Self {
         Self {
-            state: self.state.clone(),
+            state: Rc::clone(&self.state),
             frame_clock: self.frame_clock.clone(),
             params: self.params,
         }
@@ -375,7 +375,7 @@ fn schedule_next_settle_frame<F, G>(
     F: Fn(f32) -> f32 + 'static,
     G: FnOnce(SettleEnd) + 'static,
 {
-    let state_for_closure = state.clone();
+    let state_for_closure = Rc::clone(&state);
     let frame_clock_for_closure = frame_clock.clone();
     let on_end = RefCell::new(Some(on_end));
     let hit_boundary = Cell::new(false);
@@ -434,7 +434,7 @@ fn schedule_next_settle_frame<F, G>(
         if should_continue {
             if let Some(on_end_fn) = on_end.borrow_mut().take() {
                 schedule_next_settle_frame(
-                    state_for_closure.clone(),
+                    Rc::clone(&state_for_closure),
                     frame_clock_for_closure.clone(),
                     on_scroll,
                     on_end_fn,

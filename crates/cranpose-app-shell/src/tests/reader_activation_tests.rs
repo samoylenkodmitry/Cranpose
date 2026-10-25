@@ -100,7 +100,7 @@ fn collect_unique_semantic_nodes(
     }
 }
 
-fn reader_node_bounds(node: &cranpose_ui::LayoutBox, id: NodeId) -> Option<Rect> {
+fn reader_node_bounds(node: &LayoutBox, id: NodeId) -> Option<Rect> {
     if node.node_id == id {
         return Some(node.rect);
     }
@@ -290,7 +290,7 @@ fn described_images_expose_the_image_role_and_preserve_explicit_control_roles() 
                         bitmap,
                         description.map(String::from),
                         modifier,
-                        cranpose_ui::Alignment::CENTER,
+                        Alignment::CENTER,
                         cranpose_ui::ContentScale::Fit,
                         1.0,
                         None,
@@ -547,8 +547,7 @@ fn reader_activation_enters_text_editing_without_moving_the_selection() {
     );
     shell.set_semantics_enabled(true);
     shell.update();
-    let placed =
-        crate::placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed field");
+    let placed = placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed field");
     let field = placed
         .flatten()
         .into_iter()
@@ -662,8 +661,8 @@ fn assert_reader_content_insets(horizontal: bool, reverse: bool) {
 
 struct LazyEditorFixture {
     shell: AppShell<HitGraphRenderer>,
-    list: cranpose_foundation::lazy::LazyListState,
-    show_editor: cranpose_core::MutableState<bool>,
+    list: LazyListState,
+    show_editor: MutableState<bool>,
     active_effects: Rc<Cell<usize>>,
 }
 
@@ -762,7 +761,7 @@ fn lazy_editor_fixture_with_rows(
 
 fn scroll_lazy_editor(fixture: &mut LazyEditorFixture, delta: f32) {
     fixture.shell.app_context().enter(|| {
-        cranpose_core::run_in_mutable_snapshot(|| fixture.list.dispatch_scroll_delta(delta))
+        run_in_mutable_snapshot(|| fixture.list.dispatch_scroll_delta(delta))
             .expect("reader scroll");
     });
     fixture.shell.update();
@@ -791,10 +790,11 @@ fn lazy_list_keeps_the_active_editor_when_the_reader_scrolls_away() {
                 "Receipt"
             );
             assert!(fixture.shell.on_ime_set_selection(7, 7));
-            assert!(fixture.shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
-                cranpose_ui::KeyCode::Q,
-                "Q"
-            )));
+            assert!(
+                fixture
+                    .shell
+                    .on_key_event(&KeyEvent::key_down(KeyCode::Q, "Q"))
+            );
             assert!(fixture.shell.on_ime_set_selection(8, 8));
             assert!(fixture.shell.on_paste("Q"));
             fixture.shell.update();
@@ -951,7 +951,7 @@ fn reader_reveal_rejects_a_subcomposed_target_until_it_is_placed_again() {
                 .semantics(move |config| record_scroll_calls(config, &scroll_calls)),
             move |scope, _| {
                 let content_focus = content_focus.clone();
-                let children = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+                let children = scope.subcompose(SlotId::new(0), (), move || {
                     Text(
                         "Subcomposed target",
                         Modifier::empty()
@@ -1054,8 +1054,7 @@ fn lazy_list_releases_the_offscreen_editor_after_focus_is_cleared() {
     let mut fixture = lazy_editor_fixture(false, false);
     scroll_lazy_editor(&mut fixture, -1200.0);
     fixture.shell.app_context().enter(|| {
-        cranpose_core::run_in_mutable_snapshot(|| cranpose_ui::FocusManager.clear_focus())
-            .expect("clear focus");
+        run_in_mutable_snapshot(|| cranpose_ui::FocusManager.clear_focus()).expect("clear focus");
     });
     scroll_lazy_editor(&mut fixture, -80.0);
     assert!(fixture.shell.ime_editor_state().is_none());
@@ -1415,7 +1414,7 @@ fn a_weighted_row_child_keeps_its_place_in_reading_order() {
             Row(
                 Modifier::empty()
                     .size(Size::new(300.0, 80.0))
-                    .graphics_layer(|| cranpose_ui_graphics::GraphicsLayer {
+                    .graphics_layer(|| GraphicsLayer {
                         alpha: 0.9,
                         ..Default::default()
                     })
@@ -1428,17 +1427,13 @@ fn a_weighted_row_child_keeps_its_place_in_reading_order() {
                         Modifier::empty().weight(1.0).clickable(|_| {}),
                         RowSpec::new(),
                         || {
-                            cranpose_ui::Column(
-                                Modifier::empty(),
-                                cranpose_ui::ColumnSpec::new(),
-                                || {
-                                    Text("Idea Marketi", Modifier::empty(), TextStyle::default());
-                                    Text("Jul 22", Modifier::empty(), TextStyle::default());
-                                },
-                            );
+                            Column(Modifier::empty(), ColumnSpec::new(), || {
+                                Text("Idea Marketi", Modifier::empty(), TextStyle::default());
+                                Text("Jul 22", Modifier::empty(), TextStyle::default());
+                            });
                         },
                     );
-                    cranpose_ui::Column(Modifier::empty(), cranpose_ui::ColumnSpec::new(), || {
+                    Column(Modifier::empty(), ColumnSpec::new(), || {
                         Text("6,000.00", Modifier::empty(), TextStyle::default());
                         Text("Check", Modifier::empty(), TextStyle::default());
                         Text("Weak", Modifier::empty(), TextStyle::default());
@@ -1457,8 +1452,7 @@ fn a_weighted_row_child_keeps_its_place_in_reading_order() {
     );
     shell.set_semantics_enabled(true);
     shell.update();
-    let placed =
-        crate::placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed row");
+    let placed = placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed row");
     let order: Vec<_> = placed
         .flatten()
         .into_iter()

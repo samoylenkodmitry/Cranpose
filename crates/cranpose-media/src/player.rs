@@ -58,14 +58,14 @@ pub type OutputFactory = dyn Fn(
 
 impl SoftwareMediaPlayer {
     /// Creates a player. No device is opened until an item is.
-    pub fn new() -> SoftwareMediaPlayer {
+    pub fn new() -> Self {
         Self::with_output(Arc::new(cranpose_audio::backend::open))
     }
 
     /// Creates a player using the supplied output device factory. This allows
     /// an application to route decoded, processed PCM to its own device.
-    pub fn with_output(output: Arc<OutputFactory>) -> SoftwareMediaPlayer {
-        SoftwareMediaPlayer {
+    pub fn with_output(output: Arc<OutputFactory>) -> Self {
+        Self {
             shared: Arc::new(Shared {
                 active: Mutex::new(None),
                 item: Mutex::new(None),
@@ -83,8 +83,8 @@ impl SoftwareMediaPlayer {
 }
 
 impl Default for SoftwareMediaPlayer {
-    fn default() -> SoftwareMediaPlayer {
-        SoftwareMediaPlayer::new()
+    fn default() -> Self {
+        Self::new()
     }
 }
 

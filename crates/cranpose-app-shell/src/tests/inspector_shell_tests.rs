@@ -1,7 +1,7 @@
 use super::*;
 use crate::inspector::{InspectorAction, InspectorNode};
 
-fn project(semantics: &cranpose_ui::SemanticsTree) -> Vec<InspectorNode> {
+fn project(semantics: &SemanticsTree) -> Vec<InspectorNode> {
     vec![InspectorNode {
         node_id: semantics.root().node_id,
         canvas_key: None,
@@ -15,7 +15,7 @@ fn project(semantics: &cranpose_ui::SemanticsTree) -> Vec<InspectorNode> {
 
 fn press<R: Renderer>(shell: &mut AppShell<R>, action: InspectorAction)
 where
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     let bounds = shell
         .inspector_state()

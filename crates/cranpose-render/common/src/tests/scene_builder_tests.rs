@@ -117,7 +117,7 @@ fn scene_read_keeps_lazy_children_stable_while_the_handle_changes() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     let expected = lay_out_lazy_column(&mut applier, root);
-    let node: &dyn std::any::Any = applier.get_ref(root).expect("root node");
+    let node: &dyn Any = applier.get_ref(root).expect("root node");
     let handle = node
         .downcast_ref::<SubcomposeLayoutNode>()
         .expect("lazy root")
@@ -651,14 +651,12 @@ fn wrapped_card_composition(
     cranpose_ui::run_test_composition(move || {
         let text = cranpose_core::rememberMutableStateOf(|| "before".to_string());
         *label.borrow_mut() = Some(text);
-        let card_id = card_id.clone();
+        let card_id = Rc::clone(&card_id);
         cranpose_ui::Box(
             Modifier::empty().size_points(240.0, 120.0),
             cranpose_ui::BoxSpec::default(),
             move || {
-                let shape = cranpose_ui::LayerShape::Rounded(
-                    cranpose_ui::RoundedCornerShape::uniform(12.0),
-                );
+                let shape = LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
                 let id = cranpose_ui::Box(
                     Modifier::empty()
                         .offset(20.0, 30.0)
@@ -670,7 +668,7 @@ fn wrapped_card_composition(
                             translation_x: 5.0,
                             ..Default::default()
                         })
-                        .background(cranpose_ui::Color(0.2, 0.4, 0.8, 1.0)),
+                        .background(Color(0.2, 0.4, 0.8, 1.0)),
                     cranpose_ui::BoxSpec::default(),
                     move || {
                         Text(text, Modifier::empty(), TextStyle::default());
@@ -699,7 +697,7 @@ fn wrapper_and_card(root: &LayerNode, card_id: NodeId) -> (&LayerNode, &LayerNod
 fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space() {
     let label = Rc::new(RefCell::new(None));
     let card_id = Rc::new(RefCell::new(None));
-    let mut composition = wrapped_card_composition(label, card_id.clone());
+    let mut composition = wrapped_card_composition(label, Rc::clone(&card_id));
     let root = composition.root().expect("composition root");
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -764,7 +762,7 @@ fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space
 fn a_dirty_wrapped_node_is_rebuilt_as_one_wrapper() {
     let label = Rc::new(RefCell::new(None));
     let card_id = Rc::new(RefCell::new(None));
-    let mut composition = wrapped_card_composition(label.clone(), card_id.clone());
+    let mut composition = wrapped_card_composition(Rc::clone(&label), Rc::clone(&card_id));
     let root = composition.root().expect("composition root");
     let viewport = Size {
         width: 240.0,
@@ -818,13 +816,13 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
     let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =
         Rc::new(RefCell::new(None));
     let child_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let state_holder_for_comp = state_holder.clone();
-    let child_id_holder_for_comp = child_id_holder.clone();
+    let state_holder_for_comp = Rc::clone(&state_holder);
+    let child_id_holder_for_comp = Rc::clone(&child_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let label = cranpose_core::rememberMutableStateOf(|| "before".to_string());
         *state_holder_for_comp.borrow_mut() = Some(label);
-        let child_id_holder_for_content = child_id_holder_for_comp.clone();
+        let child_id_holder_for_content = Rc::clone(&child_id_holder_for_comp);
         cranpose_ui::Box(
             Modifier::empty().size_points(240.0, 80.0),
             cranpose_ui::BoxSpec::default(),
@@ -952,13 +950,13 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
     let label_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =
         Rc::new(RefCell::new(None));
     let child_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let label_holder_for_comp = label_holder.clone();
-    let child_id_holder_for_comp = child_id_holder.clone();
+    let label_holder_for_comp = Rc::clone(&label_holder);
+    let child_id_holder_for_comp = Rc::clone(&child_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let label = cranpose_core::rememberMutableStateOf(|| "before".to_string());
         *label_holder_for_comp.borrow_mut() = Some(label);
-        let child_id_holder_for_content = child_id_holder_for_comp.clone();
+        let child_id_holder_for_content = Rc::clone(&child_id_holder_for_comp);
         Column(
             Modifier::empty().size_points(240.0, 200.0),
             ColumnSpec::default(),
@@ -972,7 +970,7 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
                         }),
                     cranpose_ui::BoxSpec::default(),
                     {
-                        let child_id_holder_for_box = child_id_holder_for_content.clone();
+                        let child_id_holder_for_box = Rc::clone(&child_id_holder_for_content);
                         move || {
                             let child_id = Text(label, Modifier::empty(), TextStyle::default());
                             *child_id_holder_for_box.borrow_mut() = Some(child_id);
@@ -1052,13 +1050,13 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
     let rows_holder: Rc<RefCell<Option<cranpose_core::MutableState<usize>>>> =
         Rc::new(RefCell::new(None));
     let column_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let rows_holder_for_comp = rows_holder.clone();
-    let column_id_holder_for_comp = column_id_holder.clone();
+    let rows_holder_for_comp = Rc::clone(&rows_holder);
+    let column_id_holder_for_comp = Rc::clone(&column_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let rows = cranpose_core::rememberMutableStateOf(|| 2usize);
         *rows_holder_for_comp.borrow_mut() = Some(rows);
-        let column_id_holder_for_content = column_id_holder_for_comp.clone();
+        let column_id_holder_for_content = Rc::clone(&column_id_holder_for_comp);
         cranpose_ui::Box(
             Modifier::empty()
                 .size_points(240.0, 240.0)
@@ -1154,12 +1152,12 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
         width: 0.0,
         height: 0.0,
     }));
-    let sink_for_comp = sink.clone();
+    let sink_for_comp = Rc::clone(&sink);
     let translation = Rc::new(Cell::new(Point { x: 7.0, y: 11.0 }));
-    let translation_for_comp = translation.clone();
+    let translation_for_comp = Rc::clone(&translation);
     let mut composition = cranpose_ui::run_test_composition(move || {
-        let sink = sink_for_comp.clone();
-        let translation = translation_for_comp.clone();
+        let sink = Rc::clone(&sink_for_comp);
+        let translation = Rc::clone(&translation_for_comp);
         Column(
             Modifier::empty()
                 .size_points(200.0, 400.0)
@@ -1179,7 +1177,7 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
                             translation_y: -9.0,
                             ..Default::default()
                         })
-                        .report_window_rect(sink.clone()),
+                        .report_window_rect(Rc::clone(&sink)),
                     BoxSpec::default(),
                     || {},
                 );
@@ -1252,7 +1250,7 @@ fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
 #[test]
 fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
-    let scroll_holder_for_comp = scroll_holder.clone();
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -1312,7 +1310,7 @@ fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() 
 #[test]
 fn update_graph_from_applier_refreshes_scroll_content_offset() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
-    let scroll_holder_for_comp = scroll_holder.clone();
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -1392,7 +1390,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
 #[test]
 fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
-    let scroll_holder_for_comp = scroll_holder.clone();
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -1468,7 +1466,7 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
 #[test]
 fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
-    let scroll_holder_for_comp = scroll_holder.clone();
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -1546,11 +1544,10 @@ fn shadowed_scroll_rows(
     clicks: &Rc<RefCell<Vec<(usize, usize)>>>,
 ) {
     for index in 0..12usize {
-        let shape =
-            cranpose_ui::LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
-        let radius = shadow_radius.clone();
-        let recorded_clicks = clicks.clone();
-        let first_text = first_text.clone();
+        let shape = LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
+        let radius = Rc::clone(shadow_radius);
+        let recorded_clicks = Rc::clone(clicks);
+        let first_text = Rc::clone(first_text);
         cranpose_ui::Box(
             Modifier::empty()
                 .size_points(240.0, 60.0)
@@ -1579,15 +1576,15 @@ fn shadowed_scroll_rows(
 
 fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
-    let scroll_holder_for_comp = scroll_holder.clone();
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
     let shadow_radius = Rc::new(std::cell::Cell::new(6.0));
-    let shadow_radius_for_comp = shadow_radius.clone();
+    let shadow_radius_for_comp = Rc::clone(&shadow_radius);
     let generation_holder = Rc::new(RefCell::new(None));
-    let generation_for_comp = generation_holder.clone();
+    let generation_for_comp = Rc::clone(&generation_holder);
     let first_text = Rc::new(std::cell::Cell::new(None));
-    let first_text_for_comp = first_text.clone();
+    let first_text_for_comp = Rc::clone(&first_text);
     let clicks = Rc::new(RefCell::new(Vec::new()));
-    let clicks_for_comp = clicks.clone();
+    let clicks_for_comp = Rc::clone(&clicks);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
         *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
@@ -1596,7 +1593,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         let mut modifier = Modifier::empty().size_points(240.0, 320.0);
         if wrapped_root {
             modifier = modifier
-                .drop_shadow(cranpose_ui::LayerShape::Rectangle, |scope| {
+                .drop_shadow(LayerShape::Rectangle, |scope| {
                     scope.radius = 4.0;
                 })
                 .graphics_layer(GraphicsLayer::default);
@@ -1605,9 +1602,9 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
             modifier.vertical_scroll(scroll_state, false),
             ColumnSpec::default(),
             {
-                let shadow_radius = shadow_radius_for_comp.clone();
-                let first_text = first_text_for_comp.clone();
-                let clicks = clicks_for_comp.clone();
+                let shadow_radius = Rc::clone(&shadow_radius_for_comp);
+                let first_text = Rc::clone(&first_text_for_comp);
+                let clicks = Rc::clone(&clicks_for_comp);
                 move || {
                     shadowed_scroll_rows(generation.value(), &shadow_radius, &first_text, &clicks);
                 }
@@ -1737,7 +1734,7 @@ fn take_redraw_nodes(applier: &mut MemoryApplier, node: NodeId, out: &mut Vec<No
     };
     entry.collect_children_into(&mut children);
     let redraw = applier
-        .with_node::<cranpose_ui::LayoutNode, _>(node, |layout| {
+        .with_node::<LayoutNode, _>(node, |layout| {
             let redraw = layout.needs_redraw();
             layout.clear_needs_redraw();
             redraw
@@ -1754,7 +1751,7 @@ fn take_redraw_nodes(applier: &mut MemoryApplier, node: NodeId, out: &mut Vec<No
 #[test]
 fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
-    let state_holder_for_comp = state_holder.clone();
+    let state_holder_for_comp = Rc::clone(&state_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let list_state = rememberLazyListState();
         *state_holder_for_comp.borrow_mut() = Some(list_state);
@@ -1903,7 +1900,7 @@ fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i6
 fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
     for delta in [-30.0f32, -60.0, -96.0, -180.0, -300.0] {
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
-        let state_holder_for_comp = state_holder.clone();
+        let state_holder_for_comp = Rc::clone(&state_holder);
         let mut composition = cranpose_ui::run_test_composition(move || {
             let list_state = rememberLazyListState();
             *state_holder_for_comp.borrow_mut() = Some(list_state);
@@ -2010,16 +2007,16 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
         Rc::new(RefCell::new(None));
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
     let child_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let label_holder_for_comp = label_holder.clone();
-    let scroll_holder_for_comp = scroll_holder.clone();
-    let child_id_holder_for_comp = child_id_holder.clone();
+    let label_holder_for_comp = Rc::clone(&label_holder);
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
+    let child_id_holder_for_comp = Rc::clone(&child_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let label = cranpose_core::rememberMutableStateOf(|| "scrolled child before".to_string());
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
         *label_holder_for_comp.borrow_mut() = Some(label);
         *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
-        let child_id_holder_for_content = child_id_holder_for_comp.clone();
+        let child_id_holder_for_content = Rc::clone(&child_id_holder_for_comp);
         Column(
             Modifier::empty()
                 .size_points(260.0, 90.0)
@@ -2123,18 +2120,18 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
     let underlay_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
     let overlay_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let alpha_holder_for_comp = alpha_holder.clone();
-    let scroll_holder_for_comp = scroll_holder.clone();
-    let underlay_id_holder_for_comp = underlay_id_holder.clone();
-    let overlay_id_holder_for_comp = overlay_id_holder.clone();
+    let alpha_holder_for_comp = Rc::clone(&alpha_holder);
+    let scroll_holder_for_comp = Rc::clone(&scroll_holder);
+    let underlay_id_holder_for_comp = Rc::clone(&underlay_id_holder);
+    let overlay_id_holder_for_comp = Rc::clone(&overlay_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let alpha = cranpose_core::rememberMutableStateOf(|| 1.0f32);
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
         *alpha_holder_for_comp.borrow_mut() = Some(alpha);
         *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
-        let underlay_id_holder_for_content = underlay_id_holder_for_comp.clone();
-        let overlay_id_holder_for_content = overlay_id_holder_for_comp.clone();
+        let underlay_id_holder_for_content = Rc::clone(&underlay_id_holder_for_comp);
+        let overlay_id_holder_for_content = Rc::clone(&overlay_id_holder_for_comp);
         Column(
             Modifier::empty()
                 .size_points(260.0, 120.0)
@@ -2146,8 +2143,8 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
                     Modifier::empty().size_points(188.0, 88.0),
                     cranpose_ui::BoxSpec::default(),
                     {
-                        let underlay_id_holder_for_box = underlay_id_holder_for_content.clone();
-                        let overlay_id_holder_for_box = overlay_id_holder_for_content.clone();
+                        let underlay_id_holder_for_box = Rc::clone(&underlay_id_holder_for_content);
+                        let overlay_id_holder_for_box = Rc::clone(&overlay_id_holder_for_content);
                         move || {
                             let underlay_id = cranpose_ui::Box(
                                 Modifier::empty().size_points(188.0, 88.0),
@@ -2271,8 +2268,8 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
     let offset_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
         Rc::new(RefCell::new(None));
     let node_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let offset_holder_for_comp = offset_holder.clone();
-    let node_id_holder_for_comp = node_id_holder.clone();
+    let offset_holder_for_comp = Rc::clone(&offset_holder);
+    let node_id_holder_for_comp = Rc::clone(&node_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let offset = cranpose_core::rememberMutableStateOf(|| 0.0f32);
@@ -2359,8 +2356,8 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
     let offset_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
         Rc::new(RefCell::new(None));
     let node_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let offset_holder_for_comp = offset_holder.clone();
-    let node_id_holder_for_comp = node_id_holder.clone();
+    let offset_holder_for_comp = Rc::clone(&offset_holder);
+    let node_id_holder_for_comp = Rc::clone(&node_id_holder);
 
     let mut composition = cranpose_ui::run_test_composition(move || {
         let offset = cranpose_core::rememberMutableStateOf(|| 0.0f32);
@@ -2433,10 +2430,10 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
 
 #[test]
 fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity() {
-    let empty = Rc::new(|_: &mut DrawScopeDefault| {});
+    let empty: cranpose_ui::DrawCommandFn = Rc::new(|_: &mut DrawScopeDefault| {});
     let commands = [
-        DrawCommand::Behind(empty.clone()),
-        DrawCommand::WithContent(empty.clone()),
+        DrawCommand::Behind(Rc::clone(&empty)),
+        DrawCommand::WithContent(Rc::clone(&empty)),
         DrawCommand::Overlay(empty),
     ];
     let mut nodes = vec![RenderNode::DrawRun(DrawRunNode::new(
@@ -2658,7 +2655,7 @@ fn stored_effect_hash_tracks_local_effect_only() {
     };
     let mut effected = base.clone();
     effected.graphics_layer = Some(GraphicsLayer {
-        render_effect: Some(cranpose_ui_graphics::RenderEffect::blur(6.0)),
+        render_effect: Some(RenderEffect::blur(6.0)),
         ..GraphicsLayer::default()
     });
 
@@ -3133,7 +3130,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
     use std::{cell::RefCell, rc::Rc};
 
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
-    let state_holder_for_comp = state_holder.clone();
+    let state_holder_for_comp = Rc::clone(&state_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let list_state = rememberLazyListState();
         *state_holder_for_comp.borrow_mut() = Some(list_state);
@@ -3212,7 +3209,7 @@ fn scrolled_lazy_column_render_graph_holds_only_viewport_rows() {
     use std::{cell::RefCell, rc::Rc};
 
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
-    let state_holder_for_comp = state_holder.clone();
+    let state_holder_for_comp = Rc::clone(&state_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let list_state = rememberLazyListState();
         *state_holder_for_comp.borrow_mut() = Some(list_state);
@@ -3266,7 +3263,7 @@ fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
     use std::{cell::RefCell, rc::Rc};
 
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
-    let state_holder_for_comp = state_holder.clone();
+    let state_holder_for_comp = Rc::clone(&state_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let list_state = rememberLazyListState();
         *state_holder_for_comp.borrow_mut() = Some(list_state);
@@ -3674,7 +3671,7 @@ impl cranpose_ui::WindowRootDescriptor for TestWindow {
         self.0
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -3905,7 +3902,7 @@ fn lay_out_lazy_column(applier: &mut MemoryApplier, root: NodeId) -> Vec<NodeId>
             },
         )
         .expect("lazy column layout");
-    let node: &dyn std::any::Any = applier.get_ref(root).expect("root node");
+    let node: &dyn Any = applier.get_ref(root).expect("root node");
     let node = node
         .downcast_ref::<SubcomposeLayoutNode>()
         .expect("lazy column should be subcompose");
@@ -3991,12 +3988,12 @@ fn field_window_origin(applier: &mut MemoryApplier, field: NodeId) -> Point {
 fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origin() {
     let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
     let field_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let scroll_for_comp = scroll_holder.clone();
-    let field_for_comp = field_holder.clone();
+    let scroll_for_comp = Rc::clone(&scroll_holder);
+    let field_for_comp = Rc::clone(&field_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
         *scroll_for_comp.borrow_mut() = Some(scroll_state);
-        let field_for_content = field_for_comp.clone();
+        let field_for_content = Rc::clone(&field_for_comp);
         Column(
             Modifier::empty()
                 .size_points(260.0, 90.0)
@@ -4131,16 +4128,16 @@ fn rebuilt_text_nodes_share_their_layouts_render_text_and_style() {
 fn built_layers_know_whether_their_content_stays_inside() {
     let inside_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
     let outside_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
-    let inside_for_comp = inside_holder.clone();
-    let outside_for_comp = outside_holder.clone();
+    let inside_for_comp = Rc::clone(&inside_holder);
+    let outside_for_comp = Rc::clone(&outside_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
-        let inside_for_content = inside_for_comp.clone();
-        let outside_for_content = outside_for_comp.clone();
+        let inside_for_content = Rc::clone(&inside_for_comp);
+        let outside_for_content = Rc::clone(&outside_for_comp);
         Column(
             Modifier::empty().size_points(200.0, 100.0),
             ColumnSpec::default(),
             move || {
-                let inside = inside_for_content.clone();
+                let inside = Rc::clone(&inside_for_content);
                 let column = Column(
                     Modifier::empty()
                         .size_points(120.0, 40.0)
@@ -4151,7 +4148,7 @@ fn built_layers_know_whether_their_content_stays_inside() {
                     },
                 );
                 *inside.borrow_mut() = Some(column);
-                let outside = outside_for_content.clone();
+                let outside = Rc::clone(&outside_for_content);
                 let spilling = Column(
                     Modifier::empty().size_points(50.0, 20.0),
                     ColumnSpec::default(),
@@ -4207,12 +4204,12 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
     let field_holder: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> =
         Rc::new(RefCell::new(None));
     let ids: Rc<RefCell<(Option<NodeId>, Option<NodeId>)>> = Rc::new(RefCell::new((None, None)));
-    let field_for_comp = field_holder.clone();
-    let ids_for_comp = ids.clone();
+    let field_for_comp = Rc::clone(&field_holder);
+    let ids_for_comp = Rc::clone(&ids);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let show_field = cranpose_core::rememberMutableStateOf(|| false);
         *field_for_comp.borrow_mut() = Some(show_field);
-        let ids_for_outer = ids_for_comp.clone();
+        let ids_for_outer = Rc::clone(&ids_for_comp);
         let outer = cranpose_ui::Box(
             Modifier::empty().size_points(240.0, 80.0),
             cranpose_ui::BoxSpec::default(),
@@ -4312,23 +4309,23 @@ fn nested_label_composition(
         let pad = cranpose_core::rememberMutableStateOf(|| 0.0f32);
         *label.borrow_mut() = Some(text);
         *padding.borrow_mut() = Some(pad);
-        let ids = ids.clone();
+        let ids = Rc::clone(&ids);
         Column(
             Modifier::empty().size_points(240.0, 200.0),
             ColumnSpec::default(),
             move || {
                 let leaf = Rc::new(RefCell::new(None));
-                let leaf_seen = leaf.clone();
+                let leaf_seen = Rc::clone(&leaf);
                 let padded = cranpose_ui::Box(
                     Modifier::empty().padding(pad.value()),
                     cranpose_ui::BoxSpec::default(),
                     move || {
-                        let leaf_seen = leaf_seen.clone();
+                        let leaf_seen = Rc::clone(&leaf_seen);
                         cranpose_ui::Box(
                             Modifier::empty().padding(3.0),
                             cranpose_ui::BoxSpec::default(),
                             move || {
-                                let leaf_seen = leaf_seen.clone();
+                                let leaf_seen = Rc::clone(&leaf_seen);
                                 cranpose_ui::Box(
                                     Modifier::empty(),
                                     cranpose_ui::BoxSpec::default(),
@@ -4358,7 +4355,8 @@ fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does()
     let label: Holder<cranpose_core::MutableState<String>> = Rc::default();
     let padding: Holder<cranpose_core::MutableState<f32>> = Rc::default();
     let ids: Holder<(NodeId, NodeId)> = Rc::default();
-    let mut composition = nested_label_composition(label.clone(), padding.clone(), ids.clone());
+    let mut composition =
+        nested_label_composition(Rc::clone(&label), Rc::clone(&padding), Rc::clone(&ids));
     let root = composition.root().expect("composition root");
     let viewport = Size {
         width: 240.0,

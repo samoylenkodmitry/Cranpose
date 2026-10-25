@@ -361,7 +361,7 @@ impl RobotController {
         let (channel, robot) = RobotChannel::new(wake_event_loop);
         let RobotChannel { rx, tx } = channel;
 
-        let controller = RobotController {
+        let controller = Self {
             rx,
             tx,
             pending_command: None,
@@ -1198,7 +1198,7 @@ impl App {
         } else {
             self.native_windows
                 .get(&window_id)
-                .map(|native| native.window.clone())
+                .map(|native| Arc::clone(&native.window))
         };
         if let Some(window) = window {
             self.cursors.pointer_left(&window);
@@ -1646,9 +1646,8 @@ impl App {
         if let Some((width, height)) = crate::desktop_host_surface::take_requested_size()
             && let Some(window) = self.window.as_ref()
         {
-            let _ = window.request_surface_size(
-                winit::dpi::LogicalSize::new(width as f64, height as f64).into(),
-            );
+            let _ =
+                window.request_surface_size(LogicalSize::new(width as f64, height as f64).into());
         }
         let registry = Rc::clone(&self.native_window_registry);
         if let Some(app) = &mut self.app {
@@ -1931,7 +1930,7 @@ impl App {
         let surface = context
             .gpu
             .instance
-            .create_surface(window.clone())
+            .create_surface(Arc::clone(&window))
             .map_err(LaunchError::SurfaceCreate)?;
         surface.keep_presented_images(true);
         trace_native_window_timing!(
@@ -2184,9 +2183,7 @@ impl App {
         width: u32,
         height: u32,
     ) {
-        let previous_state_size = native
-            .state
-            .map(super::native_window::WindowState::size_non_reactive);
+        let previous_state_size = native.state.map(WindowState::size_non_reactive);
         update_native_options_size(&mut native.options, &native.window, width, height);
         tell_the_application_the_window_frame(native.state, &native.window);
         notify_native_window_resized(&native.events, &native.window, width, height);
@@ -2213,15 +2210,13 @@ impl App {
             .is_some_and(|known| native_window_positions_close(*known, position))
             && native
                 .state
-                .and_then(super::native_window::WindowState::position_non_reactive)
+                .and_then(WindowState::position_non_reactive)
                 .is_some_and(|known| native_window_positions_close((known.x, known.y), position))
         {
             return false;
         }
 
-        let previous_state_position = native
-            .state
-            .and_then(super::native_window::WindowState::position_non_reactive);
+        let previous_state_position = native.state.and_then(WindowState::position_non_reactive);
         native_window_positions.insert(native.key, position);
         update_native_options_position(&mut native.options, position.0, position.1);
         native.pending_outer_positions.clear();
@@ -2253,9 +2248,7 @@ impl App {
         let logical = LogicalPosition::new(position.x as f64, position.y as f64);
         let physical = logical.to_physical::<i32>(native.window.scale_factor());
         update_native_options_position(&mut native.options, position.x, position.y);
-        let previous_state_position = native
-            .state
-            .and_then(super::native_window::WindowState::position_non_reactive);
+        let previous_state_position = native.state.and_then(WindowState::position_non_reactive);
         tell_the_application_the_window_moved(&native.events, native.state, position.x, position.y);
         sync_native_window_state_position(
             native.state,
@@ -2328,7 +2321,7 @@ impl App {
             drag_requested_for_handler.set(true);
             true
         });
-        let resize_window = native.window.clone();
+        let resize_window = Arc::clone(&native.window);
         let resize_handler: Rc<dyn Fn(WindowResizeDirection)> = Rc::new(move |direction| {
             if let Err(error) = resize_window.drag_resize_window(native_resize_direction(direction))
             {
@@ -2885,9 +2878,7 @@ impl App {
                 continue;
             }
 
-            let previous_state_position = native
-                .state
-                .and_then(super::native_window::WindowState::position_non_reactive);
+            let previous_state_position = native.state.and_then(WindowState::position_non_reactive);
             external_moves.push((*window_id, native.key, position, previous_state_position));
         }
 
@@ -3047,9 +3038,8 @@ impl App {
             WindowEvent::Moved(position) => {
                 native.vsync_interval = monitor_refresh_interval(&native.window);
                 let known_position = self.native_window_positions.get(&native.key).copied();
-                let previous_state_position = native
-                    .state
-                    .and_then(super::native_window::WindowState::position_non_reactive);
+                let previous_state_position =
+                    native.state.and_then(WindowState::position_non_reactive);
                 let platform_probe = &self.native_window_platform_probe;
                 let position = current_native_window_position(platform_probe, native)
                     .unwrap_or_else(|| {
@@ -5382,11 +5372,8 @@ fn dispatch_mouse_wheel(
 
 fn wheel_uptime_millis() -> u64 {
     use std::sync::OnceLock;
-    static EPOCH: OnceLock<web_time::Instant> = OnceLock::new();
-    EPOCH
-        .get_or_init(web_time::Instant::now)
-        .elapsed()
-        .as_millis() as u64
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 /// Sends a press or release of a mouse button other than the left one to
@@ -5568,7 +5555,7 @@ struct DesktopTextInput {
 
 impl DesktopTextInput {
     fn install(surface: &mut SurfaceMut<'_, WgpuRenderer>, window: &Arc<dyn Window>) {
-        surface.set_platform_text_input(Rc::new(DesktopTextInput {
+        surface.set_platform_text_input(Rc::new(Self {
             window: Arc::downgrade(window),
         }));
     }
@@ -5830,7 +5817,7 @@ impl ApplicationHandler for App {
             &window,
         ));
 
-        let frame_waker_window = window.clone();
+        let frame_waker_window = Arc::clone(&window);
         let frame_waker_event_proxy = self.event_proxy.clone();
         app.set_frame_waker(primary_frame_waker(
             std::thread::current().id(),
@@ -7320,7 +7307,7 @@ impl GpuStart {
         window: &Arc<dyn Window>,
     ) -> Option<(OpenedGpu, wgpu::Surface<'static>)> {
         let gpu = self.0.take()?.join().ok()??;
-        let surface = gpu.instance.create_surface(window.clone()).ok()?;
+        let surface = gpu.instance.create_surface(Arc::clone(window)).ok()?;
         surface.keep_presented_images(true);
         gpu.adapter
             .is_surface_supported(&surface)

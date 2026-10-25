@@ -54,7 +54,7 @@ fn drawn_run(draw: impl FnOnce(&mut DrawScopeDefault)) -> RunDraw {
         &recording,
         None,
         recording.all_segments(),
-        crate::scene::Placement::at(Point::default(), None, None),
+        Placement::at(Point::default(), None, None),
     )
 }
 
@@ -71,7 +71,7 @@ fn arena_draws(runs: &[(RunDraw, crate::render::ShapePipelineKey)]) -> Vec<RunDr
             chunk,
             run,
             0..records,
-            (1.0, crate::geometry::SegmentTransform::IDENTITY, [0.0; 2]),
+            (1.0, SegmentTransform::IDENTITY, [0.0; 2]),
             &mut |_| *key,
             &mut wanted,
         );
@@ -286,7 +286,7 @@ fn a_draw_holds_occluders_once_any_record_it_takes_does() {
     };
     let card = drawn_run(|scope| {
         scope.draw_rect_at(
-            cranpose_ui_graphics::Rect {
+            Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 64.0,
@@ -308,7 +308,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
     let placement = Placement {
         offset: Point::new(10.25, 20.0),
         snap_anchor: Some(crate::scene::SnapAnchor::rigid(Point::new(0.3, 0.0))),
-        clip: Some(cranpose_ui_graphics::Rect {
+        clip: Some(Rect {
             x: 1.0,
             y: 2.0,
             width: 3.0,
@@ -318,12 +318,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         alpha: 0.5,
         color_filter: Some(Arc::new(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0)))),
     };
-    let data = PlacementData::of(
-        &placement,
-        2.0,
-        crate::geometry::SegmentTransform::IDENTITY,
-        [0.0; 2],
-    );
+    let data = PlacementData::of(&placement, 2.0, SegmentTransform::IDENTITY, [0.0; 2]);
     assert_eq!(
         data.flags,
         PLACEMENT_CANONICALIZE | PLACEMENT_CLIPPED | PLACEMENT_FILTERED | PLACEMENT_PAINTED
@@ -338,15 +333,14 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
     let plain = PlacementData::of(
         &Placement::at(Point::default(), None, None),
         1.0,
-        crate::geometry::SegmentTransform::IDENTITY,
+        SegmentTransform::IDENTITY,
         [0.0; 2],
     );
     assert_eq!(plain.flags, 0);
     assert_eq!(plain.color_matrix[2][2], 1.0);
     assert_eq!(plain.transform, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(plain.translation, [0.0, 0.0]);
-    let turn = crate::geometry::SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [5.0, 7.0])
-        .expect("a quarter turn");
+    let turn = SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [5.0, 7.0]).expect("a quarter turn");
     let turned = PlacementData::of(
         &Placement::at(Point::default(), None, None),
         1.0,
@@ -362,7 +356,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         turned.flags, PLACEMENT_TURNED,
         "and say so, so the one pipeline draws them turned"
     );
-    assert_eq!(std::mem::size_of::<PlacementData>(), 160);
+    assert_eq!(size_of::<PlacementData>(), 160);
 }
 
 #[test]
@@ -445,8 +439,8 @@ fn fill_run(solid: usize, gradient: usize) -> RunDraw {
         );
     }
     RunDraw::whole(
-        std::sync::Arc::new(recorder),
-        crate::scene::Placement::at(Point::default(), None, None),
+        Arc::new(recorder),
+        Placement::at(Point::default(), None, None),
     )
     .expect("recorded run")
 }
@@ -464,7 +458,7 @@ fn arena_wants(
         chunk,
         run,
         window,
-        (1.0, crate::geometry::SegmentTransform::IDENTITY, [0.0; 2]),
+        (1.0, SegmentTransform::IDENTITY, [0.0; 2]),
         &mut |segment| arena_key(segment),
         &mut wanted,
     );
@@ -562,9 +556,9 @@ fn stored_gradient_run(records: usize, marked: usize, alpha: f32) -> RunDraw {
             stroke: None,
         });
     }
-    let mut placement = crate::scene::Placement::at(Point::default(), None, None);
+    let mut placement = Placement::at(Point::default(), None, None);
     placement.alpha = alpha;
-    let mut run = RunDraw::whole(std::sync::Arc::new(recorder), placement).expect("recorded run");
+    let mut run = RunDraw::whole(Arc::new(recorder), placement).expect("recorded run");
     run.command = Some(DrawCommandId {
         node_id: 7,
         command_index: 0,
@@ -636,7 +630,7 @@ fn a_stored_run_rewritten_within_a_frame_leaves_each_read_its_own_tables() {
         let mut store = storage_store(&device, upload);
         let opaque = stored_gradient_run(80, 0, 1.0);
         let faded = RunDraw {
-            placement: crate::scene::Placement {
+            placement: Placement {
                 alpha: 0.25,
                 ..opaque.placement.clone()
             },

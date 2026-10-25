@@ -85,5 +85,5 @@ pub(crate) fn main() {
             println!("PASS: Lazy Pulse updated from '{first}' to '{second}'");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

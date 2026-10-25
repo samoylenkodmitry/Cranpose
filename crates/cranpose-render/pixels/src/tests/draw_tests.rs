@@ -392,8 +392,8 @@ fn gradient_brush_contract_requires_visible_color_transition() {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)],
-                cranpose_ui_graphics::Point::new(0.0, 0.0),
-                cranpose_ui_graphics::Point::new(320.0, 0.0),
+                Point::new(0.0, 0.0),
+                Point::new(320.0, 0.0),
             )),
             ..Default::default()
         },
@@ -444,7 +444,7 @@ fn draw_style_stroke_contract_changes_raster_output() {
 fn shadow_blur_radius_contract_changes_raster_output() {
     let base_shadow = cranpose_ui::text::Shadow {
         color: Color(0.0, 0.0, 0.0, 0.85),
-        offset: cranpose_ui_graphics::Point::new(6.0, 4.0),
+        offset: Point::new(6.0, 4.0),
         blur_radius: 0.0,
     };
     let zero_blur_style = cranpose_ui::TextStyle {
@@ -478,14 +478,14 @@ fn shadow_blur_radius_contract_changes_raster_output() {
 fn text_motion_contract_changes_raster_output() {
     let static_style = cranpose_ui::TextStyle {
         paragraph_style: cranpose_ui::ParagraphStyle {
-            text_motion: Some(cranpose_ui::text::TextMotion::Static),
+            text_motion: Some(TextMotion::Static),
             ..Default::default()
         },
         ..Default::default()
     };
     let animated_style = cranpose_ui::TextStyle {
         paragraph_style: cranpose_ui::ParagraphStyle {
-            text_motion: Some(cranpose_ui::text::TextMotion::Animated),
+            text_motion: Some(TextMotion::Animated),
             ..Default::default()
         },
         ..Default::default()
@@ -585,7 +585,7 @@ fn arc_band_rasterizes_between_the_two_radii() {
         width: 32.0,
         height: 32.0,
     });
-    shape.arc = Some(cranpose_ui_graphics::ArcGeometry::new(
+    shape.arc = Some(ArcGeometry::new(
         Point::new(32.0, 32.0),
         10.0,
         16.0,
@@ -613,7 +613,7 @@ fn annular_sector_has_flat_radial_edges_and_respects_the_sweep() {
         width: 16.0,
         height: 16.0,
     });
-    shape.arc = Some(cranpose_ui_graphics::ArcGeometry::new(
+    shape.arc = Some(ArcGeometry::new(
         Point::new(32.0, 32.0),
         8.0,
         16.0,
@@ -643,7 +643,7 @@ fn annular_sector_has_flat_radial_edges_and_respects_the_sweep() {
 #[test]
 fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
     for arc in [
-        cranpose_ui_graphics::ArcGeometry::new(
+        ArcGeometry::new(
             Point::new(32.0, 32.0),
             10.0,
             10.0,
@@ -651,7 +651,7 @@ fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
             1.0,
             cranpose_ui_graphics::StrokeCap::Butt,
         ),
-        cranpose_ui_graphics::ArcGeometry::new(
+        ArcGeometry::new(
             Point::new(32.0, 32.0),
             0.0,
             0.0,
@@ -863,8 +863,7 @@ fn filled_rounded_rects_cover_each_pixel_as_their_geometry_says() {
                 &format!("fill {rect:?} {shape_radii:?}"),
                 &frame,
                 |point| {
-                    if crate::style::point_in_resolved_rounded_rect(point.x, point.y, rect, &radii)
-                    {
+                    if point_in_resolved_rounded_rect(point.x, point.y, rect, &radii) {
                         1.0
                     } else {
                         0.0

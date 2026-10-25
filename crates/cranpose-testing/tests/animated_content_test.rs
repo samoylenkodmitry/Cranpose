@@ -27,8 +27,8 @@ enum Page {
 impl Page {
     fn size(self) -> Size {
         match self {
-            Page::A => Size::new(10.0, 10.0),
-            Page::B => Size::new(30.0, 20.0),
+            Self::A => Size::new(10.0, 10.0),
+            Self::B => Size::new(30.0, 20.0),
         }
     }
 }

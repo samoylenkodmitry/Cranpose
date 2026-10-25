@@ -96,7 +96,7 @@ fn a_glass_icon_button_composes_at_its_diameter() {
             GlassButtonSpec::glass(),
             44.0,
             || {},
-            cranpose_liquid::icons::SEARCH,
+            icons::SEARCH,
         );
     });
 }
@@ -112,7 +112,7 @@ fn a_glass_icon_button_group_composes_each_action() {
             |scope| {
                 for _ in 0..3 {
                     counter.set(counter.get() + 1);
-                    scope.action(cranpose_liquid::icons::SEARCH, "Search", || {});
+                    scope.action(icons::SEARCH, "Search", || {});
                 }
             },
         );
@@ -123,12 +123,7 @@ fn a_glass_icon_button_group_composes_each_action() {
 #[test]
 fn an_icon_composes_at_a_size_and_colour() {
     themed(|| {
-        cranpose_liquid::icons::Icon(
-            cranpose_liquid::icons::SEARCH,
-            Some("Search".into()),
-            24.0,
-            Color::WHITE,
-        );
+        icons::Icon(icons::SEARCH, Some("Search".into()), 24.0, Color::WHITE);
     });
 }
 
@@ -253,8 +248,8 @@ fn a_tab_bar_with_an_accessory_composes_both() {
             0,
             |_| {},
             |scope| {
-                scope.tab(cranpose_liquid::icons::SEARCH, "Search");
-                scope.tab(cranpose_liquid::icons::SEARCH, "Browse");
+                scope.tab(icons::SEARCH, "Search");
+                scope.tab(icons::SEARCH, "Browse");
             },
             {
                 let counter = Rc::clone(&counter);
@@ -280,7 +275,7 @@ fn a_menu_icon_button_composes_covered_and_uncovered() {
                 covered,
                 gesture,
                 || {},
-                cranpose_liquid::icons::SEARCH,
+                icons::SEARCH,
             );
         });
     }
@@ -296,7 +291,7 @@ fn an_absorbed_menu_icon_button_composes_transferred_and_not() {
                 44.0,
                 transferred,
                 || {},
-                cranpose_liquid::icons::SEARCH,
+                icons::SEARCH,
             );
         });
     }
@@ -471,8 +466,8 @@ fn a_tab_bar_without_an_accessory_composes_its_tabs() {
             0,
             |_| {},
             |scope| {
-                scope.tab(cranpose_liquid::icons::SEARCH, "Search");
-                scope.tab(cranpose_liquid::icons::SEARCH, "Browse");
+                scope.tab(icons::SEARCH, "Search");
+                scope.tab(icons::SEARCH, "Browse");
             },
         );
     });
@@ -489,8 +484,8 @@ fn tab_bar_announces_the_committed_selection() {
                 1,
                 |_| {},
                 |tabs| {
-                    tabs.tab(cranpose_liquid::icons::STAR, "Discover");
-                    tabs.tab(cranpose_liquid::icons::BOOKMARK, "Saved");
+                    tabs.tab(icons::STAR, "Discover");
+                    tabs.tab(icons::BOOKMARK, "Saved");
                 },
             );
         });

@@ -419,7 +419,7 @@ async fn record_pointer(scope: PointerInputScope) {
 pub(crate) fn RecordingOverlay() {
     let pulse = rememberMutableStateOf(|| 0u64);
     cranpose_core::LaunchedEffectAsync((), move |scope| {
-        std::boxed::Box::pin(async move {
+        Box::pin(async move {
             let clock = scope.runtime().frame_clock();
             while scope.is_active() {
                 let now = clock.next_frame().await;

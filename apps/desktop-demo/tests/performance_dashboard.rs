@@ -115,7 +115,7 @@ fn labels() -> Vec<String> {
     let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
     let source = frames();
     let mut rule = ComposeTestRule::new();
-    rule.set_content(move || PerformanceDashboard(index.clone(), None, source.clone()))
+    rule.set_content(move || PerformanceDashboard(Rc::clone(&index), None, source.clone()))
         .expect("the dashboard composes");
     let root = rule
         .placed_semantics(Size::new(1100.0, 1800.0))
@@ -344,7 +344,7 @@ fn dashboard() -> RobotTestRule<TestRenderer> {
     let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
     let source = frames();
     create_headless_robot_test(1100, 4000, move || {
-        PerformanceDashboard(index.clone(), None, source.clone());
+        PerformanceDashboard(Rc::clone(&index), None, source.clone());
     })
 }
 

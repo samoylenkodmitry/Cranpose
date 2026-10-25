@@ -45,10 +45,10 @@ const RECOMPOSITIONS_ALLOWED_ON_TOUCH: u64 = 8;
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 const TABS: [(&str, &str); TAB_COUNT] = [
-    (cranpose::liquid::icons::STAR, "Discover"),
-    (cranpose::liquid::icons::LIST_OUTLINE, "Library"),
-    (cranpose::liquid::icons::SCHEDULE, "Recent"),
-    (cranpose::liquid::icons::SEARCH, "Search"),
+    (icons::STAR, "Discover"),
+    (icons::LIST_OUTLINE, "Library"),
+    (icons::SCHEDULE, "Recent"),
+    (icons::SEARCH, "Search"),
 ];
 
 pub(crate) fn main() -> ExitCode {

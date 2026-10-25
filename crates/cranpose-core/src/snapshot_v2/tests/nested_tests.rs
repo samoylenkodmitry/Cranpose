@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use super::*;
 
-fn mock_state_record() -> Rc<crate::state::StateRecord> {
-    crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
+fn mock_state_record() -> Rc<StateRecord> {
+    StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
 }
 
 struct TestObj {
@@ -15,32 +15,29 @@ impl StateObject for TestObj {
         self.id
     }
 
-    fn first_record(&self) -> Rc<crate::state::StateRecord> {
+    fn first_record(&self) -> Rc<StateRecord> {
         mock_state_record()
     }
 
     fn try_readable_record(
         &self,
-        snapshot_id: crate::snapshot_id_set::SnapshotId,
+        snapshot_id: SnapshotId,
         invalid: &SnapshotIdSet,
-    ) -> Option<Rc<crate::state::StateRecord>> {
+    ) -> Option<Rc<StateRecord>> {
         Some(self.readable_record(snapshot_id, invalid))
     }
 
     fn readable_record(
         &self,
-        _snapshot_id: crate::snapshot_id_set::SnapshotId,
+        _snapshot_id: SnapshotId,
         _invalid: &SnapshotIdSet,
-    ) -> Rc<crate::state::StateRecord> {
+    ) -> Rc<StateRecord> {
         mock_state_record()
     }
 
-    fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
+    fn prepend_state_record(&self, _record: Rc<StateRecord>) {}
 
-    fn promote_record(
-        &self,
-        _child_id: crate::snapshot_id_set::SnapshotId,
-    ) -> Result<(), &'static str> {
+    fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
         Ok(())
     }
 
@@ -138,7 +135,7 @@ fn test_nested_conflict_with_parent_same_object() {
     let obj = Rc::new(TestObj {
         id: crate::state::ObjectId(200),
     });
-    parent.record_write(obj.clone());
+    parent.record_write(Rc::<TestObj>::clone(&obj));
     child.record_write(obj);
 
     let result = child.apply();

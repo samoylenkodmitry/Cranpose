@@ -9,7 +9,7 @@ use super::*;
 fn bubbling_preserves_the_subcompose_nodes_existing_owner() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> = Rc::new(|scope, _| scope.layout(0.0, 0.0, Vec::new()));
-    let mut node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), policy);
+    let mut node = SubcomposeLayoutNode::new(Modifier::empty(), policy);
     node.set_parent_for_bubbling(41);
     node.set_parent_for_bubbling(42);
     assert_eq!(node.parent(), Some(41));
@@ -21,10 +21,10 @@ fn bubbling_preserves_the_subcompose_nodes_existing_owner() {
 #[derive(Default)]
 struct DummyNode;
 
-impl cranpose_core::Node for DummyNode {}
+impl Node for DummyNode {}
 
 fn runtime_handle() -> (
-    cranpose_core::RuntimeHandle,
+    RuntimeHandle,
     cranpose_core::Composition<cranpose_core::MemoryApplier>,
 ) {
     let composition = cranpose_core::Composition::new(cranpose_core::MemoryApplier::new());
@@ -35,10 +35,10 @@ fn runtime_handle() -> (
 fn setup_composer(
     slots: &mut SlotTable,
     applier: &mut cranpose_core::MemoryApplier,
-    handle: cranpose_core::RuntimeHandle,
-    root: Option<cranpose_core::NodeId>,
+    handle: RuntimeHandle,
+    root: Option<NodeId>,
 ) -> (
-    cranpose_core::Composer,
+    Composer,
     Rc<SlotsHost>,
     Rc<ConcreteApplierHost<cranpose_core::MemoryApplier>>,
 ) {
@@ -47,8 +47,12 @@ fn setup_composer(
         applier,
         cranpose_core::MemoryApplier::new(),
     )));
-    let composer =
-        cranpose_core::Composer::new(Rc::clone(&slots_host), applier_host.clone(), handle, root);
+    let composer = Composer::new(
+        Rc::clone(&slots_host),
+        Rc::<ConcreteApplierHost<cranpose_core::MemoryApplier>>::clone(&applier_host),
+        handle,
+        root,
+    );
     (composer, slots_host, applier_host)
 }
 
@@ -71,10 +75,10 @@ fn teardown_composer(
 /// as a layout pass does, with `measurer` for its children.
 pub(crate) fn measure_subcompose_with(
     applier: &mut cranpose_core::MemoryApplier,
-    handle: &cranpose_core::RuntimeHandle,
-    node_id: cranpose_core::NodeId,
+    handle: &RuntimeHandle,
+    node_id: NodeId,
     constraints: Constraints,
-    measurer: Box<dyn FnMut(cranpose_core::NodeId, Constraints) -> SubcomposePlaceable>,
+    measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable>,
 ) -> MeasureResult {
     let applier_host = Rc::new(ConcreteApplierHost::new(std::mem::replace(
         applier,
@@ -117,8 +121,8 @@ pub(crate) fn measure_subcompose_with(
 
 fn measure_once(
     applier: &mut cranpose_core::MemoryApplier,
-    handle: &cranpose_core::RuntimeHandle,
-    node_id: cranpose_core::NodeId,
+    handle: &RuntimeHandle,
+    node_id: NodeId,
     constraints: Constraints,
 ) -> MeasureResult {
     measure_subcompose_with(
@@ -144,7 +148,7 @@ fn density_and_font_scale_do_not_require_an_active_composer() {
 
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
-    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
     let parent_handle = node.handle();
     let root_id = applier.create(Box::new(node));
 
@@ -199,7 +203,7 @@ fn measure_subcomposes_content() {
         scope.layout(0.0, 0.0, Vec::new())
     });
     let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::empty(),
+        Modifier::empty(),
         Rc::clone(&policy),
     )));
     let result = measure_once(&mut applier, &handle, node_id, Constraints::tight(0.0, 0.0));
@@ -234,7 +238,7 @@ fn subcompose_reuses_nodes_across_measures() {
         scope.layout(0.0, 0.0, Vec::new())
     });
     let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::empty(),
+        Modifier::empty(),
         Rc::clone(&policy),
     )));
     let _ = measure_once(
@@ -311,7 +315,7 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
         scope.layout(0.0, 0.0, Vec::new())
     });
     let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::empty(),
+        Modifier::empty(),
         policy,
     )));
     measure_once(
@@ -355,7 +359,7 @@ fn handle_reports_modifier_capabilities() {
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let mut node = SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::empty().background(crate::modifier::Color(0.1, 0.2, 0.3, 1.0)),
+        Modifier::empty().background(crate::modifier::Color(0.1, 0.2, 0.3, 1.0)),
         Rc::clone(&policy),
     );
 
@@ -363,7 +367,7 @@ fn handle_reports_modifier_capabilities() {
     assert!(handle.has_draw_modifier_nodes());
     assert!(!handle.has_layout_modifier_nodes());
 
-    node.set_modifier(crate::modifier::Modifier::empty().padding(4.0));
+    node.set_modifier(Modifier::empty().padding(4.0));
     let handle = node.handle();
     assert!(handle.has_layout_modifier_nodes());
     assert!(!handle.has_draw_modifier_nodes());
@@ -387,7 +391,7 @@ fn inactive_slots_move_to_reusable_pool() {
         scope.layout(0.0, 0.0, Vec::new())
     });
     let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::empty(),
+        Modifier::empty(),
         Rc::clone(&policy),
     )));
     let _ = measure_once(
@@ -420,7 +424,7 @@ fn active_children_follow_last_rendered_placements() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
-    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
 
     {
         let mut inner = node.inner.borrow_mut();
@@ -431,16 +435,16 @@ fn active_children_follow_last_rendered_placements() {
     let expected: Vec<_> = (33..45).collect();
     node.with_active_children(|active| assert_eq!(active, expected.as_slice()));
     let mut active = SmallVec::<[NodeId; 8]>::from_slice(&[99]);
-    cranpose_core::Node::collect_children_into(&node, &mut active);
+    Node::collect_children_into(&node, &mut active);
     assert_eq!(active.as_slice(), expected.as_slice());
 
     node.handle().set_active_children(Vec::<NodeId>::new());
     node.with_active_children(|active| assert!(active.is_empty()));
-    cranpose_core::Node::collect_children_into(&node, &mut active);
+    Node::collect_children_into(&node, &mut active);
     assert!(active.is_empty());
 
     let mut owned = SmallVec::<[NodeId; 8]>::new();
-    cranpose_core::Node::collect_owned_children_into(&node, &mut owned);
+    Node::collect_owned_children_into(&node, &mut owned);
     assert_eq!(owned.as_slice(), &[11, 22]);
 }
 
@@ -449,7 +453,7 @@ fn subcompose_reuses_measured_children_scratch_map() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
-    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
     let handle = node.handle();
 
     let first = handle.measured_children_scratch();
@@ -475,7 +479,7 @@ fn active_child_storage_is_shared_only_until_the_reader_returns() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
-    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), policy);
+    let node = SubcomposeLayoutNode::new(Modifier::empty(), policy);
     let handle = node.handle();
     handle.set_active_children(1..13);
     let original = node.with_active_children(<[NodeId]>::as_ptr);
@@ -513,7 +517,7 @@ fn subcompose_scope_layout_uses_retained_placement_scratch() {
             ],
         )
     });
-    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
     let node_handle = node.handle();
     node_handle.recycle_placement_scratch(Vec::with_capacity(16));
     let node_id = applier.create(Box::new(node));
@@ -533,14 +537,13 @@ fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
-    let mut node =
-        SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
-    node.set_modifier(crate::modifier::Modifier::empty().padding(2.0));
+    let mut node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
+    node.set_modifier(Modifier::empty().padding(2.0));
     let snapshot = node.modifier_slices_snapshot();
     let snapshot_ptr = Rc::as_ptr(&snapshot);
     drop(snapshot);
 
-    node.set_modifier(crate::modifier::Modifier::empty().padding(4.0));
+    node.set_modifier(Modifier::empty().padding(4.0));
 
     let updated = node.modifier_slices_snapshot();
     assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
@@ -550,13 +553,11 @@ fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
 fn semantics_configuration_reads_the_live_modifier_chain() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> = Rc::new(|scope, _| scope.layout(0.0, 0.0, Vec::new()));
-    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
     assert_eq!(node.semantics_configuration(), None);
 
-    let described = SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::empty().content_description("Feed"),
-        policy,
-    );
+    let described =
+        SubcomposeLayoutNode::new(Modifier::empty().content_description("Feed"), policy);
     assert_eq!(
         described
             .semantics_configuration()

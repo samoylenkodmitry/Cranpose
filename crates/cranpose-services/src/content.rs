@@ -180,8 +180,8 @@ impl ContentEntry {
     /// The child's metadata regardless of kind.
     pub fn metadata(&self) -> ContentMetadata {
         match self {
-            ContentEntry::File(file) => file.metadata(),
-            ContentEntry::Folder(folder) => folder.metadata(),
+            Self::File(file) => file.metadata(),
+            Self::Folder(folder) => folder.metadata(),
         }
     }
 }

@@ -43,9 +43,9 @@ fn walk_and_tree(build: impl FnMut() + 'static) -> (Option<NodeId>, NodeId, bool
     cranpose_core::Applier::get_mut(&mut *applier, root)
         .expect("root node")
         .mark_needs_semantics();
-    let walked = crate::top_modal_from_applier(&mut applier, root).expect("walk");
-    let still_dirty = crate::tree_needs_semantics(&mut *applier, root).expect("dirty flag");
-    let tree_root = crate::build_semantics_tree_from_applier(&mut applier, root)
+    let walked = top_modal_from_applier(&mut applier, root).expect("walk");
+    let still_dirty = tree_needs_semantics(&mut *applier, root).expect("dirty flag");
+    let tree_root = build_semantics_tree_from_applier(&mut applier, root)
         .expect("semantics tree")
         .expect("semantics present")
         .root()
@@ -95,7 +95,7 @@ fn the_walk_finds_the_modal_the_semantics_tree_is_rooted_at() {
 }
 
 /// The top modal of `composition` after laying it out again.
-fn walk(composition: &mut crate::TestComposition) -> Option<NodeId> {
+fn walk(composition: &mut TestComposition) -> Option<NodeId> {
     let root = composition.root().expect("root");
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -109,7 +109,7 @@ fn walk(composition: &mut crate::TestComposition) -> Option<NodeId> {
         },
     )
     .expect("layout");
-    let walked = crate::top_modal_from_applier(&mut applier, root).expect("walk");
+    let walked = top_modal_from_applier(&mut applier, root).expect("walk");
     applier.clear_runtime_handle();
     walked
 }
@@ -177,9 +177,9 @@ fn without_a_modal_the_walk_finds_nothing() {
 }
 
 fn chain_reach(modifier: &Modifier) -> cranpose_foundation::SemanticsReach {
-    let mut handle = crate::modifier::ModifierChainHandle::new();
+    let mut handle = modifier::ModifierChainHandle::new();
     let _ = handle.update(modifier);
-    crate::modifier::semantics_reach_of_chain(handle.chain())
+    modifier::semantics_reach_of_chain(handle.chain())
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn CapturedModalLazyColumn(
     modal: cranpose_core::MutableState<bool>,
     dialog: Rc<Cell<Option<NodeId>>>,
 ) {
-    let state = cranpose_foundation::lazy::rememberLazyListState();
+    let state = rememberLazyListState();
     dialog.set(Some(LazyColumn(
         captured_modal(modal),
         state,
@@ -245,13 +245,12 @@ fn CapturedModalScalingList(
     modal: cranpose_core::MutableState<bool>,
     dialog: Rc<Cell<Option<NodeId>>>,
 ) {
-    let state = crate::widgets::wear::rememberWearScalingListState(
-        crate::round_scaling_list::CentreAnchor::default(),
-    );
-    dialog.set(Some(crate::widgets::wear::WearScalingLazyColumn(
+    let state =
+        widgets::wear::rememberWearScalingListState(round_scaling_list::CentreAnchor::default());
+    dialog.set(Some(widgets::wear::WearScalingLazyColumn(
         captured_modal(modal),
         state,
-        crate::widgets::wear::WearScalingLazyColumnSpec::default(),
+        widgets::wear::WearScalingLazyColumnSpec::default(),
         |_| {},
     )));
 }
@@ -273,10 +272,10 @@ fn a_scaling_lists_semantics_closure_a_recomposition_replaces_reaches_the_walk()
 
 #[composable]
 fn ScrollModalLazyColumn(
-    list: Rc<std::cell::RefCell<Option<cranpose_foundation::lazy::LazyListState>>>,
+    list: Rc<std::cell::RefCell<Option<LazyListState>>>,
     dialog: Rc<Cell<Option<NodeId>>>,
 ) {
-    let state = cranpose_foundation::lazy::rememberLazyListState();
+    let state = rememberLazyListState();
     *list.borrow_mut() = Some(state);
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         let at_top = state.first_visible_item_index() == 0;
@@ -287,7 +286,7 @@ fn ScrollModalLazyColumn(
             state,
             LazyColumnSpec::default(),
             |scope| {
-                scope.items(cranpose_foundation::lazy::LazyItems::new(50), |_| {
+                scope.items(LazyItems::new(50), |_| {
                     Spacer(Modifier::empty().size_points(40.0, 48.0));
                 });
             },

@@ -15,7 +15,7 @@ pub struct FloatingInput {
 
 impl FloatingInput {
     fn new() -> Self {
-        FloatingInput {
+        Self {
             pressed: mutableStateOf(false),
             hovered: mutableStateOf(false),
             clicks: mutableStateOf(0u32),

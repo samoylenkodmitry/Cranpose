@@ -42,7 +42,7 @@ fn unmatched_placement_leaves_recording_storage_untouched() {
     let callback = recorded_command(|_| panic!("unmatched callback"));
     for (command, placement) in [
         (
-            DrawCommand::Behind(callback.clone()),
+            DrawCommand::Behind(Rc::clone(&callback)),
             DrawPlacement::Overlay,
         ),
         (DrawCommand::Overlay(callback), DrawPlacement::Behind),

@@ -772,7 +772,7 @@ impl SubcomposeState {
         if self
             .reusable_by_type
             .get(&content_type)
-            .is_some_and(std::collections::VecDeque::is_empty)
+            .is_some_and(VecDeque::is_empty)
         {
             self.reusable_by_type.remove(&content_type);
         }

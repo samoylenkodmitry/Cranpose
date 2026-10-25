@@ -126,19 +126,19 @@ impl SharedRenderCase {
     /// Short snake_case name of the case, for test names and reports.
     pub fn name(self) -> &'static str {
         match self {
-            SharedRenderCase::RoundedRect => "rounded_rect",
-            SharedRenderCase::PrimitiveClip => "primitive_clip",
-            SharedRenderCase::TranslatedSubtree => "translated_subtree",
-            SharedRenderCase::TranslatedPlainText => "translated_plain_text",
-            SharedRenderCase::TranslatedTextDecorations => "translated_text_decorations",
-            SharedRenderCase::MultilineText => "multiline_text",
-            SharedRenderCase::ClippedText => "clipped_text",
-            SharedRenderCase::StrokedRoundRect => "stroked_round_rect",
-            SharedRenderCase::AnnularSector => "annular_sector",
-            SharedRenderCase::FilledPath => "filled_path",
-            SharedRenderCase::DrawScopeGroups => "draw_scope_groups",
-            SharedRenderCase::PaintedDrawGroups => "painted_draw_groups",
-            SharedRenderCase::GradientDrawText => "gradient_draw_text",
+            Self::RoundedRect => "rounded_rect",
+            Self::PrimitiveClip => "primitive_clip",
+            Self::TranslatedSubtree => "translated_subtree",
+            Self::TranslatedPlainText => "translated_plain_text",
+            Self::TranslatedTextDecorations => "translated_text_decorations",
+            Self::MultilineText => "multiline_text",
+            Self::ClippedText => "clipped_text",
+            Self::StrokedRoundRect => "stroked_round_rect",
+            Self::AnnularSector => "annular_sector",
+            Self::FilledPath => "filled_path",
+            Self::DrawScopeGroups => "draw_scope_groups",
+            Self::PaintedDrawGroups => "painted_draw_groups",
+            Self::GradientDrawText => "gradient_draw_text",
         }
     }
 
@@ -146,28 +146,28 @@ impl SharedRenderCase {
     /// their fractional offsets.
     pub fn fixtures(self) -> Vec<RenderFixture> {
         match self {
-            SharedRenderCase::RoundedRect => vec![rounded_rect_fixture()],
-            SharedRenderCase::PrimitiveClip => vec![primitive_clip_fixture()],
-            SharedRenderCase::TranslatedSubtree => vec![
+            Self::RoundedRect => vec![rounded_rect_fixture()],
+            Self::PrimitiveClip => vec![primitive_clip_fixture()],
+            Self::TranslatedSubtree => vec![
                 translated_subtree_fixture(12.3, 14.7),
                 translated_subtree_fixture(32.6, 26.2),
             ],
-            SharedRenderCase::TranslatedPlainText => vec![
+            Self::TranslatedPlainText => vec![
                 translated_plain_text_fixture(14.3, 18.6),
                 translated_plain_text_fixture(36.4, 30.1),
             ],
-            SharedRenderCase::TranslatedTextDecorations => vec![
+            Self::TranslatedTextDecorations => vec![
                 translated_text_decorations_fixture(14.3, 18.6),
                 translated_text_decorations_fixture(36.4, 30.1),
             ],
-            SharedRenderCase::MultilineText => vec![multiline_text_fixture()],
-            SharedRenderCase::ClippedText => vec![clipped_text_fixture()],
-            SharedRenderCase::StrokedRoundRect => vec![stroked_round_rect_fixture()],
-            SharedRenderCase::AnnularSector => vec![annular_sector_fixture()],
-            SharedRenderCase::FilledPath => vec![filled_path_fixture()],
-            SharedRenderCase::DrawScopeGroups => vec![draw_groups::draw_groups_fixture()],
-            SharedRenderCase::PaintedDrawGroups => vec![draw_groups::painted_groups_fixture()],
-            SharedRenderCase::GradientDrawText => vec![draw_text_brush::gradient_text_fixture()],
+            Self::MultilineText => vec![multiline_text_fixture()],
+            Self::ClippedText => vec![clipped_text_fixture()],
+            Self::StrokedRoundRect => vec![stroked_round_rect_fixture()],
+            Self::AnnularSector => vec![annular_sector_fixture()],
+            Self::FilledPath => vec![filled_path_fixture()],
+            Self::DrawScopeGroups => vec![draw_groups::draw_groups_fixture()],
+            Self::PaintedDrawGroups => vec![draw_groups::painted_groups_fixture()],
+            Self::GradientDrawText => vec![draw_text_brush::gradient_text_fixture()],
         }
     }
 
@@ -175,70 +175,70 @@ impl SharedRenderCase {
     /// frame count is wrong or a frame does not match what the case expects.
     pub fn assert_frames(self, frames: &[RenderedFrame]) {
         match self {
-            SharedRenderCase::RoundedRect => {
+            Self::RoundedRect => {
                 let [frame] = frames else {
                     panic!("rounded_rect expects exactly one rendered frame");
                 };
                 assert_rounded_rect_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::PrimitiveClip => {
+            Self::PrimitiveClip => {
                 let [frame] = frames else {
                     panic!("primitive_clip expects exactly one rendered frame");
                 };
                 assert_primitive_clip_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::TranslatedSubtree => {
+            Self::TranslatedSubtree => {
                 assert_translated_subtree_frames(frames);
             }
-            SharedRenderCase::TranslatedPlainText => {
+            Self::TranslatedPlainText => {
                 assert_translated_plain_text_frames(frames);
             }
-            SharedRenderCase::TranslatedTextDecorations => {
+            Self::TranslatedTextDecorations => {
                 assert_translated_text_decorations_frames(frames);
             }
-            SharedRenderCase::MultilineText => {
+            Self::MultilineText => {
                 let [frame] = frames else {
                     panic!("multiline_text expects exactly one rendered frame");
                 };
                 assert_multiline_text_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::StrokedRoundRect => {
+            Self::StrokedRoundRect => {
                 let [frame] = frames else {
                     panic!("stroked_round_rect expects exactly one rendered frame");
                 };
                 assert_stroked_round_rect_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::AnnularSector => {
+            Self::AnnularSector => {
                 let [frame] = frames else {
                     panic!("annular_sector expects exactly one rendered frame");
                 };
                 assert_annular_sector_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::ClippedText => {
+            Self::ClippedText => {
                 let [frame] = frames else {
                     panic!("clipped_text expects exactly one rendered frame");
                 };
                 assert_clipped_text_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::FilledPath => {
+            Self::FilledPath => {
                 let [frame] = frames else {
                     panic!("filled_path expects exactly one rendered frame");
                 };
                 assert_filled_path_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::DrawScopeGroups => {
+            Self::DrawScopeGroups => {
                 let [frame] = frames else {
                     panic!("draw_scope_groups expects exactly one rendered frame");
                 };
                 draw_groups::assert_draw_groups_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::PaintedDrawGroups => {
+            Self::PaintedDrawGroups => {
                 let [frame] = frames else {
                     panic!("painted_draw_groups expects exactly one rendered frame");
                 };
                 draw_groups::assert_painted_groups_frame(&frame.pixels, frame.width, frame.height);
             }
-            SharedRenderCase::GradientDrawText => {
+            Self::GradientDrawText => {
                 let [frame] = frames else {
                     panic!("gradient_draw_text expects exactly one rendered frame");
                 };

@@ -486,12 +486,12 @@ fn popup_impl(
 
     let locals = with_current_composer(cranpose_core::Composer::capture_composition_context);
     let sync_registry = registry.clone();
-    let sync_content = content.clone();
+    let sync_content = Rc::clone(&content);
     SideEffect(move || {
         sync_registry.upsert(
             id,
             position,
-            sync_content.clone(),
+            Rc::clone(&sync_content),
             on_dismiss.clone(),
             locals.clone(),
         );

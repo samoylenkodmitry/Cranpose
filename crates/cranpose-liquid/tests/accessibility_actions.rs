@@ -142,9 +142,9 @@ fn reader_selects_each_tab_without_pointer_input() {
             LiquidTheme(LiquidThemeSpec::default(), move || {
                 let selected = rememberMutableStateOf(|| 0usize);
                 let tabs = |tabs: &LiquidTabBarScope| {
-                    tabs.tab(cranpose_liquid::icons::BOOKMARK, "Library");
-                    tabs.tab(cranpose_liquid::icons::SEARCH, "Scan");
-                    tabs.tab(cranpose_liquid::icons::STAR, "Settings");
+                    tabs.tab(icons::BOOKMARK, "Library");
+                    tabs.tab(icons::SEARCH, "Scan");
+                    tabs.tab(icons::STAR, "Settings");
                 };
                 if accessory {
                     LiquidTabBarWithAccessory(
@@ -218,9 +218,9 @@ fn keyboard_moves_across_tabs_and_selects_the_focused_tab() {
                     cranpose_ui::TextStyle::default(),
                 );
                 let tabs = |tabs: &LiquidTabBarScope| {
-                    tabs.tab(cranpose_liquid::icons::BOOKMARK, "Library");
-                    tabs.tab(cranpose_liquid::icons::SEARCH, "Scan");
-                    tabs.tab(cranpose_liquid::icons::STAR, "Settings");
+                    tabs.tab(icons::BOOKMARK, "Library");
+                    tabs.tab(icons::SEARCH, "Scan");
+                    tabs.tab(icons::STAR, "Settings");
                 };
                 if accessory {
                     LiquidTabBarWithAccessory(

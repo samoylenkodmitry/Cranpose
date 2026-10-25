@@ -218,7 +218,7 @@ impl<T> StateFlow<T> {
     }
 
     /// Whether both handles observe the same state.
-    pub fn same_as(&self, other: &StateFlow<T>) -> bool {
+    pub fn same_as(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
     }
 }

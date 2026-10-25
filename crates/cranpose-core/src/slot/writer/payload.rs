@@ -17,7 +17,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn value_slot_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
-        source: crate::Key,
+        source: Key,
         init: impl FnOnce() -> T,
     ) -> ValueSlotId {
         self.located_value_slot(kind, source, init).0
@@ -28,7 +28,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn value_slot_and_value<T: 'static>(
         &mut self,
         kind: PayloadKind,
-        source: crate::Key,
+        source: Key,
         init: impl FnOnce() -> T,
     ) -> (ValueSlotId, Option<usize>, &mut T) {
         let (slot, record_index) = self.located_value_slot(kind, source, init);
@@ -44,7 +44,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn located_value_slot<T: 'static>(
         &mut self,
         kind: PayloadKind,
-        source: crate::Key,
+        source: Key,
         init: impl FnOnce() -> T,
     ) -> (ValueSlotId, Option<usize>) {
         let mut init = Some(init);
@@ -192,13 +192,13 @@ impl SlotWriteSession<'_> {
 
     pub(crate) fn remember<T: 'static>(
         &mut self,
-        source: crate::Key,
+        source: Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
         self.remember_with_kind(PayloadKind::Remember, source, init)
     }
 
-    pub(crate) fn remember_effect<T: Default + 'static>(&mut self, source: crate::Key) -> Owned<T> {
+    pub(crate) fn remember_effect<T: Default + 'static>(&mut self, source: Key) -> Owned<T> {
         let mut made = false;
         let mut make = move || -> Box<dyn std::any::Any> {
             assert!(!made, "payload init must run at most once");
@@ -215,7 +215,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn remember_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
-        source: crate::Key,
+        source: Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
         let (slot, record_index) = self.located_value_slot(kind, source, || {

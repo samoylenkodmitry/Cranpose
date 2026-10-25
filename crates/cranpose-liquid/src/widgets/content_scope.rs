@@ -5,12 +5,9 @@ pub(crate) struct ScopeContent<T> {
 }
 
 impl<T> ScopeContent<T> {
-    pub(crate) fn collect<S>(
-        build: impl FnOnce(ScopeContent<T>) -> S,
-        content: impl FnOnce(&S),
-    ) -> Vec<T> {
+    pub(crate) fn collect<S>(build: impl FnOnce(Self) -> S, content: impl FnOnce(&S)) -> Vec<T> {
         let items = Rc::new(RefCell::new(Vec::new()));
-        let scope = build(ScopeContent {
+        let scope = build(Self {
             items: Rc::clone(&items),
         });
         content(&scope);

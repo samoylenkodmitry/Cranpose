@@ -23,7 +23,7 @@ fn wait_for_prefix(
 fn dump_semantics(robot: &Robot, label: &str) {
     if let Ok(semantics) = robot.get_semantics() {
         println!("--- Semantics dump ({label}) ---");
-        cranpose::Robot::print_semantics(&semantics, 0);
+        Robot::print_semantics(&semantics, 0);
     }
 }
 
@@ -131,5 +131,5 @@ pub(crate) fn main() {
             println!("✓ Pointer coordinates updated after tab switch");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

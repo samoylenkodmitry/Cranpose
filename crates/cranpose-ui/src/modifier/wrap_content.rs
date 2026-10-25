@@ -27,11 +27,11 @@ pub(crate) enum WrapAxes {
 
 impl WrapAxes {
     fn horizontal(self) -> bool {
-        self != WrapAxes::Vertical
+        self != Self::Vertical
     }
 
     fn vertical(self) -> bool {
-        self != WrapAxes::Horizontal
+        self != Self::Horizontal
     }
 }
 

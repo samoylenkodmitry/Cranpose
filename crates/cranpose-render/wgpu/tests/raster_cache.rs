@@ -598,8 +598,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
             })),
         })],
     );
-    shaded.graphics_layer.render_effect =
-        Some(cranpose_ui_graphics::RenderEffect::runtime_shader(shader));
+    shaded.graphics_layer.render_effect = Some(RenderEffect::runtime_shader(shader));
     shaded
 }
 

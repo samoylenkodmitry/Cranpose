@@ -91,5 +91,5 @@ pub(crate) fn main() {
             println!("PASS: screenshot pixel checks match chessboard pattern");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

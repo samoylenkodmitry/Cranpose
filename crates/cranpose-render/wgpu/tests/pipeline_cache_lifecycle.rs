@@ -52,7 +52,7 @@ impl CacheFiles {
             previous_file: debug_toggle_os(CACHE_FILE),
             previous_enabled: debug_toggle_os(CACHE_ENABLED),
         };
-        set_debug_toggle_os(CACHE_ENABLED, Some(std::ffi::OsStr::new("1")));
+        set_debug_toggle_os(CACHE_ENABLED, Some(OsStr::new("1")));
         files
     }
 

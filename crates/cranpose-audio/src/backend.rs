@@ -50,11 +50,11 @@ pub trait Renderer: Send {
 
 impl Renderer for Mixer {
     fn set_device_format(&mut self, sample_rate: f32, channels: usize) {
-        Mixer::set_device_format(self, sample_rate, channels);
+        Self::set_device_format(self, sample_rate, channels);
     }
 
     fn render(&mut self, out: &mut [f32]) -> RenderStatus {
-        Mixer::render(self, out)
+        Self::render(self, out)
     }
 }
 

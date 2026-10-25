@@ -191,7 +191,7 @@ fn stopping_releases_the_device_and_says_so() {
     let _guard = crate::registry::test_service_guard();
     clear_platform_camera();
     let backend = FakeCamera::new();
-    set_platform_camera(backend.clone());
+    set_platform_camera(Arc::<FakeCamera>::clone(&backend));
     start_camera().expect("the session starts");
     stop_camera();
     assert_eq!(backend.stopped.load(Ordering::Relaxed), 1);
@@ -253,7 +253,7 @@ fn a_still_is_asked_for_and_arrives_separately() {
     let _guard = crate::registry::test_service_guard();
     clear_platform_camera();
     let backend = FakeCamera::new();
-    set_platform_camera(backend.clone());
+    set_platform_camera(Arc::<FakeCamera>::clone(&backend));
 
     assert_eq!(
         request_camera_still(),

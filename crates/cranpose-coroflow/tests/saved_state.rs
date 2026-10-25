@@ -66,11 +66,11 @@ fn saved_state_survives_into_a_new_view_model() {
 fn saved_values_keep_the_backend_their_namespace_was_opened_with() {
     let _guard = serial();
     let first = Arc::new(MemoryPreferences::new());
-    set_platform_preferences(first.clone());
+    set_platform_preferences(Arc::<MemoryPreferences>::clone(&first));
     let a = SavedStateHandle::new("notes");
     a.set("count", &1_u32).expect("first store");
     let second = Arc::new(MemoryPreferences::new());
-    set_platform_preferences(second.clone());
+    set_platform_preferences(Arc::<MemoryPreferences>::clone(&second));
     let b = SavedStateHandle::new("notes");
     b.set("count", &2_u32).expect("second store");
     assert_eq!(

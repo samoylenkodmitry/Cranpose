@@ -102,20 +102,20 @@ pub(crate) struct HttpSource {
 }
 
 impl HttpSource {
-    pub(crate) fn open(url: &str) -> Result<(HttpSource, SourceCancel), MediaError> {
-        HttpSource::open_with(url, default_http_client())
+    pub(crate) fn open(url: &str) -> Result<(Self, SourceCancel), MediaError> {
+        Self::open_with(url, default_http_client())
     }
 
     pub(crate) fn open_with(
         url: &str,
         client: HttpClientRef,
-    ) -> Result<(HttpSource, SourceCancel), MediaError> {
+    ) -> Result<(Self, SourceCancel), MediaError> {
         let abort = Abort::default();
         let opened = Opened::request(&client, url, 0, &abort)
             .map_err(|error| MediaError::Failed(format!("{url}: {error}")))?;
         let stopping = abort.clone();
         Ok((
-            HttpSource {
+            Self {
                 client,
                 url: url.to_owned(),
                 len: opened.len,
@@ -181,7 +181,7 @@ impl Opened {
         url: &str,
         offset: u64,
         abort: &Abort,
-    ) -> Result<Opened, io::Error> {
+    ) -> Result<Self, io::Error> {
         let request = HttpRequest::get(url).resume_from(offset);
         let control = HttpControl::new();
         abort.arm(control.clone());
@@ -196,7 +196,7 @@ impl Opened {
         }
         let len = response.content_length.map(|remaining| offset + remaining);
         let ranged = response.resumed || serves_ranges(&response);
-        Ok(Opened {
+        Ok(Self {
             stream: Stream {
                 response,
                 next: offset,

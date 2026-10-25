@@ -1,9 +1,9 @@
 #[cfg(test)]
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use cranpose_core::{
@@ -42,7 +42,7 @@ struct RenderState {
 #[doc(hidden)]
 pub struct AppContext {
     id: AppContextId,
-    self_weak: RefCell<Weak<AppContext>>,
+    self_weak: RefCell<Weak<Self>>,
     state: RenderState,
     draw_observer: SnapshotStateObserver,
     text: crate::text::measure::TextService,
@@ -58,7 +58,7 @@ pub struct AppContext {
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
     pointer_dispatch: crate::dirty_node_queue::DirtyNodeQueue,
     mouse_input: crate::mouse_input::MouseInputQueue,
-    pointer_claim: Cell<Option<cranpose_core::NodeId>>,
+    pointer_claim: Cell<Option<NodeId>>,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
     modal_nodes: crate::modal_nodes::ModalNodes,
@@ -318,13 +318,13 @@ impl AppContext {
 
     /// Asks the shell to give the rest of the held press to `node` alone: the
     /// other targets under the press see it cancelled.
-    pub(crate) fn claim_pointer(&self, node: cranpose_core::NodeId) {
+    pub(crate) fn claim_pointer(&self, node: NodeId) {
         self.pointer_claim.set(Some(node));
     }
 
     /// Takes the node that claimed the held press since the last call.
     #[doc(hidden)]
-    pub fn take_pointer_claim(&self) -> Option<cranpose_core::NodeId> {
+    pub fn take_pointer_claim(&self) -> Option<NodeId> {
         self.pointer_claim.take()
     }
 
@@ -1151,7 +1151,7 @@ enum LayoutRepassScheduleDiag {
 }
 
 fn layout_repass_schedule_diagnostics_enabled_for(node_id: NodeId) -> bool {
-    static MODE: std::sync::OnceLock<LayoutRepassScheduleDiag> = std::sync::OnceLock::new();
+    static MODE: OnceLock<LayoutRepassScheduleDiag> = OnceLock::new();
     match *MODE.get_or_init(|| {
         let Some(value) = std::env::var_os("CRANPOSE_LAYOUT_REPASS_SCHEDULE_DIAG") else {
             return LayoutRepassScheduleDiag::Disabled;

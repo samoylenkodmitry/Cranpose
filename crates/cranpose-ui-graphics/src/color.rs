@@ -90,17 +90,17 @@ impl Color {
     }
 
     /// Opaque black.
-    pub const BLACK: Color = Color(0.0, 0.0, 0.0, 1.0);
+    pub const BLACK: Self = Self(0.0, 0.0, 0.0, 1.0);
     /// Opaque white.
-    pub const WHITE: Color = Color(1.0, 1.0, 1.0, 1.0);
+    pub const WHITE: Self = Self(1.0, 1.0, 1.0, 1.0);
     /// Opaque red.
-    pub const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
+    pub const RED: Self = Self(1.0, 0.0, 0.0, 1.0);
     /// Opaque green.
-    pub const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);
+    pub const GREEN: Self = Self(0.0, 1.0, 0.0, 1.0);
     /// Opaque blue.
-    pub const BLUE: Color = Color(0.0, 0.0, 1.0, 1.0);
+    pub const BLUE: Self = Self(0.0, 0.0, 1.0, 1.0);
     /// Fully transparent black, with every channel 0.0.
-    pub const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
+    pub const TRANSPARENT: Self = Self(0.0, 0.0, 0.0, 0.0);
 }
 
 /// `level / 255.0` for each 8-bit level, as the division gives it: a chip

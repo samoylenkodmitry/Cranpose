@@ -32,7 +32,7 @@ fn acquire(
     executor: &mut WgpuFrameGraphExecutor,
     device: &wgpu::Device,
     descriptor: FrameTextureDescriptor,
-) -> (crate::offscreen::OffscreenTarget, bool) {
+) -> (OffscreenTarget, bool) {
     let target = executor.transient_textures.acquire(device, descriptor);
     let (_, news) = executor.transient_textures.take_counts();
     (target, news > 0)

@@ -28,7 +28,7 @@ fn serial() -> MutexGuard<'static, ()> {
 
 fn fresh_store() -> Arc<MemoryPreferences> {
     let store = Arc::new(MemoryPreferences::new());
-    set_platform_preferences(store.clone());
+    set_platform_preferences(Arc::<MemoryPreferences>::clone(&store));
     store
 }
 

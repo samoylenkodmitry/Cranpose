@@ -17,7 +17,7 @@ fn simple_card_showcase() {
 
         Spacer(Modifier::empty().size_points(0.0, 16.0));
 
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .padding(16.0)
                 .then(Modifier::empty().size(Size {
@@ -66,7 +66,7 @@ fn positioned_boxes_showcase() {
 
         Spacer(Modifier::empty().size_points(0.0, 16.0));
 
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .size_points(100.0, 100.0)
                 .then(Modifier::empty().offset(50.0, 100.0))
@@ -83,7 +83,7 @@ fn positioned_boxes_showcase() {
             },
         );
 
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .size_points(100.0, 100.0)
                 .then(Modifier::empty().offset(200.0, 100.0))
@@ -119,7 +119,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
         let x = (frame as f32 * 10.0) % 200.0;
         let y = 50.0;
 
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .size(Size {
                     width: 50.0,
@@ -297,7 +297,7 @@ fn test_complex_modifier_chain_ordering() {
     let mut rule = ComposeTestRule::new();
 
     rule.set_content(|| {
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .padding(10.0)
                 .then(Modifier::empty().size_points(200.0, 100.0))

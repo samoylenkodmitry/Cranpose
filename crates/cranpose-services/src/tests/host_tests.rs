@@ -13,19 +13,19 @@ fn observer_is_removed_on_drop() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = Arc::clone(&calls);
     let handle = observe_lifecycle(move |_| {
-        seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        seen.fetch_add(1, Ordering::Relaxed);
     });
     dispatch_lifecycle(LifecycleEvent {
         from: LifecycleState::Created,
         to: LifecycleState::Started,
     });
-    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
     drop(handle);
     dispatch_lifecycle(LifecycleEvent {
         from: LifecycleState::Started,
         to: LifecycleState::Resumed,
     });
-    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 
 #[test]

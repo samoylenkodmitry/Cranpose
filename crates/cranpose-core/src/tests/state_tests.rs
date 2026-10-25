@@ -69,7 +69,7 @@ fn observation_leases_drive_subscriber_liveness() {
     let callback: Rc<dyn Fn()> = Rc::new(move || {
         notifications_for_callback.set(notifications_for_callback.get() + 1);
     });
-    state.subscriber_callback(callback.clone(), false);
+    state.subscriber_callback(Rc::clone(&callback), false);
 
     let first = StateObject::observation_lease(&*state).expect("first observation lease");
     let second = StateObject::observation_lease(&*state).expect("second observation lease");
@@ -265,7 +265,7 @@ fn test_new_overwritable_record_locked_reuses_invalid() {
 
     let current_head = state.first_record();
     let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, current_head.next());
-    current_head.set_next(Some(invalid_rec.clone()));
+    current_head.set_next(Some(Rc::clone(&invalid_rec)));
 
     let result = new_overwritable_record_locked(&*state);
 
@@ -306,7 +306,7 @@ fn test_writable_record_reuses_invalid_record() {
 
     let head = state.first_record();
     let invalid = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, head.next());
-    head.set_next(Some(invalid.clone()));
+    head.set_next(Some(Rc::clone(&invalid)));
 
     let snapshot_id = allocate_record_id();
     let result = writable_record(&state, snapshot_id, &SnapshotIdSet::EMPTY);
@@ -396,10 +396,10 @@ fn test_overwrite_unused_records_basic_cleanup() {
     crate::snapshot_pinning::reset_pinning_table();
 
     let rec1 = StateRecord::new(100, 1i32, None);
-    let rec2 = StateRecord::new(200, 2i32, Some(rec1.clone()));
-    let rec3 = StateRecord::new(300, 3i32, Some(rec2.clone()));
+    let rec2 = StateRecord::new(200, 2i32, Some(Rc::clone(&rec1)));
+    let rec3 = StateRecord::new(300, 3i32, Some(Rc::clone(&rec2)));
 
-    let test_state = ManualState::new(rec3.clone());
+    let test_state = ManualState::new(Rc::clone(&rec3));
 
     let _pin = crate::snapshot_pinning::track_pinning(1000, &SnapshotIdSet::EMPTY);
 
@@ -444,7 +444,7 @@ fn test_overwrite_unused_records_clears_values() {
 
     let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
     let old_rec1 = StateRecord::new(2, 999i32, Some(tail));
-    let old_rec2 = StateRecord::new(3, 888i32, Some(old_rec1.clone()));
+    let old_rec2 = StateRecord::new(3, 888i32, Some(Rc::clone(&old_rec1)));
     let head = StateRecord::new(150, 42i32, Some(old_rec2));
     let state = ManualState::new(head);
 
@@ -464,9 +464,9 @@ fn test_overwrite_unused_records_mixed_old_and_new() {
 
     let preexisting = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
     let rec2 = StateRecord::new(2, 100i32, Some(preexisting));
-    let rec5 = StateRecord::new(5, 100i32, Some(rec2.clone()));
-    let rec50 = StateRecord::new(50, 100i32, Some(rec5.clone()));
-    let head = StateRecord::new(120, 100i32, Some(rec50.clone()));
+    let rec5 = StateRecord::new(5, 100i32, Some(Rc::clone(&rec2)));
+    let rec50 = StateRecord::new(50, 100i32, Some(Rc::clone(&rec5)));
+    let head = StateRecord::new(120, 100i32, Some(Rc::clone(&rec50)));
     let state = ManualState::new(head);
 
     let _pin = crate::snapshot_pinning::track_pinning(40, &SnapshotIdSet::EMPTY);

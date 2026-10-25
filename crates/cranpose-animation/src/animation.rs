@@ -34,7 +34,7 @@ impl Lerp for f32 {
 
 impl Lerp for f64 {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        self + (target - self) * fraction as f64
+        self + (target - self) * fraction as Self
     }
 }
 
@@ -141,7 +141,7 @@ impl SpringScalar for f64 {
     }
 
     fn from_dimensions(dimensions: [f32; SPRING_MAX_DIMENSIONS]) -> Self {
-        f64::from(dimensions[0])
+        Self::from(dimensions[0])
     }
 }
 
@@ -180,15 +180,15 @@ impl Easing {
     /// Apply the easing function to a linear fraction [0, 1].
     pub fn transform(&self, fraction: f32) -> f32 {
         match self {
-            Easing::LinearEasing => fraction,
-            Easing::EaseIn => cubic_bezier(0.42, 0.0, 1.0, 1.0, fraction),
-            Easing::EaseOut => cubic_bezier(0.0, 0.0, 0.58, 1.0, fraction),
-            Easing::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, fraction),
-            Easing::FastOutSlowInEasing => cubic_bezier(0.4, 0.0, 0.2, 1.0, fraction),
-            Easing::LinearOutSlowInEasing => cubic_bezier(0.0, 0.0, 0.2, 1.0, fraction),
-            Easing::FastOutLinearEasing => cubic_bezier(0.4, 0.0, 1.0, 1.0, fraction),
-            Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier(*x1, *y1, *x2, *y2, fraction),
-            Easing::Steps(step_count) => {
+            Self::LinearEasing => fraction,
+            Self::EaseIn => cubic_bezier(0.42, 0.0, 1.0, 1.0, fraction),
+            Self::EaseOut => cubic_bezier(0.0, 0.0, 0.58, 1.0, fraction),
+            Self::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, fraction),
+            Self::FastOutSlowInEasing => cubic_bezier(0.4, 0.0, 0.2, 1.0, fraction),
+            Self::LinearOutSlowInEasing => cubic_bezier(0.0, 0.0, 0.2, 1.0, fraction),
+            Self::FastOutLinearEasing => cubic_bezier(0.4, 0.0, 1.0, 1.0, fraction),
+            Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier(*x1, *y1, *x2, *y2, fraction),
+            Self::Steps(step_count) => {
                 if fraction <= 0.0 || fraction >= 1.0 {
                     fraction
                 } else {
@@ -502,7 +502,7 @@ impl AnimationType {
 
 impl Default for AnimationType {
     fn default() -> Self {
-        AnimationType::Tween(AnimationSpec::default())
+        Self::Tween(AnimationSpec::default())
     }
 }
 
@@ -780,16 +780,17 @@ impl InfiniteTransition {
         }
 
         animation_state.install_subscriber_callback(&self.inner);
-        let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
+        let animation_any: Rc<dyn InfiniteTransitionAnimation> =
+            Rc::<TransitionAnimationState<T>>::clone(&animation_state);
         let transition_inner = Rc::clone(&self.inner);
         let animation_id = Rc::as_ptr(&animation_state) as usize;
         cranpose_core::__disposable_effect_impl(
             caller ^ cranpose_core::location_key!(),
             animation_id,
             move |_scope| {
-                transition_inner.add_animation(animation_any.clone());
+                transition_inner.add_animation(Rc::clone(&animation_any));
                 let transition_inner = Rc::clone(&transition_inner);
-                let animation_any = animation_any.clone();
+                let animation_any = Rc::clone(&animation_any);
                 DisposableEffectResult::new(move || {
                     transition_inner.remove_animation(&animation_any);
                 })
@@ -1304,7 +1305,7 @@ pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -
 impl<T: SpringScalar + 'static> Clone for Animatable<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            inner: Rc::clone(&self.inner),
         }
     }
 }

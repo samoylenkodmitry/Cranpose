@@ -24,13 +24,13 @@ impl Modifier {
         on_click: impl Fn() + 'static,
     ) -> Self {
         let on_click = Rc::new(on_click);
-        let modifier = Modifier::empty()
+        let modifier = Self::empty()
             .clickable(move |_point| on_click())
             .with_inspector_metadata(inspector_metadata("selectable", move |info| {
                 info.add_property("selected", if selected { "true" } else { "false" });
                 info.add_property("onClick", "provided");
             }))
-            .then(Modifier::empty().stable_semantics(selectable_semantics(selected, role)));
+            .then(Self::empty().stable_semantics(selectable_semantics(selected, role)));
         self.then(modifier)
     }
 }

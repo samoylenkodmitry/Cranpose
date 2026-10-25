@@ -7,7 +7,7 @@ use crate::{
 };
 
 fn reset_runtime() -> TestRuntimeGuard {
-    crate::snapshot_pinning::reset_pinning_table();
+    snapshot_pinning::reset_pinning_table();
     reset_runtime_for_tests()
 }
 

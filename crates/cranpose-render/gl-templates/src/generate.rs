@@ -1464,7 +1464,8 @@ fn with_macros(line: &str, in_code: &dyn Fn(usize) -> Option<String>) -> String 
 
 /// The Rust source of a static for each of `modules`, named as given, that
 /// holds the module's templates as `wgpu::hal::GlslTemplate`s, for a crate
-/// that depends on `wgpu`. Each piece of GLSL the templates share is written
+/// that depends on `wgpu`. It imports `wgpu`'s `hal` and `naga` once and names
+/// every type through them. Each piece of GLSL the templates share is written
 /// once.
 pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
     let mut pool: HashMap<&str, usize> = HashMap::new();
@@ -1473,13 +1474,13 @@ pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
     for (name, templates) in modules {
         let _ = write!(
             statics,
-            "pub(crate) static {name}: &[wgpu::hal::GlslTemplate] = &["
+            "pub(crate) static {name}: &[hal::GlslTemplate] = &["
         );
         for template in templates {
             let generated = &template.generated;
             let _ = write!(
                 statics,
-                "wgpu::hal::GlslTemplate {{ entry_point: {:?}, stage: wgpu::naga::ShaderStage::{:?}, glsl: &[",
+                "hal::GlslTemplate {{ entry_point: {:?}, stage: naga::ShaderStage::{:?}, glsl: &[",
                 template.entry_point, template.stage
             );
             for piece in pieces(&generated.glsl) {
@@ -1494,14 +1495,14 @@ pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
             for (name, kind) in &generated.macros {
                 let _ = write!(
                     statics,
-                    "wgpu::hal::GlslMacro {{ constant: {name:?}, name: \"CP_{name}\", kind: wgpu::hal::GlslMacroKind::{kind:?} }},"
+                    "hal::GlslMacro {{ constant: {name:?}, name: \"CP_{name}\", kind: hal::GlslMacroKind::{kind:?} }},"
                 );
             }
             statics.push_str("], blocks: &[");
             for block in &generated.blocks {
                 let _ = write!(
                     statics,
-                    "wgpu::hal::GlslBlock {{ name: {:?}, storage: {}, binding: {} }},",
+                    "hal::GlslBlock {{ name: {:?}, storage: {}, binding: {} }},",
                     block.name,
                     block.storage,
                     resource_binding(block.binding)
@@ -1515,7 +1516,7 @@ pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
                 };
                 let _ = write!(
                     statics,
-                    "wgpu::hal::GlslTexture {{ name: {:?}, storage: {}, binding: {}, sampler: {sampler} }},",
+                    "hal::GlslTexture {{ name: {:?}, storage: {}, binding: {}, sampler: {sampler} }},",
                     texture.name,
                     texture.storage,
                     resource_binding(texture.binding)
@@ -1533,7 +1534,7 @@ pub fn rust_source(modules: &[(&str, Vec<Template>)]) -> String {
         }
         statics.push_str("];\n");
     }
-    pieces_out + &statics
+    format!("use wgpu::{{hal, naga}};\n{pieces_out}{statics}")
 }
 
 /// `glsl` cut where templates are likely to share what follows: after the
@@ -1563,7 +1564,7 @@ fn pieces(glsl: &str) -> impl Iterator<Item = &str> {
 
 fn resource_binding(binding: naga::ResourceBinding) -> String {
     format!(
-        "wgpu::naga::ResourceBinding {{ group: {}, binding: {} }}",
+        "naga::ResourceBinding {{ group: {}, binding: {} }}",
         binding.group, binding.binding
     )
 }

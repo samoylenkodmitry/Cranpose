@@ -452,14 +452,14 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
         let x = (current_frame as f32 * 10.0) % 200.0;
         let y = 50.0;
 
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .size_points(250.0, 150.0)
                 .then(Modifier::empty().background(Color(0.05, 0.05, 0.15, 0.5)))
                 .then(Modifier::empty().rounded_corners(8.0)),
             BoxSpec::default(),
             move || {
-                cranpose_ui::Box(
+                Box(
                     Modifier::empty()
                         .size(Size {
                             width: 50.0,

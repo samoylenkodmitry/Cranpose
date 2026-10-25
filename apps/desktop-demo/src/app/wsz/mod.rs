@@ -1374,7 +1374,7 @@ fn PressableSprite(
             .absolute_offset(scaled(x, scale), scaled(y, scale))
             .pointer_input((), {
                 move |scope: PointerInputScope| {
-                    let on_click = on_click.clone();
+                    let on_click = Rc::clone(&on_click);
                     async move {
                         scope
                             .await_pointer_event_scope(|await_scope| async move {
@@ -1471,7 +1471,7 @@ fn DragSlider(
             .absolute_offset(scaled(x, scale), scaled(y, scale))
             .pointer_input((), {
                 move |scope: PointerInputScope| {
-                    let on_change = on_change.clone();
+                    let on_change = Rc::clone(&on_change);
                     async move {
                         scope
                             .await_pointer_event_scope(|await_scope| async move {
@@ -1526,7 +1526,7 @@ fn VerticalDragSlider(
             .absolute_offset(scaled(x, scale), scaled(y, scale))
             .pointer_input((), {
                 move |scope: PointerInputScope| {
-                    let on_change = on_change.clone();
+                    let on_change = Rc::clone(&on_change);
                     async move {
                         scope
                             .await_pointer_event_scope(|await_scope| async move {

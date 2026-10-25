@@ -66,23 +66,23 @@ fn split_color_stops(color_stops: Vec<(f32, Color)>) -> (Vec<Color>, Vec<f32>) {
 /// takes a `Color` beside each `Brush` overload.
 impl From<Color> for Brush {
     fn from(color: Color) -> Self {
-        Brush::Solid(color)
+        Self::Solid(color)
     }
 }
 
 impl Brush {
     /// Creates a brush that paints one flat color.
     pub fn solid(color: Color) -> Self {
-        Brush::Solid(color)
+        Self::Solid(color)
     }
 
     /// The brush's colours: its one colour, or a gradient's stops in order.
     pub fn colors(&self) -> &[Color] {
         match self {
-            Brush::Solid(color) => std::slice::from_ref(color),
-            Brush::LinearGradient { colors, .. }
-            | Brush::RadialGradient { colors, .. }
-            | Brush::SweepGradient { colors, .. } => colors,
+            Self::Solid(color) => std::slice::from_ref(color),
+            Self::LinearGradient { colors, .. }
+            | Self::RadialGradient { colors, .. }
+            | Self::SweepGradient { colors, .. } => colors,
         }
     }
 
@@ -120,7 +120,7 @@ impl Brush {
         end: Point,
         tile_mode: TileMode,
     ) -> Self {
-        Brush::LinearGradient {
+        Self::LinearGradient {
             colors,
             stops: None,
             start,
@@ -138,7 +138,7 @@ impl Brush {
         tile_mode: TileMode,
     ) -> Self {
         let (colors, stops) = split_color_stops(color_stops);
-        Brush::LinearGradient {
+        Self::LinearGradient {
             colors,
             stops: Some(stops),
             start,
@@ -249,7 +249,7 @@ impl Brush {
         radius: f32,
         tile_mode: TileMode,
     ) -> Self {
-        Brush::RadialGradient {
+        Self::RadialGradient {
             colors,
             stops: None,
             center,
@@ -267,7 +267,7 @@ impl Brush {
         tile_mode: TileMode,
     ) -> Self {
         let (colors, stops) = split_color_stops(color_stops);
-        Brush::RadialGradient {
+        Self::RadialGradient {
             colors,
             stops: Some(stops),
             center,
@@ -278,7 +278,7 @@ impl Brush {
 
     /// Creates a sweep gradient that spreads `colors` evenly around `center`.
     pub fn sweep_gradient(colors: Vec<Color>, center: Point) -> Self {
-        Brush::SweepGradient {
+        Self::SweepGradient {
             colors,
             stops: None,
             center,
@@ -289,7 +289,7 @@ impl Brush {
     /// around `center`.
     pub fn sweep_gradient_stops(color_stops: Vec<(f32, Color)>, center: Point) -> Self {
         let (colors, stops) = split_color_stops(color_stops);
-        Brush::SweepGradient {
+        Self::SweepGradient {
             colors,
             stops: Some(stops),
             center,
@@ -305,8 +305,8 @@ impl Brush {
     pub fn color_at(&self, rect: Rect, point: Point) -> Color {
         let (x, y) = (point.x, point.y);
         let (colors, stops, t, tile_mode) = match self {
-            Brush::Solid(color) => return *color,
-            Brush::LinearGradient {
+            Self::Solid(color) => return *color,
+            Self::LinearGradient {
                 colors,
                 stops,
                 start,
@@ -322,7 +322,7 @@ impl Brush {
                 let t = ((x - sx) * dx + (y - sy) * dy) / denom;
                 (colors, stops, t, *tile_mode)
             }
-            Brush::RadialGradient {
+            Self::RadialGradient {
                 colors,
                 stops,
                 center,
@@ -334,7 +334,7 @@ impl Brush {
                 let t = (dx * dx + dy * dy).sqrt() / radius.max(f32::EPSILON);
                 (colors, stops, t, *tile_mode)
             }
-            Brush::SweepGradient {
+            Self::SweepGradient {
                 colors,
                 stops,
                 center,

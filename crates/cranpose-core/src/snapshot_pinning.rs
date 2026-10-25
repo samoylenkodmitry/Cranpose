@@ -11,7 +11,7 @@ pub struct PinHandle(usize);
 
 impl PinHandle {
     /// Invalid pin handle constant (0 is reserved as invalid).
-    pub const INVALID: PinHandle = PinHandle(0);
+    pub const INVALID: Self = Self(0);
 
     /// Check if this handle is valid (non-zero).
     pub fn is_valid(&self) -> bool {

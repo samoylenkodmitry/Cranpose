@@ -99,7 +99,7 @@ fn test_conflict_detection_after_record_reuse() {
     let original_head_id = head.snapshot_id();
 
     let invalid_record = StateRecord::new(INVALID_SNAPSHOT_ID, -1i32, head.next());
-    head.set_next(Some(invalid_record.clone()));
+    head.set_next(Some(Rc::clone(&invalid_record)));
 
     let snap1 = global.take_nested_mutable_snapshot(None, None);
     let snap2 = global.take_nested_mutable_snapshot(None, None);
@@ -159,10 +159,10 @@ fn conflicting_apply_then_optimistic_merge(
     competitor.enter(|| state.set(5));
     assert!(competitor.apply().is_success());
 
-    let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
+    let invalid = runtime::open_snapshots().clear(global.snapshot_id());
     let modified = snapshot.debug_modified_objects();
     let snapshot_invalid = snapshot.invalid();
-    let optimistic = super::optimistic_merges(
+    let optimistic = optimistic_merges(
         global.snapshot_id(),
         snapshot.debug_base_parent_id(),
         &modified,
@@ -212,7 +212,7 @@ impl MutationPolicy<i32> for LockDetectPolicy {
 
     fn merge(&self, previous: &i32, current: &i32, applied: &i32) -> Option<i32> {
         assert_eq!(
-            super::runtime::runtime_lock_depth(),
+            runtime::runtime_lock_depth(),
             0,
             "optimistic merges should execute outside the runtime lock"
         );
@@ -278,8 +278,8 @@ fn test_observer_notifications_on_apply() {
 
     let called = Rc::new(Mutex::new(false));
     let received_count = Rc::new(Mutex::new(0));
-    let called_clone = called.clone();
-    let count_clone = received_count.clone();
+    let called_clone = Rc::clone(&called);
+    let count_clone = Rc::clone(&received_count);
 
     let _handle = register_apply_observer(Rc::new(move |modified, _snapshot_id| {
         *called_clone.lock().unwrap() = true;

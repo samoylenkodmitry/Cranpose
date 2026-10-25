@@ -108,7 +108,7 @@ fn fs_mesh(shaded: Shaded) -> @location(0) vec4<f32> {
                         entry_point: Some("vs_mesh"),
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         buffers: &[Some(wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                            array_stride: size_of::<MeshVertex>() as u64,
                             step_mode: wgpu::VertexStepMode::Vertex,
                             attributes: &MESH_ATTRIBUTES,
                         })],
@@ -1177,7 +1177,7 @@ impl RunMeshes<'_> {
                 continue;
             }
             let vertices = &self.buffers.vertices;
-            let from = u64::from(chunk.first_vertex) * std::mem::size_of::<MeshVertex>() as u64;
+            let from = u64::from(chunk.first_vertex) * size_of::<MeshVertex>() as u64;
             pass.set_vertex_buffer(
                 0,
                 vertices

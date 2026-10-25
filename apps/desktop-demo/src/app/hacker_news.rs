@@ -197,10 +197,10 @@ enum ThreadState {
 impl ThreadState {
     fn story_id(&self) -> Option<u64> {
         match self {
-            ThreadState::Idle => None,
-            ThreadState::Loading(story) => Some(story.id),
-            ThreadState::Success(data) => Some(data.story.id),
-            ThreadState::Error { story, .. } => Some(story.id),
+            Self::Idle => None,
+            Self::Loading(story) => Some(story.id),
+            Self::Success(data) => Some(data.story.id),
+            Self::Error { story, .. } => Some(story.id),
         }
     }
 }
@@ -528,9 +528,9 @@ async fn fetch_stories_page(
         .take(end.saturating_sub(start))
         .collect::<Vec<_>>();
     let results = map_ordered_concurrent(&page_ids, STORY_FETCH_CONCURRENCY, {
-        let client = client.clone();
+        let client = Arc::clone(client);
         move |id| {
-            let client = client.clone();
+            let client = Arc::clone(&client);
             async move { fetch_story(&client, id).await }
         }
     })
@@ -570,9 +570,9 @@ async fn fetch_comment_items_batch(
     ids: &[u64],
 ) -> Vec<Result<CommentItem, String>> {
     match map_ordered_concurrent(ids, COMMENT_FETCH_CONCURRENCY, {
-        let client = client.clone();
+        let client = Arc::clone(client);
         move |id| {
-            let client = client.clone();
+            let client = Arc::clone(&client);
             async move { fetch_comment_item(&client, id).await }
         }
     })
@@ -698,7 +698,7 @@ fn launch_initial_load(
 ) {
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         state.set(NewsState::Loading);
-        let client = client.clone();
+        let client = Arc::clone(&client);
 
         scope.launch_background(
             move |token| async move {
@@ -740,7 +740,7 @@ fn launch_load_more(
         };
 
         let ids_for_task = ids.clone();
-        let client = client.clone();
+        let client = Arc::clone(&client);
         scope.launch_background(
             move |token| async move {
                 if token.is_cancelled() {
@@ -791,7 +791,7 @@ fn launch_comment_thread(
         };
 
         state.set(ThreadState::Loading(story.clone()));
-        let client = client.clone();
+        let client = Arc::clone(&client);
         let story_for_load = story.clone();
 
         scope.launch_background(
@@ -832,7 +832,7 @@ fn launch_load_more_comments(
 
         let expected_story_id = data.story.id;
         let expected_loaded_count = data.loaded_count();
-        let client = client.clone();
+        let client = Arc::clone(&client);
 
         scope.launch_background(
             move |token| async move {
@@ -1225,14 +1225,14 @@ fn StoryItem<F>(
                     let thread_label = thread_label.clone();
                     let comments_url = comments_url.clone();
                     let target_url = target_url.clone();
-                    let uri_handler = uri_handler.clone();
+                    let uri_handler = Rc::clone(&uri_handler);
                     let on_select_thread_handle = Rc::clone(&on_select_thread_handle);
                     move || {
                         Text(
                             title.clone(),
                             Modifier::empty().clickable({
                                 let target_url = target_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 move |_| {
                                     if let Err(err) = uri_handler.open_uri(&target_url) {
                                         log::error!("Failed to open article {target_url}: {err:#}");
@@ -1253,7 +1253,7 @@ fn StoryItem<F>(
                                 .horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                             {
                                 let comments_url = comments_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 let thread_label_for_button = thread_label.clone();
                                 let on_select_thread = Rc::clone(&on_select_thread_handle);
                                 move || {
@@ -1270,7 +1270,7 @@ fn StoryItem<F>(
                                         "HN",
                                         Modifier::empty().clickable({
                                             let comments_url = comments_url.clone();
-                                            let uri_handler = uri_handler.clone();
+                                            let uri_handler = Rc::clone(&uri_handler);
                                             move |_| {
                                                 if let Err(err) = uri_handler.open_uri(&comments_url)
                                                 {
@@ -1521,7 +1521,7 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
                 {
                     let target_url = target_url.clone();
                     let comments_url = comments_url.clone();
-                    let uri_handler = uri_handler.clone();
+                    let uri_handler = Rc::clone(&uri_handler);
                     move || {
                         ActionButton(
                             "Open article".to_string(),
@@ -1529,7 +1529,7 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
                             palette.accent_text,
                             {
                                 let target_url = target_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 move || {
                                     if let Err(err) = uri_handler.open_uri(&target_url) {
                                         log::error!("Failed to open article {target_url}: {err:#}");
@@ -1543,7 +1543,7 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
                             palette.primary_text,
                             {
                                 let comments_url = comments_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 move || {
                                     if let Err(err) = uri_handler.open_uri(&comments_url) {
                                         log::error!(
@@ -1904,18 +1904,22 @@ pub fn HackerNewsTab() {
     let is_dark = theme_override.get().unwrap_or(system_dark);
     let palette = HackerNewsPalette::new(is_dark);
 
-    launch_initial_load(refresh_trigger.get(), news_state, http_client.clone());
-    launch_load_more(load_more_trigger.get(), news_state, http_client.clone());
+    launch_initial_load(refresh_trigger.get(), news_state, Arc::clone(&http_client));
+    launch_load_more(
+        load_more_trigger.get(),
+        news_state,
+        Arc::clone(&http_client),
+    );
     launch_comment_thread(
         selected_story.clone(),
         thread_refresh_trigger.get(),
         thread_state,
-        http_client.clone(),
+        Arc::clone(&http_client),
     );
     launch_load_more_comments(
         comment_load_more_trigger.get(),
         thread_state,
-        http_client.clone(),
+        Arc::clone(&http_client),
     );
     AutoLoadMore(list_state, news_state, auto_load_guard, load_more_trigger);
     cranpose_core::LaunchedEffect(

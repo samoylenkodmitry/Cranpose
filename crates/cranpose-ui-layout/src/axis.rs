@@ -21,21 +21,21 @@ impl Axis {
     #[inline]
     pub fn cross_axis(self) -> Self {
         match self {
-            Axis::Horizontal => Axis::Vertical,
-            Axis::Vertical => Axis::Horizontal,
+            Self::Horizontal => Self::Vertical,
+            Self::Vertical => Self::Horizontal,
         }
     }
 
     /// Returns true if this is the horizontal axis.
     #[inline]
     pub fn is_horizontal(self) -> bool {
-        matches!(self, Axis::Horizontal)
+        matches!(self, Self::Horizontal)
     }
 
     /// Returns true if this is the vertical axis.
     #[inline]
     pub fn is_vertical(self) -> bool {
-        matches!(self, Axis::Vertical)
+        matches!(self, Self::Vertical)
     }
 }
 

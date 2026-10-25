@@ -156,8 +156,8 @@ fn deferred_post_dispatch_action_is_replaced_and_discarded_when_consumed() {
     let event = PointerEvent::new(PointerEventKind::Move, point(0.0, 0.0), point(0.0, 0.0));
     let first_called = Rc::new(Cell::new(false));
     let second_called = Rc::new(Cell::new(false));
-    let first_called_in_action = first_called.clone();
-    let second_called_in_action = second_called.clone();
+    let first_called_in_action = Rc::clone(&first_called);
+    let second_called_in_action = Rc::clone(&second_called);
     event.defer_post_dispatch_action(move || {
         first_called_in_action.set(true);
         true

@@ -169,8 +169,8 @@ pub(crate) struct ComposerRuntimeState {
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
     pending_movables_by_host: RefCell<HashMap<usize, Vec<PendingMovable>>>,
     retention_policy: Cell<RetentionPolicy>,
-    live_hosts: RefCell<HashMap<usize, std::rc::Weak<SlotsHost>>>,
-    applier_host: RefCell<Option<std::rc::Weak<dyn ApplierHost>>>,
+    live_hosts: RefCell<HashMap<usize, Weak<SlotsHost>>>,
+    applier_host: RefCell<Option<Weak<dyn ApplierHost>>>,
     branch_folds: Rc<crate::slot::BranchFolds>,
 }
 
@@ -286,7 +286,7 @@ impl ComposerRuntimeState {
         self.applier_host
             .borrow()
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .is_some()
     }
 
@@ -401,7 +401,7 @@ impl ComposerRuntimeState {
         self.live_hosts
             .borrow()
             .values()
-            .filter_map(std::rc::Weak::upgrade)
+            .filter_map(Weak::upgrade)
             .find(|host| host.borrow().movable_is_attached(id))
     }
 
@@ -559,11 +559,7 @@ impl ComposerRuntimeState {
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) -> Result<(), NodeError> {
         let retention = self.retention_by_host.borrow_mut().remove(&host_key);
-        let applier_host = self
-            .applier_host
-            .borrow()
-            .as_ref()
-            .and_then(std::rc::Weak::upgrade);
+        let applier_host = self.applier_host.borrow().as_ref().and_then(Weak::upgrade);
         if let Some(applier_host) = applier_host {
             let mut disposal = crate::NodeDisposal::default();
             if let Some(retention) = retention {
@@ -624,7 +620,7 @@ impl ComposerRuntimeState {
         self.live_hosts
             .borrow()
             .get(&storage_key)
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
     }
 
     #[cold]
@@ -738,7 +734,7 @@ impl CapturedCompositionContext {
             .as_ref()
             .and_then(Weak::upgrade)
             .map_or(0, |inner| {
-                crate::RecomposeScope { inner }.owner_chain_deactivation_epoch()
+                RecomposeScope { inner }.owner_chain_deactivation_epoch()
             })
     }
 }
@@ -998,7 +994,7 @@ fn subcompose_slot_at<R>(
     context: &CapturedCompositionContext,
     f: impl FnOnce(&Composer) -> R,
 ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
-    let _teardown = crate::runtime::enter_state_teardown_scope();
+    let _teardown = runtime::enter_state_teardown_scope();
     let shared_state = slots.runtime_state().unwrap_or_else(fallback_state);
     let core = site.spin_up_core(shared_state, slots, root, context.locals.clone());
     *core.subcomposition_owner_scope.borrow_mut() = context
@@ -1105,7 +1101,7 @@ struct ScopedBranchGroup {
 #[doc(hidden)]
 #[inline]
 pub fn __branch_group_scope_deferred(key: Key) -> ScopedBranchGroupGuard {
-    let open = crate::composer_context::with_current_core(|core| ScopedBranchGroup {
+    let open = composer_context::with_current_core(|core| ScopedBranchGroup {
         token: core.branch_folds.push(key),
         folds: Rc::clone(&core.branch_folds),
     });
@@ -1254,7 +1250,7 @@ impl Composer {
     /// built in place of `parked`'s core when nothing else holds it: the
     /// pass then allocates no core and reuses the stacks' storage.
     pub(crate) fn for_pass(
-        parked: Option<Composer>,
+        parked: Option<Self>,
         shared_state: Rc<ComposerRuntimeState>,
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
@@ -1283,7 +1279,7 @@ impl Composer {
     /// The composer of a finished pass, kept for [`Self::for_pass`] when
     /// nothing else holds its core. It lets go of what the pass composed
     /// under.
-    pub(crate) fn park(mut self) -> Option<Composer> {
+    pub(crate) fn park(mut self) -> Option<Self> {
         Rc::get_mut(&mut self.core)?.park();
         Some(self)
     }
@@ -1359,7 +1355,7 @@ impl Composer {
         &self,
         slots: Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, SlotPassOutcome), NodeError> {
         let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
@@ -1372,7 +1368,7 @@ impl Composer {
         &self,
         slots: Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> (R, SlotPassOutcome) {
         let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
@@ -1390,7 +1386,7 @@ impl Composer {
     pub(crate) fn with_slot_override<R>(
         &self,
         slots: Rc<SlotsHost>,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> (R, SlotPassOutcome) {
         self.with_slot_host_pass(slots, crate::slot::SlotPassMode::Compose, f)
     }
@@ -1671,7 +1667,7 @@ impl Composer {
 
     /// Runs `f` with this composer as the current one and its runtime as the active runtime. Both
     /// are restored when `f` returns.
-    pub fn install<R>(&self, f: impl FnOnce(&Composer) -> R) -> R {
+    pub fn install<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         let _composer_guard = composer_context::enter(self);
         runtime::push_active_runtime(&self.core.runtime);
         struct Guard;
@@ -1988,7 +1984,7 @@ impl Composer {
     pub(crate) fn with_group_seed<R>(
         &self,
         key: crate::slot::GroupKeySeed,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> R {
         let group = self.open_group(key);
         debug_assert!(group.runs_body, "only movable content waits for a body");
@@ -1997,7 +1993,7 @@ impl Composer {
         result
     }
 
-    pub(crate) fn with_movable_group(&self, id: Key, f: impl FnOnce(&Composer)) {
+    pub(crate) fn with_movable_group(&self, id: Key, f: impl FnOnce(&Self)) {
         let group = self.open_group(crate::slot::GroupKeySeed::movable(id));
         if group.runs_body {
             f(self);
@@ -2007,7 +2003,7 @@ impl Composer {
 
     /// Runs `f` in a group identified by `key`. Slots and nodes that `f` creates belong to the
     /// group.
-    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Self) -> R) -> R {
         self.with_group_seed(crate::slot::GroupKeySeed::unkeyed(key), f)
     }
 
@@ -2018,7 +2014,7 @@ impl Composer {
         &self,
         key: Key,
         mut options: RecomposeOptions,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> R {
         options.retention = RetentionMode::RetainWhenInactive;
         self.core.pending_scope_options.set(Some(options));
@@ -2028,7 +2024,7 @@ impl Composer {
     /// Runs `f` in a group identified by the hash of `key`, so state and nodes follow the key when
     /// siblings move. Compose's `key`.
     #[track_caller]
-    pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Composer) -> R) -> R {
+    pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Self) -> R) -> R {
         let seed = explicit_group_key_seed(key, std::panic::Location::caller());
         self.with_group_seed(seed, f)
     }
@@ -2236,11 +2232,7 @@ impl Composer {
     }
 
     #[doc(hidden)]
-    pub fn remember_at<T: 'static>(
-        &self,
-        source: crate::Key,
-        init: impl FnOnce() -> T,
-    ) -> Owned<T> {
+    pub fn remember_at<T: 'static>(&self, source: Key, init: impl FnOnce() -> T) -> Owned<T> {
         self.with_slot_session_mut(|slots| {
             slots.remember_with_kind(PayloadKind::Remember, source, init)
         })
@@ -2249,7 +2241,7 @@ impl Composer {
     #[track_caller]
     pub(crate) fn remember_internal<T: 'static>(
         &self,
-        source_salt: crate::Key,
+        source_salt: Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
         let source = crate::caller_location_key() ^ source_salt;
@@ -2480,7 +2472,7 @@ impl Composer {
         &self,
         state: &mut SubcomposeState,
         slot_id: SlotId,
-        content: impl FnOnce(&Composer) -> R,
+        content: impl FnOnce(&Self) -> R,
     ) -> (R, Vec<NodeId>) {
         match self.phase() {
             crate::Phase::Measure | crate::Phase::Layout => {}
@@ -2517,7 +2509,7 @@ impl Composer {
         &self,
         state: &mut SubcomposeState,
         slot_id: SlotId,
-        content: impl FnOnce(&Composer) -> R,
+        content: impl FnOnce(&Self) -> R,
     ) -> (R, Vec<NodeId>) {
         let (result, nodes) = self.subcompose(state, slot_id, content);
         let roots = nodes
@@ -2545,15 +2537,15 @@ impl Composer {
         &self,
         slots: &Rc<SlotsHost>,
         root: Option<NodeId>,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> Result<R, NodeError> {
-        let _teardown = crate::runtime::enter_state_teardown_scope();
+        let _teardown = runtime::enter_state_teardown_scope();
         let site = self.subcompose_site();
         let shared_state = slots
             .runtime_state()
             .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
         let core = site.spin_up_core(shared_state, slots, root, self.current_local_stack());
-        let composer = Composer::from_core(core);
+        let composer = Self::from_core(core);
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
             let (output, outcome) = composer.try_with_slot_host_pass(
                 Rc::clone(slots),
@@ -2595,7 +2587,7 @@ impl Composer {
     pub fn with_captured_locals<R>(
         &self,
         context: &CapturedCompositionContext,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> R {
         let parent = self.current_local_stack();
         self.local_stack().clone_from(&context.locals);
@@ -2607,7 +2599,7 @@ impl Composer {
     /// Runs `f` as content under a static composition local that changed
     /// when `changed`: every group it opens runs its body, as under the
     /// provider of a changed static local.
-    pub fn with_locals_changed<R>(&self, changed: bool, f: impl FnOnce(&Composer) -> R) -> R {
+    pub fn with_locals_changed<R>(&self, changed: bool, f: impl FnOnce(&Self) -> R) -> R {
         let outer = self.core.locals_changed.get();
         self.core.locals_changed.set(outer || changed);
         let result = f(self);
@@ -2623,7 +2615,7 @@ impl Composer {
         &self,
         slots: &Rc<SlotsHost>,
         root: Option<NodeId>,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let context = self.capture_composition_context();
         self.subcompose_slot_with_context(slots, root, &context, f)
@@ -2637,7 +2629,7 @@ impl Composer {
         slots: &Rc<SlotsHost>,
         root: Option<NodeId>,
         context: &CapturedCompositionContext,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         subcompose_slot_at(
             self.subcompose_site(),
@@ -2659,7 +2651,7 @@ impl Composer {
         slots: &Rc<SlotsHost>,
         root: NodeId,
         context: &CapturedCompositionContext,
-        f: impl FnOnce(&Composer) -> R,
+        f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let site = SubcomposeSite {
             applier,
@@ -2700,7 +2692,7 @@ impl Composer {
     /// changes. Does nothing outside a recompose scope.
     pub fn set_recompose_callback<F>(&self, callback: F)
     where
-        F: FnMut(&Composer) + 'static,
+        F: FnMut(&Self) + 'static,
     {
         if let Some(scope) = self.current_recompose_scope() {
             scope.set_recompose_callback(callback);
@@ -2708,7 +2700,7 @@ impl Composer {
     }
 
     /// Like `set_recompose_callback` for a plain function pointer.
-    pub fn set_recompose_fn(&self, callback: fn(&Composer)) {
+    pub fn set_recompose_fn(&self, callback: fn(&Self)) {
         if let Some(scope) = self.current_recompose_scope() {
             scope.set_boxed_recompose(Box::new(callback), None);
         }
@@ -2719,8 +2711,8 @@ impl Composer {
     pub fn with_composition_locals<R>(
         &self,
         provided: impl IntoIterator<Item = ProvidedValue>,
-        site: crate::Key,
-        f: impl FnOnce(&Composer) -> R,
+        site: Key,
+        f: impl FnOnce(&Self) -> R,
     ) -> R {
         let provided: SmallVec<[ProvidedValue; 2]> = provided.into_iter().collect();
         if provided.is_empty() {

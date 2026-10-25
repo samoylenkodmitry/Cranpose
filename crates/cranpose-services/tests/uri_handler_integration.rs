@@ -26,13 +26,13 @@ fn integration_local_uri_handler_overrides_current() {
 
     {
         let captured = Rc::clone(&captured);
-        let custom_handler = custom_handler.clone();
+        let custom_handler = Rc::clone(&custom_handler);
         let local_for_provider = local.clone();
         let local_for_read = local.clone();
         run_test_composition(move || {
             let captured = Rc::clone(&captured);
             let local_for_read = local_for_read.clone();
-            let custom_handler = custom_handler.clone();
+            let custom_handler = Rc::clone(&custom_handler);
             CompositionLocalProvider(
                 vec![local_for_provider.provides(custom_handler)],
                 move || {
@@ -43,10 +43,6 @@ fn integration_local_uri_handler_overrides_current() {
         });
     }
 
-    let current = captured
-        .borrow()
-        .as_ref()
-        .expect("handler captured")
-        .clone();
+    let current = Rc::clone(captured.borrow().as_ref().expect("handler captured"));
     assert!(Rc::ptr_eq(&current, &custom_handler));
 }

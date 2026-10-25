@@ -60,10 +60,10 @@ impl HapticEffect {
     /// bodies and by backends without predefined effects.
     pub fn closest_feedback(self) -> HapticFeedback {
         match self {
-            HapticEffect::Tick => HapticFeedback::Selection,
-            HapticEffect::Click => HapticFeedback::ImpactLight,
-            HapticEffect::DoubleClick => HapticFeedback::ImpactMedium,
-            HapticEffect::HeavyClick => HapticFeedback::ImpactHeavy,
+            Self::Tick => HapticFeedback::Selection,
+            Self::Click => HapticFeedback::ImpactLight,
+            Self::DoubleClick => HapticFeedback::ImpactMedium,
+            Self::HeavyClick => HapticFeedback::ImpactHeavy,
         }
     }
 }
@@ -130,7 +130,7 @@ impl HapticPattern {
     ///
     /// Fails when the two slices differ in length, when there are no steps, or
     /// when every timing is zero.
-    pub fn new(timings_ms: &[u32], amplitudes: &[u8]) -> Result<HapticPattern, HapticError> {
+    pub fn new(timings_ms: &[u32], amplitudes: &[u8]) -> Result<Self, HapticError> {
         Self::build(timings_ms, amplitudes, None)
     }
 
@@ -140,7 +140,7 @@ impl HapticPattern {
         timings_ms: &[u32],
         amplitudes: &[u8],
         repeat_index: usize,
-    ) -> Result<HapticPattern, HapticError> {
+    ) -> Result<Self, HapticError> {
         Self::build(timings_ms, amplitudes, Some(repeat_index))
     }
 
@@ -148,7 +148,7 @@ impl HapticPattern {
         timings_ms: &[u32],
         amplitudes: &[u8],
         repeat: Option<usize>,
-    ) -> Result<HapticPattern, HapticError> {
+    ) -> Result<Self, HapticError> {
         if timings_ms.len() != amplitudes.len() {
             return Err(HapticError::LengthMismatch {
                 timings: timings_ms.len(),
@@ -158,10 +158,10 @@ impl HapticPattern {
         if timings_ms.is_empty() {
             return Err(HapticError::Empty);
         }
-        if timings_ms.len() > HapticPattern::MAX_STEPS {
+        if timings_ms.len() > Self::MAX_STEPS {
             return Err(HapticError::TooManySteps {
                 len: timings_ms.len(),
-                max: HapticPattern::MAX_STEPS,
+                max: Self::MAX_STEPS,
             });
         }
         if timings_ms.iter().all(|step| *step == 0) {
@@ -175,7 +175,7 @@ impl HapticPattern {
                 len: timings_ms.len(),
             });
         }
-        Ok(HapticPattern {
+        Ok(Self {
             timings_ms: timings_ms.to_vec(),
             amplitudes: amplitudes.to_vec(),
             repeat,
@@ -305,7 +305,7 @@ struct PlatformHaptics;
 fn registered_haptics() -> HapticsRef {
     PLATFORM_HAPTICS
         .get_or_warn("haptics")
-        .unwrap_or_else(|| NOOP_HAPTICS.get_or_init(|| Arc::new(NoopHaptics)).clone())
+        .unwrap_or_else(|| Arc::clone(NOOP_HAPTICS.get_or_init(|| Arc::new(NoopHaptics))))
 }
 
 impl Haptics for PlatformHaptics {
@@ -347,9 +347,7 @@ pub fn clear_platform_haptics() {
 /// Returns the haptics that forward to the installed platform implementation. They do nothing
 /// while none is installed.
 pub fn default_haptics() -> HapticsRef {
-    DEFAULT_HAPTICS
-        .get_or_init(|| Arc::new(PlatformHaptics))
-        .clone()
+    Arc::clone(DEFAULT_HAPTICS.get_or_init(|| Arc::new(PlatformHaptics)))
 }
 
 /// The haptics a composable reads. It is the platform haptics unless a composition local provider
@@ -364,7 +362,7 @@ pub fn local_haptics() -> CompositionLocal<HapticsRef> {
 /// Provides the platform haptics to `content` through [`local_haptics`].
 #[composable]
 pub fn ProvideHaptics(content: impl FnOnce()) {
-    let haptics = cranpose_core::remember(default_haptics).with(|state| state.clone());
+    let haptics = cranpose_core::remember(default_haptics).with(|state| Arc::clone(state));
     let local = local_haptics();
     CompositionLocalProvider([local.provides(haptics)], move || {
         content();

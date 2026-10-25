@@ -32,7 +32,7 @@ struct Biquad {
 }
 
 impl Biquad {
-    const PASSTHROUGH: Biquad = Biquad {
+    const PASSTHROUGH: Self = Self {
         b0: 1.0,
         b1: 0.0,
         b2: 0.0,
@@ -40,16 +40,16 @@ impl Biquad {
         a2: 0.0,
     };
 
-    fn peaking(center_hz: f32, sample_rate: f32, gain_db: f32) -> Biquad {
+    fn peaking(center_hz: f32, sample_rate: f32, gain_db: f32) -> Self {
         if gain_db == 0.0 || sample_rate <= 0.0 || center_hz * 2.0 >= sample_rate {
-            return Biquad::PASSTHROUGH;
+            return Self::PASSTHROUGH;
         }
         let amplitude = 10f32.powf(gain_db / 40.0);
         let omega = 2.0 * PI * center_hz / sample_rate;
         let (sin_omega, cos_omega) = omega.sin_cos();
         let alpha = sin_omega / (2.0 * BAND_Q);
         let a0 = 1.0 + alpha / amplitude;
-        Biquad {
+        Self {
             b0: (1.0 + alpha * amplitude) / a0,
             b1: (-2.0 * cos_omega) / a0,
             b2: (1.0 - alpha * amplitude) / a0,
@@ -82,15 +82,15 @@ struct Curve {
 }
 
 impl Curve {
-    fn flat() -> Curve {
-        Curve {
+    fn flat() -> Self {
+        Self {
             preamp: 1.0,
             filters: Vec::new(),
         }
     }
 
-    fn build(sample_rate: f32, preamp_db: f32, gains_db: &[f32]) -> Curve {
-        Curve {
+    fn build(sample_rate: f32, preamp_db: f32, gains_db: &[f32]) -> Self {
+        Self {
             preamp: 10f32.powf(preamp_db / 20.0),
             filters: BAND_CENTERS_HZ
                 .iter()
@@ -112,8 +112,8 @@ pub(crate) struct EqualizerTap {
 }
 
 impl EqualizerTap {
-    pub(crate) fn new() -> Arc<EqualizerTap> {
-        Arc::new(EqualizerTap {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
             enabled: AtomicBool::new(false),
             setting: Mutex::new((0.0, Vec::new())),
             sample_rate: AtomicU32::new(0),

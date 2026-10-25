@@ -57,13 +57,13 @@ struct Screen {
 
 fn screen(container: Container) -> Screen {
     let container = Rc::new(container);
-    let connection: Rc<dyn NestedScrollConnection> = container.clone();
+    let connection: Rc<dyn NestedScrollConnection> = Rc::<Container>::clone(&container);
     let captured: Rc<RefCell<Option<ScrollState>>> = Rc::default();
     let installed = Rc::clone(&captured);
     let robot = create_headless_robot_test(200, 400, move || {
         let scroll = cranpose_ui::rememberScrollState!(0.0);
         *installed.borrow_mut() = Some(scroll);
-        NestedScroll(connection.clone(), move || {
+        NestedScroll(Rc::clone(&connection), move || {
             Column(
                 Modifier::empty()
                     .fill_max_size()

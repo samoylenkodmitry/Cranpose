@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BinaryHeap, mem};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
@@ -207,8 +207,8 @@ impl AnchorRegistry {
 
     pub(super) fn heap_bytes(&self) -> usize {
         self.storage.heap_bytes()
-            + self.free_ids.capacity() * mem::size_of::<Reverse<u32>>()
-            + self.reused_generations.capacity() * mem::size_of::<(u32, u32)>()
+            + self.free_ids.capacity() * size_of::<Reverse<u32>>()
+            + self.reused_generations.capacity() * size_of::<(u32, u32)>()
     }
 
     pub(super) fn set_active(&mut self, anchor: AnchorId, group_index: usize) {

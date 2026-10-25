@@ -35,8 +35,8 @@ impl GlobalSnapshot {
             }
 
             let id = with_runtime(|runtime| runtime.global_snapshot_id());
-            let invalid = super::runtime::open_snapshots();
-            let global = GlobalSnapshot::new(id, invalid);
+            let invalid = runtime::open_snapshots();
+            let global = Self::new(id, invalid);
             *snapshot = Some(Rc::clone(&global));
             global
         })
@@ -46,7 +46,7 @@ impl GlobalSnapshot {
     /// any more, when the runtime is due to look for them.
     fn advance_releasing(&self, new_id: SnapshotId) {
         self.advance(new_id);
-        super::maybe_check_and_overwrite_unused_records_locked(new_id);
+        maybe_check_and_overwrite_unused_records_locked(new_id);
     }
 
     /// Advances the global snapshot to `new_id`.
@@ -55,7 +55,7 @@ impl GlobalSnapshot {
     /// snapshot keeps no written state past the advance. A state its owner
     /// releases is then freed together with its value.
     pub fn advance(&self, new_id: SnapshotId) {
-        let invalid = super::runtime::advance_global_snapshot(new_id);
+        let invalid = runtime::advance_global_snapshot(new_id);
         self.state.id.set(new_id);
         self.state.invalid.replace(invalid);
         // Drop the recorded states outside the borrow, then hand the emptied
@@ -108,9 +108,9 @@ impl GlobalSnapshot {
         // at its current id. The snapshot takes an id of its own and the
         // global moves past it, so what the global writes or creates from
         // here on stays out of the snapshot.
-        let snapshot_id = super::allocate_record_id();
+        let snapshot_id = allocate_record_id();
         let invalid = self.state.invalid.borrow().clear(self.state.id.get());
-        self.advance_releasing(super::allocate_record_id());
+        self.advance_releasing(allocate_record_id());
         ReadonlySnapshot::new(snapshot_id, invalid, read_observer)
     }
 
@@ -162,11 +162,10 @@ impl GlobalSnapshot {
     ) -> Rc<MutableSnapshot> {
         let base_parent_id = self.state.id.get();
 
-        let (new_id, child_invalid, new_global_invalid) = super::runtime::with_runtime(
-            super::runtime::SnapshotRuntime::take_new_snapshot_advancing_global,
-        );
+        let (new_id, child_invalid, new_global_invalid) =
+            with_runtime(SnapshotRuntime::take_new_snapshot_advancing_global);
 
-        let new_global_id = super::runtime::with_runtime(|runtime| runtime.global_snapshot_id());
+        let new_global_id = with_runtime(|runtime| runtime.global_snapshot_id());
         self.state.id.set(new_global_id);
         self.state.invalid.replace(new_global_invalid);
 

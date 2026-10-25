@@ -218,8 +218,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     }
 
     fn select_all(&self) {
-        self.state
-            .edit(cranpose_foundation::text::TextFieldBuffer::select_all);
+        self.state.edit(TextFieldBuffer::select_all);
         crate::request_render_invalidation();
     }
 

@@ -393,7 +393,7 @@ where
                 let item_end = item_end_with_spacing(item);
                 item_end > viewport_start && item.offset < viewport_end
             })
-            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info),
+            .map(LazyListMeasuredItem::to_item_info),
     );
     state.update_layout_info(LazyListLayoutInfo {
         visible_items_info,
@@ -505,11 +505,7 @@ where
 
     state.update_scroll_position(0, 0.0);
     let mut visible_items_info = state.spare_items_info();
-    visible_items_info.extend(
-        visible_items
-            .iter()
-            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info),
-    );
+    visible_items_info.extend(visible_items.iter().map(LazyListMeasuredItem::to_item_info));
     state.update_layout_info(LazyListLayoutInfo {
         visible_items_info,
         total_items_count: items_count,

@@ -108,7 +108,7 @@ pub(crate) fn main() {
                 let _ = robot.exit();
             }
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn print_all_texts(element: &cranpose::SemanticElement, depth: usize) {

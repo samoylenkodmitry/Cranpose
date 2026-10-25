@@ -80,7 +80,7 @@ fn without_a_platform_monitor_nothing_is_known() {
 fn a_monitor_reports_what_it_observes_as_it_changes() {
     let _guard = crate::registry::test_service_guard();
     let monitor = Observed::new(ONLINE_UNMETERED, true, false);
-    set_platform_network_monitor(monitor.clone());
+    set_platform_network_monitor(Arc::<Observed>::clone(&monitor));
     for status in [ONLINE_METERED, OFFLINE, ONLINE_UNMETERED] {
         monitor.observe(status);
         assert_eq!(network_status(), status);
@@ -91,7 +91,7 @@ fn a_monitor_reports_what_it_observes_as_it_changes() {
 fn a_stopped_monitor_reconnects_before_its_status_is_read() {
     let _guard = crate::registry::test_service_guard();
     let monitor = Observed::new(ONLINE_METERED, false, true);
-    set_platform_network_monitor(monitor.clone());
+    set_platform_network_monitor(Arc::<Observed>::clone(&monitor));
     assert_eq!(network_status(), ONLINE_METERED);
     assert_eq!(monitor.reconnects.load(Ordering::Acquire), 1);
 }
@@ -100,7 +100,7 @@ fn a_stopped_monitor_reconnects_before_its_status_is_read() {
 fn a_monitor_that_stays_stopped_reports_nothing_known() {
     let _guard = crate::registry::test_service_guard();
     let monitor = Observed::new(ONLINE_UNMETERED, false, false);
-    set_platform_network_monitor(monitor.clone());
+    set_platform_network_monitor(Arc::<Observed>::clone(&monitor));
     assert_eq!(
         network_status(),
         NetworkStatus::default(),

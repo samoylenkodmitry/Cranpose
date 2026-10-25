@@ -38,7 +38,7 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
         height: 8.0,
     };
     for motion in [TextMotion::Static, TextMotion::Animated] {
-        std::sync::Arc::make_mut(&mut draw.text_style)
+        Arc::make_mut(&mut draw.text_style)
             .paragraph_style
             .text_motion = Some(motion);
         draw.clip = None;

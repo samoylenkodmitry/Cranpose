@@ -185,7 +185,7 @@ impl Point {
     }
 
     /// The origin point `(0.0, 0.0)`.
-    pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
+    pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
 }
 
 /// A width and a height, in logical pixels.
@@ -204,7 +204,7 @@ impl Size {
     }
 
     /// A size of zero width and zero height.
-    pub const ZERO: Size = Size {
+    pub const ZERO: Self = Self {
         width: 0.0,
         height: 0.0,
     };
@@ -227,7 +227,7 @@ impl Rect {
     /// The rect that holds nothing: what two clips that do not overlap
     /// resolve to, so a clip that meets nothing stays a clip instead of
     /// lifting.
-    pub const EMPTY: Rect = Rect {
+    pub const EMPTY: Self = Self {
         x: 0.0,
         y: 0.0,
         width: 0.0,
@@ -275,7 +275,7 @@ impl Rect {
     }
 
     /// Returns the intersection of two rectangles, or `None` if they don't overlap.
-    pub fn intersect(&self, other: Rect) -> Option<Rect> {
+    pub fn intersect(&self, other: Self) -> Option<Self> {
         let left = self.x.max(other.x);
         let top = self.y.max(other.y);
         let right = (self.x + self.width).min(other.x + other.width);
@@ -285,7 +285,7 @@ impl Rect {
         if width <= 0.0 || height <= 0.0 {
             None
         } else {
-            Some(Rect {
+            Some(Self {
                 x: left,
                 y: top,
                 width,
@@ -295,12 +295,12 @@ impl Rect {
     }
 
     /// Returns the smallest rectangle that contains both rectangles.
-    pub fn union(&self, other: Rect) -> Rect {
+    pub fn union(&self, other: Self) -> Self {
         let left = self.x.min(other.x);
         let top = self.y.min(other.y);
         let right = (self.x + self.width).max(other.x + other.width);
         let bottom = (self.y + self.height).max(other.y + other.height);
-        Rect {
+        Self {
             x: left,
             y: top,
             width: (right - left).max(0.0),
@@ -502,7 +502,7 @@ impl TransformOrigin {
     }
 
     /// Pivot at the center of the layer.
-    pub const CENTER: TransformOrigin = TransformOrigin::new(0.5, 0.5);
+    pub const CENTER: Self = Self::new(0.5, 0.5);
 }
 
 impl Default for TransformOrigin {
@@ -708,36 +708,36 @@ pub enum BlendMode {
 
 impl BlendMode {
     /// Every mode in declaration order, so `mode as u32` indexes it.
-    pub const ALL: [BlendMode; 29] = [
-        BlendMode::Clear,
-        BlendMode::Src,
-        BlendMode::Dst,
-        BlendMode::SrcOver,
-        BlendMode::DstOver,
-        BlendMode::SrcIn,
-        BlendMode::DstIn,
-        BlendMode::SrcOut,
-        BlendMode::DstOut,
-        BlendMode::SrcAtop,
-        BlendMode::DstAtop,
-        BlendMode::Xor,
-        BlendMode::Plus,
-        BlendMode::Modulate,
-        BlendMode::Screen,
-        BlendMode::Overlay,
-        BlendMode::Darken,
-        BlendMode::Lighten,
-        BlendMode::ColorDodge,
-        BlendMode::ColorBurn,
-        BlendMode::HardLight,
-        BlendMode::SoftLight,
-        BlendMode::Difference,
-        BlendMode::Exclusion,
-        BlendMode::Multiply,
-        BlendMode::Hue,
-        BlendMode::Saturation,
-        BlendMode::Color,
-        BlendMode::Luminosity,
+    pub const ALL: [Self; 29] = [
+        Self::Clear,
+        Self::Src,
+        Self::Dst,
+        Self::SrcOver,
+        Self::DstOver,
+        Self::SrcIn,
+        Self::DstIn,
+        Self::SrcOut,
+        Self::DstOut,
+        Self::SrcAtop,
+        Self::DstAtop,
+        Self::Xor,
+        Self::Plus,
+        Self::Modulate,
+        Self::Screen,
+        Self::Overlay,
+        Self::Darken,
+        Self::Lighten,
+        Self::ColorDodge,
+        Self::ColorBurn,
+        Self::HardLight,
+        Self::SoftLight,
+        Self::Difference,
+        Self::Exclusion,
+        Self::Multiply,
+        Self::Hue,
+        Self::Saturation,
+        Self::Color,
+        Self::Luminosity,
     ];
 }
 
@@ -762,7 +762,7 @@ pub enum DrawPrimitive {
     /// Wrapper to associate a draw primitive with a non-default blend mode.
     Blend {
         /// The primitive drawn with `blend_mode`.
-        primitive: Box<DrawPrimitive>,
+        primitive: Box<Self>,
         /// How the wrapped primitive combines with what is already drawn.
         blend_mode: BlendMode,
     },
@@ -887,7 +887,7 @@ pub struct TextPrimitive {
     pub rect: Rect,
     /// Shared so redrawing an unchanged string each frame clones a pointer
     /// rather than the characters.
-    pub text: std::rc::Rc<str>,
+    pub text: Rc<str>,
     /// Font, size, alignment and other styling the glyphs are laid out and drawn with.
     pub style: DrawTextStyle,
     /// Paint for the glyphs: a solid colour, or a gradient laid over the
@@ -924,35 +924,35 @@ impl DrawPrimitive {
     /// primitive's rect, so it moves along.
     pub fn translate(self, dx: f32, dy: f32) -> Self {
         match self {
-            DrawPrimitive::Content => DrawPrimitive::Content,
-            DrawPrimitive::Blend {
+            Self::Content => Self::Content,
+            Self::Blend {
                 primitive,
                 blend_mode,
-            } => DrawPrimitive::Blend {
+            } => Self::Blend {
                 primitive: Box::new(primitive.translate(dx, dy)),
                 blend_mode,
             },
-            DrawPrimitive::Rect {
+            Self::Rect {
                 rect,
                 brush,
                 stroke,
-            } => DrawPrimitive::Rect {
+            } => Self::Rect {
                 rect: rect.translate(dx, dy),
                 brush,
                 stroke,
             },
-            DrawPrimitive::RoundRect {
+            Self::RoundRect {
                 rect,
                 brush,
                 radii,
                 stroke,
-            } => DrawPrimitive::RoundRect {
+            } => Self::RoundRect {
                 rect: rect.translate(dx, dy),
                 brush,
                 radii,
                 stroke,
             },
-            DrawPrimitive::Arc {
+            Self::Arc {
                 rect,
                 brush,
                 center,
@@ -961,7 +961,7 @@ impl DrawPrimitive {
                 sweep_angle,
                 stroke,
                 inner_radius,
-            } => DrawPrimitive::Arc {
+            } => Self::Arc {
                 rect: rect.translate(dx, dy),
                 brush,
                 center: Point::new(center.x + dx, center.y + dy),
@@ -971,36 +971,36 @@ impl DrawPrimitive {
                 stroke,
                 inner_radius,
             },
-            DrawPrimitive::Line {
+            Self::Line {
                 rect,
                 brush,
                 start,
                 end,
                 stroke,
-            } => DrawPrimitive::Line {
+            } => Self::Line {
                 rect: rect.translate(dx, dy),
                 brush,
                 start: Point::new(start.x + dx, start.y + dy),
                 end: Point::new(end.x + dx, end.y + dy),
                 stroke,
             },
-            DrawPrimitive::Trapezoid {
+            Self::Trapezoid {
                 rect,
                 brush,
                 trapezoid,
-            } => DrawPrimitive::Trapezoid {
+            } => Self::Trapezoid {
                 rect: rect.translate(dx, dy),
                 brush,
                 trapezoid: trapezoid.translate(dx, dy),
             },
-            DrawPrimitive::Image {
+            Self::Image {
                 rect,
                 image,
                 alpha,
                 color_filter,
                 sampling,
                 src_rect,
-            } => DrawPrimitive::Image {
+            } => Self::Image {
                 rect: rect.translate(dx, dy),
                 image,
                 alpha,
@@ -1008,38 +1008,38 @@ impl DrawPrimitive {
                 sampling,
                 src_rect,
             },
-            DrawPrimitive::Text(mut text) => {
+            Self::Text(mut text) => {
                 text.rect = text.rect.translate(dx, dy);
-                DrawPrimitive::Text(text)
+                Self::Text(text)
             }
-            DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            Self::Shadow(ShadowPrimitive::Drop {
                 shape,
                 cutout,
                 blur_radius,
                 blend_mode,
-            }) => DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            }) => Self::Shadow(ShadowPrimitive::Drop {
                 shape: Box::new(shape.translate(dx, dy)),
                 cutout: cutout.map(|cutout| Box::new(cutout.translate(dx, dy))),
                 blur_radius,
                 blend_mode,
             }),
-            DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+            Self::Shadow(ShadowPrimitive::Inner {
                 fill,
                 cutout,
                 blur_radius,
                 blend_mode,
                 clip_rect,
-            }) => DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+            }) => Self::Shadow(ShadowPrimitive::Inner {
                 fill: Box::new(fill.translate(dx, dy)),
                 cutout: Box::new(cutout.translate(dx, dy)),
                 blur_radius,
                 blend_mode,
                 clip_rect: clip_rect.translate(dx, dy),
             }),
-            DrawPrimitive::Group(GroupMarker::Start(group)) => {
-                DrawPrimitive::Group(GroupMarker::Start(group.translate(dx, dy)))
+            Self::Group(GroupMarker::Start(group)) => {
+                Self::Group(GroupMarker::Start(group.translate(dx, dy)))
             }
-            DrawPrimitive::Group(GroupMarker::End) => DrawPrimitive::Group(GroupMarker::End),
+            Self::Group(GroupMarker::End) => Self::Group(GroupMarker::End),
         }
     }
 }

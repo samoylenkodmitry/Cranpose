@@ -1554,12 +1554,12 @@ fn LazyColumnImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    let measured_item_cache_for_policy = measured_item_cache.clone();
+    let measured_item_cache_for_policy = Rc::clone(&measured_item_cache);
     let overscroll_for_policy = overscroll.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
-        let config_ref = config_cell.clone();
-        let content_ref = content_cell.clone();
-        let measured_item_cache = measured_item_cache_for_policy.clone();
+        let config_ref = Rc::clone(&config_cell);
+        let content_ref = Rc::clone(&content_cell);
+        let measured_item_cache = Rc::clone(&measured_item_cache_for_policy);
         let overscroll = overscroll_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
@@ -1581,7 +1581,7 @@ fn LazyColumnImpl(
         );
         policy
     })
-    .with(|p| p.clone());
+    .with(|p| Rc::clone(p));
     let list_state_id = lazy_list_state_identity(&state);
 
     let scroll_modifier = grid::grid_semantics(
@@ -1699,12 +1699,12 @@ fn LazyRowImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    let measured_item_cache_for_policy = measured_item_cache.clone();
+    let measured_item_cache_for_policy = Rc::clone(&measured_item_cache);
     let overscroll_for_policy = overscroll.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
-        let config_ref = config_cell.clone();
-        let content_ref = content_cell.clone();
-        let measured_item_cache = measured_item_cache_for_policy.clone();
+        let config_ref = Rc::clone(&config_cell);
+        let content_ref = Rc::clone(&content_cell);
+        let measured_item_cache = Rc::clone(&measured_item_cache_for_policy);
         let overscroll = overscroll_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
@@ -1726,7 +1726,7 @@ fn LazyRowImpl(
         );
         policy
     })
-    .with(|p| p.clone());
+    .with(|p| Rc::clone(p));
     let list_state_id = lazy_list_state_identity(&state);
 
     let scroll_modifier = grid::grid_semantics(

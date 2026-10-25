@@ -49,18 +49,18 @@ pub enum AssetError {
 impl fmt::Display for AssetError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AssetError::EmptyPath => formatter.write_str("asset path is empty"),
-            AssetError::AbsolutePath { path } => {
+            Self::EmptyPath => formatter.write_str("asset path is empty"),
+            Self::AbsolutePath { path } => {
                 write!(formatter, "asset path must be relative: {}", path.display())
             }
-            AssetError::EscapesRoot { path } => {
+            Self::EscapesRoot { path } => {
                 write!(
                     formatter,
                     "asset path cannot escape registered roots: {}",
                     path.display()
                 )
             }
-            AssetError::NotFound { path, roots } => {
+            Self::NotFound { path, roots } => {
                 write!(formatter, "asset not found: {}", path.display())?;
                 if !roots.is_empty() {
                     write!(formatter, " under")?;
@@ -70,14 +70,14 @@ impl fmt::Display for AssetError {
                 }
                 Ok(())
             }
-            AssetError::Io { path, source } => {
+            Self::Io { path, source } => {
                 write!(
                     formatter,
                     "failed to read asset {}: {source}",
                     path.display()
                 )
             }
-            AssetError::Utf8 { path, source } => {
+            Self::Utf8 { path, source } => {
                 write!(
                     formatter,
                     "asset {} is not valid UTF-8: {source}",
@@ -91,8 +91,8 @@ impl fmt::Display for AssetError {
 impl std::error::Error for AssetError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            AssetError::Io { source, .. } => Some(source),
-            AssetError::Utf8 { source, .. } => Some(source),
+            Self::Io { source, .. } => Some(source),
+            Self::Utf8 { source, .. } => Some(source),
             _ => None,
         }
     }

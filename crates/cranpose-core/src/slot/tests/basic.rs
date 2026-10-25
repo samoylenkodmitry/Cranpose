@@ -99,7 +99,7 @@ fn first_composition_records_group_value_and_node() {
     assert_eq!(payload.payload_type.type_id, TypeId::of::<i32>());
     assert_eq!(
         harness.table.group_node_record_at(0, 0).lifecycle,
-        super::NodeLifecycle::Active
+        NodeLifecycle::Active
     );
 }
 
@@ -327,7 +327,7 @@ fn debug_dump_slot_entries_use_v2_native_labels() {
 
     assert!(
         rows.iter()
-            .any(|entry| entry.kind == super::SlotDebugEntryKind::Payload),
+            .any(|entry| entry.kind == SlotDebugEntryKind::Payload),
         "payload entries should still be visible in debug output"
     );
     assert!(
@@ -371,7 +371,7 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
     assert_eq!(stats.free_payload_anchor_count, 0);
     assert_eq!(stats.node_count, 1);
     assert_eq!(stats.active_anchor_count, 1);
-    assert_eq!(stats.group_record_size, mem::size_of::<GroupRecord>());
+    assert_eq!(stats.group_record_size, size_of::<GroupRecord>());
     assert_eq!(
         stats.group_heap_bytes,
         stats.group_capacity * stats.group_record_size
@@ -392,7 +392,7 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
 
 #[test]
 fn group_record_footprint_stays_bounded_until_profiling_justifies_split_storage() {
-    let group_record_size = mem::size_of::<GroupRecord>();
+    let group_record_size = size_of::<GroupRecord>();
 
     assert!(
         group_record_size <= 128,

@@ -300,7 +300,7 @@ pub trait Renderer {
     /// Implementors must read layout state from LayoutNode.layout_state() directly.
     fn rebuild_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
+        applier: &mut MemoryApplier,
         root: cranpose_core::NodeId,
         viewport: Size,
     ) -> Result<(), Self::Error>;
@@ -309,7 +309,7 @@ pub trait Renderer {
     /// one or the geometry above one. The default implementation rebuilds the whole scene.
     fn update_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
+        applier: &mut MemoryApplier,
         root: cranpose_core::NodeId,
         viewport: Size,
         updates: SceneUpdates<'_>,
@@ -322,7 +322,7 @@ pub trait Renderer {
     /// default implementation calls `update_scene_from_applier`.
     fn update_visual_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
+        applier: &mut MemoryApplier,
         root: cranpose_core::NodeId,
         viewport: Size,
         updates: SceneUpdates<'_>,

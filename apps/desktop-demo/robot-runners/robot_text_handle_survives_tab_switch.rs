@@ -35,7 +35,7 @@ pub(crate) fn main() {
             println!("\nPASS: no stuck handle survived a tab round trip");
             let _ = robot.exit();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn drag_selection_survives_tab_switch(robot: &cranpose::Robot) {

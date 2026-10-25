@@ -28,8 +28,8 @@ const DECODE_IDLE_NAP: Duration = Duration::from_millis(5);
 struct AtomicVolume(AtomicU32);
 
 impl AtomicVolume {
-    fn new(value: f32) -> AtomicVolume {
-        AtomicVolume(AtomicU32::new(value.to_bits()))
+    fn new(value: f32) -> Self {
+        Self(AtomicU32::new(value.to_bits()))
     }
 
     fn get(&self) -> f32 {
@@ -57,8 +57,8 @@ struct Shared {
 }
 
 impl Shared {
-    fn new(volume: f32, speed: f32, balance: f32) -> Shared {
-        Shared {
+    fn new(volume: f32, speed: f32, balance: f32) -> Self {
+        Self {
             generation: AtomicU64::new(0),
             frames_written: AtomicU64::new(0),
             base_nanos: AtomicU64::new(0),
@@ -131,7 +131,7 @@ impl Sink {
         speed: f32,
         balance: f32,
         output: &crate::player::OutputFactory,
-    ) -> Result<Sink, MediaError> {
+    ) -> Result<Self, MediaError> {
         let (producer, consumer) = ring::channel::<f32>(ring_capacity());
 
         let shared = Arc::new(Shared::new(volume, speed, balance));
@@ -153,7 +153,7 @@ impl Sink {
             .spawn(move || decode_loop(source, producer, decode_shared, decode_seekable, orders))
             .map_err(|error| MediaError::Failed(format!("no decode thread: {error}")))?;
 
-        Ok(Sink {
+        Ok(Self {
             device,
             shared,
             commands,
@@ -381,9 +381,9 @@ struct Converter {
 }
 
 impl Converter {
-    fn new(source: &dyn SampleSource, device_rate: u32, device_channels: usize) -> Converter {
+    fn new(source: &dyn SampleSource, device_rate: u32, device_channels: usize) -> Self {
         let source_channels = usize::from(source.channels().get());
-        Converter {
+        Self {
             source_rate: source.sample_rate().get() as f32,
             source_channels,
             device_rate: device_rate as f32,

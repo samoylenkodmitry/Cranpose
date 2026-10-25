@@ -47,7 +47,7 @@ impl ObjectId {
 pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
-    next: Cell<Option<Rc<StateRecord>>>,
+    next: Cell<Option<Rc<Self>>>,
     value: RefCell<Option<Box<dyn RecordValue>>>,
 }
 
@@ -87,8 +87,8 @@ struct StateReadFailure {
     record_chain: Vec<(SnapshotId, bool)>,
 }
 
-impl std::fmt::Display for StateReadFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for StateReadFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "Reading a state that was created after the snapshot was taken or in a snapshot that has not yet been applied\n\
@@ -112,7 +112,7 @@ impl StateRecord {
     pub(crate) fn new<T: Any + Clone>(
         snapshot_id: SnapshotId,
         value: T,
-        next: Option<Rc<StateRecord>>,
+        next: Option<Rc<Self>>,
     ) -> Rc<Self> {
         Self::with_boxed(snapshot_id, Box::new(value), next)
     }
@@ -120,7 +120,7 @@ impl StateRecord {
     fn with_boxed(
         snapshot_id: SnapshotId,
         value: Box<dyn RecordValue>,
-        next: Option<Rc<StateRecord>>,
+        next: Option<Rc<Self>>,
     ) -> Rc<Self> {
         Rc::new(Self {
             snapshot_id: Cell::new(snapshot_id),
@@ -141,14 +141,14 @@ impl StateRecord {
     }
 
     #[inline]
-    pub(crate) fn next(&self) -> Option<Rc<StateRecord>> {
+    pub(crate) fn next(&self) -> Option<Rc<Self>> {
         self.next.take().inspect(|record| {
             self.next.set(Some(Rc::clone(record)));
         })
     }
 
     #[inline]
-    pub(crate) fn set_next(&self, next: Option<Rc<StateRecord>>) {
+    pub(crate) fn set_next(&self, next: Option<Rc<Self>>) {
         self.next.set(next);
     }
 
@@ -247,7 +247,7 @@ impl StateRecord {
         drop(self.value.borrow_mut().take());
     }
 
-    pub(crate) fn assign_value(&self, source: &StateRecord) -> Result<(), StateRecordValueError> {
+    pub(crate) fn assign_value(&self, source: &Self) -> Result<(), StateRecordValueError> {
         if std::ptr::eq(self, source) {
             return match self.value.borrow().is_some() {
                 true => Ok(()),
@@ -380,7 +380,7 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
                     Rc::clone(existing)
                 });
             } else {
-                valid_record = Some(record.clone());
+                valid_record = Some(Rc::clone(&record));
             }
         }
 
@@ -838,13 +838,13 @@ impl WriteTarget<'_> {
         else {
             let current_head = self.head.clone_head();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
-            let source = refreshed.unwrap_or_else(|| current_head.clone());
+            let source = refreshed.unwrap_or_else(|| Rc::clone(&current_head));
 
             let cloned_value = source
                 .cloned_value()
                 .unwrap_or_else(|| panic!("StateRecord value missing or wrong type"));
             let new_head = StateRecord::with_boxed(snapshot_id, cloned_value, Some(current_head));
-            self.head.replace(new_head.clone());
+            self.head.replace(Rc::clone(&new_head));
             self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
             return new_head;
         };
@@ -1002,7 +1002,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             head: CurrentRecord::new(head),
             policy,
             id: ObjectId(weak_self.as_ptr() as usize),
-            weak_self: weak_self.clone(),
+            weak_self: Weak::clone(weak_self),
             apply_observer: OnceCell::new(),
             read_observation_lease: Rc::new(()),
             scope_observation_count: Cell::new(0),
@@ -1467,10 +1467,10 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
     fn invalidate_watchers(&self) {
         // A state has few watchers: their copy stays inline.
-        let (watchers, removed_count): (smallvec::SmallVec<[RecomposeScope; 4]>, usize) = {
+        let (watchers, removed_count): (SmallVec<[RecomposeScope; 4]>, usize) = {
             let mut watchers = self.watchers.borrow_mut();
             let before = watchers.len();
-            let mut live = smallvec::SmallVec::new();
+            let mut live = SmallVec::new();
             watchers.retain(|_, scope| {
                 if let Some(inner) = scope.upgrade() {
                     live.push(RecomposeScope { inner });

@@ -12,7 +12,7 @@ pub fn launch(title: &str, width: u32, height: u32) -> AppLauncher {
 }
 
 pub fn counter_demo() {
-    desktop_app::app::combined_app_with_initial_tab(Some(desktop_app::app::DemoTab::Counter));
+    desktop_app::app::combined_app_with_initial_tab(Some(DemoTab::Counter));
 }
 
 /// A robot app hook that answers only [`SET_TAB`]. Runners install it and

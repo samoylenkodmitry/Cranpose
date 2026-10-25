@@ -143,7 +143,7 @@ fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
                 None,
                 format,
                 device.adapter_info().backend,
-                crate::pipeline_recorder::PipelineRecorder::default(),
+                PipelineRecorder::default(),
             );
             if reference {
                 renderer.blur_shader = SharedShader::new(
@@ -201,7 +201,7 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                 None,
                 format,
                 backend,
-                crate::pipeline_recorder::PipelineRecorder::default(),
+                PipelineRecorder::default(),
             );
             if reference {
                 for mode in modes {
@@ -214,11 +214,7 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                         BlendMode::DstOut => &renderer.blit_pipeline_dst_out,
                         _ => &renderer.blit_pipeline,
                     };
-                    resources[1].for_draw(
-                        &crate::pipeline_recorder::PipelineRecorder::default(),
-                        backend,
-                        || dynamic,
-                    );
+                    resources[1].for_draw(&PipelineRecorder::default(), backend, || dynamic);
                 }
             }
             renderer
@@ -326,7 +322,7 @@ fn cached_blur_kernels_preserve_fractional_radii_axes_and_eviction() {
         None,
         wgpu::TextureFormat::Rgba8Unorm,
         device.adapter_info().backend,
-        crate::pipeline_recorder::PipelineRecorder::default(),
+        PipelineRecorder::default(),
     );
     for radius in [(6.25, 6.75), (6.75, 6.25)]
         .into_iter()

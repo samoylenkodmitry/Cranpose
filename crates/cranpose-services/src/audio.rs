@@ -46,11 +46,11 @@ pub struct SoundId(u32);
 
 impl SoundId {
     /// A handle that refers to no clip. Playing it is a no-op.
-    pub const NONE: SoundId = SoundId(0);
+    pub const NONE: Self = Self(0);
 
     /// Wraps a backend-assigned raw handle. Backends allocate from 1 upward.
     pub fn from_raw(raw: u32) -> Self {
-        SoundId(raw)
+        Self(raw)
     }
 
     /// The backend-assigned raw handle.
@@ -71,11 +71,11 @@ pub struct VoiceId(u64);
 
 impl VoiceId {
     /// A handle that refers to no voice. Stopping it is a no-op.
-    pub const NONE: VoiceId = VoiceId(0);
+    pub const NONE: Self = Self(0);
 
     /// Wraps a backend-assigned raw handle. Backends allocate from 1 upward.
     pub fn from_raw(raw: u64) -> Self {
-        VoiceId(raw)
+        Self(raw)
     }
 
     /// The backend-assigned raw handle.
@@ -102,19 +102,19 @@ pub enum AudioBus {
 
 impl AudioBus {
     /// Every bus, in index order.
-    pub const ALL: [AudioBus; 2] = [AudioBus::Effects, AudioBus::Music];
+    pub const ALL: [Self; 2] = [Self::Effects, Self::Music];
 
     /// The bus's dense index, for backend-side arrays.
     pub fn index(self) -> usize {
         match self {
-            AudioBus::Effects => 0,
-            AudioBus::Music => 1,
+            Self::Effects => 0,
+            Self::Music => 1,
         }
     }
 
     /// The bus for a dense index produced by [`AudioBus::index`].
-    pub fn from_index(index: usize) -> Option<AudioBus> {
-        AudioBus::ALL.get(index).copied()
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
     }
 }
 
@@ -137,7 +137,7 @@ pub struct PlaybackParams {
 
 impl PlaybackParams {
     /// The neutral parameters: unity gain, recorded pitch, centred, effects bus.
-    pub const DEFAULT: PlaybackParams = PlaybackParams {
+    pub const DEFAULT: Self = Self {
         volume: 1.0,
         rate: 1.0,
         pan: 0.0,
@@ -152,30 +152,30 @@ impl PlaybackParams {
     pub const MAX_VOLUME: f32 = 4.0;
 
     /// The neutral parameters. Same as [`PlaybackParams::DEFAULT`].
-    pub const fn new() -> PlaybackParams {
-        PlaybackParams::DEFAULT
+    pub const fn new() -> Self {
+        Self::DEFAULT
     }
 
     /// Sets the linear gain.
-    pub fn volume(mut self, volume: f32) -> PlaybackParams {
+    pub fn volume(mut self, volume: f32) -> Self {
         self.volume = volume;
         self
     }
 
     /// Sets the playback rate (and with it the pitch).
-    pub fn rate(mut self, rate: f32) -> PlaybackParams {
+    pub fn rate(mut self, rate: f32) -> Self {
         self.rate = rate;
         self
     }
 
     /// Sets the stereo position.
-    pub fn pan(mut self, pan: f32) -> PlaybackParams {
+    pub fn pan(mut self, pan: f32) -> Self {
         self.pan = pan;
         self
     }
 
     /// Sets the mix bus.
-    pub fn bus(mut self, bus: AudioBus) -> PlaybackParams {
+    pub fn bus(mut self, bus: AudioBus) -> Self {
         self.bus = bus;
         self
     }
@@ -184,7 +184,7 @@ impl PlaybackParams {
     ///
     /// A rising combo counter reads better as `pitch_semitones(combo as f32)`
     /// than as a hand-computed ratio.
-    pub fn pitch_semitones(self, semitones: f32) -> PlaybackParams {
+    pub fn pitch_semitones(self, semitones: f32) -> Self {
         let semitones = if semitones.is_finite() {
             semitones
         } else {
@@ -197,13 +197,13 @@ impl PlaybackParams {
     ///
     /// Backends call this before handing parameters to the audio thread, which
     /// is why a `NaN` rate from app arithmetic cannot wedge a voice.
-    pub fn sanitized(self) -> PlaybackParams {
+    pub fn sanitized(self) -> Self {
         fn finite(value: f32, fallback: f32) -> f32 {
             if value.is_finite() { value } else { fallback }
         }
-        PlaybackParams {
-            volume: finite(self.volume, 1.0).clamp(0.0, PlaybackParams::MAX_VOLUME),
-            rate: finite(self.rate, 1.0).clamp(PlaybackParams::MIN_RATE, PlaybackParams::MAX_RATE),
+        Self {
+            volume: finite(self.volume, 1.0).clamp(0.0, Self::MAX_VOLUME),
+            rate: finite(self.rate, 1.0).clamp(Self::MIN_RATE, Self::MAX_RATE),
             pan: finite(self.pan, 0.0).clamp(-1.0, 1.0),
             bus: self.bus,
         }
@@ -220,8 +220,8 @@ impl PlaybackParams {
 }
 
 impl Default for PlaybackParams {
-    fn default() -> PlaybackParams {
-        PlaybackParams::DEFAULT
+    fn default() -> Self {
+        Self::DEFAULT
     }
 }
 
@@ -247,7 +247,7 @@ impl AudioClip {
         samples: Vec<f32>,
         channels: u16,
         sample_rate: u32,
-    ) -> Result<AudioClip, AudioError> {
+    ) -> Result<Self, AudioError> {
         if channels == 0 || channels > 2 {
             return Err(AudioError::UnsupportedFormat(format!(
                 "clips must be mono or stereo, got {channels} channels"
@@ -267,12 +267,12 @@ impl AudioClip {
                 samples.len()
             )));
         }
-        if samples.len() / usize::from(channels) > AudioClip::MAX_FRAMES {
+        if samples.len() / usize::from(channels) > Self::MAX_FRAMES {
             return Err(AudioError::Decode(
                 "clip exceeds the maximum in-memory length".to_string(),
             ));
         }
-        Ok(AudioClip {
+        Ok(Self {
             samples: samples.into(),
             channels,
             sample_rate,
@@ -284,7 +284,7 @@ impl AudioClip {
     ///
     /// Run this wherever the bytes arrive — including a worker thread — and
     /// hand the result to [`AudioPlayer::load_clip`] when it is ready.
-    pub fn decode(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         if wav::is_wav(bytes) {
             wav::decode(bytes)
         } else {
@@ -460,8 +460,8 @@ pub struct NoopAudioPlayer {
 
 impl NoopAudioPlayer {
     /// Creates a player that accepts everything and produces no sound.
-    pub fn new() -> NoopAudioPlayer {
-        NoopAudioPlayer {
+    pub fn new() -> Self {
+        Self {
             next_sound: Mutex::new(0),
             next_voice: Mutex::new(0),
             master: Mutex::new(1.0),
@@ -534,11 +534,9 @@ static DEFAULT_AUDIO: OnceLock<AudioPlayerRef> = OnceLock::new();
 struct PlatformAudioPlayer;
 
 fn registered_audio() -> AudioPlayerRef {
-    PLATFORM_AUDIO.get_or_warn("audio").unwrap_or_else(|| {
-        NOOP_AUDIO
-            .get_or_init(|| Arc::new(NoopAudioPlayer::new()))
-            .clone()
-    })
+    PLATFORM_AUDIO
+        .get_or_warn("audio")
+        .unwrap_or_else(|| Arc::clone(NOOP_AUDIO.get_or_init(|| Arc::new(NoopAudioPlayer::new()))))
 }
 
 impl AudioPlayer for PlatformAudioPlayer {
@@ -623,9 +621,7 @@ pub fn clear_platform_audio() {
 
 /// The installed platform player, or a no-op one.
 pub fn default_audio() -> AudioPlayerRef {
-    DEFAULT_AUDIO
-        .get_or_init(|| Arc::new(PlatformAudioPlayer))
-        .clone()
+    Arc::clone(DEFAULT_AUDIO.get_or_init(|| Arc::new(PlatformAudioPlayer)))
 }
 
 /// The CompositionLocal descendants read to reach the audio player.
@@ -639,7 +635,7 @@ pub fn local_audio() -> CompositionLocal<AudioPlayerRef> {
 /// Provides the installed audio player to `content`.
 #[composable]
 pub fn ProvideAudio(content: impl FnOnce()) {
-    let player = cranpose_core::remember(default_audio).with(|state| state.clone());
+    let player = cranpose_core::remember(default_audio).with(|state| Arc::clone(state));
     let local = local_audio();
     CompositionLocalProvider([local.provides(player)], move || {
         content();
@@ -663,7 +659,7 @@ pub struct SoundSpec<'a> {
 
 impl<'a> SoundSpec<'a> {
     /// A cue at unity gain on the effects bus.
-    pub fn new(name: &'static str, bytes: &'a [u8]) -> SoundSpec<'a> {
+    pub fn new(name: &'static str, bytes: &'a [u8]) -> Self {
         SoundSpec {
             name,
             bytes,
@@ -673,13 +669,13 @@ impl<'a> SoundSpec<'a> {
     }
 
     /// Sets the cue's own level.
-    pub fn volume(mut self, base_volume: f32) -> SoundSpec<'a> {
+    pub fn volume(mut self, base_volume: f32) -> Self {
         self.base_volume = base_volume;
         self
     }
 
     /// Sets the cue's bus.
-    pub fn bus(mut self, bus: AudioBus) -> SoundSpec<'a> {
+    pub fn bus(mut self, bus: AudioBus) -> Self {
         self.bus = bus;
         self
     }
@@ -735,7 +731,7 @@ pub struct SoundBank {
 impl SoundBank {
     /// Loads every spec through `player`, collecting the ones that fail rather
     /// than aborting the whole bank.
-    pub fn load(player: AudioPlayerRef, specs: &[SoundSpec<'_>]) -> SoundBank {
+    pub fn load(player: AudioPlayerRef, specs: &[SoundSpec<'_>]) -> Self {
         let mut entries = Vec::with_capacity(specs.len());
         let mut failures = Vec::new();
         for spec in specs {
@@ -760,7 +756,7 @@ impl SoundBank {
                 }
             }
         }
-        SoundBank {
+        Self {
             inner: Rc::new(SoundBankInner {
                 player,
                 entries,

@@ -99,13 +99,13 @@ impl SystemClock {
     /// The process-wide system clock.
     pub fn shared() -> Arc<dyn Clock> {
         static SHARED: OnceLock<Arc<SystemClock>> = OnceLock::new();
-        let clock = SHARED.get_or_init(|| Arc::new(SystemClock::start()));
+        let clock = SHARED.get_or_init(|| Arc::new(Self::start()));
         Arc::clone(clock) as Arc<dyn Clock>
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn start() -> Self {
-        let clock = SystemClock {
+        let clock = Self {
             started: Instant::now(),
             timers: Arc::new((Mutex::new(TimerHeap::default()), Condvar::new())),
         };

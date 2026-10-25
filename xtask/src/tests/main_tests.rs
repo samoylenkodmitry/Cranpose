@@ -2366,7 +2366,7 @@ fn any_intersect_true_only_when_one_range_matches() {
 #[test]
 fn cargo_bin_dir_honors_cargo_home() {
     let dir = gate_diff::cargo_bin_dir_for(
-        Some(std::ffi::OsString::from("/scratch/cargo")),
+        Some(OsString::from("/scratch/cargo")),
         PathBuf::from("/unused"),
     );
     assert_eq!(dir, PathBuf::from("/scratch/cargo/bin"));

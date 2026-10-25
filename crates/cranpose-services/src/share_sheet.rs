@@ -122,7 +122,7 @@ pub fn local_share_sheet() -> CompositionLocal<ShareSheetRef> {
 /// Provides the platform share sheet to `content` through [`local_share_sheet`].
 #[composable]
 pub fn ProvideShareSheet(content: impl FnOnce()) {
-    let share_sheet = cranpose_core::remember(default_share_sheet).with(|state| state.clone());
+    let share_sheet = cranpose_core::remember(default_share_sheet).with(|state| Rc::clone(state));
     let local = local_share_sheet();
 
     CompositionLocalProvider([local.provides(share_sheet)], move || {

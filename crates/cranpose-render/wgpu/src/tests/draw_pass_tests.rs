@@ -20,7 +20,7 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
             });
         }
         RunDraw::whole(
-            std::sync::Arc::new(recorder),
+            Arc::new(recorder),
             Placement::at(Point::default(), None, None),
         )
         .unwrap()

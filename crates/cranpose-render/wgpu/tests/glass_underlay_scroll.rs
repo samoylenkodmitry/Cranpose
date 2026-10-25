@@ -160,10 +160,7 @@ fn a_glass_bar_with_a_nested_glass_button_follows_the_feed_scrolling_beneath_it(
         .borrow()
         .expect("the feed remembers its scroll state");
     for step in 1..=6 {
-        shell
-            .app_context()
-            .clone()
-            .enter(|| scroll.scroll_to(step as f32 * SCROLL_STEP));
+        Rc::clone(shell.app_context()).enter(|| scroll.scroll_to(step as f32 * SCROLL_STEP));
         let frame = capture(&mut shell);
         let current = lane_pixels(&frame, FEED_LANE);
         let current_open = lane_pixels(&frame, OPEN_LANE);
@@ -244,9 +241,7 @@ fn a_liquid_glass_bar_with_a_glass_button_follows_a_lazy_feed_scrolling_beneath_
     let mut previous_open = lane_pixels(&first, OPEN_LANE);
     let list_state = (*list_slot.borrow()).expect("the feed remembers its list state");
     for step in 1..=6 {
-        shell
-            .app_context()
-            .clone()
+        Rc::clone(shell.app_context())
             .enter(|| list_state.scroll_to_item(0, step as f32 * SCROLL_STEP));
         let frame = capture(&mut shell);
         let current = lane_pixels(&frame, FEED_LANE);

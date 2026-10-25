@@ -159,5 +159,5 @@ pub(crate) fn main() {
             println!("✓ Conditional odd text stayed at the top of Counter App");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

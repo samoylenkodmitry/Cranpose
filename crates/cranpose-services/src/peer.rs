@@ -57,7 +57,7 @@ pub enum PeerError {
 
 impl From<std::io::Error> for PeerError {
     fn from(error: std::io::Error) -> Self {
-        PeerError::Io(error.to_string())
+        Self::Io(error.to_string())
     }
 }
 
@@ -123,13 +123,13 @@ impl PeerServer {
         bind_addr: impl ToSocketAddrs,
         token: impl Into<String>,
         resolver: SourceResolver,
-    ) -> Result<PeerServer, PeerError> {
+    ) -> Result<Self, PeerError> {
         let listener = TcpListener::bind(bind_addr)?;
         let addr = listener.local_addr()?;
         let running = Arc::new(AtomicBool::new(true));
         let token = token.into();
 
-        let loop_running = running.clone();
+        let loop_running = Arc::clone(&running);
         std::thread::Builder::new()
             .name("cranpose-peer".to_string())
             .spawn(move || {
@@ -139,7 +139,7 @@ impl PeerServer {
                     }
                     let Ok(stream) = stream else { continue };
                     let token = token.clone();
-                    let resolver = resolver.clone();
+                    let resolver = Arc::clone(&resolver);
                     let _ = std::thread::Builder::new()
                         .name("cranpose-peer-conn".to_string())
                         .spawn(move || {
@@ -149,7 +149,7 @@ impl PeerServer {
             })
             .map_err(|error| PeerError::Io(error.to_string()))?;
 
-        Ok(PeerServer { addr, running })
+        Ok(Self { addr, running })
     }
 
     /// The bound address (use its `port()` to advertise).

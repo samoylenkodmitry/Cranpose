@@ -223,9 +223,9 @@ impl Default for SpanStyle {
 impl SpanStyle {
     /// Returns a style where each field set in `other` replaces the one in `self`. Fields unset
     /// in `other` keep the value of `self`.
-    pub fn merge(&self, other: &SpanStyle) -> SpanStyle {
+    pub fn merge(&self, other: &Self) -> Self {
         let (merged_color, merged_brush) = merge_foreground_style(self, other);
-        SpanStyle {
+        Self {
             color: merged_color,
             brush: merged_brush,
             alpha: other.alpha.or(self.alpha),
@@ -259,7 +259,7 @@ impl SpanStyle {
     }
 
     /// Same as [`SpanStyle::merge`]. Compose's `SpanStyle.plus`.
-    pub fn plus(&self, other: &SpanStyle) -> SpanStyle {
+    pub fn plus(&self, other: &Self) -> Self {
         self.merge(other)
     }
 
@@ -344,8 +344,8 @@ impl Default for ParagraphStyle {
 impl ParagraphStyle {
     /// Returns a style where each field set in `other` replaces the one in `self`. Fields unset
     /// in `other` keep the value of `self`.
-    pub fn merge(&self, other: &ParagraphStyle) -> ParagraphStyle {
-        ParagraphStyle {
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
             text_align: merge_text_align(self.text_align, other.text_align),
             text_direction: merge_text_direction(self.text_direction, other.text_direction),
             line_height: merge_text_unit(self.line_height, other.line_height),
@@ -359,7 +359,7 @@ impl ParagraphStyle {
     }
 
     /// Same as [`ParagraphStyle::merge`]. Compose's `ParagraphStyle.plus`.
-    pub fn plus(&self, other: &ParagraphStyle) -> ParagraphStyle {
+    pub fn plus(&self, other: &Self) -> Self {
         self.merge(other)
     }
 
@@ -402,15 +402,15 @@ impl TextStyle {
 
     /// Returns a style that merges the span and paragraph styles of `other` over those of
     /// `self`.
-    pub fn merge(&self, other: &TextStyle) -> TextStyle {
-        TextStyle {
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
             span_style: self.span_style.merge(&other.span_style),
             paragraph_style: self.paragraph_style.merge(&other.paragraph_style),
         }
     }
 
     /// Same as [`TextStyle::merge`]. Compose's `TextStyle.plus`.
-    pub fn plus(&self, other: &TextStyle) -> TextStyle {
+    pub fn plus(&self, other: &Self) -> Self {
         self.merge(other)
     }
 
@@ -745,20 +745,17 @@ fn hash_paragraph_style<H: Hasher>(paragraph: &ParagraphStyle, state: &mut H) {
 pub fn text_align_fraction(text_style: &TextStyle, text: &str) -> f32 {
     let paragraph_style = &text_style.paragraph_style;
     match paragraph_style.text_align {
-        super::TextAlign::Left => 0.0,
-        super::TextAlign::Right => 1.0,
-        super::TextAlign::Center => 0.5,
-        super::TextAlign::Start
-        | super::TextAlign::End
-        | super::TextAlign::Justify
-        | super::TextAlign::Unspecified => {
+        TextAlign::Left => 0.0,
+        TextAlign::Right => 1.0,
+        TextAlign::Center => 0.5,
+        TextAlign::Start | TextAlign::End | TextAlign::Justify | TextAlign::Unspecified => {
             let direction =
                 super::resolve_text_direction(text, Some(paragraph_style.text_direction));
             let start = match direction {
                 super::ResolvedTextDirection::Ltr => 0.0,
                 super::ResolvedTextDirection::Rtl => 1.0,
             };
-            if paragraph_style.text_align == super::TextAlign::End {
+            if paragraph_style.text_align == TextAlign::End {
                 1.0 - start
             } else {
                 start

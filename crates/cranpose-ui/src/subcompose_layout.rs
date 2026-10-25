@@ -291,7 +291,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             .as_ref()
             .map_or(
                 0,
-                cranpose_core::CapturedCompositionContext::owner_chain_deactivation_epoch,
+                CapturedCompositionContext::owner_chain_deactivation_epoch,
             )
     }
 
@@ -808,7 +808,7 @@ impl SubcomposeLayoutNode {
     #[doc(hidden)]
     pub fn debug_slot_table_for_slot(
         &self,
-        slot_id: cranpose_core::SlotId,
+        slot_id: SlotId,
     ) -> Option<Vec<cranpose_core::SlotDebugEntry>> {
         self.inner.borrow().state.debug_slot_table_for_slot(slot_id)
     }
@@ -816,7 +816,7 @@ impl SubcomposeLayoutNode {
     #[doc(hidden)]
     pub fn debug_slot_table_groups_for_slot(
         &self,
-        slot_id: cranpose_core::SlotId,
+        slot_id: SlotId,
     ) -> Option<Vec<cranpose_core::subcompose::DebugSlotGroup>> {
         self.inner
             .borrow()
@@ -840,7 +840,7 @@ impl SubcomposeLayoutNode {
     /// A context under a changed static composition local makes every slot
     /// compose again, running every body it holds, as Compose forces a
     /// `SubcomposeLayout`'s children.
-    pub fn set_captured_context(&mut self, context: cranpose_core::CapturedCompositionContext) {
+    pub fn set_captured_context(&mut self, context: CapturedCompositionContext) {
         let locals_changed = context.locals_changed();
         self.inner.borrow_mut().captured_context = Some(context);
         if locals_changed {
@@ -1377,7 +1377,7 @@ pub struct SubcomposeLayoutNodeHandle {
 }
 
 impl SubcomposeLayoutNodeHandle {
-    pub(crate) fn note_slot_host(&self, slot_host: &Rc<cranpose_core::SlotsHost>) {
+    pub(crate) fn note_slot_host(&self, slot_host: &Rc<SlotsHost>) {
         let Ok(inner) = self.inner.try_borrow() else {
             return;
         };
@@ -1573,7 +1573,7 @@ struct SubcomposeLayoutNodeInner {
     last_placements: Rc<Vec<NodeId>>,
     measure_scratch: MeasureScratch,
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
-    captured_context: Option<cranpose_core::CapturedCompositionContext>,
+    captured_context: Option<CapturedCompositionContext>,
     density: crate::density::Density,
 }
 

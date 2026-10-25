@@ -40,11 +40,11 @@ pub(super) fn find_previous_record(
                     .as_ref()
                     .is_none_or(|current| current.snapshot_id() < id);
                 if replace {
-                    best = Some(record.clone());
+                    best = Some(Rc::clone(&record));
                 }
             }
             if fallback.is_none() {
-                fallback = Some(record.clone());
+                fallback = Some(Rc::clone(&record));
             }
         }
         cursor = record.next();
@@ -157,13 +157,13 @@ impl MutableSnapshot {
 
     /// Returns this snapshot, which is its own root.
     pub fn root_mutable(self: &Rc<Self>) -> Rc<Self> {
-        self.clone()
+        Rc::clone(self)
     }
 
     /// Runs `f` with this snapshot as the current snapshot of the thread and returns its result.
     /// The previous current snapshot is restored when `f` returns.
     pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
-        enter_snapshot_scope(AnySnapshot::Mutable(self.clone()), f)
+        enter_snapshot_scope(AnySnapshot::Mutable(Rc::clone(self)), f)
     }
 
     /// Takes a read-only snapshot of this snapshot's view of state. Reads inside the new snapshot
@@ -266,7 +266,7 @@ impl MutableSnapshot {
         let mut modified_objects: Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> =
             Vec::with_capacity(modified.len());
         for (&obj_id, (obj, writer_id)) in modified.iter() {
-            modified_objects.push((obj_id, obj.clone(), *writer_id));
+            modified_objects.push((obj_id, Rc::clone(obj), *writer_id));
         }
 
         drop(modified);
@@ -276,9 +276,9 @@ impl MutableSnapshot {
         let parent_invalid = parent_snapshot.invalid();
         drop(parent_snapshot);
 
-        let next_invalid = super::runtime::open_snapshots().clear(parent_snapshot_id);
+        let next_invalid = runtime::open_snapshots().clear(parent_snapshot_id);
         let this_invalid_for_optimistic = self.state.invalid.borrow().clone();
-        let optimistic = super::optimistic_merges(
+        let optimistic = optimistic_merges(
             parent_snapshot_id,
             self.base_parent_id,
             &modified_objects,
@@ -314,7 +314,7 @@ impl MutableSnapshot {
             if !found_base || previous.snapshot_id() == PREEXISTING_SNAPSHOT_ID {
                 operations.push(ApplyOperation::PromoteChild {
                     object_id: *obj_id,
-                    state: state.clone(),
+                    state: Rc::clone(state),
                     writer_id: *writer_id,
                 });
                 continue;
@@ -323,7 +323,7 @@ impl MutableSnapshot {
             if Rc::ptr_eq(&current, &previous) {
                 operations.push(ApplyOperation::PromoteChild {
                     object_id: *obj_id,
-                    state: state.clone(),
+                    state: Rc::clone(state),
                     writer_id: *writer_id,
                 });
                 continue;
@@ -349,22 +349,22 @@ impl MutableSnapshot {
             if Rc::ptr_eq(&merged, &applied) {
                 operations.push(ApplyOperation::PromoteChild {
                     object_id: *obj_id,
-                    state: state.clone(),
+                    state: Rc::clone(state),
                     writer_id: *writer_id,
                 });
             } else if Rc::ptr_eq(&merged, &current) {
                 operations.push(ApplyOperation::PromoteExisting {
                     object_id: *obj_id,
-                    state: state.clone(),
+                    state: Rc::clone(state),
                     source_id: current.snapshot_id(),
-                    applied: applied.clone(),
+                    applied: Rc::clone(&applied),
                 });
             } else {
                 operations.push(ApplyOperation::CommitMerged {
                     object_id: *obj_id,
-                    state: state.clone(),
-                    merged: merged.clone(),
-                    applied: applied.clone(),
+                    state: Rc::clone(state),
+                    merged: Rc::clone(&merged),
+                    applied: Rc::clone(&applied),
                 });
             }
         }
@@ -414,7 +414,7 @@ impl MutableSnapshot {
         }
 
         for (obj_id, _, head_id) in &applied_info {
-            super::set_last_write(*obj_id, *head_id);
+            set_last_write(*obj_id, *head_id);
         }
 
         self.applied.set(true);
@@ -429,9 +429,9 @@ impl MutableSnapshot {
 
         let observer_states: Vec<Rc<dyn StateObject>> = applied_info
             .iter()
-            .map(|(_, state, _)| state.clone())
+            .map(|(_, state, _)| Rc::clone(state))
             .collect();
-        super::notify_apply_observers(&observer_states, this_id);
+        notify_apply_observers(&observer_states, this_id);
         SnapshotApplyResult::Success
     }
 
@@ -487,7 +487,7 @@ impl MutableSnapshot {
         let modified = self.state.modified.borrow();
         modified
             .iter()
-            .map(|(&obj_id, (state, writer_id))| (obj_id, state.clone(), *writer_id))
+            .map(|(&obj_id, (state, writer_id))| (obj_id, Rc::clone(state), *writer_id))
             .collect()
     }
 

@@ -161,7 +161,7 @@ pub(crate) fn clear_pending_android_jni_exception(env: &mut Env<'_>) {
 
 pub(crate) fn load_cranpose_java_class<'local>(
     env: &mut Env<'local>,
-    activity: &jni::objects::JObject<'local>,
+    activity: &JObject<'local>,
     class_name: &str,
 ) -> Result<JClass<'local>, String> {
     use jni::objects::JValue;

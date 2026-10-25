@@ -3,7 +3,7 @@ use super::BlurUniforms;
 #[test]
 fn blur_uniforms_use_vec4_packing_for_gl_backends() {
     assert_eq!(
-        std::mem::size_of::<BlurUniforms>(),
+        size_of::<BlurUniforms>(),
         64 + 16 * super::BLUR_TAP_PAIRS + 16
     );
     assert_eq!(std::mem::offset_of!(BlurUniforms, direction_and_radius), 0);

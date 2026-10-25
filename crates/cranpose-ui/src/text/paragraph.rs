@@ -110,17 +110,13 @@ impl TextDirection {
     /// uses the variant's fallback, which is LTR except for `ContentOrRtl`.
     pub fn resolve(self, text: &str) -> ResolvedTextDirection {
         match self {
-            TextDirection::Ltr => ResolvedTextDirection::Ltr,
-            TextDirection::Rtl => ResolvedTextDirection::Rtl,
-            TextDirection::Content | TextDirection::ContentOrLtr => {
+            Self::Ltr => ResolvedTextDirection::Ltr,
+            Self::Rtl => ResolvedTextDirection::Rtl,
+            Self::Content | Self::ContentOrLtr => {
                 resolve_content_direction(text, ResolvedTextDirection::Ltr)
             }
-            TextDirection::ContentOrRtl => {
-                resolve_content_direction(text, ResolvedTextDirection::Rtl)
-            }
-            TextDirection::Unspecified => {
-                resolve_content_direction(text, ResolvedTextDirection::Ltr)
-            }
+            Self::ContentOrRtl => resolve_content_direction(text, ResolvedTextDirection::Rtl),
+            Self::Unspecified => resolve_content_direction(text, ResolvedTextDirection::Ltr),
         }
     }
 }
@@ -132,7 +128,7 @@ impl LineBreak {
     }
 
     /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
-    pub fn take_or_else(self, fallback: impl FnOnce() -> LineBreak) -> LineBreak {
+    pub fn take_or_else(self, fallback: impl FnOnce() -> Self) -> Self {
         if self.is_specified() {
             self
         } else {
@@ -148,7 +144,7 @@ impl Hyphens {
     }
 
     /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
-    pub fn take_or_else(self, fallback: impl FnOnce() -> Hyphens) -> Hyphens {
+    pub fn take_or_else(self, fallback: impl FnOnce() -> Self) -> Self {
         if self.is_specified() {
             self
         } else {

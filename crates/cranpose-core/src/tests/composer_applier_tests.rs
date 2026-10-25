@@ -80,7 +80,7 @@ fn slots_host_into_table_reports_live_host_references() {
 #[test]
 fn slots_host_reset_reports_active_pass() {
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
-    slots_host.begin_pass(crate::slot::SlotPassMode::Compose, &Rc::default());
+    slots_host.begin_pass(slot::SlotPassMode::Compose, &Rc::default());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slots_host.reset()));
 
@@ -101,10 +101,10 @@ fn slots_host_reset_reports_active_pass() {
 #[test]
 fn slots_host_begin_pass_while_active_is_noop() {
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
-    slots_host.begin_pass(crate::slot::SlotPassMode::Compose, &Rc::default());
+    slots_host.begin_pass(slot::SlotPassMode::Compose, &Rc::default());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        slots_host.begin_pass(crate::slot::SlotPassMode::Recompose, &Rc::default());
+        slots_host.begin_pass(slot::SlotPassMode::Recompose, &Rc::default());
     }));
 
     slots_host.abandon_active_pass();
@@ -116,7 +116,7 @@ fn slots_host_begin_pass_while_active_is_noop() {
 
 #[test]
 fn slots_host_into_table_does_not_transfer_runtime_state_through_slot_table() {
-    let state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let state = Rc::new(composer::ComposerRuntimeState::default());
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
     state.bind_slots_host(&slots_host);
 
@@ -141,8 +141,8 @@ fn slots_host_into_table_does_not_transfer_runtime_state_through_slot_table() {
 
 #[test]
 fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
-    let owner_state = Rc::new(crate::composer::ComposerRuntimeState::default());
-    let other_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let owner_state = Rc::new(composer::ComposerRuntimeState::default());
+    let other_state = Rc::new(composer::ComposerRuntimeState::default());
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
     let original_storage_key = slots_host.storage_key();
     let owner_applier: Rc<dyn ApplierHost> =
@@ -184,16 +184,16 @@ fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
 struct MismatchedSlotPassFixture {
     composer: Composer,
     mismatched_host: Rc<SlotsHost>,
-    owner_state: Rc<crate::composer::ComposerRuntimeState>,
-    other_state: Rc<crate::composer::ComposerRuntimeState>,
+    owner_state: Rc<composer::ComposerRuntimeState>,
+    other_state: Rc<composer::ComposerRuntimeState>,
     original_storage_key: usize,
     _owner_applier: Rc<dyn ApplierHost>,
     _runtime: Runtime,
 }
 
 fn mismatched_slot_pass_fixture() -> MismatchedSlotPassFixture {
-    let owner_state = Rc::new(crate::composer::ComposerRuntimeState::default());
-    let other_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let owner_state = Rc::new(composer::ComposerRuntimeState::default());
+    let other_state = Rc::new(composer::ComposerRuntimeState::default());
     let mismatched_host = Rc::new(SlotsHost::new(SlotTable::new()));
     let original_storage_key = mismatched_host.storage_key();
     let owner_applier: Rc<dyn ApplierHost> =
@@ -220,7 +220,7 @@ fn mismatched_slot_pass_fixture() -> MismatchedSlotPassFixture {
 
 fn inspect_mismatched_slot_pass_host(
     composer: &Composer,
-    other_state: &Rc<crate::composer::ComposerRuntimeState>,
+    other_state: &Rc<composer::ComposerRuntimeState>,
     mismatched_host: &Rc<SlotsHost>,
 ) -> (usize, bool, bool, bool) {
     let active_host = composer.active_slots_host();
@@ -276,7 +276,7 @@ fn try_slot_host_pass_quarantines_mismatched_bound_host() {
         .composer
         .try_with_slot_host_pass(
             Rc::clone(&fixture.mismatched_host),
-            crate::slot::SlotPassMode::Compose,
+            slot::SlotPassMode::Compose,
             |composer| {
                 inspect_mismatched_slot_pass_host(
                     composer,
@@ -305,7 +305,7 @@ fn slot_host_pass_wrapper_quarantines_mismatched_bound_host() {
         _,
     ) = fixture.composer.with_slot_host_pass(
         Rc::clone(&fixture.mismatched_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |composer| {
             inspect_mismatched_slot_pass_host(
                 composer,
@@ -403,13 +403,13 @@ fn memory_applier_borrows_dense_and_high_id_nodes_together() {
     applier.state.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
     let high = applier.create(Box::new(Value(11)));
 
-    let first: &dyn std::any::Any = applier.get_ref(dense).expect("dense node");
-    let second: &dyn std::any::Any = applier.get_ref(high).expect("sparse node");
+    let first: &dyn Any = applier.get_ref(dense).expect("dense node");
+    let second: &dyn Any = applier.get_ref(high).expect("sparse node");
     assert_eq!(first.downcast_ref::<Value>().expect("value node").0, 7);
     assert_eq!(second.downcast_ref::<Value>().expect("value node").0, 11);
     assert!(std::ptr::eq(
         first.downcast_ref::<Value>().expect("value node"),
-        (applier.get_ref(dense).expect("same node") as &dyn std::any::Any)
+        (applier.get_ref(dense).expect("same node") as &dyn Any)
             .downcast_ref::<Value>()
             .expect("value node"),
     ));
@@ -453,7 +453,7 @@ fn slot_pass_finalization_error_returns_from_try_pass() {
         let (node_id, _) = composer
             .try_with_slot_host_pass(
                 Rc::clone(&slots_host),
-                crate::slot::SlotPassMode::Compose,
+                slot::SlotPassMode::Compose,
                 |composer| {
                     composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                         composer.emit_node(TestDummyNode::default)
@@ -478,7 +478,7 @@ fn slot_pass_finalization_error_returns_from_try_pass() {
         setup_composer(&mut slots, &mut applier, handle, None);
     let result = composer.try_with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |_| {},
     );
 
@@ -499,7 +499,7 @@ fn slot_pass_wrapper_returns_body_result_after_finalization_error() {
         let (node_id, _) = composer
             .try_with_slot_host_pass(
                 Rc::clone(&slots_host),
-                crate::slot::SlotPassMode::Compose,
+                slot::SlotPassMode::Compose,
                 |composer| {
                     composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                         composer.emit_node(TestDummyNode::default)
@@ -522,11 +522,8 @@ fn slot_pass_wrapper_returns_body_result_after_finalization_error() {
 
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
-    let (result, outcome) = composer.with_slot_host_pass(
-        Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
-        |_| 42,
-    );
+    let (result, outcome) =
+        composer.with_slot_host_pass(Rc::clone(&slots_host), slot::SlotPassMode::Compose, |_| 42);
 
     assert_eq!(result, 42);
     assert!(!outcome.compacted);
@@ -550,7 +547,7 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
 
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 let child_id = composer.emit_node(|| TestDummyNode);
@@ -617,7 +614,7 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
 
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 composer.push_parent(parent_id);
@@ -929,7 +926,7 @@ fn emitted_node_replacement_removes_displaced_node() {
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         let (id, _) = composer.with_slot_host_pass(
             Rc::clone(&slots_host),
-            crate::slot::SlotPassMode::Compose,
+            slot::SlotPassMode::Compose,
             |composer| {
                 composer.with_group(GROUP_KEY, |composer| {
                     composer.emit_node(|| UnmountTrackingNode::new(Rc::clone(&unmounts)))
@@ -951,7 +948,7 @@ fn emitted_node_replacement_removes_displaced_node() {
             setup_composer(&mut slots, &mut applier, handle, None);
         let (id, _) = composer.with_slot_host_pass(
             Rc::clone(&slots_host),
-            crate::slot::SlotPassMode::Compose,
+            slot::SlotPassMode::Compose,
             |composer| {
                 composer.with_group(GROUP_KEY, |composer| {
                     composer.emit_node(TestDummyNode::default)
@@ -990,8 +987,8 @@ fn cold_recycled_nodes_are_not_reused_in_same_frame() {
     struct RecyclableTestNode;
 
     impl Node for RecyclableTestNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
     }
 
@@ -1002,7 +999,7 @@ fn cold_recycled_nodes_are_not_reused_in_same_frame() {
 
     assert!(
         applier
-            .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+            .take_recycled_node(TypeId::of::<RecyclableTestNode>())
             .is_none(),
         "cold shells removed in the current frame must not be reused immediately",
     );
@@ -1015,8 +1012,8 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
     struct SeedableNode;
 
     impl Node for SeedableNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1029,7 +1026,7 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
     }
 
     let mut applier = test_applier();
-    let key = std::any::TypeId::of::<SeedableNode>();
+    let key = TypeId::of::<SeedableNode>();
     let fresh = Box::new(SeedableNode);
 
     applier.record_fresh_recyclable_creation(key);
@@ -1060,7 +1057,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
-    let key = std::any::TypeId::of::<DesiredNode>();
+    let key = TypeId::of::<DesiredNode>();
     applier
         .state
         .recycled_nodes
@@ -1072,7 +1069,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         setup_composer(&mut slots, &mut applier, handle, None);
     let (node_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 composer.emit_recyclable_node(
@@ -1123,7 +1120,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
     let live_id = applier.create(Box::new(ExistingNode));
-    let key = std::any::TypeId::of::<DesiredNode>();
+    let key = TypeId::of::<DesiredNode>();
     applier
         .state
         .recycled_nodes
@@ -1142,7 +1139,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
         setup_composer(&mut slots, &mut applier, handle, None);
     let (node_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 composer.emit_recyclable_node(
@@ -1190,8 +1187,8 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
     struct RecyclableTestNode;
 
     impl Node for RecyclableTestNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
     }
 
@@ -1201,11 +1198,11 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
     let next_stable_id_before_remove = applier.debug_stats().next_stable_id;
 
     applier.remove(stable_id).expect("remove recyclable node");
-    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<RecyclableTestNode>());
+    applier.record_fresh_recyclable_creation(TypeId::of::<RecyclableTestNode>());
     applier.clear_recycled_nodes();
 
     let recycled = applier
-        .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+        .take_recycled_node(TypeId::of::<RecyclableTestNode>())
         .expect("recycled node should be available after the frame boundary");
     assert_eq!(recycled.stable_id(), stable_id);
     assert_eq!(applier.node_generation(stable_id), 1);
@@ -1271,8 +1268,8 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
     struct RecyclableTestNode;
 
     impl Node for RecyclableTestNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
     }
 
@@ -1281,11 +1278,11 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
     let stable_id = applier.create(Box::new(RecyclableTestNode));
 
     applier.remove(stable_id).expect("remove recyclable node");
-    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<RecyclableTestNode>());
+    applier.record_fresh_recyclable_creation(TypeId::of::<RecyclableTestNode>());
     applier.clear_recycled_nodes();
 
     let recycled = applier
-        .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+        .take_recycled_node(TypeId::of::<RecyclableTestNode>())
         .expect("warm recyclable node");
     let (reused_id, node, warm_origin) = recycled.into_parts();
     assert!(
@@ -1301,7 +1298,7 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
         .expect("remove warm recyclable node again");
 
     let recycled_again = applier
-        .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+        .take_recycled_node(TypeId::of::<RecyclableTestNode>())
         .expect("warm-origin shell should be reusable in the same frame");
     assert_eq!(recycled_again.stable_id(), stable_id);
 }
@@ -1312,8 +1309,8 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
     struct LimitedRecycleNode;
 
     impl Node for LimitedRecycleNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1340,8 +1337,8 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
         "pending shells still respect the configured pool bound inside the frame",
     );
 
-    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<LimitedRecycleNode>());
-    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<LimitedRecycleNode>());
+    applier.record_fresh_recyclable_creation(TypeId::of::<LimitedRecycleNode>());
+    applier.record_fresh_recyclable_creation(TypeId::of::<LimitedRecycleNode>());
     applier.clear_recycled_nodes();
 
     assert_eq!(
@@ -1351,10 +1348,10 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
     );
 
     let most_recent = applier
-        .take_recycled_node(std::any::TypeId::of::<LimitedRecycleNode>())
+        .take_recycled_node(TypeId::of::<LimitedRecycleNode>())
         .expect("most recent recycled node");
     let next_recent = applier
-        .take_recycled_node(std::any::TypeId::of::<LimitedRecycleNode>())
+        .take_recycled_node(TypeId::of::<LimitedRecycleNode>())
         .expect("next recent recycled node");
 
     assert_eq!(most_recent.stable_id(), third);
@@ -1367,8 +1364,8 @@ fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
     struct LimitedRecycleNode;
 
     impl Node for LimitedRecycleNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1401,8 +1398,8 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
     struct LimitedRecycleNode;
 
     impl Node for LimitedRecycleNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1415,7 +1412,7 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
     let recycled_id = applier.create(Box::new(LimitedRecycleNode));
 
     applier.remove(recycled_id).expect("remove recyclable node");
-    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<LimitedRecycleNode>());
+    applier.record_fresh_recyclable_creation(TypeId::of::<LimitedRecycleNode>());
     applier.clear_recycled_nodes();
 
     assert_eq!(
@@ -1439,8 +1436,8 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
     struct PrototypeRecycleNode;
 
     impl Node for PrototypeRecycleNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1453,7 +1450,7 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
     }
 
     let mut applier = test_applier();
-    let key = std::any::TypeId::of::<PrototypeRecycleNode>();
+    let key = TypeId::of::<PrototypeRecycleNode>();
     let seed = PrototypeRecycleNode;
     let shell = seed
         .rehouse_for_recycle()
@@ -1490,8 +1487,8 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
     struct LargeReserveNode;
 
     impl Node for LargeReserveNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1504,7 +1501,7 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
     }
 
     let mut applier = test_applier();
-    let key = std::any::TypeId::of::<LargeReserveNode>();
+    let key = TypeId::of::<LargeReserveNode>();
     let shell = LargeReserveNode
         .rehouse_for_recycle()
         .expect("large reserve node should provide a compact shell");
@@ -1537,8 +1534,8 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
     struct LargeReserveNode;
 
     impl Node for LargeReserveNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
+        fn recycle_key(&self) -> Option<TypeId> {
+            Some(TypeId::of::<Self>())
         }
 
         fn recycle_pool_limit(&self) -> Option<usize> {
@@ -1551,7 +1548,7 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
     }
 
     let mut applier = test_applier();
-    let key = std::any::TypeId::of::<LargeReserveNode>();
+    let key = TypeId::of::<LargeReserveNode>();
     let mut live_ids = Vec::with_capacity(4096);
 
     for _ in 0..4096 {
@@ -1650,7 +1647,7 @@ fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
             self.children.len() < before
         }
 
-        fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+        fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
             out.clear();
 
             out.extend_from_slice(&self.children);
@@ -1863,7 +1860,7 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
 
     let (_child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot::SlotPassMode::Compose,
+        slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 composer.push_parent(parent_id);
@@ -1896,7 +1893,7 @@ fn frame_callback_state_changes_are_visible_globally() {
 
     let state_for_callback = state;
     let callback_ran = Rc::new(Cell::new(false));
-    let callback_ran_for_closure = callback_ran.clone();
+    let callback_ran_for_closure = Rc::clone(&callback_ran);
 
     let _registration = handle.frame_clock().with_frame_nanos(move |_| {
         state_for_callback.set(42);
@@ -1945,7 +1942,7 @@ fn multiple_frame_callbacks_state_visibility() {
 #[test]
 fn test_stale_state_handle_set_does_not_panic() {
     let _guard = reset_snapshot_runtime();
-    let test_runtime = crate::runtime::TestRuntime::new();
+    let test_runtime = TestRuntime::new();
     let handle = test_runtime.handle();
 
     let lease = handle.alloc_state(42u32);
@@ -1960,7 +1957,7 @@ fn test_stale_state_handle_set_does_not_panic() {
 #[test]
 fn test_stale_state_handle_try_with_returns_none() {
     let _guard = reset_snapshot_runtime();
-    let test_runtime = crate::runtime::TestRuntime::new();
+    let test_runtime = TestRuntime::new();
     let handle = test_runtime.handle();
 
     let lease = handle.alloc_state(42u32);
@@ -1978,7 +1975,7 @@ fn test_stale_state_handle_try_with_returns_none() {
 
 #[test]
 fn a_refreshed_parameter_reuses_its_buffer_via_clone_from() {
-    let mut state = crate::ParamState::<String> {
+    let mut state = ParamState::<String> {
         value: Some(String::with_capacity(64)),
     };
     state
@@ -1989,10 +1986,7 @@ fn a_refreshed_parameter_reuses_its_buffer_via_clone_from() {
 
     let initial_ptr = state.value.as_ref().expect("seeded string").as_ptr();
     let updated = "short replacement".to_string();
-    assert!(state.update_fields(
-        || updated.clone(),
-        |stored| crate::refresh_param(stored, &updated)
-    ));
+    assert!(state.update_fields(|| updated.clone(), |stored| refresh_param(stored, &updated)));
 
     let stored = state.value.as_ref().expect("updated string");
     assert_eq!(stored, &updated);
@@ -2114,7 +2108,7 @@ impl Node for DirtyFlagNode {
         self.children.len() < before
     }
 
-    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+    fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
 
         out.extend_from_slice(&self.children);

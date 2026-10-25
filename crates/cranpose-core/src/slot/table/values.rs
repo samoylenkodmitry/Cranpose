@@ -41,21 +41,21 @@ pub(crate) enum ValueSlotError {
 impl fmt::Display for ValueSlotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ValueSlotError::ForeignTable {
+            Self::ForeignTable {
                 table_storage_id,
                 slot_storage_id,
             } => write!(
                 f,
                 "value slot belongs to storage {slot_storage_id}, not slot table storage {table_storage_id}"
             ),
-            ValueSlotError::InactiveAnchor { anchor } => {
+            Self::InactiveAnchor { anchor } => {
                 write!(f, "value slot anchor {anchor:?} is not active")
             }
-            ValueSlotError::InactiveOwner { anchor, owner } => write!(
+            Self::InactiveOwner { anchor, owner } => write!(
                 f,
                 "value slot anchor {anchor:?} points at inactive owner {owner:?}"
             ),
-            ValueSlotError::PayloadIndexOutOfRange {
+            Self::PayloadIndexOutOfRange {
                 anchor,
                 owner,
                 group_index,
@@ -66,11 +66,11 @@ impl fmt::Display for ValueSlotError {
                 f,
                 "value slot anchor {anchor:?} points at payload index {payload_index} for owner {owner:?} in group {group_index}, but the group has {payload_len} payloads and the table has {payload_count} payload records"
             ),
-            ValueSlotError::AnchorMismatch { expected, actual } => write!(
+            Self::AnchorMismatch { expected, actual } => write!(
                 f,
                 "value slot anchor mismatch: expected {expected:?}, found {actual:?}"
             ),
-            ValueSlotError::TypeMismatch {
+            Self::TypeMismatch {
                 anchor,
                 expected,
                 actual,

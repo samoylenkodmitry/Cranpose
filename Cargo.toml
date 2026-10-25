@@ -118,6 +118,7 @@ web-time = "1.1"
 # attribute overrides a lint level Cargo sets on the command line.
 [workspace.lints.rust]
 unsafe_code = "deny"
+unused_qualifications = "warn"
 
 # The one warning class `-D warnings` structurally cannot reach: `clippy`
 # stops at metadata and never links, so a message from the target linker only
@@ -142,6 +143,11 @@ redundant_locals = "deny"
 
 # A panic names its cause: `expect` with the reason.
 unwrap_used = "deny"
+
+# One spelling for a shared pointer copy, `Rc::clone(&x)`, so a `.clone()` in
+# review always means a copy of the value; `Self` inside its own impl.
+clone_on_ref_ptr = "warn"
+use_self = "warn"
 
 # clippy.toml lists what these forbid. They stay off here while
 # scripts/ci/clippy_budget.py still counts sites left for them.

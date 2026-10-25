@@ -29,7 +29,7 @@ pub(crate) fn install(
             let Some(file) = files.get(index) else {
                 continue;
             };
-            let request_frame = request_frame.clone();
+            let request_frame = Rc::clone(&request_frame);
             spawn_local(async move {
                 let Some(content) = read_dropped_file(file).await else {
                     return;

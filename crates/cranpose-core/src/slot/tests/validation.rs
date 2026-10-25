@@ -28,7 +28,7 @@ fn fast_integrity_rejects_active_anchor_count_mismatch() {
 #[test]
 fn slots_host_finish_pass_reports_writer_invariant_violation() {
     let slots_host = Rc::new(crate::SlotsHost::new(SlotTable::new()));
-    slots_host.begin_pass(SlotPassMode::Compose, &std::rc::Rc::default());
+    slots_host.begin_pass(SlotPassMode::Compose, &Rc::default());
     {
         let mut inner = slots_host.inner.borrow_mut();
         assert!(
@@ -306,11 +306,11 @@ fn validate_reports_payload_count_mismatch_structurally() {
 
     table.payloads.insert_item(
         table.payloads.len(),
-        super::PayloadRecord {
+        PayloadRecord {
             anchor: extra_anchor,
             payload_type: crate::slot::PayloadType::of::<i32>(),
             source: crate::slot::BRANCH_PATH_ROOT,
-            kind: super::PayloadKind::Internal,
+            kind: PayloadKind::Internal,
             value: Box::new(0_i32),
         },
     );
@@ -939,7 +939,7 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
     let inserted_payload_anchor =
         harness
             .table
-            .insert_value_payload(parent_anchor, 0, super::PayloadKind::Internal, 30_i32);
+            .insert_value_payload(parent_anchor, 0, PayloadKind::Internal, 30_i32);
     assert_ne!(
         inserted_payload_anchor, retained_payload_anchor,
         "active insertion must not reuse a retained detached payload anchor"
@@ -1196,13 +1196,13 @@ fn validate_reports_node_owner_mismatch_structurally() {
 fn validate_reports_duplicate_node_id_structurally() {
     let mut table = composed_group_with_value_and_node_table(480);
     let node = table.group_node_record_at(0, 0).id;
-    table.nodes.push(super::NodeRecord {
+    table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
         id: node,
         parent_id: None,
         generation: 2,
         source: crate::slot::BRANCH_PATH_ROOT,
-        lifecycle: super::NodeLifecycle::Active,
+        lifecycle: NodeLifecycle::Active,
         child_groups_before: 0,
     });
     table.groups[0].node_len = 2;
@@ -1221,14 +1221,14 @@ fn validate_reports_duplicate_node_id_structurally() {
 fn validate_reports_node_lifecycle_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(484);
     let node_id = table.group_node_record_at(0, 0).id;
-    table.group_node_record_at_mut(0, 0).lifecycle = super::NodeLifecycle::RetainedDetached;
+    table.group_node_record_at_mut(0, 0).lifecycle = NodeLifecycle::RetainedDetached;
 
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::NodeLifecycleMismatch {
             node_id,
-            expected: super::NodeLifecycle::Active,
-            actual: super::NodeLifecycle::RetainedDetached,
+            expected: NodeLifecycle::Active,
+            actual: NodeLifecycle::RetainedDetached,
         })
     );
 }
@@ -1269,13 +1269,13 @@ fn validate_reports_node_out_of_range_structurally() {
 #[test]
 fn validate_reports_node_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(487);
-    table.nodes.push(super::NodeRecord {
+    table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
         id: 999,
         parent_id: None,
         generation: 1,
         source: crate::slot::BRANCH_PATH_ROOT,
-        lifecycle: super::NodeLifecycle::Active,
+        lifecycle: NodeLifecycle::Active,
         child_groups_before: 0,
     });
 

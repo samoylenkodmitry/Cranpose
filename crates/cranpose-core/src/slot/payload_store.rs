@@ -4,7 +4,7 @@ use std::{mem, ops::Range};
 use super::SlotInvariantError;
 use super::{PayloadRecord, checked_usize_to_u32, growth::GrowthSlack, segments::SegmentItems};
 
-const ORDER_ENTRY_BYTES: usize = mem::size_of::<u32>();
+const ORDER_ENTRY_BYTES: usize = size_of::<u32>();
 
 #[derive(Default)]
 pub(in crate::slot) struct PayloadStore {
@@ -92,7 +92,7 @@ impl PayloadStore {
 
     pub(in crate::slot) fn heap_bytes(&self) -> usize {
         (self.order.capacity() + self.free.capacity()) * ORDER_ENTRY_BYTES
-            + self.slots.capacity() * mem::size_of::<Option<PayloadRecord>>()
+            + self.slots.capacity() * size_of::<Option<PayloadRecord>>()
     }
 
     pub(in crate::slot) fn shift_bytes(&self) -> usize {

@@ -28,22 +28,22 @@ impl LayoutDirection {
     }
     /// Whether the start edge is the right one.
     pub fn is_rtl(self) -> bool {
-        matches!(self, LayoutDirection::Rtl)
+        matches!(self, Self::Rtl)
     }
 
     /// The direction that reads the other way.
     pub fn reversed(self) -> Self {
         match self {
-            LayoutDirection::Ltr => LayoutDirection::Rtl,
-            LayoutDirection::Rtl => LayoutDirection::Ltr,
+            Self::Ltr => Self::Rtl,
+            Self::Rtl => Self::Ltr,
         }
     }
 
     /// Turns start/end values into physical left/right values.
     pub fn resolve(self, start: f32, end: f32) -> (f32, f32) {
         match self {
-            LayoutDirection::Ltr => (start, end),
-            LayoutDirection::Rtl => (end, start),
+            Self::Ltr => (start, end),
+            Self::Rtl => (end, start),
         }
     }
 }

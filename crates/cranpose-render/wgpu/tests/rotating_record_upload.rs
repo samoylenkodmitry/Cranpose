@@ -16,7 +16,7 @@ const COLUMNS: usize = 16;
 const RECORDS: usize = COLUMNS * COLUMNS;
 
 fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
-    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope_recording = CommandRecording::default();
     let mut scope =
         DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut scope_recording);
     let cell = SIDE as f32 / COLUMNS as f32;
@@ -65,7 +65,7 @@ fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
 fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGraph {
     const COLUMNS: usize = 104;
     const CELL: f32 = 5.0;
-    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope_recording = CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(520.0, 520.0), &mut scope_recording);
     let mut serial_recording = CommandRecording::default();
     let mut serial = serial_recording.record();

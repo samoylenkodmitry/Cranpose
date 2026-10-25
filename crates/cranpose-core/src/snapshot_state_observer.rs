@@ -213,7 +213,7 @@ impl SnapshotStateObserverInner {
                     on_value_changed_for_scope(typed);
                 }
             };
-            if std::mem::size_of_val(&callback) == 0 {
+            if size_of_val(&callback) == 0 {
                 return self.capture_free_callback(callback);
             }
             match existing_entry.as_ref() {
@@ -293,7 +293,7 @@ impl SnapshotStateObserverInner {
         drop((entries, owned));
     }
 
-    fn start(&self, weak_self: Weak<SnapshotStateObserverInner>) {
+    fn start(&self, weak_self: Weak<Self>) {
         if self.apply_handle.borrow().is_some() {
             return;
         }
@@ -443,7 +443,7 @@ impl SnapshotStateObserverInner {
         }
 
         let mut snapshot = take_transparent_observer_mutable_snapshot_reusing(
-            Some(self.read_dispatcher.clone()),
+            Some(Rc::clone(&self.read_dispatcher)),
             None,
             self.read_snapshot.take(),
         );
@@ -478,7 +478,7 @@ impl SnapshotStateObserverInner {
                         if (!several || seen_scope_ids.insert(scope_id))
                             && let Some(entry) = indexed_scopes.get(&scope_id)
                         {
-                            to_notify.push(entry.clone());
+                            to_notify.push(Rc::clone(entry));
                         }
                     }
                 }
@@ -554,7 +554,7 @@ impl SnapshotStateObserverInner {
 
 fn shrink_map_if_sparse<K, V>(map: &mut HashMap<K, V>, min_retained_capacity: usize)
 where
-    K: Eq + std::hash::Hash,
+    K: Eq + Hash,
 {
     if map.capacity() <= map.len().max(min_retained_capacity).saturating_mul(4) {
         return;
@@ -606,13 +606,13 @@ struct ObservedState {
 
 impl ObservedIds {
     fn new() -> Self {
-        ObservedIds::Small(SmallVec::new())
+        Self::Small(SmallVec::new())
     }
 
     fn insert(&mut self, state: &dyn StateObject) {
         let id = state.object_id().as_usize();
         match self {
-            ObservedIds::Small(small) => {
+            Self::Small(small) => {
                 if small.iter().any(|observed| observed.id == id) {
                     return;
                 }
@@ -628,10 +628,10 @@ impl ObservedIds {
                         large.insert(observed.id, observed._lease);
                     }
                     large.insert(id, state.observation_lease());
-                    *self = ObservedIds::Large(Box::new(large));
+                    *self = Self::Large(Box::new(large));
                 }
             }
-            ObservedIds::Large(large) => {
+            Self::Large(large) => {
                 large.entry(id).or_insert_with(|| state.observation_lease());
             }
         }
@@ -639,8 +639,8 @@ impl ObservedIds {
 
     fn clear(&mut self) {
         match self {
-            ObservedIds::Small(small) => small.clear(),
-            ObservedIds::Large(_) => *self = ObservedIds::new(),
+            Self::Small(small) => small.clear(),
+            Self::Large(_) => *self = Self::new(),
         }
     }
 
@@ -648,9 +648,9 @@ impl ObservedIds {
     /// the old ones in `fresh` to drop. An id is a state's address, which a
     /// new state can take after the old one is dropped, and only its own
     /// lease keeps the new one observed.
-    fn take_leases(&mut self, fresh: &mut ObservedIds) {
+    fn take_leases(&mut self, fresh: &mut Self) {
         match (self, fresh) {
-            (ObservedIds::Small(kept), ObservedIds::Small(fresh)) => {
+            (Self::Small(kept), Self::Small(fresh)) => {
                 for (kept, fresh) in kept.iter_mut().zip(fresh.iter_mut()) {
                     std::mem::swap(&mut kept._lease, &mut fresh._lease);
                 }
@@ -659,38 +659,38 @@ impl ObservedIds {
         }
     }
 
-    fn take_sized(&mut self) -> ObservedIds {
+    fn take_sized(&mut self) -> Self {
         match self {
-            ObservedIds::Small(small) => ObservedIds::Small(small.drain(..).collect()),
-            ObservedIds::Large(_) => std::mem::replace(self, ObservedIds::new()),
+            Self::Small(small) => Self::Small(small.drain(..).collect()),
+            Self::Large(_) => std::mem::replace(self, Self::new()),
         }
     }
 
     fn is_empty(&self) -> bool {
         match self {
-            ObservedIds::Small(small) => small.is_empty(),
-            ObservedIds::Large(large) => large.is_empty(),
+            Self::Small(small) => small.is_empty(),
+            Self::Large(large) => large.is_empty(),
         }
     }
 
     fn len(&self) -> usize {
         match self {
-            ObservedIds::Small(small) => small.len(),
-            ObservedIds::Large(large) => large.len(),
+            Self::Small(small) => small.len(),
+            Self::Large(large) => large.len(),
         }
     }
 
     fn capacity(&self) -> usize {
         match self {
-            ObservedIds::Small(small) => small.capacity(),
-            ObservedIds::Large(large) => large.capacity(),
+            Self::Small(small) => small.capacity(),
+            Self::Large(large) => large.capacity(),
         }
     }
 
     fn iter(&self) -> impl Iterator<Item = StateObjectId> + '_ {
         let (small, large) = match self {
-            ObservedIds::Small(small) => (Some(small.as_slice()), None),
-            ObservedIds::Large(large) => (None, Some(large)),
+            Self::Small(small) => (Some(small.as_slice()), None),
+            Self::Large(large) => (None, Some(large)),
         };
         small
             .into_iter()

@@ -1040,7 +1040,7 @@ fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
         command.args(["--features", features]);
     }
 
-    let mut rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+    let mut rustflags = env::var("RUSTFLAGS").unwrap_or_default();
     if !rustflags.is_empty() {
         rustflags.push(' ');
     }

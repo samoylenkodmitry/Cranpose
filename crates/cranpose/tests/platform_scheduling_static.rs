@@ -3888,8 +3888,7 @@ fn the_framework_declares_the_provider_its_own_sharing_needs() {
 fn installing_an_update_comes_only_from_the_rust_declaration() {
     let capabilities = workspace_source(CRANPOSE_CAPABILITIES);
     assert!(
-        capabilities
-            .contains("Service::Update => &[\"android.permission.REQUEST_INSTALL_PACKAGES\"]"),
+        capabilities.contains("Update => &[\"android.permission.REQUEST_INSTALL_PACKAGES\"]"),
         "an application declaring the update service must get that permission written for it"
     );
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
@@ -4794,13 +4793,11 @@ fn every_platform_names_a_dropdown_and_a_picker() {
 fn an_icon_cannot_be_drawn_without_an_answer_about_its_name() {
     for source in [
         std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../cranpose-ui/src/widgets/icon.rs"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../cranpose-ui/src/widgets/icon.rs"),
         )
         .expect("the ui icon source"),
         std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../cranpose-liquid/src/icons.rs"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../cranpose-liquid/src/icons.rs"),
         )
         .expect("the liquid icon source"),
     ] {

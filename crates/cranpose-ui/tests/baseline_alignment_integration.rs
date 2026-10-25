@@ -36,7 +36,7 @@ impl cranpose_ui_layout::MeasurePolicy for CustomBaselinePolicy {
     fn measure(
         &self,
         _: &dyn cranpose_ui_layout::MeasureScope,
-        measurables: &[std::boxed::Box<dyn cranpose_ui_layout::Measurable>],
+        measurables: &[Box<dyn cranpose_ui_layout::Measurable>],
         constraints: cranpose_ui::Constraints,
     ) -> cranpose_ui::MeasureResult {
         if !matches!(self, Self::Explicit) {
@@ -57,32 +57,16 @@ impl cranpose_ui_layout::MeasurePolicy for CustomBaselinePolicy {
         }
         custom_baseline_result(constraints)
     }
-    fn min_intrinsic_width(
-        &self,
-        _: &[std::boxed::Box<dyn cranpose_ui_layout::Measurable>],
-        _: f32,
-    ) -> f32 {
+    fn min_intrinsic_width(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
         12.0
     }
-    fn max_intrinsic_width(
-        &self,
-        _: &[std::boxed::Box<dyn cranpose_ui_layout::Measurable>],
-        _: f32,
-    ) -> f32 {
+    fn max_intrinsic_width(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
         12.0
     }
-    fn min_intrinsic_height(
-        &self,
-        _: &[std::boxed::Box<dyn cranpose_ui_layout::Measurable>],
-        _: f32,
-    ) -> f32 {
+    fn min_intrinsic_height(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
         24.0
     }
-    fn max_intrinsic_height(
-        &self,
-        _: &[std::boxed::Box<dyn cranpose_ui_layout::Measurable>],
-        _: f32,
-    ) -> f32 {
+    fn max_intrinsic_height(&self, _: &[Box<dyn cranpose_ui_layout::Measurable>], _: f32) -> f32 {
         24.0
     }
 }

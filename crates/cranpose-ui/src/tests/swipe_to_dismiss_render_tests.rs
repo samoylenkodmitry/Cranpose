@@ -77,7 +77,7 @@ fn measure_row(composition: &mut TestComposition, root: NodeId) {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    crate::measure_layout(
+    measure_layout(
         &mut applier,
         root,
         ViewportSize {
@@ -89,19 +89,19 @@ fn measure_row(composition: &mut TestComposition, root: NodeId) {
     applier.clear_runtime_handle();
 }
 
-fn layout_tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
+fn layout_tree(composition: &mut TestComposition, root: NodeId) -> LayoutTree {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let tree = crate::build_layout_tree_from_applier(&mut applier, root)
+    let tree = build_layout_tree_from_applier(&mut applier, root)
         .expect("layout tree build")
         .expect("layout tree present");
     applier.clear_runtime_handle();
     tree
 }
 
-fn pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
-    fn walk(node: &crate::LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
+fn pointer_handler(tree: &LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
+    fn walk(node: &LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
             return Some(Rc::clone(handler));
         }
@@ -110,8 +110,8 @@ fn pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
     walk(tree.root()).expect("swipe pointer handler")
 }
 
-fn content_layer_slices(tree: &crate::LayoutTree) -> Rc<ModifierNodeSlices> {
-    fn walk(node: &crate::LayoutBox) -> Option<Rc<ModifierNodeSlices>> {
+fn content_layer_slices(tree: &LayoutTree) -> Rc<ModifierNodeSlices> {
+    fn walk(node: &LayoutBox) -> Option<Rc<ModifierNodeSlices>> {
         if node.node_data.modifier_slices().graphics_layer().is_some() {
             return Some(Rc::clone(&node.node_data.modifier_slices));
         }
@@ -127,14 +127,14 @@ fn applied_translation_x(slices: &ModifierNodeSlices) -> f32 {
         .translation_x
 }
 
-fn count_color_primitives(tree: &crate::LayoutTree, expected: Color) -> usize {
-    fn walk(node: &crate::LayoutBox, expected: Color, count: &mut usize) {
+fn count_color_primitives(tree: &LayoutTree, expected: Color) -> usize {
+    fn walk(node: &LayoutBox, expected: Color, count: &mut usize) {
         let size = PrimSize {
             width: node.rect.width,
             height: node.rect.height,
         };
         for primitive in
-            crate::execute_draw_commands(node.node_data.modifier_slices().draw_commands(), size)
+            execute_draw_commands(node.node_data.modifier_slices().draw_commands(), size)
         {
             if let DrawPrimitive::Rect {
                 brush: Brush::Solid(color),
@@ -176,7 +176,7 @@ fn root_height(composition: &mut TestComposition, root: NodeId) -> f32 {
 #[test]
 fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
     let mut composition = run_test_composition(|| {});
-    let key = cranpose_core::location_key(file!(), line!(), column!());
+    let key = location_key(file!(), line!(), column!());
     for (frame, color) in [Color::RED, Color::GREEN, Color::BLUE]
         .into_iter()
         .enumerate()
@@ -203,7 +203,7 @@ fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
             .expect("apply dirty flags");
         let needs_layout = {
             let mut applier = composition.applier_mut();
-            crate::layout::tree_needs_layout(&mut *applier, root).expect("layout state")
+            tree_needs_layout(&mut *applier, root).expect("layout state")
         };
         assert!(
             !needs_layout,
@@ -220,7 +220,7 @@ fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
 #[test]
 fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
     let mut composition = run_test_composition(|| {});
-    let key = cranpose_core::location_key(file!(), line!(), column!());
+    let key = location_key(file!(), line!(), column!());
     let active_slot = Rc::new(std::cell::RefCell::new(None));
     for (selected, width) in [(0, 100.0), (1, 100.0), (1, 140.0)] {
         let output = Rc::clone(&active_slot);
@@ -419,8 +419,8 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
 
 type DepthTaggedHandler = (usize, Rc<dyn Fn(PointerEvent)>);
 
-fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
-    fn walk(node: &crate::LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
+fn deepest_pointer_handler(tree: &LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
+    fn walk(node: &LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first()
             && best.as_ref().is_none_or(|(d, _)| depth >= *d)
         {
@@ -435,8 +435,8 @@ fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)>
     best.expect("swipe pointer handler").1
 }
 
-fn outer_item_height(tree: &crate::LayoutTree) -> Option<f32> {
-    fn walk(node: &crate::LayoutBox) -> Option<f32> {
+fn outer_item_height(tree: &LayoutTree) -> Option<f32> {
+    fn walk(node: &LayoutBox) -> Option<f32> {
         for child in &node.children {
             if !child
                 .node_data

@@ -357,7 +357,7 @@ impl LazyListState {
         initial_first_visible_item_index: usize,
         initial_first_visible_item_scroll_offset: f32,
     ) -> Self {
-        LazyListState {
+        Self {
             scroll_position: LazyListScrollPosition {
                 index: cranpose_core::mutableStateOf(initial_first_visible_item_index),
                 scroll_offset: cranpose_core::mutableStateOf(

@@ -58,9 +58,9 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
 
 #[test]
 fn test_manual_state_change_triggers_recomposition() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -141,9 +141,9 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
 
 #[test]
 fn test_correct_pattern_reads_state_at_draw_time() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();

@@ -91,5 +91,5 @@ pub(crate) fn main() {
             println!("=== LazyList Recursive Composition Test PASSED ===");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

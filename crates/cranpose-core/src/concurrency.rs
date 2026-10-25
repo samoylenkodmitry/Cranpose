@@ -441,8 +441,8 @@ pub struct EventChannel<T: 'static> {
 
 struct ChannelShared<T: 'static> {
     ready: RefCell<std::collections::VecDeque<T>>,
-    closed: std::cell::Cell<bool>,
-    delivered: std::cell::Cell<usize>,
+    closed: Cell<bool>,
+    delivered: Cell<usize>,
     wakers: RefCell<Vec<Waker>>,
 }
 
@@ -466,8 +466,8 @@ impl<T: 'static> EventChannel<T> {
         Self {
             shared: Rc::new(ChannelShared {
                 ready: RefCell::new(std::collections::VecDeque::new()),
-                closed: std::cell::Cell::new(false),
-                delivered: std::cell::Cell::new(0),
+                closed: Cell::new(false),
+                delivered: Cell::new(0),
                 wakers: RefCell::new(Vec::new()),
             }),
         }

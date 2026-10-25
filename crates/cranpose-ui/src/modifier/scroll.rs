@@ -302,7 +302,7 @@ impl ScrollTarget for ScrollState {
     }
 
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
-        ScrollState::settle_policy(self)
+        Self::settle_policy(self)
     }
 }
 
@@ -347,7 +347,7 @@ impl ScrollTarget for LazyListState {
     }
 
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
-        LazyListState::settle_policy(self)
+        Self::settle_policy(self)
     }
 
     fn set_dragging(&self, dragging: bool) {
@@ -452,7 +452,7 @@ where
     Modifier::empty().pointer_input(key, move |scope| {
         let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
         let detector = ScrollGestureDetector::new(
-            gesture_state.clone(),
+            Rc::clone(&gesture_state),
             target.clone(),
             is_vertical,
             reverse_input,
@@ -560,7 +560,7 @@ impl ScrollTarget for DraggableState {
     }
 
     fn set_dragging(&self, dragging: bool) {
-        DraggableState::set_dragging(self, dragging);
+        Self::set_dragging(self, dragging);
     }
 }
 
@@ -580,7 +580,7 @@ impl ScrollTarget for ScrollableState {
     }
 
     fn set_dragging(&self, dragging: bool) {
-        ScrollableState::set_dragging(self, dragging);
+        Self::set_dragging(self, dragging);
     }
 }
 
@@ -1222,8 +1222,8 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         });
     }
 
-    fn clone_for_watcher(&self) -> ScrollGestureDetector<S> {
-        ScrollGestureDetector {
+    fn clone_for_watcher(&self) -> Self {
+        Self {
             gesture_state: Rc::clone(&self.gesture_state),
             scroll_target: self.scroll_target.clone(),
             is_vertical: self.is_vertical,
@@ -2007,7 +2007,7 @@ impl Modifier {
             state_identity: identity,
             is_vertical,
         });
-        self.then(Modifier::with_element(MotionContextAnimatedElement::new(
+        self.then(Self::with_element(MotionContextAnimatedElement::new(
             motion_context.clone(),
         )))
         .then(nested_drag_gesture_input(

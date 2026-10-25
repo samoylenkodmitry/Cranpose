@@ -20,7 +20,7 @@ fn backdrop_effect_is_visible_in_modifier_slices() {
 fn graphics_layer_is_evaluated_on_slice_access() {
     let alpha = Rc::new(Cell::new(0.15f32));
     let modifier = Modifier::empty().graphics_layer({
-        let alpha = alpha.clone();
+        let alpha = Rc::clone(&alpha);
         move || GraphicsLayer {
             alpha: alpha.get(),
             ..Default::default()
@@ -37,7 +37,7 @@ fn graphics_layer_is_evaluated_on_slice_access() {
 fn collecting_slices_does_not_eagerly_evaluate_lazy_graphics_layer() {
     let reads = Rc::new(Cell::new(0usize));
     let modifier = Modifier::empty().graphics_layer({
-        let reads = reads.clone();
+        let reads = Rc::clone(&reads);
         move || {
             reads.set(reads.get() + 1);
             GraphicsLayer {

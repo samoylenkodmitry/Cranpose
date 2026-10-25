@@ -95,8 +95,8 @@ impl Spool {
         source: Box<dyn Read + Send>,
         directory: &Path,
         len: Option<u64>,
-    ) -> io::Result<(Spool, SourceCancel)> {
-        Spool::start_with(source, directory, len, STALL_TIMEOUT)
+    ) -> io::Result<(Self, SourceCancel)> {
+        Self::start_with(source, directory, len, STALL_TIMEOUT)
     }
 
     pub(crate) fn start_with(
@@ -104,7 +104,7 @@ impl Spool {
         directory: &Path,
         len: Option<u64>,
         stall: Duration,
-    ) -> io::Result<(Spool, SourceCancel)> {
+    ) -> io::Result<(Self, SourceCancel)> {
         std::fs::create_dir_all(directory)?;
         sweep_stale_spools(directory);
         let path = directory.join(next_spool_name());
@@ -135,7 +135,7 @@ impl Spool {
             stopping.ready.notify_all();
         });
         Ok((
-            Spool {
+            Self {
                 shared,
                 file: reader,
                 position: 0,

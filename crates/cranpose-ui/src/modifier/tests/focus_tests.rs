@@ -26,7 +26,7 @@ fn focus_target_node_lifecycle() {
 fn focus_target_callback_invoked() {
     use std::cell::RefCell;
     let states = Rc::new(RefCell::new(Vec::new()));
-    let states_clone = states.clone();
+    let states_clone = Rc::clone(&states);
 
     let node = FocusTargetElement::with_callback(move |state| {
         states_clone.borrow_mut().push(state);
@@ -211,7 +211,7 @@ fn requesting_focus_from_inside_on_focus_changed_does_not_double_borrow_or_recur
     let requester_b = FocusRequester::new();
     let requester_b_for_callback = requester_b.clone();
     let bounced = Rc::new(Cell::new(false));
-    let bounced_for_callback = bounced.clone();
+    let bounced_for_callback = Rc::clone(&bounced);
 
     let chain_a = attach_at(
         10,

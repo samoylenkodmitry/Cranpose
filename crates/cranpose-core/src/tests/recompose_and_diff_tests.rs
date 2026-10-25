@@ -33,7 +33,7 @@ fn state_update_schedules_render() {
     let mut stored = None;
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let state = cranpose_core::rememberMutableStateOf(|| 10);
+            let state = rememberMutableStateOf(|| 10);
             let _ = state.value();
             stored = Some(state);
         })
@@ -49,7 +49,7 @@ fn an_armed_frame_callback_is_not_a_reason_to_recompose() {
     let mut composition = test_composition();
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let state = cranpose_core::rememberMutableStateOf(|| 10);
+            let state = rememberMutableStateOf(|| 10);
             let _ = state.value();
         })
         .expect("render succeeds");
@@ -122,11 +122,11 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
         let _ = state_a.value();
         let expand = toggle_a.value();
         if expand {
-            let _ = cranpose_core::remember(|| ());
-            let _ = cranpose_core::remember(|| ());
-            cranpose_core::with_key(&"nested", || {});
+            let _ = remember(|| ());
+            let _ = remember(|| ());
+            with_key(&"nested", || {});
         } else {
-            let _ = cranpose_core::remember(|| ());
+            let _ = remember(|| ());
         }
     }
 
@@ -142,9 +142,9 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
         state_b: MutableState<i32>,
         toggle_a: MutableState<bool>,
     ) {
-        cranpose_core::with_key(&"root", || {
-            cranpose_core::with_key(&"A", || logging_group_a(state_a, toggle_a));
-            cranpose_core::with_key(&"B", || logging_group_b(state_b));
+        with_key(&"root", || {
+            with_key(&"A", || logging_group_a(state_a, toggle_a));
+            with_key(&"B", || logging_group_b(state_b));
         });
     }
 
@@ -819,21 +819,20 @@ fn unit_return_composable_skips_without_return_value_slot() {
 
     let mut composition = test_composition();
     let key = location_key(file!(), line!(), column!());
-    let pass = |composition: &mut crate::Composition<crate::MemoryApplier>| {
-        composition.render(key, || unit_leaf(1))
-    };
+    let pass =
+        |composition: &mut Composition<MemoryApplier>| composition.render(key, || unit_leaf(1));
 
     pass(&mut composition).expect("initial unit render");
 
     let all_slots = composition.debug_dump_slot_entries();
     let value_count = all_slots
         .iter()
-        .filter(|entry| entry.kind == crate::SlotDebugEntryKind::Payload)
+        .filter(|entry| entry.kind == SlotDebugEntryKind::Payload)
         .count();
     let scoped_group_count = all_slots
         .iter()
         .filter(|entry| {
-            entry.kind == crate::SlotDebugEntryKind::Group && !entry.line.contains("scope=None")
+            entry.kind == SlotDebugEntryKind::Group && !entry.line.contains("scope=None")
         })
         .count();
 

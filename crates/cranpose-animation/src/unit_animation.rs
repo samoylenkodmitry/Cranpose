@@ -17,7 +17,7 @@ use crate::animation::{AnimationType, Lerp, SpringScalar, animateValueAsState};
 
 impl Lerp for Dp {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Dp(self.0.lerp(&target.0, fraction))
+        Self(self.0.lerp(&target.0, fraction))
     }
 }
 
@@ -29,13 +29,13 @@ impl SpringScalar for Dp {
     }
 
     fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Dp(dimensions[0])
+        Self(dimensions[0])
     }
 }
 
 impl Lerp for Sp {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Sp(self.0.lerp(&target.0, fraction))
+        Self(self.0.lerp(&target.0, fraction))
     }
 }
 
@@ -47,7 +47,7 @@ impl SpringScalar for Sp {
     }
 
     fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Sp(dimensions[0])
+        Self(dimensions[0])
     }
 }
 

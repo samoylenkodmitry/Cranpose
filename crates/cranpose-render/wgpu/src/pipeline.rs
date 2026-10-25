@@ -652,7 +652,7 @@ impl TextStyleDrawSink for CompositorScene {
         layout_options: TextLayoutOptions,
         clip: Option<Rect>,
     ) {
-        CompositorScene::push_text(
+        Self::push_text(
             self,
             node_id,
             rect,
@@ -712,7 +712,7 @@ impl TextStyleDrawSink for CompositorScene {
         z_start: usize,
         z_end: usize,
     ) {
-        CompositorScene::push_effect_layer(
+        Self::push_effect_layer(
             self,
             rect,
             clip,
@@ -734,7 +734,7 @@ impl TextStyleDrawSink for CompositorScene {
         z_start: usize,
         z_end: usize,
     ) {
-        CompositorScene::push_effect_layer(
+        Self::push_effect_layer(
             self,
             rect,
             clip,
@@ -1363,7 +1363,7 @@ impl DecorationVisualSegment {
 fn decoration_segments_from_glyph_layouts(
     text: &cranpose_ui::text::AnnotatedString,
     global_style: &TextStyle,
-    layout: &cranpose_ui::text_layout_result::TextLayoutResult,
+    layout: &TextLayoutResult,
 ) -> Vec<DecorationVisualSegment> {
     let mut glyph_layouts: Vec<_> = layout
         .glyph_layouts()
@@ -1655,7 +1655,7 @@ fn decoration_brush_for_span(
 #[cfg(test)]
 use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
-const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
+const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = 0;
 
 /// The primitive with the layer's paint folded into its brushes, for a
 /// shape that joins the layer's loose run; `None` for text, images,

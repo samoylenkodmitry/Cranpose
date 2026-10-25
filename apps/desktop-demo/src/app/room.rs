@@ -417,8 +417,8 @@ impl TorusSwitch {
     /// The columns around the ring and the rows around the tube.
     fn grid(self) -> (usize, usize) {
         match self {
-            TorusSwitch::Checkbox => (20, 8),
-            TorusSwitch::Toggle => (10, 6),
+            Self::Checkbox => (20, 8),
+            Self::Toggle => (10, 6),
         }
     }
 }

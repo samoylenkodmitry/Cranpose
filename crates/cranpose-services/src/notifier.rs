@@ -149,9 +149,7 @@ pub fn clear_platform_notifier() {
 /// Returns the notifier that forwards to the installed platform notifier. Without one, it uses
 /// the desktop notifier when the `notifier-native` feature is on, and otherwise does nothing.
 pub fn default_notifier() -> NotifierRef {
-    DEFAULT_NOTIFIER
-        .get_or_init(|| Arc::new(PlatformNotifier))
-        .clone()
+    Arc::clone(DEFAULT_NOTIFIER.get_or_init(|| Arc::new(PlatformNotifier)))
 }
 
 #[cfg(all(
@@ -264,7 +262,7 @@ pub fn local_notifier() -> CompositionLocal<NotifierRef> {
 /// Provides the platform notifier to `content` through [`local_notifier`].
 #[composable]
 pub fn ProvideNotifier(content: impl FnOnce()) {
-    let notifier = cranpose_core::remember(default_notifier).with(|state| state.clone());
+    let notifier = cranpose_core::remember(default_notifier).with(|state| Arc::clone(state));
     let local = local_notifier();
     CompositionLocalProvider([local.provides(notifier)], move || {
         content();

@@ -47,7 +47,7 @@ pub struct ModifierNodeSlices {
     rare: Option<Box<RareSlices>>,
 }
 
-fn publish_pointer_input_size(rare: &RareSlices, size: cranpose_ui_graphics::Size) {
+fn publish_pointer_input_size(rare: &RareSlices, size: Size) {
     for sink in &rare.pointer_input_sizes {
         sink.set(size);
     }
@@ -58,7 +58,7 @@ fn publish_pointer_input_size(rare: &RareSlices, size: cranpose_ui_graphics::Siz
 #[derive(Clone, Default)]
 struct RareSlices {
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
+    pointer_input_sizes: Vec<Rc<std::cell::Cell<Size>>>,
     pointer_icon: Option<PointerIcon>,
     motion_context_animated: bool,
     translated_content_context: bool,
@@ -338,7 +338,7 @@ impl ModifierNodeSlices {
     /// The write targets for this node's resolved size, one per pointer-input
     /// node that exposes a size to its handler. See
     /// [`ModifierNodeSlices::publish_pointer_input_size`].
-    pub fn pointer_input_size_sinks(&self) -> &[Rc<std::cell::Cell<cranpose_ui_graphics::Size>>] {
+    pub fn pointer_input_size_sinks(&self) -> &[Rc<std::cell::Cell<Size>>] {
         self.rare().map_or(&[], |rare| &rare.pointer_input_sizes)
     }
 
@@ -353,7 +353,7 @@ impl ModifierNodeSlices {
     /// `size` is the node's layout box — the same box the dispatched
     /// [`PointerEvent`] positions are made local to — so handlers can compare
     /// event coordinates against it directly.
-    pub fn publish_pointer_input_size(&self, size: cranpose_ui_graphics::Size) {
+    pub fn publish_pointer_input_size(&self, size: Size) {
         if let Some(rare) = self.rare() {
             publish_pointer_input_size(rare, size);
         }

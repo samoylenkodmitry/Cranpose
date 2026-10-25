@@ -97,7 +97,7 @@ pub fn LiquidNavBar(
                     }),
                 BoxSpec::default().content_alignment(Alignment::new(
                     cranpose_ui_layout::HorizontalAlignment::Start,
-                    cranpose_ui_layout::VerticalAlignment::CenterVertically,
+                    VerticalAlignment::CenterVertically,
                 )),
                 move || {
                     let modifier = if progress < 0.5 {

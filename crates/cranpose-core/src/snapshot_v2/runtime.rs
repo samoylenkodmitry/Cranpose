@@ -69,9 +69,9 @@ pub(crate) struct TestRuntimeGuard;
 #[cfg(test)]
 pub(crate) fn reset_runtime_for_tests() -> TestRuntimeGuard {
     with_runtime(SnapshotRuntime::reset_for_tests);
-    super::clear_last_writes();
-    super::global::clear_global_snapshot_for_tests();
-    super::clear_unused_record_cleanup_for_tests();
+    clear_last_writes();
+    global::clear_global_snapshot_for_tests();
+    clear_unused_record_cleanup_for_tests();
     TestRuntimeGuard
 }
 
@@ -166,7 +166,7 @@ impl SnapshotRuntime {
 
     #[cfg(test)]
     pub(crate) fn reset_for_tests(&mut self) {
-        *self = SnapshotRuntime::new();
+        *self = Self::new();
     }
 }
 

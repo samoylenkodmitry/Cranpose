@@ -125,7 +125,7 @@ fn dead_store_reconnects_before_frame_state_is_read() {
         alive: AtomicBool::new(false),
         reconnects: AtomicUsize::new(0),
     });
-    set_platform_purchases(purchases.clone());
+    set_platform_purchases(Arc::<Reconnecting>::clone(&purchases));
     assert_eq!(store_state().phase, StorePhase::Ready);
     assert_eq!(purchases.reconnects.load(Ordering::Acquire), 1);
     clear_platform_purchases();

@@ -122,7 +122,7 @@ impl Fixture {
     }
 
     fn grid_box_width(&mut self) -> f32 {
-        fn find(node: &cranpose_ui::LayoutBox, id: NodeId) -> Option<f32> {
+        fn find(node: &LayoutBox, id: NodeId) -> Option<f32> {
             if node.node_id == id {
                 return Some(node.rect.width);
             }

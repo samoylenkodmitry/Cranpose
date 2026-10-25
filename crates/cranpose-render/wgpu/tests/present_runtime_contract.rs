@@ -646,8 +646,8 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
     // which neither the expected pixels nor the packet compared with them
     // may hold.
     producer.init_gpu_compiling_inline_for_tests(
-        device.clone(),
-        queue.clone(),
+        Arc::clone(&device),
+        Arc::clone(&queue),
         format,
         backend,
         downlevel,
@@ -659,8 +659,8 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
         let worker = scope.spawn(move || {
             let mut consumer = WgpuRenderer::new(&[support::TEST_FONT]);
             consumer.init_gpu_compiling_inline_for_tests(
-                device.clone(),
-                queue.clone(),
+                Arc::clone(&device),
+                Arc::clone(&queue),
                 format,
                 backend,
                 downlevel,

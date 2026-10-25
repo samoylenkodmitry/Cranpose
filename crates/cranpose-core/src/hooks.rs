@@ -294,7 +294,7 @@ pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
             .remember_at(source, || {
                 OwnedMutableState::with_runtime_structural_eq(init(), runtime)
             })
-            .with(super::state::OwnedMutableState::handle)
+            .with(OwnedMutableState::handle)
     })
 }
 
@@ -310,7 +310,7 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
         let runtime = composer.runtime_handle();
         composer
             .remember_at(source, || OwnedMutableState::with_runtime(init(), runtime))
-            .with(super::state::OwnedMutableState::handle)
+            .with(OwnedMutableState::handle)
     })
 }
 

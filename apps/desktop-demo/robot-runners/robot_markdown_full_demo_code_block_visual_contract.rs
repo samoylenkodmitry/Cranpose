@@ -121,7 +121,7 @@ pub(crate) fn main() {
             let client: HttpClientRef = Arc::new(MarkdownFixtureClient::default_leetcode_daily());
             move || {
                 let local = local_http_client();
-                let client = client.clone();
+                let client = Arc::clone(&client);
                 CompositionLocalProvider([local.provides(client)], || {
                     app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
                 });

@@ -256,7 +256,7 @@ struct PlatformPurchases;
 fn registered_purchases() -> PurchasesRef {
     PLATFORM_PURCHASES
         .get_or_warn("purchases")
-        .unwrap_or_else(|| NO_PURCHASES.get_or_init(|| Arc::new(NoPurchases)).clone())
+        .unwrap_or_else(|| Arc::clone(NO_PURCHASES.get_or_init(|| Arc::new(NoPurchases))))
 }
 
 fn active_purchases() -> PurchasesRef {
@@ -387,9 +387,7 @@ pub fn clear_platform_purchases() {
 /// The active backend: the platform one if installed, else the no-store
 /// backend.
 pub fn purchases() -> PurchasesRef {
-    DEFAULT_PURCHASES
-        .get_or_init(|| Arc::new(PlatformPurchases))
-        .clone()
+    Arc::clone(DEFAULT_PURCHASES.get_or_init(|| Arc::new(PlatformPurchases)))
 }
 
 /// Whether a real store backend is installed on this platform.

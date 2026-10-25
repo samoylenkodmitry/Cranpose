@@ -66,13 +66,13 @@ enum Converter {
 }
 
 impl Converter {
-    const BOTH: [Converter; 2] = [Converter::TiesUp, Converter::TiesToEven];
+    const BOTH: [Self; 2] = [Self::TiesUp, Self::TiesToEven];
 
     fn to_byte(self, channel: f32) -> u32 {
         let scaled = channel.clamp(0.0, 1.0) * 255.0;
         match self {
-            Converter::TiesUp => scaled.round() as u32,
-            Converter::TiesToEven => round_half_to_even(scaled) as u32,
+            Self::TiesUp => scaled.round() as u32,
+            Self::TiesToEven => round_half_to_even(scaled) as u32,
         }
     }
 }

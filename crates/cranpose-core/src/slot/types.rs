@@ -1,7 +1,6 @@
 use std::{
     any::{Any, TypeId},
     marker::PhantomData,
-    mem,
 };
 
 use smallvec::SmallVec;
@@ -197,7 +196,7 @@ pub(crate) enum NodeSlotUpdate {
 pub(super) struct PayloadRecord {
     pub(super) anchor: PayloadAnchor,
     pub(super) payload_type: &'static PayloadType,
-    pub(super) source: crate::Key,
+    pub(super) source: Key,
     pub(super) kind: PayloadKind,
     pub(super) value: Box<dyn Any>,
 }
@@ -269,7 +268,7 @@ pub(super) struct NodeRecord {
     pub(super) id: NodeId,
     pub(super) parent_id: Option<NodeId>,
     pub(super) generation: u32,
-    pub(super) source: crate::Key,
+    pub(super) source: Key,
     pub(super) lifecycle: NodeLifecycle,
     /// How many of the owner group's direct child groups the owner composed
     /// before this node. A group's own records sit ahead of its children's;
@@ -334,7 +333,7 @@ impl ActiveSubtreeRoot {
     }
 }
 
-pub(crate) const BRANCH_PATH_ROOT: crate::Key = 0xcbf2_9ce4_8422_2325;
+pub(crate) const BRANCH_PATH_ROOT: Key = 0xcbf2_9ce4_8422_2325;
 
 pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,
@@ -444,9 +443,9 @@ impl DetachedSubtree {
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.groups.capacity() * mem::size_of::<GroupRecord>()
-            + self.payloads.capacity() * mem::size_of::<PayloadRecord>()
-            + self.nodes.capacity() * mem::size_of::<NodeRecord>()
+        self.groups.capacity() * size_of::<GroupRecord>()
+            + self.payloads.capacity() * size_of::<PayloadRecord>()
+            + self.nodes.capacity() * size_of::<NodeRecord>()
     }
 
     pub(crate) fn group_anchors(&self) -> impl Iterator<Item = AnchorId> + '_ {

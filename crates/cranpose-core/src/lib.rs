@@ -513,15 +513,10 @@ pub fn composable_identity_key(definition: Key) -> Key {
 }
 
 #[doc(hidden)]
-pub fn composable_definition_key(
-    file: &str,
-    line: u32,
-    column: u32,
-    marker: std::any::TypeId,
-) -> Key {
+pub fn composable_definition_key(file: &str, line: u32, column: u32, marker: TypeId) -> Key {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&marker, &mut hasher);
-    location_key(file, line, column) ^ avalanche_location_key(std::hash::Hasher::finish(&hasher))
+    Hash::hash(&marker, &mut hasher);
+    location_key(file, line, column) ^ avalanche_location_key(Hasher::finish(&hasher))
 }
 
 /// The key [`caller_location_key`] gives a call site, as a constant the
@@ -659,14 +654,14 @@ pub struct AnchorId {
 }
 
 impl AnchorId {
-    pub(crate) const INVALID: AnchorId = AnchorId {
+    pub(crate) const INVALID: Self = Self {
         id: 0,
         generation: 0,
     };
 
     pub(crate) fn new(id: usize) -> Self {
         Self {
-            id: crate::slot::checked_usize_to_u32(id, "anchor id"),
+            id: slot::checked_usize_to_u32(id, "anchor id"),
             generation: 1,
         }
     }
@@ -802,7 +797,7 @@ pub(crate) struct RecomposeScopeInner {
     #[cfg(all(feature = "inspection", debug_assertions))]
     recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
     slots_storage_key: Cell<usize>,
-    slots_runtime_state: Cell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
+    slots_runtime_state: Cell<Option<Weak<composer::ComposerRuntimeState>>>,
     /// The states the scope is subscribed to: what its last body read, in
     /// read order.
     state_subscriptions: RefCell<StateIds>,
@@ -1190,7 +1185,7 @@ impl RecomposeScope {
         F: FnMut(&Composer) + 'static,
     {
         let body: fn() -> TypeId = TypeId::of::<F>;
-        let stateless = std::mem::size_of::<F>() == 0;
+        let stateless = size_of::<F>() == 0;
         if stateless && self.reruns_stateless(body) {
             return;
         }
@@ -1281,7 +1276,7 @@ impl RecomposeScope {
     }
 
     /// Ties the scope to the scope its lifetime follows, or to none.
-    fn set_owner(&self, kind: OwnerKind, owner: Option<&RecomposeScope>) {
+    fn set_owner(&self, kind: OwnerKind, owner: Option<&Self>) {
         update_cell(&self.inner.owner, |link| {
             let current = link
                 .as_ref()
@@ -1294,35 +1289,35 @@ impl RecomposeScope {
     }
 
     /// Makes `parent` the scope this one composes under, or makes it a root.
-    fn set_parent_scope(&self, parent: Option<&RecomposeScope>) {
+    fn set_parent_scope(&self, parent: Option<&Self>) {
         self.set_owner(OwnerKind::Parent, parent);
     }
 
-    fn owner_of_kind(&self, kind: OwnerKind) -> Option<RecomposeScope> {
+    fn owner_of_kind(&self, kind: OwnerKind) -> Option<Self> {
         read_cell(&self.inner.owner, |owner| {
             owner
                 .as_ref()
                 .filter(|(owner_kind, _)| *owner_kind == kind)
-                .and_then(|(_, owner)| RecomposeScope::upgrade(owner))
+                .and_then(|(_, owner)| Self::upgrade(owner))
         })
     }
 
-    fn parent_scope(&self) -> Option<RecomposeScope> {
+    fn parent_scope(&self) -> Option<Self> {
         self.owner_of_kind(OwnerKind::Parent)
     }
 
     /// Makes this scope a root whose lifetime follows `owner`, or a plain
     /// root.
-    fn set_lifetime_owner_scope(&self, owner: Option<&RecomposeScope>) {
+    fn set_lifetime_owner_scope(&self, owner: Option<&Self>) {
         self.set_owner(OwnerKind::Lifetime, owner);
     }
 
     #[cfg(test)]
-    fn lifetime_owner_scope(&self) -> Option<RecomposeScope> {
+    fn lifetime_owner_scope(&self) -> Option<Self> {
         self.owner_of_kind(OwnerKind::Lifetime)
     }
 
-    fn callback_promotion_target(&self) -> Option<RecomposeScope> {
+    fn callback_promotion_target(&self) -> Option<Self> {
         let mut current = self.parent_scope();
         while let Some(scope) = current {
             if scope.has_recompose_callback() {
@@ -1349,7 +1344,7 @@ impl RecomposeScope {
         let storage_key = host.storage_key();
         update_cell(&self.inner.slots_runtime_state, |runtime_state| {
             if self.inner.slots_storage_key.get() == storage_key
-                && runtime_state.as_ref().map(std::rc::Weak::as_ptr) == host.runtime_state_ptr()
+                && runtime_state.as_ref().map(Weak::as_ptr) == host.runtime_state_ptr()
             {
                 return;
             }
@@ -1365,20 +1360,16 @@ impl RecomposeScope {
 
     /// What decides the slot host a recomposition of this scope runs in: its
     /// table's storage key and the runtime state that table belongs to.
-    pub(crate) fn slots_host_identity(
-        &self,
-    ) -> (usize, *const crate::composer::ComposerRuntimeState) {
+    pub(crate) fn slots_host_identity(&self) -> (usize, *const composer::ComposerRuntimeState) {
         let state = read_cell(&self.inner.slots_runtime_state, |state| {
-            state
-                .as_ref()
-                .map_or(std::ptr::null(), std::rc::Weak::as_ptr)
+            state.as_ref().map_or(std::ptr::null(), Weak::as_ptr)
         });
         (self.inner.slots_storage_key.get(), state)
     }
 
-    pub(crate) fn slots_runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
+    pub(crate) fn slots_runtime_state(&self) -> Option<Rc<composer::ComposerRuntimeState>> {
         read_cell(&self.inner.slots_runtime_state, |state| {
-            state.as_ref().and_then(std::rc::Weak::upgrade)
+            state.as_ref().and_then(Weak::upgrade)
         })
     }
 
@@ -1553,23 +1544,23 @@ pub enum NodeError {
 impl std::fmt::Display for NodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NodeError::Missing { id } => write!(f, "node {id} missing"),
-            NodeError::TypeMismatch { id, expected } => {
+            Self::Missing { id } => write!(f, "node {id} missing"),
+            Self::TypeMismatch { id, expected } => {
                 write!(f, "node {id} type mismatch; expected {expected}")
             }
-            NodeError::MissingContext { id, reason } => {
+            Self::MissingContext { id, reason } => {
                 write!(f, "missing context for node {id}: {reason}")
             }
-            NodeError::AlreadyExists { id } => {
+            Self::AlreadyExists { id } => {
                 write!(f, "node {id} already exists")
             }
-            NodeError::MalformedCommandPayload { tag } => {
+            Self::MalformedCommandPayload { tag } => {
                 write!(f, "command queue missing or invalid {tag} payload")
             }
-            NodeError::SlotHostUnavailable { operation, reason } => {
+            Self::SlotHostUnavailable { operation, reason } => {
                 write!(f, "{operation} cannot access slot host: {reason}")
             }
-            NodeError::RecompositionLimitExceeded { operation, limit } => {
+            Self::RecompositionLimitExceeded { operation, limit } => {
                 write!(
                     f,
                     "{operation} exceeded {limit} iterations while reconciling composition"
@@ -1727,7 +1718,7 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
-    let runtime = with_current_composer(composer::Composer::runtime_handle);
+    let runtime = with_current_composer(Composer::runtime_handle);
     let id = remember(|| runtime.next_movable_content_id()).with(|id| *id);
     MovableContent {
         id,
@@ -1799,8 +1790,8 @@ pub fn forget_movable<K: Hash>(key: K) {
 }
 
 fn forget_movable_id(id: Key) {
-    let runtime = composer_context::try_with_composer(composer::Composer::runtime_handle)
-        .or_else(runtime::current_runtime_handle);
+    let runtime = composer_context::try_with_composer(Composer::runtime_handle)
+        .or_else(current_runtime_handle);
     match runtime {
         Some(runtime) => runtime.forget_movable(id),
         None => log::error!("forget_movable called without an active runtime"),
@@ -1920,7 +1911,7 @@ where
     K: PartialEq + 'static,
     F: FnOnce(DisposableEffectScope) -> DisposableEffectResult + 'static,
 {
-    __disposable_effect_impl(crate::caller_location_key(), keys, effect);
+    __disposable_effect_impl(caller_location_key(), keys, effect);
 }
 
 /// Clones values into new bindings and evaluates a body with those bindings in scope, which saves
@@ -1959,7 +1950,7 @@ pub fn push_parent(id: NodeId) {
 /// Closes the parent that the matching `push_parent` opened, using the current composer. Must be
 /// called during composition.
 pub fn pop_parent() {
-    with_current_composer(composer::Composer::pop_parent);
+    with_current_composer(Composer::pop_parent);
 }
 
 /// A node of the tree that a composition builds. An applier stores the nodes by id. Every method
@@ -3057,112 +3048,104 @@ impl CommandQueue {
     fn payload_len_bytes(&self) -> usize {
         self.bubble_dirty
             .len()
-            .saturating_mul(std::mem::size_of::<BubbleDirtyCommand>())
-            .saturating_add(
-                self.remove_nodes
-                    .len()
-                    .saturating_mul(std::mem::size_of::<NodeId>()),
-            )
-            .saturating_add(
-                self.mount_nodes
-                    .len()
-                    .saturating_mul(std::mem::size_of::<NodeId>()),
-            )
+            .saturating_mul(size_of::<BubbleDirtyCommand>())
+            .saturating_add(self.remove_nodes.len().saturating_mul(size_of::<NodeId>()))
+            .saturating_add(self.mount_nodes.len().saturating_mul(size_of::<NodeId>()))
             .saturating_add(
                 self.attach_children
                     .len()
-                    .saturating_mul(std::mem::size_of::<AttachChildCommand>()),
+                    .saturating_mul(size_of::<AttachChildCommand>()),
             )
             .saturating_add(
                 self.insert_children
                     .len()
-                    .saturating_mul(std::mem::size_of::<InsertChildCommand>()),
+                    .saturating_mul(size_of::<InsertChildCommand>()),
             )
             .saturating_add(
                 self.move_children
                     .len()
-                    .saturating_mul(std::mem::size_of::<MoveChildCommand>()),
+                    .saturating_mul(size_of::<MoveChildCommand>()),
             )
             .saturating_add(
                 self.remove_children
                     .len()
-                    .saturating_mul(std::mem::size_of::<RemoveChildCommand>()),
+                    .saturating_mul(size_of::<RemoveChildCommand>()),
             )
             .saturating_add(
                 self.detach_children
                     .len()
-                    .saturating_mul(std::mem::size_of::<DetachChildCommand>()),
+                    .saturating_mul(size_of::<DetachChildCommand>()),
             )
             .saturating_add(
                 self.sync_children
                     .len()
-                    .saturating_mul(std::mem::size_of::<SyncChildrenCommand>()),
+                    .saturating_mul(size_of::<SyncChildrenCommand>()),
             )
             .saturating_add(
                 self.sync_child_ids
                     .len()
-                    .saturating_mul(std::mem::size_of::<NodeId>()),
+                    .saturating_mul(size_of::<NodeId>()),
             )
             .saturating_add(
                 self.callbacks
                     .len()
-                    .saturating_mul(std::mem::size_of::<CommandCallback>()),
+                    .saturating_mul(size_of::<CommandCallback>()),
             )
     }
 
     fn payload_capacity_bytes(&self) -> usize {
         self.bubble_dirty
             .capacity()
-            .saturating_mul(std::mem::size_of::<BubbleDirtyCommand>())
+            .saturating_mul(size_of::<BubbleDirtyCommand>())
             .saturating_add(
                 self.remove_nodes
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<NodeId>()),
+                    .saturating_mul(size_of::<NodeId>()),
             )
             .saturating_add(
                 self.mount_nodes
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<NodeId>()),
+                    .saturating_mul(size_of::<NodeId>()),
             )
             .saturating_add(
                 self.attach_children
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<AttachChildCommand>()),
+                    .saturating_mul(size_of::<AttachChildCommand>()),
             )
             .saturating_add(
                 self.insert_children
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<InsertChildCommand>()),
+                    .saturating_mul(size_of::<InsertChildCommand>()),
             )
             .saturating_add(
                 self.move_children
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<MoveChildCommand>()),
+                    .saturating_mul(size_of::<MoveChildCommand>()),
             )
             .saturating_add(
                 self.remove_children
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<RemoveChildCommand>()),
+                    .saturating_mul(size_of::<RemoveChildCommand>()),
             )
             .saturating_add(
                 self.detach_children
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<DetachChildCommand>()),
+                    .saturating_mul(size_of::<DetachChildCommand>()),
             )
             .saturating_add(
                 self.sync_children
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<SyncChildrenCommand>()),
+                    .saturating_mul(size_of::<SyncChildrenCommand>()),
             )
             .saturating_add(
                 self.sync_child_ids
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<NodeId>()),
+                    .saturating_mul(size_of::<NodeId>()),
             )
             .saturating_add(
                 self.callbacks
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<CommandCallback>()),
+                    .saturating_mul(size_of::<CommandCallback>()),
             )
     }
 
@@ -4259,13 +4242,13 @@ impl MemoryApplier {
             .nodes
             .iter()
             .flatten()
-            .map(|node| std::mem::size_of_val(&**node) + node.debug_heap_bytes())
+            .map(|node| size_of_val(&**node) + node.debug_heap_bytes())
             .sum::<usize>();
         let high_id_nodes = self
             .state
             .high_id_nodes
             .values()
-            .map(|node| std::mem::size_of_val(&**node) + node.debug_heap_bytes())
+            .map(|node| size_of_val(&**node) + node.debug_heap_bytes())
             .sum::<usize>();
         dense_nodes + high_id_nodes
     }
@@ -4276,7 +4259,7 @@ impl MemoryApplier {
             pools
                 .values()
                 .flat_map(|nodes| nodes.iter())
-                .map(|node| std::mem::size_of_val(&*node.node) + node.node.debug_heap_bytes())
+                .map(|node| size_of_val(&*node.node) + node.node.debug_heap_bytes())
                 .sum::<usize>()
         };
 
@@ -4689,7 +4672,7 @@ impl MemoryApplier {
         self.state
             .high_id_nodes
             .get_mut(&id)
-            .map(std::convert::AsMut::as_mut)
+            .map(AsMut::as_mut)
             .ok_or(NodeError::Missing { id })
     }
 
@@ -4898,11 +4881,7 @@ impl Applier for MemoryApplier {
     /// One lookup of the node's slot serves the pass note and the node.
     fn bubble_node(&mut self, id: NodeId, flags: u8, note: bool) -> Option<&mut dyn Node> {
         let Some(index) = self.resolve_node_index(id) else {
-            return self
-                .state
-                .high_id_nodes
-                .get_mut(&id)
-                .map(std::convert::AsMut::as_mut);
+            return self.state.high_id_nodes.get_mut(&id).map(AsMut::as_mut);
         };
         if note && self.state.bubble_passes.note(index, flags) {
             return None;
@@ -4911,7 +4890,7 @@ impl Applier for MemoryApplier {
     }
 
     fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
-        MemoryApplier::get_ref(self, id)
+        Self::get_ref(self, id)
     }
 
     fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
@@ -5096,9 +5075,9 @@ pub(crate) struct FinishedSlotPass {
 
 struct SlotsHostInner {
     table: SlotTable,
-    nested_hosts: Vec<std::rc::Weak<SlotsHost>>,
+    nested_hosts: Vec<Weak<SlotsHost>>,
     lifecycle: slot::SlotLifecycleCoordinator,
-    runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
+    runtime_state: Option<Rc<composer::ComposerRuntimeState>>,
     /// The table's storage capacity when the active pass began; `None`
     /// while no pass is active.
     active_pass: Option<usize>,
@@ -5159,7 +5138,7 @@ impl SlotsHost {
 
     /// Records `nested` as a host composed inside this one, so that forgetting effects here reaches
     /// it too. Does nothing while this host is in use.
-    pub fn note_nested_host(&self, nested: &Rc<SlotsHost>) {
+    pub fn note_nested_host(&self, nested: &Rc<Self>) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else {
             return;
         };
@@ -5184,10 +5163,10 @@ impl SlotsHost {
             }
             let drops = inner.table.take_effect_drops();
             inner.nested_hosts.retain(|held| held.upgrade().is_some());
-            let nested: Vec<Rc<SlotsHost>> = inner
+            let nested: Vec<Rc<Self>> = inner
                 .nested_hosts
                 .iter()
-                .filter_map(std::rc::Weak::upgrade)
+                .filter_map(Weak::upgrade)
                 .collect();
             (drops, nested, inner.runtime_state.clone())
         };
@@ -5207,14 +5186,14 @@ impl SlotsHost {
         any
     }
 
-    pub(crate) fn bind_runtime_state(&self, state: &Rc<crate::composer::ComposerRuntimeState>) {
+    pub(crate) fn bind_runtime_state(&self, state: &Rc<composer::ComposerRuntimeState>) {
         let mut inner = self.inner.borrow_mut();
         inner.runtime_state = Some(Rc::clone(state));
     }
 
     pub(crate) fn rebind_orphaned_runtime_state(
         &self,
-        state: &Rc<crate::composer::ComposerRuntimeState>,
+        state: &Rc<composer::ComposerRuntimeState>,
     ) -> bool {
         let inner = self.inner.borrow();
         if inner.active_pass.is_some() {
@@ -5264,11 +5243,11 @@ impl SlotsHost {
         true
     }
 
-    pub(crate) fn runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
+    pub(crate) fn runtime_state(&self) -> Option<Rc<composer::ComposerRuntimeState>> {
         self.inner.borrow().runtime_state.clone()
     }
 
-    fn runtime_state_ptr(&self) -> Option<*const crate::composer::ComposerRuntimeState> {
+    fn runtime_state_ptr(&self) -> Option<*const composer::ComposerRuntimeState> {
         self.inner.borrow().runtime_state.as_ref().map(Rc::as_ptr)
     }
 
@@ -5389,7 +5368,7 @@ impl SlotsHost {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn debug_snapshot(&self) -> slot::SlotDebugSnapshot {
+    pub(crate) fn debug_snapshot(&self) -> SlotDebugSnapshot {
         let inner = self.inner.borrow();
         let mut snapshot = inner.table.debug_snapshot();
         if let Some(state) = inner.runtime_state.clone() {

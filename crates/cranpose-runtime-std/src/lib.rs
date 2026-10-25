@@ -190,7 +190,7 @@ impl StdRuntime {
     /// Creates a new standard runtime instance.
     pub fn new() -> Self {
         let scheduler = StdSchedulerRef::new(StdScheduler::default());
-        let runtime = Runtime::new(scheduler.clone());
+        let runtime = Runtime::new(StdSchedulerRef::clone(&scheduler));
         Self {
             scheduler,
             clock: Arc::new(StdClock),

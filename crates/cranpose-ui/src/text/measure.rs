@@ -57,7 +57,7 @@ pub struct PreparedTextLayout {
     pub text: Rc<crate::text::AnnotatedString>,
     /// The style the text draws in, shared with every render node drawn
     /// from this layout.
-    pub visual_style: std::sync::Arc<TextStyle>,
+    pub visual_style: Arc<TextStyle>,
     /// Size and line count of `text`.
     pub metrics: TextMetrics,
     /// The first and last drawn baselines, excluding blank height added by `min_lines`.
@@ -68,7 +68,7 @@ pub struct PreparedTextLayout {
     /// `text` as a renderer draws it, and its
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
     /// converted on first use: see [`PreparedTextLayout::render_text`].
-    pub render_text: std::cell::OnceCell<(std::sync::Arc<crate::text::RenderString>, u64)>,
+    pub render_text: std::cell::OnceCell<(Arc<crate::text::RenderString>, u64)>,
     pub(crate) visual_style_hash: std::cell::OnceCell<u64>,
     /// The max widths the layout's greedy wrap breaks the same lines at and
     /// cuts its ellipsis at the same character, when it wrapped: `None` when
@@ -122,9 +122,9 @@ impl PreparedTextLayout {
     /// The display text as a renderer draws it. Converted once for the layout
     /// and shared after, so every frame and scene rebuild drawing this layout
     /// hands over the same allocation.
-    pub fn render_text(&self) -> std::sync::Arc<crate::text::RenderString> {
+    pub fn render_text(&self) -> Arc<crate::text::RenderString> {
         if let Some((converted, _)) = self.render_text.get() {
-            return std::sync::Arc::clone(converted);
+            return Arc::clone(converted);
         }
         self.convert_render_text().0
     }
@@ -139,12 +139,10 @@ impl PreparedTextLayout {
         self.convert_render_text().1
     }
 
-    fn convert_render_text(&self) -> (std::sync::Arc<crate::text::RenderString>, u64) {
-        let converted = std::sync::Arc::new(self.text.render_string());
+    fn convert_render_text(&self) -> (Arc<crate::text::RenderString>, u64) {
+        let converted = Arc::new(self.text.render_string());
         let hash = converted.render_hash();
-        let _ = self
-            .render_text
-            .set((std::sync::Arc::clone(&converted), hash));
+        let _ = self.render_text.set((Arc::clone(&converted), hash));
         (converted, hash)
     }
 

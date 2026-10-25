@@ -23,8 +23,8 @@ pub(crate) struct AnalysisTap {
 }
 
 impl AnalysisTap {
-    pub(crate) fn new() -> Arc<AnalysisTap> {
-        Arc::new(AnalysisTap {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
             enabled: AtomicBool::new(false),
             filled: AtomicBool::new(false),
             ready: Mutex::new(Vec::new()),

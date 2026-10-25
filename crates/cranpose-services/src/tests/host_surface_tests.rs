@@ -74,7 +74,7 @@ fn a_resizable_surface_takes_the_request_and_refuses_nonsense() {
     let surface = Arc::new(ResizableSurface {
         requested: Mutex::new(None),
     });
-    set_platform_host_surface(surface.clone());
+    set_platform_host_surface(Arc::<ResizableSurface>::clone(&surface));
     assert!(host_surface_can_resize());
     assert_eq!(request_host_surface_size(275.0, 116.0), Ok(()));
     assert_eq!(

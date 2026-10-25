@@ -166,7 +166,7 @@ fn pending_guard_decrements_pending_count() {
 
 #[test]
 fn schedule_frame_without_runtime_is_ignored() {
-    let ok = std::thread::spawn(|| std::panic::catch_unwind(super::schedule_frame).is_ok())
+    let ok = std::thread::spawn(|| std::panic::catch_unwind(schedule_frame).is_ok())
         .join()
         .expect("test thread should join");
 
@@ -177,7 +177,7 @@ fn schedule_frame_without_runtime_is_ignored() {
 fn schedule_node_update_without_runtime_is_ignored() {
     let ok = std::thread::spawn(|| {
         std::panic::catch_unwind(|| {
-            super::schedule_node_update(|_| Ok(()));
+            schedule_node_update(|_| Ok(()));
         })
         .is_ok()
     })

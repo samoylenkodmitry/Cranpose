@@ -47,7 +47,7 @@ pub fn LinkedText(
     open_url: impl Fn(&str) + 'static,
 ) -> NodeId {
     let text = text.into();
-    let text_for_links = text.clone();
+    let text_for_links = Rc::clone(&text);
     let open_url: Rc<dyn Fn(&str)> = Rc::new(open_url);
     let modifier = modifier.stable_semantics(link_actions(Rc::clone(&text), Rc::clone(&open_url)));
 

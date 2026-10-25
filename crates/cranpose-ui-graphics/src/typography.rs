@@ -28,23 +28,23 @@ pub struct FontWeight(pub u16);
 
 impl FontWeight {
     /// Thin, weight 100.
-    pub const THIN: FontWeight = FontWeight(100);
+    pub const THIN: Self = Self(100);
     /// Extra light, weight 200.
-    pub const EXTRA_LIGHT: FontWeight = FontWeight(200);
+    pub const EXTRA_LIGHT: Self = Self(200);
     /// Light, weight 300.
-    pub const LIGHT: FontWeight = FontWeight(300);
+    pub const LIGHT: Self = Self(300);
     /// Normal, weight 400.
-    pub const NORMAL: FontWeight = FontWeight(400);
+    pub const NORMAL: Self = Self(400);
     /// Medium, weight 500.
-    pub const MEDIUM: FontWeight = FontWeight(500);
+    pub const MEDIUM: Self = Self(500);
     /// Semi bold, weight 600.
-    pub const SEMI_BOLD: FontWeight = FontWeight(600);
+    pub const SEMI_BOLD: Self = Self(600);
     /// Bold, weight 700.
-    pub const BOLD: FontWeight = FontWeight(700);
+    pub const BOLD: Self = Self(700);
     /// Extra bold, weight 800.
-    pub const EXTRA_BOLD: FontWeight = FontWeight(800);
+    pub const EXTRA_BOLD: Self = Self(800);
     /// Black, weight 900.
-    pub const BLACK: FontWeight = FontWeight(900);
+    pub const BLACK: Self = Self(900);
 
     /// Clamps to the `1..=1000` range every font backend accepts.
     pub const fn new(weight: u16) -> Self {

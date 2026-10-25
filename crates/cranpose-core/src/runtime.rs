@@ -184,7 +184,7 @@ impl StateArena {
         let inner = MutableStateInner::new_with_policy(value, runtime, policy);
         inner.install_snapshot_observer(id);
         let typed_cell = Rc::new(TypedStateCell { inner });
-        let cell: Rc<dyn Any> = typed_cell.clone();
+        let cell: Rc<dyn Any> = Rc::<TypedStateCell<T>>::clone(&typed_cell);
         let watcher_cell: Rc<dyn ScopeWatchCell> = typed_cell;
         let mut arena = self.inner.borrow_mut();
         let slot_entry = &mut arena.cells[slot as usize];
@@ -561,7 +561,8 @@ pub fn label_next_ui_task(label: impl Into<String>) {
 impl RuntimeInner {
     fn new(scheduler: SchedulerRef) -> Self {
         let (tx, rx) = mpsc::channel();
-        let dispatcher = UiDispatcherRef::new(UiDispatcherInner::new(scheduler.clone(), tx));
+        let dispatcher =
+            UiDispatcherRef::new(UiDispatcherInner::new(SchedulerRef::clone(&scheduler), tx));
         Self {
             scheduler,
             needs_frame: RefCell::new(false),
@@ -1124,7 +1125,7 @@ impl Runtime {
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle {
             inner: Rc::downgrade(&self.inner),
-            dispatcher: UiDispatcher::new(self.inner.ui_dispatcher.clone()),
+            dispatcher: UiDispatcher::new(UiDispatcherRef::clone(&self.inner.ui_dispatcher)),
             ui_thread_id: self.inner.ui_thread_id,
             id: self.inner.runtime_id,
         }
@@ -1856,7 +1857,7 @@ struct RuntimeTaskWaker {
 impl RuntimeTaskWaker {
     #[cfg(not(target_arch = "wasm32"))]
     fn new(inner: &RuntimeInner, runnable: Arc<AtomicBool>) -> Self {
-        let scheduler = inner.scheduler.clone();
+        let scheduler = Arc::clone(&inner.scheduler);
         Self {
             scheduler,
             runnable,

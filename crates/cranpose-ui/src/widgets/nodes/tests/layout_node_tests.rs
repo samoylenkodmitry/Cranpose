@@ -146,7 +146,7 @@ fn an_equal_modifier_leaves_the_chain_and_its_slices_as_they_were() {
 #[test]
 fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let app_context = crate::render_state::AppContext::new_with_density(1.0);
+    let app_context = AppContext::new_with_density(1.0);
     app_context.enter(|| {
         let nodes: Vec<_> = (0..2048)
             .map(|id| {
@@ -177,8 +177,8 @@ fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
 #[test]
 fn layout_node_registry_is_scoped_by_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let first = crate::render_state::AppContext::new_with_density(1.0);
-    let second = crate::render_state::AppContext::new_with_density(1.0);
+    let first = AppContext::new_with_density(1.0);
+    let second = AppContext::new_with_density(1.0);
 
     let first_id = 100;
     let virtual_node = LayoutNode::new_virtual();

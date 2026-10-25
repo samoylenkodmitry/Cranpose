@@ -92,7 +92,7 @@ fn declared_choices_survive_library_fallback_without_extra_languages() {
 fn saved_choice_overrides_system_and_system_choice_follows_later_changes() {
     let stored = Arc::new(Mutex::new(Some("fr".into())));
     let application =
-        Localization::persistent(catalog(), locales(&["de-DE"]), Store(stored.clone()));
+        Localization::persistent(catalog(), locales(&["de-DE"]), Store(Arc::clone(&stored)));
     application.load().expect("load");
     assert_eq!(save(&application), "Enregistrer");
     application.refresh_system(&locales(&["en"]));

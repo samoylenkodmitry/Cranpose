@@ -15,8 +15,8 @@ fn composing_a_tab_bar_requests_its_lighting_and_ink_shaders() {
                 0,
                 |_| {},
                 |tabs| {
-                    tabs.tab(crate::icons::STAR, "Discover");
-                    tabs.tab(crate::icons::BOOKMARK, "Saved");
+                    tabs.tab(icons::STAR, "Discover");
+                    tabs.tab(icons::BOOKMARK, "Saved");
                 },
             );
         });

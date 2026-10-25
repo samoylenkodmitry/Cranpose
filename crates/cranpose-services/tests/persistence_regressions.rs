@@ -48,7 +48,7 @@ fn failed_save_retries_the_latest_value_without_recomposition() {
     use std::sync::atomic::Ordering;
     let _guard = serial();
     let store = Arc::new(FallibleStore::default());
-    set_platform_preferences(store.clone());
+    set_platform_preferences(Arc::<FallibleStore>::clone(&store));
     let mut composition = Composition::new(MemoryApplier::new());
     let slot = Cell::new(None);
     compose(&mut composition, &slot);
@@ -84,7 +84,7 @@ fn a_forgotten_scope_restores_nothing_and_its_values_go_once_a_save_completes() 
     use std::sync::atomic::Ordering;
     let _guard = serial();
     let store = Arc::new(FallibleStore::default());
-    set_platform_preferences(store.clone());
+    set_platform_preferences(Arc::<FallibleStore>::clone(&store));
     let mut composition = Composition::new(MemoryApplier::new());
     let scope = std::cell::RefCell::new(None);
     composition
@@ -198,7 +198,7 @@ fn compose(composition: &mut Composition<MemoryApplier>, slot: &Cell<Option<Muta
 fn save_before_another_frame_restores_the_latest_value() {
     let _guard = serial();
     let store = Arc::new(MemoryPreferences::new());
-    set_platform_preferences(store.clone());
+    set_platform_preferences(Arc::<MemoryPreferences>::clone(&store));
     let mut composition = Composition::new(MemoryApplier::new());
     let slot = Cell::new(None);
     compose(&mut composition, &slot);

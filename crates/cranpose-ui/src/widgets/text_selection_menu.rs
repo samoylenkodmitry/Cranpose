@@ -260,7 +260,7 @@ fn item_width(label: &str, style: &TextStyle) -> f32 {
 /// same measured cell widths the Row lays out (6dp of vertical grace above
 /// and below the capsule).
 fn slide_item_at(
-    point: cranpose_ui_graphics::Point,
+    point: Point,
     origin_x: f32,
     origin_y: f32,
     page_items: &[TextMenuItem],
@@ -375,7 +375,7 @@ impl MenuAnchor {
 pub fn LiquidTextMenu(
     anchor: MenuAnchor,
     visible: bool,
-    live_point: Option<cranpose_ui_graphics::Point>,
+    live_point: Option<Point>,
     items: Vec<TextMenuItem>,
 ) {
     let motion = remember(|| {
@@ -613,7 +613,7 @@ pub fn LiquidTextMenu(
 pub fn TextSelectionMenu(
     anchor: MenuAnchor,
     visible: bool,
-    live_point: Option<cranpose_ui_graphics::Point>,
+    live_point: Option<Point>,
     can_copy: bool,
     can_paste: bool,
     on_copy: impl Fn() + 'static,

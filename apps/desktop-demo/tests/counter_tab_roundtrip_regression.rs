@@ -28,11 +28,7 @@ struct HitGraphRenderer {
     scene: Scene,
 }
 
-fn collect_graph_hits(
-    layer: &cranpose_render_common::graph::LayerNode,
-    scene: &mut Scene,
-    parent_hit_clip: Option<Rect>,
-) {
+fn collect_graph_hits(layer: &LayerNode, scene: &mut Scene, parent_hit_clip: Option<Rect>) {
     collect_hits_from_graph(
         layer,
         ProjectiveTransform::identity(),
@@ -539,7 +535,7 @@ fn async_runtime_progress_advances_after_animations_click_robot_path() {
     let mut last_progress = initial_progress;
     let mut last_texts = initial_texts;
     for _ in 0..40 {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         shell.update();
         let texts = semantics_texts(&mut shell);
         let progress = async_progress_percent(&texts)
@@ -583,7 +579,7 @@ fn async_runtime_progress_advances_after_animations_direct_state_switch_in_shell
     let mut last_progress = initial_progress;
     let mut last_texts = initial_texts;
     for _ in 0..40 {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         shell.update();
         let texts = semantics_texts(&mut shell);
         let progress = async_progress_percent(&texts)
@@ -625,7 +621,7 @@ fn animations_tab_alpha_advances_on_shell_path() {
     let mut last_alpha = initial_alpha;
     let mut last_texts = initial_texts;
     for _ in 0..40 {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         shell.update();
         let texts = semantics_texts(&mut shell);
         let alpha =
