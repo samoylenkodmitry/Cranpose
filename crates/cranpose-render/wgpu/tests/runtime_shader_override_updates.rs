@@ -51,7 +51,7 @@ fn changing_cloned_overrides_replaces_the_pipeline_without_changing_the_original
         );
         let frame = support::capture_graph_settled(
             &mut renderer,
-            support::page_graph(32, 24, vec![RenderNode::Layer(Box::new(layer))]),
+            &support::page_graph(32, 24, vec![RenderNode::Layer(Box::new(layer))]),
             32,
             24,
         );

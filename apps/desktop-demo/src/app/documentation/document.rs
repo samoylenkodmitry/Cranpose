@@ -29,14 +29,14 @@ impl GuideDocument {
         Self { items, starts }
     }
 
-    pub fn chapter(&self, item: usize) -> usize {
+    pub(super) fn chapter(&self, item: usize) -> usize {
         self.starts
             .partition_point(|start| *start <= item)
             .saturating_sub(1)
             .min(self.starts.len() - 2)
     }
 
-    pub fn position(&self, item: usize, fraction: f32) -> f32 {
+    pub(super) fn position(&self, item: usize, fraction: f32) -> f32 {
         let chapter = self.chapter(item);
         let start = self.starts[chapter];
         chapter as f32
@@ -44,7 +44,7 @@ impl GuideDocument {
                 / (self.starts[chapter + 1] - start) as f32
     }
 
-    pub fn item(&self, position: f32) -> (usize, f32) {
+    pub(super) fn item(&self, position: f32) -> (usize, f32) {
         let chapter = (position as usize).min(self.starts.len() - 2);
         let offset = position.fract() * (self.starts[chapter + 1] - self.starts[chapter]) as f32;
         (

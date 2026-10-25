@@ -10,12 +10,11 @@ use cranpose_render_common::{
 use cranpose_ui::{LayoutEngine, Size, TestComposition};
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
 
-/// Every string the layer and its descendants paint, in draw order.
-pub fn painted_text(layer: &LayerNode, out: &mut Vec<String>) {
+pub(crate) fn painted_text(layer: &LayerNode, out: &mut Vec<String>) {
     out.extend(layer.painted_text());
 }
 
-pub fn initial_graph(
+pub(crate) fn initial_graph(
     composition: &mut TestComposition,
     root: NodeId,
     viewport: Size,
@@ -31,7 +30,7 @@ pub fn initial_graph(
     graph
 }
 
-pub fn with_applier<R>(
+pub(crate) fn with_applier<R>(
     composition: &mut TestComposition,
     read: impl FnOnce(&mut MemoryApplier) -> R,
 ) -> R {
@@ -43,11 +42,7 @@ pub fn with_applier<R>(
     result
 }
 
-/// Recomposes, lays out and updates `graph` with the nodes the app shell
-/// would route: content for reshaped, redrawn and restructured nodes, the
-/// nodes whose layer properties changed and the moved ones apart. Returns
-/// the moved nodes.
-pub fn update_scene(
+pub(crate) fn update_scene(
     composition: &mut TestComposition,
     root: NodeId,
     viewport: Size,
@@ -83,14 +78,13 @@ pub fn update_scene(
     })
 }
 
-/// The graph a scene built anew from the composition's current state.
-pub fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
+pub(crate) fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
     with_applier(composition, |applier| {
         build_graph_from_applier(applier, root, 1.0).expect("fresh graph")
     })
 }
 
-pub fn painted_solid_rect_colors(layer: &LayerNode, colors: &mut Vec<Color>) {
+pub(crate) fn painted_solid_rect_colors(layer: &LayerNode, colors: &mut Vec<Color>) {
     for child in &layer.children {
         match child {
             RenderNode::Layer(child) => painted_solid_rect_colors(child, colors),

@@ -19,7 +19,7 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-pub fn live_state() {
+pub(crate) fn live_state() {
     let count = rememberMutableStateOf(|| 0u32);
     let holder = remember(|| ownedMutableStateOf(String::from("held")));
     rememberCoroutineScope().launch(pending());
@@ -52,7 +52,7 @@ fn held_composition(disposed: &Arc<AtomicBool>) -> Composition<MemoryApplier> {
     composition
 }
 
-pub fn exit_while_another_thread_composes(body: impl FnOnce() + Send + 'static) {
+pub(crate) fn exit_while_another_thread_composes(body: impl FnOnce() + Send + 'static) {
     let (composing, wait_for_composing) = mpsc::channel();
     let mut worker = Some(std::thread::spawn(move || {
         body();
@@ -71,7 +71,7 @@ pub fn exit_while_another_thread_composes(body: impl FnOnce() + Send + 'static) 
         .expect("the joining composition renders");
 }
 
-pub fn hold_composition_at_thread_exit(before_hold: fn()) {
+pub(crate) fn hold_composition_at_thread_exit(before_hold: fn()) {
     let disposed = Arc::new(AtomicBool::new(false));
     let held_disposed = Arc::clone(&disposed);
     exit_while_another_thread_composes(move || {
@@ -85,11 +85,11 @@ pub fn hold_composition_at_thread_exit(before_hold: fn()) {
     );
 }
 
-pub fn touch_the_holder_first() {
+pub(crate) fn touch_the_holder_first() {
     HELD_COMPOSITION.with(|held| assert!(held.borrow().is_none()));
 }
 
-pub fn touch_the_holder_after_another_runtime() {
+pub(crate) fn touch_the_holder_after_another_runtime() {
     drop(Composition::new(MemoryApplier::new()));
     touch_the_holder_first();
 }

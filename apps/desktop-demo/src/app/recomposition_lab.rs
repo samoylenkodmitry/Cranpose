@@ -88,7 +88,7 @@ fn PhaseSection(phase: MutableState<bool>) {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LabRoute {
+pub(super) enum LabRoute {
     Overview,
     Detail,
     Settings,

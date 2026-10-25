@@ -5,13 +5,13 @@ use cranpose_core::MutableState;
 use cranpose_ui::{Point, Size};
 
 /// How near an edge has to come before the window lines up with it.
-pub const SNAP_REACH: f32 = 12.0;
+pub(super) const SNAP_REACH: f32 = 12.0;
 /// How far apart two edges may sit and still count as touching.
-pub const ATTACH_EPSILON: f32 = 3.0;
+pub(super) const ATTACH_EPSILON: f32 = 3.0;
 
 /// Where a window is and how big it is, which is all the geometry needs.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Pane {
+pub(super) struct Pane {
     pub origin: Point,
     pub size: Size,
 }
@@ -28,7 +28,7 @@ impl Pane {
 
 /// Where a window dragged to `moving` should sit once it has lined up with
 /// whichever neighbour edge it came near.
-pub fn lined_up_with_neighbours(moving: Pane, neighbours: &[Pane]) -> Point {
+pub(super) fn lined_up_with_neighbours(moving: Pane, neighbours: &[Pane]) -> Point {
     neighbours.iter().fold(moving.origin, |at, other| Point {
         x: alongside(
             moving.origin.y,
@@ -53,7 +53,7 @@ pub fn lined_up_with_neighbours(moving: Pane, neighbours: &[Pane]) -> Point {
 
 /// Whether two windows are touching along an edge, which is what makes one
 /// travel with the other.
-pub fn touching(a: Pane, b: Pane) -> bool {
+pub(super) fn touching(a: Pane, b: Pane) -> bool {
     let sides = meet(a.right(), b.origin.x) || meet(b.right(), a.origin.x);
     let ends = meet(a.bottom(), b.origin.y) || meet(b.bottom(), a.origin.y);
     sides && overlaps(a.origin.y, a.bottom(), b.origin.y, b.bottom())
@@ -61,7 +61,7 @@ pub fn touching(a: Pane, b: Pane) -> bool {
 }
 
 /// Every window that travels with `moved`, directly or through another.
-pub fn carried_by(moved: u64, panes: &HashMap<u64, Pane>) -> Vec<u64> {
+pub(super) fn carried_by(moved: u64, panes: &HashMap<u64, Pane>) -> Vec<u64> {
     let mut carried = vec![moved];
     let mut reach = panes.get(&moved).copied().into_iter().collect::<Vec<_>>();
     while let Some(pane) = reach.pop() {
@@ -108,10 +108,10 @@ fn meet(a: f32, b: f32) -> bool {
 ///
 /// Remember one of these per set of windows that snap together, with
 /// `rememberMutableStateOf(HashMap::new)`.
-pub type RestingPlaces = MutableState<HashMap<u64, Point>>;
+pub(super) type RestingPlaces = MutableState<HashMap<u64, Point>>;
 
 /// Forgets a window that is no longer on screen.
-pub fn forget(resting: RestingPlaces, key: u64) {
+pub(super) fn forget(resting: RestingPlaces, key: u64) {
     if resting.get_non_reactive().contains_key(&key) {
         resting.update(|resting| {
             resting.remove(&key);
@@ -125,7 +125,12 @@ pub fn forget(resting: RestingPlaces, key: u64) {
 /// Call it from a window's `on_moved` with the states of every window that can
 /// snap. Cranpose reports only the moves the application did not ask for, so
 /// what arrives here is the person dragging.
-pub fn window_moved(resting: RestingPlaces, moved: u64, to: Point, windows: &[(u64, WindowState)]) {
+pub(super) fn window_moved(
+    resting: RestingPlaces,
+    moved: u64,
+    to: Point,
+    windows: &[(u64, WindowState)],
+) {
     let panes = panes_with(moved, to, windows);
     let Some(moving) = panes.get(&moved).copied() else {
         return;

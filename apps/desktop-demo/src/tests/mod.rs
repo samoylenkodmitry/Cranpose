@@ -1,3 +1,3 @@
-pub mod compose_twin_tests;
-pub mod robot_lazy_reverse_layout;
-pub mod robot_test;
+pub(crate) mod compose_twin_tests;
+pub(crate) mod robot_lazy_reverse_layout;
+pub(crate) mod robot_test;

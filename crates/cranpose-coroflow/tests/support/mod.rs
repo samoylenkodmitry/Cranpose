@@ -10,9 +10,7 @@ use std::{
 
 use cranpose_core::{Composition, MemoryApplier};
 
-/// Counts its own drops, so a test can see when the future or value that
-/// holds it is dropped.
-pub struct DropMarker(pub Arc<AtomicUsize>);
+pub(crate) struct DropMarker(pub Arc<AtomicUsize>);
 
 impl Drop for DropMarker {
     fn drop(&mut self) {
@@ -20,14 +18,14 @@ impl Drop for DropMarker {
     }
 }
 
-pub const PATIENCE: Duration = Duration::from_secs(5);
-pub const QUIET_PERIOD: Duration = Duration::from_millis(200);
+pub(crate) const PATIENCE: Duration = Duration::from_secs(5);
+pub(crate) const QUIET_PERIOD: Duration = Duration::from_millis(200);
 
-pub fn composition() -> Composition<MemoryApplier> {
+pub(crate) fn composition() -> Composition<MemoryApplier> {
     Composition::new(MemoryApplier::new())
 }
 
-pub fn pump_until(
+pub(crate) fn pump_until(
     composition: &mut Composition<MemoryApplier>,
     render: impl FnMut(&mut Composition<MemoryApplier>),
     done: impl FnMut() -> bool,
@@ -35,7 +33,7 @@ pub fn pump_until(
     pump_for(PATIENCE, composition, render, done)
 }
 
-pub fn pump_for(
+pub(crate) fn pump_for(
     patience: Duration,
     composition: &mut Composition<MemoryApplier>,
     mut render: impl FnMut(&mut Composition<MemoryApplier>),

@@ -25,7 +25,7 @@ pub const MAX_CLIPS: usize = 256;
 /// is stolen, which is what a listener expects when a cue storm arrives.
 pub const MAX_VOICES: usize = 32;
 
-pub const BUS_COUNT: usize = 2;
+pub(crate) const BUS_COUNT: usize = 2;
 
 /// How long the output keeps running with nothing to play before the mixer
 /// stops it.
@@ -158,7 +158,7 @@ impl Voice {
     };
 }
 
-pub struct Mixer {
+pub(crate) struct Mixer {
     commands: Consumer<Command>,
     retired: Producer<ClipData>,
     leaked_clips: Arc<AtomicU32>,
@@ -176,7 +176,7 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    pub fn new(seed: MixerSeed, sample_rate: f32, channels: usize) -> Self {
+    pub(crate) fn new(seed: MixerSeed, sample_rate: f32, channels: usize) -> Self {
         let mut clips = Vec::with_capacity(MAX_CLIPS);
         clips.resize_with(MAX_CLIPS, || None);
         Self {
@@ -197,7 +197,7 @@ impl Mixer {
         }
     }
 
-    pub fn set_device_format(&mut self, sample_rate: f32, channels: usize) {
+    pub(crate) fn set_device_format(&mut self, sample_rate: f32, channels: usize) {
         let sample_rate = sample_rate.max(1.0);
         let channels = channels.max(1);
         if sample_rate == self.device_sample_rate && channels == self.device_channels {
@@ -218,16 +218,16 @@ impl Mixer {
     }
 
     #[allow(dead_code, reason = "only some audio backends read it")]
-    pub fn device_sample_rate(&self) -> f32 {
+    pub(crate) fn device_sample_rate(&self) -> f32 {
         self.device_sample_rate
     }
 
     #[allow(dead_code, reason = "only some audio backends read it")]
-    pub fn active_voices(&self) -> usize {
+    pub(crate) fn active_voices(&self) -> usize {
         self.voices.iter().filter(|voice| voice.id != 0).count()
     }
 
-    pub fn render(&mut self, out: &mut [f32]) -> RenderStatus {
+    pub(crate) fn render(&mut self, out: &mut [f32]) -> RenderStatus {
         self.drain_commands();
 
         for sample in out.iter_mut() {

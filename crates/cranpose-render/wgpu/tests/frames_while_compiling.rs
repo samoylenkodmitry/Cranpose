@@ -125,7 +125,7 @@ fn landed(before: Option<&RenderGraph>, graph: &RenderGraph) -> Vec<u8> {
         renderer.needs_frame_warmup(),
         "a frame drawn without its pipelines asks for the frames after it"
     );
-    support::capture_graph_settled(&mut renderer, graph.clone(), WIDTH, HEIGHT).pixels
+    support::capture_graph_settled(&mut renderer, &graph.clone(), WIDTH, HEIGHT).pixels
 }
 
 #[test]

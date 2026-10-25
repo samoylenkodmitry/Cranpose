@@ -46,8 +46,8 @@ mod window_root;
 mod wrap_content;
 mod z_index;
 
-pub(crate) use chain::{InPlaceReach, InPlaceUpdate};
-pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
+pub(crate) use chain::{InPlaceReach, InPlaceUpdate, ModifierLocalsHandle};
+pub use chain::{ModifierChainHandle, ModifierChainInspectorNode};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 pub use cranpose_foundation::{
     AnyModifierElement, DynModifierElement, FocusState, PointerButton, PointerButtons,
@@ -68,8 +68,9 @@ pub use drag_and_drop::{
     DragAndDropSourceElement, DragAndDropSourceNode, DragAndDropState, DragAndDropTarget,
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
+pub(crate) use focus::FocusRequesterElement;
 use focus::FocusTargetElement;
-pub use focus::{FocusDirection, FocusRequestError, FocusRequester, FocusRequesterElement};
+pub use focus::{FocusDirection, FocusRequestError, FocusRequester};
 pub use graphics_layer::GlassMaterial;
 pub use key_input::KeyEventRoute;
 pub(crate) use local::{
@@ -77,17 +78,16 @@ pub(crate) use local::{
 };
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 pub use local::{ModifierLocalKey, ModifierLocalReadScope};
-#[expect(unused_imports, reason = "re-exported for applications")]
-pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
+pub use pointer_input::PointerInputScope;
 pub use rotary_input::RotaryInputModifierNode;
 #[cfg(test)]
 pub(crate) use scroll::lazy_scroll_semantics;
 #[cfg(feature = "test-helpers")]
 pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 use semantics::SemanticsElement;
-pub use semantics::{
-    SemanticsRequester, SemanticsRequesterElement, collect_semantics_from_chain,
-    collect_semantics_from_modifier, semantics_reach_of_chain,
+pub use semantics::{SemanticsRequester, collect_semantics_from_modifier};
+pub(crate) use semantics::{
+    SemanticsRequesterElement, collect_semantics_from_chain, semantics_reach_of_chain,
 };
 pub(crate) use slices::SlicesSnapshot;
 pub use slices::{
@@ -105,35 +105,35 @@ pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 use crate::modifier_nodes::ClipToBoundsElement;
 
 #[derive(Clone, Debug, Default)]
-pub struct InspectorInfo {
+pub(crate) struct InspectorInfo {
     properties: Vec<InspectorProperty>,
 }
 
 impl InspectorInfo {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn add_property<V: Into<String>>(&mut self, name: &'static str, value: V) {
+    pub(crate) fn add_property<V: Into<String>>(&mut self, name: &'static str, value: V) {
         self.properties.push(InspectorProperty {
             name,
             value: value.into(),
         });
     }
 
-    pub fn properties(&self) -> &[InspectorProperty] {
+    pub(crate) fn properties(&self) -> &[InspectorProperty] {
         &self.properties
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.properties.is_empty()
     }
 
-    pub fn add_dimension(&mut self, name: &'static str, constraint: DimensionConstraint) {
+    pub(crate) fn add_dimension(&mut self, name: &'static str, constraint: DimensionConstraint) {
         self.add_property(name, describe_dimension(constraint));
     }
 
-    pub fn add_offset_components(
+    pub(crate) fn add_offset_components(
         &mut self,
         x_name: &'static str,
         y_name: &'static str,
@@ -143,7 +143,7 @@ impl InspectorInfo {
         self.add_property(y_name, offset.y.to_string());
     }
 
-    pub fn add_alignment<A>(&mut self, name: &'static str, alignment: A)
+    pub(crate) fn add_alignment<A>(&mut self, name: &'static str, alignment: A)
     where
         A: fmt::Debug,
     {
@@ -326,7 +326,7 @@ enum ModifierKind {
     },
 }
 
-pub struct ModifierElementIterator<'a> {
+pub(crate) struct ModifierElementIterator<'a> {
     inner: std::slice::Iter<'a, DynModifierElement>,
 }
 

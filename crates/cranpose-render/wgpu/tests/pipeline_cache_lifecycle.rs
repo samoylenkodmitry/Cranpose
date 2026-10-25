@@ -408,7 +408,7 @@ fn frame_waits_of(renderer: &mut support::LockedRenderer, page: RenderGraph) -> 
 /// records the pipelines it draws with.
 fn draw_settled(renderer: &mut support::LockedRenderer, page: RenderGraph) {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    support::capture_graph_settled(renderer, page, FRAME_WIDTH, FRAME_HEIGHT);
+    support::capture_graph_settled(renderer, &page, FRAME_WIDTH, FRAME_HEIGHT);
 }
 
 /// After an update the compiled pipelines are gone, but the glass the last

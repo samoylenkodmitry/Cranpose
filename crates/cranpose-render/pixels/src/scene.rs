@@ -254,7 +254,7 @@ pub(crate) struct RasterScene {
 }
 
 impl RasterScene {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             shapes: Vec::new(),
             images: Vec::new(),
@@ -507,7 +507,7 @@ impl RasterScene {
         self.shapes.push(shape);
     }
 
-    pub fn push_shape(
+    pub(crate) fn push_shape(
         &mut self,
         rect: Rect,
         brush: Brush,
@@ -530,7 +530,7 @@ impl RasterScene {
         });
     }
 
-    pub fn push_shadow(&mut self, shadow: ShadowRRect, color: Color, clip: Option<Rect>) {
+    pub(crate) fn push_shadow(&mut self, shadow: ShadowRRect, color: Color, clip: Option<Rect>) {
         self.order.push(RenderItem::Shadow(self.shadows.len()));
         self.shadows.push(ShadowDraw {
             shadow,
@@ -540,7 +540,7 @@ impl RasterScene {
         });
     }
 
-    pub fn push_pixel_snapped_shape(
+    pub(crate) fn push_pixel_snapped_shape(
         &mut self,
         rect: Rect,
         brush: Brush,
@@ -563,13 +563,11 @@ impl RasterScene {
         });
     }
 
-    /// Queues a shape an emitted primitive resolved: a rect, rounded rect,
-    /// stroke, arc band, line segment or slice of a path fill.
-    pub fn push_shape_params(&mut self, params: ShapeDrawParams) {
+    pub(crate) fn push_shape_params(&mut self, params: ShapeDrawParams) {
         self.push_draw_shape(DrawShape::of_params(params));
     }
 
-    pub fn push_image(&mut self, draw: ImageDraw) {
+    pub(crate) fn push_image(&mut self, draw: ImageDraw) {
         self.order.push(RenderItem::Image(self.images.len()));
         self.images.push(ImageDraw {
             alpha: draw.alpha.clamp(0.0, 1.0),
@@ -608,7 +606,7 @@ impl RasterScene {
         });
     }
 
-    pub fn push_text(&mut self, draw: TextDraw) {
+    pub(crate) fn push_text(&mut self, draw: TextDraw) {
         self.order.push(RenderItem::Text(self.texts.len()));
         self.texts.push(draw);
     }

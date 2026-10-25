@@ -171,7 +171,7 @@ pub fn LiquidNavBar(
     });
 }
 
-pub fn large_title_settle_policy(collapse_range: f32) -> cranpose_ui::ScrollSettlePolicy {
+pub(super) fn large_title_settle_policy(collapse_range: f32) -> cranpose_ui::ScrollSettlePolicy {
     let range = collapse_range.max(1.0);
     Rc::new(move |proposed: f32, _velocity: f32| {
         if proposed <= 0.0 || proposed >= range {

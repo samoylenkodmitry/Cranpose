@@ -129,7 +129,7 @@ pub(crate) struct AnnotatedTextLayout<'a> {
 }
 
 impl<'a> AnnotatedTextLayout<'a> {
-    pub fn new(
+    pub(crate) fn new(
         text: StyledTextRef<'a>,
         style: &'a TextStyle,
         font_size: f32,
@@ -148,7 +148,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         )
     }
 
-    pub fn new_range(
+    pub(crate) fn new_range(
         text: StyledTextRef<'a>,
         range: Range<usize>,
         style: &'a TextStyle,
@@ -282,7 +282,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         }
     }
 
-    pub fn walk(
+    pub(crate) fn walk(
         &self,
         line_offsets: Option<&[f32]>,
         mut visit: impl FnMut(AnnotatedTextSegment<'_>) -> Option<f32>,
@@ -298,7 +298,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         Some(self.metrics(width))
     }
 
-    pub fn walk_line(
+    pub(crate) fn walk_line(
         &self,
         line_index: usize,
         offset: f32,
@@ -388,7 +388,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         }
     }
 
-    pub fn all_styles(&self, matches: impl Fn(&TextStyle) -> bool) -> bool {
+    pub(crate) fn all_styles(&self, matches: impl Fn(&TextStyle) -> bool) -> bool {
         self.styles
             .iter()
             .all(|style| matches(style.as_ref().unwrap_or(self.base_style)))
@@ -400,7 +400,7 @@ impl<'a> AnnotatedTextLayout<'a> {
             .map_or(self.base_style, |style| style)
     }
 
-    pub fn has_non_solid_brush(&self) -> bool {
+    pub(crate) fn has_non_solid_brush(&self) -> bool {
         self.styles.iter().any(|style| {
             style
                 .as_ref()
@@ -412,7 +412,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         })
     }
 
-    pub fn brush_extents(
+    pub(crate) fn brush_extents(
         &self,
         line_offsets: Option<&[f32]>,
         scale: f32,
@@ -468,7 +468,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         extents
     }
 
-    pub fn metrics(&self, width: f32) -> TextMetrics {
+    pub(crate) fn metrics(&self, width: f32) -> TextMetrics {
         TextMetrics {
             width,
             height: self.lines.last().map_or(0.0, |line| {

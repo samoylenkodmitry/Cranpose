@@ -176,7 +176,7 @@ fn a_requested_specialization_draws_without_a_general_stand_in() {
         reference.source()
     ));
     let reference =
-        support::capture_graph_settled(&mut renderer, page_draw(reference), WIDTH, HEIGHT);
+        support::capture_graph_settled(&mut renderer, &page_draw(reference), WIDTH, HEIGHT);
     shader.set_override("UNUSED", 1.0);
     shader.set_specialization_exact(true);
     request_shader_warm_ups([ShaderWarmUp {

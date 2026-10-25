@@ -101,7 +101,7 @@ pub(crate) fn wrap_content_placement(
 
 /// The element behind [`Modifier::wrap_content_size`] and its one-axis forms.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WrapContentElement {
+pub(super) struct WrapContentElement {
     axes: WrapAxes,
     alignment: Alignment,
     unbounded: bool,
@@ -117,7 +117,7 @@ impl Hash for WrapContentElement {
 }
 
 /// The layout node that measures its content at its own size.
-pub struct WrapContentNode {
+pub(super) struct WrapContentNode {
     axes: WrapAxes,
     alignment: Alignment,
     unbounded: bool,

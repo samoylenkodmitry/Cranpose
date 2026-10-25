@@ -1,6 +1,6 @@
 use coroflow::{Dispatchers, with_context};
 
-pub fn serial(jobs: u64) -> u64 {
+pub(crate) fn serial(jobs: u64) -> u64 {
     let dispatchers = [Dispatchers::default_pool(), Dispatchers::io()];
     pollster::block_on(async {
         let mut sum = 0;
@@ -13,7 +13,7 @@ pub fn serial(jobs: u64) -> u64 {
     })
 }
 
-pub async fn blocking(work: impl FnOnce() -> u64 + Send + 'static) -> u64 {
+pub(crate) async fn blocking(work: impl FnOnce() -> u64 + Send + 'static) -> u64 {
     cranpose_core::withBlocking(work)
         .await
         .expect("blocking work completes")

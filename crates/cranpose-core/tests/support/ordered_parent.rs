@@ -1,14 +1,14 @@
 use cranpose_core::{Node, NodeId};
 
-pub trait FixtureLeaf: std::any::Any {}
+pub(crate) trait FixtureLeaf: std::any::Any {}
 
-pub struct ParentTracked<T> {
+pub(crate) struct ParentTracked<T> {
     node: T,
     parent: Option<NodeId>,
 }
 
 impl<T> ParentTracked<T> {
-    pub fn new(node: T) -> Self {
+    pub(crate) fn new(node: T) -> Self {
         Self { node, parent: None }
     }
 }
@@ -45,7 +45,7 @@ impl<T: FixtureLeaf> Node for ParentTracked<T> {
 }
 
 #[derive(Default)]
-pub struct OrderedParent {
+pub(crate) struct OrderedParent {
     pub children: Vec<NodeId>,
     pub hidden_children: Vec<NodeId>,
 }

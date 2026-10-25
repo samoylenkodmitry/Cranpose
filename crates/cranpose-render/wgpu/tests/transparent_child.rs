@@ -147,7 +147,7 @@ fn backdrop_node(rect: Rect, effect: RenderEffect) -> RenderNode {
 fn capture(renderer: &mut support::LockedRenderer, page: Vec<RenderNode>) -> CapturedFrame {
     support::capture_graph_settled(
         renderer,
-        support::page_graph(WIDTH, HEIGHT, page),
+        &support::page_graph(WIDTH, HEIGHT, page),
         WIDTH,
         HEIGHT,
     )

@@ -3,7 +3,7 @@ use super::{
     lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState},
 };
 
-pub struct ScrollPositionResolver<'a> {
+pub(super) struct ScrollPositionResolver<'a> {
     state: &'a LazyListState,
     measure_state: LazyListMeasureStateSnapshot,
     config: &'a LazyListMeasureConfig,
@@ -12,7 +12,7 @@ pub struct ScrollPositionResolver<'a> {
 }
 
 impl<'a> ScrollPositionResolver<'a> {
-    pub fn new(
+    pub(super) fn new(
         state: &'a LazyListState,
         measure_state: LazyListMeasureStateSnapshot,
         config: &'a LazyListMeasureConfig,

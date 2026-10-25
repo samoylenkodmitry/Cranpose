@@ -13,12 +13,12 @@ use super::Modifier;
 
 /// The side of the smallest target a person presses with ease: Material's
 /// 48 dp, above Apple's 44 pt.
-pub const MINIMUM_INTERACTIVE_SIZE: f32 = 48.0;
+pub(super) const MINIMUM_INTERACTIVE_SIZE: f32 = 48.0;
 
 /// The size a control takes and where its content sits inside it: at least
 /// the minimum on each side, as far as the incoming constraints allow, with
 /// the content in the middle on the device pixel grid of `density`.
-pub fn minimum_interactive_placement(
+pub(super) fn minimum_interactive_placement(
     constraints: Constraints,
     content: Size,
     density: f32,
@@ -43,10 +43,10 @@ pub fn minimum_interactive_placement(
 
 /// The element behind [`Modifier::minimum_interactive_component_size`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct MinimumInteractiveElement;
+pub(super) struct MinimumInteractiveElement;
 
 /// The layout node that widens a control to the minimum target size.
-pub struct MinimumInteractiveNode {
+pub(super) struct MinimumInteractiveNode {
     state: NodeState,
 }
 

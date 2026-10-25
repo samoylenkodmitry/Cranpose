@@ -1,13 +1,10 @@
-/// A WGSL module parsed and validated once, then lowered stage by stage to
-/// GLSL ES 300 as the GL backend lowers it: its pipeline constants applied
-/// and the branches they decide removed.
-pub struct ParsedShader {
+pub(crate) struct ParsedShader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
 }
 
 impl ParsedShader {
-    pub fn new(source: &str) -> Result<Self, String> {
+    pub(crate) fn new(source: &str) -> Result<Self, String> {
         let module = naga::front::wgsl::parse_str(source)
             .map_err(|err| format!("WGSL parse error: {err}"))?;
         let info = naga::valid::Validator::new(
@@ -19,7 +16,7 @@ impl ParsedShader {
         Ok(Self { module, info })
     }
 
-    pub fn lower_to_gles(
+    pub(crate) fn lower_to_gles(
         &self,
         entry_point: &str,
         shader_stage: naga::ShaderStage,

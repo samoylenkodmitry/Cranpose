@@ -22,7 +22,7 @@ fn shared_instance(backends: wgpu::Backends) -> wgpu::Instance {
     instance
 }
 
-pub fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, String> {
+pub(crate) fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, String> {
     let instance = shared_instance(backends);
     pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
@@ -31,16 +31,15 @@ pub fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, Strin
     .map_err(|err| format!("adapter request failed: {err:?}"))
 }
 
-/// Where a test renderer compiles its pipelines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pipelines {
+pub(crate) enum Pipelines {
     /// On the background compiler, as an app does.
     Background,
     /// Where each is first needed.
     Inline,
 }
 
-pub struct HeadlessDevice {
+pub(crate) struct HeadlessDevice {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     backend: wgpu::Backend,
@@ -48,7 +47,7 @@ pub struct HeadlessDevice {
 }
 
 impl HeadlessDevice {
-    pub fn request(
+    pub(crate) fn request(
         backends: wgpu::Backends,
         limits: wgpu::Limits,
         label: &str,
@@ -56,10 +55,7 @@ impl HeadlessDevice {
         Self::request_without_features(backends, limits, label, wgpu::Features::empty())
     }
 
-    /// A device without `features` of those the renderer asks for: without
-    /// `MAPPABLE_PRIMARY_BUFFERS` it copies its uploads as a discrete GPU
-    /// does.
-    pub fn request_without_features(
+    pub(crate) fn request_without_features(
         backends: wgpu::Backends,
         limits: wgpu::Limits,
         label: &str,
@@ -83,15 +79,12 @@ impl HeadlessDevice {
         })
     }
 
-    pub fn without(mut self, flags: wgpu::DownlevelFlags) -> Self {
+    pub(crate) fn without(mut self, flags: wgpu::DownlevelFlags) -> Self {
         self.downlevel.remove(flags);
         self
     }
 
-    /// Gives `renderer` this device. With [`Pipelines::Inline`] it compiles
-    /// every pipeline where first needed, so its frames never draw with a
-    /// stand-in: what a reference renderer needs.
-    pub fn attach(
+    pub(crate) fn attach(
         self,
         renderer: &mut WgpuRenderer,
         format: wgpu::TextureFormat,

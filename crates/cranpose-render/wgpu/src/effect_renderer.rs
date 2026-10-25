@@ -1207,7 +1207,7 @@ fn projective_pipeline_job(
 }
 
 impl EffectRenderer {
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         compiler: PipelineCompiler,
         pipeline_cache: Option<wgpu::PipelineCache>,

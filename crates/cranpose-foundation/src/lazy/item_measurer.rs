@@ -15,7 +15,7 @@ const MAX_VISIBLE_ITEMS_SAFETY: usize = 10000;
 const MIN_ESTIMATED_ITEM_EXTENT: f32 = 1.0;
 
 #[derive(Debug)]
-pub struct ItemMeasurePass {
+pub(super) struct ItemMeasurePass {
     pub items: Vec<LazyListMeasuredItem>,
     pub start_index: usize,
     pub start_offset: f32,
@@ -26,7 +26,7 @@ pub struct ItemMeasurePass {
     pub viewport_filled: bool,
 }
 
-pub struct ItemMeasurer<'a, S> {
+pub(super) struct ItemMeasurer<'a, S> {
     source: &'a mut S,
     pre_measured: VecDeque<LazyListMeasuredItem>,
     config: &'a LazyListMeasureConfig,
@@ -44,7 +44,7 @@ impl<'a, S> ItemMeasurer<'a, S>
 where
     S: LazyItemSource,
 {
-    pub fn new(
+    pub(super) fn new(
         source: &'a mut S,
         config: &'a LazyListMeasureConfig,
         items_count: usize,
@@ -67,27 +67,27 @@ where
         }
     }
 
-    pub fn with_beyond_bounds_item_count(mut self, count: usize) -> Self {
+    pub(super) fn with_beyond_bounds_item_count(mut self, count: usize) -> Self {
         self.beyond_bounds_item_count = count;
         self
     }
 
-    pub fn with_guaranteed_after_beyond_bounds_item_count(mut self, count: usize) -> Self {
+    pub(super) fn with_guaranteed_after_beyond_bounds_item_count(mut self, count: usize) -> Self {
         self.guaranteed_after_beyond_bounds_item_count = count.min(self.beyond_bounds_item_count);
         self
     }
 
-    pub fn with_include_before_beyond_bounds(mut self, include: bool) -> Self {
+    pub(super) fn with_include_before_beyond_bounds(mut self, include: bool) -> Self {
         self.include_before_beyond_bounds = include;
         self
     }
 
-    pub fn with_telemetry_pass_id(mut self, pass_id: Option<u64>) -> Self {
+    pub(super) fn with_telemetry_pass_id(mut self, pass_id: Option<u64>) -> Self {
         self.telemetry_pass_id = pass_id;
         self
     }
 
-    pub fn measure_all(
+    pub(super) fn measure_all(
         &mut self,
         first_item_index: usize,
         first_item_scroll_offset: f32,

@@ -7,7 +7,7 @@ use cranpose_ui::{composable, Modifier, PointerEventKind, PointerInputScope};
 /// the window; letting go without dragging is a click, which is the framework's
 /// own reading of a click, not this demo's.
 #[derive(Clone, Copy)]
-pub struct FloatingInput {
+pub(super) struct FloatingInput {
     pressed: MutableState<bool>,
     hovered: MutableState<bool>,
     clicks: MutableState<u32>,
@@ -29,20 +29,20 @@ pub fn rememberFloatingInput() -> FloatingInput {
 }
 
 impl FloatingInput {
-    pub fn pressed(self) -> bool {
+    pub(super) fn pressed(self) -> bool {
         self.pressed.get()
     }
 
-    pub fn hovered(self) -> bool {
+    pub(super) fn hovered(self) -> bool {
         self.hovered.get()
     }
 
-    pub fn clicks(self) -> u32 {
+    pub(super) fn clicks(self) -> u32 {
         self.clicks.get()
     }
 }
 
-pub trait FloatingInputModifierExt {
+pub(super) trait FloatingInputModifierExt {
     fn floating_input(self, input: FloatingInput) -> Modifier;
 }
 

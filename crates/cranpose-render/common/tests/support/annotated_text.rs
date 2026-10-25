@@ -7,7 +7,7 @@ use cranpose_render_common::graph::{
 use cranpose_ui::text::{AnnotatedString, RangeStyle, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui_graphics::{Color, Rect};
 
-pub fn mixed_size_pairs() -> AnnotatedString {
+pub(crate) fn mixed_size_pairs() -> AnnotatedString {
     let mut text = AnnotatedString::from("HH\nHH");
     for (range, size, color) in [
         (0..1, 10.0, Color::RED),
@@ -27,7 +27,7 @@ pub fn mixed_size_pairs() -> AnnotatedString {
     text
 }
 
-pub fn text_graph(
+pub(crate) fn text_graph(
     text: AnnotatedString,
     style: TextStyle,
     text_rect: Rect,

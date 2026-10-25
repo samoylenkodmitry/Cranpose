@@ -5,13 +5,13 @@ use cranpose_ui::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MineswapperTool {
+pub(super) enum MineswapperTool {
     Reveal,
     Flag,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GridPreset {
+pub(super) struct GridPreset {
     pub name: &'static str,
     pub width: usize,
     pub height: usize,

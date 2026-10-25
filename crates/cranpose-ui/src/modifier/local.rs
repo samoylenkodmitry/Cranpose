@@ -80,6 +80,10 @@ impl<T: 'static> ModifierLocalKey<T> {
         self.token.clone()
     }
 
+    fn into_token(self) -> ModifierLocalToken {
+        self.token
+    }
+
     pub(crate) fn default_value(&self) -> T {
         (self.default)()
     }
@@ -99,7 +103,7 @@ impl<T: 'static> Hash for ModifierLocalKey<T> {
     }
 }
 
-pub struct ModifierLocalProviderNode {
+pub(super) struct ModifierLocalProviderNode {
     token: ModifierLocalToken,
     value_factory: Rc<dyn Fn() -> Box<dyn Any>>,
     value: Rc<dyn Any>,
@@ -153,7 +157,7 @@ impl DelegatableNode for ModifierLocalProviderNode {
 
 impl ModifierNode for ModifierLocalProviderNode {}
 
-pub struct ModifierLocalConsumerNode {
+pub(super) struct ModifierLocalConsumerNode {
     callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>,
     state: NodeState,
 }
@@ -329,20 +333,20 @@ impl DelegatableNode for ModifierLocalConsumerNode {
 impl ModifierNode for ModifierLocalConsumerNode {}
 
 #[derive(Clone)]
-pub struct ModifierLocalProviderElement {
+pub(super) struct ModifierLocalProviderElement {
     token: ModifierLocalToken,
     factory: Rc<dyn Fn() -> Box<dyn Any>>,
 }
 
 impl ModifierLocalProviderElement {
-    pub fn new<T, F>(key: ModifierLocalKey<T>, factory: F) -> Self
+    pub(super) fn new<T, F>(key: ModifierLocalKey<T>, factory: F) -> Self
     where
         T: 'static,
         F: Fn() -> T + 'static,
     {
         let erased = Rc::new(move || -> Box<dyn Any> { Box::new(factory()) });
         Self {
-            token: key.token(),
+            token: key.into_token(),
             factory: erased,
         }
     }
@@ -392,12 +396,12 @@ impl ModifierNodeElement for ModifierLocalProviderElement {
 }
 
 #[derive(Clone)]
-pub struct ModifierLocalConsumerElement {
+pub(super) struct ModifierLocalConsumerElement {
     callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>,
 }
 
 impl ModifierLocalConsumerElement {
-    pub fn new<F>(callback: F) -> Self
+    pub(super) fn new<F>(callback: F) -> Self
     where
         F: for<'a> Fn(&mut ModifierLocalReadScope<'a>) + 'static,
     {

@@ -966,7 +966,7 @@ fn changing_glass_modes_keeps_specialized_and_general_pixels_equal() {
                 panic!("expected glass layer");
             };
             layer.graphics_layer.backdrop_effect = Some(RenderEffect::runtime_shader(shader));
-            support::capture_graph_settled(&mut renderer, graph.clone(), 160, 96)
+            support::capture_graph_settled(&mut renderer, &graph.clone(), 160, 96)
         });
         support::assert_bytes_within(
             &format!("refraction mode {mode}, content mask {mask}"),

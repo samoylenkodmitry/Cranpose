@@ -225,7 +225,7 @@ fn split_override_names_select_distinct_compiled_pipelines() {
     for (name, expected) in [("FIRST", [255, 0, 0, 255]), ("SECOND", [0, 0, 255, 255])] {
         let frame = support::capture_graph_settled(
             &mut renderer,
-            glasses_page(1, || split_name_probe(name)),
+            &glasses_page(1, || split_name_probe(name)),
             FRAME_WIDTH,
             FRAME_HEIGHT,
         );
@@ -290,7 +290,7 @@ fn materials_with_different_uniforms_share_one_pipeline_without_folds() {
             + cranpose_render_wgpu::pipelines_created_off_frame()
     };
     let capture_settled = |renderer: &mut support::LockedRenderer, graph| {
-        support::capture_graph_settled(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
+        support::capture_graph_settled(renderer, &graph, FRAME_WIDTH, FRAME_HEIGHT)
     };
     support::wait_for_background_compiler_idle();
     cranpose_ui_graphics::set_glass_material_folds(false);
@@ -629,7 +629,7 @@ fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
             support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
         };
         let direct =
-            support::capture_graph_settled(&mut renderer, scene(false), FRAME_WIDTH, FRAME_HEIGHT);
+            support::capture_graph_settled(&mut renderer, &scene(false), FRAME_WIDTH, FRAME_HEIGHT);
         let reference = capture(
             &mut support::LockedRenderer::beside_locked().expect("reference renderer"),
             scene(false),

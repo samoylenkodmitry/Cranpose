@@ -675,18 +675,15 @@ impl ModifierNodeElement for CornerShapeElement {
     }
 }
 
-/// Element that draws a stroke along the edge of a shape, over the content:
-/// Compose's `Modifier.border`. The stroke lies inside the node's bounds, its
-/// outer edge on the shape's.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BorderElement {
+pub(crate) struct BorderElement {
     width: f32,
     brush: Brush,
     shape: RoundedCornerShape,
 }
 
 impl BorderElement {
-    pub fn new(width: f32, brush: Brush, shape: RoundedCornerShape) -> Self {
+    pub(crate) fn new(width: f32, brush: Brush, shape: RoundedCornerShape) -> Self {
         Self {
             width,
             brush,
@@ -768,7 +765,7 @@ impl ModifierNodeElement for BorderElement {
     }
 }
 
-pub struct GraphicsLayerNode {
+pub(crate) struct GraphicsLayerNode {
     layer: GraphicsLayer,
     layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     node_id: Rc<Cell<Option<NodeId>>>,
@@ -776,7 +773,7 @@ pub struct GraphicsLayerNode {
 }
 
 impl GraphicsLayerNode {
-    pub fn new(layer: GraphicsLayer) -> Self {
+    pub(crate) fn new(layer: GraphicsLayer) -> Self {
         Self {
             layer,
             layer_resolver: None,
@@ -785,7 +782,7 @@ impl GraphicsLayerNode {
         }
     }
 
-    pub fn new_lazy(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
+    pub(crate) fn new_lazy(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
         Self {
             layer: GraphicsLayer::default(),
             layer_resolver: Some(layer_resolver),
@@ -803,7 +800,7 @@ impl GraphicsLayerNode {
         }
     }
 
-    pub fn layer_snapshot(&self) -> GraphicsLayer {
+    pub(crate) fn layer_snapshot(&self) -> GraphicsLayer {
         self.layer.clone()
     }
 
@@ -875,12 +872,12 @@ impl std::fmt::Debug for GraphicsLayerNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct GraphicsLayerElement {
+pub(crate) struct GraphicsLayerElement {
     layer: GraphicsLayer,
 }
 
 impl GraphicsLayerElement {
-    pub fn new(layer: GraphicsLayer) -> Self {
+    pub(crate) fn new(layer: GraphicsLayer) -> Self {
         Self { layer }
     }
 }
@@ -908,12 +905,12 @@ impl ModifierNodeElement for GraphicsLayerElement {
 }
 
 #[derive(Clone)]
-pub struct LazyGraphicsLayerElement {
+pub(crate) struct LazyGraphicsLayerElement {
     layer_resolver: Rc<dyn Fn() -> GraphicsLayer>,
 }
 
 impl LazyGraphicsLayerElement {
-    pub fn new(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
+    pub(crate) fn new(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
         Self { layer_resolver }
     }
 }
@@ -1337,28 +1334,21 @@ impl ModifierNodeElement for SizeElement {
     }
 }
 
-/// Node that names the pointer's appearance over its layout node.
-///
-/// It handles no pointer events; it carries [`PointerIcon`] as pointer-input
-/// data so the node becomes a hit target and the shell can read the icon off
-/// the topmost region under the pointer.
 #[derive(Debug)]
-pub struct PointerIconNode {
+pub(crate) struct PointerIconNode {
     icon: PointerIcon,
     state: NodeState,
 }
 
 impl PointerIconNode {
-    /// Creates a node requesting `icon` while the pointer is over it.
-    pub fn new(icon: PointerIcon) -> Self {
+    pub(crate) fn new(icon: PointerIcon) -> Self {
         Self {
             icon,
             state: NodeState::new(),
         }
     }
 
-    /// The icon this node requests.
-    pub fn icon(&self) -> &PointerIcon {
+    pub(crate) fn icon(&self) -> &PointerIcon {
         &self.icon
     }
 }
@@ -1401,15 +1391,13 @@ impl PointerInputNode for PointerIconNode {
     }
 }
 
-/// Element that creates and updates [`PointerIconNode`]s.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct PointerIconElement {
+pub(crate) struct PointerIconElement {
     icon: PointerIcon,
 }
 
 impl PointerIconElement {
-    /// Creates an element requesting `icon`.
-    pub fn new(icon: PointerIcon) -> Self {
+    pub(crate) fn new(icon: PointerIcon) -> Self {
         Self { icon }
     }
 }
@@ -1497,12 +1485,12 @@ impl ModifierNodeElement for AlphaElement {
 }
 
 #[derive(Debug)]
-pub struct ClipToBoundsNode {
+pub(crate) struct ClipToBoundsNode {
     state: NodeState,
 }
 
 impl ClipToBoundsNode {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: NodeState::new(),
         }
@@ -1518,10 +1506,10 @@ impl DelegatableNode for ClipToBoundsNode {
 impl_draw_modifier_node!(ClipToBoundsNode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ClipToBoundsElement;
+pub(crate) struct ClipToBoundsElement;
 
 impl ClipToBoundsElement {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -1564,7 +1552,7 @@ impl WindowRectSink for StateWindowRectSink {
     }
 }
 
-pub struct WindowRectReporterNode {
+pub(crate) struct WindowRectReporterNode {
     sink: Rc<dyn WindowRectSink>,
     state: NodeState,
 }
@@ -1602,21 +1590,24 @@ impl LayoutModifierNode for WindowRectReporterNode {
 }
 
 #[derive(Clone)]
-pub struct WindowRectReporterElement {
+pub(crate) struct WindowRectReporterElement {
     sink: Rc<dyn WindowRectSink>,
 }
 
 impl WindowRectReporterElement {
-    pub fn new(sink: Rc<Cell<cranpose_ui_graphics::Rect>>) -> Self {
+    pub(crate) fn new(sink: Rc<Cell<cranpose_ui_graphics::Rect>>) -> Self {
         Self { sink }
     }
 
-    /// Reports the node's local size and complete window transform.
-    pub fn from_coordinates(sink: Rc<Cell<cranpose_ui_graphics::WindowCoordinates>>) -> Self {
+    pub(crate) fn from_coordinates(
+        sink: Rc<Cell<cranpose_ui_graphics::WindowCoordinates>>,
+    ) -> Self {
         Self { sink }
     }
 
-    pub fn from_state(sink: cranpose_core::MutableState<cranpose_ui_graphics::Rect>) -> Self {
+    pub(crate) fn from_state(
+        sink: cranpose_core::MutableState<cranpose_ui_graphics::Rect>,
+    ) -> Self {
         Self {
             sink: Rc::new(StateWindowRectSink(sink)),
         }
@@ -1715,7 +1706,7 @@ impl Hash for SelectableTextElement {
 
 impl_sink_reporter_element!(SelectableTextElement, SelectableTextNode);
 
-pub trait SizeSink {
+pub(crate) trait SizeSink {
     fn set(&self, size: Size);
 }
 
@@ -1733,7 +1724,7 @@ impl SizeSink for StateSizeSink {
     }
 }
 
-pub struct SizeReporterNode {
+pub(crate) struct SizeReporterNode {
     sink: Rc<dyn SizeSink>,
     state: NodeState,
     #[cfg(debug_assertions)]
@@ -1741,7 +1732,7 @@ pub struct SizeReporterNode {
 }
 
 impl SizeReporterNode {
-    pub fn new(sink: Rc<dyn SizeSink>) -> Self {
+    pub(crate) fn new(sink: Rc<dyn SizeSink>) -> Self {
         Self {
             sink,
             state: NodeState::new(),
@@ -1799,16 +1790,16 @@ impl LayoutModifierNode for SizeReporterNode {
 }
 
 #[derive(Clone)]
-pub struct SizeReporterElement {
+pub(crate) struct SizeReporterElement {
     sink: Rc<dyn SizeSink>,
 }
 
 impl SizeReporterElement {
-    pub fn new(sink: Rc<Cell<Size>>) -> Self {
+    pub(crate) fn new(sink: Rc<Cell<Size>>) -> Self {
         Self { sink }
     }
 
-    pub fn from_state(sink: cranpose_core::MutableState<Size>) -> Self {
+    pub(crate) fn from_state(sink: cranpose_core::MutableState<Size>) -> Self {
         Self {
             sink: Rc::new(StateSizeSink(sink)),
         }
@@ -1835,14 +1826,14 @@ impl Hash for SizeReporterElement {
 
 impl_sink_reporter_element!(SizeReporterElement, SizeReporterNode);
 
-pub struct DrawCommandNode {
+pub(crate) struct DrawCommandNode {
     commands: Vec<DrawCommand>,
     node_id: Cell<Option<NodeId>>,
     state: NodeState,
 }
 
 impl DrawCommandNode {
-    pub fn new(commands: Vec<DrawCommand>) -> Self {
+    pub(crate) fn new(commands: Vec<DrawCommand>) -> Self {
         Self {
             commands,
             node_id: Cell::new(None),
@@ -1937,18 +1928,18 @@ fn draw_command_closure_identity(cmd: &DrawCommand) -> *const () {
 }
 
 #[derive(Clone)]
-pub struct DrawCommandElement {
+pub(crate) struct DrawCommandElement {
     commands: Vec<DrawCommand>,
 }
 
 impl DrawCommandElement {
-    pub fn new(command: DrawCommand) -> Self {
+    pub(crate) fn new(command: DrawCommand) -> Self {
         Self {
             commands: vec![command],
         }
     }
 
-    pub fn from_commands(commands: Vec<DrawCommand>) -> Self {
+    pub(crate) fn from_commands(commands: Vec<DrawCommand>) -> Self {
         Self { commands }
     }
 }
@@ -2494,14 +2485,14 @@ impl ModifierNodeElement for FillElement {
 }
 
 #[derive(Debug)]
-pub struct WeightNode {
+pub(crate) struct WeightNode {
     weight: f32,
     fill: bool,
     state: NodeState,
 }
 
 impl WeightNode {
-    pub fn new(weight: f32, fill: bool) -> Self {
+    pub(crate) fn new(weight: f32, fill: bool) -> Self {
         Self {
             weight,
             fill,
@@ -2509,7 +2500,7 @@ impl WeightNode {
         }
     }
 
-    pub fn layout_weight(&self) -> LayoutWeight {
+    pub(crate) fn layout_weight(&self) -> LayoutWeight {
         LayoutWeight {
             weight: self.weight,
             fill: self.fill,
@@ -2530,13 +2521,13 @@ impl ModifierNode for WeightNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct WeightElement {
+pub(crate) struct WeightElement {
     weight: f32,
     fill: bool,
 }
 
 impl WeightElement {
-    pub fn new(weight: f32, fill: bool) -> Self {
+    pub(crate) fn new(weight: f32, fill: bool) -> Self {
         Self { weight, fill }
     }
 }
@@ -2568,7 +2559,7 @@ impl ModifierNodeElement for WeightElement {
 }
 
 #[derive(Debug)]
-pub struct AlignmentNode {
+pub(crate) struct AlignmentNode {
     box_alignment: Option<Alignment>,
     column_alignment: Option<HorizontalAlignment>,
     row_alignment: Option<VerticalAlignment>,
@@ -2577,7 +2568,7 @@ pub struct AlignmentNode {
 }
 
 impl AlignmentNode {
-    pub fn new(
+    pub(crate) fn new(
         box_alignment: Option<Alignment>,
         column_alignment: Option<HorizontalAlignment>,
         row_alignment: Option<VerticalAlignment>,
@@ -2592,20 +2583,19 @@ impl AlignmentNode {
         }
     }
 
-    pub fn box_alignment(&self) -> Option<Alignment> {
+    pub(crate) fn box_alignment(&self) -> Option<Alignment> {
         self.box_alignment
     }
 
-    pub fn column_alignment(&self) -> Option<HorizontalAlignment> {
+    pub(crate) fn column_alignment(&self) -> Option<HorizontalAlignment> {
         self.column_alignment
     }
 
-    pub fn row_alignment(&self) -> Option<VerticalAlignment> {
+    pub(crate) fn row_alignment(&self) -> Option<VerticalAlignment> {
         self.row_alignment
     }
 
-    /// Whether this node requests first-baseline alignment in its parent Row.
-    pub fn row_baseline(&self) -> bool {
+    pub(crate) fn row_baseline(&self) -> bool {
         self.row_baseline
     }
 }
@@ -2623,7 +2613,7 @@ impl ModifierNode for AlignmentNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AlignmentElement {
+pub(crate) struct AlignmentElement {
     box_alignment: Option<Alignment>,
     column_alignment: Option<HorizontalAlignment>,
     row_alignment: Option<VerticalAlignment>,
@@ -2631,7 +2621,7 @@ pub struct AlignmentElement {
 }
 
 impl AlignmentElement {
-    pub fn box_alignment(alignment: Alignment) -> Self {
+    pub(crate) fn box_alignment(alignment: Alignment) -> Self {
         Self {
             box_alignment: Some(alignment),
             column_alignment: None,
@@ -2640,7 +2630,7 @@ impl AlignmentElement {
         }
     }
 
-    pub fn column_alignment(alignment: HorizontalAlignment) -> Self {
+    pub(crate) fn column_alignment(alignment: HorizontalAlignment) -> Self {
         Self {
             box_alignment: None,
             column_alignment: Some(alignment),
@@ -2649,7 +2639,7 @@ impl AlignmentElement {
         }
     }
 
-    pub fn row_alignment(alignment: VerticalAlignment) -> Self {
+    pub(crate) fn row_alignment(alignment: VerticalAlignment) -> Self {
         Self {
             box_alignment: None,
             column_alignment: None,
@@ -2658,8 +2648,7 @@ impl AlignmentElement {
         }
     }
 
-    /// Requests first-baseline alignment with siblings in a Row.
-    pub fn row_baseline() -> Self {
+    pub(crate) fn row_baseline() -> Self {
         Self {
             box_alignment: None,
             column_alignment: None,
@@ -2724,20 +2713,20 @@ impl ModifierNodeElement for AlignmentElement {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum IntrinsicAxis {
+pub(crate) enum IntrinsicAxis {
     Width,
     Height,
 }
 
 #[derive(Debug)]
-pub struct IntrinsicSizeNode {
+pub(crate) struct IntrinsicSizeNode {
     axis: IntrinsicAxis,
     size: IntrinsicSize,
     state: NodeState,
 }
 
 impl IntrinsicSizeNode {
-    pub fn new(axis: IntrinsicAxis, size: IntrinsicSize) -> Self {
+    pub(crate) fn new(axis: IntrinsicAxis, size: IntrinsicSize) -> Self {
         Self {
             axis,
             size,
@@ -2852,20 +2841,20 @@ impl LayoutModifierNode for IntrinsicSizeNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct IntrinsicSizeElement {
+pub(crate) struct IntrinsicSizeElement {
     axis: IntrinsicAxis,
     size: IntrinsicSize,
 }
 
 impl IntrinsicSizeElement {
-    pub fn width(size: IntrinsicSize) -> Self {
+    pub(crate) fn width(size: IntrinsicSize) -> Self {
         Self {
             axis: IntrinsicAxis::Width,
             size,
         }
     }
 
-    pub fn height(size: IntrinsicSize) -> Self {
+    pub(crate) fn height(size: IntrinsicSize) -> Self {
         Self {
             axis: IntrinsicAxis::Height,
             size,

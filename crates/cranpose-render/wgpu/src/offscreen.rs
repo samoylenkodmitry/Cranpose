@@ -98,7 +98,7 @@ impl OffscreenTarget {
         self.width == width && self.height == height
     }
 
-    pub fn get_or_create_bind_group(
+    pub(crate) fn get_or_create_bind_group(
         &self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -164,7 +164,7 @@ fn target_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
 }
 
 impl OffscreenPool {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self {
             available: IdlePool::default(),
             format,
@@ -181,15 +181,15 @@ impl OffscreenPool {
         }
     }
 
-    pub fn max_texture_dim(&self) -> u32 {
+    pub(crate) fn max_texture_dim(&self) -> u32 {
         self.max_texture_dim
     }
 
-    pub fn pool_size(&self) -> usize {
+    pub(crate) fn pool_size(&self) -> usize {
         self.available.len()
     }
 
-    pub fn estimated_bytes(&self) -> usize {
+    pub(crate) fn estimated_bytes(&self) -> usize {
         self.available
             .iter()
             .map(|t| {
@@ -200,7 +200,7 @@ impl OffscreenPool {
             .sum()
     }
 
-    pub fn acquire(
+    pub(crate) fn acquire(
         &mut self,
         device: &wgpu::Device,
         width: u32,
@@ -222,7 +222,7 @@ impl OffscreenPool {
         }
     }
 
-    pub fn release(&mut self, target: OffscreenTarget) {
+    pub(crate) fn release(&mut self, target: OffscreenTarget) {
         let bytes_per_pixel = self.bytes_per_pixel();
         self.available
             .put(target, MAX_POOLED_TARGETS, MAX_POOLED_BYTES, |t| {
@@ -230,10 +230,7 @@ impl OffscreenPool {
             });
     }
 
-    /// Ends a frame, keeping every target this frame handed back and
-    /// [`MAX_IDLE_TARGETS`] of the older ones, and dropping the targets no
-    /// frame has reused for [`crate::idle_pool::IDLE_FRAMES`].
-    pub fn end_frame(&mut self) {
+    pub(crate) fn end_frame(&mut self) {
         self.available.end_frame_keeping(MAX_IDLE_TARGETS);
     }
 
@@ -241,7 +238,7 @@ impl OffscreenPool {
         crate::frame_graph::texture_format_bytes_per_pixel(self.format)
     }
 
-    pub fn texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    pub(crate) fn texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Effect Texture Bind Group Layout"),
             entries: &[
@@ -265,7 +262,7 @@ impl OffscreenPool {
         })
     }
 
-    pub fn uniform_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    pub(crate) fn uniform_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Effect Uniform Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
