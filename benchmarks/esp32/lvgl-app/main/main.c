@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "panel.h"
@@ -30,10 +31,25 @@ static const char *TAG = "lvgl_bench";
 static lv_display_t *display;
 static TaskHandle_t ui_task;
 static bool rendered;
+static SemaphoreHandle_t flushed;
+static volatile bool flushing;
 
 static void on_transfer_done(void *context)
 {
+    flushing = false;
     lv_display_flush_ready(display);
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(flushed, &woken);
+}
+
+// LVGL waits here for the panel to read a strip: blocked, as the other
+// benchmarks wait, so the core idles meanwhile instead of spinning on a
+// flag.
+static void wait_flushed(lv_display_t *disp)
+{
+    while (flushing) {
+        xSemaphoreTake(flushed, portMAX_DELAY);
+    }
 }
 
 // Widens each invalidated area to the columns the panel accepts as an update.
@@ -49,6 +65,7 @@ static void flush(lv_display_t *disp, const lv_area_t *area, uint8_t *pixels)
 {
     uint32_t pixel_count = lv_area_get_width(area) * lv_area_get_height(area);
     lv_draw_sw_rgb565_swap(pixels, pixel_count);
+    flushing = true;
     panel_draw(area->x1, area->y1, area->x2, area->y2, pixels);
 }
 
@@ -206,6 +223,7 @@ static void record(stats_t *stats, int64_t start, int64_t busy, int64_t now)
 
 void app_main(void)
 {
+    flushed = xSemaphoreCreateBinary();
     panel_open(on_transfer_done, NULL);
     int64_t start = esp_timer_get_time();
     lv_init();
@@ -216,6 +234,7 @@ void app_main(void)
     void *second = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     lv_display_set_buffers(display, first, second, STRIP_BYTES, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display, flush);
+    lv_display_set_flush_wait_cb(display, wait_flushed);
     lv_display_add_event_cb(display, align_area, LV_EVENT_INVALIDATE_AREA, NULL);
     lv_display_add_event_cb(display, on_render_start, LV_EVENT_RENDER_START, NULL);
 #if CONFIG_BENCH_DASHBOARD
