@@ -679,7 +679,12 @@ impl LineGeometry {
     /// past the ends of a round cap, the distance to the cap's disc.
     /// `shape.wgsl` mirrors it.
     pub fn coverage(&self, point: Point) -> f32 {
-        let frame = self.frame();
+        self.coverage_in(&self.frame(), point)
+    }
+
+    /// [`Self::coverage`] for a segment whose [`Self::frame`] is `frame`,
+    /// as a renderer asks it for many pixels of one segment.
+    pub fn coverage_in(&self, frame: &LineFrame, point: Point) -> f32 {
         let (dx, dy) = (point.x - frame.center.x, point.y - frame.center.y);
         let along = (dx * frame.direction.x + dy * frame.direction.y).abs();
         let across = (dx * frame.direction.y - dy * frame.direction.x).abs();

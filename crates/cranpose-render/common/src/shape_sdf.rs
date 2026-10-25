@@ -172,13 +172,25 @@ pub fn stroked_rect_coverage(
     half_width: f32,
     join: StrokeJoin,
 ) -> f32 {
+    coverage_for_distance(stroked_rect_distance(point, rect, radii, half_width, join))
+}
+
+/// The signed distance from `point` to the edge of the stroke
+/// [`stroked_rect_coverage`] covers.
+pub fn stroked_rect_distance(
+    point: Point,
+    rect: Rect,
+    radii: Option<CornerRadii>,
+    half_width: f32,
+    join: StrokeJoin,
+) -> f32 {
     let half_size = (rect.width * 0.5, rect.height * 0.5);
     let local = Point::new(
         point.x - (rect.x + half_size.0),
         point.y - (rect.y + half_size.1),
     );
     let radii = radii.unwrap_or_default();
-    let distance = sdf_stroked_rounded_rect(
+    sdf_stroked_rounded_rect(
         local,
         half_size,
         [
@@ -189,8 +201,7 @@ pub fn stroked_rect_coverage(
         ],
         half_width,
         join,
-    );
-    coverage_for_distance(distance)
+    )
 }
 
 /// Coverage of `point` by an arc band.

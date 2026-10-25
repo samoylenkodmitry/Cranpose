@@ -121,6 +121,12 @@ pub(crate) struct ClipBounds {
 }
 
 impl ClipBounds {
+    fn within(self, limit: i32) -> bool {
+        [self.min_x, self.min_y, self.max_x, self.max_y]
+            .iter()
+            .all(|edge| edge.abs() <= limit)
+    }
+
     fn overlaps(self, other: Self) -> bool {
         self.min_x < other.max_x
             && other.min_x < self.max_x
@@ -469,15 +475,20 @@ fn draw_shape(
     };
     let whole_rows = |_: f32, min_x: i32, max_x: i32| [(min_x, max_x), NO_RUN];
     match &coverage {
-        ShapeCoverage::Line(line) => paint.paint(whole_rows, |point| line.coverage(point)),
+        ShapeCoverage::Line(line) => {
+            let frame = line.frame();
+            paint.paint(whole_rows, |point| {
+                Coverage::of(line.coverage_in(&frame, point))
+            });
+        }
         ShapeCoverage::Trapezoid(trapezoid) => {
-            paint.paint(whole_rows, |point| trapezoid.coverage(point));
+            paint.paint(whole_rows, |point| Coverage::of(trapezoid.coverage(point)));
         }
         ShapeCoverage::Arc(arc) => {
             let band = shape_sdf::ArcBand::new(arc);
             paint.paint(
                 |y, min_x, max_x| arc_row_runs(arc, y, min_x, max_x),
-                |point| band.coverage(point),
+                |point| Coverage::of_distance(band.distance(point)),
             );
         }
         &ShapeCoverage::Stroke {
@@ -485,10 +496,26 @@ fn draw_shape(
             radii,
             half_width,
             join,
-        } => paint.paint(
-            |y, min_x, max_x| stroke_row_runs(rect, radii, half_width, join, y, min_x, max_x),
-            |point| shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join),
-        ),
+        } => {
+            let runs =
+                |y, min_x, max_x| stroke_row_runs(rect, radii, half_width, join, y, min_x, max_x);
+            // With one radius at every corner the distance is the exact one
+            // to a rounded box's band; corners of different radii meet
+            // where the distance can step.
+            if radii.is_none_or(|radii| radii == CornerRadii::uniform(radii.top_left)) {
+                paint.paint(runs, |point| {
+                    Coverage::of_distance(shape_sdf::stroked_rect_distance(
+                        point, rect, radii, half_width, join,
+                    ))
+                });
+            } else {
+                paint.paint(runs, |point| {
+                    Coverage::of(shape_sdf::stroked_rect_coverage(
+                        point, rect, radii, half_width, join,
+                    ))
+                });
+            }
+        }
         ShapeCoverage::Fill {
             rect,
             radii: Some(radii),
@@ -538,7 +565,7 @@ impl ShapeRows<'_, '_> {
                 {
                     self.fill_uniform_columns(runs);
                 } else {
-                    self.paint(runs, |_| 1.0);
+                    self.paint(runs, |_| Coverage::of(1.0));
                 }
             }
         }
@@ -631,10 +658,11 @@ impl ShapeRows<'_, '_> {
         }
     }
 
-    /// Paints the pixels of each row's `runs` by their `coverage`. Out of
-    /// line, as [`draw_shadow`] is.
+    /// Paints the pixels of each row's `runs` by their `coverage`, which
+    /// is not asked again for the pixels a coverage settles. Out of line,
+    /// as [`draw_shadow`] is.
     #[inline(never)]
-    fn paint(self, runs: impl Fn(f32, i32, i32) -> RowRuns, coverage: impl Fn(Point) -> f32) {
+    fn paint(self, runs: impl Fn(f32, i32, i32) -> RowRuns, coverage: impl Fn(Point) -> Coverage) {
         let Self {
             target,
             draw,
@@ -645,12 +673,23 @@ impl ShapeRows<'_, '_> {
             diagnostics,
         } = self;
         let brush = BrushSampler::new(&draw.brush, rect);
+        let settles = clip_bounds.within(SETTLED_COORDINATES);
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
             for (start, end) in runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
+                let mut settled = Coverage::of(0.0);
                 for (px, dst) in (start..).zip(target.row(py, start, end)) {
                     let center_x = px as f32 + 0.5;
-                    let coverage = coverage(Point::new(center_x, center_y));
+                    let coverage = if settled.next > 0 {
+                        settled.next -= 1;
+                        settled.value
+                    } else {
+                        settled = coverage(Point::new(center_x, center_y));
+                        if !settles {
+                            settled.next = 0;
+                        }
+                        settled.value
+                    };
                     if coverage <= 0.0 {
                         continue;
                     }
@@ -672,6 +711,51 @@ impl ShapeRows<'_, '_> {
         }
     }
 }
+
+// A pixel's coverage, and how many pixels after it along the row take the
+// same, which `ShapeRows::paint` then does not work out.
+#[derive(Clone, Copy)]
+struct Coverage {
+    value: f32,
+    next: u32,
+}
+
+impl Coverage {
+    fn of(value: f32) -> Self {
+        Self { value, next: 0 }
+    }
+
+    // The coverage of a pixel at `distance` from a shape's edge, where the
+    // distance changes by at most one from pixel to pixel, as an exact
+    // distance does. Inside by more than half a pixel the coverage is 1,
+    // outside by as much 0, and a distance that far in or out stays there for
+    // as many whole pixels as it reaches past that half pixel. The margin
+    // keeps the float error of the distance, far smaller, from settling a
+    // pixel the distance itself would not.
+    fn of_distance(distance: f32) -> Self {
+        let value = shape_sdf::coverage_for_distance(distance);
+        let reach = if distance <= -0.5 - SETTLE_MARGIN {
+            -0.5 - SETTLE_MARGIN - distance
+        } else if distance >= 0.5 + SETTLE_MARGIN {
+            distance - 0.5 - SETTLE_MARGIN
+        } else {
+            0.0
+        };
+        Self {
+            value,
+            next: if distance.is_finite() {
+                reach as u32
+            } else {
+                0
+            },
+        }
+    }
+}
+
+// Far more than the rounding of a distance between points of a window of up
+// to `SETTLED_COORDINATES` pixels a side.
+const SETTLE_MARGIN: f32 = 1.0 / 32.0;
+const SETTLED_COORDINATES: i32 = 16_384;
 
 /// The bytes an opaque solid colour leaves on a pixel it covers fully,
 /// whatever was there: what `blend_pixel` works out for it.
