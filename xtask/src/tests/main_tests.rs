@@ -3190,6 +3190,36 @@ fn duplication_find_violations_clone_that_moved_with_its_code_passes() {
 }
 
 #[test]
+fn duplication_find_violations_clone_that_only_lost_module_paths_passes() {
+    let ranges = BTreeMap::from([("src/tests/a_tests.rs".to_owned(), vec![(1, 40)])]);
+    let unqualified = duplicate_of(
+        ("src/tests/a_tests.rs", 1, 12),
+        ("src/tests/b_tests.rs", 20, 31),
+        12,
+        "fn rebuild(&mut self, applier: &mut MemoryApplier, root: NodeId) {\n    Rc::clone(&root);\n}\n",
+    );
+    let old_source = duplication_gate::clone_text(
+        "fn rebuild(&mut self, applier: &mut cranpose_core::MemoryApplier, root: cranpose_core::NodeId) {\n    std::rc::Rc::clone(&root);\n}\n",
+    );
+    assert_eq!(
+        duplication_gate::find_violations(
+            std::slice::from_ref(&unqualified),
+            &[],
+            &[old_source],
+            &ranges
+        ),
+        Vec::<String>::new()
+    );
+    let renamed = duplication_gate::clone_text(
+        "fn rebuild(&mut self, applier: &mut cranpose_core::OtherApplier, root: NodeId) {}\n",
+    );
+    assert_eq!(
+        duplication_gate::find_violations(&[unqualified], &[], &[renamed], &ranges).len(),
+        1
+    );
+}
+
+#[test]
 fn duplication_find_violations_clone_rustfmt_rejoined_after_moving_passes() {
     let ranges = BTreeMap::from([("src/tests/a_tests.rs".to_owned(), vec![(1, 40)])]);
     let moved = duplicate_of(
