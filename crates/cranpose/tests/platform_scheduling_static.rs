@@ -2467,6 +2467,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
         "crates/cranpose-audio/src/backend/avaudio.rs",
+        "crates/cranpose-platform/esp-idf/src/heap.rs",
         "crates/cranpose-platform/esp-idf/src/panel.rs",
         "crates/cranpose-platform/esp-idf/src/small_alloc.rs",
         "crates/cranpose-platform/esp-idf/src/touch.rs",
