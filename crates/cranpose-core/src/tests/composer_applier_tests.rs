@@ -1060,9 +1060,10 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
     let key = TypeId::of::<DesiredNode>();
     applier
         .state
-        .recycled_nodes
+        .recycle_pools
         .entry(key)
         .or_default()
+        .warm
         .push(RecycledNode::from_shell(0, Box::new(WrongNode), true));
 
     let (composer, slots_host, applier_host) =
@@ -1123,9 +1124,10 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
     let key = TypeId::of::<DesiredNode>();
     applier
         .state
-        .recycled_nodes
+        .recycle_pools
         .entry(key)
         .or_default()
+        .warm
         .push(RecycledNode::from_shell(
             live_id,
             Box::new(DesiredNode {

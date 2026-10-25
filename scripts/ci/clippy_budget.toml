@@ -11,9 +11,9 @@
 "clippy::float_cmp" = 158
 "clippy::fn_params_excessive_bools" = 6
 "clippy::inline_always" = 63
-"clippy::iter_over_hash_type" = 35
+"clippy::iter_over_hash_type" = 33
 "clippy::let_underscore_must_use" = 266
-"clippy::let_underscore_untyped" = 704
+"clippy::let_underscore_untyped" = 702
 "clippy::missing_assert_message" = 191
 "clippy::multiple_inherent_impl" = 121
 "clippy::needless_pass_by_value" = 176
