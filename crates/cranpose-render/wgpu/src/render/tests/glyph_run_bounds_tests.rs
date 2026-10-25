@@ -1,6 +1,11 @@
+use cranpose_render_common::software_text_raster::SoftwareGlyphAtlasKey;
 use cranpose_ui_graphics::Color;
 
 use super::*;
+use crate::{
+    geometry::SegmentTransform, glyph_run::RunGlyphScratch,
+    render::glyph_draws::for_each_visible_glyph,
+};
 
 fn placement(x: i32, y: i32, width: usize, height: usize) -> SoftwareGlyphAtlasPlacement {
     SoftwareGlyphAtlasPlacement {

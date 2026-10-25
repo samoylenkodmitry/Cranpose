@@ -1,9 +1,12 @@
-use cranpose_render_common::software_text_raster::SoftwareGlyphAtlasMask;
+use cranpose_render_common::software_text_raster::{SoftwareGlyphAtlasKey, SoftwareGlyphAtlasMask};
 use cranpose_ui::text::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::Color;
 
 use super::*;
-use crate::scene::DrawnText;
+use crate::{
+    render::text_glyph_cache::{CachedTextGlyphQuad, cached_text_glyph_quad},
+    scene::{CompositorScene, DrawnText},
+};
 
 fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let (lock, device, queue) = crate::frame_graph::upload_test_device();
