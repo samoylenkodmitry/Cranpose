@@ -25,29 +25,29 @@ impl Deref for ShapedFont<'_> {
     }
 }
 
-impl SoftwareTextFont {
-    pub(crate) fn shaped_for(&self, style: &TextStyle) -> ShapedFont<'_> {
+impl<'a> ShapedFont<'a> {
+    pub(crate) fn new(font: &'a SoftwareTextFont, style: &TextStyle) -> Self {
         let settings = style.span_style.font_feature_settings.as_deref();
-        if settings.is_none() && !self.font.has_substitutions() {
-            return ShapedFont::Borrowed(self);
+        if settings.is_none() && !font.font.has_substitutions() {
+            return Self::Borrowed(font);
         }
-        self.shaped_with(settings)
+        Self::with_settings(font, settings)
     }
 
     // Out of line, so the face it may build takes room on the stack only
     // while it builds one.
     #[inline(never)]
-    fn shaped_with(&self, settings: Option<&str>) -> ShapedFont<'_> {
-        match self.font.with_feature_settings(settings) {
-            None => ShapedFont::Borrowed(self),
-            Some(font) => ShapedFont::Owned(Box::new(Self {
-                glyph_map_hash: self.content_hash ^ font.feature_key(),
-                font,
-                metadata: self.metadata.clone(),
-                score: self.score,
-                content_hash: self.content_hash,
+    fn with_settings(font: &'a SoftwareTextFont, settings: Option<&str>) -> Self {
+        match font.font.with_feature_settings(settings) {
+            None => Self::Borrowed(font),
+            Some(shaped) => Self::Owned(Box::new(SoftwareTextFont {
+                glyph_map_hash: font.content_hash ^ shaped.feature_key(),
+                font: shaped,
+                metadata: font.metadata.clone(),
+                score: font.score,
+                content_hash: font.content_hash,
                 #[cfg(feature = "text-shaping")]
-                shaping: Arc::clone(&self.shaping),
+                shaping: Arc::clone(&font.shaping),
             })),
         }
     }

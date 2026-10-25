@@ -48,6 +48,7 @@ use crate::{
     text_hyphenation::HyphenationDictionaryStore,
     text_mask_gamma::TextLuminance,
 };
+use shaped_font::ShapedFont;
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;
@@ -2059,7 +2060,7 @@ fn rasterize_text_pixels(
     if requires_font_layout(request.text.text, request.style) {
         return rasterize_styled_text_region(request, font.into(), glyph_cache);
     }
-    let shaped = font.shaped_for(request.style);
+    let shaped = ShapedFont::new(font, request.style);
     let font = &*shaped;
     rasterize_text_to_image_impl(request, font.raster_ref(), font.content_hash(), glyph_cache)
 }
@@ -2177,7 +2178,7 @@ fn annotated_raster_segment_advance(segment: &AnnotatedTextSegment<'_>, scale: f
     {
         return shaped_run_width(&run, segment.font, segment.style, segment.font_size, scale);
     }
-    let font = segment.font.shaped_for(segment.style);
+    let font = ShapedFont::new(segment.font, segment.style);
     segment_advance_px(
         &font.font,
         segment.text,
@@ -2317,7 +2318,7 @@ pub fn paint_text(
     let Some(font) = TextFonts::from(fonts).single_font_for_text(text.text, style) else {
         return false;
     };
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     paint_text_glyphs(
         request,
@@ -2646,7 +2647,8 @@ pub fn measure_text_with_font(
             None,
         );
     }
-    measure_text_impl(text, style, font_size, font.shaped_for(style).raster_ref())
+    let shaped = ShapedFont::new(font, style);
+    measure_text_impl(text, style, font_size, shaped.raster_ref())
 }
 
 fn measure_text_with_font_cached(
@@ -2660,7 +2662,7 @@ fn measure_text_with_font_cached(
     if requires_font_layout(text, style) {
         return measure_shaped_text(text, style, font_size, font);
     }
-    measure_text_impl_cached(text, style, font_size, &font.shaped_for(style), cache)
+    measure_text_impl_cached(text, style, font_size, &ShapedFont::new(font, style), cache)
 }
 
 /// Measures annotated `text`, including its span styles, drawn with `font` in `style` at
@@ -2733,7 +2735,7 @@ pub fn text_offset_for_position_with_font(
         return 0;
     }
 
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     let font_size = resolve_font_size(style);
     let line_box = font_line_box(style, font, font_size);
@@ -2816,7 +2818,7 @@ pub fn cursor_x_for_offset_with_font(
     }
 
     let font_size = resolve_font_size(style);
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     measure_text_impl(&text[..clamped_offset], style, font_size, font.raster_ref()).width
 }
@@ -2838,7 +2840,7 @@ pub fn layout_text_with_font(
             font,
         );
     }
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     let font_size = resolve_font_size(style);
     let glyph_font_size = font.ab_glyph_px_size(font_size);
@@ -2958,7 +2960,7 @@ fn walk_annotated_glyphs(
         }
         return run.width(scale, spacing);
     }
-    let shaped = segment.font.shaped_for(segment.style);
+    let shaped = ShapedFont::new(segment.font, segment.style);
     let font = &*shaped;
     let weight =
         TextWeightSynthesis::for_style(segment.style, font.weight(), segment.font_size, 1.0);
@@ -3563,7 +3565,7 @@ fn visit_text_segment_masks(
         .text_motion
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     #[cfg(feature = "text-shaping")]
@@ -3892,7 +3894,7 @@ fn collect_atlas_segment<T>(
         return None;
     }
 
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let font_hash = font.content_hash();
@@ -4441,7 +4443,7 @@ fn append_font_prefix_width_segment<S: PrefixWidthSink>(
     glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
     walk: &mut PrefixWidthWalk<'_, S>,
 ) {
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     let font = &*shaped;
     let glyph_font_size = font.ab_glyph_px_size(font_size);
     let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
