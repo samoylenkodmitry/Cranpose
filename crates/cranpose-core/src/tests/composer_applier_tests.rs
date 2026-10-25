@@ -387,7 +387,7 @@ fn memory_applier_create_routes_generated_high_ids_to_sparse_storage() {
     let node_id = applier.create(Box::new(HighIdNode));
 
     assert_eq!(node_id, MemoryApplier::HIGH_ID_THRESHOLD);
-    assert!(applier.state.high_id_nodes.contains_key(&node_id));
+    assert!(applier.high_id_node(node_id).is_ok());
     assert_eq!(applier.node_generation(node_id), 0);
     assert_eq!(applier.debug_stats().high_id_nodes_len, 1);
     assert_eq!(applier.debug_stats().nodes_len, 0);
