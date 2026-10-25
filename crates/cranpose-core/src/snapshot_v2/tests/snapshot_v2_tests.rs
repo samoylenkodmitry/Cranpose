@@ -373,7 +373,7 @@ fn test_remaining_observers_still_work_after_drop() {
 fn test_observer_ids_are_unique() {
     use std::sync::Mutex;
 
-    let ids = Rc::new(Mutex::new(std::collections::HashSet::new()));
+    let ids: Rc<Mutex<HashSet<_>>> = Rc::new(Mutex::new(HashSet::default()));
 
     let mut handles = Vec::new();
 
