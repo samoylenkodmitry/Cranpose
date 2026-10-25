@@ -78,59 +78,55 @@ use cranpose_ui::LayoutTree;
 pub use cranpose_ui_graphics::Brush;
 use cranpose_ui_graphics::Size;
 
-/// Describes scene nodes whose recorded content or layer properties changed.
-///
-/// Content updates may re-record a node's draw commands. Draw updates
-/// re-record them and keep everything else of the node's layer. Layer updates
-/// change graphics-layer properties while retaining those recordings. A node
-/// in two slices takes the content update.
-/// Layout, child structure, and draw-command changes belong in `content`.
-///
-/// ```
-/// use cranpose_render_common::SceneUpdates;
-/// let updates = SceneUpdates {
-///     content: &[1],
-///     draws: &[4],
-///     layers: &[2],
-///     moved: &[3],
-/// };
-/// assert!(!updates.is_empty());
-/// ```
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SceneUpdates<'a> {
-    /// Nodes whose recorded draw content must be refreshed; a node may be
-    /// named more than once.
-    pub content: &'a [cranpose_core::NodeId],
-    /// Nodes whose draw commands read state that changed while their layout,
-    /// modifiers and children stayed: the scene records their draws again
-    /// and keeps their layers.
-    pub draws: &'a [cranpose_core::NodeId],
-    /// Nodes whose graphics-layer properties changed without content dirt.
-    pub layers: &'a [cranpose_core::NodeId],
-    /// Nodes that moved in their parent and kept their size: the scene moves
-    /// what it drew for them unless another list names them too.
-    pub moved: &'a [cranpose_core::NodeId],
+/// What changed in a node since the scene last drew it, and so how the scene
+/// updates what it drew for that node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeUpdate {
+    /// Its layout, children or draw commands changed: the scene records it
+    /// again.
+    Content,
+    /// Only state its draws read changed: its layer keeps its children and
+    /// records the node's draws again.
+    Draws,
+    /// Its graphics-layer properties changed and it drew the same.
+    Layer,
+    /// It moved in its parent and kept its size: its layer moves and keeps
+    /// what it drew.
+    Moved,
+    /// It moved and its layer properties changed: its layer moves, takes the
+    /// new properties and keeps what it drew.
+    MovedLayer,
 }
 
-impl<'a> SceneUpdates<'a> {
-    /// Creates an update containing only nodes with changed draw content.
-    pub const fn content(nodes: &'a [cranpose_core::NodeId]) -> Self {
-        Self {
-            content: nodes,
-            draws: &[],
-            layers: &[],
-            moved: &[],
+impl NodeUpdate {
+    /// The update a node named with both `self` and `other` needs: content
+    /// wins over the others, draws with any other change need the content,
+    /// and a move with a layer change moves the layer with its new
+    /// properties.
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        use NodeUpdate::{Content, Draws, Layer, Moved, MovedLayer};
+        match (self, other) {
+            (Content, _) | (_, Content) => Content,
+            (Draws, Draws) => Draws,
+            (Draws, _) | (_, Draws) => Content,
+            (Moved, Moved) => Moved,
+            (Layer, Layer) => Layer,
+            (Moved | Layer | MovedLayer, Moved | Layer | MovedLayer) => MovedLayer,
         }
     }
-
-    /// Returns whether the update contains no dirty nodes.
-    pub const fn is_empty(self) -> bool {
-        self.content.is_empty()
-            && self.draws.is_empty()
-            && self.layers.is_empty()
-            && self.moved.is_empty()
-    }
 }
+
+/// The nodes whose drawing changed since the last scene, each with the
+/// update it needs. A node may be named more than once: its updates merge
+/// (see [`NodeUpdate::merge`]).
+///
+/// ```
+/// use cranpose_render_common::{NodeUpdate, SceneUpdates};
+/// let updates: SceneUpdates<'_> = &[(1, NodeUpdate::Content), (3, NodeUpdate::Moved)];
+/// assert_eq!(updates.len(), 2);
+/// ```
+pub type SceneUpdates<'a> = &'a [(cranpose_core::NodeId, NodeUpdate)];
 
 /// Trait implemented by hit-test targets stored inside a [`RenderScene`].
 pub trait HitTestTarget {

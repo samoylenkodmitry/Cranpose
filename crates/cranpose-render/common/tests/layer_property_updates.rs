@@ -214,12 +214,7 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
     apply_updates(
         &mut composition,
         &mut graph,
-        SceneUpdates {
-            content: &[],
-            draws: &[],
-            layers: &[parent],
-            moved: &[],
-        },
+        &[(parent, cranpose_render_common::NodeUpdate::Layer)],
     );
     assert_eq!(
         (
@@ -279,12 +274,7 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
     apply_updates(
         &mut composition,
         &mut graph,
-        SceneUpdates {
-            content: &[],
-            draws: &[],
-            layers: &[parent],
-            moved: &[],
-        },
+        &[(parent, cranpose_render_common::NodeUpdate::Layer)],
     );
     let after = sink.get();
     assert_ne!(after, before, "the child's viewport moves with its parent");
@@ -354,12 +344,10 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
     apply_updates(
         &mut composition,
         &mut graph,
-        SceneUpdates {
-            content: &[child],
-            draws: &[],
-            layers: &[parent],
-            moved: &[],
-        },
+        &[
+            (child, cranpose_render_common::NodeUpdate::Content),
+            (parent, cranpose_render_common::NodeUpdate::Layer),
+        ],
     );
     assert_ne!(
         layer_for(&graph.root, parent)
@@ -431,12 +419,10 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
     apply_updates(
         &mut composition,
         &mut graph,
-        SceneUpdates {
-            content: &[parent],
-            draws: &[],
-            layers: &[child],
-            moved: &[],
-        },
+        &[
+            (parent, cranpose_render_common::NodeUpdate::Content),
+            (child, cranpose_render_common::NodeUpdate::Layer),
+        ],
     );
     assert_ne!(
         layer_for(&graph.root, child)

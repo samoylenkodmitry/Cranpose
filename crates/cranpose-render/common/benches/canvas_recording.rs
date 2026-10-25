@@ -3,7 +3,6 @@
 use std::{alloc::System, cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Instant};
 
 use cranpose_render_common::{
-    SceneUpdates,
     graph::{DrawRunNode, LayerNode, RenderGraph, RenderNode},
     scene_builder::{
         build_graph_from_applier, clear_command_recordings_for_tests, rebuild_graph_from_applier,
@@ -378,7 +377,7 @@ fn run_with_content_case(arcs: usize) {
             update_graph_from_applier_report(
                 &applier,
                 graph,
-                SceneUpdates::content(std::slice::from_ref(&parent)),
+                &[(parent, cranpose_render_common::NodeUpdate::Content)],
                 1.0,
             )
             .applied(),
@@ -495,14 +494,9 @@ fn run_property_mode(
         let angle_value = 0.125 + tick as f32 * 0.37;
         angle.set(angle_value);
         let updates = if layers_only {
-            SceneUpdates {
-                content: &[],
-                draws: &[],
-                layers: std::slice::from_ref(&canvas_node),
-                moved: &[],
-            }
+            &[(canvas_node, cranpose_render_common::NodeUpdate::Layer)]
         } else {
-            SceneUpdates::content(std::slice::from_ref(&canvas_node))
+            &[(canvas_node, cranpose_render_common::NodeUpdate::Content)]
         };
         assert!(
             update_graph_from_applier_report(applier, graph, updates, 1.0).applied(),

@@ -1700,7 +1700,7 @@ impl ScopedUpdateCountingRenderer {
         &mut self,
         applier: &mut MemoryApplier,
         root: NodeId,
-        updates: SceneUpdates<'_>,
+        updates: cranpose_render_common::SceneUpdates<'_>,
         visual: bool,
     ) {
         if visual {
@@ -1708,9 +1708,15 @@ impl ScopedUpdateCountingRenderer {
         } else {
             self.updates.set(self.updates.get() + 1);
         }
-        let mut dirty_nodes = updates.content.to_vec();
-        dirty_nodes.extend_from_slice(updates.draws);
-        dirty_nodes.extend_from_slice(updates.layers);
+        let dirty_nodes = [NodeUpdate::Content, NodeUpdate::Draws, NodeUpdate::Layer]
+            .into_iter()
+            .flat_map(|kind| {
+                updates
+                    .iter()
+                    .filter(move |&&(_, update)| update == kind)
+                    .map(|&(id, _)| id)
+            })
+            .collect();
         *self.last_dirty_nodes.borrow_mut() = dirty_nodes;
         let updated = self.scene.graph.as_mut().is_some_and(|graph| {
             cranpose_render_common::scene_builder::update_graph_from_applier(
@@ -1771,7 +1777,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
         applier: &mut MemoryApplier,
         root: NodeId,
         _viewport: Size,
-        updates: SceneUpdates<'_>,
+        updates: cranpose_render_common::SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.update_from_applier(applier, root, updates, false);
         Ok(())
@@ -1782,7 +1788,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
         applier: &mut MemoryApplier,
         root: NodeId,
         _viewport: Size,
-        updates: SceneUpdates<'_>,
+        updates: cranpose_render_common::SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.update_from_applier(applier, root, updates, true);
         Ok(())

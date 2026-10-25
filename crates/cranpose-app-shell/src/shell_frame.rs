@@ -75,7 +75,7 @@ struct RenderPhaseDirtyDiagnostics<'a> {
     layout_dirty_nodes: usize,
     moved_nodes: usize,
     structural_dirty_nodes: usize,
-    partial_dirty_nodes: usize,
+    scene_updates: usize,
     dirty_node_ids: Option<String>,
     render_only_dirty: bool,
     recomposed_this_frame: bool,
@@ -97,7 +97,7 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
         layout_dirty_nodes,
         moved_nodes,
         structural_dirty_nodes,
-        partial_dirty_nodes,
+        scene_updates,
         dirty_node_ids,
         render_only_dirty,
         recomposed_this_frame,
@@ -105,11 +105,11 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
     } = diagnostics;
     if let Some(dirty_node_ids) = dirty_node_ids {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} scene_updates={scene_updates} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
         );
     } else {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} scene_updates={scene_updates} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
         );
     }
 }
@@ -129,7 +129,9 @@ struct SurfaceDirt {
     layout_dirty_nodes: Vec<NodeId>,
     moved_nodes: Vec<NodeId>,
     structural_parents: Vec<NodeId>,
-    partial_dirty_nodes: Vec<NodeId>,
+    // What the scene updates in place, the shell's lists in one: kept from
+    // frame to frame for its capacity.
+    scene_updates: Vec<(NodeId, NodeUpdate)>,
     draw_repass_pending: bool,
     render_only_dirty: bool,
     visual_only_partial_dirty: bool,
@@ -148,6 +150,10 @@ struct ScopedLayoutNodes {
     moved: Vec<NodeId>,
 }
 
+fn any_nodes(lists: &[&[NodeId]]) -> bool {
+    lists.iter().any(|nodes| !nodes.is_empty())
+}
+
 impl SurfaceDirt {
     fn classify(
         frame: &FrameDirt,
@@ -156,7 +162,7 @@ impl SurfaceDirt {
         visual_nodes: ScopedVisualNodes,
         layout: ScopedLayoutNodes,
         structural_parents: Vec<NodeId>,
-        mut partial_dirty_nodes: Vec<NodeId>,
+        scene_updates: Vec<(NodeId, NodeUpdate)>,
     ) -> Self {
         let ScopedVisualNodes {
             draw: draw_dirty_nodes,
@@ -167,17 +173,15 @@ impl SurfaceDirt {
             moved: moved_nodes,
         } = layout;
         let structural_dirty = !structural_parents.is_empty();
-        // A node in two of the lists stays in both: the scene keys its
-        // updates by node, so sorting every id to drop the second copy would
-        // do that work twice.
-        partial_dirty_nodes.clear();
-        partial_dirty_nodes.extend(draw_dirty_nodes.iter().copied());
-        partial_dirty_nodes.extend(layout_dirty_nodes.iter().copied());
-        partial_dirty_nodes.extend(structural_parents.iter().copied());
 
         // Moved nodes are not part of the partial list: the scene moves them.
         let layout_changed = !layout_dirty_nodes.is_empty() || !moved_nodes.is_empty();
-        let partial_scene_dirty = !partial_dirty_nodes.is_empty() || !moved_nodes.is_empty();
+        let partial_scene_dirty = any_nodes(&[
+            &draw_dirty_nodes,
+            &layout_dirty_nodes,
+            &moved_nodes,
+            &structural_parents,
+        ]);
         let render_only_dirty = frame.render_dirty
             && !frame.attributed
             && !partial_scene_dirty
@@ -199,26 +203,63 @@ impl SurfaceDirt {
             || !layer_property_nodes.is_empty()
             || draw_repass_pending
             || structural_dirty;
-        Self {
+        let mut dirt = Self {
             draw_dirty_nodes,
             layer_property_nodes,
             layout_dirty_nodes,
             moved_nodes,
             structural_parents,
-            partial_dirty_nodes,
+            scene_updates,
             draw_repass_pending,
             render_only_dirty,
             visual_only_partial_dirty,
             full_scene_dirty,
             needs_scene_rebuild,
+        };
+        dirt.fill_scene_updates();
+        dirt
+    }
+
+    // A node in two of the lists stays in both: the scene merges a node's
+    // updates as it keys them, so sorting every id to drop the second copy
+    // would do that work twice. Nothing was composed or laid out for a
+    // visual update, so its draw nodes' draws read state that changed;
+    // otherwise they, the laid out nodes and the structural parents are
+    // recorded again.
+    fn fill_scene_updates(&mut self) {
+        let visual = self.use_visual_update();
+        let updates = &mut self.scene_updates;
+        updates.clear();
+        updates.extend(self.moved_nodes.iter().map(|&id| (id, NodeUpdate::Moved)));
+        updates.extend(
+            self.layer_property_nodes
+                .iter()
+                .map(|&id| (id, NodeUpdate::Layer)),
+        );
+        if visual {
+            updates.extend(
+                self.draw_dirty_nodes
+                    .iter()
+                    .map(|&id| (id, NodeUpdate::Draws)),
+            );
+        } else {
+            let recorded = self
+                .draw_dirty_nodes
+                .iter()
+                .chain(&self.layout_dirty_nodes)
+                .chain(&self.structural_parents);
+            updates.extend(recorded.map(|&id| (id, NodeUpdate::Content)));
         }
     }
 
     fn use_partial_update(&self) -> bool {
-        (!self.partial_dirty_nodes.is_empty()
-            || !self.layer_property_nodes.is_empty()
-            || !self.moved_nodes.is_empty())
-            && !self.render_only_dirty
+        any_nodes(&[
+            &self.draw_dirty_nodes,
+            &self.layer_property_nodes,
+            &self.layout_dirty_nodes,
+            &self.moved_nodes,
+            &self.structural_parents,
+        ]) && !self.render_only_dirty
             && !self.full_scene_dirty
     }
 
@@ -247,16 +288,16 @@ impl SurfaceDirt {
             layout_dirty_nodes: self.layout_dirty_nodes.len(),
             moved_nodes: self.moved_nodes.len(),
             structural_dirty_nodes: self.structural_parents.len(),
-            partial_dirty_nodes: self.partial_dirty_nodes.len(),
+            scene_updates: self.scene_updates.len(),
             dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
                 format!(
-                    "draw={:?} layers={:?} layout={:?} moved={:?} structural={:?} partial={:?}",
+                    "draw={:?} layers={:?} layout={:?} moved={:?} structural={:?} updates={:?}",
                     self.draw_dirty_nodes,
                     self.layer_property_nodes,
                     self.layout_dirty_nodes,
                     self.moved_nodes,
                     self.structural_parents,
-                    self.partial_dirty_nodes,
+                    self.scene_updates,
                 )
             }),
             render_only_dirty: self.render_only_dirty,
@@ -821,7 +862,7 @@ where
         reshaped: std::mem::take(&mut surface.scoped_layout_scene_nodes),
         moved: std::mem::take(&mut surface.scoped_moved_scene_nodes),
     };
-    let partial_dirty_nodes = std::mem::take(&mut surface.partial_scene_nodes);
+    let scene_updates = std::mem::take(&mut surface.scene_updates);
     let scene_dirty = surface.scene_dirty;
     let mut dirt = SurfaceDirt::classify(
         frame,
@@ -833,7 +874,7 @@ where
         },
         layout,
         structural_parents,
-        partial_dirty_nodes,
+        scene_updates,
     );
 
     if !dirt.needs_scene_rebuild {
@@ -851,7 +892,7 @@ where
         surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
         surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
         surface.structural_scene_nodes = dirt.structural_parents;
-        surface.partial_scene_nodes = dirt.partial_dirty_nodes;
+        surface.scene_updates = dirt.scene_updates;
         if dirt.render_only_dirty && app.dev_options.fps_counter {
             draw_dev_overlay(app, surface);
         }
@@ -876,7 +917,7 @@ where
     surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
     surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
     surface.structural_scene_nodes = dirt.structural_parents;
-    surface.partial_scene_nodes = dirt.partial_dirty_nodes;
+    surface.scene_updates = dirt.scene_updates;
     surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
     SurfaceFrame {
         result: FrameUpdateResult {
@@ -912,24 +953,14 @@ fn rebuild_surface_scene<R>(
             &mut applier,
             root,
             viewport_size,
-            SceneUpdates {
-                content: &[],
-                draws: &dirt.draw_dirty_nodes,
-                layers: &dirt.layer_property_nodes,
-                moved: &dirt.moved_nodes,
-            },
+            &dirt.scene_updates,
         )
     } else if dirt.use_partial_update() {
         surface.renderer.update_scene_from_applier(
             &mut applier,
             root,
             viewport_size,
-            SceneUpdates {
-                content: &dirt.partial_dirty_nodes,
-                draws: &[],
-                layers: &dirt.layer_property_nodes,
-                moved: &dirt.moved_nodes,
-            },
+            &dirt.scene_updates,
         )
     } else {
         surface

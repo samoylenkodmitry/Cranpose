@@ -290,12 +290,7 @@ pub(crate) fn camera_moved(
     scene.update_from_applier(
         applier,
         root,
-        cranpose_render_common::SceneUpdates {
-            content: &[],
-            draws: &[],
-            layers: &[scene_id],
-            moved: &[],
-        },
+        &[(scene_id, cranpose_render_common::NodeUpdate::Layer)],
     );
 }
 

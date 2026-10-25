@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    SceneUpdates,
+    NodeUpdate, SceneUpdates,
     graph::{
         CachePolicy, ContentChanges, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons,
         LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
@@ -196,54 +196,23 @@ pub fn update_graph_from_applier_report(
     {
         eprintln!(
             "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
-            updates.content.len()
-                + updates.draws.len()
-                + updates.layers.len()
-                + updates.moved.len()
+            updates.len()
         );
     }
     report
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum NodeUpdate {
-    Content,
-    /// Only state the node's draws read changed: its layer keeps its
-    /// children and records the node's draws again.
-    Draws,
-    Layer,
-    /// The node moved in its parent and kept its size: its layer moves and
-    /// keeps what it drew.
-    Moved,
-    /// The node moved and its layer properties changed: its layer moves,
-    /// takes the new properties and keeps what it drew.
-    MovedLayer,
-}
-
-/// Puts into `dirty` each dirty node with the update it needs: content wins
-/// over the others, a node whose draws changed with another change takes
-/// it, and a moved node whose layer properties changed too moves with them.
+/// Puts into `dirty` each dirty node with the update it needs, the updates
+/// of a node named more than once merged.
 fn dirty_node_updates(updates: SceneUpdates<'_>, dirty: &mut HashMap<NodeId, NodeUpdate>) {
     dirty.clear();
-    dirty.reserve(
-        updates.moved.len() + updates.layers.len() + updates.draws.len() + updates.content.len(),
-    );
-    dirty.extend(updates.moved.iter().map(|&id| (id, NodeUpdate::Moved)));
-    for &id in updates.layers {
-        let kind = match dirty.get(&id) {
-            Some(NodeUpdate::Moved) => NodeUpdate::MovedLayer,
-            _ => NodeUpdate::Layer,
-        };
-        dirty.insert(id, kind);
+    dirty.reserve(updates.len());
+    for &(id, update) in updates {
+        dirty
+            .entry(id)
+            .and_modify(|kind| *kind = kind.merge(update))
+            .or_insert(update);
     }
-    for &id in updates.draws {
-        let kind = match dirty.get(&id) {
-            None | Some(NodeUpdate::Draws) => NodeUpdate::Draws,
-            Some(_) => NodeUpdate::Content,
-        };
-        dirty.insert(id, kind);
-    }
-    dirty.extend(updates.content.iter().map(|&id| (id, NodeUpdate::Content)));
 }
 
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]

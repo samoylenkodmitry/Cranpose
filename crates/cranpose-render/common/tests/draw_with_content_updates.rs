@@ -5,7 +5,6 @@ use std::{
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
-    SceneUpdates,
     graph::RenderGraph,
     scene_builder::{
         clear_command_recordings_for_tests, rebuild_graph_from_applier,
@@ -114,7 +113,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     let report = update_graph_from_applier_report(
         &applier,
         &mut graph,
-        SceneUpdates::content(std::slice::from_ref(&parent)),
+        &[(parent, cranpose_render_common::NodeUpdate::Content)],
         1.0,
     );
     assert!(report.applied(), "content update applies to retained graph");
@@ -133,10 +132,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     let report = update_graph_from_applier_report(
         &applier,
         &mut graph,
-        SceneUpdates {
-            draws: std::slice::from_ref(&parent),
-            ..SceneUpdates::default()
-        },
+        &[(parent, cranpose_render_common::NodeUpdate::Draws)],
         1.0,
     );
     assert!(report.applied(), "draw update applies to retained graph");

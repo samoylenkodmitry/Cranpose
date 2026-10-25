@@ -14,7 +14,7 @@ use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{PointerButton, PointerButtons, PointerSource, RotaryScrollEvent};
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{NodeUpdate, Renderer};
 use cranpose_ui::{
     LayoutNode, LayoutTree, MovedSceneNode, PlatformTextInputHandler, SemanticsTree,
     pointer_icon_session::PointerIconState,
@@ -67,7 +67,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scoped_draw_nodes: Vec<NodeId>,
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
-    pub(crate) partial_scene_nodes: Vec<NodeId>,
+    pub(crate) scene_updates: Vec<(NodeId, NodeUpdate)>,
     /// The nodes the retained redraw walk has yet to visit, empty between
     /// frames; kept for its storage.
     pub(crate) redraw_walk: Vec<NodeId>,
@@ -115,7 +115,7 @@ impl<R: Renderer> RootSurface<R> {
             scoped_draw_nodes: Vec::new(),
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
-            partial_scene_nodes: Vec::new(),
+            scene_updates: Vec::new(),
             redraw_walk: Vec::new(),
             retained_visual_nodes: HashSet::default(),
             is_dirty: true,
@@ -192,7 +192,7 @@ impl<R: Renderer> RootSurface<R> {
         self.scoped_draw_nodes.clear();
         self.scoped_layer_property_nodes.clear();
         self.structural_scene_nodes.clear();
-        self.partial_scene_nodes.clear();
+        self.scene_updates.clear();
         self.scene_dirty = true;
     }
 

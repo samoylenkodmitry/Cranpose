@@ -8,7 +8,7 @@ use std::{
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
-    Renderer, SceneUpdates,
+    NodeUpdate, Renderer, SceneUpdates,
     graph::{LayerNode, RenderNode},
     graph_scene::Scene,
     scene_builder::{
@@ -75,7 +75,10 @@ impl Renderer for GraphRenderer {
         updates: SceneUpdates<'_>,
     ) -> Result<(), ()> {
         self.updates += 1;
-        self.dirty_ids += updates.content.len() + updates.draws.len() + updates.layers.len();
+        self.dirty_ids += updates
+            .iter()
+            .filter(|&&(_, update)| update != NodeUpdate::Moved)
+            .count();
         let updated = self
             .scene
             .graph

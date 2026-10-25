@@ -6,7 +6,7 @@ use std::{alloc::System, cell::RefCell, rc::Rc};
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_render_common::{
-    SceneUpdates,
+    NodeUpdate,
     graph::{LayerNode, RenderGraph, RenderNode},
     scene_builder::{
         build_graph_from_applier, rebuild_graph_from_applier, update_graph_from_applier,
@@ -99,9 +99,12 @@ fn allocations_per_cell(mut pass: impl FnMut(&mut MemoryApplier, NodeId, &mut Re
 /// cell rebuilt with the same content allocates nothing of its own.
 fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
     let per_cell = allocations_per_cell(|applier, _, graph| {
-        let dirty = cell_ids(&graph.root);
+        let dirty: Vec<_> = cell_ids(&graph.root)
+            .into_iter()
+            .map(|id| (id, NodeUpdate::Content))
+            .collect();
         assert!(
-            update_graph_from_applier(applier, graph, SceneUpdates::content(&dirty), 1.0),
+            update_graph_from_applier(applier, graph, &dirty, 1.0),
             "the cells rebuild in place"
         );
     });
@@ -128,9 +131,9 @@ fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
 /// updating one cell allocates what the cell's rebuild allocates alone.
 fn updating_one_cell_reuses_the_dirty_node_map() {
     let allocations = allocations_per_pass(10, |applier, _, graph| {
-        let dirty = cell_ids(&graph.root)[..1].to_vec();
+        let dirty = [(cell_ids(&graph.root)[0], NodeUpdate::Content)];
         assert!(
-            update_graph_from_applier(applier, graph, SceneUpdates::content(&dirty), 1.0),
+            update_graph_from_applier(applier, graph, &dirty, 1.0),
             "the cell rebuilds in place"
         );
     });
@@ -197,9 +200,10 @@ fn scroll_step_allocations() -> usize {
         dirty.extend(applier.take_structural_change_parents_attached_to(root));
         dirty.sort_unstable();
         dirty.dedup();
+        let updates: Vec<_> = dirty.iter().map(|&id| (id, NodeUpdate::Content)).collect();
         let region = Region::new(GLOBAL);
         assert!(
-            update_graph_from_applier(&applier, &mut graph, SceneUpdates::content(&dirty), 1.0),
+            update_graph_from_applier(&applier, &mut graph, &updates, 1.0),
             "the scroll updates the scene in place"
         );
         let allocations = region.change().allocations;

@@ -31,7 +31,7 @@ pub use cranpose_foundation::{
     rotary_scroll_pixels_from_detents,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
-use cranpose_render_common::{HitTestTarget, RenderScene, Renderer, SceneUpdates};
+use cranpose_render_common::{HitTestTarget, NodeUpdate, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
     HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
