@@ -379,7 +379,7 @@ impl WgpuRenderer {
     }
 
     fn retire_live_backend(&mut self) {
-        #[allow(unused_mut)]
+        #[allow(unused_mut, reason = "only native targets change the backend")]
         let mut backend = std::mem::replace(&mut self.backend, PresentBackend::None);
         #[cfg(not(target_arch = "wasm32"))]
         if let PresentBackend::Threaded(handle) = &mut backend {

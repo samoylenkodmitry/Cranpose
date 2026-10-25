@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 //! The microphone standby on Android, through `CranposeMicrophoneStandby`,
 //! which an application carries only when it declares the

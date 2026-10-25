@@ -1,6 +1,6 @@
 use cranpose::prelude::*;
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, reason = "names follow Compose's casing")]
 pub fn WatchApp() {
     Box(
         Modifier::empty().fill_max_size().background(Color(0.05, 0.1, 0.25, 1.0)),

@@ -414,7 +414,7 @@ pub fn local_lifecycle_state() -> cranpose_core::CompositionLocal<LifecycleState
 }
 
 /// The host's lifecycle state as observable state.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberLifecycleState() -> cranpose_core::State<LifecycleState> {
     let transitions = rememberLifecycleEvents();
@@ -430,7 +430,7 @@ pub fn rememberLifecycleState() -> cranpose_core::State<LifecycleState> {
 }
 
 /// Host lifecycle transitions as a composition-scoped stream.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberLifecycleEvents() -> cranpose_core::EventStream<LifecycleEvent> {
     cranpose_core::rememberEventStream((), |sender| {

@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to AVAudioEngine")]
 
 //! The watchOS output device: an `AVAudioEngine` whose source node runs the
 //! renderer.

@@ -4,7 +4,7 @@ use cranpose_render_common::{
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
         collect_solid_text_atlas_run, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
-        SoftwareTextFontSet, SoftwareTextMeasurer,
+        SoftwareTextFontSet, SoftwareTextMeasurer, TextRasterRequest,
     },
 };
 use cranpose_ui::text::{
@@ -64,12 +64,14 @@ fn ink_area(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) -> usize
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(256);
     let mut run: Vec<SoftwareGlyphAtlasRunGlyph> = Vec::new();
     collect_solid_text_atlas_run(
-        &AnnotatedString::from(text),
-        rect,
-        style,
-        Color::WHITE,
-        FONT_SIZE,
-        1.0,
+        TextRasterRequest::new(
+            &AnnotatedString::from(text),
+            rect,
+            style,
+            Color::WHITE,
+            FONT_SIZE,
+            1.0,
+        ),
         fonts,
         &mut cache,
         &mut run,

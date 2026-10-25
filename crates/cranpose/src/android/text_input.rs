@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 

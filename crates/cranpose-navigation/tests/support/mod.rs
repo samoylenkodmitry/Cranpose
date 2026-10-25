@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, reason = "each test binary uses a part of the support")]
 
 use std::{
     cell::{Cell, RefCell},

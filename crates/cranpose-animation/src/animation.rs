@@ -5,8 +5,8 @@
 //! Note: This module uses camelCase for method names (animateTo, snapTo) to maintain
 //! 1:1 API parity with Jetpack Compose.
 
-#![expect(non_snake_case)]
-#![expect(non_upper_case_globals)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
+#![expect(non_upper_case_globals, reason = "Compose's easing names")]
 
 use std::{
     cell::{Cell, RefCell},
@@ -616,7 +616,7 @@ impl InfiniteTransition {
     /// A float that runs from `initial_value` to `target_value` and over
     /// again as `animation_spec` says, while the transition is composed.
     /// Compose's `InfiniteTransition.animateFloat`.
-    #[expect(non_snake_case)]
+    #[expect(non_snake_case, reason = "names follow Compose's casing")]
     #[track_caller]
     pub fn animateFloat(
         &self,
@@ -631,7 +631,7 @@ impl InfiniteTransition {
 
     /// [`animateFloat`](Self::animateFloat) for any value that interpolates.
     /// Compose's `InfiniteTransition.animateValue`.
-    #[expect(non_snake_case)]
+    #[expect(non_snake_case, reason = "names follow Compose's casing")]
     #[track_caller]
     pub fn animateValue<T: Lerp + Clone + PartialEq + 'static>(
         &self,
@@ -762,7 +762,7 @@ impl InfiniteTransitionInner {
 
 /// Remembers an [`InfiniteTransition`] named `label`, whose animations run
 /// while the caller stays composed. Compose's `rememberInfiniteTransition`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
     let transition = cranpose_core::remember(|| {
@@ -1181,7 +1181,7 @@ pub fn animateValueAsState<T: SpringScalar + PartialEq + 'static>(
 /// A float that animates to `target` with `animation` each time `target`
 /// changes; the first composition starts at `target`. Compose's
 /// `animateFloatAsState`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
     animateValueAsState(target, animation, label)

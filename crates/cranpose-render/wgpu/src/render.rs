@@ -18,8 +18,8 @@ use cranpose_render_common::{
     graph::{DrawCommandId, quad_bounds},
     software_text_raster::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph,
-        SoftwareGlyphRasterCache, SoftwareTextFontSet, TextPixels, TextRasterRequest,
-        collect_solid_text_atlas_run, rasterize_text,
+        SoftwareGlyphRasterCache, SoftwareTextFontSet, TextPixels, collect_solid_text_atlas_run,
+        rasterize_text,
     },
 };
 use cranpose_ui_graphics::{
@@ -5161,12 +5161,7 @@ impl GpuRenderer {
         }
         collected_run.clear();
         if collect_solid_text_atlas_run(
-            text_draw.text.string().as_ref(),
-            raster_rect,
-            &text_draw.text_style,
-            text_draw.color,
-            text_draw.font_size,
-            text_scale,
+            text_draw.raster_request(raster_rect, text_scale),
             &self.text_fonts,
             &mut self.text_glyph_mask_cache,
             collected_run,
@@ -5583,19 +5578,13 @@ impl GpuRenderer {
         text_scale: f32,
     ) -> Option<ImageBitmap> {
         rasterize_text(
-            TextRasterRequest::new(
-                text_draw.text.string().as_ref(),
-                raster_rect,
-                &text_draw.text_style,
-                text_draw.color,
-                text_draw.font_size,
-                text_scale,
-            )
-            .with_origin(if text_draw.text.string().span_styles().is_empty() {
-                Point::new(raster_rect.x, raster_rect.y)
-            } else {
-                source_origin
-            }),
+            text_draw
+                .raster_request(raster_rect, text_scale)
+                .with_origin(if text_draw.text.string().span_styles().is_empty() {
+                    Point::new(raster_rect.x, raster_rect.y)
+                } else {
+                    source_origin
+                }),
             &self.text_fonts,
             Some(&mut self.text_glyph_mask_cache),
         )

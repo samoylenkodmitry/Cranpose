@@ -287,7 +287,7 @@ pub fn observe_heart_rate(
 /// The wearer's heart rate, observed for as long as this call stays in the
 /// composition. While `active` the sensor runs, if the person has allowed
 /// it; this never asks -- call [`request_heart_rate_permission`] for that.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberHeartRate(active: bool) -> State<HeartRate> {
     let updates = rememberEventStream(active, move |sender| {

@@ -124,7 +124,7 @@ impl Default for RenderString {
 
 const _: () = {
     fn assert_send<T: Send + Sync>() {}
-    #[expect(dead_code)]
+    #[expect(dead_code, reason = "a compile-time check that is never called")]
     fn assert_render_string_is_send_sync() {
         assert_send::<RenderString>();
     }

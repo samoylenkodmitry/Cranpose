@@ -177,12 +177,14 @@ fn the_atlas_run_centres_each_line_of_a_wrapped_block() {
 
     let mut centred = Vec::new();
     collect_solid_text_atlas_run(
-        &text,
-        rect,
-        &centred_style(TextAlign::Center),
-        Color(1.0, 1.0, 1.0, 1.0),
-        20.0,
-        1.0,
+        TextRasterRequest::new(
+            &text,
+            rect,
+            &centred_style(TextAlign::Center),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+        ),
         &fonts,
         &mut cache,
         &mut centred,
@@ -190,12 +192,14 @@ fn the_atlas_run_centres_each_line_of_a_wrapped_block() {
     .expect("centred run");
     let mut flush = Vec::new();
     collect_solid_text_atlas_run(
-        &text,
-        rect,
-        &centred_style(TextAlign::Start),
-        Color(1.0, 1.0, 1.0, 1.0),
-        20.0,
-        1.0,
+        TextRasterRequest::new(
+            &text,
+            rect,
+            &centred_style(TextAlign::Start),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+        ),
         &fonts,
         &mut cache,
         &mut flush,

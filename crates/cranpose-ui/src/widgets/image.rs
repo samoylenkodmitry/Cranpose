@@ -1,6 +1,6 @@
 //! Image composable and painter primitives.
 
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 #![expect(clippy::too_many_arguments)]
 
 #[cfg(feature = "svg")]

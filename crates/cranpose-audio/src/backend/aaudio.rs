@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "calls into AAudio")]
 
 use std::{
     ffi::c_void,

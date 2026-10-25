@@ -109,17 +109,19 @@ fn atlas_placements(
 ) -> Vec<(u64, u32, i32, i32, usize, usize)> {
     let mut glyphs = Vec::new();
     collect_solid_text_atlas_run(
-        text,
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 180.0,
-            height: 48.0,
-        },
-        style,
-        Color::BLACK,
-        28.0,
-        1.0,
+        TextRasterRequest::new(
+            text,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 180.0,
+                height: 48.0,
+            },
+            style,
+            Color::BLACK,
+            28.0,
+            1.0,
+        ),
         fonts,
         &mut SoftwareGlyphRasterCache::with_capacity_at_least_one(64),
         &mut glyphs,

@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 use std::{ffi::c_void, ptr::NonNull};
 

@@ -32,7 +32,7 @@ macro_rules! android_main {
         // and it is defined here rather than by hand in each of them.
         #[cfg(target_os = "android")]
         #[doc(hidden)]
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
         #[unsafe(no_mangle)]
         pub fn android_main(app: $crate::AndroidApp) {
             $crate::AppLauncher::run($launcher, app, $content);
@@ -44,7 +44,7 @@ macro_rules! android_main {
         // which only the crate the APK packages defines.
         #[cfg(target_os = "android")]
         #[doc(hidden)]
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
         #[unsafe(no_mangle)]
         pub extern "system" fn Java_dev_cranpose_android_CranposeProcess_nativeStart<'local>(
             env: $crate::__android_jni::EnvUnowned<'local>,

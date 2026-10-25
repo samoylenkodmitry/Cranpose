@@ -30,17 +30,19 @@ fn atlas_glyph_ids(
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
     let mut run = Vec::new();
     collect_solid_text_atlas_run(
-        text,
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 400.0,
-            height: 40.0,
-        },
-        style,
-        Color::WHITE,
-        18.0,
-        1.0,
+        TextRasterRequest::new(
+            text,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 40.0,
+            },
+            style,
+            Color::WHITE,
+            18.0,
+            1.0,
+        ),
         fonts,
         &mut cache,
         &mut run,

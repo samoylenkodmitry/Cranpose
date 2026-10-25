@@ -18,7 +18,7 @@ fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
 /// `CompositionLocalProvider`.
 pub struct ProvidedValue {
     key: LocalKey,
-    #[expect(clippy::type_complexity)]
+    #[expect(clippy::type_complexity, reason = "one boxed closure per local")]
     apply: Box<dyn Fn(&Composer, crate::Key) -> (Rc<dyn Any>, bool)>,
 }
 
@@ -42,7 +42,7 @@ impl ProvidedValue {
 
 /// Makes `values` available to `content` and everything it composes. Where two values are for the
 /// same local, the last wins. Compose's `CompositionLocalProvider`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn CompositionLocalProvider(
     values: impl IntoIterator<Item = ProvidedValue>,
@@ -289,7 +289,7 @@ pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
 
 /// Creates a [`CompositionLocal`] whose default is made by `default`. A provided value replaces the
 /// previous one when it differs by `==`. Compose's `compositionLocalOf`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
 ) -> CompositionLocal<T> {
@@ -298,7 +298,7 @@ pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
 
 /// Creates a [`CompositionLocal`] whose default is made by `default`. A provided value replaces the
 /// previous one only when `equivalent` returns `false` for the two.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
     default: impl Fn() -> T + 'static,
     equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
@@ -518,7 +518,7 @@ pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
 }
 
 /// A [`StaticCompositionLocal`] whose provided values compare with `==`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn staticCompositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
 ) -> StaticCompositionLocal<T> {
@@ -527,7 +527,7 @@ pub fn staticCompositionLocalOf<T: Clone + PartialEq + 'static>(
 
 /// A [`StaticCompositionLocal`] whose provider recomposes its content when
 /// `equivalent` says a new value differs from the last one.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn staticCompositionLocalOfWithPolicy<T: Clone + 'static>(
     default: impl Fn() -> T + 'static,
     equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
@@ -545,7 +545,7 @@ pub fn staticCompositionLocalOfWithPolicy<T: Clone + 'static>(
 /// when a dynamic local the computation read changes. As the default reads
 /// locals, it is computed during composition only. Compose's
 /// `compositionLocalWithComputedDefaultOf`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn compositionLocalWithComputedDefaultOf<T: Clone + PartialEq + 'static>(
     compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
 ) -> CompositionLocal<T> {
@@ -555,7 +555,7 @@ pub fn compositionLocalWithComputedDefaultOf<T: Clone + PartialEq + 'static>(
 /// A [`StaticCompositionLocal`] whose default is computed at each read
 /// without a provider, from the other locals there. Compose's
 /// `staticCompositionLocalWithComputedDefaultOf`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn staticCompositionLocalWithComputedDefaultOf<T: Clone + PartialEq + 'static>(
     compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
 ) -> StaticCompositionLocal<T> {

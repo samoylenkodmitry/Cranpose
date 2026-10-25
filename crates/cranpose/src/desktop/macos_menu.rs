@@ -5,7 +5,7 @@
 //! gauntlet's window back 14 ms (median of six launches). The menu is the one
 //! winit builds -- About, Services, Hide, Hide Others, Show All and Quit -- so
 //! the application behaves as before once its first frame is presented.
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to AppKit")]
 
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};

@@ -167,7 +167,7 @@ fn builtin_open(handle: &str) -> Option<WritableFolderStoreRef> {
     {
         return Some(desktop::open(handle));
     }
-    #[allow(unreachable_code)]
+    #[allow(unreachable_code, reason = "platforms without a folder end before it")]
     {
         let _ = handle;
         None

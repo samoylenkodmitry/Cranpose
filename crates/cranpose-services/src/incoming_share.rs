@@ -150,7 +150,7 @@ pub fn clear_incoming_content() {
 ///     });
 /// }
 /// ```
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberIncomingContent() -> EventStream<IncomingContent> {
     rememberEventStream((), |sender| {

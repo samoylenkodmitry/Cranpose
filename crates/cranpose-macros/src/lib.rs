@@ -960,7 +960,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     quote! { #pat }
                 };
                 quote! {
-                    #[allow(unused_mut)]
+                    #[allow(unused_mut, reason = "only some callbacks change the binding")]
                     let #binding = #composer_ident
                         .with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
@@ -1090,7 +1090,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let slot_origin = hot_slot_origin(&core_path, &func.sig.ident, body_end);
         let recompose_fn = quote! {
-            #[allow(non_snake_case)]
+            #[allow(non_snake_case, reason = "names follow Compose's casing")]
             fn #recompose_fn_ident #impl_generics (
                 #composer_ident: &#core_path::Composer
             ) -> #return_ty #where_clause {
@@ -1100,7 +1100,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
 
         let helper_fn = quote! {
-            #[allow(non_snake_case, clippy::too_many_arguments)]
+            #[allow(non_snake_case, clippy::too_many_arguments, reason = "the helper takes the composable's own parameters")]
             fn #helper_ident #impl_generics (
                 #composer_ident: &#core_path::Composer,
                 #group_ident: &#core_path::ComposableGroup<'_>
@@ -1113,7 +1113,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
 
         let body_fn = quote! {
-            #[allow(non_snake_case, clippy::too_many_arguments)]
+            #[allow(non_snake_case, clippy::too_many_arguments, reason = "the helper takes the composable's own parameters")]
             fn #body_ident #impl_generics (
                 #composer_ident: &#core_path::Composer
                 #(, #body_inputs)*

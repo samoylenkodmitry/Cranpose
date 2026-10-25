@@ -126,7 +126,7 @@ pub fn publish_memory_pressure(pressure: MemoryPressure) {
 ///     });
 /// }
 /// ```
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMemoryPressure() -> EventStream<MemoryPressure> {
     rememberEventStream((), |sender| {

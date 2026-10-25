@@ -32,7 +32,7 @@ pub fn local_system_languages() -> CompositionLocal<Rc<[Locale]>> {
 /// Provides stored language choices and automatic host-language updates to an app.
 /// Preference I/O runs on workers; UI labels, accessibility and scoped controls
 /// update after a successful choice without a platform-specific application adapter.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn ProvideApplicationLocalization(
     application: cranpose_ui::localization::Localization,

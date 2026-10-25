@@ -453,7 +453,7 @@ impl BranchGroupInjector<'_> {
             // After a statement that never ends, as `return` is, this drop
             // and the advance that may replace it never run.
             rebuilt.push(syn::parse_quote! {
-                #[allow(unreachable_code)]
+                #[allow(unreachable_code, reason = "a branch may end the function before it")]
                 drop(#guard);
             });
         }
@@ -564,12 +564,12 @@ impl BranchGroupInjector<'_> {
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>
-                #[allow(unreachable_code)]
+                #[allow(unreachable_code, reason = "a branch may end the function before it")]
                 #core_path::__branch_group_scope_advance(&mut #guard, #key);
             }
         } else {
             syn::parse_quote_spanned! {span=>
-                #[allow(unreachable_code)]
+                #[allow(unreachable_code, reason = "a branch may end the function before it")]
                 #guard.advance(#key);
             }
         }

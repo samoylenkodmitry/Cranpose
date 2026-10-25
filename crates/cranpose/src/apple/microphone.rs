@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to Apple frameworks")]
 
 //! The microphone permission and the recording session on iOS and watchOS.
 
@@ -33,7 +33,7 @@ struct AppleMicrophone;
 impl MicrophoneAccess for AppleMicrophone {
     // The session's permission API serves iOS 16 too; AVAudioApplication's
     // came in iOS 17 and watchOS 10.
-    #[expect(deprecated)]
+    #[expect(deprecated, reason = "the replacement needs iOS 17 and watchOS 10")]
     fn permission(&self) -> MicrophonePermission {
         // SAFETY: the shared session is valid for the life of the process.
         let permission = unsafe { AVAudioSession::sharedInstance().recordPermission() };
@@ -52,7 +52,7 @@ impl MicrophoneAccess for AppleMicrophone {
         });
         // SAFETY: the block outlives the call; the system copies it until the
         // person answers.
-        #[expect(deprecated)]
+        #[expect(deprecated, reason = "the replacement needs iOS 17 and watchOS 10")]
         unsafe {
             AVAudioSession::sharedInstance().requestRecordPermission(&answered);
         }

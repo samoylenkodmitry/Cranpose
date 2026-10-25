@@ -73,7 +73,7 @@ pub fn layout_direction() -> LayoutDirection {
 }
 
 /// Runs `content` in `direction`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn ProvideLayoutDirection(direction: LayoutDirection, content: impl FnOnce()) {
     CompositionLocalProvider([local_layout_direction().provides(direction)], content);

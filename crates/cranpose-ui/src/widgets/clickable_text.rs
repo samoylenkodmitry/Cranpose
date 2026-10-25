@@ -3,7 +3,7 @@
 //! Mirrors Jetpack Compose's `ClickableText` from:
 //! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/ClickableText.kt`
 
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use std::rc::Rc;
 

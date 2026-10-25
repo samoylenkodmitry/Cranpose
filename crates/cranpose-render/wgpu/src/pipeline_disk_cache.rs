@@ -133,7 +133,7 @@ fn driver_cache(
     }
     // SAFETY: `data` is this build's own `get_data` output, and `fallback:
     // true` has wgpu validate the header and fall back to an empty cache.
-    #[expect(unsafe_code)]
+    #[expect(unsafe_code, reason = "wgpu takes the pipeline cache bytes on trust")]
     let cache = unsafe {
         device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
             label: Some("cranpose pipeline disk cache"),

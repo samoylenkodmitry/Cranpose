@@ -3,7 +3,7 @@
 //! application delegate's `application:openURLs:`, and winit leaves the
 //! delegate to the application. Documents arrive as incoming content and
 //! links as opened links, at launch too.
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to AppKit")]
 
 use std::path::Path;
 

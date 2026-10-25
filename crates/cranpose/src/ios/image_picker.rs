@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -111,7 +111,7 @@ fn dismiss(picker: &UIImagePickerController) {
     picker.dismissViewControllerAnimated_completion(true, None);
 }
 
-#[expect(deprecated)]
+#[expect(deprecated, reason = "PHPicker has no camera; UIImagePicker does")]
 fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, ImagePickerError> {
     let root = super::file_picker::root_view_controller(mtm).ok_or_else(|| {
         ImagePickerError::Failed("no root view controller to present from".into())

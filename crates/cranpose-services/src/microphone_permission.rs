@@ -186,7 +186,7 @@ pub fn observe_microphone_permission(
 /// The permission as observable state, read again each time the
 /// application's lifecycle changes, such as on its return from the system
 /// settings. This never asks.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMicrophonePermission() -> State<MicrophonePermission> {
     let lifecycle = crate::rememberLifecycleState().get();

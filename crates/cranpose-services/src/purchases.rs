@@ -426,7 +426,7 @@ pub fn take_event() -> Option<PurchaseEvent> {
 /// The composition recomposes when the backend publishes news; nothing polls
 /// and no frame loop is required for a purchase that completes while the screen
 /// is idle.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberStoreState() -> cranpose_core::State<StoreState> {
     let updates = cranpose_core::rememberEventStream((), |sender| {
@@ -439,7 +439,7 @@ pub fn rememberStoreState() -> cranpose_core::State<StoreState> {
 ///
 /// Each event is delivered exactly once. Collect it with
 /// [`cranpose_core::CollectEvents`].
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberPurchaseEvents() -> cranpose_core::EventStream<PurchaseEvent> {
     cranpose_core::rememberEventStream((), |sender| {

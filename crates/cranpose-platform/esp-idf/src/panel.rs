@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "calls into ESP-IDF and its drivers")]
 
 use std::{
     borrow::Borrow,

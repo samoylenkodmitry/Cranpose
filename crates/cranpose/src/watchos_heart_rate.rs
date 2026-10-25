@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to watchOS frameworks")]
 
 //! The wearer's heart rate on watchOS, through HealthKit.
 //!

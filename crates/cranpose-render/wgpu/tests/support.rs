@@ -1,4 +1,4 @@
-#![expect(dead_code)]
+#![expect(dead_code, reason = "each test binary uses a part of the support")]
 
 use std::sync::PoisonError;
 #[path = "support/device.rs"]
@@ -456,7 +456,7 @@ pub mod page {
 
 /// Everything a raw render-graph test imports: the graph node types and the
 /// drawing primitives that fill a draw run.
-#[expect(unused_imports)]
+#[expect(unused_imports, reason = "each test binary uses a part of the support")]
 pub mod graph {
     pub use cranpose_render_common::{
         Renderer,

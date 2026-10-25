@@ -1,6 +1,6 @@
 //! Compose-like window scaffold with framework-owned system insets.
 
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use std::rc::Rc;
 

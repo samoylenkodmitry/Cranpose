@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "calls into ESP-IDF and its drivers")]
 
 mod st77922;
 mod xpt2046;

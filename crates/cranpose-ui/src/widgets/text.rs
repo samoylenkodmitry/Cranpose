@@ -201,7 +201,7 @@ mod shared_style {
 
 /// Displays `text` in `style` with the given layout `options`. Compose's `BasicText`.
 #[track_caller]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn BasicTextWithOptions<S>(
     text: S,
     modifier: Modifier,
@@ -217,7 +217,7 @@ where
 /// Displays `text` in `style` with the given overflow, wrapping and line limits. Compose's
 /// `BasicText`.
 #[track_caller]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn BasicText<S>(
     text: S,
     modifier: Modifier,
@@ -245,7 +245,7 @@ where
 
 /// Displays `value` in `style` with the given text `options`. Compose's `Text`.
 #[track_caller]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn TextWithOptions<S>(
     value: S,
     modifier: Modifier,
@@ -281,7 +281,7 @@ where
 /// }
 /// ```
 #[track_caller]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,

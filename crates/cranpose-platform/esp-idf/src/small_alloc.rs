@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "calls into ESP-IDF and its drivers")]
 
 //! The global allocator: blocks of up to 128 bytes come from lists each task
 //! keeps, larger ones from ESP-IDF's heap. See

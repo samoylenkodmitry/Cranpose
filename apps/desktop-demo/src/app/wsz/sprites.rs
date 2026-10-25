@@ -1,4 +1,4 @@
-#![expect(dead_code)]
+#![expect(dead_code, reason = "the sprite sheet keeps every frame's rectangle")]
 
 use cranpose_ui_graphics::Rect;
 

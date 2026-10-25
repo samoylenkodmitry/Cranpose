@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
 //! `download_to` on a background `URLSession`: the system carries the
 //! transfer while the application is suspended, and finishes it when the

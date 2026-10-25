@@ -40,7 +40,7 @@ impl Default for FrameStats {
 }
 
 #[derive(Default)]
-#[expect(dead_code)]
+#[expect(dead_code, reason = "a node type no test builds")]
 struct DummyNode;
 
 impl Node for DummyNode {}

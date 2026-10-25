@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,

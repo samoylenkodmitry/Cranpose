@@ -3,10 +3,10 @@
 // The render tests' device helper; these tests draw only on the background
 // compiler, so its inline reference mode goes unused here.
 #[path = "../../../crates/cranpose-render/wgpu/tests/support/device.rs"]
-#[expect(dead_code)]
+#[expect(dead_code, reason = "this binary uses a part of the module")]
 mod gpu_test_device;
 #[path = "../src/test_screens/liquid_tab_reference.rs"]
-#[expect(dead_code)]
+#[expect(dead_code, reason = "this binary uses a part of the module")]
 mod reference;
 
 mod accessibility_audit;

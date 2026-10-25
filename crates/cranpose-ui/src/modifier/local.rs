@@ -542,7 +542,10 @@ impl ModifierLocalManager {
         Self::default()
     }
 
-    #[expect(private_interfaces)]
+    #[expect(
+        private_interfaces,
+        reason = "the sync callback types stay crate-private"
+    )]
     pub fn sync(
         &mut self,
         chain: &ModifierNodeChain,

@@ -777,7 +777,7 @@ pub fn observe_camera_lenses(
 
 /// What the camera session is doing, observed for as long as this call stays in
 /// the composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberCameraState() -> State<CameraState> {
     let updates = rememberEventStream((), |sender| {
@@ -792,7 +792,7 @@ pub fn rememberCameraState() -> State<CameraState> {
 /// up falls behind by frames rather than by memory — see
 /// [`dropped_camera_frames`]. A viewfinder draws [`latest_camera_frame`]
 /// instead, which costs no recomposition at all.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberCameraFrames() -> EventStream<CameraFrame> {
     rememberEventStream((), |sender| {
@@ -801,7 +801,7 @@ pub fn rememberCameraFrames() -> EventStream<CameraFrame> {
 }
 
 /// The stills the session produces, as a stream this composition collects.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberCameraStills() -> EventStream<Result<CameraStill, CameraError>> {
     rememberEventStream((), |sender| {
@@ -811,7 +811,7 @@ pub fn rememberCameraStills() -> EventStream<Result<CameraStill, CameraError>> {
 
 /// The lens list and the device in use, observed for as long as this call
 /// stays in the composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberCameraLenses() -> State<CameraLenses> {
     let updates = rememberEventStream((), |sender| {

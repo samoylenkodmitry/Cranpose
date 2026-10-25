@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![allow(unsafe_code, reason = "AccessKit takes raw window handles")]
 
 use std::{
     collections::{HashMap, HashSet},

@@ -217,12 +217,12 @@ impl Mixer {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "only some audio backends read it")]
     pub fn device_sample_rate(&self) -> f32 {
         self.device_sample_rate
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "only some audio backends read it")]
     pub fn active_voices(&self) -> usize {
         self.voices.iter().filter(|voice| voice.id != 0).count()
     }

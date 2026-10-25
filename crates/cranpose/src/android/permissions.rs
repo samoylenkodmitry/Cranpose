@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 //! Answers to the permission requests services make. `CranposeActivity`
 //! hands Rust every answer to a request it did not make itself, one

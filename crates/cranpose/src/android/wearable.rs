@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 //! The Wear OS Data Layer, through `CranposeWearable` and
 //! `CranposeWearableService`, which an application carries only when it

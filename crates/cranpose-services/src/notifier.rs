@@ -228,7 +228,7 @@ mod desktop {
             }
         }
 
-        #[allow(unused_variables)]
+        #[allow(unused_variables, reason = "only Linux reads the id")]
         fn cancel(&self, id: &str) {
             #[cfg(target_os = "linux")]
             {

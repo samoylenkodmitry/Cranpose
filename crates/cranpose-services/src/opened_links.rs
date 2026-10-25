@@ -50,7 +50,7 @@ pub fn clear_opened_links() {
 ///     });
 /// }
 /// ```
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberOpenedLinks() -> EventStream<String> {
     rememberEventStream((), |sender| {

@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 //! The heart-rate sensor on Android, through `CranposeHeartRate`, which an
 //! application carries only when its build script declares

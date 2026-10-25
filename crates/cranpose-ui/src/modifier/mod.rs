@@ -55,7 +55,7 @@ pub use cranpose_foundation::{
     modifier_element,
 };
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
-#[expect(unused_imports)]
+#[expect(unused_imports, reason = "re-exported for applications")]
 pub use cranpose_ui_graphics::{
     BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
     CursorIcon, CustomPointerIcon, CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec,
@@ -77,7 +77,7 @@ pub(crate) use local::{
 };
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 pub use local::{ModifierLocalKey, ModifierLocalReadScope};
-#[expect(unused_imports)]
+#[expect(unused_imports, reason = "re-exported for applications")]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use rotary_input::RotaryInputModifierNode;
 #[cfg(test)]
