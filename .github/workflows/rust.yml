@@ -161,6 +161,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-ci-gate-reachability
 
+      - name: Check the contracts of the CI boards and the Android bridges
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just platform-contracts
+
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"

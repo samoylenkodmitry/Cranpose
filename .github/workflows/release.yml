@@ -249,10 +249,9 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # No broad setup-android action (repo contract:
-      # platform_scheduling_static): the pinned installer resolves the
-      # runner's SDK (incl. the macOS default ~/Library/Android/sdk) and
-      # provisions exactly the required packages.
+      # No broad setup-android action (`cargo xtask platform-contracts`): the
+      # pinned installer resolves the runner's SDK (incl. the macOS default
+      # ~/Library/Android/sdk) and provisions exactly the required packages.
       - name: Install Android SDK packages
         run: bash scripts/ci/install_android_ndk.sh 30.0.16248370
 

@@ -3491,6 +3491,9 @@ fn violations_message_lists_each_violation_indented() {
     );
 }
 
+#[path = "platform_contracts_tests.rs"]
+mod platform_contracts;
+
 #[path = "release_tests.rs"]
 mod release;
 

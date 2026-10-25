@@ -20,12 +20,16 @@ it fails until the budget comes down in the same commit, so the saving stays.
 - source_text_checks: `.contains(` calls in tests under crates/ and apps/
   that read source files as text. Such a check breaks on a rename and passes
   a changed behavior. xtask reads text by design and is left out.
+- half_state_words: lines in crates/, apps/, docs/ and README.md that speak
+  of a state between two designs (TODO, FIXME, legacy, workaround...). Text
+  describes the current design.
 - ast_grep: the sites of each structural rule in rules/ast-grep, from one
   `ast-grep scan` of crates/, apps/ and xtask/. A rule with no budget fails.
 """
 
 import collections
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -40,6 +44,12 @@ FOR_TEST_FN = re.compile(r"\bfn\s+[a-z0-9_]+_for_tests?\b")
 ENV_NAME = re.compile(r"\"(CRANPOSE_[A-Z0-9_]+)\"")
 SOURCE_PATH = re.compile(r"\.(rs|kt|kts|swift|yml|yaml|xml|toml|gradle|py|sh|m|mm|h)\"")
 READS_TEXT = re.compile(r"read_to_string\(|include_str!\(")
+HALF_STATE_ROOTS = ("crates", "apps", "docs")
+HALF_STATE_SUFFIXES = {".rs", ".md", ".toml", ".sh"}
+HALF_STATE = re.compile(
+    r"todo:|todo!\(|fixme|legacy|old way|when implemented|migration|workaround|backwards? compat",
+    re.IGNORECASE,
+)
 
 
 def rust_files(*roots: str) -> list[pathlib.Path]:
@@ -49,6 +59,22 @@ def rust_files(*roots: str) -> list[pathlib.Path]:
             if not SKIP_DIRS.intersection(path.relative_to(ROOT).parts):
                 files.append(path)
     return sorted(files)
+
+
+def half_state_sites() -> list[str]:
+    files = [path for path in [ROOT / "README.md"] if path.exists()]
+    for root in HALF_STATE_ROOTS:
+        for directory, subdirectories, names in os.walk(ROOT / root):
+            subdirectories[:] = [name for name in subdirectories if name not in SKIP_DIRS]
+            files += [pathlib.Path(directory, name) for name in names]
+    sites = []
+    for path in sorted(files):
+        if path.suffix not in HALF_STATE_SUFFIXES:
+            continue
+        for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            if HALF_STATE.search(line):
+                sites.append(f"{rel(path)}:{number}")
+    return sites
 
 
 def is_test(path: pathlib.Path) -> bool:
@@ -65,7 +91,7 @@ def rel(path: pathlib.Path) -> str:
     return str(path.relative_to(ROOT))
 
 
-def measure() -> tuple[dict[str, int], dict[str, int]]:
+def measure() -> tuple[dict[str, int], dict[str, int], dict[str, list[str]]]:
     files = rust_files(*CODE_ROOTS)
     texts = {path: path.read_text(errors="replace") for path in files}
     lengths = {
@@ -91,14 +117,16 @@ def measure() -> tuple[dict[str, int], dict[str, int]]:
         and SOURCE_PATH.search(text)
     )
     private_docs = private_doc_lines(files)
+    sites = {"half_state_words": half_state_sites()}
     counts = {
         "too_many_arguments": too_many_arguments,
         "private_docs": private_docs,
         "for_test_fns": for_test_fns,
         "cranpose_env_names": len(env_names),
         "source_text_checks": source_text_checks,
+        "half_state_words": len(sites["half_state_words"]),
     }
-    return counts, lengths
+    return counts, lengths, sites
 
 
 def private_doc_lines(files: list[pathlib.Path]) -> int:
@@ -163,9 +191,12 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     config = tomllib.loads(BUDGET_FILE.read_text())
-    counts, lengths = measure()
+    counts, lengths, sites = measure()
     failures: list[str] = []
     lowered = compare(counts, config["counts"], failures)
+    for name, found in sites.items():
+        if len(found) > config["counts"].get(name, 0):
+            print(f"source-budgets: {name}:", *found[:20], sep="\n    ", file=sys.stderr)
     if "ast_grep" in config:
         matches = ast_grep_matches()
         rule_counts = dict(collections.Counter(match["ruleId"] for match in matches))
