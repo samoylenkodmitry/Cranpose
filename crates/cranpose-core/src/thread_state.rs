@@ -151,6 +151,7 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) current_composer: RefCell<Option<Rc<ComposerCore>>>,
     pub(crate) spare_commands: RefCell<Vec<CommandQueue>>,
     pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
+    pub(crate) spare_group_frames: RefCell<Vec<crate::slot::GroupFrameStorage>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
     /// The constant values `__constant` keeps, by slot: empty until the
     /// first one.
@@ -190,6 +191,7 @@ impl RuntimeThreadState {
             current_composer: RefCell::new(None),
             spare_commands: RefCell::new(Vec::new()),
             spare_composer_stacks: Cell::new(None),
+            spare_group_frames: RefCell::new(Vec::new()),
             bridges: RefCell::new(fixed_hash_map()),
             constants: RefCell::new(Vec::new()),
             computed_observer: RefCell::new(None),
@@ -225,6 +227,7 @@ impl RuntimeThreadState {
             current_composer,
             spare_commands,
             spare_composer_stacks,
+            spare_group_frames,
             bridges,
             constants,
             computed_observer,
@@ -252,6 +255,7 @@ impl RuntimeThreadState {
         swap_values(current_composer, &other.current_composer);
         swap_values(spare_commands, &other.spare_commands);
         spare_composer_stacks.swap(&other.spare_composer_stacks);
+        swap_values(spare_group_frames, &other.spare_group_frames);
         swap_values(bridges, &other.bridges);
         swap_values(constants, &other.constants);
         swap_values(computed_observer, &other.computed_observer);

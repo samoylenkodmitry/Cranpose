@@ -37,6 +37,7 @@ impl SlotWriteSession<'_> {
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_valid_after(self.table, "finalize_pass");
+        self.state.group_stack.recycle();
         Ok(root_detached)
     }
 }

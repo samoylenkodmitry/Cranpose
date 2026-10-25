@@ -248,16 +248,24 @@ every task's stack.
 
 ## Allocator
 
-ESP-IDF's heap takes a spinlock for each call, and Rust's 8-byte aligned
-blocks go through `heap_caps_aligned_alloc`: about 1,000 instructions for an
+ESP-IDF's heap takes a spinlock for each call: about 500 instructions for an
 allocation and its free. With the default `small-block-alloc` feature the
 crate installs [`SmallBlockAllocator`](src/small_alloc.rs) as the global
-allocator. Each task keeps up to 8 freed blocks of each of ten size classes
-up to 128 bytes in lists of its own and takes them back without a lock;
-other blocks come from the heap. A task's blocks go back to the heap when it
-is deleted. An application that installs another global allocator, or links
+allocator. Each task keeps up to 2 KB of freed blocks in lists of its own,
+one for each size class, 8 to 128 bytes in steps of 8, and takes them back
+without a lock; other blocks come from the heap. A task's blocks go back to
+the heap when it is deleted. The allocator's code runs from IRAM, since every
+allocation runs it. An application that installs another global allocator, or links
 code that frees memory from C `malloc` through Rust's allocator, turns the
 feature off with `default-features = false`.
+
+The heap aligns its blocks to 4 bytes, and its own aligned allocation leaves
+a 20-byte free block before every block it finds 4 bytes off. No later
+request of the same size fits such a hole, and on the classic ESP32 a busy
+screen ran out of memory with 29 KB free in holes of at most 352 bytes. The
+allocator never asks the heap for an alignment: a block that needs 8 bytes
+or more is taken that much longer, starts at the first aligned address past
+the heap block's first word, and keeps the distance back there.
 
 ## QEMU
 

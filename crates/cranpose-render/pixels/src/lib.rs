@@ -283,6 +283,10 @@ impl PixelsRenderer {
     }
 }
 
+// A frame measures again only the texts whose layout changed, and on a
+// microcontroller a measurement takes about 190 bytes.
+const MEASURED_TEXTS_KEPT: usize = 16;
+
 impl Renderer for PixelsRenderer {
     type Scene = Scene;
     type Error = std::convert::Infallible;
@@ -290,7 +294,7 @@ impl Renderer for PixelsRenderer {
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
         app_context.set_text_measurer(CachedFontTextMeasurer::with_text_resources(
             self.text.resources.clone(),
-            64,
+            MEASURED_TEXTS_KEPT,
         ));
         self.app_context = Some(app_context.downgrade());
     }

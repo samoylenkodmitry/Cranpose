@@ -172,11 +172,12 @@ jobs:
         run: '"$RUSTC_WRAPPER" --show-stats || true'
 
   # The ESP32-S3 firmware, built with the Xtensa toolchain, linted, and booted
-  # in Espressif's QEMU until it presents its first frame. The first build on
-  # a runner downloads ESP-IDF, too slow for a push; `clippy-no-atomic64`
-  # covers the framework crates there.
+  # in Espressif's QEMU until it presents its first frame; then the demo's
+  # busy screen for 15 s on the classic ESP32, the chip with the least memory.
+  # The first build on a runner downloads ESP-IDF, too slow for a push;
+  # `clippy-no-atomic64` covers the framework crates there.
   esp32:
-    name: ESP32-S3 firmware in QEMU (macOS)
+    name: ESP32 firmware in QEMU (macOS)
     needs: decide
     if: needs.decide.outputs.run == 'true'
     runs-on: [self-hosted, macOS, ARM64]
@@ -200,6 +201,10 @@ jobs:
       - name: Boot the demo in QEMU
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just esp32-qemu-check
+
+      - name: Run the busy screen on the classic ESP32 in QEMU
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just esp32-qemu-check-esp32
 
       - name: Check the app image size
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}

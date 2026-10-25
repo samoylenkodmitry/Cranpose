@@ -1,0 +1,5 @@
+# Added to sdkconfig.defaults for QEMU's classic ESP32 (`just
+# esp32-qemu-check-esp32`): the 4 MB flash of the classic boards, read in
+# the default two-bit mode, since QEMU's flash model fails in the quad mode
+# of sdkconfig.e32r35t.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
