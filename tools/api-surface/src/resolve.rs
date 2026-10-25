@@ -349,6 +349,17 @@ impl Default for Loader {
     }
 }
 
+// A module to load: its path in the crate, the file holding it, whether it
+// is public, whether the surface leaves it out, and the directory a
+// `#[path]` on it set for its children.
+struct ModuleSource {
+    path: ModPath,
+    file: PathBuf,
+    is_pub: bool,
+    excluded: bool,
+    forced_dir: Option<PathBuf>,
+}
+
 impl Loader {
     pub fn new() -> Self {
         Loader {
@@ -357,55 +368,43 @@ impl Loader {
     }
 
     pub fn load_crate(&mut self, root_file: &Path) -> Result<()> {
-        self.load_file_as_module(vec![], root_file.to_path_buf(), true, false, None)
+        self.load_file_as_module(ModuleSource {
+            path: vec![],
+            file: root_file.to_path_buf(),
+            is_pub: true,
+            excluded: false,
+            forced_dir: None,
+        })
     }
 
-    fn load_file_as_module(
-        &mut self,
-        path: ModPath,
-        file: PathBuf,
-        is_pub: bool,
-        excluded: bool,
-        forced_dir_for_children: Option<PathBuf>,
-    ) -> Result<()> {
+    fn load_file_as_module(&mut self, module: ModuleSource) -> Result<()> {
+        let file = &module.file;
         let src =
-            fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
+            fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
         let ast = syn::parse_file(&src).with_context(|| format!("parsing {}", file.display()))?;
         let path_base = file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-        self.process_items(
-            path,
-            file,
-            &ast.items,
-            is_pub,
-            excluded,
-            forced_dir_for_children,
-            &path_base,
-        )
+        self.process_items(module, &ast.items, &path_base)
     }
 
     /// `path_base` is the directory a `#[path]` on a module in `items`
     /// resolves from: the file's own directory at the top of a file, and the
     /// inline module's directory inside `mod name { .. }`, as rustc does.
-    #[expect(clippy::too_many_arguments)]
     fn process_items(
         &mut self,
-        path: ModPath,
-        file: PathBuf,
+        module: ModuleSource,
         items: &[Item],
-        is_pub: bool,
-        excluded: bool,
-        forced_dir_for_children: Option<PathBuf>,
         path_base: &Path,
     ) -> Result<()> {
         let mut node = ModuleNode {
-            is_pub,
-            excluded,
+            is_pub: module.is_pub,
+            excluded: module.excluded,
             reachable: Cell::new(false),
             pub_use_edges: vec![],
             use_items: vec![],
         };
-        let dir_for_children = children_dir_for(&file, forced_dir_for_children);
-        let mut file_children: Vec<(ModPath, PathBuf, bool, bool, Option<PathBuf>)> = vec![];
+        let dir_for_children = children_dir_for(&module.file, module.forced_dir);
+        let (path, file, excluded) = (module.path, module.file, module.excluded);
+        let mut file_children: Vec<ModuleSource> = vec![];
 
         for item in items {
             match item {
@@ -418,15 +417,14 @@ impl Loader {
                     child_path.push(name.clone());
                     if let Some((_, inner_items)) = &m.content {
                         let inline_dir = dir_for_children.join(&name);
-                        self.process_items(
-                            child_path,
-                            file.clone(),
-                            inner_items,
-                            child_is_pub,
-                            child_excluded,
-                            Some(inline_dir.clone()),
-                            &inline_dir,
-                        )?;
+                        let inline = ModuleSource {
+                            path: child_path,
+                            file: file.clone(),
+                            is_pub: child_is_pub,
+                            excluded: child_excluded,
+                            forced_dir: Some(inline_dir.clone()),
+                        };
+                        self.process_items(inline, inner_items, &inline_dir)?;
                     } else {
                         let child_file = resolve_mod_file(
                             &dir_for_children,
@@ -441,13 +439,13 @@ impl Loader {
                                 .unwrap_or_else(|| Path::new("."))
                                 .to_path_buf()
                         });
-                        file_children.push((
-                            child_path,
-                            child_file,
-                            child_is_pub,
-                            child_excluded,
-                            child_forced_dir,
-                        ));
+                        file_children.push(ModuleSource {
+                            path: child_path,
+                            file: child_file,
+                            is_pub: child_is_pub,
+                            excluded: child_excluded,
+                            forced_dir: child_forced_dir,
+                        });
                     }
                 }
                 Item::Use(u) => {
@@ -517,8 +515,8 @@ impl Loader {
         }
 
         self.tree.modules.insert(path.clone(), node);
-        for (cpath, cfile, cpub, cexcl, cforced_dir) in file_children {
-            self.load_file_as_module(cpath, cfile, cpub, cexcl, cforced_dir)?;
+        for child in file_children {
+            self.load_file_as_module(child)?;
         }
         Ok(())
     }

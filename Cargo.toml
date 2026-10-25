@@ -144,6 +144,9 @@ redundant_locals = "deny"
 # A panic names its cause: `expect` with the reason.
 unwrap_used = "deny"
 
+# A suppression names its cause too: `#[expect(lint, reason = "...")]`.
+allow_attributes_without_reason = "deny"
+
 # One spelling for a shared pointer copy, `Rc::clone(&x)`, so a `.clone()` in
 # review always means a copy of the value; `Self` inside its own impl.
 clone_on_ref_ptr = "warn"

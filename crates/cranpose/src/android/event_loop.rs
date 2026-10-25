@@ -1521,7 +1521,28 @@ fn init_gpu_threaded_for_android(
 /// one drew to, and hands it to the renderer: the composition, its state and
 /// its input stay. When devices keep getting lost without a frame, the
 /// activity finishes.
-#[expect(clippy::too_many_arguments)]
+// What an app shell on Android is built from: its content, the app's
+// settings, the frame driver, the registry of host windows and whether
+// frames present on their own thread.
+struct ShellInputs<'a, F> {
+    content: &'a Rc<RefCell<F>>,
+    settings: &'a AppSettings,
+    frame_driver: &'a AndroidFrameDriver,
+    host_window_registry: &'a android_host_window::AndroidHostWindowRegistry,
+    present_thread: bool,
+}
+
+// The window rendering starts on: its handle, the owner keeping it alive,
+// its size in pixels and the display's density.
+#[derive(Clone)]
+struct WindowTarget {
+    ptr: NonNull<c_void>,
+    owner: Option<NativeWindow>,
+    width: u32,
+    height: u32,
+    density: f32,
+}
+
 fn recover_lost_device<F>(
     app: &android_activity::AndroidApp,
     device_loss: &mut crate::gpu_loss::LossSignal,
@@ -1530,11 +1551,7 @@ fn recover_lost_device<F>(
         &mut Option<GpuResources>,
         &mut Option<AppShell<WgpuRenderer>>,
     ),
-    content: &Rc<RefCell<F>>,
-    settings: &AppSettings,
-    frame_driver: &AndroidFrameDriver,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
-    present_thread: bool,
+    inputs: &ShellInputs<'_, F>,
 ) where
     F: FnMut() + 'static,
 {
@@ -1552,26 +1569,25 @@ fn recover_lost_device<F>(
     };
     let (window, owner) = (lost.native_window_ptr, lost._native_window.take());
     let (width, height) = (lost.config.width, lost.config.height);
-    drop_android_surface(gpu_resources, app_shell, present_thread);
+    drop_android_surface(gpu_resources, app_shell, inputs.present_thread);
     *gpu_resources = None;
     let Some(window) = window else {
         return;
     };
     let density = get_display_density(app);
-    match initialize_android_rendering_with_backend_fallback(
-        wgpu_context,
-        None,
-        app_shell,
-        content,
-        settings,
-        frame_driver,
-        host_window_registry,
-        window,
+    let window = WindowTarget {
+        ptr: window,
         owner,
         width,
         height,
         density,
-        present_thread,
+    };
+    match initialize_android_rendering_with_backend_fallback(
+        wgpu_context,
+        None,
+        app_shell,
+        inputs,
+        window,
         &device_loss.handler(super::services::wake_native_loop),
     ) {
         Ok((resources, _)) => {
@@ -1620,38 +1636,31 @@ fn hand_surface_to_present_thread(renderer: &mut WgpuRenderer, setup: &mut Andro
     setup.resources.surface_dirty = true;
 }
 
-#[expect(clippy::too_many_arguments)]
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
     existing_resources: Option<GpuResources>,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
-    content: &Rc<RefCell<F>>,
-    settings: &AppSettings,
-    frame_driver: &AndroidFrameDriver,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
-    native_window_ptr: NonNull<c_void>,
-    native_window_owner: Option<NativeWindow>,
-    width: u32,
-    height: u32,
-    density: f32,
-    present_thread: bool,
+    inputs: &ShellInputs<'_, F>,
+    window: WindowTarget,
     device_lost: &DeviceLostHandler,
 ) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
     F: FnMut() + 'static,
 {
+    let (frame_driver, present_thread) = (inputs.frame_driver, inputs.present_thread);
+    let (width, height, density) = (window.width, window.height, window.density);
     let mut setup = create_android_gpu_resources(
         instance,
         existing_resources,
-        native_window_ptr,
-        native_window_owner,
+        window.ptr,
+        window.owner,
         width,
         height,
     )?;
 
     let mut surface_handed = false;
     if app_shell.is_none() {
-        let fonts = settings.resolve_font_set();
+        let fonts = inputs.settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
         renderer.set_device_lost_handler(Arc::clone(device_lost));
         if present_thread {
@@ -1664,7 +1673,7 @@ where
             renderer.init_gpu(setup.resources.gpu_target());
         }
 
-        let content_clone = Rc::clone(content);
+        let content_clone = Rc::clone(inputs.content);
         let density = density.max(f32::EPSILON);
         let platform_env = android_platform_env();
         // The frame loop runs idle prefetch passes while it waits for a frame
@@ -1682,7 +1691,7 @@ where
             density,
         );
         shell.set_semantics_enabled(true);
-        crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
+        crate::accessibility::install_inspector(&mut shell, inputs.settings.developer_inspector);
         shell.set_safe_area(android_platform_env().safe_area());
 
         *app_shell = Some(shell);
@@ -1748,27 +1757,18 @@ where
 
     let actual_size = app_shell.as_mut().and_then(|shell| {
         shell.set_buffer_size(width, height);
-        update_android_shell_geometry(shell, density, host_window_registry)
+        update_android_shell_geometry(shell, density, inputs.host_window_registry)
     });
 
     Ok((setup.resources, actual_size))
 }
 
-#[expect(clippy::too_many_arguments)]
 fn initialize_android_rendering_with_backend_fallback<F>(
     wgpu_context: &mut AndroidWgpuContext,
     existing_resources: Option<GpuResources>,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
-    content: &Rc<RefCell<F>>,
-    settings: &AppSettings,
-    frame_driver: &AndroidFrameDriver,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
-    native_window_ptr: NonNull<c_void>,
-    native_window_owner: Option<NativeWindow>,
-    width: u32,
-    height: u32,
-    density: f32,
-    present_thread: bool,
+    inputs: &ShellInputs<'_, F>,
+    window: WindowTarget,
     device_lost: &DeviceLostHandler,
 ) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
@@ -1779,16 +1779,8 @@ where
             &wgpu_context.instance,
             existing_resources,
             app_shell,
-            content,
-            settings,
-            frame_driver,
-            host_window_registry,
-            native_window_ptr,
-            native_window_owner,
-            width,
-            height,
-            density,
-            present_thread,
+            inputs,
+            window,
             device_lost,
         );
     }
@@ -1797,16 +1789,8 @@ where
         &wgpu_context.instance,
         None,
         app_shell,
-        content,
-        settings,
-        frame_driver,
-        host_window_registry,
-        native_window_ptr,
-        native_window_owner.clone(),
-        width,
-        height,
-        density,
-        present_thread,
+        inputs,
+        window.clone(),
         device_lost,
     ) {
         Err(AndroidSurfaceError::RequestAdapter(error)) => {
@@ -1816,16 +1800,8 @@ where
                 &wgpu_context.instance,
                 None,
                 app_shell,
-                content,
-                settings,
-                frame_driver,
-                host_window_registry,
-                native_window_ptr,
-                native_window_owner,
-                width,
-                height,
-                density,
-                present_thread,
+                inputs,
+                window,
                 device_lost,
             )
         }
@@ -2306,6 +2282,13 @@ pub fn run(
     super::vsync::install_waker(android_frame_driver.vsync_waker());
     super::accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
+    let shell_inputs = ShellInputs {
+        content: &content,
+        settings: &settings,
+        frame_driver: &android_frame_driver,
+        host_window_registry: &host_window_registry,
+        present_thread,
+    };
     let overlay_event_queue = Arc::new(overlay_window::AndroidOverlayEventQueue::default());
 
     let ime_event_queue = Arc::new(text_input::AndroidImeEventQueue::new());
@@ -2385,11 +2368,7 @@ pub fn run(
             &mut device_loss,
             &mut wgpu_context,
             (&mut gpu_resources, &mut app_shell),
-            &content,
-            &settings,
-            &android_frame_driver,
-            &host_window_registry,
-            present_thread,
+            &shell_inputs,
         );
 
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
@@ -2513,16 +2492,14 @@ pub fn run(
                                     &mut wgpu_context,
                                     gpu_resources.take(),
                                     &mut app_shell,
-                                    &content,
-                                    &settings,
-                                    &android_frame_driver,
-                                    &host_window_registry,
-                                    native_window.ptr().cast(),
-                                    None,
-                                    width,
-                                    height,
-                                    density,
-                                    present_thread,
+                                    &shell_inputs,
+                                    WindowTarget {
+                                        ptr: native_window.ptr().cast(),
+                                        owner: None,
+                                        width,
+                                        height,
+                                        density,
+                                    },
                                     &device_loss.handler(super::services::wake_native_loop),
                                 ) {
                                     Ok((resources, actual_size)) => {
@@ -2735,16 +2712,14 @@ pub fn run(
                                 &mut wgpu_context,
                                 gpu_resources.take(),
                                 &mut app_shell,
-                                &content,
-                                &settings,
-                                &android_frame_driver,
-                                &host_window_registry,
-                                native_window.ptr().cast(),
-                                None,
-                                width,
-                                height,
-                                density,
-                                present_thread,
+                                &shell_inputs,
+                                WindowTarget {
+                                    ptr: native_window.ptr().cast(),
+                                    owner: None,
+                                    width,
+                                    height,
+                                    density,
+                                },
                                 &device_loss.handler(super::services::wake_native_loop),
                             ) {
                                 Ok((resources, actual_size)) => {
@@ -2782,16 +2757,14 @@ pub fn run(
                             &mut wgpu_context,
                             gpu_resources.take(),
                             &mut app_shell,
-                            &content,
-                            &settings,
-                            &android_frame_driver,
-                            &host_window_registry,
-                            native_window_ptr,
-                            Some(native_window),
-                            width,
-                            height,
-                            density,
-                            present_thread,
+                            &shell_inputs,
+                            WindowTarget {
+                                ptr: native_window_ptr,
+                                owner: Some(native_window),
+                                width,
+                                height,
+                                density,
+                            },
                             &device_loss.handler(super::services::wake_native_loop),
                         ) {
                             Ok((resources, actual_size)) => {

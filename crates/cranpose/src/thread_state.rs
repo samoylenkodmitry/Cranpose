@@ -39,7 +39,10 @@ pub(crate) struct CranposeThreadState {
             all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
             all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
         )),
-        expect(dead_code)
+        expect(
+            dead_code,
+            reason = "only the accessibility bridges warn about unlabeled controls"
+        )
     )]
     pub(crate) unlabeled_controls_warned: RefCell<std::collections::HashSet<cranpose_core::NodeId>>,
     #[cfg(all(feature = "android", target_os = "android"))]
