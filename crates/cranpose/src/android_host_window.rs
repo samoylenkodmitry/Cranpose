@@ -263,6 +263,9 @@ impl AndroidHostWindowState {
 /// In normal Android activity mode this state targets the current
 /// `NativeActivity` host window. In Android overlay mode it resizes the active
 /// overlay surface and can move it through `WindowManager.updateViewLayout`.
+/// When the last host-window state leaves composition, Activity mode restores
+/// the window layout that preceded the first size request. The system can then
+/// resize the Activity freely. Overlay mode keeps its last explicit bounds.
 #[composable]
 #[track_caller]
 pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWindowState {

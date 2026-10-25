@@ -26,6 +26,8 @@ public final class CranposeOverlayWindow {
     public static final int RESULT_CREATE_FAILED = -5;
     public static final int RESULT_NOT_VISIBLE = -6;
 
+    private static final java.util.WeakHashMap<Activity, int[]> activityLayouts = new java.util.WeakHashMap<>();
+
     private static volatile OverlayState currentOverlay;
 
     private CranposeOverlayWindow() {
@@ -35,6 +37,10 @@ public final class CranposeOverlayWindow {
         try {
             activity.runOnUiThread(() -> {
                 try {
+                    if (!activityLayouts.containsKey(activity)) {
+                        WindowManager.LayoutParams layout = activity.getWindow().getAttributes();
+                        activityLayouts.put(activity, new int[]{layout.width, layout.height});
+                    }
                     activity.getWindow().setLayout(widthPx, heightPx);
                 } catch (RuntimeException error) {
                     Log.w(
@@ -42,6 +48,24 @@ public final class CranposeOverlayWindow {
                             "Failed to set Activity window layout",
                             error
                     );
+                }
+            });
+            return RESULT_OK;
+        } catch (RuntimeException error) {
+            return RESULT_CREATE_FAILED;
+        }
+    }
+
+    public static int restoreActivityWindowLayout(Activity activity) {
+        try {
+            activity.runOnUiThread(() -> {
+                int[] layout = activityLayouts.remove(activity);
+                if (layout != null) {
+                    try {
+                        activity.getWindow().setLayout(layout[0], layout[1]);
+                    } catch (RuntimeException error) {
+                        Log.w("CranposeOverlayWindow", "Failed to restore Activity window layout", error);
+                    }
                 }
             });
             return RESULT_OK;

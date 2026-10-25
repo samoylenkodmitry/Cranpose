@@ -1795,7 +1795,7 @@ fn dispatch_android_surface_size_request(
 
     let (width_px, height_px) =
         android_host_window::logical_to_physical_window_size(requested, density);
-    set_android_window_layout_px(app, width_px, height_px)
+    set_android_window_layout(app, ActivityWindowLayout::Exact(width_px, height_px))
 }
 
 fn dispatch_registered_android_surface_size_request(
@@ -1809,6 +1809,12 @@ fn dispatch_registered_android_surface_size_request(
     let Some(request) =
         android_host_window::latest_android_host_window_request(host_window_registry)
     else {
+        if overlay_options.is_none() && last_dispatched.take().is_some() {
+            *pending_confirmation = None;
+            if let Err(message) = set_android_window_layout(app, ActivityWindowLayout::System) {
+                log::warn!("Failed to restore Android window layout: {message}");
+            }
+        }
         return;
     };
     let dispatch_key = (
@@ -1925,31 +1931,42 @@ fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> 
     })
 }
 
-fn set_android_window_layout_px(
+enum ActivityWindowLayout {
+    Exact(i32, i32),
+    System,
+}
+
+fn set_android_window_layout(
     app: &android_activity::AndroidApp,
-    width_px: i32,
-    height_px: i32,
+    layout: ActivityWindowLayout,
 ) -> Result<(), String> {
     use jni::{jni_sig, jni_str, objects::JValue};
 
     with_android_activity_env(app, |env, activity| {
         let class = android_overlay_window::find_android_overlay_class(env, &activity)?;
-        let result = env
-            .call_static_method(
+        let result = match layout {
+            ActivityWindowLayout::Exact(width, height) => env.call_static_method(
                 class,
                 jni_str!("setActivityWindowLayout"),
                 jni_sig!("(Landroid/app/Activity;II)I"),
                 &[
                     JValue::Object(&activity),
-                    JValue::Int(width_px),
-                    JValue::Int(height_px),
+                    JValue::Int(width),
+                    JValue::Int(height),
                 ],
-            )
-            .and_then(jni::JValueOwned::i)
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                format!("failed to request Android window layout: {error}")
-            })?;
+            ),
+            ActivityWindowLayout::System => env.call_static_method(
+                class,
+                jni_str!("restoreActivityWindowLayout"),
+                jni_sig!("(Landroid/app/Activity;)I"),
+                &[JValue::Object(&activity)],
+            ),
+        }
+        .and_then(jni::JValueOwned::i)
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to request Android window layout: {error}")
+        })?;
 
         match result {
             0 => Ok(()),
