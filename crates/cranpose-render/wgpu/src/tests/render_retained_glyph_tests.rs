@@ -215,10 +215,10 @@ fn queued_glyph_draw_keeps_its_atlas_after_growth() {
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
     renderer.text.glyph_atlas.reset(
         &renderer.device,
-        &renderer.image_bind_group_layout,
+        &renderer.pipelines.image_bind_group_layout,
         GlyphSamplers {
-            nearest: &renderer.image_nearest_sampler,
-            linear: &renderer.image_linear_sampler,
+            nearest: &renderer.pipelines.image_nearest_sampler,
+            linear: &renderer.pipelines.image_linear_sampler,
         },
     );
     assert_eq!(renderer.text.glyph_atlas.size(), size * 2);

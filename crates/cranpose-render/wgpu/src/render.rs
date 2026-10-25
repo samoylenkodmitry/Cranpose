@@ -1222,45 +1222,7 @@ pub(crate) struct GpuRenderer {
     output_converter: OutputConverter,
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
-    pipeline_cache: Option<wgpu::PipelineCache>,
-    #[cfg(not(target_arch = "wasm32"))]
-    _pipeline_cache_watcher: Option<crate::pipeline_disk_cache::PersistWatcher>,
-    /// The pipelines recent launches of another build drew with, built once
-    /// this renderer's first frame is drawn.
-    #[cfg(not(target_arch = "wasm32"))]
-    recent_after_update: Option<Arc<crate::pipeline_records::PipelineRecords>>,
-    /// What this renderer draws with, for the next launches.
-    recorder: crate::pipeline_recorder::PipelineRecorder,
-    /// The background compiler, which builds a pass's missing pipelines side
-    /// by side.
-    pipeline_compiler: PipelineCompiler,
-    /// Where the background compiler says a pipeline a placeholder waited
-    /// for landed.
-    #[cfg(not(target_arch = "wasm32"))]
-    landing: Option<Arc<crate::pipeline_compiler::Landing>>,
-    /// The pipelines the background threads had built when this frame
-    /// started.
-    #[cfg(not(target_arch = "wasm32"))]
-    built_at_frame_start: u64,
-    /// Whether this frame drew a placeholder in place of an effect whose
-    /// pipelines were compiling, or left out a draw whose pipeline was.
-    pub(crate) drew_placeholder: Cell<bool>,
-    shape_pipelines: ShapePipelines,
-    /// Image and glyph pipelines for passes without and with a depth buffer.
-    image_pipeline: [FixedPipeline; 8],
-    image_pipeline_dst_out: [FixedPipeline; 8],
-    /// Indexed by depth, then turned: see [`GpuRenderer::glyph_atlas_pipeline`].
-    glyph_atlas_pipeline: [FixedPipeline; 6],
-    /// Round rect shadow pipelines without and with a depth buffer.
-    rrect_shadow_pipeline: [FixedPipeline; 2],
-    /// The pipelines shape draws take while their own compile, without and
-    /// with a depth buffer (see [`crate::mesh_fallback`]). The web's frames
-    /// build their shape pipelines, or stand one in.
-    #[cfg(not(target_arch = "wasm32"))]
-    mesh_pipelines: [FixedPipeline; 2],
-    image_shader: SharedShader,
-    glyph_atlas_shader: SharedShader,
-    rrect_shadow_shader: SharedShader,
+    pub(crate) pipelines: RendererPipelines,
     /// Transient depth buffers by target size, for passes that lay opaque
     /// interiors down first, dropped once no frame has used them for
     /// [`crate::idle_pool::IDLE_FRAMES`].
@@ -1273,10 +1235,6 @@ pub(crate) struct GpuRenderer {
     pub(crate) depth_gate: crate::depth_gate::DepthGate,
     /// The size of the atlas the layer surfaces drawn again go into.
     pub(crate) surface_atlas_sizes: crate::frame::SurfaceAtlasSizes,
-    uniform_bind_group_layout: wgpu::BindGroupLayout,
-    image_bind_group_layout: wgpu::BindGroupLayout,
-    image_nearest_sampler: wgpu::Sampler,
-    image_linear_sampler: wgpu::Sampler,
     text: TextResources,
     viewport_uniforms: ViewportUniforms,
     run_store: RunStore,
@@ -1566,68 +1524,39 @@ impl GpuRenderer {
             output_converter,
             screenshot_converter,
             adapter_backend,
-            pipeline_cache,
-            #[cfg(not(target_arch = "wasm32"))]
-            _pipeline_cache_watcher: pipeline_cache_watcher,
-            #[cfg(not(target_arch = "wasm32"))]
-            recent_after_update: updated.then(|| Arc::clone(&records)),
-            recorder,
-            #[cfg(not(target_arch = "wasm32"))]
-            landing: pipeline_compiler.landing(),
-            pipeline_compiler,
-            #[cfg(not(target_arch = "wasm32"))]
-            built_at_frame_start: 0,
-            drew_placeholder: Cell::new(false),
-            shape_pipelines,
-            image_pipeline: [
-                FixedPipeline::new("image/src-over"),
-                FixedPipeline::new("image/src-over/depth"),
-                FixedPipeline::new("image/src-over/alpha-mask"),
-                FixedPipeline::new("image/src-over/alpha-mask/depth"),
-                FixedPipeline::new("image/src-over/rounded"),
-                FixedPipeline::new("image/src-over/rounded/depth"),
-                FixedPipeline::new("image/src-over/alpha-mask/rounded"),
-                FixedPipeline::new("image/src-over/alpha-mask/rounded/depth"),
-            ],
-            image_pipeline_dst_out: [
-                FixedPipeline::new("image/dst-out"),
-                FixedPipeline::new("image/dst-out/depth"),
-                FixedPipeline::new("image/dst-out/alpha-mask"),
-                FixedPipeline::new("image/dst-out/alpha-mask/depth"),
-                FixedPipeline::new("image/dst-out/rounded"),
-                FixedPipeline::new("image/dst-out/rounded/depth"),
-                FixedPipeline::new("image/dst-out/alpha-mask/rounded"),
-                FixedPipeline::new("image/dst-out/alpha-mask/rounded/depth"),
-            ],
-            glyph_atlas_pipeline: [
-                FixedPipeline::new("glyph/atlas"),
-                FixedPipeline::new("glyph/atlas/depth"),
-                FixedPipeline::new("glyph/atlas/aligned"),
-                FixedPipeline::new("glyph/atlas/aligned/depth"),
-                FixedPipeline::new("glyph/atlas/turned"),
-                FixedPipeline::new("glyph/atlas/turned/depth"),
-            ],
-            rrect_shadow_pipeline: [
-                FixedPipeline::new("shadow/rrect"),
-                FixedPipeline::new("shadow/rrect/depth"),
-            ],
-            #[cfg(not(target_arch = "wasm32"))]
-            mesh_pipelines: [
-                FixedPipeline::new("mesh/fallback"),
-                FixedPipeline::new("mesh/fallback/depth"),
-            ],
-            image_shader,
-            glyph_atlas_shader,
-            rrect_shadow_shader,
+            pipelines: RendererPipelines {
+                pipeline_cache,
+                #[cfg(not(target_arch = "wasm32"))]
+                _pipeline_cache_watcher: pipeline_cache_watcher,
+                #[cfg(not(target_arch = "wasm32"))]
+                recent_after_update: updated.then(|| Arc::clone(&records)),
+                recorder,
+                #[cfg(not(target_arch = "wasm32"))]
+                landing: pipeline_compiler.landing(),
+                compiler: pipeline_compiler,
+                #[cfg(not(target_arch = "wasm32"))]
+                built_at_frame_start: 0,
+                drew_placeholder: Cell::new(false),
+                shape_pipelines,
+                image_pipeline: IMAGE_SRC_OVER_PIPELINES.map(FixedPipeline::new),
+                image_pipeline_dst_out: IMAGE_DST_OUT_PIPELINES.map(FixedPipeline::new),
+                glyph_atlas_pipeline: GLYPH_ATLAS_PIPELINES.map(FixedPipeline::new),
+                rrect_shadow_pipeline: RRECT_SHADOW_PIPELINES.map(FixedPipeline::new),
+                #[cfg(not(target_arch = "wasm32"))]
+                mesh_pipelines: MESH_FALLBACK_PIPELINES.map(FixedPipeline::new),
+                image_shader,
+                glyph_atlas_shader,
+                rrect_shadow_shader,
+                uniform_bind_group_layout,
+                image_bind_group_layout,
+                image_nearest_sampler,
+                image_linear_sampler,
+            },
             depth_targets: crate::idle_pool::IdlePool::default(),
             scene_depth_targets: crate::idle_pool::IdlePool::default(),
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
-            uniform_bind_group_layout,
-            image_bind_group_layout,
-            image_nearest_sampler,
-            image_linear_sampler,
             text: TextResources::new(text_fonts, text_glyph_atlas, copy_free),
             viewport_uniforms,
             run_store,
@@ -1725,7 +1654,7 @@ impl GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     fn warm_every_screen(&mut self) {
         let lane = CompileLane::WarmUp;
-        let (compiler, backend) = (&self.pipeline_compiler, self.adapter_backend);
+        let (compiler, backend) = (&self.pipelines.compiler, self.adapter_backend);
         for quads in [GlyphQuads::Aligned, GlyphQuads::Turned] {
             self.glyph_atlas_pipeline_resource(false, quads).queue(
                 compiler,
@@ -1740,20 +1669,23 @@ impl GpuRenderer {
             alpha_mask: false,
             rounded: true,
         };
-        self.image_pipeline_resource(BlendMode::SrcOver, rounded)
+        self.pipelines
+            .image_pipeline_resource(BlendMode::SrcOver, rounded)
             .queue(
                 compiler,
                 lane,
                 backend,
                 self.image_pipeline_job(BlendMode::SrcOver, rounded),
             );
-        self.rrect_shadow_pipeline[0].queue(
+        self.pipelines.rrect_shadow_pipeline[0].queue(
             compiler,
             lane,
             backend,
             self.rrect_shadow_pipeline_job(false),
         );
-        self.shape_pipelines.warm(ShapePipelineKey::SOLID_RECT);
+        self.pipelines
+            .shape_pipelines
+            .warm(ShapePipelineKey::SOLID_RECT);
     }
 
     /// Queues the shader warm-ups requested since the last call, each at the
@@ -1780,7 +1712,7 @@ impl GpuRenderer {
             .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
             .filter_map(ShapePipelineKey::from_bits);
         for key in shapes {
-            self.shape_pipelines.warm(key);
+            self.pipelines.shape_pipelines.warm(key);
         }
         self.effect_renderer
             .warm_recorded_shaders(records.shaders.iter().map(|shader| &shader.entry));
@@ -1805,7 +1737,7 @@ impl GpuRenderer {
             crate::pipeline_records::decode_first_screen(records, self.adapter_backend, viewport);
         for shape in &records.shapes {
             if let Some(key) = ShapePipelineKey::from_bits(shape.entry) {
-                self.shape_pipelines.build_ahead(key);
+                self.pipelines.shape_pipelines.build_ahead(key);
             }
         }
         self.for_each_fixed_pipeline(&mut |pipeline, job| {
@@ -1814,7 +1746,7 @@ impl GpuRenderer {
                 .iter()
                 .any(|fixed| fixed.entry == pipeline.label())
             {
-                pipeline.build_ahead(&self.recorder, self.adapter_backend, job());
+                pipeline.build_ahead(&self.pipelines.recorder, self.adapter_backend, job());
             }
         });
     }
@@ -1829,7 +1761,9 @@ impl GpuRenderer {
     #[cold]
     #[inline(never)]
     pub(crate) fn first_screen_pipelines(&self) -> Option<Vec<u8>> {
-        self.recorder.first_screen_records(self.adapter_backend)
+        self.pipelines
+            .recorder
+            .first_screen_records(self.adapter_backend)
     }
 
     /// Hands `visit` every fixed pipeline, the effect renderer's too, with
@@ -1849,9 +1783,10 @@ impl GpuRenderer {
                     rounded,
                 };
                 for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
-                    visit(self.image_pipeline_resource(blend_mode, variant), &|| {
-                        Box::new(self.image_pipeline_job(blend_mode, variant))
-                    });
+                    visit(
+                        self.pipelines.image_pipeline_resource(blend_mode, variant),
+                        &|| Box::new(self.image_pipeline_job(blend_mode, variant)),
+                    );
                 }
             }
             for quads in [GlyphQuads::Plain, GlyphQuads::Aligned, GlyphQuads::Turned] {
@@ -1859,9 +1794,10 @@ impl GpuRenderer {
                     Box::new(self.glyph_atlas_pipeline_job(depth, quads))
                 });
             }
-            visit(&self.rrect_shadow_pipeline[usize::from(depth)], &|| {
-                Box::new(self.rrect_shadow_pipeline_job(depth))
-            });
+            visit(
+                &self.pipelines.rrect_shadow_pipeline[usize::from(depth)],
+                &|| Box::new(self.rrect_shadow_pipeline_job(depth)),
+            );
         }
         for kind in crate::scene_pass::ScenePipeline::ALL {
             visit(self.scene_pipeline_resource(kind), &|| {
@@ -1898,7 +1834,7 @@ impl GpuRenderer {
         self.app_shader_pipeline(kept.pipeline(variant as usize), || {
             crate::scene_pass::volume_pipeline_job(
                 &self.device,
-                self.pipeline_cache.clone(),
+                self.pipelines.pipeline_cache.clone(),
                 (self.composition_format, self.adapter_backend, variant),
                 (self.scene_pipeline_parts(), kept),
             )
@@ -1917,7 +1853,7 @@ impl GpuRenderer {
         self.app_shader_pipeline(kept.pipeline(variant as usize), || {
             crate::scene_pass::shaded_pipeline_job(
                 &self.device,
-                self.pipeline_cache.clone(),
+                self.pipelines.pipeline_cache.clone(),
                 (self.composition_format, self.adapter_backend, variant),
                 (self.scene_pipeline_parts(), kept),
             )
@@ -1936,8 +1872,8 @@ impl GpuRenderer {
     {
         let ready = pipeline.when_ready(
             (
-                &self.recorder,
-                &self.pipeline_compiler,
+                &self.pipelines.recorder,
+                &self.pipelines.compiler,
                 self.adapter_backend,
             ),
             job,
@@ -1975,24 +1911,10 @@ impl GpuRenderer {
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         crate::scene_pass::scene_pipeline_job(
             &self.device,
-            self.pipeline_cache.clone(),
+            self.pipelines.pipeline_cache.clone(),
             (self.composition_format, kind),
             self.scene_pipeline_parts(),
         )
-    }
-
-    fn image_pipeline_resource(
-        &self,
-        blend_mode: BlendMode,
-        variant: ImageVariant,
-    ) -> &FixedPipeline {
-        let pipelines = match blend_mode {
-            BlendMode::DstOut => &self.image_pipeline_dst_out,
-            _ => &self.image_pipeline,
-        };
-        &pipelines[usize::from(variant.depth)
-            + 2 * usize::from(variant.alpha_mask)
-            + 4 * usize::from(variant.rounded)]
     }
 
     fn image_pipeline_job(
@@ -2001,9 +1923,9 @@ impl GpuRenderer {
         variant: ImageVariant,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
-        let cache = self.pipeline_cache.clone();
+        let cache = self.pipelines.pipeline_cache.clone();
         let format = self.composition_format;
-        let shader = self.image_shader.clone();
+        let shader = self.pipelines.image_shader.clone();
         move || {
             create_image_pipeline(
                 &device,
@@ -2036,12 +1958,13 @@ impl GpuRenderer {
             if last.replace(variant) == Some(variant) {
                 continue;
             }
-            if let Some(pending) = self.image_pipeline_resource(blend_mode, variant).prefetch(
-                lane,
-                &self.pipeline_compiler,
-                self.adapter_backend,
-                || self.image_pipeline_job(blend_mode, variant),
-            ) {
+            if let Some(pending) = self
+                .pipelines
+                .image_pipeline_resource(blend_mode, variant)
+                .prefetch(lane, &self.pipelines.compiler, self.adapter_backend, || {
+                    self.image_pipeline_job(blend_mode, variant)
+                })
+            {
                 awaited(pending);
             }
         }
@@ -2064,7 +1987,7 @@ impl GpuRenderer {
             }
             if let Some(pending) = self.glyph_atlas_pipeline_resource(depth, quads).prefetch(
                 lane,
-                &self.pipeline_compiler,
+                &self.pipelines.compiler,
                 self.adapter_backend,
                 || self.glyph_atlas_pipeline_job(depth, quads),
             ) {
@@ -2081,9 +2004,9 @@ impl GpuRenderer {
         (depth, lane): (bool, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
-        if let Some(pending) = self.rrect_shadow_pipeline[usize::from(depth)].prefetch(
+        if let Some(pending) = self.pipelines.rrect_shadow_pipeline[usize::from(depth)].prefetch(
             lane,
-            &self.pipeline_compiler,
+            &self.pipelines.compiler,
             self.adapter_backend,
             || self.rrect_shadow_pipeline_job(depth),
         ) {
@@ -2098,9 +2021,10 @@ impl GpuRenderer {
         blend_mode: BlendMode,
         variant: ImageVariant,
     ) -> Option<&wgpu::RenderPipeline> {
-        self.ready_or_left_out(self.image_pipeline_resource(blend_mode, variant), || {
-            self.image_pipeline_job(blend_mode, variant)
-        })
+        self.ready_or_left_out(
+            self.pipelines.image_pipeline_resource(blend_mode, variant),
+            || self.image_pipeline_job(blend_mode, variant),
+        )
     }
 
     /// `pipeline` for a draw, or `None` while it compiles, noting the draw
@@ -2114,8 +2038,8 @@ impl GpuRenderer {
         J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
     {
         let ready = pipeline.when_ready(
-            &self.recorder,
-            &self.pipeline_compiler,
+            &self.pipelines.recorder,
+            &self.pipelines.compiler,
             self.adapter_backend,
             job,
         );
@@ -2131,9 +2055,9 @@ impl GpuRenderer {
         quads: GlyphQuads,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
-        let cache = self.pipeline_cache.clone();
+        let cache = self.pipelines.pipeline_cache.clone();
         let format = self.composition_format;
-        let shader = self.glyph_atlas_shader.clone();
+        let shader = self.pipelines.glyph_atlas_shader.clone();
         move || {
             create_glyph_atlas_pipeline(&device, cache.as_ref(), format, &shader, (depth, quads))
         }
@@ -2148,8 +2072,8 @@ impl GpuRenderer {
     ) -> Option<&wgpu::RenderPipeline> {
         let resource = self.glyph_atlas_pipeline_resource(depth, quads);
         let ready = resource.when_ready(
-            &self.recorder,
-            &self.pipeline_compiler,
+            &self.pipelines.recorder,
+            &self.pipelines.compiler,
             self.adapter_backend,
             || self.glyph_atlas_pipeline_job(depth, quads),
         );
@@ -2170,76 +2094,22 @@ impl GpuRenderer {
     /// draws take while their own compile.
     #[cfg(not(target_arch = "wasm32"))]
     fn warm_mesh_fallback(&self) {
-        for (depth, pipeline) in [false, true].into_iter().zip(&self.mesh_pipelines) {
+        for (depth, pipeline) in [false, true]
+            .into_iter()
+            .zip(&self.pipelines.mesh_pipelines)
+        {
             pipeline.queue(
-                &self.pipeline_compiler,
+                &self.pipelines.compiler,
                 CompileLane::Demanded,
                 self.adapter_backend,
                 crate::mesh_fallback::mesh_pipeline_job(
                     &self.device,
-                    self.pipeline_cache.clone(),
+                    self.pipelines.pipeline_cache.clone(),
                     self.composition_format,
                     depth,
                 ),
             );
         }
-    }
-
-    /// The fallback pipeline for a pass with a depth buffer or not, once it
-    /// is built; none on the web, which leaves every fallback out of its
-    /// build.
-    #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
-    fn mesh_pipeline(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
-        #[cfg(not(target_arch = "wasm32"))]
-        return self.mesh_pipelines[usize::from(depth)].built();
-        #[cfg(target_arch = "wasm32")]
-        None
-    }
-
-    /// Lays out as fallback triangles the run draws of `draws` in `range`
-    /// whose shape pipelines still compile, each record of `tables` placed
-    /// by `placement`.
-    #[expect(clippy::too_many_arguments)]
-    fn mesh_unready(
-        &self,
-        draws: &[RunDrawCall],
-        range: std::ops::Range<usize>,
-        tables: crate::mesh_fallback::MeshRecords<'_>,
-        placement: &dyn Fn(
-            &cranpose_ui_graphics::ShapeRecordBody,
-        ) -> Option<crate::mesh_fallback::MeshPlacement>,
-        viewport: ViewportUniformParams,
-        depth: bool,
-        meshes: &mut crate::mesh_fallback::PassMeshes,
-    ) {
-        let target = crate::mesh_fallback::MeshTarget {
-            offset: viewport.offset,
-            size: [viewport.width as f32, viewport.height as f32],
-            depth_base: depth.then_some(viewport.depth_base),
-        };
-        for index in range {
-            let Some(draw) = draws.get(index) else {
-                continue;
-            };
-            if self.shape_pipelines.get(draw.key).is_some() {
-                continue;
-            }
-            let indices =
-                meshes
-                    .builder
-                    .push_records(tables, draw.records.clone(), placement, target);
-            meshes.set(index, indices);
-        }
-    }
-
-    /// Whether a draw in `range` of `draws` still waits for its shape
-    /// pipeline, so it takes fallback triangles.
-    fn awaits_shape_pipeline(&self, draws: &[RunDrawCall], range: std::ops::Range<usize>) -> bool {
-        draws.get(range).is_some_and(|draws| {
-            draws
-                .iter()
-                .any(|draw| self.shape_pipelines.get(draw.key).is_none())
-        })
     }
 
     /// Lays out as fallback triangles a stored run's draws in `range` of
@@ -2255,7 +2125,8 @@ impl GpuRenderer {
         depth: bool,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
-        if self.mesh_pipeline(depth).is_none() || !self.awaits_shape_pipeline(draws, range.clone())
+        if self.mesh_pipeline(depth).is_none()
+            || !self.pipelines.awaits_shape_pipeline(draws, range.clone())
         {
             return;
         }
@@ -2289,7 +2160,8 @@ impl GpuRenderer {
         depth: bool,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
-        if self.mesh_pipeline(depth).is_none() || !self.awaits_shape_pipeline(draws, range.clone())
+        if self.mesh_pipeline(depth).is_none()
+            || !self.pipelines.awaits_shape_pipeline(draws, range.clone())
         {
             return;
         }
@@ -2309,26 +2181,14 @@ impl GpuRenderer {
         );
     }
 
-    /// The lane a pass queues its image, glyph, shadow and composite
-    /// pipelines on. Where the compiler's threads run, those draws are left
-    /// out until their pipelines land, so they go on the demand lane, ahead
-    /// of the shape pipelines, whose draws take fallback triangles.
-    pub(crate) fn frame_lane(&self) -> CompileLane {
-        if self.pipeline_compiler.is_active() {
-            CompileLane::Demanded
-        } else {
-            CompileLane::WarmUp
-        }
-    }
-
     fn rrect_shadow_pipeline_job(
         &self,
         depth: bool,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
-        let cache = self.pipeline_cache.clone();
+        let cache = self.pipelines.pipeline_cache.clone();
         let format = self.composition_format;
-        let shader = self.rrect_shadow_shader.clone();
+        let shader = self.pipelines.rrect_shadow_shader.clone();
         move || create_rrect_shadow_pipeline(&device, cache.as_ref(), format, &shader, depth)
     }
 
@@ -2344,11 +2204,10 @@ impl GpuRenderer {
         frame: PassFrame,
     ) -> Result<(), String> {
         let depth = frame.depth;
-        let Some(pipeline) = self
-            .ready_or_left_out(&self.rrect_shadow_pipeline[usize::from(depth)], || {
-                self.rrect_shadow_pipeline_job(depth)
-            })
-        else {
+        let Some(pipeline) = self.ready_or_left_out(
+            &self.pipelines.rrect_shadow_pipeline[usize::from(depth)],
+            || self.rrect_shadow_pipeline_job(depth),
+        ) else {
             return Ok(());
         };
         let (x, y, width, height) = frame.scissor(scissor);
@@ -2374,15 +2233,6 @@ impl GpuRenderer {
             &self.device,
             bytemuck::cast_slice(instances),
         )
-    }
-
-    fn glyph_atlas_pipeline_resource(&self, depth: bool, quads: GlyphQuads) -> &FixedPipeline {
-        let kind = match quads {
-            GlyphQuads::Plain => 0,
-            GlyphQuads::Aligned => 1,
-            GlyphQuads::Turned => 2,
-        };
-        &self.glyph_atlas_pipeline[usize::from(depth) + 2 * kind]
     }
 
     /// The transient depth buffer for a target of `size`, created on first
@@ -2529,8 +2379,8 @@ impl GpuRenderer {
     fn image_bind_groups(&self, view: &wgpu::TextureView, alpha_mask: bool) -> ImageBindGroups {
         ImageBindGroups {
             alpha_mask,
-            nearest: self.image_bind_group(view, &self.image_nearest_sampler),
-            linear: self.image_bind_group(view, &self.image_linear_sampler),
+            nearest: self.image_bind_group(view, &self.pipelines.image_nearest_sampler),
+            linear: self.image_bind_group(view, &self.pipelines.image_linear_sampler),
         }
     }
 
@@ -2541,7 +2391,7 @@ impl GpuRenderer {
     ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Image Texture Bind Group"),
-            layout: &self.image_bind_group_layout,
+            layout: &self.pipelines.image_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -2708,6 +2558,62 @@ impl GpuRenderer {
         }
         self.shadow_surface_cache_bytes = self.shadow_surface_cache_bytes.saturating_add(byte_size);
     }
+
+    fn glyph_atlas_pipeline_resource(&self, depth: bool, quads: GlyphQuads) -> &FixedPipeline {
+        let kind = match quads {
+            GlyphQuads::Plain => 0,
+            GlyphQuads::Aligned => 1,
+            GlyphQuads::Turned => 2,
+        };
+        &self.pipelines.glyph_atlas_pipeline[usize::from(depth) + 2 * kind]
+    }
+
+    /// The fallback pipeline for a pass with a depth buffer or not, once it
+    /// is built; none on the web, which leaves every fallback out of its
+    /// build.
+    #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
+    fn mesh_pipeline(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.pipelines.mesh_pipelines[usize::from(depth)].built();
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+
+    /// Lays out as fallback triangles the run draws of `draws` in `range`
+    /// whose shape pipelines still compile, each record of `tables` placed
+    /// by `placement`.
+    #[expect(clippy::too_many_arguments)]
+    fn mesh_unready(
+        &self,
+        draws: &[RunDrawCall],
+        range: std::ops::Range<usize>,
+        tables: crate::mesh_fallback::MeshRecords<'_>,
+        placement: &dyn Fn(
+            &cranpose_ui_graphics::ShapeRecordBody,
+        ) -> Option<crate::mesh_fallback::MeshPlacement>,
+        viewport: ViewportUniformParams,
+        depth: bool,
+        meshes: &mut crate::mesh_fallback::PassMeshes,
+    ) {
+        let target = crate::mesh_fallback::MeshTarget {
+            offset: viewport.offset,
+            size: [viewport.width as f32, viewport.height as f32],
+            depth_base: depth.then_some(viewport.depth_base),
+        };
+        for index in range {
+            let Some(draw) = draws.get(index) else {
+                continue;
+            };
+            if self.pipelines.shape_pipelines.get(draw.key).is_some() {
+                continue;
+            }
+            let indices =
+                meshes
+                    .builder
+                    .push_records(tables, draw.records.clone(), placement, target);
+            meshes.set(index, indices);
+        }
+    }
 }
 fn frame_stats_need_warmup_frame(snapshot: &gpu_stats::FrameStatsSnapshot) -> bool {
     snapshot.layer_cache_misses > 0
@@ -2781,8 +2687,8 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let builds_before = thread_builds();
         self.warm_requested_shaders();
-        self.shape_pipelines.begin_frame();
-        self.recorder.begin_frame((width, height));
+        self.pipelines.shape_pipelines.begin_frame();
+        self.pipelines.recorder.begin_frame((width, height));
         self.begin_placeholder_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
@@ -2925,29 +2831,25 @@ impl GpuRenderer {
         self.pending_frame_warmup_frames > 0 || self.placeholder_awaits_frame()
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn pipeline_compiler(&self) -> &PipelineCompiler {
-        &self.pipeline_compiler
-    }
-
     /// Whether a frame must follow to replace a placeholder: a pipeline it
     /// waited for landed, or, with nothing to wake the app when one does,
     /// this frame drew one.
     fn placeholder_awaits_frame(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.landing {
-            return landing.landed() || (self.drew_placeholder.get() && !landing.has_wake());
+        if let Some(landing) = &self.pipelines.landing {
+            return landing.landed()
+                || (self.pipelines.drew_placeholder.get() && !landing.has_wake());
         }
-        self.drew_placeholder.get()
+        self.pipelines.drew_placeholder.get()
     }
 
     /// Starts a frame: once a pipeline a placeholder waited for has landed,
     /// the retained layers, which may hold that placeholder, are dropped.
     fn begin_placeholder_frame(&mut self) {
-        self.drew_placeholder.set(false);
+        self.pipelines.drew_placeholder.set(false);
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.landing {
-            self.built_at_frame_start = landing.built();
+        if let Some(landing) = &self.pipelines.landing {
+            self.pipelines.built_at_frame_start = landing.built();
             if landing.take_landed() {
                 self.drop_kept_drawing();
             }
@@ -2960,12 +2862,6 @@ impl GpuRenderer {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn background_pipelines_landed(&mut self) {
         self.drop_kept_drawing();
-    }
-
-    /// See [`crate::WgpuRenderer::compile_pipelines_in_background`].
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn compile_pipelines_in_background(&mut self) {
-        self.shape_pipelines.build_in_background();
     }
 
     /// Drops the layers, the blurred shadows and the window earlier frames
@@ -3176,11 +3072,11 @@ impl GpuRenderer {
     /// Asks for the frame after the next pipeline lands: this one drew
     /// something in place of what that pipeline draws.
     fn await_landing(&self) {
-        self.drew_placeholder.set(true);
-        self.recorder.hold_first_screen();
+        self.pipelines.drew_placeholder.set(true);
+        self.pipelines.recorder.hold_first_screen();
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.landing {
-            landing.await_since(self.built_at_frame_start);
+        if let Some(landing) = &self.pipelines.landing {
+            landing.await_since(self.pipelines.built_at_frame_start);
         }
     }
 
@@ -3190,44 +3086,20 @@ impl GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prepare_recorded(&mut self) -> bool {
         self.effect_renderer.warm_after_first_frame();
-        if let Some(records) = self.recent_after_update.take() {
+        if let Some(records) = self.pipelines.recent_after_update.take() {
             self.warm_recent(&records);
         }
-        self.compiling()
-    }
-
-    /// Whether the background compiler has a queued pipeline left to build.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn compiling(&self) -> bool {
-        self.landing
-            .as_ref()
-            .is_some_and(|landing| landing.in_flight())
+        self.pipelines.compiling()
     }
 
     /// Whether the last frame drew a placeholder and pipelines are still
     /// compiling, so its picture is not final yet.
     pub(crate) fn awaits_pipelines(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.landing {
-            return self.drew_placeholder.get() && landing.in_flight();
+        if let Some(landing) = &self.pipelines.landing {
+            return self.pipelines.drew_placeholder.get() && landing.in_flight();
         }
-        self.drew_placeholder.get()
-    }
-
-    /// The compiler's account of the pipelines it builds, for a runtime that
-    /// reads it off the present thread.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn landing(&self) -> Option<Arc<crate::pipeline_compiler::Landing>> {
-        self.landing.clone()
-    }
-
-    /// Calls `wake` from the compiling thread when a pipeline a placeholder
-    /// waited for lands, so an app with nothing else to draw draws again.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn wake_on_landing(&self, wake: Box<dyn Fn() + Send + Sync>) {
-        if let Some(landing) = &self.landing {
-            landing.wake_with(wake);
-        }
+        self.pipelines.drew_placeholder.get()
     }
 
     pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
@@ -3470,9 +3342,9 @@ impl GpuRenderer {
         };
         #[cfg(not(target_arch = "wasm32"))]
         if submitted {
-            self.recorder.note_frame_drawn();
+            self.pipelines.recorder.note_frame_drawn();
             self.effect_renderer.warm_after_first_frame();
-            if let Some(records) = self.recent_after_update.take() {
+            if let Some(records) = self.pipelines.recent_after_update.take() {
                 self.warm_recent(&records);
             }
         }
@@ -3565,7 +3437,7 @@ impl GpuRenderer {
                     output_view,
                     bind_group,
                     self.adapter_backend,
-                    &self.recorder,
+                    &self.pipelines.recorder,
                 );
                 recorder.record_pass();
             }
@@ -3582,9 +3454,9 @@ impl GpuRenderer {
             }
         }
         self.stage_frame_uploads(recorder);
-        self.shape_pipelines.build_wanted();
+        self.pipelines.shape_pipelines.build_wanted();
         self.depth_gate.end_frame();
-        self.pipeline_compiler.end_frame();
+        self.pipelines.compiler.end_frame();
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
@@ -3603,8 +3475,11 @@ impl GpuRenderer {
     /// Claims this frame's next viewport uniform slot for `params`.
     pub(crate) fn claim_uniform_slot(&mut self, params: ViewportUniformParams) -> usize {
         let uniforms = Uniforms::of(params, PlacementData::zeroed(), RunTier::Arena);
-        self.viewport_uniforms
-            .claim(&self.device, &self.uniform_bind_group_layout, &uniforms)
+        self.viewport_uniforms.claim(
+            &self.device,
+            &self.pipelines.uniform_bind_group_layout,
+            &uniforms,
+        )
     }
 
     /// Resolves a blurred shadow at `z` into a texture and queues its
@@ -4024,30 +3899,6 @@ impl GpuRenderer {
         }
     }
 
-    /// Queues for a later frame the shape pipelines `keys` name and the
-    /// interiors they lay down, handing `awaited` each still to land.
-    pub(crate) fn warm_shapes_later(
-        &mut self,
-        keys: &PipelineDemand,
-        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
-    ) {
-        for key in keys.keys() {
-            self.shape_pipelines.warm_later(key, awaited);
-        }
-    }
-
-    /// Readies the pipeline of each key `pipelines` holds and, in a pass
-    /// with a depth buffer, the one laying down its opaque interiors (see
-    /// [`ShapePipelines::ensure`]), leaving `pipelines` empty.
-    pub(crate) fn ensure_run_pipelines(&mut self, pipelines: &mut PipelineDemand) {
-        for key in pipelines.drain() {
-            self.shape_pipelines.ensure(key);
-            if let Some(interior) = key.interior() {
-                self.shape_pipelines.ensure(interior);
-            }
-        }
-    }
-
     /// Brings a stored run's tables up to date and appends its draws, under
     /// a placement uniform of its own, to the pass's run draws `draws`, and
     /// the pipelines they draw with to `pipelines`.
@@ -4117,9 +3968,11 @@ impl GpuRenderer {
             PlacementData::of(&run.placement, root_scale, viewport.transform, [0.0; 2]),
             RunTier::Store,
         );
-        let uniform_slot =
-            self.viewport_uniforms
-                .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
+        let uniform_slot = self.viewport_uniforms.claim(
+            &self.device,
+            &self.pipelines.uniform_bind_group_layout,
+            &uniforms,
+        );
         for draw in run_draws {
             pipelines.add(draw.key);
         }
@@ -4283,7 +4136,7 @@ impl GpuRenderer {
         let mut records_bound = true;
         for (position, draw) in planned.enumerate() {
             let key = draw.key;
-            let Some((pipeline, fallback)) = self.shape_pipelines.get(key) else {
+            let Some((pipeline, fallback)) = self.pipelines.shape_pipelines.get(key) else {
                 // Its pipeline compiles: the draw takes its fallback
                 // triangles, or is left out, until it lands.
                 let mesh = meshes.and_then(|(meshes, depth)| {
@@ -4681,10 +4534,10 @@ impl GpuRenderer {
         self.flush_glyph_uploads();
         self.text.glyph_atlas.reset(
             &self.device,
-            &self.image_bind_group_layout,
+            &self.pipelines.image_bind_group_layout,
             GlyphSamplers {
-                nearest: &self.image_nearest_sampler,
-                linear: &self.image_linear_sampler,
+                nearest: &self.pipelines.image_nearest_sampler,
+                linear: &self.pipelines.image_linear_sampler,
             },
         );
         Err("text glyph atlas filled and was reset".to_string())
@@ -5489,6 +5342,13 @@ pub(crate) use glyph_draws::{
 use text_resources::TextResources;
 pub(crate) mod admission_gate;
 mod glyph_atlas;
+mod renderer_pipelines;
+#[cfg(not(target_arch = "wasm32"))]
+use renderer_pipelines::MESH_FALLBACK_PIPELINES;
+use renderer_pipelines::{
+    GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,
+    RRECT_SHADOW_PIPELINES, RendererPipelines,
+};
 mod image_draws;
 mod text_glyph_cache;
 mod text_resources;

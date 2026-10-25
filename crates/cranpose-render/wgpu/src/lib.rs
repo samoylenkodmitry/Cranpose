@@ -736,7 +736,7 @@ impl WgpuRenderer {
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            compiling = gpu_renderer.compiling();
+            compiling = gpu_renderer.pipelines.compiling();
         }
         true
     }
@@ -1146,7 +1146,7 @@ impl WgpuRenderer {
     #[cfg(target_arch = "wasm32")]
     pub fn begin_discovery_frame(&self) {
         if let Some(gpu_renderer) = self.sync_gpu_renderer() {
-            gpu_renderer.pipeline_compiler().begin_discovery_frame();
+            gpu_renderer.pipelines.compiler.begin_discovery_frame();
         }
     }
 
@@ -1169,7 +1169,7 @@ impl WgpuRenderer {
     #[cfg(target_arch = "wasm32")]
     pub fn compile_pipelines_in_background(&mut self) {
         if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
-            gpu_renderer.compile_pipelines_in_background();
+            gpu_renderer.pipelines.compile_pipelines_in_background();
         }
     }
 

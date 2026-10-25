@@ -126,10 +126,10 @@ impl PresentState {
         let device = Arc::clone(&gpu.device);
         let renderer_epoch = gpu.renderer_epoch;
         let gpu_renderer = GpuRenderer::new(gpu);
-        if let Some(landing) = gpu_renderer.landing() {
+        if let Some(landing) = gpu_renderer.pipelines.landing() {
             let _ = status.landing.set(landing);
         }
-        gpu_renderer.wake_on_landing(Box::new({
+        gpu_renderer.pipelines.wake_on_landing(Box::new({
             let status = Arc::clone(&status);
             let waker = Arc::clone(&waker);
             move || {
@@ -486,9 +486,10 @@ impl PresentState {
         self.status
             .needs_frame_warmup
             .store(self.gpu_renderer.needs_frame_warmup(), Ordering::Relaxed);
-        self.status
-            .drew_placeholder
-            .store(self.gpu_renderer.drew_placeholder.get(), Ordering::Relaxed);
+        self.status.drew_placeholder.store(
+            self.gpu_renderer.pipelines.drew_placeholder.get(),
+            Ordering::Relaxed,
+        );
         if returns.outcome == PresentOutcome::Presented {
             self.status.presented_frames.fetch_add(1, Ordering::Relaxed);
         }
