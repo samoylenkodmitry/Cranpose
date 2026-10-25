@@ -43,7 +43,7 @@ fn run_compile_fail_case(test_name: &str, fixture: &str, expected_fragments: &[&
     let macros_artifact = find_artifact(
         &deps_dir,
         "libcranpose_macros-",
-        &[std::env::consts::DLL_EXTENSION],
+        &[env::consts::DLL_EXTENSION],
     );
 
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());

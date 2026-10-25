@@ -38,9 +38,9 @@ fn composed(content: impl FnMut() + 'static) {
 }
 
 fn composed_in_popup_host(content: impl Fn() + 'static) {
-    let content = std::rc::Rc::new(content);
+    let content = Rc::new(content);
     composed(move || {
-        let content = std::rc::Rc::clone(&content);
+        let content = Rc::clone(&content);
         cranpose_ui::widgets::popup::PopupHost(move || content());
     });
 }

@@ -193,14 +193,14 @@ fn register_services() {
     HAPTIC_CALLS.store(0, Ordering::Relaxed);
     NOTIFIER_CALLS.store(0, Ordering::Relaxed);
     REPLACEMENT_NOTIFIER_CALLS.store(0, Ordering::Relaxed);
-    cranpose_services::set_platform_audio(std::sync::Arc::new(RegisteredAudio(true)));
-    cranpose_services::set_platform_haptics(std::sync::Arc::new(RegisteredHaptics(true)));
-    cranpose_services::set_platform_purchases(std::sync::Arc::new(RegisteredPurchases(
+    cranpose_services::set_platform_audio(Arc::new(RegisteredAudio(true)));
+    cranpose_services::set_platform_haptics(Arc::new(RegisteredHaptics(true)));
+    cranpose_services::set_platform_purchases(Arc::new(RegisteredPurchases(
         "registered",
     )));
-    cranpose_services::set_platform_network_monitor(std::sync::Arc::new(RegisteredNetwork(false)));
-    cranpose_services::set_platform_notifier(std::sync::Arc::new(RegisteredNotifier));
-    cranpose_services::set_platform_image_picker(std::sync::Arc::new(RegisteredImagePicker(7)));
+    cranpose_services::set_platform_network_monitor(Arc::new(RegisteredNetwork(false)));
+    cranpose_services::set_platform_notifier(Arc::new(RegisteredNotifier));
+    cranpose_services::set_platform_image_picker(Arc::new(RegisteredImagePicker(7)));
 }
 
 pub(crate) fn main() {
@@ -253,7 +253,7 @@ pub(crate) fn main() {
                 connected: AtomicBool::new(false),
                 reconnects: AtomicUsize::new(0),
             });
-            cranpose_services::set_platform_purchases(purchases.clone());
+            cranpose_services::set_platform_purchases(Arc::<RecoveringPurchases>::clone(&purchases));
             assert_eq!(cranpose_services::store_state().phase, StorePhase::Ready);
             assert_eq!(purchases.reconnects.load(Ordering::Acquire), 1);
 
@@ -261,7 +261,7 @@ pub(crate) fn main() {
                 online: AtomicBool::new(false),
                 reconnects: AtomicUsize::new(0),
             });
-            cranpose_services::set_platform_network_monitor(network.clone());
+            cranpose_services::set_platform_network_monitor(Arc::<RecoveringNetwork>::clone(&network));
             assert_eq!(
                 cranpose_services::network_status().connectivity,
                 Connectivity::Online

@@ -754,20 +754,17 @@ pub enum FocusState {
 impl FocusState {
     /// Returns whether the component is focused (Active or Captured).
     pub fn is_focused(self) -> bool {
-        matches!(self, FocusState::Active | FocusState::Captured)
+        matches!(self, Self::Active | Self::Captured)
     }
 
     /// Returns whether this node or any descendant has focus.
     pub fn has_focus(self) -> bool {
-        matches!(
-            self,
-            FocusState::Active | FocusState::ActiveParent | FocusState::Captured
-        )
+        matches!(self, Self::Active | Self::ActiveParent | Self::Captured)
     }
 
     /// Returns whether focus is captured.
     pub fn is_captured(self) -> bool {
-        matches!(self, FocusState::Captured)
+        matches!(self, Self::Captured)
     }
 }
 
@@ -1847,7 +1844,7 @@ impl SemanticsConfiguration {
     /// Folds `other` into this configuration. A value that `other` sets replaces the value here.
     /// `enabled` stays true only when both are enabled, the boolean flags turn true when either is
     /// true, and the lists are appended.
-    pub fn merge(&mut self, other: &SemanticsConfiguration) {
+    pub fn merge(&mut self, other: &Self) {
         if let Some(description) = &other.content_description {
             self.content_description = Some(description.clone());
         }
@@ -1901,7 +1898,7 @@ impl SemanticsConfiguration {
         self.merge_ranges(other);
     }
 
-    fn merge_words(&mut self, other: &SemanticsConfiguration) {
+    fn merge_words(&mut self, other: &Self) {
         if let Some(title) = &other.pane_title {
             self.pane_title = Some(title.clone());
         }
@@ -1916,7 +1913,7 @@ impl SemanticsConfiguration {
         }
     }
 
-    fn merge_actions(&mut self, other: &SemanticsConfiguration) {
+    fn merge_actions(&mut self, other: &Self) {
         if let Some(on_click) = &other.on_click {
             self.on_click = Some(on_click.clone());
         }
@@ -1956,7 +1953,7 @@ impl SemanticsConfiguration {
         }
     }
 
-    fn merge_ranges(&mut self, other: &SemanticsConfiguration) {
+    fn merge_ranges(&mut self, other: &Self) {
         if let Some(selection) = other.text_selection {
             self.text_selection = Some(selection);
         }
@@ -2631,8 +2628,8 @@ struct ReconcileScratch {
 }
 
 thread_local! {
-    static RECONCILE_SCRATCH: std::cell::RefCell<ReconcileScratch> =
-        std::cell::RefCell::default();
+    static RECONCILE_SCRATCH: RefCell<ReconcileScratch> =
+        RefCell::default();
 }
 
 struct SentinelNode {
@@ -2801,7 +2798,7 @@ fn update_entry_in_place(
     };
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
-        entry.element = element.clone();
+        entry.element = Rc::clone(element);
         request_update_auto_invalidations(element.as_ref(), context, capabilities);
         entry
             .node
@@ -2827,7 +2824,7 @@ fn fresh_entry(
     let capabilities = element.capabilities();
     let entry = ModifierNodeEntry::new(
         element.key(),
-        element.clone(),
+        Rc::clone(&element),
         element.create_node(),
         capabilities,
     );
@@ -3063,7 +3060,7 @@ impl ModifierNodeChain {
                 }
                 fast_path_failed_at = Some(idx);
             }
-            scratch.elements.push(element.clone());
+            scratch.elements.push(Rc::clone(element));
         }
 
         if fast_path_failed_at.is_none() && scratch.elements.is_empty() {
@@ -3591,7 +3588,7 @@ impl ModifierNodeChain {
     }
 }
 
-impl<'a> ModifierChainNodeRef<'a> {
+impl ModifierChainNodeRef<'_> {
     fn with_state<R>(&self, f: impl FnOnce(&NodeState) -> R) -> R {
         match &self.link {
             NodeLink::Head => f(self.chain.head_sentinel.node_state()),
@@ -3714,7 +3711,7 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Visits descendant nodes, optionally including `self`, in insertion order.
     pub fn visit_descendants<F>(self, include_self: bool, mut f: F)
     where
-        F: FnMut(ModifierChainNodeRef<'a>),
+        F: FnMut(Self),
     {
         let mut current = if include_self {
             Some(self)
@@ -3735,7 +3732,7 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Visits descendant nodes that match `mask`, short-circuiting when possible.
     pub fn visit_descendants_matching<F>(self, include_self: bool, mask: NodeCapabilities, mut f: F)
     where
-        F: FnMut(ModifierChainNodeRef<'a>),
+        F: FnMut(Self),
     {
         if mask.is_empty() {
             self.visit_descendants(include_self, f);
@@ -3756,7 +3753,7 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Visits ancestor nodes up to (but excluding) the sentinel head.
     pub fn visit_ancestors<F>(self, include_self: bool, mut f: F)
     where
-        F: FnMut(ModifierChainNodeRef<'a>),
+        F: FnMut(Self),
     {
         let mut current = if include_self {
             Some(self)
@@ -3775,7 +3772,7 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Visits ancestor nodes that match `mask`.
     pub fn visit_ancestors_matching<F>(self, include_self: bool, mask: NodeCapabilities, mut f: F)
     where
-        F: FnMut(ModifierChainNodeRef<'a>),
+        F: FnMut(Self),
     {
         if mask.is_empty() {
             self.visit_ancestors(include_self, f);

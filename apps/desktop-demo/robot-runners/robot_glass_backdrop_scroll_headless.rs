@@ -23,5 +23,5 @@ pub(crate) fn main() {
             }
             .run();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

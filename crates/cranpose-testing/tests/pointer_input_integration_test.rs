@@ -52,9 +52,9 @@ fn hover_tracking_app(hover_position: MutableState<Point>, is_hovered: MutableSt
 
 #[test]
 fn test_pointer_input_async_handler_is_present() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -126,9 +126,9 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
 
 #[test]
 fn test_button_with_draw_modifiers_is_clickable() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -190,9 +190,9 @@ fn dynamic_label_button_app(click_count: MutableState<i32>, is_active: MutableSt
 
 #[test]
 fn test_button_with_dynamic_content_updates_correctly() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();

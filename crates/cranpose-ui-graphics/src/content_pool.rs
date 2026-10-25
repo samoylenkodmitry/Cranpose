@@ -11,7 +11,7 @@ pub trait PooledValue {
 
 impl<T: ?Sized> PooledValue for Rc<T> {
     fn is_held(&self) -> bool {
-        Rc::strong_count(self) > 1
+        Self::strong_count(self) > 1
     }
 }
 

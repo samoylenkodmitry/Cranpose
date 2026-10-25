@@ -341,7 +341,7 @@ pub(crate) fn LazyListWithScrollbar<F>(
     F: Fn() + 'static,
 {
     let content_cell = cranpose_core::remember(|| Rc::new(RefCell::new(None::<Rc<dyn Fn()>>)))
-        .with(|cell| cell.clone());
+        .with(|cell| Rc::clone(cell));
     *content_cell.borrow_mut() = Some(Rc::new(content));
 
     Row(

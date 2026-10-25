@@ -124,11 +124,11 @@ fn normalize_icon_scale(scale: f32) -> f32 {
     }
 }
 
-fn tab_base_content_color(colors: crate::theme::LiquidColors) -> Color {
+fn tab_base_content_color(colors: LiquidColors) -> Color {
     colors.label
 }
 
-fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
+fn tab_selection_content_color(colors: LiquidColors) -> Color {
     colors.accent
 }
 
@@ -177,7 +177,7 @@ impl Default for LiquidTabBarSpec {
     }
 }
 
-fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, activity: f32) -> Glass {
+fn tab_flight_lens_material(foreground: Color, activity: f32) -> Glass {
     let activity = activity.clamp(0.0, 1.0);
     Glass::lens()
         .face_lighting(false)
@@ -233,7 +233,7 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, activity: f
         .highlight(activity)
         .rim_reflection(activity)
         .shadow_style(GlassShadow::new(
-            cranpose_ui_graphics::Color::BLACK.with_alpha(0.1 * activity),
+            Color::BLACK.with_alpha(0.1 * activity),
             8.0,
             7.0,
             0.0,

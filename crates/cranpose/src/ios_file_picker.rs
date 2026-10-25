@@ -196,7 +196,7 @@ fn present(
 
     let picker = build(mtm);
     let slot: SharedSlot = Rc::new(RefCell::new(Default::default()));
-    let delegate = PickerDelegate::new(slot.clone(), mtm);
+    let delegate = PickerDelegate::new(Rc::clone(&slot), mtm);
     picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     root.presentViewController_animated_completion(&picker, true, None);
 
@@ -387,7 +387,7 @@ impl ContentFolder for IosFolder {
                 .into_iter()
                 .map(|(path, is_dir)| {
                     if is_dir {
-                        ContentEntry::Folder(Rc::new(IosFolder {
+                        ContentEntry::Folder(Rc::new(Self {
                             scope: Rc::clone(&scope),
                             path,
                         }))

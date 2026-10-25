@@ -86,9 +86,9 @@ impl HorizontalAlignment {
     /// Compose's bias for this alignment: -1 the start, 0 the middle, 1 the end.
     pub fn bias(&self) -> f32 {
         match self {
-            HorizontalAlignment::Start => -1.0,
-            HorizontalAlignment::CenterHorizontally => 0.0,
-            HorizontalAlignment::End => 1.0,
+            Self::Start => -1.0,
+            Self::CenterHorizontally => 0.0,
+            Self::End => 1.0,
         }
     }
 
@@ -114,9 +114,9 @@ impl VerticalAlignment {
     /// Compose's bias for this alignment: -1 the top, 0 the middle, 1 the bottom.
     pub fn bias(&self) -> f32 {
         match self {
-            VerticalAlignment::Top => -1.0,
-            VerticalAlignment::CenterVertically => 0.0,
-            VerticalAlignment::Bottom => 1.0,
+            Self::Top => -1.0,
+            Self::CenterVertically => 0.0,
+            Self::Bottom => 1.0,
         }
     }
 

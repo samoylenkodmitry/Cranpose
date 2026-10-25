@@ -27,8 +27,11 @@ fn multilingual_tab_labels_fit_their_text_area() {
         include_bytes!("../../cranpose-render/common/tests/fixtures/localization/Devanagari.ttf"),
     ]);
     let measurer = Rc::new(SoftwareTextMeasurer::from_font_set(fonts, 32));
-    let mut robot =
-        create_headless_robot_test_with_text_measurer(400, 120, measurer.clone(), || {
+    let mut robot = create_headless_robot_test_with_text_measurer(
+        400,
+        120,
+        Rc::<SoftwareTextMeasurer>::clone(&measurer),
+        || {
             LiquidTheme(LiquidThemeSpec::default(), || {
                 LiquidTabBar(
                     Modifier::empty().width(390.0),
@@ -38,12 +41,13 @@ fn multilingual_tab_labels_fit_their_text_area() {
                     |tabs| {
                         for label in ["Settings", "الإعدادات", "सेटिंग्स"]
                         {
-                            tabs.tab(cranpose_liquid::icons::SEARCH, label);
+                            tabs.tab(icons::SEARCH, label);
                         }
                     },
                 );
             });
-        });
+        },
+    );
     robot.wait_for_idle();
     let graph = robot.shell_mut().scene().graph.as_ref().expect("tab scene");
     for label in ["Settings", "الإعدادات", "सेटिंग्स"] {

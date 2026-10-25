@@ -381,8 +381,8 @@ fn dispatch_stops_after_event_consumed() {
             height: 50.0,
         }),
         handlers: pointer_slices(&[
-            make_handler(count_first.clone(), true),
-            make_handler(count_second.clone(), false),
+            make_handler(Rc::clone(&count_first), true),
+            make_handler(Rc::clone(&count_second), false),
         ]),
         ..Default::default()
     });
@@ -413,8 +413,8 @@ fn dispatch_delivers_terminal_events_after_consumption_for_cleanup() {
             height: 50.0,
         }),
         handlers: pointer_slices(&[
-            make_handler(count_first.clone(), true),
-            make_handler(count_second.clone(), false),
+            make_handler(Rc::clone(&count_first), true),
+            make_handler(Rc::clone(&count_second), false),
         ]),
         ..Default::default()
     });
@@ -442,7 +442,7 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
             width: 20.0,
             height: 20.0,
         }),
-        handlers: pointer_slices(&[make_handler(child_count.clone(), true)]),
+        handlers: pointer_slices(&[make_handler(Rc::clone(&child_count), true)]),
         z_index: 1,
         ..Default::default()
     });
@@ -455,7 +455,7 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
             width: 50.0,
             height: 50.0,
         }),
-        handlers: pointer_slices(&[make_handler(parent_count.clone(), false)]),
+        handlers: pointer_slices(&[make_handler(Rc::clone(&parent_count), false)]),
         ..Default::default()
     });
 

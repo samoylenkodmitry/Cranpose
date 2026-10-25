@@ -314,7 +314,7 @@ impl PresentState {
         };
         let after_acquire_ns = self.now();
         if let Some(delay) = ENCODE_DELAY_MS.parse::<u64>() {
-            std::thread::sleep(std::time::Duration::from_millis(delay));
+            std::thread::sleep(Duration::from_millis(delay));
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),

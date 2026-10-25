@@ -129,7 +129,7 @@ fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, Ima
     picker.setSourceType(source_type);
 
     let slot: SharedSlot = Rc::new(RefCell::new(Default::default()));
-    let delegate = PickerDelegate::new(slot.clone(), mtm);
+    let delegate = PickerDelegate::new(Rc::clone(&slot), mtm);
     // SAFETY: the delegate conforms to both delegate protocols the picker needs;
     // `setDelegate` takes the untyped `id` and holds it weakly (the returned
     // future keeps the delegate alive).

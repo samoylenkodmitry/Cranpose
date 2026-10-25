@@ -14,7 +14,7 @@ pub enum TextUnit {
 impl TextUnit {
     /// Returns true for `Unspecified`.
     pub fn is_unspecified(&self) -> bool {
-        matches!(self, TextUnit::Unspecified)
+        matches!(self, Self::Unspecified)
     }
 
     /// Returns true for `Sp` and `Em`.
@@ -25,9 +25,9 @@ impl TextUnit {
     /// Returns the number inside `Sp` or `Em`, or `NaN` for `Unspecified`.
     pub fn value(&self) -> f32 {
         match self {
-            TextUnit::Unspecified => f32::NAN,
-            TextUnit::Sp(v) => *v,
-            TextUnit::Em(v) => *v,
+            Self::Unspecified => f32::NAN,
+            Self::Sp(v) => *v,
+            Self::Em(v) => *v,
         }
     }
 }

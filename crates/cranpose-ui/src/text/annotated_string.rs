@@ -202,7 +202,7 @@ impl RenderString {
     /// Returns a new `RenderString` containing a substring of the original
     /// text and any styles that overlap with the new range, with indices
     /// adjusted. Mirrors [`AnnotatedString::subsequence`].
-    pub fn subsequence(&self, range: std::ops::Range<usize>) -> Self {
+    pub fn subsequence(&self, range: Range<usize>) -> Self {
         let start = range.start.min(self.text.len());
         let end = range.end.max(start).min(self.text.len());
         if start == end {
@@ -444,7 +444,7 @@ impl AnnotatedString {
 
     /// Returns a new `AnnotatedString` containing a substring of the original text
     /// and any styles that overlap with the new range, with indices adjusted.
-    pub fn subsequence(&self, range: std::ops::Range<usize>) -> Self {
+    pub fn subsequence(&self, range: Range<usize>) -> Self {
         if range.is_empty() {
             return Self::new(String::new());
         }

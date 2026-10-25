@@ -67,7 +67,7 @@ pub struct SemanticElement {
     /// The name tests find the element by (`Modifier::test_tag`).
     pub test_tag: Option<String>,
     /// Child semantic elements
-    pub children: Vec<SemanticElement>,
+    pub children: Vec<Self>,
 }
 
 /// Geometric bounds for a semantic element
@@ -307,7 +307,7 @@ impl RobotChannel {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (resp_tx, resp_rx) = mpsc::channel();
 
-        let channel = RobotChannel {
+        let channel = Self {
             rx: cmd_rx,
             tx: resp_tx,
         };

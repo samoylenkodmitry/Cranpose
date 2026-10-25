@@ -40,7 +40,7 @@ pub(crate) fn create_wgpu_surface_and_adapter(
 {
     let instance = new_instance();
     let surface = instance
-        .create_surface(window.clone())
+        .create_surface(std::sync::Arc::clone(window))
         .map_err(crate::app_launcher::LaunchError::SurfaceCreate)?;
     // Each image comes back with the frame it presented, so a frame draws
     // only what changed since (`render_surface_texture`).

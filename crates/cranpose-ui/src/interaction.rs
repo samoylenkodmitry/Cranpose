@@ -498,7 +498,7 @@ impl<T: InteractionTracker> ModifierNodeElement for InteractionElement<T> {
             cached_handler: InteractionNode::handler(
                 self.interaction_source,
                 self.tracker,
-                active.clone(),
+                Rc::clone(&active),
             ),
             active,
             state: NodeState::new(),
@@ -530,7 +530,7 @@ impl<T: InteractionTracker> InteractionNode<T> {
         self.end_active();
         self.interaction_source = interaction_source;
         self.tracker = tracker;
-        self.cached_handler = Self::handler(interaction_source, tracker, self.active.clone());
+        self.cached_handler = Self::handler(interaction_source, tracker, Rc::clone(&self.active));
     }
 
     fn end_active(&self) {
@@ -587,7 +587,7 @@ impl<T: InteractionTracker> ModifierNode for InteractionNode<T> {
 
 impl<T: InteractionTracker> PointerInputNode for InteractionNode<T> {
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
-        Some(self.cached_handler.clone())
+        Some(Rc::clone(&self.cached_handler))
     }
 }
 

@@ -51,7 +51,7 @@ pub(crate) fn start_battery_probe(request_frame: Rc<dyn Fn()>) {
         update_from_manager(&manager, &request_frame);
         for event_name in ["levelchange", "chargingchange"] {
             let manager_for_closure = manager.clone();
-            let request_frame = request_frame.clone();
+            let request_frame = Rc::clone(&request_frame);
             let closure = Closure::wrap(Box::new(move || {
                 update_from_manager(&manager_for_closure, &request_frame);
             }) as Box<dyn FnMut()>);

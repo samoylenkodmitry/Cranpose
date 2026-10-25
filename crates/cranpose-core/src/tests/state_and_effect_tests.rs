@@ -84,10 +84,7 @@ fn event_handler_scope_restores_flag_after_panic() {
 }
 
 type CapturedSubcomposeSlot = (SlotId, Owned<i32>, NodeId);
-type SubcomposePassResult = (
-    Vec<CapturedSubcomposeSlot>,
-    crate::subcompose::SubcomposeDisposal,
-);
+type SubcomposePassResult = (Vec<CapturedSubcomposeSlot>, subcompose::SubcomposeDisposal);
 
 fn run_subcompose_pass(
     slots: &mut SlotTable,
@@ -501,7 +498,7 @@ fn state_arena_diagnostics_are_total_after_runtime_drop() {
     assert_eq!(handle.state_arena_stats(), (0, 0));
     assert_eq!(
         handle.state_arena_debug_stats(),
-        crate::runtime::StateArenaDebugStats::default()
+        runtime::StateArenaDebugStats::default()
     );
 }
 
@@ -559,11 +556,11 @@ fn runtime_registry_stays_alive_until_last_runtime_clone_drops() {
     drop(runtime);
 
     assert_eq!(state.value(), 11);
-    assert!(crate::runtime::runtime_handle_by_id(handle.id()).is_some());
+    assert!(runtime::runtime_handle_by_id(handle.id()).is_some());
 
     drop(runtime_clone);
 
-    assert!(crate::runtime::runtime_handle_by_id(handle.id()).is_none());
+    assert!(runtime::runtime_handle_by_id(handle.id()).is_none());
 }
 
 #[test]
@@ -958,7 +955,7 @@ fn anchor_survives_conditional_removal() {
         composition
             .render(0, move || {
                 if toggle.value() {
-                    cranpose_core::with_current_composer(|composer| {
+                    with_current_composer(|composer| {
                         composer.emit_node(|| TestDummyNode);
                     });
                 }
@@ -1045,18 +1042,18 @@ fn launched_effect_async_survives_conditional_cycle() {
     let spawns = Arc::new(AtomicUsize::new(0));
 
     let mut render = {
-        let log = log.clone();
+        let log = Rc::clone(&log);
         let spawns = Arc::clone(&spawns);
         move || {
             if gate.value() {
-                cranpose_core::with_current_composer(|composer| {
+                with_current_composer(|composer| {
                     composer.emit_node(|| TestDummyNode);
                 });
             }
 
-            let log = log.clone();
+            let log = Rc::clone(&log);
             let spawns = Arc::clone(&spawns);
-            cranpose_core::LaunchedEffectAsync((), move |scope| {
+            LaunchedEffectAsync((), move |scope| {
                 spawns.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
@@ -1186,7 +1183,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
 
     let mut render = {
         move || {
-            cranpose_core::LaunchedEffectAsync((), move |scope| {
+            LaunchedEffectAsync((), move |scope| {
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
                     let mut last_time: Option<u64> = None;
@@ -1227,7 +1224,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
 
             let snapshot = animation.value();
             if snapshot.progress > 0.0 {
-                cranpose_core::with_current_composer(|composer| {
+                with_current_composer(|composer| {
                     composer.emit_node(|| TestDummyNode);
                 });
             }
@@ -1416,7 +1413,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     let group_key = location_key(file!(), line!(), column!());
 
     {
-        state.reset_for_pass(crate::slot::SlotPassMode::Compose);
+        state.reset_for_pass(slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || 42i32);
         assert_eq!(value.with(|value| *value), 42);
@@ -1424,7 +1421,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     }
 
     {
-        state.reset_for_pass(crate::slot::SlotPassMode::Compose);
+        state.reset_for_pass(slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "updated");
         assert_eq!(value.with(|&value| value), "updated");
@@ -1432,7 +1429,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     }
 
     {
-        state.reset_for_pass(crate::slot::SlotPassMode::Compose);
+        state.reset_for_pass(slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "should not run");
         assert_eq!(value.with(|&value| value), "updated");
@@ -1448,13 +1445,13 @@ fn frame_callbacks_fire_in_registration_order() {
     let events: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
     let mut guards = Vec::new();
     {
-        let events = events.clone();
+        let events = Rc::clone(&events);
         guards.push(clock.with_frame_nanos(move |_| {
             events.borrow_mut().push("first");
         }));
     }
     {
-        let events = events.clone();
+        let events = Rc::clone(&events);
         guards.push(clock.with_frame_nanos(move |_| {
             events.borrow_mut().push("second");
         }));
@@ -1506,7 +1503,7 @@ fn cancelling_frame_callback_prevents_execution() {
     let events: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
 
     let registration = {
-        let events = events.clone();
+        let events = Rc::clone(&events);
         clock.with_frame_nanos(move |_| {
             events.borrow_mut().push("fired");
         })
@@ -1527,12 +1524,12 @@ fn launched_effect_async_restarts_on_key_change() {
     let log: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
 
     let mut render = {
-        let log = log.clone();
+        let log = Rc::clone(&log);
         move || {
             let key = key_state.value();
-            let log = log.clone();
-            cranpose_core::LaunchedEffectAsync(key, move |scope| {
-                let log = log.clone();
+            let log = Rc::clone(&log);
+            LaunchedEffectAsync(key, move |scope| {
+                let log = Rc::clone(&log);
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
                     loop {
@@ -1604,7 +1601,7 @@ struct ParkOnce {
     parked: bool,
 }
 
-impl std::future::Future for ParkOnce {
+impl Future for ParkOnce {
     type Output = ();
 
     fn poll(
@@ -1627,7 +1624,7 @@ fn a_parked_task_stops_asking_for_frames() {
     let waker: Rc<RefCell<Option<std::task::Waker>>> = Rc::new(RefCell::new(None));
 
     handle.spawn_ui(ParkOnce {
-        waker: waker.clone(),
+        waker: Rc::clone(&waker),
         parked: false,
     });
     assert!(
@@ -1677,10 +1674,10 @@ fn a_task_awaiting_a_frame_still_asks_for_frames() {
 
 #[composable]
 fn frame_callback_node(events: Rc<RefCell<Vec<&'static str>>>) -> NodeId {
-    let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+    let runtime = with_current_composer(|composer| composer.runtime_handle());
     DisposableEffect((), move |scope| {
         let clock = runtime.frame_clock();
-        let events = events.clone();
+        let events = Rc::clone(&events);
         let registration = clock.with_frame_nanos(move |_| {
             events.borrow_mut().push("fired");
         });
@@ -1695,12 +1692,12 @@ fn disposing_scope_cancels_pending_frame_callback() {
     let mut composition = test_composition();
     let runtime_handle = composition.runtime_handle();
     let events: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
-    let active = cranpose_core::MutableState::with_runtime(true, runtime_handle.clone());
+    let active = MutableState::with_runtime(true, runtime_handle.clone());
     let mut render = {
-        let events = events.clone();
+        let events = Rc::clone(&events);
         move || {
             if active.value() {
-                frame_callback_node(events.clone());
+                frame_callback_node(Rc::clone(&events));
             }
         }
     };
@@ -1723,8 +1720,8 @@ struct HashCollidingKey {
     tag: u32,
 }
 
-impl std::hash::Hash for HashCollidingKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl Hash for HashCollidingKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         0u32.hash(state);
     }
 }
@@ -1735,8 +1732,8 @@ fn hash_colliding_key_produces_identical_digests_for_unequal_values() {
     let b = HashCollidingKey { tag: 2 };
     assert_ne!(a, b, "the two keys must be genuinely distinct by PartialEq");
     assert_eq!(
-        crate::hash_key(&a),
-        crate::hash_key(&b),
+        hash_key(&a),
+        hash_key(&b),
         "the two keys must produce an identical digest under the crate's \
          active hasher to reproduce the exact defect: comparing hashed \
          digests instead of comparing the keys themselves"
@@ -1913,23 +1910,23 @@ fn keyed_effect_removed_before_its_key_write_still_disposes() {
 }
 
 #[derive(Debug)]
-struct CountedClones(std::rc::Rc<std::cell::Cell<u32>>);
+struct CountedClones(Rc<std::cell::Cell<u32>>);
 
 impl Clone for CountedClones {
     fn clone(&self) -> Self {
         self.0.set(self.0.get() + 1);
-        Self(std::rc::Rc::clone(&self.0))
+        Self(Rc::clone(&self.0))
     }
 }
 
 #[test]
 fn reading_state_through_read_borrows_instead_of_cloning() {
     let (handle, _runtime) = runtime_handle();
-    let clones = std::rc::Rc::new(std::cell::Cell::new(0));
-    let state = MutableState::with_runtime(CountedClones(std::rc::Rc::clone(&clones)), handle);
+    let clones = Rc::new(std::cell::Cell::new(0));
+    let state = MutableState::with_runtime(CountedClones(Rc::clone(&clones)), handle);
     let before = clones.get();
 
-    let strong = state.read(|value| std::rc::Rc::strong_count(&value.0));
+    let strong = state.read(|value| Rc::strong_count(&value.0));
     assert!(strong >= 2, "the read sees the stored value");
     assert_eq!(
         clones.get(),

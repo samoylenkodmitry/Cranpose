@@ -116,12 +116,12 @@ pub fn debug_scope_invalidation_sources(_scope_id: usize) -> Vec<String> {
 
 #[doc(hidden)]
 pub fn debug_live_recompose_scope_count() -> usize {
-    crate::runtime::live_recompose_scope_count()
+    runtime::live_recompose_scope_count()
 }
 
 #[doc(hidden)]
 pub fn debug_recompose_scope_registry_stats() -> RecomposeScopeRegistryDebugStats {
-    let live = crate::runtime::live_recompose_scope_count();
+    let live = runtime::live_recompose_scope_count();
     RecomposeScopeRegistryDebugStats {
         len: live,
         capacity: live,

@@ -415,7 +415,7 @@ fn source_hash_consistent() {
 #[test]
 fn runtime_shader_from_shared_source_reuses_shared_source() {
     let source = Arc::<str>::from("fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }");
-    let s1 = RuntimeShader::from_shared_source(source.clone());
+    let s1 = RuntimeShader::from_shared_source(Arc::clone(&source));
     let s2 = RuntimeShader::from_shared_source(source);
 
     assert!(Arc::ptr_eq(&s1.source, &s2.source));

@@ -102,7 +102,7 @@ fn GrowingLazyRow(
 
 #[test]
 fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let item_count = MutableState::with_runtime(2usize, runtime);
@@ -230,7 +230,7 @@ fn measured_indicator_lazy_row() -> (
 
 #[test]
 fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let (mut composition, root, captured_state) = measured_indicator_lazy_row();
     let viewport = INDICATOR_VIEWPORT;
     let initial_texts = render_texts(&mut composition, root);
@@ -359,12 +359,12 @@ fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size
 
 #[test]
 fn a_reader_reaches_a_row_of_a_lazy_row_by_number() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let (mut composition, root, captured_state) = measured_indicator_lazy_row();
     let list_state = (*captured_state.borrow()).expect("state captured");
 
-    let mut config = cranpose_foundation::SemanticsConfiguration::default();
-    crate::modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
+    let mut config = SemanticsConfiguration::default();
+    modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
     let jump = config
         .scroll_to_index
         .expect("a lazy row takes a row number from a reader");
@@ -385,15 +385,15 @@ fn a_reader_reaches_a_row_of_a_lazy_row_by_number() {
 
 #[test]
 fn a_reader_page_moves_a_lazy_row_forward() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let (mut composition, root, captured_state) = measured_indicator_lazy_row();
     let viewport = INDICATOR_VIEWPORT;
     let initial_records = render_text_records(&mut composition, root);
     let initial_item_0_x = text_x(&initial_records, "Item 0");
     let list_state = (*captured_state.borrow()).expect("state captured");
 
-    let mut config = cranpose_foundation::SemanticsConfiguration::default();
-    crate::modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
+    let mut config = SemanticsConfiguration::default();
+    modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
     let scroll_by = config
         .scroll_by
         .expect("a lazy row takes a page from a reader");
@@ -416,12 +416,12 @@ fn a_reader_page_moves_a_lazy_row_forward() {
 
 #[test]
 fn a_reader_hears_how_many_items_a_lazy_row_holds() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let (_composition, _root, captured_state) = measured_indicator_lazy_row();
     let list_state = (*captured_state.borrow()).expect("state captured");
 
-    let mut config = cranpose_foundation::SemanticsConfiguration::default();
-    crate::modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
+    let mut config = SemanticsConfiguration::default();
+    modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
     let collection = config
         .collection
         .expect("a lazy row says how many items it holds");

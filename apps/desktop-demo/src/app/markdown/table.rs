@@ -54,7 +54,7 @@ pub(super) fn MarkdownTable(table: Rc<Table>, appearance: MarkdownAppearance) {
                                                 _ => TextAlign::Start,
                                             };
                                             render_text_block_aligned(
-                                                cell.clone(),
+                                                Rc::clone(cell),
                                                 appearance,
                                                 alignment,
                                             );

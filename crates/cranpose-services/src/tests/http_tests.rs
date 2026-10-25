@@ -209,7 +209,7 @@ fn an_empty_body_ends_immediately() {
 #[test]
 fn default_http_client_is_available() {
     let client = default_http_client();
-    let cloned = client.clone();
+    let cloned = Arc::clone(&client);
     assert_eq!(Arc::strong_count(&client), 2);
     drop(cloned);
     assert_eq!(Arc::strong_count(&client), 1);
@@ -295,7 +295,7 @@ fn native_ordered_concurrency_is_not_tied_to_native_http_client_feature() {
 #[test]
 fn map_ordered_concurrent_reports_worker_panic() {
     let inputs = [1usize];
-    let should_panic = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let should_panic = Arc::new(AtomicBool::new(true));
     let should_panic_for_task = Arc::clone(&should_panic);
 
     let error = pollster::block_on(map_ordered_concurrent(&inputs, 1, move |_| {
@@ -322,14 +322,14 @@ fn local_http_client_can_be_overridden() {
 
     {
         let captured_for_closure = Rc::clone(&captured);
-        let custom_client = custom_client.clone();
+        let custom_client = Arc::clone(&custom_client);
         let local_for_provider = local.clone();
         let local_for_read = local.clone();
         run_test_composition(move || {
             let captured = Rc::clone(&captured_for_closure);
             let local_for_read = local_for_read.clone();
             CompositionLocalProvider(
-                vec![local_for_provider.provides(custom_client.clone())],
+                vec![local_for_provider.provides(Arc::clone(&custom_client))],
                 move || {
                     let current = local_for_read.current();
                     *captured.borrow_mut() = Some(current);
@@ -338,7 +338,7 @@ fn local_http_client_can_be_overridden() {
         });
     }
 
-    let current = captured.borrow().as_ref().expect("client captured").clone();
+    let current = Arc::clone(captured.borrow().as_ref().expect("client captured"));
     assert!(Arc::ptr_eq(&current, &custom_client));
     assert!(!Arc::ptr_eq(&current, &default_client));
 }
@@ -490,7 +490,7 @@ fn a_native_transfer_reports_progress_as_it_runs() {
         return;
     };
 
-    let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let reports = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&reports);
     let control = HttpControl::new().with_progress(move |progress| {
         recorder
@@ -692,7 +692,7 @@ fn a_download_resumes_from_what_is_already_on_disk() {
     else {
         return;
     };
-    let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let reports = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&reports);
     let control = HttpControl::new().with_progress(move |progress| {
         recorder
@@ -726,7 +726,7 @@ fn a_download_resumes_from_what_is_already_on_disk() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_platform_downloader_runs_every_download_to() {
-    struct Recorded(std::sync::Mutex<Vec<(String, std::path::PathBuf)>>);
+    struct Recorded(Mutex<Vec<(String, std::path::PathBuf)>>);
     impl PlatformDownloader for Recorded {
         fn download<'a>(
             &'a self,
@@ -746,8 +746,8 @@ fn a_platform_downloader_runs_every_download_to() {
         }
     }
     let _services = crate::registry::test_service_guard();
-    let recorded = Arc::new(Recorded(std::sync::Mutex::default()));
-    set_platform_downloader(recorded.clone());
+    let recorded = Arc::new(Recorded(Mutex::default()));
+    set_platform_downloader(Arc::<Recorded>::clone(&recorded));
     let target = crate::test_scratch_dir("http-platform").join("model.bin");
     let written = pollster::block_on(default_http_client().download_to(
         "https://example.test/model.bin",

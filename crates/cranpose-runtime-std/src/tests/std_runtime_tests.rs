@@ -32,12 +32,12 @@ fn std_runtime_requests_frame_and_recomposes_on_state_change() {
     let state_slot: Rc<RefCell<Option<MutableState<i32>>>> = Rc::new(RefCell::new(None));
 
     let mut content = {
-        let recompositions = recompositions.clone();
-        let state_slot = state_slot.clone();
+        let recompositions = Rc::clone(&recompositions);
+        let state_slot = Rc::clone(&state_slot);
         move || {
             cranpose_core::with_current_composer(|composer| {
-                let recompositions_cb = recompositions.clone();
-                let state_slot_cb = state_slot.clone();
+                let recompositions_cb = Rc::clone(&recompositions);
+                let state_slot_cb = Rc::clone(&state_slot);
                 composer.set_recompose_callback(move |_composer| {
                     cranpose_counter_body(&recompositions_cb, &state_slot_cb);
                 });

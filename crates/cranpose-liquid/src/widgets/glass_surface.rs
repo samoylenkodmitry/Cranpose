@@ -11,7 +11,7 @@ use crate::material::{
     GlassShadow, GlassSpecularHighlight, LiquidModifierExt,
 };
 
-pub(crate) fn surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
+pub(crate) fn surface_material(foreground: Color) -> Glass {
     Glass::regular()
         .face_lighting(false)
         .key_fill(GlassKeyFill {

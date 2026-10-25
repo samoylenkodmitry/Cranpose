@@ -884,7 +884,7 @@ pub(crate) fn scene_surface_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Scene Surface Uniform Buffer",
         "Scene Surface Uniform Bind Group",
-        std::mem::size_of::<SceneSurfaceUniforms>() as u64,
+        size_of::<SceneSurfaceUniforms>() as u64,
     )
 }
 
@@ -892,7 +892,7 @@ pub(crate) fn scene_volume_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Scene Volume Uniform Buffer",
         "Scene Volume Uniform Bind Group",
-        std::mem::size_of::<SceneVolumeUniforms>() as u64,
+        size_of::<SceneVolumeUniforms>() as u64,
     )
 }
 
@@ -900,7 +900,7 @@ pub(crate) fn scene_shaded_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Scene Shaded Uniform Buffer",
         "Scene Shaded Uniform Bind Group",
-        std::mem::size_of::<SceneShadedUniforms>() as u64,
+        size_of::<SceneShadedUniforms>() as u64,
     )
 }
 
@@ -1434,7 +1434,7 @@ fn create_scene_pipeline(
                 entry_point: Some(vertex),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<SceneVertex>() as u64,
+                    array_stride: size_of::<SceneVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x3,

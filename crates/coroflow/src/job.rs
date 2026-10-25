@@ -190,7 +190,7 @@ impl Job {
         let (finished, failure) = {
             let mut state = lock(&self.inner);
             if state.outcome.is_none() {
-                state.parent = Some(parent.clone());
+                state.parent = Some(Weak::clone(&parent));
             }
             (state.outcome, state.unreported_failure.take())
         };

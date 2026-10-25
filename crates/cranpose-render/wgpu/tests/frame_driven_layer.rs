@@ -12,7 +12,7 @@ const SIZE: u32 = 64;
 fn FrameDrivenLayer() {
     let seconds = rememberMutableStateOf(|| 0.0f32);
     LaunchedEffectAsync((), move |scope| {
-        std::boxed::Box::pin(async move {
+        Box::pin(async move {
             let clock = scope.runtime().frame_clock();
             while scope.is_active() {
                 let now = clock.next_frame().await;

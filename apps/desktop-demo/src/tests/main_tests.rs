@@ -106,10 +106,7 @@ fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeErr
     Ok(())
 }
 
-fn app_context_scope() -> (
-    std::rc::Rc<cranpose_ui::AppContext>,
-    cranpose_ui::AppContextScope,
-) {
+fn app_context_scope() -> (Rc<cranpose_ui::AppContext>, cranpose_ui::AppContextScope) {
     let context = cranpose_ui::AppContext::new();
     let scope = context.enter_scope();
     (context, scope)
@@ -646,13 +643,10 @@ fn tab_source_paths_point_at_files_that_exist() {
 
 #[test]
 fn an_inline_playlist_falls_back_to_the_size_the_skin_draws() {
-    let size = crate::app::wsz::playlist_window_size(None);
+    let size = wsz::playlist_window_size(None);
     assert_eq!(
         (size.width, size.height),
-        (
-            crate::app::wsz::sprites::PLAYLIST_WIDTH,
-            crate::app::wsz::sprites::PLAYLIST_HEIGHT
-        ),
+        (wsz::sprites::PLAYLIST_WIDTH, wsz::sprites::PLAYLIST_HEIGHT),
         "a playlist that is not in a window of its own is the size the skin draws"
     );
 }

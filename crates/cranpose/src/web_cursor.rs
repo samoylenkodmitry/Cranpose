@@ -240,7 +240,7 @@ fn follow_pointer(canvas: &HtmlCanvasElement, drawn: &Rc<RefCell<DrawnCursor>>) 
         ("pointerenter", false),
         ("pointerleave", true),
     ] {
-        let drawn = drawn.clone();
+        let drawn = Rc::clone(drawn);
         let target = canvas.clone();
         let listener = Closure::wrap(Box::new(move |event: PointerEvent| {
             let at = (!leaves && event.pointer_type() != "touch")

@@ -123,7 +123,7 @@ impl PartialEq for HalfAsTall {
     }
 }
 
-type Measurables = [std::boxed::Box<dyn Measurable>];
+type Measurables = [Box<dyn Measurable>];
 
 impl MeasurePolicy for HalfAsTall {
     fn measure(

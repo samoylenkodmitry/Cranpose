@@ -542,7 +542,7 @@ pub fn markdown_viewer_tab() {
         let document_url = url.clone();
         fetch_state.set(FetchState::Loading);
 
-        let client = http_client.clone();
+        let client = std::sync::Arc::clone(&http_client);
         scope.launch_background(
             move |token| async move {
                 if token.is_cancelled() {
@@ -701,7 +701,7 @@ pub fn MarkdownScrollStabilityFixtureTab() {
             &markdown, "",
         )))
     })
-    .with(|blocks| blocks.clone());
+    .with(|blocks| Rc::clone(blocks));
 
     Column(
         Modifier::empty()
@@ -712,7 +712,7 @@ pub fn MarkdownScrollStabilityFixtureTab() {
             .fill_max_size(),
         ColumnSpec::default(),
         move || {
-            render_markdown_blocks(blocks.clone());
+            render_markdown_blocks(Rc::clone(&blocks));
         },
     );
 }
@@ -733,7 +733,7 @@ pub fn MarkdownScrollStressFixtureTabWithState(
             &markdown, "",
         )))
     })
-    .with(|blocks| blocks.clone());
+    .with(|blocks| Rc::clone(blocks));
 
     Column(
         Modifier::empty()
@@ -744,7 +744,7 @@ pub fn MarkdownScrollStressFixtureTabWithState(
             .fill_max_size(),
         ColumnSpec::default(),
         move || {
-            render_markdown_blocks_with_state(blocks.clone(), list_state);
+            render_markdown_blocks_with_state(Rc::clone(&blocks), list_state);
         },
     );
 }
@@ -831,15 +831,15 @@ pub(super) fn render_markdown_block(
     width: f32,
 ) {
     match block {
-        MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
+        MarkdownBlock::Text(annotated) => render_text_block(Rc::clone(annotated), appearance),
         MarkdownBlock::Image { url, alt } => MarkdownImage(url.clone(), alt.clone()),
         MarkdownBlock::Rule => render_rule(),
-        MarkdownBlock::Table(table) => table::MarkdownTable(table.clone(), appearance),
+        MarkdownBlock::Table(table) => table::MarkdownTable(Rc::clone(table), appearance),
         MarkdownBlock::Example { code, preview } => {
             if appearance == MarkdownAppearance::Reader {
-                MarkdownExample(code.clone(), *preview, width);
+                MarkdownExample(Rc::clone(code), *preview, width);
             } else {
-                render_text_block(code.clone(), appearance);
+                render_text_block(Rc::clone(code), appearance);
             }
         }
     }
@@ -908,7 +908,7 @@ fn render_markdown_blocks_with_state(
         "MarkdownScrollbarRail",
         markdown_scrollbar_style(),
         move || {
-            MarkdownBlocksList(list_state, blocks.clone());
+            MarkdownBlocksList(list_state, Rc::clone(&blocks));
         },
     );
 }
@@ -1042,7 +1042,7 @@ fn MarkdownImage(url: String, alt: String) {
             return;
         }
         state.set(ImageState::Loading);
-        let client = http_client.clone();
+        let client = std::sync::Arc::clone(&http_client);
         let fetch_url = effect_url.clone();
         let store_url = effect_url.clone();
         scope.launch_background(
@@ -1123,7 +1123,7 @@ fn placeholder_text_style(color: Color) -> TextStyle {
 #[composable]
 fn render_rule() {
     Spacer(Modifier::empty().size_points(0.0, 4.0));
-    cranpose_ui::Box(
+    Box(
         Modifier::empty()
             .fill_max_width()
             .draw_behind(|scope| {
@@ -1142,7 +1142,7 @@ fn render_rule() {
                 width: f32::INFINITY,
                 height: 2.0,
             }),
-        cranpose_ui::BoxSpec::default(),
+        BoxSpec::default(),
         || {},
     );
     Spacer(Modifier::empty().size_points(0.0, 4.0));

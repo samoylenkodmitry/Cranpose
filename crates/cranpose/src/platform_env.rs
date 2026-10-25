@@ -77,7 +77,7 @@ impl PlatformEnvironment {
                     content();
                 };
                 #[cfg(feature = "localization")]
-                languages::ProvideSystemLanguages(self.languages.clone(), content);
+                languages::ProvideSystemLanguages(Rc::clone(&self.languages), content);
                 #[cfg(not(feature = "localization"))]
                 content();
             },

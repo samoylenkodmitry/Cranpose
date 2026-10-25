@@ -45,13 +45,13 @@ fn a_perpetual_frame_keeps_asking_after_every_dispatch() {
         let waker = std::task::Waker::noop().clone();
         let mut context = std::task::Context::from_waker(&waker);
         assert!(
-            std::future::Future::poll(next.as_mut(), &mut context).is_pending(),
+            Future::poll(next.as_mut(), &mut context).is_pending(),
             "a frame was answered before it was dispatched"
         );
         clock
             .runtime_handle()
             .drain_frame_callbacks(frame * 16_000_000);
-        if std::future::Future::poll(next.as_mut(), &mut context).is_ready() {
+        if Future::poll(next.as_mut(), &mut context).is_ready() {
             seen.set(seen.get() + 1);
         }
     }

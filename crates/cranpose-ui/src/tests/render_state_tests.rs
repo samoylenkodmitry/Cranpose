@@ -299,7 +299,7 @@ fn dropped_app_context_unregisters_from_thread_lookup_registry() {
 }
 
 /// Counts the layout passes it is told of; measures as [`TestTextMeasurer`].
-struct PassCountingMeasurer(std::rc::Rc<std::cell::Cell<usize>>);
+struct PassCountingMeasurer(Rc<Cell<usize>>);
 
 impl TextMeasurer for PassCountingMeasurer {
     fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
@@ -338,8 +338,8 @@ impl TextMeasurer for PassCountingMeasurer {
 fn each_layout_pass_tells_the_text_measurer() {
     begin_text_layout_pass();
 
-    let passes = std::rc::Rc::new(std::cell::Cell::new(0));
-    let counted = std::rc::Rc::clone(&passes);
+    let passes = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&passes);
     let mut composition = crate::run_test_composition(|| {
         crate::Text("pass", crate::Modifier::empty(), TextStyle::default());
     });

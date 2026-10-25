@@ -170,7 +170,7 @@ fn with_content_matches_ordered_translucent_draws_before_and_after_child_content
         renderer,
         location_key(file!(), line!(), column!()),
         move || {
-            WithContentPage(before_for_app.clone(), after_for_app.clone());
+            WithContentPage(Rc::clone(&before_for_app), Rc::clone(&after_for_app));
         },
     );
     shell.set_viewport(WIDTH as f32, HEIGHT as f32);

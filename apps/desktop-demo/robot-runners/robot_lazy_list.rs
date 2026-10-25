@@ -357,5 +357,5 @@ pub(crate) fn main() {
             println!("\n=== LazyList Robot Test Complete ===");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

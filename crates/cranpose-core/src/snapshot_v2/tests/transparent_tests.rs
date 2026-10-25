@@ -1,49 +1,7 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateObject, StateRecord};
-
-fn mock_state_record() -> Rc<StateRecord> {
-    StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
-}
-
-struct MockState(usize);
-
-impl StateObject for MockState {
-    fn object_id(&self) -> ObjectId {
-        ObjectId(self.0)
-    }
-
-    fn first_record(&self) -> Rc<StateRecord> {
-        mock_state_record()
-    }
-
-    fn try_readable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Option<Rc<StateRecord>> {
-        Some(self.readable_record(snapshot_id, invalid))
-    }
-
-    fn readable_record(
-        &self,
-        _snapshot_id: SnapshotId,
-        _invalid: &SnapshotIdSet,
-    ) -> Rc<StateRecord> {
-        mock_state_record()
-    }
-
-    fn prepend_state_record(&self, _record: Rc<StateRecord>) {}
-
-    fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
+use crate::tests::state_mock::MockState;
 
 #[test]
 fn test_transparent_observer_mutable_snapshot() {
@@ -83,7 +41,7 @@ fn test_transparent_observer_snapshot_write_panics() {
 
     let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
 
-    let mock_state = Rc::new(MockState(0));
+    let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
 }
 
@@ -107,7 +65,7 @@ fn transparent_mutable_set_read_observer_replaces_observer() {
         let replacement_reads = Rc::clone(&replacement_reads);
         move |_| replacement_reads.set(replacement_reads.get() + 1)
     })));
-    snapshot.record_read(&MockState(1));
+    snapshot.record_read(&MockState::with_id(1));
 
     assert_eq!(initial_reads.get(), 0);
     assert_eq!(replacement_reads.get(), 1);
@@ -133,7 +91,7 @@ fn transparent_mutable_set_write_observer_replaces_observer() {
         let replacement_writes = Rc::clone(&replacement_writes);
         move |_| replacement_writes.set(replacement_writes.get() + 1)
     })));
-    snapshot.record_write(Rc::new(MockState(2)));
+    snapshot.record_write(Rc::new(MockState::with_id(2)));
 
     assert_eq!(initial_writes.get(), 0);
     assert_eq!(replacement_writes.get(), 1);
@@ -156,8 +114,8 @@ fn transparent_mutable_nested_snapshot_inherits_replaced_observers() {
     })));
 
     let nested = snapshot.take_nested_mutable_snapshot(None, None);
-    nested.record_read(&MockState(3));
-    nested.record_write(Rc::new(MockState(4)));
+    nested.record_read(&MockState::with_id(3));
+    nested.record_write(Rc::new(MockState::with_id(4)));
 
     assert_eq!(parent_reads.get(), 1);
     assert_eq!(parent_writes.get(), 1);
@@ -182,7 +140,7 @@ fn transparent_readonly_set_read_observer_replaces_observer() {
         let replacement_reads = Rc::clone(&replacement_reads);
         move |_| replacement_reads.set(replacement_reads.get() + 1)
     })));
-    snapshot.record_read(&MockState(5));
+    snapshot.record_read(&MockState::with_id(5));
 
     assert_eq!(initial_reads.get(), 0);
     assert_eq!(replacement_reads.get(), 1);

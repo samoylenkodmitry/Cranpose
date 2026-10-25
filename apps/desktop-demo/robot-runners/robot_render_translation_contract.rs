@@ -48,7 +48,7 @@ pub(crate) fn main() {
         println!("✓ rigid subtree motion preserved in desktop demo surfaces");
         robot.exit().expect("exit");
     })
-    .run(crate::robot_launch::counter_demo);
+    .run(robot_launch::counter_demo);
 }
 
 fn verify_text_drag_release_contract(robot: &cranpose::Robot) {

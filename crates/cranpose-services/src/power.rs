@@ -37,7 +37,7 @@ pub enum ThermalState {
 impl ThermalState {
     /// Whether sustained, expensive work should stop at this level.
     pub fn should_pause_work(self) -> bool {
-        self >= ThermalState::Severe
+        self >= Self::Severe
     }
 }
 
@@ -69,14 +69,14 @@ impl<T> PowerReading<T> {
     /// The value, if the platform reported one.
     pub fn known(self) -> Option<T> {
         match self {
-            PowerReading::Known(value) => Some(value),
+            Self::Known(value) => Some(value),
             _ => None,
         }
     }
 
     /// Whether this platform can answer at all.
     pub fn is_supported(&self) -> bool {
-        !matches!(self, PowerReading::Unsupported)
+        !matches!(self, Self::Unsupported)
     }
 
     /// The value, or `fallback` when there is none.

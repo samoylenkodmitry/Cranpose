@@ -24,7 +24,7 @@ pub fn live_state() {
     let holder = remember(|| ownedMutableStateOf(String::from("held")));
     rememberCoroutineScope().launch(pending());
     let _events = rememberEventStream((), |_: EventSender<u32>| ());
-    LaunchedEffectAsync((), |_| std::boxed::Box::pin(pending()));
+    LaunchedEffectAsync((), |_| Box::pin(pending()));
     DisposableEffect((), move |scope| {
         let _ = holder.with(|state| state.value());
         scope.on_dispose(move || {

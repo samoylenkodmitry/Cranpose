@@ -156,7 +156,7 @@ pub fn SubcomposeLayout(
     cranpose_core::debug_label_current_scope("SubcomposeLayout");
     let policy_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(None::<Rc<SubcomposeMeasurePolicy>>)))
-            .with(|cell| cell.clone());
+            .with(|cell| Rc::clone(cell));
     let current_policy: Rc<SubcomposeMeasurePolicy> = Rc::new(measure_policy);
     let policy_captures_changed = {
         let mut policy_cell_ref = policy_cell.borrow_mut();
@@ -167,7 +167,7 @@ pub fn SubcomposeLayout(
         changed
     };
     let policy: Rc<SubcomposeMeasurePolicy> = cranpose_core::remember(move || {
-        let policy_cell = policy_cell.clone();
+        let policy_cell = Rc::clone(&policy_cell);
         let policy: Rc<SubcomposeMeasurePolicy> =
             Rc::new(
                 move |scope, constraints| match policy_cell.borrow().as_ref().cloned() {
@@ -177,7 +177,7 @@ pub fn SubcomposeLayout(
             );
         policy
     })
-    .with(|policy| policy.clone());
+    .with(|policy| Rc::clone(policy));
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_node(|| SubcomposeLayoutNode::new(modifier.clone(), Rc::clone(&policy)))
     });

@@ -2290,10 +2290,7 @@ fn a_resting_glass_pane_washes_its_backdrop_with_the_resting_tint() {
         },
         ProjectiveTransform::identity(),
         GraphicsLayer {
-            backdrop_effect: Some(
-                RenderEffect::blur(6.0)
-                    .then(cranpose_ui_graphics::RenderEffect::runtime_shader(tail)),
-            ),
+            backdrop_effect: Some(RenderEffect::blur(6.0).then(RenderEffect::runtime_shader(tail))),
             ..GraphicsLayer::default()
         },
         vec![],
@@ -2380,10 +2377,7 @@ fn a_resting_glass_pane_transmits_the_blurred_backdrop() {
         },
         ProjectiveTransform::identity(),
         GraphicsLayer {
-            backdrop_effect: Some(
-                RenderEffect::blur(6.0)
-                    .then(cranpose_ui_graphics::RenderEffect::runtime_shader(tail)),
-            ),
+            backdrop_effect: Some(RenderEffect::blur(6.0).then(RenderEffect::runtime_shader(tail))),
             ..GraphicsLayer::default()
         },
         vec![],
@@ -2809,7 +2803,7 @@ fn translation_only_wrapper_with_underlined_text_fixture(
         wrapper_translation,
         TextStyle::from_span_style(SpanStyle {
             color: Some(Color::WHITE),
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            text_decoration: Some(TextDecoration::UNDERLINE),
             ..Default::default()
         }),
     )
@@ -2932,10 +2926,7 @@ fn translation_only_wrapper_with_decorated_shadow_text_fixture(
             color: Some(Color::WHITE),
             letter_spacing: TextUnit::Em(0.18),
             background: Some(Color(0.2, 0.3, 0.52, 0.55)),
-            text_decoration: Some(
-                cranpose_ui::text::TextDecoration::UNDERLINE
-                    .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
-            ),
+            text_decoration: Some(TextDecoration::UNDERLINE.combine(TextDecoration::LINE_THROUGH)),
             shadow: Some(cranpose_ui::text::Shadow {
                 color: Color::BLACK,
                 offset: Point::new(2.0, 2.0),

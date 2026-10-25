@@ -66,7 +66,7 @@ struct ShellClipboard {
     /// The system clipboard, opened at the first copy or paste: opened at
     /// launch, it held the main thread ~0.8 ms on an Apple M5, for apps that
     /// never touch it too.
-    inner: std::cell::OnceCell<std::cell::RefCell<Option<arboard::Clipboard>>>,
+    inner: std::cell::OnceCell<RefCell<Option<arboard::Clipboard>>>,
 }
 
 #[cfg(all(
@@ -83,7 +83,7 @@ impl ShellClipboard {
         use_clipboard: impl FnOnce(&mut arboard::Clipboard) -> Option<T>,
     ) -> Option<T> {
         self.inner
-            .get_or_init(|| std::cell::RefCell::new(arboard::Clipboard::new().ok()))
+            .get_or_init(|| RefCell::new(arboard::Clipboard::new().ok()))
             .borrow_mut()
             .as_mut()
             .and_then(use_clipboard)
@@ -176,7 +176,7 @@ impl FrameRatePreference {
         panel_max_hz: Option<f32>,
     ) -> f32 {
         match self {
-            FrameRatePreference::Auto => {
+            Self::Auto => {
                 if boosted {
                     panel_max_hz
                         .filter(|rate| *rate > 0.0)
@@ -187,9 +187,9 @@ impl FrameRatePreference {
                     0.0
                 }
             }
-            FrameRatePreference::NoPreference => 0.0,
-            FrameRatePreference::Exact(rate) if rate > 0.0 => rate,
-            FrameRatePreference::Exact(_) => 0.0,
+            Self::NoPreference => 0.0,
+            Self::Exact(rate) if rate > 0.0 => rate,
+            Self::Exact(_) => 0.0,
         }
     }
 }
@@ -379,7 +379,7 @@ pub struct FrameSchedule {
     pub needs_frame: bool,
     /// When the next timed event, such as a cursor blink, is due. `None` when no timed event is
     /// waiting.
-    pub next_deadline: Option<web_time::Instant>,
+    pub next_deadline: Option<Instant>,
 }
 
 /// What one shell update changed.
@@ -407,7 +407,7 @@ pub trait PlatformFrameDriver {
     fn request_frame(&self);
     /// Asks the platform to wake its loop at `deadline`. A deadline of the current time means wake
     /// as soon as possible.
-    fn request_wake_at(&self, deadline: web_time::Instant);
+    fn request_wake_at(&self, deadline: Instant);
     /// Cancels the wake requested by `request_wake_at`.
     fn clear_wake(&self);
 }
@@ -464,7 +464,7 @@ impl FrameSchedule {
             driver.clear_wake();
             driver.request_frame();
         } else if self.needs_update {
-            driver.request_wake_at(web_time::Instant::now());
+            driver.request_wake_at(Instant::now());
         } else if let Some(deadline) = self.next_deadline {
             driver.request_wake_at(deadline);
         } else {
@@ -569,7 +569,7 @@ impl ShellApp {
             || self.composition.should_render()
     }
 
-    pub(crate) fn next_event_time(&self) -> Option<web_time::Instant> {
+    pub(crate) fn next_event_time(&self) -> Option<Instant> {
         let blink = self.app_context.enter(cranpose_ui::next_cursor_blink_time);
         match (blink, cranpose_core::concurrency::next_alarm_deadline()) {
             (Some(blink), Some(alarm)) => Some(blink.min(alarm)),
@@ -646,7 +646,7 @@ where
         let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
-        let app_content = Rc::new(std::cell::RefCell::new(content));
+        let app_content = Rc::new(RefCell::new(content));
         let mut build: Box<dyn FnMut()> = Box::new(move || {
             let app_content = Rc::clone(&app_content);
             cranpose_ui::density::ProvideDensity(cranpose_ui::Density::from_host(), move || {
@@ -664,7 +664,7 @@ where
                 not(target_os = "ios")
             ))]
             {
-                cranpose_ui::clipboard_session::set_platform_clipboard(std::rc::Rc::new(
+                cranpose_ui::clipboard_session::set_platform_clipboard(Rc::new(
                     ShellClipboard::default(),
                 ));
             }
@@ -867,9 +867,9 @@ where
         &self,
         point: cranpose_ui::DragAndDropPoint,
         source: usize,
-    ) -> Option<(NodeId, cranpose_ui::Point)> {
+    ) -> Option<(NodeId, Point)> {
         let drag_and_drop = self.app.app_context.drag_and_drop();
-        let target_in = |index: usize, local: cranpose_ui::Point| {
+        let target_in = |index: usize, local: Point| {
             self.surfaces[index]
                 .renderer
                 .scene()
@@ -1047,7 +1047,7 @@ where
 
     /// Tells the shell where the primary window sits on the screen. See
     /// [`SurfaceMut::set_screen_origin`].
-    pub fn set_screen_origin(&mut self, origin: Option<cranpose_ui_graphics::Point>) {
+    pub fn set_screen_origin(&mut self, origin: Option<Point>) {
         self.surfaces[0].screen_origin = origin;
     }
 
@@ -1294,7 +1294,7 @@ where
     /// Returns when the next timed event is due: a cursor blink, or a
     /// `delay` that waits for the host to drain the UI work, as on ESP-IDF.
     /// Use this for `ControlFlow::WaitUntil` scheduling.
-    pub fn next_event_time(&self) -> Option<web_time::Instant> {
+    pub fn next_event_time(&self) -> Option<Instant> {
         self.app.next_event_time()
     }
 

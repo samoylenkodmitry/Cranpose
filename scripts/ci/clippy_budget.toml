@@ -6,9 +6,8 @@
 "clippy::allow_attributes_without_reason" = 259
 "clippy::cast_possible_truncation" = 1036
 "clippy::cast_sign_loss" = 571
-"clippy::clone_on_ref_ptr" = 724
 "clippy::disallowed_methods" = 196
-"clippy::disallowed_types" = 183
+"clippy::disallowed_types" = 181
 "clippy::float_cmp" = 158
 "clippy::fn_params_excessive_bools" = 6
 "clippy::inline_always" = 63
@@ -22,12 +21,10 @@
 "clippy::print_stdout" = 122
 "clippy::ref_option" = 18
 "clippy::significant_drop_tightening" = 203
-"clippy::string_add" = 3
+"clippy::string_add" = 2
 "clippy::string_slice" = 277
-"clippy::too_many_lines" = 115
+"clippy::too_many_lines" = 114
 "clippy::trivially_copy_pass_by_ref" = 31
 "clippy::unused_result_ok" = 33
-"clippy::use_self" = 1030
 "clippy::wildcard_imports" = 33
 "unreachable_pub" = 734
-"unused_qualifications" = 1720

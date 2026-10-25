@@ -408,11 +408,7 @@ fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
             "Blur Vertical Uniform Bind Group",
         ),
     };
-    UploadAllocatorSpec::uniform(
-        buffer,
-        bind_group,
-        std::mem::size_of::<BlurUniforms>() as u64,
-    )
+    UploadAllocatorSpec::uniform(buffer, bind_group, size_of::<BlurUniforms>() as u64)
 }
 
 #[derive(Clone, Copy)]
@@ -528,7 +524,7 @@ fn offset_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Offset Uniform Buffer",
         "Offset Uniform Bind Group",
-        std::mem::size_of::<OffsetUniforms>() as u64,
+        size_of::<OffsetUniforms>() as u64,
     )
 }
 
@@ -536,7 +532,7 @@ fn blit_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Blit Uniform Buffer",
         "Blit Uniform Bind Group",
-        std::mem::size_of::<BlitUniforms>() as u64,
+        size_of::<BlitUniforms>() as u64,
     )
 }
 
@@ -544,14 +540,14 @@ fn projective_blit_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Projective Blit Uniform Buffer",
         "Projective Blit Uniform Bind Group",
-        std::mem::size_of::<ProjectiveBlitUniforms>() as u64,
+        size_of::<ProjectiveBlitUniforms>() as u64,
     )
 }
 
 fn projective_blit_vertex_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::vertex(
         "Projective Blit Vertex Buffer",
-        (std::mem::size_of::<ProjectiveBlitVertex>() * 5) as u64,
+        (size_of::<ProjectiveBlitVertex>() * 5) as u64,
     )
 }
 
@@ -559,7 +555,7 @@ fn effect_uniform_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::uniform(
         "Effect Uniform Buffer",
         "Effect Uniform Bind Group",
-        (RuntimeShader::MAX_UNIFORMS * std::mem::size_of::<f32>()) as u64,
+        (RuntimeShader::MAX_UNIFORMS * size_of::<f32>()) as u64,
     )
 }
 
@@ -1168,7 +1164,7 @@ fn projective_pipeline_job(
                     module: &stages.vertex,
                     entry_point: Some("projective_blit_vs"),
                     buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
+                        array_stride: size_of::<ProjectiveBlitVertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[wgpu::VertexAttribute {
                             offset: 0,

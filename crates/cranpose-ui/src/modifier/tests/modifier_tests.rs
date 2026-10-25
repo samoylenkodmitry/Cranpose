@@ -263,7 +263,7 @@ fn modifiers_joined_in_any_grouping_or_from_shared_chains_are_equal() {
         test_fingerprint_element(11, NodeCapabilities::DRAW, false),
         test_fingerprint_element(12, NodeCapabilities::SEMANTICS, false),
     ];
-    let one = |index: usize| Modifier::from_dyn_element(elements[index].clone());
+    let one = |index: usize| Modifier::from_dyn_element(Rc::clone(&elements[index]));
 
     let left = one(0).then(one(1)).then(one(2));
     let right = one(0).then(one(1).then(one(2)));
@@ -355,14 +355,11 @@ fn graphics_layer_modifier_creates_node() {
 
     let chain = handle.chain();
     let mut has_graphics_layer = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
-                has_graphics_layer = true;
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
+            has_graphics_layer = true;
+        }
+    });
     assert!(has_graphics_layer, "Expected GraphicsLayerNode in chain");
 }
 
@@ -377,15 +374,12 @@ fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
 
     let chain = handle.chain();
     let mut found = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                let layer = layer_node.layer();
-                found = layer.backdrop_effect.is_some();
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            let layer = layer_node.layer();
+            found = layer.backdrop_effect.is_some();
+        }
+    });
 
     assert!(
         found,
@@ -493,7 +487,7 @@ fn graphics_layer_reads_latest_value_without_recomposition() {
 
     let alpha = Rc::new(Cell::new(0.25f32));
     let modifier = Modifier::empty().graphics_layer({
-        let alpha = alpha.clone();
+        let alpha = Rc::clone(&alpha);
         move || GraphicsLayer {
             alpha: alpha.get(),
             ..Default::default()
@@ -506,14 +500,11 @@ fn graphics_layer_reads_latest_value_without_recomposition() {
     let chain = handle.chain();
     let read_alpha = |expected: f32| {
         let mut observed = None;
-        chain.for_each_node_with_capability(
-            cranpose_foundation::NodeCapabilities::DRAW,
-            |_ref, node| {
-                if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                    observed = Some(layer_node.layer().alpha);
-                }
-            },
-        );
+        chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = Some(layer_node.layer().alpha);
+            }
+        });
         let value = observed.expect("graphics layer node");
         assert!((value - expected).abs() < 1e-6);
     };
@@ -572,17 +563,14 @@ fn shader_background_wraps_runtime_shader_as_backdrop_effect() {
 
     let chain = handle.chain();
     let mut found_shader = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                found_shader = matches!(
-                    layer_node.layer().backdrop_effect,
-                    Some(RenderEffect::Shader { .. })
-                );
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            found_shader = matches!(
+                layer_node.layer().backdrop_effect,
+                Some(RenderEffect::Shader { .. })
+            );
+        }
+    });
 
     assert!(
         found_shader,
@@ -602,14 +590,11 @@ fn color_filter_modifier_sets_graphics_layer_filter() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = layer_node.layer().color_filter;
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = layer_node.layer().color_filter;
+        }
+    });
 
     assert_eq!(observed, Some(filter));
 }
@@ -626,14 +611,11 @@ fn tint_modifier_is_color_filter_tint_alias() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = layer_node.layer().color_filter;
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = layer_node.layer().color_filter;
+        }
+    });
 
     assert_eq!(observed, Some(ColorFilter::tint(tint)));
 }
@@ -649,14 +631,11 @@ fn compositing_strategy_modifier_sets_graphics_layer_strategy() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = Some(layer_node.layer().compositing_strategy);
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = Some(layer_node.layer().compositing_strategy);
+        }
+    });
 
     assert_eq!(observed, Some(CompositingStrategy::Offscreen));
 }
@@ -672,14 +651,11 @@ fn layer_blend_mode_modifier_sets_graphics_layer_mode() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = Some(layer_node.layer().blend_mode);
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = Some(layer_node.layer().blend_mode);
+        }
+    });
 
     assert_eq!(observed, Some(BlendMode::DstOut));
 }
@@ -696,14 +672,11 @@ fn blur_with_edge_treatment_sets_expected_render_effect() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = Some(layer_node.layer());
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = Some(layer_node.layer());
+        }
+    });
 
     let layer = observed.expect("blur layer");
     let expected_radius = 6.0 * crate::current_density();
@@ -729,14 +702,11 @@ fn blur_with_default_edge_treatment_enables_rect_clip() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = Some(layer_node.layer());
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = Some(layer_node.layer());
+        }
+    });
 
     let layer = observed.expect("blur layer");
     assert_eq!(layer.render_effect, None);
@@ -749,7 +719,7 @@ fn blur_unbounded_zero_radius_is_noop() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier =
         Modifier::empty().blur_with_edge_treatment(Dp(0.0), BlurredEdgeTreatment::UNBOUNDED);
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     assert!(slices.graphics_layer().is_none());
 }
 
@@ -784,14 +754,11 @@ fn graphics_layer_params_sets_scale_axes_and_alpha() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = Some(layer_node.layer());
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = Some(layer_node.layer());
+        }
+    });
 
     let layer = observed.expect("graphics layer");
     assert!((layer.scale_x - 1.25).abs() < 1e-6);
@@ -842,14 +809,11 @@ fn graphics_layer_block_applies_configuration() {
 
     let chain = handle.chain();
     let mut observed = None;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = Some(layer_node.layer());
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            observed = Some(layer_node.layer());
+        }
+    });
 
     let layer = observed.expect("graphics layer");
     assert!((layer.alpha - 0.42).abs() < 1e-6);
@@ -870,13 +834,13 @@ fn graphics_layer_block_tracks_state_changes_without_recomposition() {
     let _app_context = crate::render_state::app_context_test_scope();
     let elevation = Rc::new(Cell::new(2.0f32));
     let modifier = Modifier::empty().graphics_layer_block({
-        let elevation = elevation.clone();
+        let elevation = Rc::clone(&elevation);
         move |layer| {
             layer.shadow_elevation = elevation.get();
         }
     });
 
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     assert!((slices.graphics_layer().expect("layer").shadow_elevation - 2.0).abs() < 1e-6);
 
     elevation.set(9.0);
@@ -887,7 +851,7 @@ fn graphics_layer_block_tracks_state_changes_without_recomposition() {
 fn shadow_defaults_match_compose_behavior() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().shadow(6.0);
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let layer = slices
         .graphics_layer()
         .expect("shadow should install layer");
@@ -909,7 +873,7 @@ fn shadow_with_allows_zero_elevation_clipping_and_custom_colors() {
         Color::from_rgba_u8(20, 30, 40, 200),
         Color::from_rgba_u8(60, 70, 80, 210),
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let layer = slices
         .graphics_layer()
         .expect("clip-only shadow should keep layer");
@@ -940,7 +904,7 @@ fn shadow_with_zero_elevation_and_no_clip_is_noop() {
         Color::BLACK,
         Color::BLACK,
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     assert!(
         slices.graphics_layer().is_none(),
         "zero elevation + clip=false should not install a layer"
@@ -992,10 +956,7 @@ fn brush_max_alpha(brush: &Brush) -> f32 {
         Brush::Solid(color) => color.a(),
         Brush::LinearGradient { colors, .. }
         | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors
-            .iter()
-            .map(cranpose_ui_graphics::Color::a)
-            .fold(0.0f32, f32::max),
+        | Brush::SweepGradient { colors, .. } => colors.iter().map(Color::a).fold(0.0f32, f32::max),
     }
 }
 
@@ -1180,7 +1141,7 @@ fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
             ..Default::default()
         },
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let commands = slices.draw_commands();
     let DrawCommand::Behind(draw) = &commands[0] else {
         panic!("drop_shadow should emit a behind draw command");
@@ -1192,19 +1153,14 @@ fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
             height: 32.0,
         },
     );
-    let [
-        cranpose_ui_graphics::DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
-            cutout,
-            ..
-        }),
-    ] = primitives.as_slice()
+    let [DrawPrimitive::Shadow(ShadowPrimitive::Drop { cutout, .. })] = primitives.as_slice()
     else {
         panic!("expected a single drop-shadow primitive");
     };
     let Some(cutout) = cutout else {
         panic!("cutout: true must knock the element shape out of the shadow silhouette");
     };
-    let cranpose_ui_graphics::DrawPrimitive::RoundRect { rect, .. } = cutout.as_ref() else {
+    let DrawPrimitive::RoundRect { rect, .. } = cutout.as_ref() else {
         panic!("cutout must reuse the element's rounded shape");
     };
     assert_eq!(
@@ -1227,7 +1183,7 @@ fn drop_shadow_static_emits_behind_primitives() {
             ..Default::default()
         },
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let commands = slices.draw_commands();
 
     assert_eq!(commands.len(), 1);
@@ -1256,13 +1212,13 @@ fn drop_shadow_closure_tracks_runtime_values() {
     let _app_context = crate::render_state::app_context_test_scope();
     let spread = Rc::new(Cell::new(0.0f32));
     let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, {
-        let spread = spread.clone();
+        let spread = Rc::clone(&spread);
         move |scope| {
             scope.radius = 10.0;
             scope.spread = spread.get();
         }
     });
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let commands = slices.draw_commands();
 
     let DrawCommand::Behind(draw) = &commands[0] else {
@@ -1297,7 +1253,7 @@ fn drop_shadow_high_radius_emits_single_blurred_shadow_primitive() {
         scope.radius = 40.0;
         scope.alpha = 0.85;
     });
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
         panic!("drop_shadow should emit a behind draw command");
     };
@@ -1328,7 +1284,7 @@ fn inner_shadow_emits_overlay_with_dst_out_cutout() {
         scope.radius = 14.0;
         scope.offset = Point::new(5.0, -3.0);
     });
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let commands = slices.draw_commands();
 
     assert_eq!(commands.len(), 1);
@@ -1361,7 +1317,7 @@ fn inner_shadow_large_radius_keeps_fill_and_cutout_pairs_balanced() {
             scope.alpha = 0.9;
         },
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
@@ -1415,7 +1371,7 @@ fn inner_shadow_static_uses_density_for_dp_offset() {
             ..Default::default()
         },
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let commands = slices.draw_commands();
     let DrawCommand::Overlay(draw) = &commands[0] else {
         panic!("inner_shadow should emit an overlay draw command");
@@ -1440,7 +1396,7 @@ fn inner_shadow_cutout_alpha_remains_opaque_for_hole_mask() {
         scope.offset = Point::new(4.0, 3.0);
         scope.alpha = 0.2;
     });
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
@@ -1473,7 +1429,7 @@ fn drop_shadow_emits_primitives() {
         scope.radius = 8.0;
         scope.spread = 2.0;
     });
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
         panic!("drop_shadow should emit a behind draw command");
     };
@@ -1499,7 +1455,7 @@ fn drop_shadow_value_alias_uses_static_shadow() {
             ..Default::default()
         },
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
         panic!("drop_shadow_value alias should emit a behind draw command");
     };
@@ -1523,7 +1479,7 @@ fn inner_shadow_emits_primitives() {
         scope.radius = 10.0;
         scope.offset = Point::new(3.0, 1.0);
     });
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
@@ -1549,7 +1505,7 @@ fn inner_shadow_value_alias_uses_static_shadow() {
             ..Default::default()
         },
     );
-    let slices = super::collect_slices_from_modifier(&modifier);
+    let slices = collect_slices_from_modifier(&modifier);
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow_value alias should emit an overlay draw command");
     };
@@ -1583,17 +1539,14 @@ fn gradient_cut_mask_modifier_sets_render_effect_shader() {
 
     let chain = handle.chain();
     let mut found_shader = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                found_shader = matches!(
-                    layer_node.layer().render_effect,
-                    Some(RenderEffect::Shader { .. })
-                );
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            found_shader = matches!(
+                layer_node.layer().render_effect,
+                Some(RenderEffect::Shader { .. })
+            );
+        }
+    });
 
     assert!(
         found_shader,
@@ -1612,17 +1565,14 @@ fn rounded_alpha_mask_modifier_sets_render_effect_shader() {
 
     let chain = handle.chain();
     let mut found_shader = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                found_shader = matches!(
-                    layer_node.layer().render_effect,
-                    Some(RenderEffect::Shader { .. })
-                );
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            found_shader = matches!(
+                layer_node.layer().render_effect,
+                Some(RenderEffect::Shader { .. })
+            );
+        }
+    });
 
     assert!(
         found_shader,
@@ -1641,14 +1591,11 @@ fn rounded_alpha_mask_identity_is_noop() {
 
     let chain = handle.chain();
     let mut found_layer = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
-                found_layer = true;
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
+            found_layer = true;
+        }
+    });
 
     assert!(
         !found_layer,
@@ -1682,17 +1629,14 @@ fn gradient_fade_dst_out_modifier_sets_render_effect_shader() {
 
     let chain = handle.chain();
     let mut found_shader = false;
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                found_shader = matches!(
-                    layer_node.layer().render_effect,
-                    Some(RenderEffect::Shader { .. })
-                );
-            }
-        },
-    );
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+            found_shader = matches!(
+                layer_node.layer().render_effect,
+                Some(RenderEffect::Shader { .. })
+            );
+        }
+    });
 
     assert!(
         found_shader,
@@ -1820,7 +1764,7 @@ fn modifier_chain_trace_runs_only_when_debug_flag_set() {
     let mut handle = ModifierChainHandle::new();
     let invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
     {
-        let counter = invocations.clone();
+        let counter = std::sync::Arc::clone(&invocations);
         let _guard = crate::debug::install_modifier_chain_trace(move |_nodes| {
             *counter.lock().unwrap() += 1;
         });
@@ -1847,13 +1791,13 @@ fn modifier_chain_trace_is_app_context_owned() {
     let second_invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
 
     let _first_guard = first_context.enter(|| {
-        let invocations = first_invocations.clone();
+        let invocations = std::sync::Arc::clone(&first_invocations);
         crate::debug::install_modifier_chain_trace(move |_nodes| {
             *invocations.lock().unwrap() += 1;
         })
     });
     let _second_guard = second_context.enter(|| {
-        let invocations = second_invocations.clone();
+        let invocations = std::sync::Arc::clone(&second_invocations);
         crate::debug::install_modifier_chain_trace(move |_nodes| {
             *invocations.lock().unwrap() += 1;
         })

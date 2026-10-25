@@ -479,7 +479,7 @@ impl GpuRenderer {
                 vertices: recorder.upload_buffer(
                     crate::frame_graph::UploadAllocatorSpec::vertex(
                         "Mesh Fallback Vertex Buffer",
-                        std::mem::size_of::<crate::mesh_fallback::MeshVertex>() as u64,
+                        size_of::<crate::mesh_fallback::MeshVertex>() as u64,
                     ),
                     &self.device,
                     bytemuck::cast_slice(builder.vertices()),
@@ -487,7 +487,7 @@ impl GpuRenderer {
                 indices: recorder.upload_buffer(
                     crate::frame_graph::UploadAllocatorSpec::index(
                         "Mesh Fallback Index Buffer",
-                        std::mem::size_of::<u16>() as u64,
+                        size_of::<u16>() as u64,
                     ),
                     &self.device,
                     bytemuck::cast_slice(builder.indices()),
@@ -523,7 +523,7 @@ impl GpuRenderer {
         label: &'static str,
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
-        let device = self.device.clone();
+        let device = Arc::clone(&self.device);
         let takes_depth = self.depth_gate.may() && takes_depth(segments);
         let depth = takes_depth && self.depth_gate.is_open();
         let mut prep = PassPrep {

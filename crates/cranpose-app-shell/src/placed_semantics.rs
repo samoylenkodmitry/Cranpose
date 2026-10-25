@@ -108,7 +108,7 @@ pub struct PlacedSemanticsNode {
     /// layers included. `None` when the hit graph carries no region for it.
     pub touch_bounds: Option<Rect>,
     /// The child nodes, in reading order.
-    pub children: Vec<PlacedSemanticsNode>,
+    pub children: Vec<Self>,
 }
 
 impl PlacedSemanticsNode {
@@ -119,7 +119,7 @@ impl PlacedSemanticsNode {
     }
 
     /// Depth-first walk, self first.
-    pub fn visit(&self, visitor: &mut impl FnMut(&PlacedSemanticsNode)) {
+    pub fn visit(&self, visitor: &mut impl FnMut(&Self)) {
         visitor(self);
         for child in &self.children {
             child.visit(visitor);
@@ -127,13 +127,13 @@ impl PlacedSemanticsNode {
     }
 
     /// Every node in the subtree, self first, in tree order.
-    pub fn flatten(&self) -> Vec<&PlacedSemanticsNode> {
+    pub fn flatten(&self) -> Vec<&Self> {
         let mut all = Vec::new();
         self.collect(&mut all);
         all
     }
 
-    fn collect<'a>(&'a self, out: &mut Vec<&'a PlacedSemanticsNode>) {
+    fn collect<'a>(&'a self, out: &mut Vec<&'a Self>) {
         out.push(self);
         for child in &self.children {
             child.collect(out);
@@ -142,7 +142,7 @@ impl PlacedSemanticsNode {
 
     /// The first node in the subtree, self first, that carries `tag`
     /// (`Modifier::test_tag`).
-    pub fn find_by_tag(&self, tag: &str) -> Option<&PlacedSemanticsNode> {
+    pub fn find_by_tag(&self, tag: &str) -> Option<&Self> {
         if self.test_tag.as_deref() == Some(tag) {
             return Some(self);
         }
@@ -152,7 +152,7 @@ impl PlacedSemanticsNode {
     }
 
     /// Every node a tap would do something to.
-    pub fn controls(&self) -> Vec<&PlacedSemanticsNode> {
+    pub fn controls(&self) -> Vec<&Self> {
         self.flatten()
             .into_iter()
             .filter(|node| node.clickable)

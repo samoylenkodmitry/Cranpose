@@ -53,7 +53,7 @@ fn ramp(index: usize, rect: Rect) -> Brush {
 }
 
 fn scene(side: f32, columns: usize, rows: usize) -> Vec<DrawPrimitive> {
-    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope_recording = CommandRecording::default();
     let mut scope = DrawScopeDefault::new(Size::new(side, side), &mut scope_recording);
     scope.draw_rect_at(full(side), Brush::solid(PAGE));
     let (cell_width, cell_height) = (side / columns as f32, side / rows as f32);
@@ -167,7 +167,7 @@ fn turned_graph(primitives: Vec<DrawPrimitive>, degrees: f32) -> RenderGraph {
             primitives,
         ))],
     );
-    let mut page_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut page_recording = CommandRecording::default();
     let mut page = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut page_recording);
     page.draw_rect_at(full(SIDE as f32), Brush::solid(PAGE));
     layer(

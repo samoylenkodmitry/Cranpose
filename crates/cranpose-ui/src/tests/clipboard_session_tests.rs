@@ -64,7 +64,7 @@ fn manager_routes_through_the_installed_platform_clipboard() {
         let recorder = Rc::new(RecordingClipboard {
             value: RefCell::new(None),
         });
-        set_platform_clipboard(recorder.clone());
+        set_platform_clipboard(Rc::<RecordingClipboard>::clone(&recorder));
 
         let clipboard = ClipboardManager;
         assert!(clipboard.has_system_clipboard());
@@ -84,7 +84,7 @@ fn a_paste_goes_to_the_platform_when_it_cannot_be_read_on_the_spot() {
         let clipboard = Rc::new(AsyncOnlyClipboard {
             requests: Cell::new(0),
         });
-        set_platform_clipboard(clipboard.clone());
+        set_platform_clipboard(Rc::<AsyncOnlyClipboard>::clone(&clipboard));
 
         assert!(clipboard_can_paste());
         clipboard_paste_into_focus();

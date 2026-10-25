@@ -671,7 +671,7 @@ fn removing_conditional_child_returns_detached_subtree() {
     assert_eq!(root_nodes, vec![41]);
     assert_eq!(
         detached.node_states().collect::<Vec<_>>(),
-        vec![(41, super::NodeLifecycle::Active)]
+        vec![(41, NodeLifecycle::Active)]
     );
     assert_eq!(scope_labels(detached.scopes()), vec![CHILD_SCOPE]);
     assert_eq!(detached.group_anchors().count(), 1);

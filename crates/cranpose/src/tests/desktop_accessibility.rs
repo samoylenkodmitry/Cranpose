@@ -237,7 +237,7 @@ fn a_selected_button_reads_as_pressed_so_a_reader_can_still_press_it() {
             let node = accesskit_node(&element);
             assert_eq!(node.toggled(), Some(Toggled::from(selected)));
             assert_eq!(node.is_selected(), None);
-            assert!(node.supports_action(accesskit::Action::Click));
+            assert!(node.supports_action(Action::Click));
         }
     }
     let tab = accesskit_node(&AccessibilityElement {

@@ -19,8 +19,8 @@ pub(crate) enum SeekError {
 impl std::fmt::Display for SeekError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SeekError::Unsupported => write!(formatter, "this item cannot seek"),
-            SeekError::Failed(reason) => write!(formatter, "{reason}"),
+            Self::Unsupported => write!(formatter, "this item cannot seek"),
+            Self::Failed(reason) => write!(formatter, "{reason}"),
         }
     }
 }
@@ -33,8 +33,8 @@ pub(crate) struct SourceCancel {
 }
 
 impl SourceCancel {
-    pub(crate) fn new(stop: impl Fn() + Send + Sync + 'static) -> SourceCancel {
-        SourceCancel {
+    pub(crate) fn new(stop: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
             stop: Some(Arc::new(stop)),
         }
     }
@@ -66,11 +66,11 @@ pub(crate) struct SamplesBuffer {
 
 #[cfg(test)]
 impl SamplesBuffer {
-    pub(crate) fn new(channels: u16, sample_rate: u32, samples: Vec<Sample>) -> SamplesBuffer {
+    pub(crate) fn new(channels: u16, sample_rate: u32, samples: Vec<Sample>) -> Self {
         let channels = ChannelCount::new(channels).expect("channels");
         let sample_rate = SampleRate::new(sample_rate).expect("sample rate");
         let frames = samples.len() / usize::from(channels.get());
-        SamplesBuffer {
+        Self {
             duration: Duration::from_secs_f64(f64::from(sample_rate.get()).recip() * frames as f64),
             samples: samples.into_iter(),
             channels,

@@ -66,7 +66,7 @@ impl AppUpdater for GitHubAppUpdater {
     }
 
     fn check(&self, source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
-        let client = self.client.clone();
+        let client = std::sync::Arc::clone(&self.client);
         let source = source.clone();
         std::thread::Builder::new()
             .name("cranpose-app-update-check".to_string())

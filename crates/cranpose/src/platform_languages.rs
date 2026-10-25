@@ -29,7 +29,7 @@ impl SystemLanguagesState {
 pub(super) fn ProvideSystemLanguages(state: Rc<SystemLanguagesState>, content: impl FnOnce()) {
     let revision = rememberMutableStateOf(|| 0u64);
     let _current_revision = revision.get();
-    let refresh = state.clone();
+    let refresh = Rc::clone(&state);
     crate::LifecycleEffect((), move |event| {
         if event.to == cranpose_services::LifecycleState::Resumed && refresh.refresh() {
             revision.update(|revision| *revision = revision.wrapping_add(1));

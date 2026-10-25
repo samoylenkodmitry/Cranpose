@@ -447,9 +447,9 @@ fn cross_slot_reuse_moves_slot_host_and_callback_holder() {
     let old_slot = SlotId::new(1);
     let new_slot = SlotId::new(2);
     let old_host = state.get_or_create_slots(old_slot);
-    let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
     let old_holder = state.callback_holder(old_slot);
-    let old_calls = std::rc::Rc::clone(&calls);
+    let old_calls = Rc::clone(&calls);
     old_holder.update(move || old_calls.borrow_mut().push("old"));
     let forwarded = old_holder.clone_rc();
 
@@ -458,10 +458,10 @@ fn cross_slot_reuse_moves_slot_host_and_callback_holder() {
 
     assert_eq!(state.take_node_from_reusables(new_slot), Some((10, true)));
     let new_host = state.get_or_create_slots(new_slot);
-    assert!(std::rc::Rc::ptr_eq(&old_host, &new_host));
+    assert!(Rc::ptr_eq(&old_host, &new_host));
 
     let new_holder = state.callback_holder(new_slot);
-    let new_calls = std::rc::Rc::clone(&calls);
+    let new_calls = Rc::clone(&calls);
     new_holder.update(move || new_calls.borrow_mut().push("new"));
     forwarded();
 
@@ -561,7 +561,7 @@ fn moving_last_reusable_node_transfers_slot_composition() {
     let reused = state.take_node_from_reusables(slot_b);
     assert_eq!(reused, Some((10, true)));
     let transferred_host = state.get_or_create_slots(slot_b);
-    assert!(std::rc::Rc::ptr_eq(&host, &transferred_host));
+    assert!(Rc::ptr_eq(&host, &transferred_host));
     assert!(
         !state.slots.contains_key(&slot_a),
         "the slot the node left keeps nothing"

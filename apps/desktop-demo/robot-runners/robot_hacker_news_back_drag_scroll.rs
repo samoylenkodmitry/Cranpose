@@ -251,7 +251,7 @@ pub(crate) fn main() {
             let mock_client = create_mock_client();
             move || {
                 let local = local_http_client();
-                CompositionLocalProvider([local.provides(mock_client.clone())], || {
+                CompositionLocalProvider([local.provides(std::sync::Arc::clone(&mock_client))], || {
                     app::combined_app_with_initial_tab(Some(DemoTab::HackerNews));
                 });
             }

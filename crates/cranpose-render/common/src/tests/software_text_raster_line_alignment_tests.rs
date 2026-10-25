@@ -193,7 +193,7 @@ fn the_atlas_run_centres_each_line_of_a_wrapped_block() {
     let second_line_start = |glyphs: &[SoftwareGlyphAtlasRunGlyph]| {
         let placements: Vec<_> = glyphs
             .iter()
-            .map(super::SoftwareGlyphAtlasRunGlyph::placement)
+            .map(SoftwareGlyphAtlasRunGlyph::placement)
             .collect();
         let baseline = placements.iter().map(|p| p.y).max().expect("glyphs");
         placements

@@ -138,7 +138,7 @@ pub fn ComposeTwinScreen() {
         return;
     };
     cranpose_ui::density::ProvideDensity(cranpose_ui::Density::new(twin.density, 1.0), || {
-        cranpose_ui::Box(
+        Box(
             Modifier::empty()
                 .fill_max_size()
                 .background(TWIN_FRAME_COLOR),
@@ -243,7 +243,7 @@ pub fn modifier_order_probes() {
                     );
                 },
             );
-            cranpose_ui::Box(
+            Box(
                 Modifier::empty()
                     .background(Color(0.8, 0.3, 0.3, 0.9))
                     .offset(12.0, 6.0)
@@ -251,7 +251,7 @@ pub fn modifier_order_probes() {
                 BoxSpec::default(),
                 || {},
             );
-            cranpose_ui::Box(
+            Box(
                 Modifier::empty()
                     .offset(12.0, 6.0)
                     .background(Color(0.3, 0.6, 0.9, 0.9))
@@ -259,14 +259,14 @@ pub fn modifier_order_probes() {
                 BoxSpec::default(),
                 || {},
             );
-            cranpose_ui::Box(
+            Box(
                 Modifier::empty()
                     .padding(6.0)
                     .minimum_interactive_component_size()
                     .background(Color(0.3, 0.8, 0.4, 0.9)),
                 BoxSpec::default(),
                 || {
-                    cranpose_ui::Box(
+                    Box(
                         Modifier::empty().size_points(16.0, 16.0),
                         BoxSpec::default(),
                         || {},
@@ -316,7 +316,7 @@ pub fn text_field_probes() {
                     .padding(9.0),
                 BasicTextFieldOptions::default(),
                 |inner| {
-                    cranpose_ui::Box(Modifier::empty(), BoxSpec::default(), move || {
+                    Box(Modifier::empty(), BoxSpec::default(), move || {
                         Text(
                             "Search",
                             Modifier::empty(),

@@ -358,7 +358,7 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             }
         }
         AndroidImeEvent::EditorAction { action } => {
-            let _ = shell.on_ime_action(crate::android_text_input::ime_action_from_android(action));
+            let _ = shell.on_ime_action(android_text_input::ime_action_from_android(action));
         }
         AndroidImeEvent::ImeInsetsChanged { bottom_px } => {
             if set_android_ime_bottom_px(bottom_px) {
@@ -769,8 +769,8 @@ struct AndroidFrameDriver {
     need_frame: Arc<AtomicBool>,
     app_waker: android_activity::AndroidAppWaker,
     loop_thread: std::thread::ThreadId,
-    next_deadline: Cell<Option<web_time::Instant>>,
-    clock_anchor: (i64, web_time::Instant),
+    next_deadline: Cell<Option<Instant>>,
+    clock_anchor: (i64, Instant),
     last_frame_timestamp: Cell<Option<i64>>,
     vsync_available: Cell<bool>,
     displayed_tx: std::sync::mpsc::Sender<DisplayedFrame>,
@@ -787,7 +787,7 @@ impl AndroidFrameDriver {
             next_deadline: Cell::new(None),
             clock_anchor: (
                 crate::android_frame_telemetry::monotonic_nanos(),
-                web_time::Instant::now(),
+                Instant::now(),
             ),
             last_frame_timestamp: Cell::new(None),
             vsync_available: Cell::new(true),
@@ -837,14 +837,14 @@ impl AndroidFrameDriver {
     }
 
     fn frame_waker(&self) -> impl Fn() + Send + Sync + 'static {
-        let need_frame = self.need_frame.clone();
+        let need_frame = Arc::clone(&self.need_frame);
         let app_waker = self.app_waker.clone();
         let loop_thread = self.loop_thread;
         move || Self::raise_frame_request(&need_frame, &app_waker, loop_thread)
     }
 
     fn vsync_waker(&self) -> impl Fn() + Send + Sync + 'static {
-        let need_frame = self.need_frame.clone();
+        let need_frame = Arc::clone(&self.need_frame);
         let app_waker = self.app_waker.clone();
         move || {
             need_frame.store(true, Ordering::Relaxed);
@@ -925,7 +925,7 @@ impl PlatformFrameDriver for AndroidFrameDriver {
         Self::raise_frame_request(&self.need_frame, &self.app_waker, self.loop_thread);
     }
 
-    fn request_wake_at(&self, deadline: web_time::Instant) {
+    fn request_wake_at(&self, deadline: Instant) {
         self.next_deadline.set(Some(deadline));
     }
 
@@ -949,9 +949,9 @@ fn update_offscreen(
     shell: Option<&mut AppShell<WgpuRenderer>>,
     host_window_registry: &Rc<android_host_window::AndroidHostWindowRegistry>,
     pending_ui: bool,
-    next_update: Option<web_time::Instant>,
-) -> Option<web_time::Instant> {
-    let due = next_update.is_some_and(|at| at <= web_time::Instant::now());
+    next_update: Option<Instant>,
+) -> Option<Instant> {
+    let due = next_update.is_some_and(|at| at <= Instant::now());
     if !pending_ui && !due {
         return next_update;
     }
@@ -962,7 +962,7 @@ fn update_offscreen(
             shell.update_without_frame()
         });
     }
-    pending_ui.then(|| web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD)
+    pending_ui.then(|| Instant::now() + OFFSCREEN_UPDATE_PERIOD)
 }
 
 fn start_pending_frame(
@@ -1064,9 +1064,9 @@ fn prefetch_while_waiting(
     wait.map(|wait| (now + wait).saturating_duration_since(Instant::now()))
 }
 
-fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
+fn duration_until_frame_deadline(deadline: Instant) -> Duration {
     deadline
-        .checked_duration_since(web_time::Instant::now())
+        .checked_duration_since(Instant::now())
         .unwrap_or(Duration::ZERO)
 }
 
@@ -1091,7 +1091,7 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
 /// Hands the focused field's text and window bounds to the native editor
 /// while the soft keyboard session is open.
 fn sync_ime_session(
-    ime_session: &crate::android_keyboard::AndroidImeSession,
+    ime_session: &android_keyboard::AndroidImeSession,
     shell: Option<&mut AppShell<WgpuRenderer>>,
     android_platform: &AndroidPlatform,
 ) {
@@ -1303,7 +1303,7 @@ fn drain_present_returns_into_loop(
         shell.mark_dirty();
     }
     presented.then(|| {
-        let now = web_time::Instant::now();
+        let now = Instant::now();
         let now_ns = telemetry.now();
         let instant_at = |timestamp_ns: i64| {
             let age_ns = now_ns.saturating_sub(timestamp_ns);
@@ -1331,15 +1331,15 @@ fn drain_present_returns_into_loop(
 /// A frame that reached the display: when the loop started it, when its
 /// present returned, and its work for the scheduler's performance hints.
 struct PresentedFrame {
-    started_at: web_time::Instant,
-    finished_at: web_time::Instant,
+    started_at: Instant,
+    finished_at: Instant,
     work_ns: Option<i64>,
 }
 
 fn record_presented_frame(
     shell: Option<&mut AppShell<WgpuRenderer>>,
-    frame_started_at: web_time::Instant,
-    frame_finished_at: web_time::Instant,
+    frame_started_at: Instant,
+    frame_finished_at: Instant,
 ) {
     if let Some(shell) = shell {
         shell.record_presented_frame(frame_started_at, frame_finished_at);
@@ -1510,8 +1510,8 @@ fn init_gpu_threaded_for_android(
 ) -> Result<(), AndroidSurfaceError> {
     renderer
         .init_gpu_threaded(
-            resources.device.clone(),
-            resources.queue.clone(),
+            Arc::clone(&resources.device),
+            Arc::clone(&resources.queue),
             resources.surface_format,
             resources.backend,
             resources.adapter.get_downlevel_capabilities().flags,
@@ -1667,15 +1667,15 @@ where
             surface_handed = true;
         } else {
             renderer.init_gpu(
-                setup.resources.device.clone(),
-                setup.resources.queue.clone(),
+                Arc::clone(&setup.resources.device),
+                Arc::clone(&setup.resources.queue),
                 setup.resources.surface_format,
                 setup.resources.backend,
                 setup.resources.adapter.get_downlevel_capabilities().flags,
             );
         }
 
-        let content_clone = content.clone();
+        let content_clone = Rc::clone(content);
         let density = density.max(f32::EPSILON);
         let platform_env = android_platform_env();
         // The frame loop runs idle prefetch passes while it waits for a frame
@@ -1712,8 +1712,8 @@ where
                 init_gpu_threaded_for_android(shell.renderer(), &setup.resources, frame_driver)?;
             } else {
                 shell.renderer().init_gpu(
-                    setup.resources.device.clone(),
-                    setup.resources.queue.clone(),
+                    Arc::clone(&setup.resources.device),
+                    Arc::clone(&setup.resources.queue),
                     setup.resources.surface_format,
                     setup.resources.backend,
                     setup.resources.adapter.get_downlevel_capabilities().flags,
@@ -1938,9 +1938,9 @@ fn create_android_gpu_resources_for_existing_device(
         resources: GpuResources {
             surface: None,
             native_window_ptr: Some(native_window_ptr),
-            adapter: existing.adapter.clone(),
-            device: existing.device.clone(),
-            queue: existing.queue.clone(),
+            adapter: Arc::clone(&existing.adapter),
+            device: Arc::clone(&existing.device),
+            queue: Arc::clone(&existing.queue),
             surface_format: crate::surface_format::display_surface_view_format(config.format),
             backend: existing.backend,
             config,
@@ -2309,7 +2309,7 @@ pub fn run(
 
     crate::android_app_info::install_app_info(&app);
 
-    let content = std::rc::Rc::new(std::cell::RefCell::new(content));
+    let content = Rc::new(RefCell::new(content));
 
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     #[cfg(feature = "webview")]
@@ -2373,7 +2373,7 @@ pub fn run(
 
     let mut key_translator = AndroidKeyTranslator::new(app.clone());
     let mut soft_keyboard_installed = false;
-    let mut next_offscreen_update: Option<web_time::Instant> = None;
+    let mut next_offscreen_update: Option<Instant> = None;
 
     let mut frame_telemetry =
         crate::android_frame_telemetry::AndroidFrameTelemetry::from_system_properties();
@@ -2436,14 +2436,12 @@ pub fn run(
         if !offscreen {
             next_offscreen_update = None;
         }
-        let offscreen_pending_ui = offscreen
-            && app_shell
-                .as_ref()
-                .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
+        let offscreen_pending_ui =
+            offscreen && app_shell.as_ref().is_some_and(AppShell::has_pending_ui);
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
         let accessibility_flush_timeout = accessibility_policy
             .wake_deadline()
-            .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let idle_timeout = match no_surface {
             true => earliest_android_poll_timeout(pending_confirmation_timeout, offscreen_timeout),
             false => earliest_android_poll_timeout(
@@ -2696,7 +2694,7 @@ pub fn run(
                         );
                         let reopened = app_shell
                             .as_mut()
-                            .is_some_and(cranpose_app_shell::AppShell::notify_app_resumed);
+                            .is_some_and(AppShell::notify_app_resumed);
                         if !reopened {
                             ime_session.ensure_hidden();
                         }
@@ -2969,7 +2967,7 @@ pub fn run(
             );
         }
 
-        let mut frame_started_at: Option<web_time::Instant> = None;
+        let mut frame_started_at: Option<Instant> = None;
         #[cfg(feature = "webview")]
         webviews.dispatch(&android_platform_env().native_views);
         frame_waits_for_vsync = false;
@@ -2989,7 +2987,7 @@ pub fn run(
             if frame_starts {
                 frame_timings.pacing = frame_pacing(frame_pacer.current_level());
                 frame_timings.lead_ns = frame_pacer.current_lead_ns(vsync_period_ns());
-                frame_started_at = Some(web_time::Instant::now());
+                frame_started_at = Some(Instant::now());
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
                     || shell.update_without_frame(),
@@ -3071,7 +3069,7 @@ pub fn run(
         }
 
         let presented = if frame_timings.after_present_ns != 0 {
-            let finished_at = web_time::Instant::now();
+            let finished_at = Instant::now();
             Some(PresentedFrame {
                 started_at: frame_started_at.unwrap_or(finished_at),
                 finished_at,

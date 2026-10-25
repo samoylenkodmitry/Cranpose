@@ -513,7 +513,7 @@ fn MarkdownViewerPerfApp() {
             app::markdown_scroll_stress_fixture(),
         )) as HttpClientRef
     })
-    .with(|client| client.clone());
+    .with(|client| Arc::clone(client));
     let local = local_http_client();
     CompositionLocalProvider([local.provides(client)], || {
         app::MarkdownViewerRobotApp();
@@ -525,7 +525,7 @@ fn MarkdownViewerDefaultFixturePerfApp() {
     let client = cranpose_core::remember(|| {
         Arc::new(MarkdownFixtureClient::default_leetcode_daily()) as HttpClientRef
     })
-    .with(|client| client.clone());
+    .with(|client| Arc::clone(client));
     let local = local_http_client();
     CompositionLocalProvider([local.provides(client)], || {
         app::MarkdownViewerRobotApp();

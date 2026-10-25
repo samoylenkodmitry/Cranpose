@@ -103,7 +103,7 @@ fn run_interactive_overlap() {
                 150,
                 110,
             );
-            let measure = |image: &image::RgbaImage| {
+            let measure = |image: &RgbaImage| {
                 let left_half =
                     crop_rgba(image, (glass_crop.0, glass_crop.1, 75, glass_crop.3));
                 let right_half = crop_rgba(

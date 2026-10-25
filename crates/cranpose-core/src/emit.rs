@@ -43,7 +43,7 @@ impl Composer {
                 OwnedMutableState::with_runtime(init(), runtime.clone())
             })
         });
-        state.with(super::state::OwnedMutableState::handle)
+        state.with(OwnedMutableState::handle)
     }
 
     /// The current scope's id and debug label, for a trace line.

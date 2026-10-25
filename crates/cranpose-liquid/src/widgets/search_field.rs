@@ -118,7 +118,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                         BoxSpec {
                             content_alignment: Alignment::new(
                                 cranpose_ui_layout::HorizontalAlignment::Start,
-                                cranpose_ui_layout::VerticalAlignment::CenterVertically,
+                                VerticalAlignment::CenterVertically,
                             ),
                             propagate_min_constraints: true,
                         },

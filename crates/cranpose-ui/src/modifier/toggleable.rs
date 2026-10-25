@@ -58,14 +58,14 @@ impl Modifier {
         on_click: impl Fn() + 'static,
     ) -> Self {
         let on_click = Rc::new(on_click);
-        let modifier = Modifier::empty()
+        let modifier = Self::empty()
             .clickable(move |_point| on_click())
             .with_inspector_metadata(inspector_metadata("toggleable", move |info| {
                 info.add_property("state", format!("{state:?}"));
                 info.add_property("onClick", "provided");
             }))
-            .then(Modifier::empty().stable_semantics(
-                move |config: &mut SemanticsConfiguration| {
+            .then(
+                Self::empty().stable_semantics(move |config: &mut SemanticsConfiguration| {
                     config.is_clickable = true;
                     config.toggled = Some(state);
                     if let Some(description) = &description {
@@ -74,8 +74,8 @@ impl Modifier {
                     if let Some(role) = role {
                         config.role = Some(role);
                     }
-                },
-            ));
+                }),
+            );
         self.then(modifier)
     }
 }

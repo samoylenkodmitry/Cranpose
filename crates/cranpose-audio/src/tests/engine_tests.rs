@@ -72,11 +72,11 @@ struct Rig {
 }
 
 impl Rig {
-    fn new() -> Rig {
-        Rig::with_failure(false)
+    fn new() -> Self {
+        Self::with_failure(false)
     }
 
-    fn with_failure(fail: bool) -> Rig {
+    fn with_failure(fail: bool) -> Self {
         let mixer: Arc<Mutex<Option<Mixer>>> = Arc::new(Mutex::new(None));
         let sink = Arc::new(SinkLog {
             dead: SharedBool::new(false),
@@ -99,7 +99,7 @@ impl Rig {
                 log: Arc::clone(&sink_for_opener),
             }))
         }));
-        Rig {
+        Self {
             opens,
             engine,
             mixer,

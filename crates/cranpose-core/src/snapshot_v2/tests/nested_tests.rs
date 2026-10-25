@@ -1,53 +1,7 @@
 use std::rc::Rc;
 
 use super::*;
-
-fn mock_state_record() -> Rc<crate::state::StateRecord> {
-    crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
-}
-
-struct TestObj {
-    id: crate::state::ObjectId,
-}
-
-impl StateObject for TestObj {
-    fn object_id(&self) -> crate::state::ObjectId {
-        self.id
-    }
-
-    fn first_record(&self) -> Rc<crate::state::StateRecord> {
-        mock_state_record()
-    }
-
-    fn try_readable_record(
-        &self,
-        snapshot_id: crate::snapshot_id_set::SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Option<Rc<crate::state::StateRecord>> {
-        Some(self.readable_record(snapshot_id, invalid))
-    }
-
-    fn readable_record(
-        &self,
-        _snapshot_id: crate::snapshot_id_set::SnapshotId,
-        _invalid: &SnapshotIdSet,
-    ) -> Rc<crate::state::StateRecord> {
-        mock_state_record()
-    }
-
-    fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
-
-    fn promote_record(
-        &self,
-        _child_id: crate::snapshot_id_set::SnapshotId,
-    ) -> Result<(), &'static str> {
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
+use crate::tests::state_mock::MockState;
 
 #[test]
 fn test_nested_readonly_snapshot() {
@@ -120,9 +74,7 @@ fn test_nested_merge_sets_parent_pending_changes() {
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let child = parent.take_nested_mutable_snapshot(None, None);
 
-    let obj = Rc::new(TestObj {
-        id: crate::state::ObjectId(100),
-    });
+    let obj = Rc::new(MockState::with_id(100));
     child.record_write(obj);
     assert!(!parent.has_pending_changes());
     child.apply().check();
@@ -135,10 +87,8 @@ fn test_nested_conflict_with_parent_same_object() {
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let child = parent.take_nested_mutable_snapshot(None, None);
 
-    let obj = Rc::new(TestObj {
-        id: crate::state::ObjectId(200),
-    });
-    parent.record_write(obj.clone());
+    let obj = Rc::new(MockState::with_id(200));
+    parent.record_write(Rc::<MockState>::clone(&obj));
     child.record_write(obj);
 
     let result = child.apply();

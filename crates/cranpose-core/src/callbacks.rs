@@ -17,13 +17,13 @@ pub trait SharedParam {
 
 impl<T: ?Sized> SharedParam for Rc<T> {
     fn same_allocation(&self, other: &Self) -> bool {
-        Rc::ptr_eq(self, other)
+        Self::ptr_eq(self, other)
     }
 }
 
 impl<T: ?Sized> SharedParam for std::sync::Arc<T> {
     fn same_allocation(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(self, other)
+        Self::ptr_eq(self, other)
     }
 }
 
@@ -238,8 +238,8 @@ impl CallbackHolder {
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn() + 'static + use<> {
-        let rc = self.rc.clone();
-        let creator_scope = self.creator_scope.clone();
+        let rc = Rc::clone(&self.rc);
+        let creator_scope = Rc::clone(&self.creator_scope);
         move || {
             if !callback_owner_is_active(&creator_scope) {
                 return;
@@ -289,8 +289,8 @@ impl<A: 'static> CallbackHolder1<A> {
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn(A) + 'static {
-        let rc = self.rc.clone();
-        let creator_scope = self.creator_scope.clone();
+        let rc = Rc::clone(&self.rc);
+        let creator_scope = Rc::clone(&self.creator_scope);
         move |arg| {
             if !callback_owner_is_active(&creator_scope) {
                 return;

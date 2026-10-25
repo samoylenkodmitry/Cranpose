@@ -14,11 +14,11 @@ fn check_keyboard_focus(decorated: bool, show_keyboard_on_focus: bool) {
     let content_requester = requester.clone();
     let content_other = other.clone();
     let preference = Rc::new(RefCell::new(None));
-    let content_preference = preference.clone();
+    let content_preference = Rc::clone(&preference);
     let (mut shell, keyboard) = shell_with_keyboard(move || {
         let requester = content_requester.clone();
         let other = content_other.clone();
-        let preference = content_preference.clone();
+        let preference = Rc::clone(&content_preference);
         Column(Modifier::empty(), ColumnSpec::default(), move || {
             let state = remember(|| TextFieldState::new("Search")).with(|state| *state);
             let show_keyboard = rememberMutableStateOf(move || show_keyboard_on_focus);

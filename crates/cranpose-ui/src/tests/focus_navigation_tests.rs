@@ -8,7 +8,7 @@ use crate::{
 
 struct Handle;
 
-impl crate::focus_dispatch::FocusTargetHandle for Handle {
+impl focus_dispatch::FocusTargetHandle for Handle {
     fn set_focus_state(&self, _state: cranpose_foundation::FocusState) {}
 }
 

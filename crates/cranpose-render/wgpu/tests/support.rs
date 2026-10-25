@@ -130,13 +130,13 @@ impl LockedRenderer {
     /// A reference renderer beside the locked one. It compiles every
     /// pipeline where first needed, so its frames never draw with a
     /// stand-in a slow machine's background compiler has not replaced yet.
-    pub fn beside_locked() -> Result<LockedRenderer, String> {
+    pub fn beside_locked() -> Result<Self, String> {
         Ok(with_app_context(headless_renderer_beside_locked()?, None))
     }
 
     /// A renderer beside the locked one that compiles on the background
     /// compiler, as an app's does.
-    pub fn compiling_in_background_beside_locked() -> Result<LockedRenderer, String> {
+    pub fn compiling_in_background_beside_locked() -> Result<Self, String> {
         Ok(with_app_context(
             create_background_compiling_renderer()?,
             None,
@@ -471,7 +471,7 @@ pub mod graph {
 
 /// A root layer of `size` square pixels holding one draw run of `scope`'s
 /// primitives.
-pub fn draw_run_graph(size: u32, scope: cranpose_ui_graphics::DrawScopeDefault<'_>) -> RenderGraph {
+pub fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
     use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
     use cranpose_ui_graphics::DrawScope;
     RenderGraph::new(layer_node(
@@ -938,14 +938,10 @@ pub mod clip_band {
                 ..GraphicsLayer::default()
             }
             .into(),
-            children: vec![RenderNode::Layer(std::boxed::Box::new(child))],
+            children: vec![RenderNode::Layer(Box::new(child))],
             ..Default::default()
         };
-        page_graph(
-            FRAME,
-            FRAME,
-            vec![RenderNode::Layer(std::boxed::Box::new(band))],
-        )
+        page_graph(FRAME, FRAME, vec![RenderNode::Layer(Box::new(band))])
     }
 
     /// Red pixels above and inside the band.
@@ -1014,7 +1010,7 @@ pub fn capture_drawn(
     width: u32,
     height: u32,
 ) -> (CapturedFrame, RenderStatsSnapshot) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let frame = capture_graph(renderer, graph.clone(), width, height);
         let stats = renderer.last_frame_stats().expect("frame statistics");
@@ -1025,7 +1021,7 @@ pub fn capture_drawn(
             std::time::Instant::now() < deadline,
             "the effects' pipelines never landed"
         );
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -1062,16 +1058,16 @@ pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
 /// a count of pipelines built from here on is the scene's, not the
 /// renderer's warm-up.
 pub fn wait_for_background_compiler_idle() {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut seen = cranpose_render_wgpu::pipelines_created_off_frame();
     let mut quiet_since = std::time::Instant::now();
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         let now = cranpose_render_wgpu::pipelines_created_off_frame();
         if now != seen {
             seen = now;
             quiet_since = std::time::Instant::now();
-        } else if quiet_since.elapsed() >= std::time::Duration::from_secs(1) {
+        } else if quiet_since.elapsed() >= Duration::from_secs(1) {
             return;
         }
         assert!(
@@ -1104,7 +1100,7 @@ pub fn capture_settled(
 }
 
 pub fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> T {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let (stats, captured) = frame();
         if pipelines_settled(&stats) {
@@ -1114,7 +1110,7 @@ pub fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> T {
             std::time::Instant::now() < deadline,
             "specialization did not finish"
         );
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -1253,19 +1249,17 @@ pub fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> Rend
     });
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Text(std::boxed::Box::new(
-            cranpose_render_common::graph::TextPrimitiveNode {
-                node_id,
-                rect,
-                text: cranpose_ui::text::shared_plain_annotated_string(text),
-                render_text: cranpose_ui::text::shared_plain_render_string(text),
-                text_style: std::sync::Arc::new(style),
-                font_size,
-                layout_options: cranpose_ui::TextLayoutOptions::default(),
-                clip: None,
-                paint: Default::default(),
-            },
-        )),
+        node: PrimitiveNode::Text(Box::new(cranpose_render_common::graph::TextPrimitiveNode {
+            node_id,
+            rect,
+            text: cranpose_ui::text::shared_plain_annotated_string(text),
+            render_text: cranpose_ui::text::shared_plain_render_string(text),
+            text_style: std::sync::Arc::new(style),
+            font_size,
+            layout_options: cranpose_ui::TextLayoutOptions::default(),
+            clip: None,
+            paint: Default::default(),
+        })),
     })
 }
 
@@ -1278,7 +1272,7 @@ pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
 pub fn drop_shadow(rect: Rect, color: Color, blur_radius: f32) -> RenderNode {
     draw_node(
         DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
-            shape: std::boxed::Box::new(DrawPrimitive::Rect {
+            shape: Box::new(DrawPrimitive::Rect {
                 rect,
                 brush: Brush::solid(color),
                 stroke: None,
@@ -1578,9 +1572,9 @@ pub fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
 
 pub fn contract_layer(
     node_id: Option<NodeId>,
-    cache_policy: cranpose_render_common::graph::CachePolicy,
+    cache_policy: CachePolicy,
     local_bounds: Rect,
-    transform_to_parent: cranpose_render_common::graph::ProjectiveTransform,
+    transform_to_parent: ProjectiveTransform,
     children: Vec<RenderNode>,
 ) -> LayerNode {
     LayerNode {
@@ -1816,7 +1810,7 @@ pub mod glass_page {
                         width: GLASS_WIDTH,
                         height: GLASS_HEIGHT,
                     },
-                    cranpose_render_common::graph::ProjectiveTransform::translation(
+                    ProjectiveTransform::translation(
                         GLASS_LEFT + GLASS_PITCH * index as f32,
                         GLASS_TOP,
                     ),

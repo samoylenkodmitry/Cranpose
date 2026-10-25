@@ -34,25 +34,25 @@ pub enum Mood {
 impl Mood {
     pub fn after_clicks(clicks: u32) -> Self {
         match clicks % 3 {
-            0 => Mood::Prompt,
-            1 => Mood::Happy,
-            _ => Mood::Sleepy,
+            0 => Self::Prompt,
+            1 => Self::Happy,
+            _ => Self::Sleepy,
         }
     }
 
     pub fn caption(self) -> &'static str {
         match self {
-            Mood::Prompt => "click me, drag me",
-            Mood::Happy => "a window, no chrome",
-            Mood::Sleepy => "zzz… floating on top",
+            Self::Prompt => "click me, drag me",
+            Self::Happy => "a window, no chrome",
+            Self::Sleepy => "zzz… floating on top",
         }
     }
 
     fn shader_code(self) -> f32 {
         match self {
-            Mood::Prompt => 0.0,
-            Mood::Happy => 1.0,
-            Mood::Sleepy => 2.0,
+            Self::Prompt => 0.0,
+            Self::Happy => 1.0,
+            Self::Sleepy => 2.0,
         }
     }
 }
@@ -180,13 +180,11 @@ fn pet_effect(p: &PetParams) -> RenderEffect {
 
 fn pet_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
-    SOURCE
-        .get_or_init(|| {
-            Arc::<str>::from(format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}{WGSL_HELPERS}{FIRE_FIELD_WGSL}{PET_FRAGMENT_WGSL}"
-            ))
-        })
-        .clone()
+    Arc::clone(SOURCE.get_or_init(|| {
+        Arc::<str>::from(format!(
+            "{RUNTIME_SHADER_PRELUDE_WGSL}{WGSL_HELPERS}{FIRE_FIELD_WGSL}{PET_FRAGMENT_WGSL}"
+        ))
+    }))
 }
 
 const CLOCK_PERIOD_MS: u64 = 120_000;

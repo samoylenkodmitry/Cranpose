@@ -34,7 +34,7 @@ pub enum Capacity {
 
 impl Capacity {
     /// Kotlin's `Channel.BUFFERED`: 64 values.
-    pub const BUFFERED: Capacity = Capacity::Buffered(64);
+    pub const BUFFERED: Self = Self::Buffered(64);
 }
 
 /// The channel was closed, or every receiver is gone; the value comes back.
@@ -67,8 +67,8 @@ pub enum TrySendError<T> {
 impl<T> fmt::Debug for TrySendError<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TrySendError::Full(_) => formatter.write_str("Full(..)"),
-            TrySendError::Closed(_) => formatter.write_str("Closed(..)"),
+            Self::Full(_) => formatter.write_str("Full(..)"),
+            Self::Closed(_) => formatter.write_str("Closed(..)"),
         }
     }
 }
@@ -76,8 +76,8 @@ impl<T> fmt::Debug for TrySendError<T> {
 impl<T> fmt::Display for TrySendError<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TrySendError::Full(_) => formatter.write_str("the channel is full"),
-            TrySendError::Closed(_) => formatter.write_str("the channel is closed"),
+            Self::Full(_) => formatter.write_str("the channel is full"),
+            Self::Closed(_) => formatter.write_str("the channel is closed"),
         }
     }
 }
@@ -466,9 +466,9 @@ impl<T> Future for RecvFuture<'_, T> {
 
 impl<T> Flow for Receiver<T> {
     type Item = T;
-    type Run = Receiver<T>;
+    type Run = Self;
 
-    fn open(&self) -> Receiver<T> {
+    fn open(&self) -> Self {
         self.clone()
     }
 }

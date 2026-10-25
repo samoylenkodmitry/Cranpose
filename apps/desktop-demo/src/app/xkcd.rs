@@ -86,7 +86,7 @@ pub(crate) fn xkcd_tab() {
     cranpose_core::LaunchedEffect(request_id.get(), move |scope| {
         let _request_id = request_id.get();
         state.set(XkcdState::Loading);
-        let client = http_client.clone();
+        let client = std::sync::Arc::clone(&http_client);
         scope.launch_background(
             move |_token| async move { fetch_random_comic(&client).await },
             move |result| match result {
@@ -182,7 +182,7 @@ pub(crate) fn xkcd_tab() {
 
                     {
                         let url = format!("https://xkcd.com/{}", loaded.comic.num);
-                        let uri_handler = uri_handler.clone();
+                        let uri_handler = std::rc::Rc::clone(&uri_handler);
                         Text(
                             url.clone(),
                             Modifier::empty()

@@ -16,7 +16,7 @@ use crate::support_text_field::shell_with_keyboard;
 fn the_focused_field_reports_its_window_bounds_and_follows_a_move() {
     let requester = FocusRequester::new();
     let offset_slot = Rc::new(Cell::new(None));
-    let (content_requester, content_offset) = (requester.clone(), offset_slot.clone());
+    let (content_requester, content_offset) = (requester.clone(), Rc::clone(&offset_slot));
     let (mut shell, _keyboard) = shell_with_keyboard(move || {
         let state = remember(|| TextFieldState::new("name")).with(|state| *state);
         let offset = remember(|| mutableStateOf(40.0_f32)).with(|offset| *offset);

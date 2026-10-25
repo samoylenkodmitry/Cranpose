@@ -60,7 +60,7 @@ where
     T: IntoSharedAnnotatedString,
 {
     let text = text.into_shared();
-    let text_for_click = text.clone();
+    let text_for_click = Rc::clone(&text);
     let style_for_click = style.clone();
     let on_click: Rc<dyn Fn(usize)> = Rc::new(on_click);
 

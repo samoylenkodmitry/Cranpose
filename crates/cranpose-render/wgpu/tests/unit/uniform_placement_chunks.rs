@@ -33,6 +33,6 @@ fn uniform_binding_covers_the_entire_placement_chunk() {
     );
     assert_eq!(
         tables.bindings[PLACEMENT_BUFFER],
-        (4 * std::mem::size_of::<PlacementData>()) as u64,
+        (4 * size_of::<PlacementData>()) as u64,
     );
 }

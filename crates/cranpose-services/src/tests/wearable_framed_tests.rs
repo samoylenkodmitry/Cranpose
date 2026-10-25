@@ -23,7 +23,7 @@ struct Outbox(Arc<Mutex<Vec<Sent>>>);
 
 impl Outbox {
     /// Hands every frame sent so far to `link`, as from `peer`.
-    fn deliver(&self, link: &FramedWearableLink<Outbox>, peer: &str) {
+    fn deliver(&self, link: &FramedWearableLink<Self>, peer: &str) {
         for sent in self.0.lock().drain(..) {
             link.receive(peer, &sent.frame);
         }

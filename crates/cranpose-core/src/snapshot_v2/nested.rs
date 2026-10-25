@@ -11,7 +11,7 @@ use super::*;
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct NestedReadonlySnapshot {
     pub(super) state: SnapshotState,
-    parent: Weak<NestedReadonlySnapshot>,
+    parent: Weak<Self>,
 }
 
 impl NestedReadonlySnapshot {
@@ -22,7 +22,7 @@ impl NestedReadonlySnapshot {
         id: SnapshotId,
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
-        parent: Weak<NestedReadonlySnapshot>,
+        parent: Weak<Self>,
     ) -> Rc<Self> {
         Rc::new(Self {
             state: SnapshotState::new(id, invalid, read_observer, None, false),
@@ -47,11 +47,11 @@ impl NestedReadonlySnapshot {
 
     /// Returns the outermost parent that is still alive, or a copy of this snapshot when it has no
     /// live parent.
-    pub fn root_nested_readonly(&self) -> Rc<NestedReadonlySnapshot> {
+    pub fn root_nested_readonly(&self) -> Rc<Self> {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_nested_readonly()
         } else {
-            NestedReadonlySnapshot::new(
+            Self::new(
                 self.state.id.get(),
                 self.state.invalid.borrow().clone(),
                 self.state.read_observer.borrow().clone(),
@@ -63,23 +63,20 @@ impl NestedReadonlySnapshot {
     /// Runs `f` with this snapshot as the current snapshot of the thread and returns its result.
     /// The previous current snapshot is restored when `f` returns.
     pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
-        enter_snapshot_scope(AnySnapshot::NestedReadonly(self.clone()), f)
+        enter_snapshot_scope(AnySnapshot::NestedReadonly(Rc::clone(self)), f)
     }
 
     /// Takes another read-only snapshot with the same view of state. Reads inside the new snapshot
     /// call both `read_observer` and this snapshot's own read observer.
-    pub fn take_nested_snapshot(
-        &self,
-        read_observer: Option<ReadObserver>,
-    ) -> Rc<NestedReadonlySnapshot> {
+    pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Rc<Self> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
-        NestedReadonlySnapshot::new(
+        Self::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
             merged_observer,
-            self.parent.clone(),
+            Weak::clone(&self.parent),
         )
     }
 
@@ -190,7 +187,7 @@ impl NestedMutableSnapshot {
     /// Runs `f` with this snapshot as the current snapshot of the thread and returns its result.
     /// The previous current snapshot is restored when `f` returns.
     pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
-        enter_snapshot_scope(AnySnapshot::NestedMutable(self.clone()), f)
+        enter_snapshot_scope(AnySnapshot::NestedMutable(Rc::clone(self)), f)
     }
 
     /// Takes a read-only snapshot of this snapshot's view of state. Reads inside the new snapshot
@@ -290,7 +287,7 @@ impl NestedMutableSnapshot {
         self: &Rc<Self>,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> Rc<NestedMutableSnapshot> {
+    ) -> Rc<Self> {
         let root = Rc::downgrade(&self.root_mutable());
         allocate_nested_mutable_snapshot(self, root, read_observer, write_observer)
     }

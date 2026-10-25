@@ -56,5 +56,5 @@ pub(crate) fn main() {
             println!("✓ ALL TESTS PASSED");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

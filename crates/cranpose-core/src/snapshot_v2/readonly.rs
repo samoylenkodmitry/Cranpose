@@ -42,7 +42,7 @@ impl ReadonlySnapshot {
 
     /// Returns a new read-only snapshot with the same id, invalid set and read observer.
     pub fn root_readonly(&self) -> Rc<Self> {
-        ReadonlySnapshot::new(
+        Self::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
             self.state.read_observer.borrow().clone(),
@@ -60,7 +60,7 @@ impl ReadonlySnapshot {
     pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Rc<Self> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
-        ReadonlySnapshot::new(
+        Self::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
             merged_observer,

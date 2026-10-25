@@ -132,12 +132,12 @@ pub fn LiquidActionChip(
     label: SharedText,
 ) {
     let spec = if prominent {
-        super::button::GlassButtonSpec::prominent()
+        GlassButtonSpec::prominent()
     } else {
-        super::button::GlassButtonSpec::glass()
+        GlassButtonSpec::glass()
     }
-    .with_size(super::button::GlassButtonSize::Small);
+    .with_size(GlassButtonSize::Small);
     super::button::GlassButton(modifier, spec.clone(), on_click, move || {
-        super::button::GlassButtonLabel(label.clone(), spec.clone());
+        GlassButtonLabel(label.clone(), spec.clone());
     });
 }

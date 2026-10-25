@@ -43,13 +43,13 @@ pub(super) enum Wall {
 }
 
 impl Wall {
-    pub(super) const ALL: [Wall; 6] = [
-        Wall::North,
-        Wall::East,
-        Wall::South,
-        Wall::West,
-        Wall::Floor,
-        Wall::Ceiling,
+    pub(super) const ALL: [Self; 6] = [
+        Self::North,
+        Self::East,
+        Self::South,
+        Self::West,
+        Self::Floor,
+        Self::Ceiling,
     ];
 }
 

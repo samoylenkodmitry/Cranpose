@@ -905,14 +905,14 @@ fn a_row_that_may_draw_past_its_bounds_is_collected_offscreen() {
     );
 }
 
-fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, std::sync::Arc<cranpose_ui::TextStyle>) {
-    let style = std::sync::Arc::new(style);
+fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::TextStyle>) {
+    let style = Arc::new(style);
     let text = cranpose_render_common::graph::TextPrimitiveNode {
         node_id: 5,
         rect: rect(0.0, 0.0, 80.0, 20.0),
         text: cranpose_ui::text::shared_plain_annotated_string("shared"),
         render_text: cranpose_ui::text::shared_plain_render_string("shared"),
-        text_style: std::sync::Arc::clone(&style),
+        text_style: Arc::clone(&style),
         font_size: 14.0,
         layout_options: cranpose_ui::TextLayoutOptions::default(),
         clip: None,
@@ -943,5 +943,5 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
     )
     .scene;
     assert_eq!(scene.texts.len(), 1);
-    assert!(std::sync::Arc::ptr_eq(&scene.texts[0].text_style, &style));
+    assert!(Arc::ptr_eq(&scene.texts[0].text_style, &style));
 }

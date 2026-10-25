@@ -88,13 +88,13 @@ fn blur_shader_validates_for_webgl() {
 
 #[test]
 fn shape_shader_validates_for_webgpu_in_every_table_form() {
-    if let Err(err) = validate_wgsl_module(super::SHADER) {
+    if let Err(err) = validate_wgsl_module(SHADER) {
         panic!("shape.wgsl must validate for WebGPU: {err}");
     }
     if let Err(err) = validate_wgsl_module(&storage_shape_shader()) {
         panic!("shape.wgsl with storage tables must validate for WebGPU: {err}");
     }
-    if let Err(err) = validate_wgsl_module(&super::filling_shape_shader()) {
+    if let Err(err) = validate_wgsl_module(&filling_shape_shader()) {
         panic!("shape.wgsl with storage tables and the arc trig fill must validate: {err}");
     }
 }
@@ -169,7 +169,7 @@ fn shape_shader_validates_for_webgl() {
         "vs_record_dithered_fill",
         "vs_record_gradient_fill",
     ] {
-        if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
+        if let Err(err) = validate_glsl_portability(SHADER, entry, ShaderStage::Vertex) {
             panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
         }
     }
@@ -179,7 +179,7 @@ fn shape_shader_validates_for_webgl() {
         "fs_dithered_fill",
         "fs_gradient_fill",
     ] {
-        if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Fragment) {
+        if let Err(err) = validate_glsl_portability(SHADER, entry, ShaderStage::Fragment) {
             panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
         }
     }
@@ -198,7 +198,7 @@ fn dithering_solid_batches_validate_for_webgl() {
         ("vs_record_solid", ShaderStage::Vertex),
         ("fs_solid", ShaderStage::Fragment),
     ] {
-        validate_glsl_portability_with_constants(super::SHADER, entry, stage, &constants)
+        validate_glsl_portability_with_constants(SHADER, entry, stage, &constants)
             .unwrap_or_else(|error| panic!("{entry}: {error}"));
     }
 }
@@ -249,7 +249,7 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         "fs_dithered_fill",
         "fs_gradient_fill",
     ] {
-        let (locations, position) = fragment_inputs(super::SHADER, entry_point);
+        let (locations, position) = fragment_inputs(SHADER, entry_point);
         // WebGL counts the fragment position a stage reads against the same
         // vectors (GLSL ES 1.00 appendix A.7), and ANGLE links no more.
         let vectors = locations.len() + usize::from(position);
@@ -263,28 +263,28 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
     }
     assert_eq!(
-        fragment_input_locations(super::SHADER, "fs_solid").len(),
+        fragment_input_locations(SHADER, "fs_solid").len(),
         7,
         "a solid batch carries the coverage vectors, a fill's interior inside its arc vector, \
          and nothing of the brush"
     );
     assert_eq!(
-        fragment_input_locations(super::SHADER, "fs_clipped_fill").len(),
+        fragment_input_locations(SHADER, "fs_clipped_fill").len(),
         4,
         "a clipped fill drawn flat carries its colour, rect, radii and clip"
     );
     assert_eq!(
-        fragment_input_locations(super::SHADER, "fs_plain_fill").len(),
+        fragment_input_locations(SHADER, "fs_plain_fill").len(),
         3,
         "an unclipped fill drawn flat carries its colour, rect and radii"
     );
     assert_eq!(
-        fragment_input_locations(super::SHADER, "fs_dithered_fill").len(),
+        fragment_input_locations(SHADER, "fs_dithered_fill").len(),
         4,
         "a flat fill batch holding a gradient its vertices shade adds only the dither position"
     );
     assert_eq!(
-        fragment_input_locations(super::SHADER, "fs_gradient_fill").len(),
+        fragment_input_locations(SHADER, "fs_gradient_fill").len(),
         11,
         "a gradient fill batch derives its interior and carries no colour, stroke or arc vectors"
     );
@@ -309,7 +309,7 @@ fn shape_shader_declares_the_record_layout_the_recorder_writes() {
         "override SHAPE_TIER: u32",
     ] {
         assert!(
-            super::SHADER.contains(needle),
+            SHADER.contains(needle),
             "shape.wgsl must declare `{needle}`"
         );
     }
@@ -319,15 +319,14 @@ fn shape_shader_declares_the_record_layout_the_recorder_writes() {
 fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
     use crate::run_store::{BRUSH_CHUNK, PLACEMENT_CHUNK, STOP_CHUNK};
     for (uniform, _) in RUN_TABLE_DECLARATIONS {
-        assert!(super::SHADER.contains(uniform), "missing `{uniform}`");
+        assert!(SHADER.contains(uniform), "missing `{uniform}`");
     }
-    let words = |record: usize| record / std::mem::size_of::<[f32; 4]>();
-    let brush_words = BRUSH_CHUNK * words(std::mem::size_of::<cranpose_ui_graphics::BrushRecord>());
-    let stop_words =
-        STOP_CHUNK * words(std::mem::size_of::<cranpose_ui_graphics::GradientStopRecord>());
-    assert!(super::SHADER.contains(&format!("array<vec4<u32>, {brush_words}>")));
-    assert!(super::SHADER.contains(&format!("array<vec4<f32>, {stop_words}>")));
-    assert!(super::SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
+    let words = |record: usize| record / size_of::<[f32; 4]>();
+    let brush_words = BRUSH_CHUNK * words(size_of::<cranpose_ui_graphics::BrushRecord>());
+    let stop_words = STOP_CHUNK * words(size_of::<cranpose_ui_graphics::GradientStopRecord>());
+    assert!(SHADER.contains(&format!("array<vec4<u32>, {brush_words}>")));
+    assert!(SHADER.contains(&format!("array<vec4<f32>, {stop_words}>")));
+    assert!(SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
 }
 
 #[test]

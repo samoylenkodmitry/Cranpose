@@ -38,9 +38,9 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
 
 #[test]
 fn test_button_creates_valid_composition() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -127,9 +127,9 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
 
 #[test]
 fn test_multiple_buttons_in_composition() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();

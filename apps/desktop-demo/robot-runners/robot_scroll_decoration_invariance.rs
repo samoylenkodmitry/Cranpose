@@ -43,7 +43,7 @@ pub(crate) fn main() {
         println!("PASS: text decoration rendering is scroll-position-invariant");
         robot.exit().expect("exit");
     })
-    .run(crate::robot_launch::counter_demo);
+    .run(robot_launch::counter_demo);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -104,7 +104,7 @@ fn verify_underline_row_tracks_fractional_scroll(robot: &cranpose::Robot) {
 }
 
 fn find_presented_underline_row(
-    screenshot: &cranpose::RobotScreenshot,
+    screenshot: &RobotScreenshot,
     bounds: (f32, f32, f32, f32),
 ) -> Option<UnderlineRowMetrics> {
     let scale_x = screenshot.width as f32 / screenshot.logical_width.max(1.0);
@@ -161,7 +161,7 @@ fn find_presented_underline_row(
     })
 }
 
-fn is_red_decoration_pixel(screenshot: &cranpose::RobotScreenshot, x: usize, y: usize) -> bool {
+fn is_red_decoration_pixel(screenshot: &RobotScreenshot, x: usize, y: usize) -> bool {
     let index = (y * screenshot.width as usize + x) * 4;
     let red = screenshot.pixels[index] as u16;
     let green = screenshot.pixels[index + 1] as u16;
@@ -526,10 +526,10 @@ fn scroll_text_into_view(robot: &cranpose::Robot, text: &str, max_attempts: usiz
 
 fn save_debug_images(
     name: &str,
-    before_shot: &cranpose::RobotScreenshot,
-    after_shot: &cranpose::RobotScreenshot,
-    before_normalized: &cranpose::RobotScreenshot,
-    after_normalized: &cranpose::RobotScreenshot,
+    before_shot: &RobotScreenshot,
+    after_shot: &RobotScreenshot,
+    before_normalized: &RobotScreenshot,
+    after_normalized: &RobotScreenshot,
 ) {
     let output_dir = output_paths::diagnostic_path("cranpose_scroll_decoration_invariance");
     if let Err(err) = std::fs::create_dir_all(&output_dir) {

@@ -377,7 +377,7 @@ fn a_stream_mounting_later_does_not_steal_an_existing_streams_identity() {
 fn blocking_work_runs_off_the_ui_thread_and_reports_back_on_it() {
     let mut composition = composition();
     let key = location_key(file!(), line!(), column!());
-    let worker_thread = Arc::new(std::sync::Mutex::new(None));
+    let worker_thread = Arc::new(Mutex::new(None));
     let reported = Rc::new(Cell::new(0u32));
 
     let thread_sink = Arc::clone(&worker_thread);

@@ -70,8 +70,8 @@ impl Slide {
     /// `container`, where content rests at the start.
     fn offset(self, own: f32, container: f32, rtl: bool) -> f32 {
         match self {
-            Slide::Fraction(fraction) => fraction * own,
-            Slide::Container { towards, entering } => {
+            Self::Fraction(fraction) => fraction * own,
+            Self::Container { towards, entering } => {
                 if entering == towards.is_backward(rtl) {
                     container
                 } else {
@@ -84,7 +84,7 @@ impl Slide {
     fn uses_direction(self) -> bool {
         matches!(
             self,
-            Slide::Container {
+            Self::Container {
                 towards: SlideDirection::Start | SlideDirection::End,
                 ..
             }

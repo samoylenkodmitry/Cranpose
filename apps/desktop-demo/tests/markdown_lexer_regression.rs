@@ -9,7 +9,7 @@ fn markdown_robot(markdown: String) -> RobotTestRule<TestRenderer> {
     let client: HttpClientRef = Arc::new(StubHttpClient::with_body(markdown.into_bytes()));
     let local = local_http_client();
     RobotTestRule::new(800, 600, TestRenderer::default(), move || {
-        let client = client.clone();
+        let client = Arc::clone(&client);
         CompositionLocalProvider([local.provides(client)], || {
             app::MarkdownViewerRobotApp();
         });

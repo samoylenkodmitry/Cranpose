@@ -52,7 +52,7 @@ pub(crate) fn web_fetch_example() {
 
         fetch_status.set(FetchStatus::Loading);
 
-        let client = http_client.clone();
+        let client = std::sync::Arc::clone(&http_client);
         scope.launch_background(
             move |token| async move {
                 if token.is_cancelled() {
@@ -75,9 +75,9 @@ pub(crate) fn web_fetch_example() {
             .padding(20.0),
         ColumnSpec::default(),
         {
-            let uri_handler = uri_handler.clone();
+            let uri_handler = std::rc::Rc::clone(&uri_handler);
             move || {
-                let uri_handler = uri_handler.clone();
+                let uri_handler = std::rc::Rc::clone(&uri_handler);
                 Text(
                     "Fetch data from the web",
                     Modifier::empty()
@@ -105,14 +105,14 @@ pub(crate) fn web_fetch_example() {
                 Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                 let api_url = "https://api.ipify.org";
-                let link_handler = uri_handler.clone();
+                let link_handler = std::rc::Rc::clone(&uri_handler);
                 Row(
                     Modifier::empty().fill_max_width().padding(4.0),
                     RowSpec::new()
                         .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
                     move || {
-                        let link_handler = link_handler.clone();
+                        let link_handler = std::rc::Rc::clone(&link_handler);
                         Text(
                             "API Endpoint:",
                             Modifier::empty().padding(2.0),

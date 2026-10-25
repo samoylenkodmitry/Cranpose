@@ -90,7 +90,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     fn applier_host(&self) -> Rc<dyn ApplierHost> {
-        self.applier.clone()
+        Rc::<ConcreteApplierHost<A>>::clone(&self.applier)
     }
 
     fn reset_last_pass_stats(&mut self) {
@@ -229,7 +229,7 @@ impl<A: Applier + 'static> Composition<A> {
             let composer = Composer::new_with_shared_state(
                 Rc::clone(&self.composer_state),
                 Rc::clone(&self.slots),
-                self.applier.clone(),
+                Rc::<ConcreteApplierHost<A>>::clone(&self.applier),
                 runtime_handle.clone(),
                 self.root,
             );

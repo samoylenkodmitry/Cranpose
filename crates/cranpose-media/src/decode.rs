@@ -34,12 +34,12 @@ pub(crate) struct Decoder {
 }
 
 impl Decoder {
-    pub(crate) fn open(uri: &str) -> Result<(Decoder, SourceCancel), MediaError> {
+    pub(crate) fn open(uri: &str) -> Result<(Self, SourceCancel), MediaError> {
         let (media, cancel) = open_media(uri)?;
-        Ok((Decoder::from_media(media, uri)?, cancel))
+        Ok((Self::from_media(media, uri)?, cancel))
     }
 
-    fn from_media(media: Box<dyn MediaSource>, uri: &str) -> Result<Decoder, MediaError> {
+    fn from_media(media: Box<dyn MediaSource>, uri: &str) -> Result<Self, MediaError> {
         let stream = MediaSourceStream::new(media, Default::default());
 
         let mut hint = Hint::new();
@@ -56,10 +56,10 @@ impl Decoder {
             )
             .map_err(|error| MediaError::Failed(format!("{uri}: {error}")))?;
 
-        Decoder::from_format(format)
+        Self::from_format(format)
     }
 
-    fn from_format(format: Box<dyn FormatReader>) -> Result<Decoder, MediaError> {
+    fn from_format(format: Box<dyn FormatReader>) -> Result<Self, MediaError> {
         let track = format
             .first_track(TrackType::Audio)
             .ok_or_else(|| MediaError::Failed("the item has no audio track".to_owned()))?;
@@ -90,7 +90,7 @@ impl Decoder {
             .and_then(ChannelCount::new)
             .ok_or_else(|| MediaError::Failed("the item states no channel layout".to_owned()))?;
 
-        Ok(Decoder {
+        Ok(Self {
             format,
             decoder,
             track_id,
@@ -110,7 +110,7 @@ impl Decoder {
         } else {
             Box::new(std::fs::File::open(cranpose_services::path_from_uri(uri)?).ok()?)
         };
-        Decoder::from_media(media, uri).ok()?.total_duration()
+        Self::from_media(media, uri).ok()?.total_duration()
     }
 
     fn fill(&mut self) -> bool {

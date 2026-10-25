@@ -29,19 +29,13 @@ fn prepared_layout_cache_distinguishes_visual_styles() {
     let red = service.prepare_with_options(
         None,
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Arc::new(style.clone()),
         options,
         None,
     );
 
     style.span_style.color = Some(crate::Color(0.0, 0.0, 1.0, 1.0));
-    let blue = service.prepare_with_options(
-        None,
-        &Rc::new(text),
-        &std::sync::Arc::new(style),
-        options,
-        None,
-    );
+    let blue = service.prepare_with_options(None, &Rc::new(text), &Arc::new(style), options, None);
 
     assert_eq!(
         red.visual_style.span_style.color,
@@ -483,7 +477,7 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
         &self,
         _node_id: Option<NodeId>,
         text: &Rc<crate::text::AnnotatedString>,
-        style: &std::sync::Arc<TextStyle>,
+        style: &Arc<TextStyle>,
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
@@ -583,14 +577,14 @@ fn text_service_reuses_prepared_layout_cache_across_node_ids() {
     let first = service.prepare_with_options(
         Some(9),
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Arc::new(style.clone()),
         options,
         Some(120.0),
     );
     let second = service.prepare_with_options(
         Some(10),
         &Rc::new(text),
-        &std::sync::Arc::new(style),
+        &Arc::new(style),
         options,
         Some(120.0),
     );
@@ -618,14 +612,14 @@ fn prepared_text_preserves_width_variants_and_owned_edits() {
     let wide = service.prepare_with_options(
         None,
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Arc::new(style.clone()),
         options,
         Some(1000.0),
     );
     let mut narrow = Rc::unwrap_or_clone(service.prepare_with_options(
         None,
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Arc::new(style.clone()),
         options,
         Some(50.0),
     ));
@@ -633,7 +627,7 @@ fn prepared_text_preserves_width_variants_and_owned_edits() {
     let cached = service.prepare_with_options(
         None,
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Arc::new(style.clone()),
         options,
         Some(50.0),
     );
@@ -651,7 +645,7 @@ fn prepared_text_preserves_width_variants_and_owned_edits() {
     let reloaded = service.prepare_with_options(
         None,
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style),
+        &Arc::new(style),
         options,
         Some(50.0),
     );
@@ -1065,7 +1059,7 @@ fn scale_annotated_font_sizes_borrows_when_spans_need_no_scaling() {
     let plain = crate::text::AnnotatedString::from("plain");
     assert!(matches!(
         scale_annotated_font_sizes(&plain, FontScaleCurve::linear(0.5)),
-        std::borrow::Cow::Borrowed(_)
+        Cow::Borrowed(_)
     ));
 
     let colored = crate::text::annotated_string::Builder::new()
@@ -1078,7 +1072,7 @@ fn scale_annotated_font_sizes_borrows_when_spans_need_no_scaling() {
         .to_annotated_string();
     assert!(matches!(
         scale_annotated_font_sizes(&colored, FontScaleCurve::linear(0.5)),
-        std::borrow::Cow::Borrowed(_)
+        Cow::Borrowed(_)
     ));
 }
 
@@ -1099,7 +1093,7 @@ fn scale_annotated_font_sizes_scales_span_shadow_geometry() {
         .to_annotated_string();
 
     let scaled = scale_annotated_font_sizes(&text, FontScaleCurve::linear(0.5));
-    let std::borrow::Cow::Owned(scaled) = scaled else {
+    let Cow::Owned(scaled) = scaled else {
         panic!("shadowed span should be scaled into owned text");
     };
     let shadow = scaled.span_styles[0]
@@ -1421,7 +1415,7 @@ fn mixed_font_size_segments_wrap_without_truncation() {
 fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLayout {
     PreparedTextLayout {
         text: Rc::new(crate::text::AnnotatedString::from(display)),
-        visual_style: std::sync::Arc::new(TextStyle::default()),
+        visual_style: Arc::new(TextStyle::default()),
         metrics: TextMetrics {
             width,
             height: 10.0,
@@ -1675,7 +1669,7 @@ fn fit_ellipsis_places_the_cut_from_prefix_widths() {
 fn a_prepared_layout_converts_its_render_text_once() {
     let layout = PreparedTextLayout {
         text: Rc::new(crate::text::AnnotatedString::from("shown")),
-        visual_style: std::sync::Arc::new(TextStyle::default()),
+        visual_style: Arc::new(TextStyle::default()),
         alignment_lines: Default::default(),
         metrics: TextMetrics {
             width: 10.0,
@@ -1691,7 +1685,7 @@ fn a_prepared_layout_converts_its_render_text_once() {
     let untouched = layout.clone();
     let first = layout.render_text();
     assert_eq!(first.text(), "shown");
-    assert!(std::sync::Arc::ptr_eq(&first, &layout.render_text()));
+    assert!(Arc::ptr_eq(&first, &layout.render_text()));
     assert_eq!(
         layout, untouched,
         "the converted copy does not change what the layout is"
@@ -1945,7 +1939,7 @@ fn metrics_at_options_a_text_was_laid_out_at_come_from_its_prepared_layout() {
     let prepared = service.prepare_with_options(
         Some(3),
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Arc::new(style.clone()),
         options,
         Some(90.0),
     );

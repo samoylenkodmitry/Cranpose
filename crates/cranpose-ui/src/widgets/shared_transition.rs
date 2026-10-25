@@ -309,7 +309,7 @@ impl MeasurePolicy for FlightPolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[std::boxed::Box<dyn Measurable>],
+        measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let flying = self.registry.0.flying_box(&self.key);
@@ -335,19 +335,19 @@ impl MeasurePolicy for FlightPolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 }

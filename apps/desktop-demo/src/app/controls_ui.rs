@@ -75,47 +75,44 @@ pub(crate) enum ControlKind {
 impl ControlKind {
     fn title(self) -> &'static str {
         match self {
-            ControlKind::Checkmark => "Checkmark",
-            ControlKind::Slider => "Slider",
-            ControlKind::Toggle => "Toggle",
-            ControlKind::PushButton => "Push button",
-            ControlKind::VolumeDial => "Volume dial",
-            ControlKind::LeverSwitch => "Lever switch",
+            Self::Checkmark => "Checkmark",
+            Self::Slider => "Slider",
+            Self::Toggle => "Toggle",
+            Self::PushButton => "Push button",
+            Self::VolumeDial => "Volume dial",
+            Self::LeverSwitch => "Lever switch",
         }
     }
 
     fn scene_index(self) -> f32 {
         match self {
-            ControlKind::Checkmark => 0.0,
-            ControlKind::Slider => 1.0,
-            ControlKind::Toggle => 2.0,
-            ControlKind::PushButton => 3.0,
-            ControlKind::VolumeDial => 4.0,
-            ControlKind::LeverSwitch => 5.0,
+            Self::Checkmark => 0.0,
+            Self::Slider => 1.0,
+            Self::Toggle => 2.0,
+            Self::PushButton => 3.0,
+            Self::VolumeDial => 4.0,
+            Self::LeverSwitch => 5.0,
         }
     }
 
     fn is_switch(self) -> bool {
-        matches!(
-            self,
-            ControlKind::Checkmark | ControlKind::Toggle | ControlKind::LeverSwitch
-        )
+        matches!(self, Self::Checkmark | Self::Toggle | Self::LeverSwitch)
     }
 
     /// What a screen reader announces this control as, mirroring Compose's
     /// `Role`.
     fn role(self) -> Option<SemanticsWidgetRole> {
         match self {
-            ControlKind::Checkmark => Some(SemanticsWidgetRole::Checkbox),
-            ControlKind::Toggle | ControlKind::LeverSwitch => Some(SemanticsWidgetRole::Switch),
-            ControlKind::PushButton => Some(SemanticsWidgetRole::Button),
-            ControlKind::Slider | ControlKind::VolumeDial => None,
+            Self::Checkmark => Some(SemanticsWidgetRole::Checkbox),
+            Self::Toggle | Self::LeverSwitch => Some(SemanticsWidgetRole::Switch),
+            Self::PushButton => Some(SemanticsWidgetRole::Button),
+            Self::Slider | Self::VolumeDial => None,
         }
     }
 
     /// Whether a drag on the stage moves this control's value.
     fn is_continuous(self) -> bool {
-        matches!(self, ControlKind::Slider | ControlKind::VolumeDial)
+        matches!(self, Self::Slider | Self::VolumeDial)
     }
 
     fn value_animation(self) -> AnimationType {
@@ -463,14 +460,12 @@ const SHADING_WGSL: &str = include_str!("controls_shading.wgsl");
 
 fn controls_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
-    SOURCE
-        .get_or_init(|| {
-            Arc::<str>::from(format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}{SHADING_WGSL}{STAGE_WGSL}{}",
-                include_str!("controls_ui.wgsl")
-            ))
-        })
-        .clone()
+    Arc::clone(SOURCE.get_or_init(|| {
+        Arc::<str>::from(format!(
+            "{RUNTIME_SHADER_PRELUDE_WGSL}{SHADING_WGSL}{STAGE_WGSL}{}",
+            include_str!("controls_ui.wgsl")
+        ))
+    }))
 }
 
 struct StageUniforms {

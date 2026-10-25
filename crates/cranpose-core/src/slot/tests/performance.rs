@@ -834,7 +834,7 @@ fn perf_keyed_insert_near_top_shifts_only_order_entries() {
     );
     assert_eq!(
         payload_shift_bytes(&harness) - before,
-        SHIFT_PAYLOADS_PER_ROW * SHIFT_LATER_PAYLOADS * mem::size_of::<u32>(),
+        SHIFT_PAYLOADS_PER_ROW * SHIFT_LATER_PAYLOADS * size_of::<u32>(),
         "each payload inserted above {SHIFT_LATER_PAYLOADS} payloads must move one u32 order entry per later payload, not a payload record"
     );
     assert_eq!(harness.table.validate(), Ok(()));
@@ -853,7 +853,7 @@ fn perf_removal_near_top_shifts_only_order_entries() {
     assert_eq!(detached[0].payload_count(), SHIFT_PAYLOADS_PER_ROW);
     assert_eq!(
         payload_shift_bytes(&harness) - before,
-        SHIFT_LATER_PAYLOADS * mem::size_of::<u32>(),
+        SHIFT_LATER_PAYLOADS * size_of::<u32>(),
         "removing a row above {SHIFT_LATER_PAYLOADS} payloads must move one u32 order entry per later payload, not a payload record"
     );
     for subtree in detached {

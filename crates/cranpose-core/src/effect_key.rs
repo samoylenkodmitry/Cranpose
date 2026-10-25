@@ -5,7 +5,7 @@ pub(crate) struct EffectKey(Box<dyn Any>);
 
 impl EffectKey {
     pub(crate) fn new<K: PartialEq + 'static>(key: K) -> Self {
-        EffectKey(Box::new(key))
+        Self(Box::new(key))
     }
 
     /// Whether this holds keys of `key`'s type equal to it. A recomposition

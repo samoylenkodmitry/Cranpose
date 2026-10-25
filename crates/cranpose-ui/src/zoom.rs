@@ -310,7 +310,7 @@ impl Modifier {
         let key = state.id();
 
         self.pointer_input(key, move |scope| {
-            let gesture_state = gesture_state.clone();
+            let gesture_state = Rc::clone(&gesture_state);
 
             async move {
                 scope

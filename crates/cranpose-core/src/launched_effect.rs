@@ -58,14 +58,14 @@ pub struct TaskSite {
 
 impl TaskSite {
     /// The site a macro captured with `file!()` and `line!()`.
-    pub const fn new(file: &'static str, line: u32) -> TaskSite {
-        TaskSite { file, line }
+    pub const fn new(file: &'static str, line: u32) -> Self {
+        Self { file, line }
     }
 }
 
 impl Default for TaskSite {
-    fn default() -> TaskSite {
-        TaskSite::new("unknown", 0)
+    fn default() -> Self {
+        Self::new("unknown", 0)
     }
 }
 
@@ -76,8 +76,8 @@ impl std::fmt::Display for TaskSite {
 }
 
 impl From<&'static std::panic::Location<'static>> for TaskSite {
-    fn from(location: &'static std::panic::Location<'static>) -> TaskSite {
-        TaskSite::new(location.file(), location.line())
+    fn from(location: &'static std::panic::Location<'static>) -> Self {
+        Self::new(location.file(), location.line())
     }
 }
 
@@ -261,7 +261,7 @@ impl LaunchedEffectScope {
     /// The provided closure executes on the runtime thread and may freely
     /// capture `Rc`/`RefCell` state. This must only be called from the UI
     /// thread, typically inside another effect callback.
-    pub fn launch(&self, task: impl FnOnce(LaunchedEffectScope) + 'static) {
+    pub fn launch(&self, task: impl FnOnce(Self) + 'static) {
         if !self.is_active() {
             return;
         }

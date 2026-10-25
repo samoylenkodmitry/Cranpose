@@ -1348,7 +1348,7 @@ impl SoftwareTextMeasurer {
 }
 
 impl TextMeasurer for SoftwareTextMeasurer {
-    fn measure(&self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+    fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
         self.lock_cache().get_or_measure(&self.fonts, text, style)
     }
 
@@ -1358,7 +1358,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
 
     fn measure_subsequence(
         &self,
-        text: &cranpose_ui::text::AnnotatedString,
+        text: &AnnotatedString,
         range: std::ops::Range<usize>,
         style: &TextStyle,
     ) -> TextMetrics {
@@ -1370,7 +1370,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
 
     fn measure_line_prefix_widths(
         &self,
-        text: &cranpose_ui::text::AnnotatedString,
+        text: &AnnotatedString,
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
     ) -> Option<TextLinePrefixWidths> {
@@ -1383,7 +1383,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
 
     fn measure_line_width(
         &self,
-        text: &cranpose_ui::text::AnnotatedString,
+        text: &AnnotatedString,
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
     ) -> Option<f32> {
@@ -1397,7 +1397,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
             .get_or_measure_line_width(&self.fonts, text, line_range, style)
     }
 
-    fn line_height(&self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
+    fn line_height(&self, text: &AnnotatedString, style: &TextStyle) -> f32 {
         let font_size = resolve_font_size(style);
         max_line_height_for_annotated_text_with_resolver(text, style, font_size, &self.fonts)
     }
@@ -1444,7 +1444,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
 
     fn get_offset_for_position(
         &self,
-        text: &cranpose_ui::text::AnnotatedString,
+        text: &AnnotatedString,
         style: &TextStyle,
         x: f32,
         y: f32,
@@ -1454,18 +1454,14 @@ impl TextMeasurer for SoftwareTextMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        text: &cranpose_ui::text::AnnotatedString,
+        text: &AnnotatedString,
         style: &TextStyle,
         offset: usize,
     ) -> f32 {
         annotated_cursor_x_for_offset(text, style, offset, &self.fonts)
     }
 
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> TextLayoutResult {
+    fn layout(&self, text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
         layout_annotated_text_with_font_set(text, style, &self.fonts)
     }
 
@@ -4249,7 +4245,7 @@ pub(crate) fn font_line_box(
 ) -> cranpose_ui::text::LineBox {
     line_box_for(
         style,
-        crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size)),
+        vertical_metrics(&font.font, font.ab_glyph_px_size(font_size)),
         asked_line_height(style, 1.0),
         measure_grid(),
     )
@@ -4261,8 +4257,7 @@ pub(crate) fn font_line_box(
 /// a whole advance further down.
 pub(crate) fn font_glyph_line_box(style: &TextStyle, font: &SoftwareTextFont) -> (f32, f32) {
     let font_size = resolve_font_size(style);
-    let metrics =
-        crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
+    let metrics = vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
     let resolved = font_line_box(style, font, font_size);
     let height = metrics.natural_line_height.min(resolved.height).max(1.0);
     (resolved.first_baseline() - metrics.ascent, height)
@@ -5238,7 +5233,7 @@ fn draw_mask_glyph(
                 paint.brush_rect,
                 paint.canvas_origin.x + px as f32 + 0.5,
                 paint.canvas_origin.y + py as f32 + 0.5,
-                cranpose_ui_graphics::Point::default(),
+                Point::default(),
             );
             let alpha = coverage * sample[3] * paint.alpha;
             if alpha <= 0.0 {

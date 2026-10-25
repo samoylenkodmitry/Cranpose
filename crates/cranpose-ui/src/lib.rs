@@ -323,7 +323,7 @@ pub use zoom::ZoomState;
 
 /// In-memory composition helper used by tests.
 pub struct TestComposition {
-    _scope: render_state::AppContextScope,
+    _scope: AppContextScope,
     app_context: Rc<AppContext>,
     composition: Composition<MemoryApplier>,
     /// The root content and its key, which a root render composes again, as
@@ -382,6 +382,27 @@ impl TestComposition {
             .enter(|| self.composition.render(*key, content))
     }
 
+    /// Measures and places the tree under `root` within `max_size`, as a
+    /// host's layout pass does.
+    pub fn measure_layout(
+        &mut self,
+        root: NodeId,
+        max_size: Size,
+    ) -> Result<LayoutMeasurements, NodeError> {
+        self.with_runtime_applier(|applier| measure_layout(applier, root, max_size))
+    }
+
+    /// Runs `with` on the applier while it holds the composition's runtime
+    /// handle, as a host's layout pass does, and takes the handle back after.
+    pub fn with_runtime_applier<R>(&mut self, with: impl FnOnce(&mut MemoryApplier) -> R) -> R {
+        let handle = self.runtime_handle();
+        let mut applier = self.applier_mut();
+        applier.set_runtime_handle(handle);
+        let result = with(&mut applier);
+        applier.clear_runtime_handle();
+        result
+    }
+
     /// Borrows the applier that holds the node tree. The guard keeps this composition's app context
     /// active.
     pub fn applier_mut(&mut self) -> TestApplierGuard<'_> {
@@ -402,7 +423,7 @@ impl TestComposition {
 /// Mutable access to the applier of a [`TestComposition`], with the app context of that composition
 /// active while the guard lives.
 pub struct TestApplierGuard<'a> {
-    _scope: render_state::AppContextScope,
+    _scope: AppContextScope,
     applier: ApplierGuard<'a, MemoryApplier>,
 }
 

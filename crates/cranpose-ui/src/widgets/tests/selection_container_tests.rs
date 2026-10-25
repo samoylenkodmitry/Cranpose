@@ -60,7 +60,7 @@ fn a_text_that_leaves_the_container_leaves_its_selection() {
             let shown = Rc::clone(&shown);
             SelectionContainer(Modifier::empty(), move || {
                 remember_registrar(&seen);
-                let visible = cranpose_core::rememberMutableStateOf(|| true);
+                let visible = rememberMutableStateOf(|| true);
                 *shown.borrow_mut() = Some(visible);
                 Text("stays", Modifier::empty(), TextStyle::default());
                 if visible.get() {

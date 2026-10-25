@@ -151,7 +151,7 @@ fn a_dialog_traps_focus_inside_it_and_releases_it_on_close() {
             .first()
             .cloned()
             .expect("field has a pointer handler");
-        let position = cranpose_ui_graphics::Point { x: 1.0, y: 1.0 };
+        let position = Point { x: 1.0, y: 1.0 };
         handler(PointerEvent::new(
             PointerEventKind::Down,
             position,

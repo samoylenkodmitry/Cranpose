@@ -24,6 +24,10 @@ use serde::Deserialize;
 
 use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
 
+mod html_text;
+
+use html_text::html_to_plain_text;
+
 const PAGE_SIZE: usize = 20;
 const AUTOLOAD_THRESHOLD: usize = 1;
 const STORY_FETCH_CONCURRENCY: usize = 8;
@@ -197,10 +201,10 @@ enum ThreadState {
 impl ThreadState {
     fn story_id(&self) -> Option<u64> {
         match self {
-            ThreadState::Idle => None,
-            ThreadState::Loading(story) => Some(story.id),
-            ThreadState::Success(data) => Some(data.story.id),
-            ThreadState::Error { story, .. } => Some(story.id),
+            Self::Idle => None,
+            Self::Loading(story) => Some(story.id),
+            Self::Success(data) => Some(data.story.id),
+            Self::Error { story, .. } => Some(story.id),
         }
     }
 }
@@ -369,125 +373,6 @@ fn comment_entry_from_item(item: &CommentItem, depth: usize) -> Option<CommentEn
     })
 }
 
-fn html_to_plain_text(html: &str) -> String {
-    let mut plain = String::with_capacity(html.len());
-    let mut tag = String::new();
-    let mut entity = String::new();
-    let mut in_tag = false;
-    let mut in_entity = false;
-
-    for ch in html.chars() {
-        if in_tag {
-            if ch == '>' {
-                append_tag_separator(&tag, &mut plain);
-                tag.clear();
-                in_tag = false;
-            } else {
-                tag.push(ch);
-            }
-            continue;
-        }
-
-        if in_entity {
-            entity.push(ch);
-            if ch == ';' {
-                plain.push_str(decode_html_entity(&entity));
-                entity.clear();
-                in_entity = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '<' => {
-                in_tag = true;
-                tag.clear();
-            }
-            '&' => {
-                in_entity = true;
-                entity.clear();
-                entity.push(ch);
-            }
-            _ => plain.push(ch),
-        }
-    }
-
-    if in_entity {
-        plain.push_str(&entity);
-    }
-
-    collapse_text_whitespace(&plain)
-}
-
-fn append_tag_separator(tag: &str, plain: &mut String) {
-    let normalized = tag.trim().to_ascii_lowercase();
-    if (normalized.starts_with("br")
-        || normalized.starts_with("p")
-        || normalized.starts_with("/p")
-        || normalized.starts_with("div")
-        || normalized.starts_with("/div")
-        || normalized.starts_with("pre")
-        || normalized.starts_with("/pre"))
-        && !plain.ends_with('\n')
-        && !plain.is_empty()
-    {
-        plain.push('\n');
-    }
-    if normalized.starts_with("li") {
-        if !plain.ends_with('\n') && !plain.is_empty() {
-            plain.push('\n');
-        }
-        plain.push_str("• ");
-    }
-}
-
-fn decode_html_entity(entity: &str) -> &'static str {
-    match entity {
-        "&amp;" => "&",
-        "&gt;" => ">",
-        "&lt;" => "<",
-        "&quot;" => "\"",
-        "&#39;" | "&#x27;" => "'",
-        "&#47;" | "&#x2F;" => "/",
-        "&nbsp;" => " ",
-        _ => "",
-    }
-}
-
-fn collapse_text_whitespace(text: &str) -> String {
-    let mut collapsed = String::with_capacity(text.len());
-    let mut pending_space = false;
-    let mut newline_run = 0usize;
-
-    for ch in text.chars() {
-        match ch {
-            '\r' => {}
-            '\n' => {
-                pending_space = false;
-                if newline_run < 2 {
-                    collapsed.push('\n');
-                }
-                newline_run += 1;
-            }
-            c if c.is_whitespace() => {
-                if !collapsed.ends_with('\n') {
-                    pending_space = true;
-                }
-            }
-            c => {
-                if pending_space && !collapsed.is_empty() && !collapsed.ends_with(' ') {
-                    collapsed.push(' ');
-                }
-                pending_space = false;
-                newline_run = 0;
-                collapsed.push(c);
-            }
-        }
-    }
-
-    collapsed.trim().to_string()
-}
-
 async fn fetch_top_story_ids(client: &HttpClientRef) -> Result<Vec<u64>, String> {
     let ids_json = client
         .get_text("https://hacker-news.firebaseio.com/v0/topstories.json")
@@ -528,9 +413,9 @@ async fn fetch_stories_page(
         .take(end.saturating_sub(start))
         .collect::<Vec<_>>();
     let results = map_ordered_concurrent(&page_ids, STORY_FETCH_CONCURRENCY, {
-        let client = client.clone();
+        let client = Arc::clone(client);
         move |id| {
-            let client = client.clone();
+            let client = Arc::clone(&client);
             async move { fetch_story(&client, id).await }
         }
     })
@@ -570,9 +455,9 @@ async fn fetch_comment_items_batch(
     ids: &[u64],
 ) -> Vec<Result<CommentItem, String>> {
     match map_ordered_concurrent(ids, COMMENT_FETCH_CONCURRENCY, {
-        let client = client.clone();
+        let client = Arc::clone(client);
         move |id| {
-            let client = client.clone();
+            let client = Arc::clone(&client);
             async move { fetch_comment_item(&client, id).await }
         }
     })
@@ -694,11 +579,12 @@ async fn load_comment_page(
 fn launch_initial_load(
     trigger: u64,
     state: cranpose_core::MutableState<NewsState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         state.set(NewsState::Loading);
-        let client = client.clone();
+        let client = Arc::clone(&client);
 
         scope.launch_background(
             move |token| async move {
@@ -718,8 +604,9 @@ fn launch_initial_load(
 fn launch_load_more(
     trigger: u64,
     state: cranpose_core::MutableState<NewsState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         if trigger == 0 {
             return;
@@ -740,7 +627,7 @@ fn launch_load_more(
         };
 
         let ids_for_task = ids.clone();
-        let client = client.clone();
+        let client = Arc::clone(&client);
         scope.launch_background(
             move |token| async move {
                 if token.is_cancelled() {
@@ -780,8 +667,9 @@ fn launch_comment_thread(
     selected_story: Option<Story>,
     refresh_trigger: u64,
     state: cranpose_core::MutableState<ThreadState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     let selected_story_id = selected_story.as_ref().map(|story| story.id);
 
     cranpose_core::LaunchedEffect((selected_story_id, refresh_trigger), move |scope| {
@@ -791,7 +679,7 @@ fn launch_comment_thread(
         };
 
         state.set(ThreadState::Loading(story.clone()));
-        let client = client.clone();
+        let client = Arc::clone(&client);
         let story_for_load = story.clone();
 
         scope.launch_background(
@@ -812,8 +700,9 @@ fn launch_comment_thread(
 fn launch_load_more_comments(
     trigger: u64,
     state: cranpose_core::MutableState<ThreadState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         if trigger == 0 {
             return;
@@ -832,7 +721,7 @@ fn launch_load_more_comments(
 
         let expected_story_id = data.story.id;
         let expected_loaded_count = data.loaded_count();
-        let client = client.clone();
+        let client = Arc::clone(&client);
 
         scope.launch_background(
             move |token| async move {
@@ -1225,14 +1114,14 @@ fn StoryItem<F>(
                     let thread_label = thread_label.clone();
                     let comments_url = comments_url.clone();
                     let target_url = target_url.clone();
-                    let uri_handler = uri_handler.clone();
+                    let uri_handler = Rc::clone(&uri_handler);
                     let on_select_thread_handle = Rc::clone(&on_select_thread_handle);
                     move || {
                         Text(
                             title.clone(),
                             Modifier::empty().clickable({
                                 let target_url = target_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 move |_| {
                                     if let Err(err) = uri_handler.open_uri(&target_url) {
                                         log::error!("Failed to open article {target_url}: {err:#}");
@@ -1253,7 +1142,7 @@ fn StoryItem<F>(
                                 .horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                             {
                                 let comments_url = comments_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 let thread_label_for_button = thread_label.clone();
                                 let on_select_thread = Rc::clone(&on_select_thread_handle);
                                 move || {
@@ -1270,7 +1159,7 @@ fn StoryItem<F>(
                                         "HN",
                                         Modifier::empty().clickable({
                                             let comments_url = comments_url.clone();
-                                            let uri_handler = uri_handler.clone();
+                                            let uri_handler = Rc::clone(&uri_handler);
                                             move |_| {
                                                 if let Err(err) = uri_handler.open_uri(&comments_url)
                                                 {
@@ -1521,7 +1410,7 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
                 {
                     let target_url = target_url.clone();
                     let comments_url = comments_url.clone();
-                    let uri_handler = uri_handler.clone();
+                    let uri_handler = Rc::clone(&uri_handler);
                     move || {
                         ActionButton(
                             "Open article".to_string(),
@@ -1529,7 +1418,7 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
                             palette.accent_text,
                             {
                                 let target_url = target_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 move || {
                                     if let Err(err) = uri_handler.open_uri(&target_url) {
                                         log::error!("Failed to open article {target_url}: {err:#}");
@@ -1543,7 +1432,7 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
                             palette.primary_text,
                             {
                                 let comments_url = comments_url.clone();
-                                let uri_handler = uri_handler.clone();
+                                let uri_handler = Rc::clone(&uri_handler);
                                 move || {
                                     if let Err(err) = uri_handler.open_uri(&comments_url) {
                                         log::error!(
@@ -1904,19 +1793,15 @@ pub fn HackerNewsTab() {
     let is_dark = theme_override.get().unwrap_or(system_dark);
     let palette = HackerNewsPalette::new(is_dark);
 
-    launch_initial_load(refresh_trigger.get(), news_state, http_client.clone());
-    launch_load_more(load_more_trigger.get(), news_state, http_client.clone());
+    launch_initial_load(refresh_trigger.get(), news_state, &http_client);
+    launch_load_more(load_more_trigger.get(), news_state, &http_client);
     launch_comment_thread(
         selected_story.clone(),
         thread_refresh_trigger.get(),
         thread_state,
-        http_client.clone(),
+        &http_client,
     );
-    launch_load_more_comments(
-        comment_load_more_trigger.get(),
-        thread_state,
-        http_client.clone(),
-    );
+    launch_load_more_comments(comment_load_more_trigger.get(), thread_state, &http_client);
     AutoLoadMore(list_state, news_state, auto_load_guard, load_more_trigger);
     cranpose_core::LaunchedEffect(
         (

@@ -1,10 +1,14 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui_graphics::Size as ViewportSize;
 
 use super::*;
+
+const VIEWPORT: ViewportSize = ViewportSize {
+    width: 320.0,
+    height: 480.0,
+};
 
 fn compose_lazy_swipe_rows() -> TestComposition {
     run_test_composition(|| {
@@ -33,24 +37,8 @@ fn compose_lazy_swipe_rows() -> TestComposition {
     })
 }
 
-fn measure(composition: &mut TestComposition, root: NodeId) {
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    measure_layout(
-        &mut applier,
-        root,
-        ViewportSize {
-            width: 320.0,
-            height: 480.0,
-        },
-    )
-    .expect("layout measurement");
-    applier.clear_runtime_handle();
-}
-
-fn layout_texts(tree: &crate::LayoutTree) -> Vec<String> {
-    fn walk(node: &crate::LayoutBox, out: &mut Vec<String>) {
+fn layout_texts(tree: &LayoutTree) -> Vec<String> {
+    fn walk(node: &LayoutBox, out: &mut Vec<String>) {
         if let Some(text) = node.node_data.modifier_slices().text_content() {
             out.push(text.to_string());
         }
@@ -63,8 +51,8 @@ fn layout_texts(tree: &crate::LayoutTree) -> Vec<String> {
     out
 }
 
-fn semantics_descriptions(tree: &crate::SemanticsTree) -> Vec<String> {
-    fn walk(node: &crate::SemanticsNode, out: &mut Vec<String>) {
+fn semantics_descriptions(tree: &SemanticsTree) -> Vec<String> {
+    fn walk(node: &SemanticsNode, out: &mut Vec<String>) {
         if let Some(description) = &node.description {
             out.push(description.clone());
         }
@@ -81,12 +69,14 @@ fn semantics_descriptions(tree: &crate::SemanticsTree) -> Vec<String> {
 fn swipe_to_dismiss_renders_content_inside_lazy_column_item() {
     let mut composition = compose_lazy_swipe_rows();
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let tree = crate::build_layout_tree_from_applier(&mut applier, root)
+    let tree = build_layout_tree_from_applier(&mut applier, root)
         .expect("layout tree build")
         .expect("layout tree present");
     applier.clear_runtime_handle();
@@ -102,12 +92,14 @@ fn swipe_to_dismiss_renders_content_inside_lazy_column_item() {
 fn swipe_to_dismiss_exposes_semantics_inside_lazy_column_item() {
     let mut composition = compose_lazy_swipe_rows();
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let tree = crate::build_semantics_tree_from_applier(&mut applier, root)
+    let tree = build_semantics_tree_from_applier(&mut applier, root)
         .expect("semantics tree build")
         .expect("semantics tree present");
     applier.clear_runtime_handle();
@@ -137,9 +129,7 @@ fn a_keyed_lazy_item_supplies_its_key_to_its_content() {
                 scope.items(
                     LazyItems::new(3).key(move |index: usize| 700 + index as u64),
                     move |index| {
-                        recorder
-                            .borrow_mut()
-                            .push(crate::lazy_item::lazy_item_key());
+                        recorder.borrow_mut().push(lazy_item_key());
                         Text(
                             format!("Row {index}"),
                             Modifier::empty(),
@@ -151,7 +141,9 @@ fn a_keyed_lazy_item_supplies_its_key_to_its_content() {
         );
     });
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let keys = seen.borrow().clone();
     assert!(!keys.is_empty(), "no lazy item was composed");
@@ -180,9 +172,7 @@ fn an_unkeyed_lazy_item_reports_no_identity() {
             move |scope| {
                 let recorder = Rc::clone(&recorder);
                 scope.items(3, move |index| {
-                    recorder
-                        .borrow_mut()
-                        .push(crate::lazy_item::lazy_item_key());
+                    recorder.borrow_mut().push(lazy_item_key());
                     Text(
                         format!("Row {index}"),
                         Modifier::empty(),
@@ -193,7 +183,9 @@ fn an_unkeyed_lazy_item_reports_no_identity() {
         );
     });
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let keys = seen.borrow().clone();
     assert!(!keys.is_empty(), "no lazy item was composed");

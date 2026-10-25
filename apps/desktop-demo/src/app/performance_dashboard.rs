@@ -520,7 +520,7 @@ pub fn PerformanceTab() {
     let client = local_http_client().current();
     cranpose_core::LaunchedEffect(refresh.get(), move |scope| {
         state.set(LoadState::Loading);
-        let client = client.clone();
+        let client = std::sync::Arc::clone(&client);
         scope.launch_background(
             move |_token| async move { load_index(&client).await },
             move |result| {
@@ -711,7 +711,7 @@ fn LatestNightly(
         Rc::new(run.subjects.iter().cloned().enumerate().collect());
     Card(palette, title, move || {
         StartChips(palette, start);
-        NightlyTable(palette, run.clone(), start.get());
+        NightlyTable(palette, Rc::clone(&run), start.get());
         Text(
             "Main's median over the release's. Green: main is better; red: worse; amber: not \
              settled within four pairs of legs; ⚠: a second run confirmed it.",
@@ -720,8 +720,8 @@ fn LatestNightly(
         );
         RunView(
             palette,
-            run.clone(),
-            subjects.clone(),
+            Rc::clone(&run),
+            Rc::clone(&subjects),
             source.clone(),
             scenario,
             start.get(),
@@ -1671,7 +1671,7 @@ fn SubjectBar(
             let style = text_style(12.0, palette.text, emphasized);
             match url.clone() {
                 Some(url) => {
-                    let uri_handler = uri_handler.clone();
+                    let uri_handler = Rc::clone(&uri_handler);
                     Text(
                         label.clone(),
                         name.clickable(move |_| {
@@ -1772,8 +1772,8 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
         MetricChips(palette, metric);
         RunView(
             palette,
-            run.clone(),
-            subjects.clone(),
+            Rc::clone(&run),
+            Rc::clone(&subjects),
             source.clone(),
             scenario,
             start.get(),

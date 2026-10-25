@@ -31,7 +31,7 @@ impl CanvasWatch {
         device_size: Rc<Cell<Option<(u32, u32)>>>,
     ) -> Self {
         let on_resize = {
-            let changed = changed.clone();
+            let changed = Rc::clone(&changed);
             Closure::wrap(Box::new(move |entries: js_sys::Array, _observer: JsValue| {
                 device_size.set(observed_device_size(&entries));
                 changed();

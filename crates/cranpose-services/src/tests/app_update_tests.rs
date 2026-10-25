@@ -140,7 +140,7 @@ fn request_builds_typed_source() {
 fn operations_publish_and_forward() {
     let _guard = crate::registry::test_service_guard();
     let updater = Arc::new(RecordingUpdater::new());
-    set_platform_app_updater(updater.clone());
+    set_platform_app_updater(Arc::<RecordingUpdater>::clone(&updater));
     assert!(app_updates_supported());
     check_for_app_update(&GitHubReleaseUpdate::new("owner/app", "1", ".apk")).unwrap();
     assert_eq!(updater.checks.load(Ordering::Relaxed), 1);
@@ -167,7 +167,7 @@ fn operations_publish_and_forward() {
 fn a_package_with_an_uncheckable_digest_is_refused_before_it_is_downloaded() {
     let _guard = crate::registry::test_service_guard();
     let updater = Arc::new(RecordingUpdater::new());
-    set_platform_app_updater(updater.clone());
+    set_platform_app_updater(Arc::<RecordingUpdater>::clone(&updater));
     let package = UpdatePackage::new("2", "https://example.test/app.apk")
         .with_digest(PackageDigest::sha256("not-a-digest"));
     assert!(matches!(
@@ -221,7 +221,7 @@ fn a_host_that_cannot_update_says_so_through_the_status_and_not_only_the_result(
 fn a_package_with_no_digest_at_all_never_reaches_the_installer() {
     let _guard = crate::registry::test_service_guard();
     let updater = Arc::new(RecordingUpdater::new());
-    set_platform_app_updater(updater.clone());
+    set_platform_app_updater(Arc::<RecordingUpdater>::clone(&updater));
     let package = UpdatePackage::new("2", "https://example.test/app.apk");
 
     assert!(!package.is_verifiable());

@@ -595,8 +595,8 @@ impl RuntimeShader {
     pub(crate) fn specialize_with_large_draws(
         &mut self,
         min_pixels: u64,
-        large: impl FnOnce(&mut RuntimeShader),
-        own: impl FnOnce(&mut RuntimeShader),
+        large: impl FnOnce(&mut Self),
+        own: impl FnOnce(&mut Self),
     ) {
         let source = self.specialization.clone();
         large(self);
@@ -1073,12 +1073,12 @@ fn cached_shader_source(
 
     if let Some(entry) = cache.iter_mut().find(|entry| entry.callsite == callsite) {
         if entry.source.as_ref() == source {
-            return (entry.source.clone(), entry.source_hash);
+            return (Arc::clone(&entry.source), entry.source_hash);
         }
         let source_hash = runtime_shader_source_hash(source);
         entry.source_hash = source_hash;
         entry.source = Arc::<str>::from(source);
-        return (entry.source.clone(), entry.source_hash);
+        return (Arc::clone(&entry.source), entry.source_hash);
     }
 
     let source_hash = runtime_shader_source_hash(source);
@@ -1086,7 +1086,7 @@ fn cached_shader_source(
     cache.push(CachedShaderSource {
         callsite,
         source_hash,
-        source: shared.clone(),
+        source: Arc::clone(&shared),
     });
     (shared, source_hash)
 }
@@ -1148,9 +1148,9 @@ pub enum RenderEffect {
     /// Child effects are shared; use [`Arc::make_mut`] to edit a cloned chain independently.
     Chain {
         /// The effect applied first, to the layer's rendered content.
-        first: Arc<RenderEffect>,
+        first: Arc<Self>,
         /// The effect applied to the result of `first`.
-        second: Arc<RenderEffect>,
+        second: Arc<Self>,
     },
 }
 
@@ -1159,8 +1159,8 @@ impl RenderEffect {
     /// of the shader that draws last, if it has one.
     pub fn placeholder(&self) -> Option<ShaderPlaceholder> {
         match self {
-            RenderEffect::Shader { shader } => shader.placeholder(),
-            RenderEffect::Chain { second, .. } => second.placeholder(),
+            Self::Shader { shader } => shader.placeholder(),
+            Self::Chain { second, .. } => second.placeholder(),
             _ => None,
         }
     }
@@ -1202,7 +1202,7 @@ impl RenderEffect {
     }
 
     /// Chain this effect with another: `self` is applied first, then `other`.
-    pub fn then(self, other: RenderEffect) -> Self {
+    pub fn then(self, other: Self) -> Self {
         Self::Chain {
             first: Arc::new(self),
             second: Arc::new(other),
@@ -1214,8 +1214,8 @@ impl RenderEffect {
     /// so layer surface caching is counterproductive for them.
     pub fn contains_runtime_shader(&self) -> bool {
         match self {
-            RenderEffect::Shader { .. } => true,
-            RenderEffect::Chain { first, second } => {
+            Self::Shader { .. } => true,
+            Self::Chain { first, second } => {
                 first.contains_runtime_shader() || second.contains_runtime_shader()
             }
             _ => false,
@@ -1227,9 +1227,9 @@ impl RenderEffect {
     /// chain when every step does.
     pub fn preserves_transparency(&self) -> bool {
         match self {
-            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => true,
-            RenderEffect::Shader { shader } => shader.preserves_transparency(),
-            RenderEffect::Chain { first, second } => {
+            Self::Blur { .. } | Self::Offset { .. } => true,
+            Self::Shader { shader } => shader.preserves_transparency(),
+            Self::Chain { first, second } => {
                 first.preserves_transparency() && second.preserves_transparency()
             }
         }
@@ -1238,12 +1238,12 @@ impl RenderEffect {
     /// Maximum logical-pixel input padding required by this effect.
     pub fn input_padding(&self) -> f32 {
         match self {
-            RenderEffect::Blur {
+            Self::Blur {
                 radius_x, radius_y, ..
             } => radius_x.abs().max(radius_y.abs()),
-            RenderEffect::Offset { offset_x, offset_y } => offset_x.abs().max(offset_y.abs()),
-            RenderEffect::Shader { shader } => shader.input_padding(),
-            RenderEffect::Chain { first, second } => first.input_padding() + second.input_padding(),
+            Self::Offset { offset_x, offset_y } => offset_x.abs().max(offset_y.abs()),
+            Self::Shader { shader } => shader.input_padding(),
+            Self::Chain { first, second } => first.input_padding() + second.input_padding(),
         }
     }
 
@@ -1252,11 +1252,9 @@ impl RenderEffect {
     /// blur/offset stay confined to their tight rect.
     pub fn output_padding(&self) -> f32 {
         match self {
-            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => 0.0,
-            RenderEffect::Shader { shader } => shader.output_padding(),
-            RenderEffect::Chain { first, second } => {
-                first.output_padding() + second.output_padding()
-            }
+            Self::Blur { .. } | Self::Offset { .. } => 0.0,
+            Self::Shader { shader } => shader.output_padding(),
+            Self::Chain { first, second } => first.output_padding() + second.output_padding(),
         }
     }
 
@@ -1266,9 +1264,9 @@ impl RenderEffect {
     /// rect and declare none.
     pub fn output_support(&self) -> Option<Rect> {
         match self {
-            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
-            RenderEffect::Shader { shader } => shader.output_support(),
-            RenderEffect::Chain { second, .. } => second.output_support(),
+            Self::Blur { .. } | Self::Offset { .. } => None,
+            Self::Shader { shader } => shader.output_support(),
+            Self::Chain { second, .. } => second.output_support(),
         }
     }
 
@@ -1277,9 +1275,9 @@ impl RenderEffect {
     /// input otherwise. A blur samples everything it writes and more.
     pub fn sample_domain(&self) -> Option<Rect> {
         match self {
-            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
-            RenderEffect::Shader { shader } => shader.sample_domain(),
-            RenderEffect::Chain { second, .. } => second.sample_domain(),
+            Self::Blur { .. } | Self::Offset { .. } => None,
+            Self::Shader { shader } => shader.sample_domain(),
+            Self::Chain { second, .. } => second.sample_domain(),
         }
     }
 }

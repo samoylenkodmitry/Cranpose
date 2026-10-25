@@ -102,29 +102,29 @@ fn request_test_composition() -> RequestTestComposition {
 }
 
 #[composable]
-fn RequestCounterText(counter: cranpose_core::MutableState<i32>) {
+fn RequestCounterText(counter: MutableState<i32>) {
     cranpose_ui::Text(
         format!("Counter {}", counter.get()),
-        cranpose_ui::Modifier::empty(),
+        Modifier::empty(),
         cranpose_ui::TextStyle::default(),
     );
 }
 
 #[composable]
-fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
+fn PersistentRequestRoot(counter: MutableState<i32>) {
     RequestCounterText(counter);
     WindowBox(WindowConfig::new("Persistent request", 100.0, 50.0));
 }
 
 #[composable]
-fn ConditionalRequestRoot(show: cranpose_core::MutableState<bool>) {
+fn ConditionalRequestRoot(show: MutableState<bool>) {
     if show.get() {
         WindowBox(WindowConfig::new("Conditional request", 100.0, 50.0));
     }
 }
 
 #[composable]
-fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
+fn KeyedReplacementRequestRoot(show: MutableState<bool>) {
     let active = show.get();
     cranpose_core::with_key(&active, || {
         if active {
@@ -132,7 +132,7 @@ fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
         } else {
             cranpose_ui::Text(
                 "Inactive branch",
-                cranpose_ui::Modifier::empty(),
+                Modifier::empty(),
                 cranpose_ui::TextStyle::default(),
             );
         }
@@ -143,7 +143,7 @@ fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
 fn native_window_request_survives_unrelated_scoped_recompose() {
     let mut test = request_test_composition();
     clear_native_window_requests(&test.registry);
-    let counter = cranpose_core::MutableState::with_runtime(0i32, test.runtime.handle());
+    let counter = MutableState::with_runtime(0i32, test.runtime.handle());
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
         composition
@@ -171,7 +171,7 @@ fn native_window_request_survives_unrelated_scoped_recompose() {
 fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
     let mut test = request_test_composition();
     clear_native_window_requests(&test.registry);
-    let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
+    let show = MutableState::with_runtime(true, test.runtime.handle());
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
         composition
@@ -199,7 +199,7 @@ fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
 fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
     let mut test = request_test_composition();
     clear_native_window_requests(&test.registry);
-    let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
+    let show = MutableState::with_runtime(true, test.runtime.handle());
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
         composition
@@ -294,11 +294,12 @@ fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
         },
     );
     let slices = collect_slices_from_modifier(&modifier);
-    let handler = slices
-        .pointer_inputs()
-        .first()
-        .expect("window drag pointer handler")
-        .clone();
+    let handler = Rc::clone(
+        slices
+            .pointer_inputs()
+            .first()
+            .expect("window drag pointer handler"),
+    );
     let resize_handler: NativeWindowResizeHandler = Rc::new(|_| {});
 
     with_native_window_drag_handler(Rc::new(|| true), resize_handler, || {
@@ -504,8 +505,8 @@ fn clear_does_not_reuse_same_content_revision() {
 
 #[composable(no_skip)]
 fn TornPageRoot(
-    torn: cranpose_core::MutableState<bool>,
-    title: cranpose_core::MutableState<&'static str>,
+    torn: MutableState<bool>,
+    title: MutableState<&'static str>,
     node: Rc<Cell<Option<cranpose_core::NodeId>>>,
 ) {
     cranpose_ui::Box(
@@ -525,8 +526,8 @@ fn TornPageRoot(
 
 struct TornPage {
     test: RequestTestComposition,
-    torn: cranpose_core::MutableState<bool>,
-    title: cranpose_core::MutableState<&'static str>,
+    torn: MutableState<bool>,
+    title: MutableState<&'static str>,
     node: Rc<Cell<Option<cranpose_core::NodeId>>>,
     root_key: cranpose_core::Key,
 }
@@ -534,8 +535,8 @@ struct TornPage {
 impl TornPage {
     fn composed() -> Self {
         let test = request_test_composition();
-        let torn = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
-        let title = cranpose_core::MutableState::with_runtime("Torn page", test.runtime.handle());
+        let torn = MutableState::with_runtime(true, test.runtime.handle());
+        let title = MutableState::with_runtime("Torn page", test.runtime.handle());
         let node = Rc::new(Cell::new(None));
         let root_key = cranpose_core::location_key(file!(), line!(), column!());
         let mut page = Self {
@@ -626,7 +627,7 @@ fn a_changed_config_reaches_the_request_with_a_new_revision() {
 
 #[composable(no_skip)]
 fn LocalWindowStateRoot(
-    torn: cranpose_core::MutableState<bool>,
+    torn: MutableState<bool>,
     declared: Rc<Cell<Option<WindowState>>>,
     inside: Rc<Cell<Option<WindowState>>>,
     beside: Rc<Cell<Option<WindowState>>>,
@@ -652,7 +653,7 @@ fn LocalWindowStateRoot(
 
 struct LocalWindowStatePage {
     test: RequestTestComposition,
-    torn: cranpose_core::MutableState<bool>,
+    torn: MutableState<bool>,
     declared: Rc<Cell<Option<WindowState>>>,
     inside: Rc<Cell<Option<WindowState>>>,
     beside: Rc<Cell<Option<WindowState>>>,
@@ -662,7 +663,7 @@ struct LocalWindowStatePage {
 impl LocalWindowStatePage {
     fn composed(torn_at_first: bool) -> Self {
         let test = request_test_composition();
-        let torn = cranpose_core::MutableState::with_runtime(torn_at_first, test.runtime.handle());
+        let torn = MutableState::with_runtime(torn_at_first, test.runtime.handle());
         let mut page = Self {
             test,
             torn,

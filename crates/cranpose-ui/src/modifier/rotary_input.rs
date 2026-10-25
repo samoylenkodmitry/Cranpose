@@ -22,8 +22,8 @@ impl RotaryPass {
     fn matches(self, kind: PointerEventKind) -> bool {
         matches!(
             (self, kind),
-            (RotaryPass::Pre, PointerEventKind::RotaryScrollPre)
-                | (RotaryPass::Bubble, PointerEventKind::RotaryScroll)
+            (Self::Pre, PointerEventKind::RotaryScrollPre)
+                | (Self::Bubble, PointerEventKind::RotaryScroll)
         )
     }
 }
@@ -130,11 +130,11 @@ impl ModifierNodeElement for RotaryInputElement {
     type Node = RotaryInputModifierNode;
 
     fn create(&self) -> Self::Node {
-        RotaryInputModifierNode::new(self.pass, self.handler.clone())
+        RotaryInputModifierNode::new(self.pass, Rc::clone(&self.handler))
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.handler.set(Some(self.handler.clone()));
+        node.handler.set(Some(Rc::clone(&self.handler)));
     }
 
     fn always_update(&self) -> bool {

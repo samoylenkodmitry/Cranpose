@@ -1,5 +1,3 @@
-use std::mem;
-
 use super::{dense_id_map::DenseIdMap, growth::GrowthSlack};
 use crate::collections::map::HashMap;
 
@@ -73,8 +71,8 @@ impl<S> GenerationalRegistryStorage<S> {
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.dense_states.capacity() * mem::size_of::<Option<GenerationalSlot<S>>>()
-            + self.sparse_states.capacity() * mem::size_of::<(usize, GenerationalSlot<S>)>()
+        self.dense_states.capacity() * size_of::<Option<GenerationalSlot<S>>>()
+            + self.sparse_states.capacity() * size_of::<(usize, GenerationalSlot<S>)>()
     }
 
     pub(crate) fn clear(&mut self) {

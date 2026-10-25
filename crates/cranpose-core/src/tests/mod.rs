@@ -24,7 +24,7 @@ use crate::{
 
 #[cfg(test)]
 fn reset_snapshot_runtime() -> TestRuntimeGuard {
-    crate::snapshot_pinning::reset_pinning_table();
+    snapshot_pinning::reset_pinning_table();
     reset_runtime_for_tests()
 }
 
@@ -184,7 +184,7 @@ fn recompose_scope_live_count_is_runtime_owned() {
 #[test]
 fn recompose_scope_live_count_tracks_runtime_owned_scopes() {
     let before = debug_live_recompose_scope_count();
-    let runtime = runtime::TestRuntime::new();
+    let runtime = TestRuntime::new();
     let scope = RecomposeScope::new(runtime.handle());
 
     assert_eq!(debug_live_recompose_scope_count(), before + 1);
@@ -209,7 +209,7 @@ fn recompose_scope_ids_do_not_use_process_global_counter() {
 
 #[test]
 fn recompose_scope_id_is_retained_scope_identity() {
-    let runtime = runtime::TestRuntime::new();
+    let runtime = TestRuntime::new();
     let first = RecomposeScope::new(runtime.handle());
     let first_clone = first.clone();
     let second = RecomposeScope::new(runtime.handle());
@@ -351,54 +351,49 @@ pub(crate) fn assert_composition_valid(composition: &Composition<MemoryApplier>)
 
 pub(crate) fn test_slot_table() -> SlotTable {
     with_test_slot_lifecycle(|lifecycle| {
-        *lifecycle = crate::slot::SlotLifecycleCoordinator::default();
+        *lifecycle = slot::SlotLifecycleCoordinator::default();
     });
     SlotTable::new()
 }
 
-pub(crate) fn test_slot_session() -> crate::slot::SlotWriteSessionState {
-    crate::slot::SlotWriteSessionState::default()
+pub(crate) fn test_slot_session() -> slot::SlotWriteSessionState {
+    slot::SlotWriteSessionState::default()
 }
 
 thread_local! {
-    static TEST_SLOT_LIFECYCLE: RefCell<crate::slot::SlotLifecycleCoordinator> =
-        RefCell::new(crate::slot::SlotLifecycleCoordinator::default());
+    static TEST_SLOT_LIFECYCLE: RefCell<slot::SlotLifecycleCoordinator> =
+        RefCell::new(slot::SlotLifecycleCoordinator::default());
 }
 
-fn with_test_slot_lifecycle<R>(
-    f: impl FnOnce(&mut crate::slot::SlotLifecycleCoordinator) -> R,
-) -> R {
+fn with_test_slot_lifecycle<R>(f: impl FnOnce(&mut slot::SlotLifecycleCoordinator) -> R) -> R {
     TEST_SLOT_LIFECYCLE.with(|slot| f(&mut slot.borrow_mut()))
 }
 
 pub(crate) fn begin_test_group(
     slots: &mut SlotTable,
-    state: &mut crate::slot::SlotWriteSessionState,
+    state: &mut slot::SlotWriteSessionState,
     key: Key,
 ) -> ActiveGroupId {
     with_test_slot_lifecycle(|lifecycle| {
         let mut session = slots.write_session(lifecycle, state);
-        let group_key = session.reserve_group_key(crate::slot::GroupKeySeed::unkeyed(key));
+        let group_key = session.reserve_group_key(slot::GroupKeySeed::unkeyed(key));
         session.begin_group(group_key, None, None).group
     })
 }
 
 pub(crate) fn remember_test_value<T: 'static>(
     slots: &mut SlotTable,
-    state: &mut crate::slot::SlotWriteSessionState,
+    state: &mut slot::SlotWriteSessionState,
     init: impl FnOnce() -> T,
 ) -> Owned<T> {
     with_test_slot_lifecycle(|lifecycle| {
         slots
             .write_session(lifecycle, state)
-            .remember(crate::slot::BRANCH_PATH_ROOT, init)
+            .remember(slot::BRANCH_PATH_ROOT, init)
     })
 }
 
-pub(crate) fn end_test_group(
-    slots: &mut SlotTable,
-    state: &mut crate::slot::SlotWriteSessionState,
-) {
+pub(crate) fn end_test_group(slots: &mut SlotTable, state: &mut slot::SlotWriteSessionState) {
     with_test_slot_lifecycle(|lifecycle| {
         slots.write_session(lifecycle, state).end_group();
     });
@@ -411,18 +406,18 @@ thread_local! {
 thread_local! {
     static PARENT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
     static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
-    static CAPTURED_PARENT_STATE: RefCell<Option<cranpose_core::MutableState<i32>>> =
+    static CAPTURED_PARENT_STATE: RefCell<Option<MutableState<i32>>> =
         const { RefCell::new(None) };
     static SIDE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     static DISPOSABLE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
-    static DISPOSABLE_STATE: RefCell<Option<cranpose_core::MutableState<i32>>> =
+    static DISPOSABLE_STATE: RefCell<Option<MutableState<i32>>> =
         const { RefCell::new(None) };
-    static SIDE_EFFECT_STATE: RefCell<Option<cranpose_core::MutableState<i32>>> =
+    static SIDE_EFFECT_STATE: RefCell<Option<MutableState<i32>>> =
         const { RefCell::new(None) };
 }
 
 thread_local! {
-    static DROP_REENTRY_STATE: RefCell<Option<cranpose_core::MutableState<ReentrantDropState>>> =
+    static DROP_REENTRY_STATE: RefCell<Option<MutableState<ReentrantDropState>>> =
         const { RefCell::new(None) };
     static DROP_REENTRY_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static DROP_REENTRY_LAST_VALUE: Cell<Option<usize>> = const { Cell::new(None) };
@@ -480,7 +475,7 @@ impl Drop for ReentrantDropState {
 }
 
 fn cranpose_test_node<N: Node + 'static>(init: impl FnOnce() -> N) -> NodeId {
-    cranpose_core::with_current_composer(|composer| composer.emit_node(init))
+    with_current_composer(|composer| composer.emit_node(init))
 }
 
 fn setup_composer(
@@ -498,7 +493,12 @@ fn setup_composer(
         applier,
         MemoryApplier::new(),
     )));
-    let composer = Composer::new(Rc::clone(&slots_host), applier_host.clone(), handle, root);
+    let composer = Composer::new(
+        Rc::clone(&slots_host),
+        Rc::<ConcreteApplierHost<MemoryApplier>>::clone(&applier_host),
+        handle,
+        root,
+    );
     (composer, slots_host, applier_host)
 }
 
@@ -542,7 +542,7 @@ impl Node for RecordingNode {
         self.parent = None;
     }
 
-    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+    fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
 
         out.extend_from_slice(&self.children);
@@ -642,7 +642,7 @@ impl Node for UnmountTrackingNode {
         self.children.len() < before
     }
 
-    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+    fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
 
         out.extend_from_slice(&self.children);
@@ -673,7 +673,7 @@ fn counted_text(value: i32) -> NodeId {
 }
 
 #[composable]
-fn child_reads_state(state: cranpose_core::State<i32>) -> NodeId {
+fn child_reads_state(state: State<i32>) -> NodeId {
     CHILD_RECOMPOSITIONS.with(|calls| calls.set(calls.get() + 1));
     counted_text(state.value())
 }
@@ -681,7 +681,7 @@ fn child_reads_state(state: cranpose_core::State<i32>) -> NodeId {
 #[composable]
 fn parent_passes_state() -> NodeId {
     PARENT_RECOMPOSITIONS.with(|calls| calls.set(calls.get() + 1));
-    let state = cranpose_core::rememberMutableStateOf(|| 0);
+    let state = rememberMutableStateOf(|| 0);
     CAPTURED_PARENT_STATE.with(|slot| {
         if slot.borrow().is_none() {
             *slot.borrow_mut() = Some(state);
@@ -693,14 +693,14 @@ fn parent_passes_state() -> NodeId {
 #[composable]
 fn side_effect_component() -> NodeId {
     SIDE_EFFECT_LOG.with(|log| log.borrow_mut().push("compose"));
-    let state = cranpose_core::rememberMutableStateOf(|| 0);
+    let state = rememberMutableStateOf(|| 0);
     let _ = state.value();
     SIDE_EFFECT_STATE.with(|slot| {
         if slot.borrow().is_none() {
             *slot.borrow_mut() = Some(state);
         }
     });
-    cranpose_core::SideEffect(|| {
+    SideEffect(|| {
         SIDE_EFFECT_LOG.with(|log| log.borrow_mut().push("effect"));
     });
     cranpose_test_node(TestTextNode::default)
@@ -708,7 +708,7 @@ fn side_effect_component() -> NodeId {
 
 #[composable]
 fn disposable_effect_host() -> NodeId {
-    let state = cranpose_core::rememberMutableStateOf(|| 0);
+    let state = rememberMutableStateOf(|| 0);
     DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = Some(state));
     DisposableEffect(state.value(), |scope| {
         DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().push("start"));
@@ -745,7 +745,7 @@ fn exact_subcompose_activation_does_not_take_compatible_cross_slot_nodes() {
 
 #[test]
 fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
-    let runtime = runtime::TestRuntime::new();
+    let runtime = TestRuntime::new();
     let scope = RecomposeScope::new_for_test(runtime.handle());
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
@@ -774,6 +774,7 @@ mod snapshot_observer_nesting_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;
 mod state_holder_tests;
+pub(crate) mod state_mock;
 
 #[test]
 fn hot_keys_follow_structure_not_absolute_lines() {

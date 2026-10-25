@@ -30,7 +30,7 @@ impl SnapshotWeakSet {
     #[cfg(test)]
     pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Rc<T>) {
         let hash = Rc::as_ptr(state) as *const () as usize;
-        let trait_obj: Rc<dyn StateObject> = state.clone();
+        let trait_obj: Rc<dyn StateObject> = Rc::<T>::clone(state);
         let weak = Rc::downgrade(&trait_obj);
 
         let pos = self.entries.partition_point(|(h, _)| *h < hash);

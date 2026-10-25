@@ -10,7 +10,7 @@ fn thousand() -> NonZeroU32 {
     NonZeroU32::new(1_000).expect("a thousand")
 }
 
-fn write_wav(path: &std::path::Path, channels: u16, rate: u32, frames: u32) {
+fn write_wav(path: &Path, channels: u16, rate: u32, frames: u32) {
     let bytes_per_frame = u32::from(channels) * 2;
     let data_len = frames * bytes_per_frame;
     let mut wav = Vec::with_capacity(44 + data_len as usize);
@@ -42,10 +42,10 @@ fn scratch(tag: &str) -> std::path::PathBuf {
 struct Fixture(std::path::PathBuf);
 
 impl Fixture {
-    fn wav(name: &str, channels: u16, rate: u32, frames: u32) -> Fixture {
+    fn wav(name: &str, channels: u16, rate: u32, frames: u32) -> Self {
         let path = scratch(name).join(format!("{name}.wav"));
         write_wav(&path, channels, rate, frames);
-        Fixture(path)
+        Self(path)
     }
 
     fn uri(&self) -> String {

@@ -55,9 +55,9 @@ impl FrameFormat {
     pub fn byte_len(self, width: u32, height: u32) -> Option<usize> {
         let pixels = (width as usize).checked_mul(height as usize)?;
         match self {
-            FrameFormat::Rgba8 => pixels.checked_mul(4),
-            FrameFormat::Rgb8 => pixels.checked_mul(3),
-            FrameFormat::Nv12 => {
+            Self::Rgba8 => pixels.checked_mul(4),
+            Self::Rgb8 => pixels.checked_mul(3),
+            Self::Nv12 => {
                 if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
                     return None;
                 }
@@ -382,19 +382,19 @@ pub enum CameraState {
 impl CameraState {
     /// Whether frames are being produced now.
     pub fn is_running(&self) -> bool {
-        matches!(self, CameraState::Running { .. })
+        matches!(self, Self::Running { .. })
     }
 
     /// Whether the session is opening or open — which is when a screen keeps
     /// the viewfinder on screen rather than showing a placeholder.
     pub fn is_active(&self) -> bool {
-        matches!(self, CameraState::Starting | CameraState::Running { .. })
+        matches!(self, Self::Starting | Self::Running { .. })
     }
 
     /// The failure, if the session ended in one.
     pub fn failure(&self) -> Option<&CameraError> {
         match self {
-            CameraState::Failed(error) => Some(error),
+            Self::Failed(error) => Some(error),
             _ => None,
         }
     }

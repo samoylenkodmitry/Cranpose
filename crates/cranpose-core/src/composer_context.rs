@@ -64,12 +64,13 @@ pub(crate) fn without_composer<R>(f: impl FnOnce() -> R) -> R {
 /// Panics if there is no active composer.
 pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     thread_state::runtimes(|state| {
-        let core = state
-            .current_composer
-            .borrow()
-            .as_ref()
-            .expect("with_composer: no active composer")
-            .clone();
+        let core = Rc::clone(
+            state
+                .current_composer
+                .borrow()
+                .as_ref()
+                .expect("with_composer: no active composer"),
+        );
         let composer = Composer::from_core(core);
         f(&composer)
     })
@@ -82,14 +83,13 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
 #[doc(hidden)]
 pub fn __current_composer() -> Composer {
     thread_state::runtimes(|state| {
-        Composer::from_core(
+        Composer::from_core(Rc::clone(
             state
                 .current_composer
                 .borrow()
                 .as_ref()
-                .expect("with_composer: no active composer")
-                .clone(),
-        )
+                .expect("with_composer: no active composer"),
+        ))
     })
 }
 
@@ -116,7 +116,7 @@ pub fn current_composer() -> Option<Composer> {
         return None;
     }
     thread_state::try_runtimes(|state| {
-        let core = state.current_composer.borrow().as_ref()?.clone();
+        let core = Rc::clone(state.current_composer.borrow().as_ref()?);
         Some(Composer::from_core(core))
     })
     .flatten()
@@ -125,12 +125,12 @@ pub fn current_composer() -> Option<Composer> {
 /// Registers `host`, the slot table of a subcomposition, as nested in the active slot table of the
 /// current composer, so that forgetting effects in the outer table reaches `host` too. Does nothing
 /// without a current composer.
-pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {
+pub fn note_nested_slots_host(host: &Rc<crate::SlotsHost>) {
     let Some(composer) = current_composer() else {
         return;
     };
     let holder = composer.active_slots_host();
-    if std::rc::Rc::ptr_eq(&holder, host) {
+    if Rc::ptr_eq(&holder, host) {
         return;
     }
     holder.note_nested_host(host);

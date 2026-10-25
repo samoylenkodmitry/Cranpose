@@ -167,8 +167,8 @@ fn scaled_geometry_canonicalization_preserves_edges_and_quad_topology() {
     assert_eq!(scaled.height, 50.0);
 
     assert_eq!(
-        canonicalized_scaled_quad(crate::rect_to_quad(rect), 1.25),
-        crate::rect_to_quad(scaled)
+        canonicalized_scaled_quad(rect_to_quad(rect), 1.25),
+        rect_to_quad(scaled)
     );
 }
 

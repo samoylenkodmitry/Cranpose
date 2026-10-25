@@ -36,7 +36,7 @@ impl ModifierNodeElement for NativeWindowElement {
             parts.options.width,
             parts.options.height,
         )));
-        let descriptor: Rc<dyn WindowRootDescriptor> = surface.clone();
+        let descriptor: Rc<dyn WindowRootDescriptor> = Rc::<NativeWindowRoot>::clone(&surface);
         NativeWindowNode {
             root: WindowRootNode::new(descriptor),
             surface,

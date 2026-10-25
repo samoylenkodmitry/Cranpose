@@ -234,10 +234,7 @@ pub(crate) struct TextFieldLayoutHandle {
 }
 
 impl TextFieldLayoutHandle {
-    pub(crate) fn measured_layout(
-        &self,
-        style: &TextStyle,
-    ) -> std::rc::Rc<crate::text::PreparedTextLayout> {
+    pub(crate) fn measured_layout(&self, style: &TextStyle) -> Rc<crate::text::PreparedTextLayout> {
         crate::text::prepare_text_layout_for_node(
             self.node_id.get(),
             &self.presentation.get(self.state).shown,
@@ -384,17 +381,17 @@ fn build_focus_handler(
         line_limits,
         refs.focus_options.get().show_keyboard_on_focus,
         crate::text_field_handler::InputRefs {
-            keyboard_options: refs.keyboard_options.clone(),
-            keyboard_action: refs.keyboard_action.clone(),
-            transformation: refs.input_transformation.clone(),
+            keyboard_options: Rc::clone(&refs.keyboard_options),
+            keyboard_action: Rc::clone(&refs.keyboard_action),
+            transformation: Rc::clone(&refs.input_transformation),
             secure: refs.is_secure(),
         },
         crate::text_field_handler::CaretGeometryRefs {
-            window: refs.window.clone(),
-            content_origin: refs.content_origin.clone(),
-            scroll_offset: refs.scroll_offset.clone(),
-            wrap_width: refs.wrap_width.clone(),
-            presentation: refs.presentation.clone(),
+            window: Rc::clone(&refs.window),
+            content_origin: Rc::clone(&refs.content_origin),
+            scroll_offset: Rc::clone(&refs.scroll_offset),
+            wrap_width: Rc::clone(&refs.wrap_width),
+            presentation: Rc::clone(&refs.presentation),
             style: style.clone(),
         },
     )
@@ -416,7 +413,7 @@ fn request_pointer_focus(
         .is_some_and(crate::focus_dispatch::request_focus_in_context);
     if !routed {
         crate::text_field_focus::request_focus(
-            refs.is_focused.clone(),
+            Rc::clone(&refs.is_focused),
             build_focus_handler(state, refs, line_limits, style),
             modal_depth,
         );
@@ -454,7 +451,7 @@ impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
     fn set_focus_state(&self, state: FocusState) {
         if state.is_focused() {
             crate::text_field_focus::request_focus(
-                self.refs.is_focused.clone(),
+                Rc::clone(&self.refs.is_focused),
                 build_focus_handler(self.state, &self.refs, self.line_limits, &self.style),
                 self.refs.focus_options.get().modal_depth,
             );
@@ -610,8 +607,8 @@ impl TextFieldModifierNode {
         refs: TextFieldRefs,
         decorated: bool,
     ) -> Self {
-        let refs_line_height = refs.line_height.clone();
-        let refs_wrap_width = refs.wrap_width.clone();
+        let refs_line_height = Rc::clone(&refs.line_height);
+        let refs_wrap_width = Rc::clone(&refs.wrap_width);
         let line_limits = TextFieldLineLimits::default();
         let cached_handler =
             Self::create_handler(state, refs.clone(), line_limits, style.clone(), 0);
@@ -710,7 +707,7 @@ impl TextFieldModifierNode {
     pub fn text_pan_resolver(&self) -> Option<TextPanResolver> {
         self.line_limits
             .is_single_line()
-            .then(|| self.cached_pan_resolver.clone())
+            .then(|| Rc::clone(&self.cached_pan_resolver))
     }
 
     /// Returns the current horizontal scroll (pan) offset in px.
@@ -877,15 +874,15 @@ impl TextFieldModifierNode {
     }
 
     pub(crate) fn window_sink(&self) -> Rc<Cell<WindowCoordinates>> {
-        self.refs.window.clone()
+        Rc::clone(&self.refs.window)
     }
 
     pub(crate) fn layout_handle(&self) -> TextFieldLayoutHandle {
         TextFieldLayoutHandle {
             state: self.state,
-            node_id: self.refs.node_id.clone(),
-            wrap_width: self.measured_wrap_width.clone(),
-            presentation: self.refs.presentation.clone(),
+            node_id: Rc::clone(&self.refs.node_id),
+            wrap_width: Rc::clone(&self.measured_wrap_width),
+            presentation: Rc::clone(&self.refs.presentation),
         }
     }
 
@@ -1132,10 +1129,7 @@ impl TextFieldModifierNode {
 /// The field's content viewport: its measured text area, or the draw
 /// scope's size before the first measure. The draw scope is the field's
 /// content rect, already inside the padding declared before the field.
-fn content_viewport(
-    measured: cranpose_ui_graphics::Size,
-    size: cranpose_foundation::Size,
-) -> (f32, f32) {
+fn content_viewport(measured: Size, size: Size) -> (f32, f32) {
     let width = if measured.width > 0.0 {
         measured.width
     } else {
@@ -1155,22 +1149,22 @@ impl DrawModifierNode for TextFieldModifierNode {
     ) -> Option<Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>> {
         use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
 
-        let is_focused = self.refs.is_focused.clone();
+        let is_focused = Rc::clone(&self.refs.is_focused);
         let state = self.state;
-        let content_origin = self.refs.content_origin.clone();
+        let content_origin = Rc::clone(&self.refs.content_origin);
         let cursor_brush = self.cursor_brush.clone();
         let style = self.style.clone();
-        let cached_line_height = self.measured_line_height.clone();
-        let measured_size = self.measured_size.clone();
-        let measured_wrap_width = self.measured_wrap_width.clone();
-        let node_id = self.refs.node_id.clone();
-        let pan_resolver = self.cached_pan_resolver.clone();
+        let cached_line_height = Rc::clone(&self.measured_line_height);
+        let measured_size = Rc::clone(&self.measured_size);
+        let measured_wrap_width = Rc::clone(&self.measured_wrap_width);
+        let node_id = Rc::clone(&self.refs.node_id);
+        let pan_resolver = Rc::clone(&self.cached_pan_resolver);
         let handle_controller = self.handle_controller.clone();
-        let window = self.refs.window.clone();
-        let direct_manipulation = self.refs.direct_manipulation.clone();
+        let window = Rc::clone(&self.refs.window);
+        let direct_manipulation = Rc::clone(&self.refs.direct_manipulation);
         let press_track = self.refs.press_track;
-        let gesture_claimed = self.refs.gesture_claimed.clone();
-        let presentation_cache = self.refs.presentation.clone();
+        let gesture_claimed = Rc::clone(&self.refs.gesture_claimed);
+        let presentation_cache = Rc::clone(&self.refs.presentation);
 
         Some(Rc::new(move |scope| {
             let size = scope.size();
@@ -1227,9 +1221,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 let (comp_start, comp_end) = presentation.range_to_shown(comp_range);
 
                 if comp_start < comp_end && comp_end <= text.len() {
-                    let underline_brush = cranpose_ui_graphics::Brush::solid(
-                        cranpose_ui_graphics::Color(0.8, 0.8, 0.8, 0.8),
-                    );
+                    let underline_brush = Brush::solid(Color(0.8, 0.8, 0.8, 0.8));
                     let underline_height: f32 = 2.0;
 
                     for line_rect in range_visual_line_rects(
@@ -1303,16 +1295,16 @@ impl DrawModifierNode for TextFieldModifierNode {
     ) -> Option<Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>> {
         use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
 
-        let is_focused = self.refs.is_focused.clone();
+        let is_focused = Rc::clone(&self.refs.is_focused);
         let state = self.state;
         let selection_brush = self.selection_brush.clone();
         let style = self.style.clone();
-        let cached_line_height = self.measured_line_height.clone();
-        let measured_size = self.measured_size.clone();
-        let measured_wrap_width = self.measured_wrap_width.clone();
-        let node_id = self.refs.node_id.clone();
-        let pan_resolver = self.cached_pan_resolver.clone();
-        let presentation_cache = self.refs.presentation.clone();
+        let cached_line_height = Rc::clone(&self.measured_line_height);
+        let measured_size = Rc::clone(&self.measured_size);
+        let measured_wrap_width = Rc::clone(&self.measured_wrap_width);
+        let node_id = Rc::clone(&self.refs.node_id);
+        let pan_resolver = Rc::clone(&self.cached_pan_resolver);
+        let presentation_cache = Rc::clone(&self.refs.presentation);
 
         Some(Rc::new(move |scope| {
             let size = scope.size();
@@ -1454,7 +1446,7 @@ impl PointerInputNode for TextFieldModifierNode {
     }
 
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
-        Some(self.cached_handler.clone())
+        Some(Rc::clone(&self.cached_handler))
     }
 }
 

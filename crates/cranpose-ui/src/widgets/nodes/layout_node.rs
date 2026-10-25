@@ -313,19 +313,19 @@ pub enum IntrinsicKind {
 impl IntrinsicKind {
     fn discriminant(&self) -> u8 {
         match self {
-            IntrinsicKind::MinWidth(_) => 0,
-            IntrinsicKind::MaxWidth(_) => 1,
-            IntrinsicKind::MinHeight(_) => 2,
-            IntrinsicKind::MaxHeight(_) => 3,
+            Self::MinWidth(_) => 0,
+            Self::MaxWidth(_) => 1,
+            Self::MinHeight(_) => 2,
+            Self::MaxHeight(_) => 3,
         }
     }
 
     fn value_bits(&self) -> u32 {
         match self {
-            IntrinsicKind::MinWidth(value)
-            | IntrinsicKind::MaxWidth(value)
-            | IntrinsicKind::MinHeight(value)
-            | IntrinsicKind::MaxHeight(value) => value.to_bits(),
+            Self::MinWidth(value)
+            | Self::MaxWidth(value)
+            | Self::MinHeight(value)
+            | Self::MaxHeight(value) => value.to_bits(),
         }
     }
 }
@@ -1408,7 +1408,7 @@ impl LayoutNode {
     }
 
     pub(crate) fn layout_runtime_state_handle(&self) -> Rc<RefCell<LayoutRuntimeState>> {
-        self.layout_runtime_state.clone()
+        Rc::clone(&self.layout_runtime_state)
     }
 
     /// The node's layout runtime state, borrowed where
@@ -1431,7 +1431,7 @@ impl Clone for LayoutNode {
             modifier_chain: ModifierChainHandle::for_layout_direction(
                 self.modifier_chain.layout_direction(),
             ),
-            measure_policy: self.measure_policy.clone(),
+            measure_policy: Rc::clone(&self.measure_policy),
             density: self.density,
             children: self.children.clone(),
             cache: self.cache.clone(),
@@ -1449,8 +1449,8 @@ impl Clone for LayoutNode {
             is_virtual: self.is_virtual,
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
-            layout_state: self.layout_state.clone(),
-            layout_runtime_state: self.layout_runtime_state.clone(),
+            layout_state: Rc::clone(&self.layout_state),
+            layout_runtime_state: Rc::clone(&self.layout_runtime_state),
             coordinator_geometry: Rc::clone(&self.coordinator_geometry),
         };
         node.sync_modifier_chain(None);
@@ -1469,7 +1469,7 @@ impl Node for LayoutNode {
     }
 
     fn set_node_id(&mut self, id: NodeId) {
-        LayoutNode::set_node_id(self, id);
+        Self::set_node_id(self, id);
     }
 
     fn insert_child(&mut self, child: NodeId) -> bool {
@@ -1543,19 +1543,19 @@ impl Node for LayoutNode {
     }
 
     fn mark_needs_layout(&self) {
-        LayoutNode::mark_needs_layout(self);
+        Self::mark_needs_layout(self);
     }
 
     fn needs_layout(&self) -> bool {
-        LayoutNode::needs_layout(self)
+        Self::needs_layout(self)
     }
 
     fn mark_needs_measure(&self) {
-        LayoutNode::mark_needs_measure(self);
+        Self::mark_needs_measure(self);
     }
 
     fn needs_measure(&self) -> bool {
-        LayoutNode::needs_measure(self)
+        Self::needs_measure(self)
     }
 
     fn mark_descendant_needs_layout(&self, measure: bool) {
@@ -1590,7 +1590,7 @@ impl Node for LayoutNode {
     }
 
     fn needs_semantics(&self) -> bool {
-        LayoutNode::needs_semantics(self)
+        Self::needs_semantics(self)
     }
 
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
@@ -1611,11 +1611,11 @@ impl Node for LayoutNode {
         *self = Self::new_recycled_shell(self.is_virtual);
     }
 
-    fn rehouse_for_recycle(&self) -> Option<Box<dyn cranpose_core::Node>> {
+    fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
         Some(Box::new(Self::new_recycled_shell(self.is_virtual)))
     }
 
-    fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn cranpose_core::Node>> {
+    fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn Node>> {
         // The whole node moves into the new box. Its modifier nodes keep
         // what the user is doing with it, such as a focus, a held press or an
         // IME composition, and its caches and registry entry stay true for

@@ -121,7 +121,7 @@ fn nested_edit_is_rejected() {
         let state = TextFieldState::new("Hello");
         let state_clone = state;
         let nested_result = Rc::new(Cell::new(true));
-        let nested_result_for_edit = nested_result.clone();
+        let nested_result_for_edit = Rc::clone(&nested_result);
         let outer_result = state.edit(move |_buffer| {
             nested_result_for_edit.set(state_clone.edit(|_| {}));
         });
@@ -137,7 +137,7 @@ fn listener_is_called_on_change() {
 
         let state = TextFieldState::new("Hello");
         let called = Rc::new(Cell::new(false));
-        let called_clone = called.clone();
+        let called_clone = Rc::clone(&called);
 
         state.add_listener(move |_value| {
             called_clone.set(true);

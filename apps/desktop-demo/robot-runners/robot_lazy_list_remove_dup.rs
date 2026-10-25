@@ -111,5 +111,5 @@ pub(crate) fn main() {
             println!("✓ No duplicate LazyList layout detected");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

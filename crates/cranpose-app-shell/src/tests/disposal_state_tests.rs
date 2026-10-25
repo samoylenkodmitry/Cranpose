@@ -115,7 +115,7 @@ fn a_lazy_item_disposal_may_write_state_at_final_teardown() {
 }
 
 thread_local! {
-    static SCROLL_LIST: RefCell<Option<cranpose_foundation::lazy::LazyListState>> = const { RefCell::new(None) };
+    static SCROLL_LIST: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
 }
 
 #[composable]

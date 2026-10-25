@@ -764,7 +764,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let return_ty: syn::Type = match &func.sig.output {
+    let return_ty: Type = match &func.sig.output {
         ReturnType::Default => syn::parse_quote! { () },
         ReturnType::Type(_, ty) => ty.as_ref().clone(),
     };
@@ -1217,7 +1217,7 @@ fn find_reserved_pattern_ident(pat: &Pat) -> Option<&Ident> {
     struct Scan<'ast> {
         found: Option<&'ast Ident>,
     }
-    impl<'ast> syn::visit::Visit<'ast> for Scan<'ast> {
+    impl<'ast> Visit<'ast> for Scan<'ast> {
         fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
             if self.found.is_none() {
                 let name = node.ident.to_string();

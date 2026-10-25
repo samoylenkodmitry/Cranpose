@@ -804,7 +804,7 @@ impl WebAccessibilityBridge {
     pub(crate) fn text_input_handler(
         &self,
     ) -> Rc<dyn cranpose_app_shell::PlatformTextInputHandler> {
-        self.text_input.clone()
+        Rc::<WebTextInput>::clone(&self.text_input)
     }
 
     /// When a frame must come for the mirror to look at a change the publish

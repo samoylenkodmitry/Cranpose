@@ -200,5 +200,5 @@ pub(crate) fn main() {
             println!("✓ LazyList row layout looks correct");
             robot.exit().ok();
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }

@@ -16,7 +16,7 @@ use crate::animation::{AnimationType, Lerp, SpringScalar, animateValueAsState};
 
 impl Lerp for Color {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Color(
+        Self(
             self.0.lerp(&target.0, fraction).clamp(0.0, 1.0),
             self.1.lerp(&target.1, fraction).clamp(0.0, 1.0),
             self.2.lerp(&target.2, fraction).clamp(0.0, 1.0),
@@ -42,7 +42,7 @@ impl SpringScalar for Color {
     }
 
     fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Color(
+        Self(
             dimensions[0].clamp(0.0, 1.0),
             dimensions[1].clamp(0.0, 1.0),
             dimensions[2].clamp(0.0, 1.0),

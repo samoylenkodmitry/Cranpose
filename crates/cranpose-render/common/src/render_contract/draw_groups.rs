@@ -297,7 +297,7 @@ pub(super) fn painted_groups_fixture() -> RenderFixture {
         .graph
         .root
         .children
-        .push(RenderNode::Layer(std::boxed::Box::new(node_root)));
+        .push(RenderNode::Layer(Box::new(node_root)));
     fixture
 }
 

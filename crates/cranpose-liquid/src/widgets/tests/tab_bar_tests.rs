@@ -134,8 +134,7 @@ fn app_badge_geometry_honors_the_tab_optical_scale() {
 
 #[test]
 fn base_tab_content_remains_neutral_under_the_moving_selection_layer() {
-    let colors =
-        crate::theme::LiquidColors::light(cranpose_ui_graphics::Color::from_rgb_u8(0, 122, 255));
+    let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
     assert_eq!(tab_base_content_color(colors), colors.label);
     assert_eq!(tab_selection_content_color(colors), colors.accent);
 }
@@ -252,7 +251,7 @@ fn tab_grid_matches_the_reference_inner_inset() {
 
 #[test]
 fn flight_lens_uses_the_measured_sequential_warps() {
-    let glass = tab_flight_lens_material(cranpose_ui_graphics::Color::BLACK, 1.0);
+    let glass = tab_flight_lens_material(Color::BLACK, 1.0);
     let generic_lens = Glass::lens();
     assert!(glass.lift.is_some_and(|lift| (0.0..=0.15).contains(&lift)));
     assert_eq!(glass.refraction_depth_dp, Some(36.0));
@@ -317,7 +316,7 @@ fn flight_lens_retains_neutral_tint_through_direct_motion() {
 
 #[test]
 fn bar_surface_adapts_tone_to_its_foreground() {
-    let glass = surface_material(cranpose_ui_graphics::Color::BLACK);
+    let glass = surface_material(Color::BLACK);
     assert_eq!(glass.blur_radius, Some(6.0));
     assert_eq!(glass.saturation, Some(1.0));
     assert_eq!(glass.lift, Some(0.0));

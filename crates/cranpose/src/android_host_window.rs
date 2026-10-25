@@ -107,7 +107,7 @@ impl AndroidHostWindowState {
                     0,
                 ),
             };
-        AndroidHostWindowState {
+        Self {
             requested_size: cranpose_core::mutableStateOf(initial_requested),
             requested_position: cranpose_core::mutableStateOf(Point::ZERO),
             actual_size: cranpose_core::mutableStateOf(Size::ZERO),

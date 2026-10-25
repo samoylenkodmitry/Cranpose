@@ -4,6 +4,11 @@ use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, DrawPrimitive, Point, Size as ViewportSize, Size as PrimSize};
 
 use super::*;
+
+const VIEWPORT: ViewportSize = ViewportSize {
+    width: 320.0,
+    height: 480.0,
+};
 use crate::{
     modifier::{Color, ModifierNodeSlices, PointerEvent, PointerEventKind},
     widgets::Canvas,
@@ -73,35 +78,19 @@ fn compose_lazy_row_with_background() -> TestComposition {
     })
 }
 
-fn measure_row(composition: &mut TestComposition, root: NodeId) {
+fn layout_tree(composition: &mut TestComposition, root: NodeId) -> LayoutTree {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    crate::measure_layout(
-        &mut applier,
-        root,
-        ViewportSize {
-            width: 320.0,
-            height: 480.0,
-        },
-    )
-    .expect("layout measurement");
-    applier.clear_runtime_handle();
-}
-
-fn layout_tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    let tree = crate::build_layout_tree_from_applier(&mut applier, root)
+    let tree = build_layout_tree_from_applier(&mut applier, root)
         .expect("layout tree build")
         .expect("layout tree present");
     applier.clear_runtime_handle();
     tree
 }
 
-fn pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
-    fn walk(node: &crate::LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
+fn pointer_handler(tree: &LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
+    fn walk(node: &LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
             return Some(Rc::clone(handler));
         }
@@ -110,8 +99,8 @@ fn pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
     walk(tree.root()).expect("swipe pointer handler")
 }
 
-fn content_layer_slices(tree: &crate::LayoutTree) -> Rc<ModifierNodeSlices> {
-    fn walk(node: &crate::LayoutBox) -> Option<Rc<ModifierNodeSlices>> {
+fn content_layer_slices(tree: &LayoutTree) -> Rc<ModifierNodeSlices> {
+    fn walk(node: &LayoutBox) -> Option<Rc<ModifierNodeSlices>> {
         if node.node_data.modifier_slices().graphics_layer().is_some() {
             return Some(Rc::clone(&node.node_data.modifier_slices));
         }
@@ -127,14 +116,14 @@ fn applied_translation_x(slices: &ModifierNodeSlices) -> f32 {
         .translation_x
 }
 
-fn count_color_primitives(tree: &crate::LayoutTree, expected: Color) -> usize {
-    fn walk(node: &crate::LayoutBox, expected: Color, count: &mut usize) {
+fn count_color_primitives(tree: &LayoutTree, expected: Color) -> usize {
+    fn walk(node: &LayoutBox, expected: Color, count: &mut usize) {
         let size = PrimSize {
             width: node.rect.width,
             height: node.rect.height,
         };
         for primitive in
-            crate::execute_draw_commands(node.node_data.modifier_slices().draw_commands(), size)
+            execute_draw_commands(node.node_data.modifier_slices().draw_commands(), size)
         {
             if let DrawPrimitive::Rect {
                 brush: Brush::Solid(color),
@@ -176,7 +165,7 @@ fn root_height(composition: &mut TestComposition, root: NodeId) -> f32 {
 #[test]
 fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
     let mut composition = run_test_composition(|| {});
-    let key = cranpose_core::location_key(file!(), line!(), column!());
+    let key = location_key(file!(), line!(), column!());
     for (frame, color) in [Color::RED, Color::GREEN, Color::BLUE]
         .into_iter()
         .enumerate()
@@ -196,14 +185,16 @@ fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
             .expect("compose changing canvas");
         let root = composition.root().expect("root");
         if frame == 0 {
-            measure_row(&mut composition, root);
+            composition
+                .measure_layout(root, VIEWPORT)
+                .expect("layout measurement");
         }
         composition
             .flush_pending_node_updates()
             .expect("apply dirty flags");
         let needs_layout = {
             let mut applier = composition.applier_mut();
-            crate::layout::tree_needs_layout(&mut *applier, root).expect("layout state")
+            tree_needs_layout(&mut *applier, root).expect("layout state")
         };
         assert!(
             !needs_layout,
@@ -220,7 +211,7 @@ fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
 #[test]
 fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
     let mut composition = run_test_composition(|| {});
-    let key = cranpose_core::location_key(file!(), line!(), column!());
+    let key = location_key(file!(), line!(), column!());
     let active_slot = Rc::new(std::cell::RefCell::new(None));
     for (selected, width) in [(0, 100.0), (1, 100.0), (1, 140.0)] {
         let output = Rc::clone(&active_slot);
@@ -243,7 +234,9 @@ fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
             })
             .expect("compose controller and dimensions");
         let root = composition.root().expect("root");
-        measure_row(&mut composition, root);
+        composition
+            .measure_layout(root, VIEWPORT)
+            .expect("layout measurement");
         let tree = layout_tree(&mut composition, root);
         let handler = pointer_handler(&tree);
         handler(down(10.0));
@@ -262,7 +255,9 @@ fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
 fn dragging_translates_content_with_the_finger() {
     let mut composition = compose_row(false);
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     let tree = layout_tree(&mut composition, root);
 
     let handler = pointer_handler(&tree);
@@ -301,7 +296,9 @@ fn dragging_translates_content_with_the_finger() {
 fn background_only_draws_while_displaced() {
     let mut composition = compose_row(true);
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let tree = layout_tree(&mut composition, root);
     assert_eq!(
@@ -317,7 +314,9 @@ fn background_only_draws_while_displaced() {
     composition
         .process_invalid_scopes()
         .expect("recompose after reveal");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     let displaced = layout_tree(&mut composition, root);
     assert!(
         count_color_primitives(&displaced, BIN_RED) > 0,
@@ -329,7 +328,9 @@ fn background_only_draws_while_displaced() {
 fn dismissed_row_hides_background_and_collapses_to_zero_height() {
     let mut composition = compose_row(true);
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     assert!(
         (root_height(&mut composition, root) - 48.0).abs() < 1e-3,
         "row starts at its natural 48px height"
@@ -352,7 +353,9 @@ fn dismissed_row_hides_background_and_collapses_to_zero_height() {
     composition
         .process_invalid_scopes()
         .expect("recompose after the dismiss settles");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let settled = layout_tree(&mut composition, root);
     assert_eq!(
@@ -371,7 +374,9 @@ fn dismissed_row_hides_background_and_collapses_to_zero_height() {
 fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
     let mut composition = compose_lazy_row_with_background();
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let tree = layout_tree(&mut composition, root);
     let handler = deepest_pointer_handler(&tree);
@@ -383,7 +388,9 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
     composition
         .process_invalid_scopes()
         .expect("recompose after capture");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     assert!(
         count_color_primitives(&layout_tree(&mut composition, root), BIN_RED) > 0,
         "the swipe must reveal the bin background mid-drag"
@@ -401,7 +408,9 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
         composition
             .process_invalid_scopes()
             .expect("recompose during collapse");
-        measure_row(&mut composition, root);
+        composition
+            .measure_layout(root, VIEWPORT)
+            .expect("layout measurement");
     }
 
     let settled = layout_tree(&mut composition, root);
@@ -419,8 +428,8 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
 
 type DepthTaggedHandler = (usize, Rc<dyn Fn(PointerEvent)>);
 
-fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
-    fn walk(node: &crate::LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
+fn deepest_pointer_handler(tree: &LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
+    fn walk(node: &LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first()
             && best.as_ref().is_none_or(|(d, _)| depth >= *d)
         {
@@ -435,8 +444,8 @@ fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)>
     best.expect("swipe pointer handler").1
 }
 
-fn outer_item_height(tree: &crate::LayoutTree) -> Option<f32> {
-    fn walk(node: &crate::LayoutBox) -> Option<f32> {
+fn outer_item_height(tree: &LayoutTree) -> Option<f32> {
+    fn walk(node: &LayoutBox) -> Option<f32> {
         for child in &node.children {
             if !child
                 .node_data

@@ -54,8 +54,8 @@ pub enum TextSource {
 impl TextSource {
     fn resolve(&self) -> Rc<crate::text::AnnotatedString> {
         match self {
-            TextSource::Static(text) => text.clone(),
-            TextSource::Dynamic(dynamic) => dynamic.resolve(),
+            Self::Static(text) => Rc::clone(text),
+            Self::Dynamic(dynamic) => dynamic.resolve(),
         }
     }
 }

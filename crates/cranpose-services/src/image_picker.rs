@@ -120,7 +120,7 @@ pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
 /// Provides the platform image picker to `content` through [`local_image_picker`].
 #[composable]
 pub fn ProvideImagePicker(content: impl FnOnce()) {
-    let picker = cranpose_core::remember(default_image_picker).with(|state| state.clone());
+    let picker = cranpose_core::remember(default_image_picker).with(|state| Arc::clone(state));
     let local = local_image_picker();
 
     CompositionLocalProvider([local.provides(picker)], move || {

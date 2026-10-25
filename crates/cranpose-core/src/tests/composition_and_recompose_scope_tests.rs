@@ -106,7 +106,7 @@ fn composition_local_default_value_used_outside_provider() {
 #[test]
 fn nested_providers_shadow_and_restore_the_locals_around_them() {
     thread_local! {
-        static READS: std::cell::RefCell<Vec<(i32, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static READS: RefCell<Vec<(i32, i32)>> = const { RefCell::new(Vec::new()) };
     }
 
     let first = compositionLocalOf(|| 0);
@@ -136,7 +136,7 @@ fn nested_providers_shadow_and_restore_the_locals_around_them() {
         .expect("compose readers");
 
     assert_eq!(
-        READS.with(std::cell::RefCell::take),
+        READS.with(RefCell::take),
         [(3, 2), (3, 4), (3, 2), (0, 0)],
         "the last value for a local wins, an inner provider shadows only its own, \
          and each provider's end restores the locals around it"
@@ -170,7 +170,7 @@ fn a_provider_restores_the_very_locals_it_was_given() {
     );
 }
 
-fn same_locals(a: &crate::LocalStackSnapshot, b: &crate::LocalStackSnapshot) -> bool {
+fn same_locals(a: &LocalStackSnapshot, b: &LocalStackSnapshot) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => Rc::ptr_eq(a, b),
         (None, None) => true,
@@ -194,9 +194,9 @@ fn malformed_composition_local_entry_falls_back_to_default() {
 
     composition
         .render(2_031, || {
-            let malformed = crate::composition_locals::malformed_composition_local_for_test(
+            let malformed = composition_locals::malformed_composition_local_for_test(
                 &local_counter,
-                Rc::new(String::from("wrong")) as Rc<dyn std::any::Any>,
+                Rc::new(String::from("wrong")) as Rc<dyn Any>,
             );
             CompositionLocalProvider([malformed], || reader(local_counter.clone()));
         })
@@ -335,7 +335,7 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let shared = Arc::new(7);
-    let provided_state = MutableState::with_runtime(shared.clone(), runtime.clone());
+    let provided_state = MutableState::with_runtime(Arc::clone(&shared), runtime.clone());
 
     #[composable]
     fn reader(local_value: CompositionLocal<Arc<i32>>) {
@@ -568,9 +568,9 @@ fn malformed_static_composition_local_entry_falls_back_to_default() {
 
     composition
         .render(2_037, || {
-            let malformed = crate::composition_locals::malformed_static_composition_local_for_test(
+            let malformed = composition_locals::malformed_static_composition_local_for_test(
                 &local_counter,
-                Rc::new(String::from("wrong")) as Rc<dyn std::any::Any>,
+                Rc::new(String::from("wrong")) as Rc<dyn Any>,
             );
             CompositionLocalProvider([malformed], || reader(local_counter.clone()));
         })
@@ -1114,7 +1114,7 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
             PARENT_SCOPE_ID.with(|slot| slot.set(Some(scope.id())));
         });
 
-        cranpose_core::with_key(&"callbackless-child", || {
+        with_key(&"callbackless-child", || {
             with_current_composer(|composer| {
                 let scope = composer
                     .current_recompose_scope()
@@ -1199,7 +1199,7 @@ fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_request
 
     let mut render = || {
         RENDER_COUNT.with(|count| count.set(count.get() + 1));
-        cranpose_core::with_key(&"root-callbackless", || {
+        with_key(&"root-callbackless", || {
             with_current_composer(|composer| {
                 let scope = composer
                     .current_recompose_scope()
@@ -1208,7 +1208,7 @@ fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_request
             });
         });
 
-        cranpose_core::SideEffect(|| {
+        SideEffect(|| {
             let already_invalidated =
                 INVALIDATED_DURING_SIDE_EFFECT.with(|flag| flag.replace(true));
             if already_invalidated {
@@ -1325,7 +1325,7 @@ fn reconcile_clears_scope_flags_during_root_replay() {
 
     let mut render = || {
         parent_scope_host();
-        cranpose_core::with_key(&"root-callbackless", || {
+        with_key(&"root-callbackless", || {
             with_current_composer(|composer| {
                 let scope = composer
                     .current_recompose_scope()
@@ -2956,7 +2956,7 @@ fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_nod
                 let container =
                     with_current_composer(|composer| composer.emit_node(RecordingNode::default));
                 parent_id.set(Some(container));
-                cranpose_core::push_parent(container);
+                push_parent(container);
                 if show_branch.value() {
                     with_current_composer(|composer| {
                         let captured = Rc::clone(&captured);
@@ -2970,7 +2970,7 @@ fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_nod
                         );
                     });
                 }
-                cranpose_core::pop_parent();
+                pop_parent();
             })
             .expect("render retained child branch");
         assert_composition_valid(composition);
@@ -3295,7 +3295,7 @@ fn list_item_reorder_with_explicit_keys_preserves_item_state() {
                 captured.replace(Vec::new());
                 let current_order = order.borrow().clone();
                 for item in current_order {
-                    cranpose_core::with_key(&item, || {
+                    with_key(&item, || {
                         let slot =
                             with_current_composer(|composer| composer.remember(|| item * 10));
                         captured.borrow_mut().push((item, slot));
@@ -3669,13 +3669,13 @@ fn with_key_keeps_callsite_identity_when_user_key_repeats() {
     #[composable]
     fn root(show_first: MutableState<bool>) {
         if show_first.value() {
-            cranpose_core::with_key(&"shared-user-key", || {
+            with_key(&"shared-user-key", || {
                 let slot = with_current_composer(|composer| composer.remember(|| 10));
                 let _ = slot;
             });
         }
 
-        cranpose_core::with_key(&"shared-user-key", || {
+        with_key(&"shared-user-key", || {
             let slot = with_current_composer(|composer| composer.remember(|| 20));
             SECOND_SLOT.with(|cell| cell.replace(Some(slot)));
         });
@@ -3776,9 +3776,7 @@ fn keyed_child_moved_between_parents_rebuilds_without_stale_attachment() {
 
     #[composable]
     fn movable_child() -> NodeId {
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(TrackingChild::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(TrackingChild::default));
         CHILD_ID.with(|slot| slot.set(Some(id)));
         id
     }
@@ -3786,7 +3784,7 @@ fn keyed_child_moved_between_parents_rebuilds_without_stale_attachment() {
     #[composable]
     fn keyed_movable_child() -> NodeId {
         let node_id = Cell::new(None);
-        cranpose_core::with_key(&"movable-child", || {
+        with_key(&"movable-child", || {
             node_id.set(Some(movable_child()));
         });
         node_id
@@ -3796,31 +3794,27 @@ fn keyed_child_moved_between_parents_rebuilds_without_stale_attachment() {
 
     #[composable]
     fn movable_parent(show_child_inside: bool) -> NodeId {
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RecordingNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         PARENT_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         if show_child_inside {
             keyed_movable_child();
         }
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
     #[composable]
     fn movable_root(show_child_inside: MutableState<bool>) -> NodeId {
         let show_child_inside = show_child_inside.value();
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RecordingNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         ROOT_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         movable_parent(show_child_inside);
         if !show_child_inside {
             keyed_movable_child();
         }
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
@@ -3904,7 +3898,7 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
 
     #[composable]
     fn Leaf(label: &'static str) -> NodeId {
-        cranpose_core::with_current_composer(|composer| {
+        with_current_composer(|composer| {
             composer.emit_node(|| TrackingChild {
                 label: label.to_string(),
                 ..TrackingChild::default()
@@ -3914,13 +3908,11 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
 
     #[composable]
     fn QueueRow() -> NodeId {
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RecordingNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         QUEUE_ROW_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         Leaf("queue");
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
@@ -3934,42 +3926,36 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
 
     #[composable]
     fn CurrentRow(field_text: MutableState<&'static str>) -> NodeId {
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RecordingNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         CURRENT_ROW_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         CurrentField(field_text);
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
     #[composable]
     fn StatusRow() -> NodeId {
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RecordingNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         STATUS_ROW_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         Leaf("status");
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
     #[composable]
     fn Root(show_current: MutableState<bool>, field_text: MutableState<&'static str>) -> NodeId {
         let show_current = show_current.value();
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RecordingNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         ROOT_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         QueueRow();
         if show_current {
             CurrentRow(field_text);
         }
         StatusRow();
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
@@ -4107,7 +4093,7 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
             self.children.len() < before
         }
 
-        fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+        fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
             out.clear();
 
             out.extend_from_slice(&self.children);
@@ -4116,7 +4102,7 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
 
     #[composable]
     fn Child(value: i32) -> NodeId {
-        cranpose_core::with_current_composer(|composer| {
+        with_current_composer(|composer| {
             composer.emit_node(|| TrackingChild {
                 label: value.to_string(),
                 ..TrackingChild::default()
@@ -4127,13 +4113,11 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
     #[composable]
     fn Root(value: MutableState<i32>) -> NodeId {
         let value = value.value();
-        let id = cranpose_core::with_current_composer(|composer| {
-            composer.emit_node(RootReplayNode::default)
-        });
+        let id = with_current_composer(|composer| composer.emit_node(RootReplayNode::default));
         ROOT_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         Child(value);
-        cranpose_core::pop_parent();
+        pop_parent();
         id
     }
 
@@ -4552,7 +4536,7 @@ fn key_preserves_state_when_unchanged_and_discards_when_key_changes() {
 
     #[composable]
     fn root(variant: MutableState<u32>) {
-        cranpose_core::key(variant.value(), || {
+        key(variant.value(), || {
             let slot = with_current_composer(|composer| composer.remember(|| 0_i32));
             SLOT.with(|cell| cell.replace(Some(slot)));
         });
@@ -4604,11 +4588,11 @@ fn sibling_key_blocks_with_different_keys_do_not_share_state() {
     #[composable]
     fn root(tick: MutableState<u32>) {
         let _ = tick.value();
-        cranpose_core::key("first", || {
+        key("first", || {
             let slot = with_current_composer(|composer| composer.remember(|| 1_i32));
             SLOTS.with(|cell| cell.borrow_mut().push(slot));
         });
-        cranpose_core::key("second", || {
+        key("second", || {
             let slot = with_current_composer(|composer| composer.remember(|| 2_i32));
             SLOTS.with(|cell| cell.borrow_mut().push(slot));
         });
@@ -4658,7 +4642,7 @@ fn a_rekeyed_subtree_keeps_its_place_when_only_its_scope_recomposes() {
     #[composable]
     fn tabbed_list(tab: MutableState<u8>) {
         let tab = tab.value();
-        cranpose_core::with_key(&tab, || {
+        with_key(&tab, || {
             let id = with_current_composer(|composer| {
                 composer.emit_node(|| TrackingChild {
                     label: format!("list {tab}"),
@@ -4684,10 +4668,10 @@ fn a_rekeyed_subtree_keeps_its_place_when_only_its_scope_recomposes() {
     fn pane(tab: MutableState<u8>) {
         let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         CONTAINER_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         tabbed_list(tab);
         dock();
-        cranpose_core::pop_parent();
+        pop_parent();
     }
 
     fn container_children(composition: &mut Composition<MemoryApplier>) -> Vec<NodeId> {
@@ -4771,10 +4755,10 @@ fn a_scope_that_grows_places_its_new_node_among_its_own_nodes() {
     fn pane(grown: MutableState<bool>) {
         let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
         CONTAINER_ID.with(|slot| slot.set(Some(id)));
-        cranpose_core::push_parent(id);
+        push_parent(id);
         growing_list(grown);
         dock();
-        cranpose_core::pop_parent();
+        pop_parent();
     }
 
     fn container_children(composition: &mut Composition<MemoryApplier>) -> Vec<NodeId> {

@@ -379,7 +379,7 @@ impl GlassSpecializationKey {
         let backdrop_radius =
             (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
                 .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
-        GlassSpecializationKey {
+        Self {
             flags,
             substrate_radius,
             folds,
@@ -406,7 +406,7 @@ impl GlassSpecializationKey {
 
     fn apply(&self, shader: &mut RuntimeShader) {
         shader.clear_large_draws();
-        let GlassSpecializationKey {
+        let Self {
             flags,
             substrate_radius: radius,
             folds,

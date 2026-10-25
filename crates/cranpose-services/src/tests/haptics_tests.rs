@@ -27,7 +27,7 @@ fn registered_haptics_receives_events() {
         }
     }
     let count = Arc::new(Mutex::new(0));
-    set_platform_haptics(Arc::new(Counter(count.clone())));
+    set_platform_haptics(Arc::new(Counter(Arc::clone(&count))));
     default_haptics().perform(HapticFeedback::ImpactMedium);
     assert_eq!(*count.lock(), 1);
     clear_platform_haptics();
@@ -115,7 +115,7 @@ fn total_duration_saturates_instead_of_overflowing() {
 #[test]
 fn defaulted_methods_fall_back_to_perform() {
     let backend = Arc::new(Rec::default());
-    let haptics: HapticsRef = backend.clone();
+    let haptics: HapticsRef = Arc::<Rec>::clone(&backend);
 
     haptics.vibrate(10, 20);
     haptics.vibrate(60, 20);
@@ -147,7 +147,7 @@ fn provide_haptics_publishes_the_platform_backend() {
     let _guard = crate::registry::test_service_guard();
     clear_platform_haptics();
     let backend = Arc::new(Rec::default());
-    let haptics: HapticsRef = backend.clone();
+    let haptics: HapticsRef = Arc::<Rec>::clone(&backend);
     set_platform_haptics(haptics);
 
     run_test_composition(move || {

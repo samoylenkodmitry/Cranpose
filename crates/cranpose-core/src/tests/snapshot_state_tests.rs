@@ -27,12 +27,11 @@ fn snapshot_state_global_equivalent_write_preserves_mutation_policy() {
     let state = SnapshotMutableState::new_in_rc(0, Rc::new(SumPolicy));
     let notifications = Rc::new(RefCell::new(Vec::new()));
     let notifications_for_observer = Rc::clone(&notifications);
-    let _handle =
-        crate::snapshot_v2::register_apply_observer(Rc::new(move |modified, snapshot_id| {
-            notifications_for_observer
-                .borrow_mut()
-                .push((modified.len(), snapshot_id));
-        }));
+    let _handle = snapshot_v2::register_apply_observer(Rc::new(move |modified, snapshot_id| {
+        notifications_for_observer
+            .borrow_mut()
+            .push((modified.len(), snapshot_id));
+    }));
 
     state.set(0);
 
@@ -96,7 +95,7 @@ fn snapshot_state_child_apply_after_parent_history() {
 #[composable]
 fn anchor_progress_content(toggle: MutableState<bool>, stats: MutableState<i32>) {
     let show_progress = toggle.value();
-    cranpose_core::with_current_composer(|composer| {
+    with_current_composer(|composer| {
         composer.with_group(location_key(file!(), line!(), column!()), |composer| {
             if show_progress {
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {

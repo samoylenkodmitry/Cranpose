@@ -165,7 +165,7 @@ pub fn LiquidPullToRefreshBox(
         .semantics(move |config| config.custom_actions.push(action.clone()));
     let mut content = content;
     Box(container, BoxSpec::default(), move || {
-        NestedScroll(connection.clone(), &mut content);
+        NestedScroll(Rc::clone(&connection), &mut content);
         PullIndicator(PullHandle(Rc::clone(&pull)), refreshing);
     });
 }

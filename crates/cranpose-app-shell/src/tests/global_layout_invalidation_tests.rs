@@ -2,58 +2,6 @@ use cranpose_ui_layout::MeasureScope;
 
 use super::*;
 
-struct FontSizedTextMeasurer;
-
-impl FontSizedTextMeasurer {
-    fn width(text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
-        text.text.chars().count() as f32 * style.resolve_font_size(14.0)
-    }
-}
-
-impl cranpose_ui::TextMeasurer for FontSizedTextMeasurer {
-    fn measure(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> cranpose_ui::TextMetrics {
-        let size = style.resolve_font_size(14.0);
-        cranpose_ui::TextMetrics {
-            width: Self::width(text, style),
-            height: size,
-            line_height: size,
-            line_count: 1,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        Self::width(text, style)
-    }
-
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> cranpose_ui::TextLayoutResult {
-        let size = style.resolve_font_size(14.0);
-        cranpose_ui::TextLayoutResult::monospaced(&text.text, size, size)
-    }
-}
-
 const GRID_WIDTH_PER_UNIT: f32 = 10.0;
 
 const SCALED_LABEL: &str = "Scaled label";
@@ -89,7 +37,9 @@ impl Fixture {
             location_key(file!(), line!(), column!()),
             move || LabelsBesideAGridWideBox(Rc::clone(&grid_box_in_content)),
         );
-        shell.app_context().set_text_measurer(FontSizedTextMeasurer);
+        shell
+            .app_context()
+            .set_text_measurer(StubTextMeasurer::FontSized);
         shell.update();
         let neighbour = {
             let tree = shell.layout_tree().expect("layout tree available");
@@ -122,7 +72,7 @@ impl Fixture {
     }
 
     fn grid_box_width(&mut self) -> f32 {
-        fn find(node: &cranpose_ui::LayoutBox, id: NodeId) -> Option<f32> {
+        fn find(node: &LayoutBox, id: NodeId) -> Option<f32> {
             if node.node_id == id {
                 return Some(node.rect.width);
             }

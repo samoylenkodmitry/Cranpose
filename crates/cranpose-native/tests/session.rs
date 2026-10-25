@@ -6,7 +6,7 @@ use cranpose_native::{NativeContent, NativeError, NativeSession, SendToHost, Tou
 
 fn component() -> std::sync::Arc<NativeSession> {
     NativeSession::new(|| {
-        let control = Rc::new(Cell::new(None::<cranpose_core::MutableState<i32>>));
+        let control = Rc::new(Cell::new(None::<MutableState<i32>>));
         let draw_control = Rc::clone(&control);
         NativeContent::new(move || {
             let count = rememberMutableStateOf(|| 0);
@@ -62,7 +62,7 @@ fn independent_sessions_exchange_events_and_preserve_native_identity() {
 fn zoomable() -> std::sync::Arc<NativeSession> {
     NativeSession::new(|| {
         NativeContent::new(|| {
-            let zoom = cranpose_core::remember(ZoomState::new).with(|state| *state);
+            let zoom = remember(ZoomState::new).with(|state| *state);
             SendToHost("scale", format!("{:.1}", zoom.scale()));
             Box(
                 Modifier::empty().fill_max_size().zoomable(zoom),

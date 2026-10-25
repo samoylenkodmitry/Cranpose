@@ -745,7 +745,7 @@ fn duplicate_explicit_keys_are_rejected_during_writer_traversal() {
         assert!(first.detached_children.is_empty());
         session.end_group();
 
-        let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let duplicate = panic::catch_unwind(AssertUnwindSafe(|| {
             begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
         }));
         assert!(

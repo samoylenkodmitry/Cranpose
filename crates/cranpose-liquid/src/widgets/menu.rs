@@ -1286,7 +1286,7 @@ pub fn LiquidMenu(
     }
 
     let anchor_zone = anchor.height * ANCHOR_OVERLAP;
-    let node_size = rememberMutableStateOf(|| cranpose_ui_graphics::Size::ZERO);
+    let node_size = rememberMutableStateOf(|| Size::ZERO);
     let resize_anim = remember(|| {
         let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
@@ -1486,7 +1486,7 @@ pub fn LiquidMenu(
                     );
                 }
                 Box(card, BoxSpec::default(), {
-                    let items = items.clone();
+                    let items = Rc::clone(&items);
                     let typography = typography.clone();
                     let on_item = Rc::clone(&on_item);
                     let on_dismiss = Rc::clone(&on_dismiss);
@@ -1495,7 +1495,7 @@ pub fn LiquidMenu(
                             Modifier::empty().fill_max_width().padding(MENU_SHADOW_PAD),
                             ColumnSpec::default(),
                             {
-                                let items = items.clone();
+                                let items = Rc::clone(&items);
                                 let typography = typography.clone();
                                 let on_item = Rc::clone(&on_item);
                                 let on_dismiss = Rc::clone(&on_dismiss);
@@ -1540,7 +1540,7 @@ pub fn LiquidMenu(
                                             ..Default::default()
                                         });
                                     Box(rows_wrap, BoxSpec::default(), {
-                                        let items = items.clone();
+                                        let items = Rc::clone(&items);
                                         let typography = typography.clone();
                                         let on_item = Rc::clone(&on_item);
                                         let on_dismiss = Rc::clone(&on_dismiss);
@@ -1555,7 +1555,7 @@ pub fn LiquidMenu(
                                                 ),
                                                 ColumnSpec::default(),
                                                 {
-                                                    let items = items.clone();
+                                                    let items = Rc::clone(&items);
                                                     let typography = typography.clone();
                                                     let on_item = Rc::clone(&on_item);
                                                     let on_dismiss = Rc::clone(&on_dismiss);
@@ -1756,7 +1756,7 @@ fn menu_item_row(
     typography: &crate::theme::LiquidTypography,
     has_checks: bool,
     colors: crate::theme::LiquidColors,
-    hovered: cranpose_core::MutableState<Option<usize>>,
+    hovered: MutableState<Option<usize>>,
     gesture_hover: Option<usize>,
     expanded_header: bool,
     rect_sink: Rc<Cell<Rect>>,
@@ -1770,9 +1770,9 @@ fn menu_item_row(
     };
     let is_hovered = hovered.get() == Some(index) || gesture_hover == Some(index);
     let highlight = if colors.is_dark {
-        cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 44)
+        Color::from_rgba_u8(120, 120, 128, 44)
     } else {
-        cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 30)
+        Color::from_rgba_u8(120, 120, 128, 30)
     };
     let row_label = item.label.clone();
     let checked = item.checked;

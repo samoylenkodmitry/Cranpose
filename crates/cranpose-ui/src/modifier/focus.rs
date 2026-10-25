@@ -92,7 +92,7 @@ impl FocusTargetShared {
 
 impl focus_dispatch::FocusTargetHandle for FocusTargetShared {
     fn set_focus_state(&self, state: FocusState) {
-        FocusTargetShared::set_focus_state(self, state);
+        Self::set_focus_state(self, state);
     }
 }
 
@@ -110,7 +110,8 @@ impl FocusTargetNode {
 
     fn from_callback(on_focus_changed: Option<FocusChangedCallback>) -> Self {
         let shared = Rc::new(FocusTargetShared::new(on_focus_changed));
-        let handle: Rc<dyn focus_dispatch::FocusTargetHandle> = shared.clone();
+        let handle: Rc<dyn focus_dispatch::FocusTargetHandle> =
+            Rc::<FocusTargetShared>::clone(&shared);
         Self {
             state: NodeState::new(),
             shared,
@@ -271,10 +272,10 @@ pub enum FocusRequestError {
 impl std::fmt::Display for FocusRequestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FocusRequestError::NotAttached => {
+            Self::NotAttached => {
                 write!(f, "FocusRequester is not attached to a node in composition")
             }
-            FocusRequestError::NoFocusTarget => write!(
+            Self::NoFocusTarget => write!(
                 f,
                 "FocusRequester's node has no focus target to move focus onto"
             ),

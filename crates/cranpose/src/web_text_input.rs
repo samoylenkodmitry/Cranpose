@@ -618,7 +618,7 @@ fn selection_ends(node: &Element, state: &ImeEditorState) -> (usize, usize) {
 }
 
 pub(crate) struct WebTextInput {
-    me: Weak<WebTextInput>,
+    me: Weak<Self>,
     document: Document,
     canvas: HtmlCanvasElement,
     app: Weak<RefCell<AppShell<WgpuRenderer>>>,

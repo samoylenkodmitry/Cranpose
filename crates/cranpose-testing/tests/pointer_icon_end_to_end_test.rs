@@ -85,7 +85,7 @@ fn no_icon_app() {
 fn a_pointer_icon_alone_makes_a_node_a_hit_target() {
     let context = AppContext::new();
     let _scope = context.enter_scope();
-    context.enter(cranpose_ui::reset_render_state_for_tests);
+    context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     rule.set_content(icon_only_app).expect("render");
@@ -102,7 +102,7 @@ fn a_pointer_icon_alone_makes_a_node_a_hit_target() {
 fn a_node_without_a_pointer_icon_stays_out_of_the_hit_graph() {
     let context = AppContext::new();
     let _scope = context.enter_scope();
-    context.enter(cranpose_ui::reset_render_state_for_tests);
+    context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     rule.set_content(no_icon_app).expect("render");
@@ -115,7 +115,7 @@ fn a_node_without_a_pointer_icon_stays_out_of_the_hit_graph() {
 fn the_innermost_pointer_icon_wins_over_its_container() {
     let context = AppContext::new();
     let _scope = context.enter_scope();
-    context.enter(cranpose_ui::reset_render_state_for_tests);
+    context.enter(reset_render_state_for_tests);
 
     let mut rule = ComposeTestRule::new();
     rule.set_content(nested_icons_app).expect("render");

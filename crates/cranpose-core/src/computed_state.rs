@@ -42,7 +42,7 @@ pub fn computedStateOf<T: Clone + PartialEq + 'static>(
     ComputedState {
         inner: Rc::new_cyclic(|this| ComputedInner {
             calculation: Box::new(calculation),
-            this: this.clone(),
+            this: Weak::clone(this),
             read: OnceCell::new(),
             refresh_queued: Cell::new(false),
         }),
@@ -78,7 +78,7 @@ impl<T: Clone + PartialEq + 'static> ComputedState<T> {
 
 struct ComputedInner<T: Clone + PartialEq + 'static> {
     calculation: Box<dyn Fn() -> T>,
-    this: Weak<ComputedInner<T>>,
+    this: Weak<Self>,
     /// The value the readers in compositions read last, which they
     /// subscribe to, and the runtime it lives in: set again whenever a
     /// state the calculation read changed, it recomposes them when the value
@@ -92,7 +92,7 @@ impl<T: Clone + PartialEq + 'static> ComputedInner<T> {
     fn key(&self) -> ComputedKey {
         ComputedKey {
             id: self.id(),
-            target: self.this.clone(),
+            target: Weak::<Self>::clone(&self.this),
         }
     }
 
@@ -126,7 +126,7 @@ impl<T: Clone + PartialEq + 'static> ComputedRefresh for ComputedInner<T> {
         if self.refresh_queued.replace(true) {
             return;
         }
-        let this = self.this.clone();
+        let this = Weak::clone(&self.this);
         runtime.enqueue_ui_task(Box::new(move || {
             if let Some(inner) = this.upgrade() {
                 inner.refresh_queued.set(false);

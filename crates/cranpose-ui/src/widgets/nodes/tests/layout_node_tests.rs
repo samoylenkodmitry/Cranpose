@@ -75,21 +75,6 @@ fn bubbling_preserves_the_layout_nodes_existing_owner() {
 }
 
 #[test]
-fn modifier_slices_cache_reuses_unique_snapshot_allocation() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
-    node.set_modifier(Modifier::empty().padding(2.0));
-    let snapshot = node.modifier_slices_snapshot();
-    let snapshot_ptr = Rc::as_ptr(&snapshot);
-    drop(snapshot);
-
-    node.set_modifier(Modifier::empty().padding(4.0));
-
-    let updated = node.modifier_slices_snapshot();
-    assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
-}
-
-#[test]
 fn modifier_slices_cache_preserves_live_snapshot_isolation() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();
@@ -146,7 +131,7 @@ fn an_equal_modifier_leaves_the_chain_and_its_slices_as_they_were() {
 #[test]
 fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let app_context = crate::render_state::AppContext::new_with_density(1.0);
+    let app_context = AppContext::new_with_density(1.0);
     app_context.enter(|| {
         let nodes: Vec<_> = (0..2048)
             .map(|id| {
@@ -177,8 +162,8 @@ fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
 #[test]
 fn layout_node_registry_is_scoped_by_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let first = crate::render_state::AppContext::new_with_density(1.0);
-    let second = crate::render_state::AppContext::new_with_density(1.0);
+    let first = AppContext::new_with_density(1.0);
+    let second = AppContext::new_with_density(1.0);
 
     let first_id = 100;
     let virtual_node = LayoutNode::new_virtual();

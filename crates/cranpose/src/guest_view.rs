@@ -56,8 +56,8 @@ impl GuestView {
             settings.resolve_font_set(),
         ));
         renderer.init_gpu(
-            gpu.device.clone(),
-            gpu.queue.clone(),
+            std::sync::Arc::clone(&gpu.device),
+            std::sync::Arc::clone(&gpu.queue),
             format,
             gpu.adapter.get_info().backend,
             gpu.adapter.get_downlevel_capabilities().flags,

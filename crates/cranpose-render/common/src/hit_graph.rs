@@ -34,7 +34,7 @@ impl HitGraphSink for Scene {
         geometry: HitGeometry<'_>,
         hit: &HitTestNode,
     ) {
-        Scene::push_hit(self, node_id, capture_path, geometry, hit_spec(hit));
+        Self::push_hit(self, node_id, capture_path, geometry, hit_spec(hit));
     }
 }
 

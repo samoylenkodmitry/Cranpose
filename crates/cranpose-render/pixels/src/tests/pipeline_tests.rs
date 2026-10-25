@@ -27,7 +27,7 @@ fn push_text_style_draws_for_test(
     clip: Option<Rect>,
 ) {
     let text = Rc::new(cranpose_ui::text::AnnotatedString::from(text));
-    let text_style = std::sync::Arc::new(text_style.clone());
+    let text_style = Arc::new(text_style.clone());
     with_test_app_context(|| {
         push_text_style_draws(
             scene,
@@ -441,7 +441,7 @@ fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
 #[test]
 fn push_text_style_draws_emits_background_shadow_and_main_text() {
     let mut scene = RasterScene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
             background: Some(Color(0.2, 0.3, 0.52, 0.55)),
@@ -503,13 +503,10 @@ fn push_text_style_draws_emits_background_shadow_and_main_text() {
 #[test]
 fn push_text_style_draws_emits_decoration_shapes() {
     let mut scene = RasterScene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
-            text_decoration: Some(
-                cranpose_ui::text::TextDecoration::UNDERLINE
-                    .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
-            ),
+            text_decoration: Some(TextDecoration::UNDERLINE.combine(TextDecoration::LINE_THROUGH)),
             ..Default::default()
         },
         ..Default::default()
@@ -543,7 +540,7 @@ fn push_text_style_draws_emits_decoration_shapes() {
 #[test]
 fn push_text_style_draws_applies_baseline_shift() {
     let mut scene = RasterScene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
             baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
@@ -571,7 +568,7 @@ fn push_text_style_draws_applies_baseline_shift() {
 fn push_text_style_draws_non_solid_brush_contract_does_not_fallback_to_first_stop() {
     let mut scene = RasterScene::new();
     let first_stop = Color(1.0, 0.0, 0.0, 1.0);
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![first_stop, Color(0.0, 0.0, 1.0, 1.0)],

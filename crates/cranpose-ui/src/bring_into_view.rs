@@ -158,11 +158,8 @@ impl Modifier {
     /// Publishes this node's local size and complete local-to-window mapping.
     /// Coordinates include placement, scrolling, and graphics-layer transforms.
     /// They use logical pixels in the window containing this node.
-    pub fn report_window_coordinates(
-        self,
-        sink: Rc<Cell<cranpose_ui_graphics::WindowCoordinates>>,
-    ) -> Self {
-        self.then(Modifier::with_element(
+    pub fn report_window_coordinates(self, sink: Rc<Cell<WindowCoordinates>>) -> Self {
+        self.then(Self::with_element(
             crate::modifier_nodes::WindowRectReporterElement::from_coordinates(sink),
         ))
     }
@@ -175,7 +172,7 @@ impl Modifier {
     /// [`BringIntoViewResponder`]. Positioning-only: it draws nothing and does
     /// not affect layout.
     pub fn report_window_rect(self, sink: Rc<Cell<Rect>>) -> Self {
-        self.then(Modifier::with_element(
+        self.then(Self::with_element(
             crate::modifier_nodes::WindowRectReporterElement::new(sink),
         ))
     }
@@ -184,7 +181,7 @@ impl Modifier {
     /// State changes schedule composition, so anchored overlays follow layout,
     /// scrolling, graphics-layer transforms, and viewport changes.
     pub fn report_window_rect_state(self, sink: cranpose_core::MutableState<Rect>) -> Self {
-        self.then(Modifier::with_element(
+        self.then(Self::with_element(
             crate::modifier_nodes::WindowRectReporterElement::from_state(sink),
         ))
     }
@@ -193,7 +190,7 @@ impl Modifier {
     /// measure pass — the `onSizeChanged` seam for consumers that need the
     /// resolved size outside layout (shader morph geometry, lens overlays).
     pub fn report_size(self, sink: Rc<Cell<cranpose_ui_graphics::Size>>) -> Self {
-        self.then(Modifier::with_element(
+        self.then(Self::with_element(
             crate::modifier_nodes::SizeReporterElement::new(sink),
         ))
     }
@@ -211,7 +208,7 @@ impl Modifier {
         self,
         sink: cranpose_core::MutableState<cranpose_ui_graphics::Size>,
     ) -> Self {
-        self.then(Modifier::with_element(
+        self.then(Self::with_element(
             crate::modifier_nodes::SizeReporterElement::from_state(sink),
         ))
     }

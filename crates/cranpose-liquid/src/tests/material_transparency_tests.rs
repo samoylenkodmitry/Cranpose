@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn less_transparency_makes_glass_a_flat_surface() {
-    let colors = crate::theme::LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
+    let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
     let flat = Glass::regular()
         .resolve(&colors)
         .without_transparency(&colors);

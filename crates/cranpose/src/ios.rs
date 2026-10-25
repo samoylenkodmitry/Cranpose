@@ -149,10 +149,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         if !cranpose_services::background_active() || !crate::ios_background::app_is_off_screen() {
             self.next_off_screen_render = None;
         } else {
-            let pending_ui = self
-                .shell
-                .as_ref()
-                .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
+            let pending_ui = self.shell.as_ref().is_some_and(AppShell::has_pending_ui);
             let due = self
                 .next_off_screen_render
                 .is_some_and(|at| at <= Instant::now());
@@ -570,7 +567,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         });
         self.shell = Some(shell);
         self.accessibility = accessibility;
-        self.window = Some(window.clone());
+        self.window = Some(Arc::clone(&window));
         crate::ios_scene::hold_window(window.as_ref());
         window.request_redraw();
     }

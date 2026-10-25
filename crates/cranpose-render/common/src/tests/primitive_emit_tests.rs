@@ -110,12 +110,7 @@ fn draw_shape_params_for_primitive_rejects_non_shape_primitives() {
                     width: 4.0,
                     height: 4.0,
                 }),
-                image: cranpose_ui_graphics::ImageBitmap::from_rgba8(
-                    1,
-                    1,
-                    vec![255, 255, 255, 255],
-                )
-                .expect("image"),
+                image: ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255],).expect("image"),
                 alpha: 1.0,
                 color_filter: None,
                 sampling: ImageSampling::Nearest,

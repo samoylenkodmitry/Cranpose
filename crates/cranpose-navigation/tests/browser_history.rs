@@ -131,7 +131,7 @@ struct App {
 impl App {
     fn opened_at(fragment: &str) -> Self {
         let history = FakeHistory::opened_at(fragment);
-        set_platform_browser_history(history.clone());
+        set_platform_browser_history(Rc::<FakeHistory>::clone(&history));
         let nav = Rc::new(Cell::new(None));
         let captured = Rc::clone(&nav);
         let host = Host::new(move || {

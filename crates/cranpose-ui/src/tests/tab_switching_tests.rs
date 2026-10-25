@@ -600,7 +600,7 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
         .root()
         .expect("composition should have a root node");
     let mut applier = harness.composition.applier_mut();
-    let viewport = crate::modifier::Size {
+    let viewport = Size {
         width: 800.0,
         height: 600.0,
     };
@@ -674,7 +674,7 @@ fn layout_two_child_stats(composition: &mut Composition<MemoryApplier>) -> (usiz
     let layout = applier
         .compute_layout(
             root,
-            crate::modifier::Size {
+            Size {
                 width: 800.0,
                 height: 600.0,
             },
@@ -774,7 +774,7 @@ fn recursive_layout_nodes_preserve_extent() {
             // Room for the whole depth-4 tree: a Column offers each child
             // only the height the ones before it leave, so a smaller window
             // would squeeze the deepest rows to nothing, as Compose would.
-            crate::modifier::Size {
+            Size {
                 width: 2400.0,
                 height: 2400.0,
             },

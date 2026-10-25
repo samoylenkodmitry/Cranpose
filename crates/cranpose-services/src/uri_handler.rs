@@ -146,7 +146,7 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
 /// Provides the platform URI handler to `content` through [`local_uri_handler`].
 #[composable]
 pub fn ProvideUriHandler(content: impl FnOnce()) {
-    let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());
+    let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| Rc::clone(state));
     let uri_local = local_uri_handler();
 
     CompositionLocalProvider([uri_local.provides(uri_handler)], move || {

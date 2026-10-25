@@ -9,7 +9,7 @@ struct Probe {
 
 impl Probe {
     fn new() -> Self {
-        Probe {
+        Self {
             count: mutableStateOf(0),
             label: mutableStateOf("first"),
             taps: RuntimeCell::new(Cell::new(0)),

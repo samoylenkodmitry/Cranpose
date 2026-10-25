@@ -34,22 +34,22 @@ fn payload_records_store_semantic_payload_kinds() {
         begin_unkeyed(session, 52, None);
         let _remembered = session.remember(crate::slot::BRANCH_PATH_ROOT, || 17_i32);
         let _param_slot = session.value_slot_with_kind(
-            super::PayloadKind::Param,
+            PayloadKind::Param,
             crate::slot::BRANCH_PATH_ROOT,
             crate::ParamState::<i32>::default,
         );
         let _callback_slot = session.value_slot_with_kind(
-            super::PayloadKind::Param,
+            PayloadKind::Param,
             crate::slot::BRANCH_PATH_ROOT,
             crate::CallbackHolder::new,
         );
         let _return_slot = session.value_slot_with_kind(
-            super::PayloadKind::Return,
+            PayloadKind::Return,
             crate::slot::BRANCH_PATH_ROOT,
             crate::ReturnSlot::<i32>::default,
         );
         let _effect_slot = session.remember_with_kind(
-            super::PayloadKind::Effect,
+            PayloadKind::Effect,
             crate::slot::BRANCH_PATH_ROOT,
             crate::DisposableEffectState::default,
         );
@@ -78,13 +78,13 @@ fn payload_records_store_semantic_payload_kinds() {
     assert_eq!(
         payload_kinds,
         vec![
-            super::PayloadKind::Remember,
-            super::PayloadKind::Param,
-            super::PayloadKind::Param,
-            super::PayloadKind::Return,
-            super::PayloadKind::Effect,
-            super::PayloadKind::Internal,
-            super::PayloadKind::Internal,
+            PayloadKind::Remember,
+            PayloadKind::Param,
+            PayloadKind::Param,
+            PayloadKind::Return,
+            PayloadKind::Effect,
+            PayloadKind::Internal,
+            PayloadKind::Internal,
         ]
     );
 }
@@ -505,11 +505,9 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
     harness.begin_pass(SlotPassMode::Compose);
     let first_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(
-            super::PayloadKind::Param,
-            crate::slot::BRANCH_PATH_ROOT,
-            || 7_i32,
-        );
+        let slot =
+            session
+                .value_slot_with_kind(PayloadKind::Param, crate::slot::BRANCH_PATH_ROOT, || 7_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -522,14 +520,14 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
             .group_payload_record_at(0, 0)
             .expect("test payload should resolve")
             .kind,
-        super::PayloadKind::Param
+        PayloadKind::Param
     );
 
     harness.begin_pass(SlotPassMode::Compose);
     let second_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
         let slot = session.value_slot_with_kind(
-            super::PayloadKind::Return,
+            PayloadKind::Return,
             crate::slot::BRANCH_PATH_ROOT,
             || 9_i32,
         );
@@ -547,7 +545,7 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
             .group_payload_record_at(0, 0)
             .expect("test payload should resolve")
             .kind,
-        super::PayloadKind::Return
+        PayloadKind::Return
     );
     assert_eq!(*harness.table.read_value::<i32>(second_slot), 7);
 }
@@ -689,7 +687,7 @@ fn read_value_type_mismatch_panics_consistently() {
     });
     harness.finish_pass();
 
-    let mismatch_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let mismatch_read = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = harness.table.read_value::<u32>(slot);
     }));
     assert!(
@@ -738,7 +736,7 @@ fn value_slot_type_change_inserts_fresh_and_trims_the_stale_slot() {
     assert_eq!(harness.table.group_payload_len_at(0), 1);
     assert_eq!(*harness.table.read_value::<u32>(replacement_slot), 7);
 
-    let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let stale_read = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = harness.table.read_value::<i32>(old_slot);
     }));
     assert!(
@@ -839,7 +837,7 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     );
     assert_eq!(*harness.table.read_value::<i32>(new_slot), 77);
 
-    let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let stale_read = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = harness.table.read_value::<i32>(old_slot);
     }));
     assert!(

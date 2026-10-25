@@ -23,10 +23,10 @@ pub enum CutDirection {
 impl CutDirection {
     fn uniform_code(self) -> f32 {
         match self {
-            CutDirection::LeftToRight => 0.0,
-            CutDirection::RightToLeft => 1.0,
-            CutDirection::TopToBottom => 2.0,
-            CutDirection::BottomToTop => 3.0,
+            Self::LeftToRight => 0.0,
+            Self::RightToLeft => 1.0,
+            Self::TopToBottom => 2.0,
+            Self::BottomToTop => 3.0,
         }
     }
 }

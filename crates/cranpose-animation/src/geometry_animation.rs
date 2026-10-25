@@ -17,7 +17,7 @@ use crate::animation::{AnimationType, Lerp, SpringScalar, animateValueAsState};
 
 impl Lerp for Point {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Point::new(
+        Self::new(
             self.x.lerp(&target.x, fraction),
             self.y.lerp(&target.y, fraction),
         )
@@ -35,13 +35,13 @@ impl SpringScalar for Point {
     }
 
     fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Point::new(dimensions[0], dimensions[1])
+        Self::new(dimensions[0], dimensions[1])
     }
 }
 
 impl Lerp for Size {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Size::new(
+        Self::new(
             self.width.lerp(&target.width, fraction),
             self.height.lerp(&target.height, fraction),
         )
@@ -59,13 +59,13 @@ impl SpringScalar for Size {
     }
 
     fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Size::new(dimensions[0], dimensions[1])
+        Self::new(dimensions[0], dimensions[1])
     }
 }
 
 impl Lerp for Rect {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Rect {
+        Self {
             x: self.x.lerp(&target.x, fraction),
             y: self.y.lerp(&target.y, fraction),
             width: self.width.lerp(&target.width, fraction),
@@ -87,7 +87,7 @@ impl SpringScalar for Rect {
     }
 
     fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Rect {
+        Self {
             x: dimensions[0],
             y: dimensions[1],
             width: dimensions[2],

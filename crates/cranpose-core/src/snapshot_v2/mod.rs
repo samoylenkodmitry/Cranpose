@@ -74,12 +74,12 @@ pub enum SnapshotApplyResult {
 impl SnapshotApplyResult {
     /// Check if the result is successful.
     pub fn is_success(&self) -> bool {
-        matches!(self, SnapshotApplyResult::Success)
+        matches!(self, Self::Success)
     }
 
     /// Check if the result is a failure.
     pub fn is_failure(&self) -> bool {
-        matches!(self, SnapshotApplyResult::Failure)
+        matches!(self, Self::Failure)
     }
 
     /// Panic if the result is a failure (for use in tests).
@@ -132,40 +132,40 @@ impl AnyMutableSnapshot {
     /// Get the snapshot ID.
     pub fn snapshot_id(&self) -> SnapshotId {
         match self {
-            AnyMutableSnapshot::Root(s) => s.snapshot_id(),
-            AnyMutableSnapshot::Nested(s) => s.snapshot_id(),
+            Self::Root(s) => s.snapshot_id(),
+            Self::Nested(s) => s.snapshot_id(),
         }
     }
 
     /// Get the set of invalid snapshot IDs.
     pub fn invalid(&self) -> SnapshotIdSet {
         match self {
-            AnyMutableSnapshot::Root(s) => s.invalid(),
-            AnyMutableSnapshot::Nested(s) => s.invalid(),
+            Self::Root(s) => s.invalid(),
+            Self::Nested(s) => s.invalid(),
         }
     }
 
     /// Enter this snapshot, making it current for the duration of the closure.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         match self {
-            AnyMutableSnapshot::Root(s) => s.enter(f),
-            AnyMutableSnapshot::Nested(s) => s.enter(f),
+            Self::Root(s) => s.enter(f),
+            Self::Nested(s) => s.enter(f),
         }
     }
 
     /// Apply the snapshot.
     pub fn apply(&self) -> SnapshotApplyResult {
         match self {
-            AnyMutableSnapshot::Root(s) => s.apply(),
-            AnyMutableSnapshot::Nested(s) => s.apply(),
+            Self::Root(s) => s.apply(),
+            Self::Nested(s) => s.apply(),
         }
     }
 
     /// Dispose the snapshot.
     pub fn dispose(&self) {
         match self {
-            AnyMutableSnapshot::Root(s) => s.dispose(),
-            AnyMutableSnapshot::Nested(s) => s.dispose(),
+            Self::Root(s) => s.dispose(),
+            Self::Nested(s) => s.dispose(),
         }
     }
 }
@@ -174,26 +174,26 @@ impl AnySnapshot {
     /// Get the snapshot ID.
     pub fn snapshot_id(&self) -> SnapshotId {
         match self {
-            AnySnapshot::Readonly(s) => s.snapshot_id(),
-            AnySnapshot::Mutable(s) => s.snapshot_id(),
-            AnySnapshot::NestedReadonly(s) => s.snapshot_id(),
-            AnySnapshot::NestedMutable(s) => s.snapshot_id(),
-            AnySnapshot::Global(s) => s.snapshot_id(),
-            AnySnapshot::TransparentMutable(s) => s.snapshot_id(),
-            AnySnapshot::TransparentReadonly(s) => s.snapshot_id(),
+            Self::Readonly(s) => s.snapshot_id(),
+            Self::Mutable(s) => s.snapshot_id(),
+            Self::NestedReadonly(s) => s.snapshot_id(),
+            Self::NestedMutable(s) => s.snapshot_id(),
+            Self::Global(s) => s.snapshot_id(),
+            Self::TransparentMutable(s) => s.snapshot_id(),
+            Self::TransparentReadonly(s) => s.snapshot_id(),
         }
     }
 
     /// The state every snapshot kind shares: id, invalid set, observers and flags.
     fn state(&self) -> &SnapshotState {
         match self {
-            AnySnapshot::Readonly(s) => &s.state,
-            AnySnapshot::Mutable(s) => &s.state,
-            AnySnapshot::NestedReadonly(s) => &s.state,
-            AnySnapshot::NestedMutable(s) => &s.state,
-            AnySnapshot::Global(s) => &s.state,
-            AnySnapshot::TransparentMutable(s) => &s.state,
-            AnySnapshot::TransparentReadonly(s) => &s.state,
+            Self::Readonly(s) => &s.state,
+            Self::Mutable(s) => &s.state,
+            Self::NestedReadonly(s) => &s.state,
+            Self::NestedMutable(s) => &s.state,
+            Self::Global(s) => &s.state,
+            Self::TransparentMutable(s) => &s.state,
+            Self::TransparentReadonly(s) => &s.state,
         }
     }
 
@@ -204,13 +204,13 @@ impl AnySnapshot {
     /// Returns the ids of snapshots whose writes this snapshot does not see.
     pub fn invalid(&self) -> SnapshotIdSet {
         match self {
-            AnySnapshot::Readonly(s) => s.invalid(),
-            AnySnapshot::Mutable(s) => s.invalid(),
-            AnySnapshot::NestedReadonly(s) => s.invalid(),
-            AnySnapshot::NestedMutable(s) => s.invalid(),
-            AnySnapshot::Global(s) => s.invalid(),
-            AnySnapshot::TransparentMutable(s) => s.invalid(),
-            AnySnapshot::TransparentReadonly(s) => s.invalid(),
+            Self::Readonly(s) => s.invalid(),
+            Self::Mutable(s) => s.invalid(),
+            Self::NestedReadonly(s) => s.invalid(),
+            Self::NestedMutable(s) => s.invalid(),
+            Self::Global(s) => s.invalid(),
+            Self::TransparentMutable(s) => s.invalid(),
+            Self::TransparentReadonly(s) => s.invalid(),
         }
     }
 
@@ -223,36 +223,34 @@ impl AnySnapshot {
     /// Check if this is a read-only snapshot.
     pub fn read_only(&self) -> bool {
         match self {
-            AnySnapshot::Readonly(_) => true,
-            AnySnapshot::Mutable(_) => false,
-            AnySnapshot::NestedReadonly(_) => true,
-            AnySnapshot::NestedMutable(_) => false,
-            AnySnapshot::Global(_) => false,
-            AnySnapshot::TransparentMutable(_) => false,
-            AnySnapshot::TransparentReadonly(_) => true,
+            Self::Readonly(_) => true,
+            Self::Mutable(_) => false,
+            Self::NestedReadonly(_) => true,
+            Self::NestedMutable(_) => false,
+            Self::Global(_) => false,
+            Self::TransparentMutable(_) => false,
+            Self::TransparentReadonly(_) => true,
         }
     }
 
     /// Get the root snapshot.
-    pub fn root(&self) -> AnySnapshot {
+    pub fn root(&self) -> Self {
         match self {
-            AnySnapshot::Readonly(s) => AnySnapshot::Readonly(s.root_readonly()),
-            AnySnapshot::Mutable(s) => AnySnapshot::Mutable(s.root_mutable()),
-            AnySnapshot::NestedReadonly(s) => AnySnapshot::NestedReadonly(s.root_nested_readonly()),
-            AnySnapshot::NestedMutable(s) => AnySnapshot::Mutable(s.root_mutable()),
-            AnySnapshot::Global(_) => AnySnapshot::Global(GlobalSnapshot::get_or_create()),
-            AnySnapshot::TransparentMutable(s) => {
-                AnySnapshot::TransparentMutable(s.root_transparent_mutable())
-            }
-            AnySnapshot::TransparentReadonly(s) => {
-                AnySnapshot::TransparentReadonly(s.root_transparent_readonly())
+            Self::Readonly(s) => Self::Readonly(s.root_readonly()),
+            Self::Mutable(s) => Self::Mutable(s.root_mutable()),
+            Self::NestedReadonly(s) => Self::NestedReadonly(s.root_nested_readonly()),
+            Self::NestedMutable(s) => Self::Mutable(s.root_mutable()),
+            Self::Global(_) => Self::Global(GlobalSnapshot::get_or_create()),
+            Self::TransparentMutable(s) => Self::TransparentMutable(s.root_transparent_mutable()),
+            Self::TransparentReadonly(s) => {
+                Self::TransparentReadonly(s.root_transparent_readonly())
             }
         }
     }
 
     /// Check if this snapshot refers to the same transparent snapshot.
     pub fn is_same_transparent(&self, other: &Rc<TransparentObserverMutableSnapshot>) -> bool {
-        matches!(self, AnySnapshot::TransparentMutable(snapshot) if Rc::ptr_eq(snapshot, other))
+        matches!(self, Self::TransparentMutable(snapshot) if Rc::ptr_eq(snapshot, other))
     }
 
     /// Check if this snapshot refers to the same transparent mutable snapshot.
@@ -265,41 +263,33 @@ impl AnySnapshot {
 
     /// Check if this snapshot refers to the same transparent readonly snapshot.
     pub fn is_same_transparent_readonly(&self, other: &Rc<TransparentObserverSnapshot>) -> bool {
-        matches!(self, AnySnapshot::TransparentReadonly(snapshot) if Rc::ptr_eq(snapshot, other))
+        matches!(self, Self::TransparentReadonly(snapshot) if Rc::ptr_eq(snapshot, other))
     }
 
     /// Enter this snapshot, making it current for the duration of the closure.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         match self {
-            AnySnapshot::Readonly(s) => s.enter(f),
-            AnySnapshot::Mutable(s) => s.enter(f),
-            AnySnapshot::NestedReadonly(s) => s.enter(f),
-            AnySnapshot::NestedMutable(s) => s.enter(f),
-            AnySnapshot::Global(s) => s.enter(f),
-            AnySnapshot::TransparentMutable(s) => s.enter(f),
-            AnySnapshot::TransparentReadonly(s) => s.enter(f),
+            Self::Readonly(s) => s.enter(f),
+            Self::Mutable(s) => s.enter(f),
+            Self::NestedReadonly(s) => s.enter(f),
+            Self::NestedMutable(s) => s.enter(f),
+            Self::Global(s) => s.enter(f),
+            Self::TransparentMutable(s) => s.enter(f),
+            Self::TransparentReadonly(s) => s.enter(f),
         }
     }
 
     /// Take a nested read-only snapshot.
-    pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> AnySnapshot {
+    pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Self {
         match self {
-            AnySnapshot::Readonly(s) => {
-                AnySnapshot::Readonly(s.take_nested_snapshot(read_observer))
-            }
-            AnySnapshot::Mutable(s) => AnySnapshot::Readonly(s.take_nested_snapshot(read_observer)),
-            AnySnapshot::NestedReadonly(s) => {
-                AnySnapshot::NestedReadonly(s.take_nested_snapshot(read_observer))
-            }
-            AnySnapshot::NestedMutable(s) => {
-                AnySnapshot::Readonly(s.take_nested_snapshot(read_observer))
-            }
-            AnySnapshot::Global(s) => AnySnapshot::Readonly(s.take_nested_snapshot(read_observer)),
-            AnySnapshot::TransparentMutable(s) => {
-                AnySnapshot::Readonly(s.take_nested_snapshot(read_observer))
-            }
-            AnySnapshot::TransparentReadonly(s) => {
-                AnySnapshot::TransparentReadonly(s.take_nested_snapshot(read_observer))
+            Self::Readonly(s) => Self::Readonly(s.take_nested_snapshot(read_observer)),
+            Self::Mutable(s) => Self::Readonly(s.take_nested_snapshot(read_observer)),
+            Self::NestedReadonly(s) => Self::NestedReadonly(s.take_nested_snapshot(read_observer)),
+            Self::NestedMutable(s) => Self::Readonly(s.take_nested_snapshot(read_observer)),
+            Self::Global(s) => Self::Readonly(s.take_nested_snapshot(read_observer)),
+            Self::TransparentMutable(s) => Self::Readonly(s.take_nested_snapshot(read_observer)),
+            Self::TransparentReadonly(s) => {
+                Self::TransparentReadonly(s.take_nested_snapshot(read_observer))
             }
         }
     }
@@ -307,75 +297,75 @@ impl AnySnapshot {
     /// Check if there are pending changes.
     pub fn has_pending_changes(&self) -> bool {
         match self {
-            AnySnapshot::Readonly(s) => s.has_pending_changes(),
-            AnySnapshot::Mutable(s) => s.has_pending_changes(),
-            AnySnapshot::NestedReadonly(s) => s.has_pending_changes(),
-            AnySnapshot::NestedMutable(s) => s.has_pending_changes(),
-            AnySnapshot::Global(s) => s.has_pending_changes(),
-            AnySnapshot::TransparentMutable(s) => s.has_pending_changes(),
-            AnySnapshot::TransparentReadonly(s) => s.has_pending_changes(),
+            Self::Readonly(s) => s.has_pending_changes(),
+            Self::Mutable(s) => s.has_pending_changes(),
+            Self::NestedReadonly(s) => s.has_pending_changes(),
+            Self::NestedMutable(s) => s.has_pending_changes(),
+            Self::Global(s) => s.has_pending_changes(),
+            Self::TransparentMutable(s) => s.has_pending_changes(),
+            Self::TransparentReadonly(s) => s.has_pending_changes(),
         }
     }
 
     /// Dispose of this snapshot.
     pub fn dispose(&self) {
         match self {
-            AnySnapshot::Readonly(s) => s.dispose(),
-            AnySnapshot::Mutable(s) => s.dispose(),
-            AnySnapshot::NestedReadonly(s) => s.dispose(),
-            AnySnapshot::NestedMutable(s) => s.dispose(),
-            AnySnapshot::Global(s) => s.dispose(),
-            AnySnapshot::TransparentMutable(s) => s.dispose(),
-            AnySnapshot::TransparentReadonly(s) => s.dispose(),
+            Self::Readonly(s) => s.dispose(),
+            Self::Mutable(s) => s.dispose(),
+            Self::NestedReadonly(s) => s.dispose(),
+            Self::NestedMutable(s) => s.dispose(),
+            Self::Global(s) => s.dispose(),
+            Self::TransparentMutable(s) => s.dispose(),
+            Self::TransparentReadonly(s) => s.dispose(),
         }
     }
 
     /// Check if disposed.
     pub fn is_disposed(&self) -> bool {
         match self {
-            AnySnapshot::Readonly(s) => s.is_disposed(),
-            AnySnapshot::Mutable(s) => s.is_disposed(),
-            AnySnapshot::NestedReadonly(s) => s.is_disposed(),
-            AnySnapshot::NestedMutable(s) => s.is_disposed(),
-            AnySnapshot::Global(s) => s.is_disposed(),
-            AnySnapshot::TransparentMutable(s) => s.is_disposed(),
-            AnySnapshot::TransparentReadonly(s) => s.is_disposed(),
+            Self::Readonly(s) => s.is_disposed(),
+            Self::Mutable(s) => s.is_disposed(),
+            Self::NestedReadonly(s) => s.is_disposed(),
+            Self::NestedMutable(s) => s.is_disposed(),
+            Self::Global(s) => s.is_disposed(),
+            Self::TransparentMutable(s) => s.is_disposed(),
+            Self::TransparentReadonly(s) => s.is_disposed(),
         }
     }
 
     /// Record a read.
     pub fn record_read(&self, state: &dyn StateObject) {
         match self {
-            AnySnapshot::Readonly(s) => s.record_read(state),
-            AnySnapshot::Mutable(s) => s.record_read(state),
-            AnySnapshot::NestedReadonly(s) => s.record_read(state),
-            AnySnapshot::NestedMutable(s) => s.record_read(state),
-            AnySnapshot::Global(s) => s.record_read(state),
-            AnySnapshot::TransparentMutable(s) => s.record_read(state),
-            AnySnapshot::TransparentReadonly(s) => s.record_read(state),
+            Self::Readonly(s) => s.record_read(state),
+            Self::Mutable(s) => s.record_read(state),
+            Self::NestedReadonly(s) => s.record_read(state),
+            Self::NestedMutable(s) => s.record_read(state),
+            Self::Global(s) => s.record_read(state),
+            Self::TransparentMutable(s) => s.record_read(state),
+            Self::TransparentReadonly(s) => s.record_read(state),
         }
     }
 
     /// Record a write.
     pub fn record_write(&self, state: Rc<dyn StateObject>) {
         match self {
-            AnySnapshot::Readonly(s) => s.record_write(state),
-            AnySnapshot::Mutable(s) => s.record_write(state),
-            AnySnapshot::NestedReadonly(s) => s.record_write(state),
-            AnySnapshot::NestedMutable(s) => s.record_write(state),
-            AnySnapshot::Global(s) => s.record_write(state),
-            AnySnapshot::TransparentMutable(s) => s.record_write(state),
-            AnySnapshot::TransparentReadonly(s) => s.record_write(state),
+            Self::Readonly(s) => s.record_write(state),
+            Self::Mutable(s) => s.record_write(state),
+            Self::NestedReadonly(s) => s.record_write(state),
+            Self::NestedMutable(s) => s.record_write(state),
+            Self::Global(s) => s.record_write(state),
+            Self::TransparentMutable(s) => s.record_write(state),
+            Self::TransparentReadonly(s) => s.record_write(state),
         }
     }
 
     /// Apply changes (only valid for mutable snapshots).
     pub fn apply(&self) -> SnapshotApplyResult {
         match self {
-            AnySnapshot::Mutable(s) => s.apply(),
-            AnySnapshot::NestedMutable(s) => s.apply(),
-            AnySnapshot::Global(s) => s.apply(),
-            AnySnapshot::TransparentMutable(s) => s.apply(),
+            Self::Mutable(s) => s.apply(),
+            Self::NestedMutable(s) => s.apply(),
+            Self::Global(s) => s.apply(),
+            Self::TransparentMutable(s) => s.apply(),
             _ => panic!("Cannot apply a read-only snapshot"),
         }
     }
@@ -385,18 +375,18 @@ impl AnySnapshot {
         &self,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> AnySnapshot {
+    ) -> Self {
         match self {
-            AnySnapshot::Mutable(s) => AnySnapshot::NestedMutable(
-                s.take_nested_mutable_snapshot(read_observer, write_observer),
-            ),
-            AnySnapshot::NestedMutable(s) => AnySnapshot::NestedMutable(
-                s.take_nested_mutable_snapshot(read_observer, write_observer),
-            ),
-            AnySnapshot::Global(s) => {
-                AnySnapshot::Mutable(s.take_nested_mutable_snapshot(read_observer, write_observer))
+            Self::Mutable(s) => {
+                Self::NestedMutable(s.take_nested_mutable_snapshot(read_observer, write_observer))
             }
-            AnySnapshot::TransparentMutable(s) => AnySnapshot::TransparentMutable(
+            Self::NestedMutable(s) => {
+                Self::NestedMutable(s.take_nested_mutable_snapshot(read_observer, write_observer))
+            }
+            Self::Global(s) => {
+                Self::Mutable(s.take_nested_mutable_snapshot(read_observer, write_observer))
+            }
+            Self::TransparentMutable(s) => Self::TransparentMutable(
                 s.take_nested_mutable_snapshot(read_observer, write_observer),
             ),
             _ => panic!("Cannot take nested mutable snapshot from read-only snapshot"),
@@ -720,7 +710,7 @@ pub(crate) fn check_and_overwrite_unused_records_locked() {
         state
             .extra_state_objects
             .borrow_mut()
-            .remove_if(super::state::StateObject::overwrite_unused_records);
+            .remove_if(StateObject::overwrite_unused_records);
     });
 }
 
@@ -882,7 +872,7 @@ impl SnapshotState {
         let pin_handle = if should_pin {
             snapshot_pinning::track_pinning(id, &invalid)
         } else {
-            snapshot_pinning::PinHandle::INVALID
+            PinHandle::INVALID
         };
         Self {
             id: Cell::new(id),

@@ -1,5 +1,3 @@
-use std::mem;
-
 use super::{
     GroupRecord, SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup,
     SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableLocalDebugStats,
@@ -9,7 +7,7 @@ use crate::{Key, RecomposeScope, ScopeId};
 
 impl SlotTable {
     fn group_heap_bytes(&self) -> usize {
-        self.groups.capacity() * mem::size_of::<GroupRecord>()
+        self.groups.capacity() * size_of::<GroupRecord>()
     }
 
     /// Heap bytes reserved by the table for groups, payloads, nodes and anchors.
@@ -26,7 +24,7 @@ impl SlotTable {
         SlotTableLocalDebugStats {
             group_count: self.groups.len(),
             group_capacity: self.groups.capacity(),
-            group_record_size: mem::size_of::<GroupRecord>(),
+            group_record_size: size_of::<GroupRecord>(),
             group_heap_bytes: self.group_heap_bytes(),
             payload_count: self.total_payload_count(),
             payload_capacity: self.payloads.capacity(),

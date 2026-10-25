@@ -195,9 +195,9 @@ pub(crate) fn main() -> ExitCode {
 }
 
 const TABS: [(&str, &str); TAB_COUNT] = [
-    (cranpose::liquid::icons::STAR, "A"),
-    (cranpose::liquid::icons::LIST_OUTLINE, "B"),
-    (cranpose::liquid::icons::SEARCH, "C"),
+    (icons::STAR, "A"),
+    (icons::LIST_OUTLINE, "B"),
+    (icons::SEARCH, "C"),
 ];
 
 fn sample(shot: &RobotScreenshot, (lx, ly): (f32, f32), scale: f32) -> (u8, u8, u8) {

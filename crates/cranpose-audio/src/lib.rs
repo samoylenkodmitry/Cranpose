@@ -26,7 +26,7 @@ pub fn create() -> Arc<AudioEngine> {
 /// device opens on the first sound, not here and not when clips are loaded, so
 /// installing the engine in an app that never plays anything costs nothing.
 pub fn install() -> AudioPlayerRef {
-    let engine: AudioPlayerRef = INSTALLED_ENGINE.get_or_init(create).clone();
+    let engine: AudioPlayerRef = Arc::<AudioEngine>::clone(INSTALLED_ENGINE.get_or_init(create));
     set_platform_audio(Arc::clone(&engine));
     engine
 }

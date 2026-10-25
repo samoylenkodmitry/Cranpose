@@ -26,7 +26,7 @@ fn record(
     name: &'static str,
     consume: bool,
 ) -> impl Fn(&KeyEvent) -> bool + 'static {
-    let log = log.clone();
+    let log = Rc::clone(log);
     move |_| {
         log.borrow_mut().push(name);
         consume
@@ -39,8 +39,8 @@ fn logged_shell(
     let focus = FocusRequester::new();
     let events = EventLog::default();
     let content_focus = focus.clone();
-    let content_events = events.clone();
-    let shell = new_shell(move || content(content_focus.clone(), content_events.clone()));
+    let content_events = Rc::clone(&events);
+    let shell = new_shell(move || content(content_focus.clone(), Rc::clone(&content_events)));
     (shell, focus, events)
 }
 
@@ -59,9 +59,9 @@ fn ancestor_preview_consumes_shortcuts_before_the_focused_editor() {
     let focus = FocusRequester::new();
     let content_focus = focus.clone();
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let content_seen = seen.clone();
+    let content_seen = Rc::clone(&seen);
     let mut shell = new_shell(move || {
-        let seen = content_seen.clone();
+        let seen = Rc::clone(&content_seen);
         let focus = content_focus.clone();
         Column(
             Modifier::empty().on_preview_key_event(move |event| {
@@ -139,9 +139,9 @@ fn updated_and_removed_handlers_take_effect_on_the_next_key() {
     let focus = FocusRequester::new();
     let content_focus = focus.clone();
     let log = EventLog::default();
-    let content_log = log.clone();
+    let content_log = Rc::clone(&log);
     let version = Rc::new(RefCell::new(None));
-    let content_version = version.clone();
+    let content_version = Rc::clone(&version);
     let mut shell = new_shell(move || {
         let current = rememberMutableStateOf(|| 0);
         *content_version.borrow_mut() = Some(current);
@@ -221,7 +221,7 @@ fn focused_control_activation_runs_between_preview_and_bubble() {
                 .on_key_event(record(&log, "bubble", true)),
             ColumnSpec::default(),
             move || {
-                let log = log.clone();
+                let log = Rc::clone(&log);
                 cranpose_ui::Button(
                     Modifier::empty()
                         .width(100.0)
@@ -281,7 +281,7 @@ fn modal_keys_do_not_reach_the_surrounding_page() {
             ColumnSpec::default(),
             move || {
                 let focus = focus.clone();
-                let log = log.clone();
+                let log = Rc::clone(&log);
                 cranpose_ui::widgets::Dialog(
                     cranpose_ui::widgets::DialogSpec::default(),
                     |_| {},

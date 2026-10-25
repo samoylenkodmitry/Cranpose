@@ -357,7 +357,7 @@ pub fn window_lifecycle_state(visible: bool, focused: bool) -> LifecycleState {
 impl LifecycleState {
     /// Whether this state is at least as active as `other`, counting paused
     /// as started and stopped as created — Android's `isAtLeast`.
-    pub fn is_at_least(self, other: LifecycleState) -> bool {
+    pub fn is_at_least(self, other: Self) -> bool {
         lifecycle_level(self) >= lifecycle_level(other)
     }
 }

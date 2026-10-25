@@ -107,7 +107,7 @@ fn push_text_style_draws_for_test(
 ) {
     with_test_app_context(|| {
         let mut text_layout = UiTextLayoutResolver;
-        let render_text = std::sync::Arc::new(text.render_string());
+        let render_text = Arc::new(text.render_string());
         let text = Rc::new(text.clone());
         push_text_style_draws(
             scene,
@@ -118,8 +118,8 @@ fn push_text_style_draws_for_test(
             content_layer,
             (&text, &render_text),
             (
-                &std::sync::Arc::new(text_style.clone()),
-                cranpose_render_common::text_paint::TextPaint::of(
+                &Arc::new(text_style.clone()),
+                TextPaint::of(
                     text_style,
                     text_style.render_hash(),
                     &text.span_styles,
@@ -137,9 +137,7 @@ fn push_text_style_draws_for_test(
 
 /// Every recorded shape of the scene with the placement it draws
 /// under, the open loose run closed first.
-fn shape_records(
-    scene: &mut Scene,
-) -> Vec<(cranpose_ui_graphics::ShapeRecord, crate::scene::Placement)> {
+fn shape_records(scene: &mut Scene) -> Vec<(cranpose_ui_graphics::ShapeRecord, Placement)> {
     scene.flush_loose();
     scene
         .runs
@@ -153,7 +151,7 @@ fn shape_records(
         .collect()
 }
 
-fn record_rect(entry: &(cranpose_ui_graphics::ShapeRecord, crate::scene::Placement)) -> Rect {
+fn record_rect(entry: &(cranpose_ui_graphics::ShapeRecord, Placement)) -> Rect {
     entry.1.translated_bounds(entry.0.stored_rect())
 }
 
@@ -214,7 +212,7 @@ fn a_layer_shadow_draws_skias_ambient_then_spot_pass() {
     let light = ShadowLight::for_window(200.0, 200.0, 1.0, 1.0);
     push_layer_shadow(&mut scene, &layer, bounds, bounds, None, light);
 
-    let geometry = cranpose_render_common::layer_shadow::layer_shadow_geometry(
+    let geometry = layer_shadow_geometry(
         &layer,
         bounds,
         Some(RoundedCornerShape::uniform(8.0)),
@@ -338,7 +336,7 @@ fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
 #[test]
 fn push_text_style_draws_emits_background_shadow_and_main_text() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
             background: Some(Color(0.2, 0.3, 0.52, 0.55)),
@@ -408,7 +406,7 @@ fn push_text_style_draws_emits_background_shadow_and_main_text() {
 #[test]
 fn push_text_style_draws_hard_shadow_does_not_emit_effect_layer() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
             shadow: Some(cranpose_ui::text::Shadow {
@@ -456,7 +454,7 @@ fn push_text_style_draws_hard_shadow_does_not_emit_effect_layer() {
 #[test]
 fn estimate_text_style_draw_bounds_matches_scene_emission() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.6, 0.4, 1.0)],
@@ -524,13 +522,10 @@ fn estimate_text_style_draw_bounds_matches_scene_emission() {
 #[test]
 fn push_text_style_draws_emits_decoration_shapes() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
-            text_decoration: Some(
-                cranpose_ui::text::TextDecoration::UNDERLINE
-                    .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
-            ),
+            text_decoration: Some(TextDecoration::UNDERLINE.combine(TextDecoration::LINE_THROUGH)),
             ..Default::default()
         },
         ..Default::default()
@@ -565,9 +560,9 @@ fn push_text_style_draws_emits_decoration_shapes() {
 
 #[test]
 fn push_text_style_draws_preserves_subpixel_decoration_y() {
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            text_decoration: Some(TextDecoration::UNDERLINE),
             ..Default::default()
         },
         ..Default::default()
@@ -625,9 +620,9 @@ fn push_text_style_draws_preserves_subpixel_decoration_y() {
 #[test]
 fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            text_decoration: Some(TextDecoration::UNDERLINE),
             ..Default::default()
         },
         ..Default::default()
@@ -672,25 +667,25 @@ fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
 
 #[test]
 fn decoration_segments_from_glyph_layouts_line_through_preserves_bidi_visual_order() {
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
     let text = cranpose_ui::text::AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            text_decoration: Some(TextDecoration::LINE_THROUGH),
             ..Default::default()
         })
         .append("A")
         .pop()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color(0.0, 0.8, 0.0, 1.0)),
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            text_decoration: Some(TextDecoration::LINE_THROUGH),
             ..Default::default()
         })
         .append("B")
         .pop()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::BLUE),
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            text_decoration: Some(TextDecoration::LINE_THROUGH),
             ..Default::default()
         })
         .append("C")
@@ -768,9 +763,9 @@ fn decoration_segments_from_glyph_layouts_line_through_preserves_bidi_visual_ord
 
 #[test]
 fn decoration_segments_from_glyph_layouts_multiline_line_through_keeps_visual_line_boxes() {
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            text_decoration: Some(TextDecoration::LINE_THROUGH),
             ..Default::default()
         },
         paragraph_style: cranpose_ui::ParagraphStyle {
@@ -858,9 +853,9 @@ fn decoration_segments_from_glyph_layouts_multiline_line_through_keeps_visual_li
 
 #[test]
 fn decoration_segments_from_glyph_layouts_bridge_letter_spacing_gaps() {
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            text_decoration: Some(TextDecoration::LINE_THROUGH),
             ..Default::default()
         },
         ..Default::default()
@@ -909,9 +904,9 @@ fn decoration_segments_from_glyph_layouts_bridge_letter_spacing_gaps() {
 
 #[test]
 fn decoration_segments_from_glyph_layouts_bridge_whitespace_gaps() {
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            text_decoration: Some(TextDecoration::LINE_THROUGH),
             ..Default::default()
         },
         ..Default::default()
@@ -961,12 +956,12 @@ fn decoration_segments_from_glyph_layouts_bridge_whitespace_gaps() {
 #[test]
 fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alpha() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
     let text = cranpose_ui::text::AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
             alpha: Some(0.4),
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            text_decoration: Some(TextDecoration::UNDERLINE),
             ..Default::default()
         })
         .append("Tinted")
@@ -1012,17 +1007,17 @@ fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alp
 fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
     let mut base_scene = Scene::new();
     let mut shifted_scene = Scene::new();
-    let base_style = cranpose_ui::TextStyle {
+    let base_style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            text_decoration: Some(TextDecoration::UNDERLINE),
             ..Default::default()
         },
         ..Default::default()
     };
-    let shifted_style = cranpose_ui::TextStyle {
+    let shifted_style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            text_decoration: Some(TextDecoration::UNDERLINE),
             ..Default::default()
         },
         ..Default::default()
@@ -1073,7 +1068,7 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
 #[test]
 fn push_text_style_draws_applies_baseline_shift() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
             baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
@@ -1112,7 +1107,7 @@ fn push_text_style_draws_applies_baseline_shift() {
 fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
     let mut scene = Scene::new();
     let first_stop = Color(1.0, 0.0, 0.0, 1.0);
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![first_stop, Color(0.0, 0.0, 1.0, 1.0)],
@@ -1188,13 +1183,13 @@ fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
 #[test]
 fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoints() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient(vec![
                 Color(0.42, 0.94, 1.0, 1.0),
                 Color(1.0, 0.76, 0.54, 1.0),
             ])),
-            draw_style: Some(cranpose_ui::text::TextDrawStyle::Fill),
+            draw_style: Some(TextDrawStyle::Fill),
             ..Default::default()
         },
         ..Default::default()
@@ -1249,9 +1244,9 @@ fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoint
 #[test]
 fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 5.0 }),
+            draw_style: Some(TextDrawStyle::Stroke { width: 5.0 }),
             ..Default::default()
         },
         ..Default::default()
@@ -1329,9 +1324,9 @@ fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
 #[test]
 fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 3.0 }),
+            draw_style: Some(TextDrawStyle::Stroke { width: 3.0 }),
             ..Default::default()
         },
         ..Default::default()
@@ -1399,14 +1394,14 @@ fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
 #[test]
 fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.7, 0.5, 1.0)],
                 Point::new(0.0, 0.0),
                 Point::new(180.0, 0.0),
             )),
-            draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 2.8 }),
+            draw_style: Some(TextDrawStyle::Stroke { width: 2.8 }),
             ..Default::default()
         },
         ..Default::default()
@@ -1476,7 +1471,7 @@ fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
 #[test]
 fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_mask() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![Color(0.15, 0.9, 1.0, 1.0), Color(1.0, 0.65, 0.45, 1.0)],
@@ -1550,7 +1545,7 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
 #[test]
 fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_batches() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![Color(0.15, 0.9, 1.0, 1.0), Color(1.0, 0.65, 0.45, 1.0)],
@@ -1672,7 +1667,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
 #[test]
 fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
     let text = cranpose_ui::text::AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
@@ -1730,7 +1725,7 @@ fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
 #[test]
 fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
     let text = cranpose_ui::text::AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
@@ -1780,7 +1775,7 @@ fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
 #[test]
 fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color::BLUE),
             ..Default::default()
@@ -1835,7 +1830,7 @@ fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
 #[test]
 fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
     let text = cranpose_ui::text::AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
@@ -1896,7 +1891,7 @@ fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
 #[test]
 fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
     let mut scene = Scene::new();
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
     let source_text = cranpose_ui::text::AnnotatedString::builder()
         .push_style(cranpose_ui::text::SpanStyle {
             color: Some(Color::RED),
@@ -1963,15 +1958,14 @@ fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space(
         width: 180.0,
         height: 28.0,
     };
-    let static_style = cranpose_ui::TextStyle::from_paragraph_style(cranpose_ui::ParagraphStyle {
-        text_motion: Some(cranpose_ui::text::TextMotion::Static),
+    let static_style = TextStyle::from_paragraph_style(cranpose_ui::ParagraphStyle {
+        text_motion: Some(TextMotion::Static),
         ..Default::default()
     });
-    let animated_style =
-        cranpose_ui::TextStyle::from_paragraph_style(cranpose_ui::ParagraphStyle {
-            text_motion: Some(cranpose_ui::text::TextMotion::Animated),
-            ..Default::default()
-        });
+    let animated_style = TextStyle::from_paragraph_style(cranpose_ui::ParagraphStyle {
+        text_motion: Some(TextMotion::Animated),
+        ..Default::default()
+    });
 
     let mut static_scene = Scene::new();
     push_text_style_draws_for_test(
@@ -2017,20 +2011,20 @@ fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
         width: 180.0,
         height: 28.0,
     };
-    let static_style = cranpose_ui::TextStyle {
+    let static_style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
-            draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 4.0 }),
+            draw_style: Some(TextDrawStyle::Stroke { width: 4.0 }),
             ..Default::default()
         },
         paragraph_style: cranpose_ui::ParagraphStyle {
-            text_motion: Some(cranpose_ui::text::TextMotion::Static),
+            text_motion: Some(TextMotion::Static),
             ..Default::default()
         },
     };
-    let animated_style = cranpose_ui::TextStyle {
+    let animated_style = TextStyle {
         span_style: static_style.span_style.clone(),
         paragraph_style: cranpose_ui::ParagraphStyle {
-            text_motion: Some(cranpose_ui::text::TextMotion::Animated),
+            text_motion: Some(TextMotion::Animated),
             ..Default::default()
         },
     };
@@ -2101,7 +2095,7 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
         width: 180.2,
         height: 28.4,
     };
-    let style = cranpose_ui::TextStyle {
+    let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             brush: Some(Brush::linear_gradient_range(
                 vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.7, 0.5, 1.0)],
@@ -2111,7 +2105,7 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
             ..Default::default()
         },
         paragraph_style: cranpose_ui::ParagraphStyle {
-            text_motion: Some(cranpose_ui::text::TextMotion::Static),
+            text_motion: Some(TextMotion::Static),
             ..Default::default()
         },
     };
@@ -2161,9 +2155,9 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
 fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {
     DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {
         rect,
-        text: std::rc::Rc::from(text),
+        text: Rc::from(text),
         style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
-        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
+        brush: Brush::solid(Color::WHITE),
     }))
 }
 
@@ -2204,7 +2198,7 @@ fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
     assert_eq!(text.text.string().text(), "SCORE");
     assert_eq!(text.rect.x, 14.0);
     assert_eq!(text.rect.y, 25.0);
-    assert_eq!(text.color, cranpose_ui_graphics::Color::WHITE);
+    assert_eq!(text.color, Color::WHITE);
     assert!(
         scene
             .draw_ops
@@ -2225,7 +2219,7 @@ fn text_draw_primitives_keep_their_z_order_against_the_shapes_around_them() {
     };
     let backdrop = DrawPrimitive::Rect {
         rect: bounds,
-        brush: Brush::solid(cranpose_ui_graphics::Color::BLACK),
+        brush: Brush::solid(Color::BLACK),
         stroke: None,
     };
     for primitive in [

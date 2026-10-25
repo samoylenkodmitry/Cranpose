@@ -96,7 +96,7 @@ impl Catalog {
             .map(|language| {
                 let tag: Arc<str> = language.to_string().into();
                 Language {
-                    name: tag.clone(),
+                    name: Arc::clone(&tag),
                     tag,
                     locale: Locale {
                         language: language.clone(),
@@ -156,8 +156,8 @@ impl Catalog {
 
     /// Adds a library's catalogs below application overrides without copying its resources.
     /// Lookup prefers an application message in the same language before the library's.
-    pub fn with_fallback(self, library: &Catalog) -> Self {
-        let choices = self.1.clone();
+    pub fn with_fallback(self, library: &Self) -> Self {
+        let choices = Arc::clone(&self.1);
         let mut languages = self.0.languages.clone();
         languages.extend(library.0.languages.iter().cloned());
         languages.sort();

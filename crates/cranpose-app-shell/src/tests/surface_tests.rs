@@ -14,7 +14,7 @@ use cranpose_ui_graphics::{GraphicsLayer, PointerIcon};
 use super::{
     tests::{
         HitGraphRenderer, ScopedUpdateCountingRenderer, SoftKeyboardProbe, TextFieldDispatchProbe,
-        test_guard,
+        request_probe_focus, test_guard,
     },
     *,
 };
@@ -22,7 +22,7 @@ use super::{
 fn window_root_at<R>(shell: &AppShell<R>, index: usize) -> u64
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     shell
         .window_roots()
@@ -34,7 +34,7 @@ where
 fn attach_first_window<R>(shell: &mut AppShell<R>, renderer: R) -> u64
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     shell.update();
     let window_id = window_root_at(shell, 0);
@@ -391,7 +391,7 @@ fn two_window_shell(windows: &TwoWindows) -> (AppShell<HitGraphRenderer>, u64) {
 fn click<R>(surface: &mut SurfaceMut<'_, R>, x: f32, y: f32) -> bool
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     surface.set_cursor(x, y);
     let pressed = surface.pointer_pressed();
@@ -563,11 +563,11 @@ fn the_soft_keyboard_belongs_to_the_active_surface() {
     let (mut shell, window_id) = two_window_shell(&windows);
     let primary_keyboard = Rc::new(SoftKeyboardProbe::default());
     let window_keyboard = Rc::new(SoftKeyboardProbe::default());
-    shell.set_platform_text_input(primary_keyboard.clone());
+    shell.set_platform_text_input(Rc::<SoftKeyboardProbe>::clone(&primary_keyboard));
     shell
         .surface(RootId::Window(window_id))
         .expect("window surface")
-        .set_platform_text_input(window_keyboard.clone());
+        .set_platform_text_input(Rc::<SoftKeyboardProbe>::clone(&window_keyboard));
 
     let mut window = shell
         .surface(RootId::Window(window_id))
@@ -575,9 +575,7 @@ fn the_soft_keyboard_belongs_to_the_active_surface() {
     assert!(click(&mut window, 40.0, 20.0));
     let focus_flag = Rc::new(RefCell::new(false));
     let handler = Rc::new(TextFieldDispatchProbe::default());
-    shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
-    });
+    request_probe_focus(&shell, &focus_flag, &handler);
     assert_eq!(*window_keyboard.calls.borrow(), vec!["show"]);
     assert!(primary_keyboard.calls.borrow().is_empty());
 
@@ -671,7 +669,7 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
     let window_id = attach_first_window(&mut shell, window_counts.renderer());
     primary.reset();
     window_counts.reset();
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
     assert_eq!(
         (primary.scene_work(), window_counts.scene_work()),
@@ -792,7 +790,7 @@ fn press_recorder(recorded: Rc<Cell<Option<Option<cranpose_ui::Point>>>>) {
                         .await_pointer_event_scope(|await_scope| async move {
                             loop {
                                 let event = await_scope.await_pointer_event().await;
-                                if event.kind == cranpose_ui::PointerEventKind::Down {
+                                if event.kind == PointerEventKind::Down {
                                     recorded.set(Some(event.screen_position));
                                 }
                             }
@@ -890,7 +888,7 @@ fn movable_content_torn_into_a_fresh_column_lays_out_after_the_strip() {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
                     if !is_torn.get() {
                         Column(Modifier::empty(), ColumnSpec::default(), || {
-                            cranpose_core::movable("page", || {
+                            movable("page", || {
                                 Box(
                                     Modifier::empty().size(Size::new(90.0, 30.0)),
                                     BoxSpec::default(),
@@ -905,7 +903,7 @@ fn movable_content_torn_into_a_fresh_column_lays_out_after_the_strip() {
                                 BoxSpec::default(),
                                 || {},
                             );
-                            cranpose_core::movable("page", || {
+                            movable("page", || {
                                 Box(
                                     Modifier::empty().size(Size::new(90.0, 30.0)),
                                     BoxSpec::default(),
@@ -955,7 +953,7 @@ fn TornBody(page: u64) {
 fn TornWindowChrome(page: u64) {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         TornStrip();
-        cranpose_core::movable(("page", page), move || TornBody(page));
+        movable(("page", page), move || TornBody(page));
     });
 }
 

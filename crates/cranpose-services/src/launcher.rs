@@ -191,7 +191,7 @@ fn remember_core(
 ) -> Rc<LauncherCore> {
     let picker = local_file_picker().current();
     let slot = cranpose_core::remember({
-        let picker = picker.clone();
+        let picker = Rc::clone(&picker);
         let request_key = request_key.to_string();
         move || LauncherSlot {
             core: Rc::new(LauncherCore {

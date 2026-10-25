@@ -189,7 +189,7 @@ fn retention_take_preserves_retained_node_lifecycle_until_restore() {
     let restored = retention.take(key).expect("retained subtree must exist");
     assert_eq!(
         restored.node_states().collect::<Vec<_>>(),
-        vec![(child_id, super::NodeLifecycle::RetainedDetached)]
+        vec![(child_id, NodeLifecycle::RetainedDetached)]
     );
 }
 
@@ -209,7 +209,7 @@ fn retention_take_after_restore_preflight_keeps_subtree_when_preflight_panics() 
     let mut retention = RetentionManager::default();
     retention.insert(key, detached);
 
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let failed = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = retention.take_after_restore_preflight(key, |_| panic!("restore preflight failed"));
     }));
     assert!(failed.is_err(), "preflight panic must propagate");
@@ -220,7 +220,7 @@ fn retention_take_after_restore_preflight_keeps_subtree_when_preflight_panics() 
         .expect("failed preflight must leave retained subtree available");
     assert_eq!(
         restored.node_states().collect::<Vec<_>>(),
-        vec![(child_node, super::NodeLifecycle::RetainedDetached)]
+        vec![(child_node, NodeLifecycle::RetainedDetached)]
     );
 }
 
@@ -747,7 +747,7 @@ fn retention_validate_rejects_active_retained_node() {
         Err(SlotInvariantError::RetainedNodeLifecycleMismatch {
             root_key: retain_key.key,
             node_id: child_node,
-            actual: super::NodeLifecycle::Active,
+            actual: NodeLifecycle::Active,
         })
     );
 }

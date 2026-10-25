@@ -79,7 +79,7 @@ fn quiet_loop() -> LoopControlInputs {
 #[test]
 fn a_drag_poll_ahead_is_waited_for_and_one_that_is_due_is_run() {
     let now = Instant::now();
-    let ahead = now + std::time::Duration::from_millis(16);
+    let ahead = now + Duration::from_millis(16);
     assert_eq!(
         event_loop_control_flow(
             now,
@@ -126,7 +126,7 @@ fn a_redraw_that_presents_nothing_still_paces_the_next_one() {
     pace_after_empty_redraw(
         &mut presented,
         &mut empty,
-        attempt + std::time::Duration::from_millis(5),
+        attempt + Duration::from_millis(5),
         true,
     );
     assert_eq!(presented, Some(attempt), "a present keeps its own anchor");
@@ -135,7 +135,7 @@ fn a_redraw_that_presents_nothing_still_paces_the_next_one() {
 
 #[test]
 fn an_unpaced_window_waits_a_vsync_after_a_redraw_that_presented_nothing() {
-    let vsync = std::time::Duration::from_micros(16_667);
+    let vsync = Duration::from_micros(16_667);
     assert_eq!(
         frame_cap_interval(FramePacingMode::NoVsync, vsync, false),
         None,
@@ -177,14 +177,14 @@ fn a_trace_that_is_off_evaluates_none_of_its_arguments() {
     assert!(evaluated.get());
 }
 
-fn window_options() -> crate::native_window::NativeWindowOptions {
-    crate::native_window::NativeWindowOptions {
+fn window_options() -> NativeWindowOptions {
+    NativeWindowOptions {
         title: "w".to_string(),
         width: 320.0,
         height: 240.0,
         x: None,
         y: None,
-        position_origin: crate::native_window::NativeWindowPositionOrigin::Screen,
+        position_origin: NativeWindowPositionOrigin::Screen,
         decorations: false,
         transparent: false,
         shadow: true,
@@ -294,11 +294,8 @@ fn a_drag_with_no_pointer_to_poll_and_no_anchor_leaves_the_move_to_the_platform(
 #[test]
 fn a_drag_anchored_at_a_handed_over_press_polls_without_a_platform_pointer() {
     assert_eq!(
-        super::native_window_polling_drag_pointer(
-            None,
-            Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
-        ),
-        Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
+        super::native_window_polling_drag_pointer(None, Some(PhysicalPosition::new(7.0, 9.0)),),
+        Some(PhysicalPosition::new(7.0, 9.0)),
         "the window holding the button relays its moves, so the session has \
          a pointer to follow from the anchor on"
     );
@@ -306,20 +303,20 @@ fn a_drag_anchored_at_a_handed_over_press_polls_without_a_platform_pointer() {
 
 #[test]
 fn a_drag_polls_from_the_anchor_the_press_recorded() {
-    let global = super::NativeWindowPointerState {
-        position: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+    let global = NativeWindowPointerState {
+        position: PhysicalPosition::new(1.0, 2.0),
         primary_down: true,
     };
     assert_eq!(
         super::native_window_polling_drag_pointer(
             Some(global),
-            Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
+            Some(PhysicalPosition::new(7.0, 9.0)),
         ),
-        Some(winit::dpi::PhysicalPosition::new(7.0, 9.0))
+        Some(PhysicalPosition::new(7.0, 9.0))
     );
     assert_eq!(
         super::native_window_polling_drag_pointer(Some(global), None),
-        Some(winit::dpi::PhysicalPosition::new(1.0, 2.0))
+        Some(PhysicalPosition::new(1.0, 2.0))
     );
 }
 
@@ -540,15 +537,15 @@ fn desktop_robot_queries_schedule_presentation_for_drained_visual_updates() {
 
 #[test]
 fn a_mode_that_outruns_the_display_gets_a_deeper_drawable_queue() {
-    let sixty = std::time::Duration::from_nanos(16_666_667);
+    let sixty = Duration::from_nanos(16_666_667);
     assert_eq!(desired_frame_latency(FramePacingMode::Hard120, sixty), 2);
     assert_eq!(desired_frame_latency(FramePacingMode::NoVsync, sixty), 2);
 }
 
 #[test]
 fn a_mode_the_display_can_keep_up_with_keeps_the_shallow_queue() {
-    let sixty = std::time::Duration::from_nanos(16_666_667);
-    let one_twenty = std::time::Duration::from_nanos(8_333_333);
+    let sixty = Duration::from_nanos(16_666_667);
+    let one_twenty = Duration::from_nanos(8_333_333);
     assert_eq!(desired_frame_latency(FramePacingMode::Hard60, sixty), 1);
     assert_eq!(
         desired_frame_latency(FramePacingMode::Hard60, one_twenty),
@@ -564,8 +561,8 @@ fn a_mode_the_display_can_keep_up_with_keeps_the_shallow_queue() {
 #[test]
 fn vsync_keeps_its_queue_depth_on_every_display() {
     for interval in [
-        std::time::Duration::from_nanos(16_666_667),
-        std::time::Duration::from_nanos(8_333_333),
+        Duration::from_nanos(16_666_667),
+        Duration::from_nanos(8_333_333),
     ] {
         assert_eq!(desired_frame_latency(FramePacingMode::Vsync, interval), 2);
     }
@@ -573,7 +570,7 @@ fn vsync_keeps_its_queue_depth_on_every_display() {
 
 #[test]
 fn no_vsync_redraw_chain_requires_uncapped_dirty_frame() {
-    let vsync_interval = std::time::Duration::from_nanos(16_666_667);
+    let vsync_interval = Duration::from_nanos(16_666_667);
 
     assert!(should_chain_no_vsync_redraw(
         frame_interval_for_mode(FramePacingMode::NoVsync, vsync_interval),
@@ -595,7 +592,7 @@ fn no_vsync_redraw_chain_requires_uncapped_dirty_frame() {
 
 #[test]
 fn free_running_loop_never_parks_on_a_frame_it_already_asked_for() {
-    let vsync_interval = std::time::Duration::from_nanos(16_666_667);
+    let vsync_interval = Duration::from_nanos(16_666_667);
     let no_vsync = frame_interval_for_mode(FramePacingMode::NoVsync, vsync_interval);
 
     assert!(free_running_frame(no_vsync, false, true));
@@ -618,8 +615,8 @@ fn free_running_loop_never_parks_on_a_frame_it_already_asked_for() {
 #[test]
 fn a_driven_run_never_parks_longer_than_its_command_poll() {
     let now = Instant::now();
-    let far = now + std::time::Duration::from_secs(5);
-    let soon = now + std::time::Duration::from_millis(1);
+    let far = now + Duration::from_secs(5);
+    let soon = now + Duration::from_millis(1);
     let bound = now + ROBOT_PARKED_COMMAND_POLL_INTERVAL;
 
     assert_eq!(
@@ -721,7 +718,7 @@ fn robot_idle_wait_does_not_blame_the_app_for_a_starved_host() {
     );
     assert_eq!(
         controller.idle_wait_timeout(
-            started_at + ROBOT_IDLE_STARVATION_CEILING - std::time::Duration::from_millis(1)
+            started_at + ROBOT_IDLE_STARVATION_CEILING - Duration::from_millis(1)
         ),
         None
     );
@@ -757,9 +754,8 @@ fn robot_idle_wait_does_not_blame_the_app_for_a_slow_present() {
         None
     );
     assert_eq!(
-        controller.idle_wait_timeout(
-            started_at + ROBOT_IDLE_PRESENT_TIMEOUT - std::time::Duration::from_millis(1)
-        ),
+        controller
+            .idle_wait_timeout(started_at + ROBOT_IDLE_PRESENT_TIMEOUT - Duration::from_millis(1)),
         None
     );
 }
@@ -832,23 +828,21 @@ fn each_presented_scroll_step_restarts_the_wait_deadline() {
     let started_at = Instant::now();
 
     controller.begin_pump_present_wait_at(11, started_at);
-    let next_step = started_at + ROBOT_PRESENT_WAIT_TIMEOUT - std::time::Duration::from_millis(1);
+    let next_step = started_at + ROBOT_PRESENT_WAIT_TIMEOUT - Duration::from_millis(1);
     controller.begin_pump_present_wait_at(12, next_step);
 
-    assert!(
-        !controller.pump_present_wait_timed_out(next_step + std::time::Duration::from_millis(2))
-    );
+    assert!(!controller.pump_present_wait_timed_out(next_step + Duration::from_millis(2)));
     assert!(controller.pump_present_wait_timed_out(next_step + ROBOT_PRESENT_WAIT_TIMEOUT));
 }
 
 #[test]
 fn frame_anchor_holds_cadence_despite_late_wakeups() {
-    let interval = std::time::Duration::from_nanos(16_666_667);
+    let interval = Duration::from_nanos(16_666_667);
     let start = Instant::now();
     let mut anchor = start;
 
     for step in 1..=240u32 {
-        let observed = anchor + interval + std::time::Duration::from_micros(750);
+        let observed = anchor + interval + Duration::from_micros(750);
         anchor = next_frame_anchor(Some(anchor), observed, Some(interval));
         assert_eq!(anchor, start + interval * step);
     }
@@ -856,7 +850,7 @@ fn frame_anchor_holds_cadence_despite_late_wakeups() {
 
 #[test]
 fn frame_anchor_reanchors_after_a_full_interval_overrun() {
-    let interval = std::time::Duration::from_nanos(16_666_667);
+    let interval = Duration::from_nanos(16_666_667);
     let previous = Instant::now();
     let overrun = previous + interval * 4;
 
@@ -868,15 +862,12 @@ fn frame_anchor_reanchors_after_a_full_interval_overrun() {
 
 #[test]
 fn frame_anchor_falls_back_to_the_observed_start_without_a_cadence() {
-    let interval = std::time::Duration::from_nanos(16_666_667);
+    let interval = Duration::from_nanos(16_666_667);
     let now = Instant::now();
 
     assert_eq!(next_frame_anchor(None, now, Some(interval)), now);
     assert_eq!(next_frame_anchor(Some(now), now, None), now);
-    assert_eq!(
-        next_frame_anchor(Some(now), now, Some(std::time::Duration::ZERO)),
-        now
-    );
+    assert_eq!(next_frame_anchor(Some(now), now, Some(Duration::ZERO)), now);
 }
 
 #[test]
@@ -1040,7 +1031,7 @@ fn background_ui_post_returns_without_the_event_loop_thread() {
         },
         counting(&wake_ups),
     ));
-    let runtime = Runtime::new(scheduler.clone());
+    let runtime = Runtime::new(Arc::<StdScheduler>::clone(&scheduler));
     let dispatcher = runtime.handle().dispatcher();
     let (posted, post_returned) = mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -1808,7 +1799,7 @@ fn a_primary_that_wraps_its_content_asks_for_each_new_content_size_once() {
 #[test]
 fn a_hidden_primarys_update_is_paced_while_an_animation_still_needs_frames() {
     let started = Instant::now();
-    let interval = Some(std::time::Duration::from_millis(16));
+    let interval = Some(Duration::from_millis(16));
     assert_eq!(
         super::declaration_host_frame_anchor(None, started, interval, false, false),
         None,
@@ -1824,7 +1815,7 @@ fn a_hidden_primarys_update_is_paced_while_an_animation_still_needs_frames() {
         Some(started),
         "an animation that only dirties a peer's scene is paced like a presented frame"
     );
-    let previous = Some(started - std::time::Duration::from_millis(1));
+    let previous = Some(started - Duration::from_millis(1));
     assert_eq!(
         super::declaration_host_frame_anchor(previous, started, interval, false, false),
         previous,

@@ -69,7 +69,7 @@ fn LifecycleStatsDisplay(stats: MutableState<LifecycleStats>) {
 }
 
 #[composable]
-fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
+fn LazyListStatsDisplay(list_state: LazyListState) {
     let stats = list_state.stats();
     let visible = stats.items_in_use;
     let cached = stats.items_in_pool;
@@ -99,7 +99,7 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
 }
 
 #[composable]
-fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
+fn FirstVisibleIndexDisplay(list_state: LazyListState) {
     let first_index = list_state.first_visible_item_index();
     Text(
         format!("FirstIndex: {first_index}"),

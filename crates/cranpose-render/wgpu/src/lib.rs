@@ -1429,7 +1429,7 @@ impl Renderer for WgpuRenderer {
         self.frontend.refresh_dev_overlay();
     }
 
-    fn set_inspector_overlay(&mut self, graph: Option<cranpose_render_common::graph::RenderGraph>) {
+    fn set_inspector_overlay(&mut self, graph: Option<RenderGraph>) {
         self.frontend.inspector_overlay_graph = graph;
         self.frontend.refresh_dev_overlay();
     }

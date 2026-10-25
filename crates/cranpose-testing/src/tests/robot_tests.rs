@@ -103,8 +103,8 @@ impl Renderer for NeverWarmRenderer {
 
     fn rebuild_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         viewport: Size,
     ) -> Result<(), Self::Error> {
         self.inner

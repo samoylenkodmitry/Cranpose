@@ -454,32 +454,32 @@ pub async fn run(
     let frame_timer = Rc::new(WebFrameTimer::default());
     let surface_dirty = Rc::new(Cell::new(true));
     let request_frame: Rc<dyn Fn()> = {
-        let frame_pending = frame_pending.clone();
-        let render_loop = render_loop.clone();
-        let frame_timer = frame_timer.clone();
+        let frame_pending = Rc::clone(&frame_pending);
+        let render_loop = Rc::clone(&render_loop);
+        let frame_timer = Rc::clone(&frame_timer);
         Rc::new(move || request_web_frame(&frame_pending, &render_loop, Some(&frame_timer)))
     };
-    crate::web_host_surface::wake_with(request_frame.clone());
+    crate::web_host_surface::wake_with(Rc::clone(&request_frame));
     let accessibility = Rc::new(RefCell::new(
         crate::web_accessibility::WebAccessibilityBridge::install(
             &document,
             canvas.clone(),
-            app.clone(),
-            request_frame.clone(),
+            Rc::clone(&app),
+            Rc::clone(&request_frame),
         )?,
     ));
     let frame_running = Rc::new(Cell::new(false));
     app.borrow_mut().set_frame_waker(frame_waker(
-        request_frame.clone(),
-        frame_running.clone(),
+        Rc::clone(&request_frame),
+        Rc::clone(&frame_running),
         woken_task_pump(Rc::downgrade(&app)),
     ));
 
-    crate::web_clipboard::install(&app, request_frame.clone());
+    crate::web_clipboard::install(&app, Rc::clone(&request_frame));
 
-    crate::web_drop::install(&canvas, request_frame.clone())?;
+    crate::web_drop::install(&canvas, Rc::clone(&request_frame))?;
 
-    crate::web_power::start_battery_probe(request_frame.clone());
+    crate::web_power::start_battery_probe(Rc::clone(&request_frame));
 
     app.borrow_mut()
         .set_platform_text_input(accessibility.borrow().text_input_handler());
@@ -492,8 +492,8 @@ pub async fn run(
         };
         platform_env.set_system_theme(initial);
         let env = Rc::clone(&platform_env);
-        let app_for_theme = app.clone();
-        let request_frame_for_theme = request_frame.clone();
+        let app_for_theme = Rc::clone(&app);
+        let request_frame_for_theme = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: web_sys::MediaQueryListEvent| {
             let theme = if event.matches() {
                 cranpose_services::SystemTheme::Dark
@@ -508,14 +508,14 @@ pub async fn run(
         query.add_event_listener_with_callback("change", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
-    crate::web_accessibility_options::watch(&window, app.clone(), request_frame.clone());
-    crate::web_lifecycle::watch(&window, request_frame.clone());
+    crate::web_accessibility_options::watch(&window, Rc::clone(&app), Rc::clone(&request_frame));
+    crate::web_lifecycle::watch(&window, Rc::clone(&request_frame));
 
     {
-        let app = app.clone();
-        let platform = platform.clone();
+        let app = Rc::clone(&app);
+        let platform = Rc::clone(&platform);
         let wheel_canvas = canvas.clone();
-        let request_frame = request_frame.clone();
+        let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
@@ -547,14 +547,14 @@ pub async fn run(
 
     crate::web_pointer::listen(
         &canvas,
-        app.clone(),
-        platform.clone(),
-        request_frame.clone(),
+        Rc::clone(&app),
+        Rc::clone(&platform),
+        Rc::clone(&request_frame),
     )?;
 
     {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyEvent, KeyEventType};
 
@@ -585,8 +585,8 @@ pub async fn run(
     }
 
     {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyEvent, KeyEventType};
 
@@ -611,8 +611,8 @@ pub async fn run(
     }
 
     {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             if let Some(data) = event.clipboard_data()
                 && let Ok(text) = data.get_data("text/plain")
@@ -630,8 +630,8 @@ pub async fn run(
     }
 
     {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             if let Ok(mut app_mut) = app.try_borrow_mut()
                 && let Some(text) = app_mut.on_copy()
@@ -648,8 +648,8 @@ pub async fn run(
     }
 
     {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             if let Ok(mut app_mut) = app.try_borrow_mut()
                 && let Some(text) = app_mut.on_cut()
@@ -671,13 +671,13 @@ pub async fn run(
     let reshape: ReshapeFn = {
         let canvas = canvas.clone();
         let window = window.clone();
-        let app = app.clone();
-        let surface = surface.clone();
-        let surface_config = surface_config.clone();
-        let surface_dirty = surface_dirty.clone();
-        let request_frame = request_frame.clone();
-        let floating_size_owed = floating_size_owed.clone();
-        let device_size = device_size.clone();
+        let app = Rc::clone(&app);
+        let surface = Rc::clone(&surface);
+        let surface_config = Rc::clone(&surface_config);
+        let surface_dirty = Rc::clone(&surface_dirty);
+        let request_frame = Rc::clone(&request_frame);
+        let floating_size_owed = Rc::clone(&floating_size_owed);
+        let device_size = Rc::clone(&device_size);
         Rc::new(move |requested: Option<(f32, f32)>| {
             if let Some(size) = requested {
                 apply_requested_canvas_size(&canvas, &window, size, &floating_size_owed);
@@ -730,31 +730,31 @@ pub async fn run(
     let canvas_watch = Rc::new(crate::web_canvas_watch::CanvasWatch::new(
         canvas.clone(),
         {
-            let reshape = reshape.clone();
+            let reshape = Rc::clone(&reshape);
             Rc::new(move || reshape(None))
         },
         device_size,
     ));
     canvas_watch.follow();
 
-    let render_loop_for_deadline = render_loop.clone();
+    let render_loop_for_deadline = Rc::clone(&render_loop);
     #[cfg(feature = "webview")]
-    let request_frame_for_loop = request_frame.clone();
+    let request_frame_for_loop = Rc::clone(&request_frame);
     let recovery = Rc::new(crate::web_device_loss::Recovery {
-        app: app.clone(),
-        surface: surface.clone(),
-        config: surface_config.clone(),
-        surface_dirty: surface_dirty.clone(),
-        request_frame: request_frame.clone(),
+        app: Rc::clone(&app),
+        surface: Rc::clone(&surface),
+        config: Rc::clone(&surface_config),
+        surface_dirty: Rc::clone(&surface_dirty),
+        request_frame: Rc::clone(&request_frame),
         discovery: Rc::clone(&discovery),
     });
     device_loss.watch_canvas(&canvas, &recovery)?;
     device_loss.schedule_drill(&window, &canvas);
     let presenter = CanvasPresenter::new(
-        surface.clone(),
+        Rc::clone(&surface),
         surface_config,
-        surface_dirty.clone(),
-        request_frame.clone(),
+        Rc::clone(&surface_dirty),
+        Rc::clone(&request_frame),
         discovery,
         Rc::downgrade(&app),
     );
@@ -764,7 +764,7 @@ pub async fn run(
         settings.custom_cursor_size,
     ));
     let canvas_for_cursor = canvas.clone();
-    let reshape_for_loop = reshape.clone();
+    let reshape_for_loop = Rc::clone(&reshape);
 
     #[cfg(feature = "webview")]
     let mut webviews = crate::web_webview::BrowserViews::default();
@@ -861,15 +861,15 @@ impl CanvasPresenter {
         app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>,
     ) -> Rc<Self> {
         let redraw: Rc<dyn Fn()> = {
-            let dirty = dirty.clone();
-            let request_frame = request_frame.clone();
+            let dirty = Rc::clone(&dirty);
+            let request_frame = Rc::clone(&request_frame);
             Rc::new(move || {
                 dirty.set(true);
                 request_frame();
             })
         };
         Rc::new_cyclic(|presenter: &std::rc::Weak<Self>| {
-            let presenter = presenter.clone();
+            let presenter = std::rc::Weak::clone(presenter);
             let request_redraw = Rc::clone(&redraw);
             let draw_now: Rc<dyn Fn()> =
                 Rc::new(move || match (presenter.upgrade(), app.upgrade()) {
@@ -1035,7 +1035,7 @@ fn woken_task_pump(app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>) -> impl 
             return;
         }
         let queued = Rc::clone(&queued);
-        let app = app.clone();
+        let app = std::rc::Weak::clone(&app);
         wasm_bindgen_futures::spawn_local(async move {
             queued.set(false);
             if let Some(app) = app.upgrade()
@@ -1093,9 +1093,9 @@ fn request_web_frame_at_deadline(
         .checked_duration_since(web_time::Instant::now())
         .unwrap_or_default();
     let delay_ms = delay.as_millis().min(i32::MAX as u128) as i32;
-    let timer_for_timeout = timer.clone();
-    let frame_pending_for_timeout = frame_pending.clone();
-    let render_loop_for_timeout = render_loop.clone();
+    let timer_for_timeout = Rc::clone(timer);
+    let frame_pending_for_timeout = Rc::clone(frame_pending);
+    let render_loop_for_timeout = Rc::clone(render_loop);
     let callback = Closure::once_into_js(move || {
         if timer_for_timeout.generation.get() != generation {
             return;

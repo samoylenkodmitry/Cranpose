@@ -578,9 +578,8 @@ fn rasterize_reference_dilation_stroke(
     ImageBitmap::from_rgba8(width, height, rgba).expect("reference dilation image")
 }
 
-fn test_font() -> ab_glyph::FontRef<'static> {
-    ab_glyph::FontRef::try_from_slice(include_bytes!("../../assets/NotoSansMerged.ttf"))
-        .expect("font")
+fn test_font() -> FontRef<'static> {
+    FontRef::try_from_slice(include_bytes!("../../assets/NotoSansMerged.ttf")).expect("font")
 }
 
 fn test_software_font() -> SoftwareTextFont {

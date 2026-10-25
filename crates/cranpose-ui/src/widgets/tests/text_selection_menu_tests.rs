@@ -11,7 +11,7 @@ fn button_handler(modifier: &Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNod
         1,
         "menu button must install exactly one pointer-input gesture"
     );
-    let handler = slices.pointer_inputs()[0].clone();
+    let handler = Rc::clone(&slices.pointer_inputs()[0]);
     (handler, slices)
 }
 

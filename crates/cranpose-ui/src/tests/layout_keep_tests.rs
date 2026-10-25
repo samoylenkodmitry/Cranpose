@@ -194,7 +194,7 @@ impl MeasurePolicy for IntrinsicReader {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[std::boxed::Box<dyn Measurable>],
+        measurables: &[Box<dyn Measurable>],
         _constraints: Constraints,
     ) -> MeasureResult {
         let Some(child) = measurables.first() else {
@@ -217,19 +217,19 @@ impl MeasurePolicy for IntrinsicReader {
         )
     }
 
-    fn min_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         30.0
     }
 
-    fn max_intrinsic_width(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         30.0
     }
 
-    fn min_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[std::boxed::Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
         0.0
     }
 }

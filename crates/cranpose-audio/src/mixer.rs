@@ -145,7 +145,7 @@ struct Voice {
 }
 
 impl Voice {
-    const IDLE: Voice = Voice {
+    const IDLE: Self = Self {
         id: 0,
         slot: 0,
         position: 0.0,
@@ -176,10 +176,10 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    pub fn new(seed: MixerSeed, sample_rate: f32, channels: usize) -> Mixer {
+    pub fn new(seed: MixerSeed, sample_rate: f32, channels: usize) -> Self {
         let mut clips = Vec::with_capacity(MAX_CLIPS);
         clips.resize_with(MAX_CLIPS, || None);
-        Mixer {
+        Self {
             commands: seed.commands,
             retired: seed.retired,
             leaked_clips: seed.leaked_clips,

@@ -103,7 +103,7 @@ pub(crate) fn moving_focus(block: impl FnOnce()) {
 #[derive(Clone)]
 pub(crate) struct FocusWithinChain {
     observer: Rc<FocusWithinObserver>,
-    outer: Option<Rc<FocusWithinChain>>,
+    outer: Option<Rc<Self>>,
 }
 
 /// The same observers in the same order.

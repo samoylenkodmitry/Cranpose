@@ -104,17 +104,13 @@ pub fn preferences() -> PreferencesRef {
 #[cfg(not(target_arch = "wasm32"))]
 fn default_preferences() -> PreferencesRef {
     static DEFAULT: OnceLock<PreferencesRef> = OnceLock::new();
-    DEFAULT
-        .get_or_init(|| Arc::new(FilePreferences::new()) as PreferencesRef)
-        .clone()
+    Arc::clone(DEFAULT.get_or_init(|| Arc::new(FilePreferences::new()) as PreferencesRef))
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "preferences-web"))]
 fn default_preferences() -> PreferencesRef {
     static DEFAULT: OnceLock<PreferencesRef> = OnceLock::new();
-    DEFAULT
-        .get_or_init(|| Arc::new(BrowserPreferences) as PreferencesRef)
-        .clone()
+    Arc::clone(DEFAULT.get_or_init(|| Arc::new(BrowserPreferences) as PreferencesRef))
 }
 
 #[cfg(all(target_arch = "wasm32", not(feature = "preferences-web")))]

@@ -162,18 +162,13 @@ pub trait StateFlowCollect<T: Clone + 'static> {
 impl<T: Clone + PartialEq + 'static> StateFlowCollect<T> for StateFlow<T> {
     #[track_caller]
     fn collectAsState(&self) -> State<T> {
-        collect_state(self, || self.value(), true, StateFlow::same_as)
+        collect_state(self, || self.value(), true, Self::same_as)
     }
 
     #[track_caller]
     fn collectAsStateWithLifecycle(&self) -> State<T> {
         let lifecycle = rememberLifecycleState().get();
-        collect_state(
-            self,
-            || self.value(),
-            collects_in(lifecycle),
-            StateFlow::same_as,
-        )
+        collect_state(self, || self.value(), collects_in(lifecycle), Self::same_as)
     }
 }
 

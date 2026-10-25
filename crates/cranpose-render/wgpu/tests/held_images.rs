@@ -237,7 +237,7 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
                 image(10.0),
                 DrawPrimitive::Blend {
                     blend_mode: BlendMode::DstOut,
-                    primitive: std::boxed::Box::new(image(30.0)),
+                    primitive: Box::new(image(30.0)),
                 },
             ],
         ))],

@@ -304,9 +304,9 @@ fn a_one_shape_recording_holds_room_for_one_record_and_one_segment() {
     assert_eq!(one.shape_capacity(), 1);
     assert_eq!(
         one.pod_heap_bytes(),
-        std::mem::size_of::<cranpose_ui_graphics::ShapeRecordBody>()
-            + std::mem::size_of::<cranpose_ui_graphics::ShapeRecordCurve>()
-            + std::mem::size_of::<cranpose_ui_graphics::RecordSegment>(),
+        size_of::<cranpose_ui_graphics::ShapeRecordBody>()
+            + size_of::<cranpose_ui_graphics::ShapeRecordCurve>()
+            + size_of::<cranpose_ui_graphics::RecordSegment>(),
         "a background or border recording keeps no room it never fills"
     );
     let mut again = one.record();

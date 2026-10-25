@@ -18,7 +18,7 @@ pub struct SnapshotIdSet {
 
 impl SnapshotIdSet {
     /// Empty snapshot ID set.
-    pub const EMPTY: SnapshotIdSet = SnapshotIdSet {
+    pub const EMPTY: Self = Self {
         upper_set: 0,
         lower_set: 0,
         lower_bound: 0,

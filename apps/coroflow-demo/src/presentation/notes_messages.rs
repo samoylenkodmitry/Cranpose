@@ -20,9 +20,9 @@ impl NotesEvent {
     /// The text to show the user.
     pub fn message(&self) -> String {
         match self {
-            NotesEvent::Added(title) => format!("Added \u{201c}{title}\u{201d}"),
-            NotesEvent::Deleted(title) => format!("Deleted \u{201c}{title}\u{201d}"),
-            NotesEvent::Failed(reason) => format!("Failed: {reason}"),
+            Self::Added(title) => format!("Added \u{201c}{title}\u{201d}"),
+            Self::Deleted(title) => format!("Deleted \u{201c}{title}\u{201d}"),
+            Self::Failed(reason) => format!("Failed: {reason}"),
         }
     }
 }

@@ -68,8 +68,8 @@ pub struct MediaArtwork {
 
 impl MediaArtwork {
     /// Artwork from encoded bytes.
-    pub fn new(bytes: impl Into<Arc<[u8]>>, mime: impl Into<String>) -> MediaArtwork {
-        MediaArtwork {
+    pub fn new(bytes: impl Into<Arc<[u8]>>, mime: impl Into<String>) -> Self {
+        Self {
             bytes: bytes.into(),
             mime: mime.into(),
         }
@@ -96,33 +96,33 @@ pub struct MediaMetadata {
 
 impl MediaMetadata {
     /// Metadata carrying only a title, which is what a bare file name gives.
-    pub fn titled(title: impl Into<String>) -> MediaMetadata {
-        MediaMetadata {
+    pub fn titled(title: impl Into<String>) -> Self {
+        Self {
             title: title.into(),
-            ..MediaMetadata::default()
+            ..Self::default()
         }
     }
 
     /// Sets the performer.
-    pub fn artist(mut self, artist: impl Into<String>) -> MediaMetadata {
+    pub fn artist(mut self, artist: impl Into<String>) -> Self {
         self.artist = artist.into();
         self
     }
 
     /// Sets the album.
-    pub fn album(mut self, album: impl Into<String>) -> MediaMetadata {
+    pub fn album(mut self, album: impl Into<String>) -> Self {
         self.album = album.into();
         self
     }
 
     /// Sets the length known ahead of playback.
-    pub fn duration(mut self, duration: Duration) -> MediaMetadata {
+    pub fn duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
         self
     }
 
     /// Sets the artwork.
-    pub fn artwork(mut self, artwork: MediaArtwork) -> MediaMetadata {
+    pub fn artwork(mut self, artwork: MediaArtwork) -> Self {
         self.artwork = Some(artwork);
         self
     }
@@ -150,15 +150,15 @@ pub struct MediaItem {
 
 impl MediaItem {
     /// An item at `uri`, with no metadata yet.
-    pub fn new(uri: impl Into<String>) -> MediaItem {
-        MediaItem {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
             uri: uri.into(),
             metadata: MediaMetadata::default(),
         }
     }
 
     /// The same item with metadata attached.
-    pub fn with_metadata(mut self, metadata: MediaMetadata) -> MediaItem {
+    pub fn with_metadata(mut self, metadata: MediaMetadata) -> Self {
         self.metadata = metadata;
         self
     }
@@ -207,7 +207,7 @@ pub struct MediaCapabilities {
 impl MediaCapabilities {
     /// A backend that plays, pauses and seeks and does nothing else, which is
     /// the floor for anything worth calling a media player.
-    pub const TRANSPORT: MediaCapabilities = MediaCapabilities {
+    pub const TRANSPORT: Self = Self {
         seeking: true,
         speed: false,
         looping: true,
@@ -231,9 +231,9 @@ pub struct EqualizerBand {
 
 impl EqualizerBand {
     /// A band centred on `center_hz` with a symmetric range.
-    pub fn new(center_hz: f32, range_db: f32) -> EqualizerBand {
+    pub fn new(center_hz: f32, range_db: f32) -> Self {
         let range = range_db.abs();
-        EqualizerBand {
+        Self {
             center_hz,
             min_gain_db: -range,
             max_gain_db: range,
@@ -283,8 +283,8 @@ pub struct EqualizerSettings {
 
 impl EqualizerSettings {
     /// An enabled equalizer with every band flat.
-    pub fn flat(bands: usize) -> EqualizerSettings {
-        EqualizerSettings {
+    pub fn flat(bands: usize) -> Self {
+        Self {
             enabled: true,
             preamp_db: 0.0,
             gains_db: vec![0.0; bands],
@@ -293,8 +293,8 @@ impl EqualizerSettings {
 
     /// This setting with every gain brought inside what `bands` can do, and
     /// its length matched to theirs.
-    pub fn clamped_to(&self, bands: &[EqualizerBand]) -> EqualizerSettings {
-        EqualizerSettings {
+    pub fn clamped_to(&self, bands: &[EqualizerBand]) -> Self {
+        Self {
             enabled: self.enabled,
             preamp_db: self.preamp_db,
             gains_db: bands
@@ -354,21 +354,18 @@ pub enum PlaybackState {
 impl PlaybackState {
     /// Whether sound is coming out now.
     pub fn is_playing(&self) -> bool {
-        matches!(self, PlaybackState::Playing)
+        matches!(self, Self::Playing)
     }
 
     /// Whether an item is open — playing, paused, or still opening.
     pub fn is_active(&self) -> bool {
-        matches!(
-            self,
-            PlaybackState::Loading | PlaybackState::Playing | PlaybackState::Paused
-        )
+        matches!(self, Self::Loading | Self::Playing | Self::Paused)
     }
 
     /// The failure, if playback ended in one.
     pub fn failure(&self) -> Option<&MediaError> {
         match self {
-            PlaybackState::Failed(error) => Some(error),
+            Self::Failed(error) => Some(error),
             _ => None,
         }
     }
@@ -388,8 +385,8 @@ pub struct PlaybackProgress {
 
 impl PlaybackProgress {
     /// Progress through an item of known length.
-    pub fn new(position: Duration, duration: Duration) -> PlaybackProgress {
-        PlaybackProgress {
+    pub fn new(position: Duration, duration: Duration) -> Self {
+        Self {
             position: position.min(duration),
             duration: Some(duration),
             buffered: duration,
@@ -442,7 +439,7 @@ impl MediaCommand {
     /// [`Previous`](Self::Previous) need an order the framework does not have,
     /// so they are only reported.
     pub fn is_transport(self) -> bool {
-        !matches!(self, MediaCommand::Next | MediaCommand::Previous)
+        !matches!(self, Self::Next | Self::Previous)
     }
 }
 
@@ -486,12 +483,12 @@ impl MediaSamples {
         channels: u16,
         sequence: u64,
         samples: impl Into<Arc<[f32]>>,
-    ) -> Option<MediaSamples> {
+    ) -> Option<Self> {
         let samples = samples.into();
         if sample_rate == 0 || channels == 0 || samples.len() % channels as usize != 0 {
             return None;
         }
-        Some(MediaSamples {
+        Some(Self {
             sample_rate,
             channels,
             samples,
@@ -739,8 +736,8 @@ struct ObserverList<T: ?Sized> {
 }
 
 impl<T: ?Sized> ObserverList<T> {
-    const fn new() -> ObserverList<T> {
-        ObserverList {
+    const fn new() -> Self {
+        Self {
             entries: Mutex::new(Vec::new()),
         }
     }

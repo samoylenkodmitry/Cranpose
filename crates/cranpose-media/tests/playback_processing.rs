@@ -47,16 +47,16 @@ fn wave() -> Vec<u8> {
 
 fn output_peak(path: &std::path::Path, balance: f32, gain_db: f32) -> [f32; 2] {
     let analyzed: Arc<Mutex<Option<MediaSamples>>> = Arc::new(Mutex::new(None));
-    let received = analyzed.clone();
+    let received = Arc::clone(&analyzed);
     let _observer = cranpose_services::observe_media_samples(move |samples| {
         *received.lock().expect("analysis lock") = Some(samples);
     });
     let output: Output = Arc::new(Mutex::new(None));
-    let receiver = output.clone();
+    let receiver = Arc::clone(&output);
     let player = SoftwareMediaPlayer::with_output(Arc::new(move |mut renderer| {
         renderer.set_device_format(48_000.0, 2);
         *receiver.lock().expect("capture lock") = Some(renderer);
-        Ok(Box::new(Capture(receiver.clone())))
+        Ok(Box::new(Capture(Arc::clone(&receiver))))
     }));
     assert!(player.set_balance(balance));
     assert!(!player.set_balance(f32::NAN));

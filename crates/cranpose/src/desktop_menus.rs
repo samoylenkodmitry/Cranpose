@@ -172,7 +172,7 @@ impl Menu {
     }
 
     /// The menu with `menu` added at the end as a submenu.
-    pub fn submenu(mut self, menu: Menu) -> Self {
+    pub fn submenu(mut self, menu: Self) -> Self {
         self.entries.push(MenuEntry::Submenu(menu));
         self
     }

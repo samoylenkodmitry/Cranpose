@@ -39,13 +39,13 @@ fn integration_local_http_client_overrides_current() {
 
     {
         let captured = Rc::clone(&captured);
-        let custom_client = custom_client.clone();
+        let custom_client = Arc::clone(&custom_client);
         let local_for_provider = local.clone();
         let local_for_read = local.clone();
         run_test_composition(move || {
             let captured = Rc::clone(&captured);
             let local_for_read = local_for_read.clone();
-            let custom_client = custom_client.clone();
+            let custom_client = Arc::clone(&custom_client);
             CompositionLocalProvider(
                 vec![local_for_provider.provides(custom_client)],
                 move || {
@@ -56,6 +56,6 @@ fn integration_local_http_client_overrides_current() {
         });
     }
 
-    let current = captured.borrow().as_ref().expect("client captured").clone();
+    let current = Arc::clone(captured.borrow().as_ref().expect("client captured"));
     assert!(Arc::ptr_eq(&current, &custom_client));
 }

@@ -69,7 +69,7 @@ fn a_recovered_pick_reaches_the_launcher_that_asked_for_it() {
     clear_launcher_state();
 
     let picker = Rc::new(RecreatingPicker::default());
-    set_platform_file_picker(picker.clone());
+    set_platform_file_picker(Rc::<RecreatingPicker>::clone(&picker));
 
     {
         let launched = Rc::new(std::cell::Cell::new(false));
@@ -115,7 +115,7 @@ fn a_recovered_pick_is_delivered_once() {
     clear_launcher_state();
 
     let picker = Rc::new(RecreatingPicker::default());
-    set_platform_file_picker(picker.clone());
+    set_platform_file_picker(Rc::<RecreatingPicker>::clone(&picker));
 
     {
         let launched = Rc::new(std::cell::Cell::new(false));
@@ -194,7 +194,7 @@ fn a_launcher_reports_a_chooser_that_is_still_in_front() {
     clear_platform_file_picker();
     clear_launcher_state();
     let picker = Rc::new(RecreatingPicker::default());
-    set_platform_file_picker(picker.clone());
+    set_platform_file_picker(Rc::<RecreatingPicker>::clone(&picker));
 
     let state: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
     let launched = Rc::new(std::cell::Cell::new(false));

@@ -296,7 +296,7 @@ pub struct Shaded {
     /// pipeline for each.
     pub shader: Arc<str>,
     /// The values the shader reads.
-    pub params: [f32; Shaded::PARAMS],
+    pub params: [f32; Self::PARAMS],
 }
 
 impl Shaded {
@@ -335,7 +335,7 @@ pub struct Volume {
     /// pipeline for each.
     pub shader: Arc<str>,
     /// The values the shader reads.
-    pub params: [f32; Volume::PARAMS],
+    pub params: [f32; Self::PARAMS],
 }
 
 impl Volume {

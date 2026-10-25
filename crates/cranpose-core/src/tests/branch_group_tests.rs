@@ -608,9 +608,9 @@ fn remembered_key_marker(marker: i32) -> i32 {
 #[composable]
 fn composing_key_argument_probe(cond: bool) {
     if cond {
-        cranpose_core::with_key(&remembered_key_marker(61), || {});
+        with_key(&remembered_key_marker(61), || {});
     } else {
-        cranpose_core::with_key(&remembered_key_marker(62), || {});
+        with_key(&remembered_key_marker(62), || {});
     }
 }
 
@@ -742,7 +742,7 @@ fn keyed_visibility_probe(rows: Vec<(u64, bool)>) {
     KEYED_VALUES.with(|values| values.borrow_mut().clear());
     for (id, visible) in rows {
         if visible {
-            cranpose_core::with_key(&id, || {
+            with_key(&id, || {
                 let value = remember(|| {
                     BRANCH_INITS.with(|count| count.set(count.get() + 1));
                     BRANCH_INITS.with(Cell::get) as i32
@@ -794,7 +794,7 @@ fn mixed_keyed_visibility_probe(rows: Vec<(u64, bool)>) {
     for (id, visible) in rows {
         if visible {
             let _breadcrumb = remember(|| 0_i32);
-            cranpose_core::with_key(&id, || {
+            with_key(&id, || {
                 let value = remember(|| {
                     BRANCH_INITS.with(|count| count.set(count.get() + 1));
                     BRANCH_INITS.with(Cell::get) as i32
@@ -1772,7 +1772,9 @@ fn repeated_occurrences_of_one_branch_site_retain_independently() {
 mod delegating_with_key {
     use super::*;
 
-    fn with_key<K: std::hash::Hash>(key: &K, content: impl FnOnce()) {
+    // forwards on purpose: the probe calls a local function named `with_key`, which the
+    // composable macro must not take for the runtime's own.
+    fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
         cranpose_core::with_key(key, content);
     }
 
@@ -2162,7 +2164,7 @@ fn a_helper_branch_called_from_both_arms_keeps_the_outer_identity() {
 }
 
 fn keyed_shell_helper(marker: i32) {
-    cranpose_core::with_key(&"same", || {
+    with_key(&"same", || {
         let value = remember_branch_marker(marker);
         BRANCH_SEEN.with(|seen| seen.set(value));
     });
@@ -2252,7 +2254,7 @@ fn unkeyed_neighbor_probe(inner: bool) {
         if inner {
             let _ = remember(|| 0_i32);
         }
-        cranpose_core::with_key(&7, || {
+        with_key(&7, || {
             let value = remember_branch_marker(70);
             BRANCH_SEEN.with(|seen| seen.set(value));
         });
@@ -2455,7 +2457,7 @@ fn a_stored_closure_invoked_twice_owns_two_slots() {
 fn folded_duplicate_probe() {
     for _ in 0..2 {
         if true {
-            cranpose_core::with_key(&5, || {
+            with_key(&5, || {
                 let _ = remember_branch_marker(5);
             });
         }
@@ -2473,7 +2475,7 @@ fn duplicate_keys_in_folded_brackets_panic_loudly() {
 #[composable]
 fn folded_retention_probe(visible: bool) {
     if visible {
-        cranpose_core::with_key(&9, || retained_marker(9));
+        with_key(&9, || retained_marker(9));
     }
 }
 
@@ -2481,7 +2483,7 @@ fn folded_retention_probe(visible: bool) {
 fn materialized_retention_probe(visible: bool) {
     if visible {
         let _ = remember(|| 0_i32);
-        cranpose_core::with_key(&9, || retained_marker(9));
+        with_key(&9, || retained_marker(9));
     }
 }
 
@@ -2517,7 +2519,7 @@ fn keyed_wrapper_retention_behaves_identically_in_both_shell_classes() {
 #[composable]
 fn folded_recompose_probe(bump: i32) {
     if true {
-        cranpose_core::with_key(&3, || {
+        with_key(&3, || {
             let state = rememberMutableStateOf(|| 0_i32);
             if bump > state.value() {
                 state.set_value(bump);
@@ -2675,7 +2677,7 @@ mod raw_node_arms {
 
     pub(super) struct LabeledNode;
 
-    impl crate::Node for LabeledNode {}
+    impl Node for LabeledNode {}
 
     #[composable(no_skip)]
     pub(super) fn probe(first: bool) {
@@ -2703,11 +2705,11 @@ mod macro_emitted_nodes {
 
     pub(super) struct AlphaNode;
 
-    impl crate::Node for AlphaNode {}
+    impl Node for AlphaNode {}
 
     pub(super) struct BetaNode;
 
-    impl crate::Node for BetaNode {}
+    impl Node for BetaNode {}
 
     macro_rules! emit_pair {
         ($composer:expr, $show:expr) => {
@@ -2827,7 +2829,7 @@ mod node_entry {
 
     pub(super) struct EntryNode;
 
-    impl crate::Node for EntryNode {}
+    impl Node for EntryNode {}
 
     #[composable(no_skip)]
     pub(super) fn probe(enabled: bool) {
@@ -3610,7 +3612,7 @@ fn a_macro_statement_does_not_feed_its_neighbor() {
     assert_composition_valid(&composition);
 }
 
-fn poll_ready<F: std::future::Future>(future: F) -> F::Output {
+fn poll_ready<F: Future>(future: F) -> F::Output {
     let mut pinned = std::pin::pin!(future);
     let waker = std::task::Waker::noop();
     let mut context = std::task::Context::from_waker(waker);

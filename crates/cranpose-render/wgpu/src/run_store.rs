@@ -314,11 +314,11 @@ fn painted_stops(
 const UPLOAD_CHUNK_BYTES: usize = 4096;
 
 const ELEMENT_SIZES: [usize; BUFFER_COUNT] = [
-    std::mem::size_of::<ShapeRecordBody>(),
-    std::mem::size_of::<ShapeRecordCurve>(),
-    std::mem::size_of::<BrushRecord>(),
-    std::mem::size_of::<GradientStopRecord>(),
-    std::mem::size_of::<PlacementData>(),
+    size_of::<ShapeRecordBody>(),
+    size_of::<ShapeRecordCurve>(),
+    size_of::<BrushRecord>(),
+    size_of::<GradientStopRecord>(),
+    size_of::<PlacementData>(),
 ];
 const LABELS: [&str; BUFFER_COUNT] = [
     "Run Record Bodies",
@@ -924,11 +924,11 @@ impl ArenaStaging {
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.bodies.capacity() * std::mem::size_of::<ShapeRecordBody>()
-            + self.curves.capacity() * std::mem::size_of::<ShapeRecordCurve>()
-            + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
-            + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
-            + self.placements.capacity() * std::mem::size_of::<PlacementData>()
+        self.bodies.capacity() * size_of::<ShapeRecordBody>()
+            + self.curves.capacity() * size_of::<ShapeRecordCurve>()
+            + self.brushes.capacity() * size_of::<BrushRecord>()
+            + self.stops.capacity() * size_of::<GradientStopRecord>()
+            + self.placements.capacity() * size_of::<PlacementData>()
     }
 
     fn is_empty(&self) -> bool {

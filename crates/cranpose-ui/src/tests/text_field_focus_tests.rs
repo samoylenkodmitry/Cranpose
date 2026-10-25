@@ -91,7 +91,7 @@ fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
 fn request_focus_sets_flag() {
     let _app_context = crate::render_state::app_context_test_scope();
     let focus = Rc::new(RefCell::new(false));
-    request_focus(focus.clone(), mock_handler(), 0);
+    request_focus(Rc::clone(&focus), mock_handler(), 0);
     assert!(*focus.borrow());
     clear_focus();
 }
@@ -102,10 +102,10 @@ fn request_focus_clears_previous() {
     let focus1 = Rc::new(RefCell::new(false));
     let focus2 = Rc::new(RefCell::new(false));
 
-    request_focus(focus1.clone(), mock_handler(), 0);
+    request_focus(Rc::clone(&focus1), mock_handler(), 0);
     assert!(*focus1.borrow());
 
-    request_focus(focus2.clone(), mock_handler(), 0);
+    request_focus(Rc::clone(&focus2), mock_handler(), 0);
     assert!(!*focus1.borrow());
     assert!(*focus2.borrow());
     clear_focus();
@@ -115,7 +115,7 @@ fn request_focus_clears_previous() {
 fn clear_focus_unfocuses_current() {
     let _app_context = crate::render_state::app_context_test_scope();
     let focus = Rc::new(RefCell::new(false));
-    request_focus(focus.clone(), mock_handler(), 0);
+    request_focus(Rc::clone(&focus), mock_handler(), 0);
     assert!(*focus.borrow());
 
     clear_focus();
@@ -184,7 +184,11 @@ fn dispatch_delete_surrounding_calls_handler() {
     let focus = Rc::new(RefCell::new(false));
     let handler = Rc::new(DispatchRecordingHandler::default());
 
-    request_focus(Rc::clone(&focus), handler.clone(), 0);
+    request_focus(
+        Rc::clone(&focus),
+        Rc::<DispatchRecordingHandler>::clone(&handler),
+        0,
+    );
     assert!(dispatch_delete_surrounding(3, 1));
     assert_eq!(handler.last_delete.get(), Some((3, 1)));
 
@@ -198,7 +202,11 @@ fn dispatch_clears_stale_focus_owner_before_invoking_handler() {
 
     {
         let focus = Rc::new(RefCell::new(false));
-        request_focus(Rc::clone(&focus), handler.clone(), 0);
+        request_focus(
+            Rc::clone(&focus),
+            Rc::<DispatchRecordingHandler>::clone(&handler),
+            0,
+        );
         assert!(has_focused_field());
     }
 
@@ -223,7 +231,7 @@ fn stale_focus_cleanup_after_hidden_blink_does_not_reenter_the_focus_registry_bo
     let _app_context = crate::render_state::app_context_test_scope();
 
     let focus = Rc::new(RefCell::new(false));
-    request_focus(focus.clone(), Rc::new(NodeBackedHandler(3)), 0);
+    request_focus(Rc::clone(&focus), Rc::new(NodeBackedHandler(3)), 0);
 
     let past_interval = web_time::Instant::now()
         + crate::cursor_animation::CursorAnimationState::BLINK_INTERVAL
@@ -250,7 +258,7 @@ fn stale_focus_cleanup_repasses_the_node_that_lost_its_caret() {
     let _ = crate::render_state::take_draw_repass_nodes();
 
     let focus = Rc::new(RefCell::new(false));
-    request_focus(focus.clone(), Rc::new(NodeBackedHandler(11)), 0);
+    request_focus(Rc::clone(&focus), Rc::new(NodeBackedHandler(11)), 0);
     let _ = crate::render_state::take_draw_repass_nodes();
 
     drop(focus);
@@ -282,10 +290,12 @@ impl crate::text_input_session::PlatformTextInputHandler for KeyboardProbe {
 fn focus_transitions_drive_platform_keyboard() {
     let _app_context = crate::render_state::app_context_test_scope();
     let keyboard = Rc::new(KeyboardProbe::default());
-    crate::text_input_session::set_platform_text_input_handler(keyboard.clone());
+    crate::text_input_session::set_platform_text_input_handler(Rc::<KeyboardProbe>::clone(
+        &keyboard,
+    ));
 
     let focus = Rc::new(RefCell::new(false));
-    request_focus(focus.clone(), mock_handler(), 0);
+    request_focus(Rc::clone(&focus), mock_handler(), 0);
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
     request_focus(focus, mock_handler(), 0);
@@ -299,7 +309,9 @@ fn focus_transitions_drive_platform_keyboard() {
 fn stale_focus_detection_hides_platform_keyboard() {
     let _app_context = crate::render_state::app_context_test_scope();
     let keyboard = Rc::new(KeyboardProbe::default());
-    crate::text_input_session::set_platform_text_input_handler(keyboard.clone());
+    crate::text_input_session::set_platform_text_input_handler(Rc::<KeyboardProbe>::clone(
+        &keyboard,
+    ));
 
     {
         let focus = Rc::new(RefCell::new(false));
@@ -322,14 +334,14 @@ fn text_field_focus_is_scoped_by_app_context() {
     let second_focus = Rc::new(RefCell::new(false));
 
     first.enter(|| {
-        request_focus(first_focus.clone(), mock_handler(), 0);
+        request_focus(Rc::clone(&first_focus), mock_handler(), 0);
         assert!(has_focused_field());
         assert!(*first_focus.borrow());
     });
 
     second.enter(|| {
         assert!(!has_focused_field());
-        request_focus(second_focus.clone(), mock_handler(), 0);
+        request_focus(Rc::clone(&second_focus), mock_handler(), 0);
         assert!(has_focused_field());
         assert!(*second_focus.borrow());
     });

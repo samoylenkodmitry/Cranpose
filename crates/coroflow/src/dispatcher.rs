@@ -91,7 +91,7 @@ impl Dispatcher {
     /// steps at once, in the order they were dispatched — Kotlin's
     /// `limitedParallelism`. Views share the underlying threads. A
     /// `parallelism` of zero counts as one.
-    pub fn limited_parallelism(&self, parallelism: usize) -> Dispatcher {
+    pub fn limited_parallelism(&self, parallelism: usize) -> Self {
         let limited = Arc::new(Limited {
             target: self.clone(),
             limit: parallelism.max(1),
@@ -100,7 +100,7 @@ impl Dispatcher {
                 workers: 0,
             }),
         });
-        Dispatcher::new(LimitedExecutor { limited }, Arc::clone(self.clock()))
+        Self::new(LimitedExecutor { limited }, Arc::clone(self.clock()))
     }
 }
 

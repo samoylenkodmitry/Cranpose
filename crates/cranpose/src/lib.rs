@@ -328,18 +328,18 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 #[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
     cranpose_core::__disposable_effect_impl(
-        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
+        caller_location_key() ^ cranpose_core::location_key!(),
         enabled,
         move |scope| {
             if !enabled {
-                return cranpose_core::DisposableEffectResult::default();
+                return DisposableEffectResult::default();
             }
             if KEEP_SCREEN_ON_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
-                cranpose_services::set_keep_screen_on(true);
+                set_keep_screen_on(true);
             }
             scope.on_dispose(move || {
                 if KEEP_SCREEN_ON_EFFECTS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-                    cranpose_services::set_keep_screen_on(false);
+                    set_keep_screen_on(false);
                 }
             })
         },
@@ -353,17 +353,15 @@ pub fn KeepScreenOn(enabled: bool) {
 #[track_caller]
 pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
-    spec: cranpose_services::BundledAssetInstallSpec,
-    on_result: impl FnOnce(
-        Result<cranpose_services::BundledAssetInstallOutcome, cranpose_services::BundledAssetError>,
-    ) + 'static,
+    spec: BundledAssetInstallSpec,
+    on_result: impl FnOnce(Result<BundledAssetInstallOutcome, BundledAssetError>) + 'static,
 ) {
     cranpose_core::__launched_effect_impl(
-        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
+        caller_location_key() ^ cranpose_core::location_key!(),
         keys,
         move |scope| {
             scope.launch_background(
-                move |_token| async move { cranpose_services::install_bundled_asset_set(&spec) },
+                move |_token| async move { install_bundled_asset_set(&spec) },
                 on_result,
             );
         },
@@ -379,20 +377,20 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
 #[track_caller]
 pub fn LifecycleEffect<K: PartialEq + 'static>(
     keys: K,
-    observer: impl FnMut(cranpose_services::LifecycleEvent) + 'static,
+    observer: impl FnMut(LifecycleEvent) + 'static,
 ) {
-    let transitions = cranpose_services::rememberLifecycleEvents();
-    cranpose_core::CollectEvents(transitions, keys, observer);
+    let transitions = rememberLifecycleEvents();
+    CollectEvents(transitions, keys, observer);
 }
 
 /// Remembers observable application update state for the current composition.
 #[expect(non_snake_case)]
 #[track_caller]
-pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUpdateStatus> {
-    let updates = cranpose_core::rememberEventStream((), |sender| {
-        cranpose_services::observe_app_update_status(move |status| sender.send(status))
+pub fn rememberAppUpdateState() -> State<AppUpdateStatus> {
+    let updates = rememberEventStream((), |sender| {
+        observe_app_update_status(move |status| sender.send(status))
     });
-    cranpose_core::collectAsState(updates, (), cranpose_services::app_update_status())
+    collectAsState(updates, (), app_update_status())
 }
 
 /// Runs `on_frame` on every animation frame while `running` is true.
@@ -411,9 +409,9 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 ) {
     let on_frame: std::rc::Rc<std::cell::RefCell<dyn FnMut(u64)>> =
         std::rc::Rc::new(std::cell::RefCell::new(on_frame));
-    let on_frame = cranpose_core::rememberUpdatedState(on_frame);
+    let on_frame = rememberUpdatedState(on_frame);
     cranpose_core::__launched_effect_async_impl(
-        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
+        caller_location_key() ^ cranpose_core::location_key!(),
         std::panic::Location::caller().into(),
         (keys, running),
         move |scope| {

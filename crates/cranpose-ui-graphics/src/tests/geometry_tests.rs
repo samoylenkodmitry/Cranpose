@@ -1240,7 +1240,11 @@ fn text_scope(
 ) -> (DrawScopeDefault<'_>, Rc<FixedAdvanceTextMeasurer>) {
     let measurer = FixedAdvanceTextMeasurer::shared(10.0, 20.0);
     (
-        DrawScopeDefault::with_text_measurer(size, measurer.clone(), recording),
+        DrawScopeDefault::with_text_measurer(
+            size,
+            Rc::<FixedAdvanceTextMeasurer>::clone(&measurer),
+            recording,
+        ),
         measurer,
     )
 }
@@ -1453,7 +1457,7 @@ fn a_scope_without_a_measurer_falls_back_to_the_font_free_estimate() {
     let style = DrawTextStyle::new(16.0);
     assert_eq!(
         scope.measure_text("ABC", &style),
-        crate::estimate_text_measurement("ABC", &style)
+        estimate_text_measurement("ABC", &style)
     );
     scope.draw_text_from(Point::ZERO, Brush::solid(Color::WHITE), "ABC", &style);
     let primitives = scope.into_primitives();

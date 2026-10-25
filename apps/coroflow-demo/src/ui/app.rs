@@ -40,8 +40,8 @@ const TABS: [(Screen, &str); 2] = [
 const LINK_SCHEME: &str = "coroflow-notes://";
 
 /// The saved form of each screen, which the browser's address bar shows.
-fn routes() -> cranpose::Saver<Screen> {
-    cranpose::Saver::new(
+fn routes() -> Saver<Screen> {
+    Saver::new(
         |screen: &Screen| match screen {
             Screen::Notes => "notes".to_owned(),
             Screen::Note(NoteId(id)) => format!("note/{id}"),

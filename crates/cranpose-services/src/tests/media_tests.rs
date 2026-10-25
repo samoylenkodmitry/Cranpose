@@ -9,8 +9,8 @@ struct FakePlayer {
 }
 
 impl FakePlayer {
-    fn new() -> Arc<FakePlayer> {
-        Arc::new(FakePlayer {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
             capabilities: MediaCapabilities {
                 seeking: true,
                 speed: true,
@@ -26,8 +26,8 @@ impl FakePlayer {
         })
     }
 
-    fn with(capabilities: MediaCapabilities) -> Arc<FakePlayer> {
-        Arc::new(FakePlayer {
+    fn with(capabilities: MediaCapabilities) -> Arc<Self> {
+        Arc::new(Self {
             capabilities,
             calls: Mutex::new(Vec::new()),
             volume: Mutex::new(1.0),
@@ -35,8 +35,8 @@ impl FakePlayer {
         })
     }
 
-    fn failing() -> Arc<FakePlayer> {
-        Arc::new(FakePlayer {
+    fn failing() -> Arc<Self> {
+        Arc::new(Self {
             capabilities: MediaCapabilities::TRANSPORT,
             calls: Mutex::new(Vec::new()),
             volume: Mutex::new(1.0),
@@ -129,7 +129,7 @@ fn install() -> (crate::registry::TestServiceGuard, Arc<FakePlayer>) {
     let guard = test_service_guard();
     clear_platform_media_player();
     let player = FakePlayer::new();
-    set_platform_media_player(player.clone());
+    set_platform_media_player(Arc::<FakePlayer>::clone(&player));
     (guard, player)
 }
 

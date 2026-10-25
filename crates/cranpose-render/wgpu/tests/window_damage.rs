@@ -458,9 +458,9 @@ impl Keeper {
     /// The frames drawn whole before one draws a part.
     fn start_frames(self) -> u32 {
         match self {
-            Keeper::Composition => START_FRAMES,
-            Keeper::Swapchain(_) => SWAPCHAIN_START_FRAMES,
-            Keeper::Cleared => CLEARED_START_FRAMES,
+            Self::Composition => START_FRAMES,
+            Self::Swapchain(_) => SWAPCHAIN_START_FRAMES,
+            Self::Cleared => CLEARED_START_FRAMES,
         }
     }
 }
@@ -690,8 +690,8 @@ impl Scene {
     /// and the panes over it.
     fn reach(self) -> [f32; 4] {
         match self {
-            Scene::UnderBlur | Scene::UnderLiquidGlass => around(GLASS, 32.0),
-            Scene::UnderBlurUnderBlur => {
+            Self::UnderBlur | Self::UnderLiquidGlass => around(GLASS, 32.0),
+            Self::UnderBlurUnderBlur => {
                 let right = (UPPER_GLASS[0] + UPPER_GLASS[2]).max(GLASS[0] + GLASS[2]);
                 let bottom = (UPPER_GLASS[1] + UPPER_GLASS[3]).max(GLASS[1] + GLASS[3]);
                 around(
@@ -699,11 +699,11 @@ impl Scene {
                     32.0,
                 )
             }
-            Scene::Label => around([SPOT[0], SPOT[1], 60.0, 20.0], 8.0),
-            Scene::Shadow | Scene::BlurredContent => around(SPOT, 32.0),
+            Self::Label => around([SPOT[0], SPOT[1], 60.0, 20.0], 8.0),
+            Self::Shadow | Self::BlurredContent => around(SPOT, 32.0),
             // A turned square reaches past its box by a fifth of its side.
-            Scene::TurnedLayer => around(SPOT, 12.0),
-            Scene::Spinner | Scene::TurnedSpinner => around(SPINNER, 12.0),
+            Self::TurnedLayer => around(SPOT, 12.0),
+            Self::Spinner | Self::TurnedSpinner => around(SPINNER, 12.0),
             _ => around(SPOT, 8.0),
         }
     }

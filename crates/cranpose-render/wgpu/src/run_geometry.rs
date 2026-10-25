@@ -207,13 +207,13 @@ pub(crate) fn quad_area(record: &ShapeRecord, scale: f32) -> f64 {
 /// it, so the count per kind must be exact per record, not a sum.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ShapeFill {
-    pub(crate) pixels: [f64; ShapeFill::CLASSES],
+    pub(crate) pixels: [f64; Self::CLASSES],
     pub(crate) vertices: u64,
 }
 
 impl ShapeFill {
     pub(crate) const CLASSES: usize = 10;
-    pub(crate) const LABELS: [&'static str; ShapeFill::CLASSES] = [
+    pub(crate) const LABELS: [&'static str; Self::CLASSES] = [
         "fill",
         "fill_grad",
         "stroke",

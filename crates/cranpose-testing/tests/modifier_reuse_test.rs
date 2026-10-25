@@ -2,9 +2,9 @@ use cranpose_ui::*;
 
 #[test]
 fn test_modifier_chain_length_after_updates() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(Modifier::empty().padding(12.0), BoxSpec::default(), || {});
     });
@@ -26,9 +26,9 @@ fn test_modifier_chain_length_after_updates() {
 
 #[test]
 fn test_modifier_value_changes_propagate_to_layout() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
 
     let run_with_padding = |p: f32| {
         let mut composition = run_test_composition(move || {
@@ -59,9 +59,9 @@ fn test_modifier_value_changes_propagate_to_layout() {
 
 #[test]
 fn test_modifier_chain_adds_node() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(Modifier::empty().padding(8.0), BoxSpec::default(), || {});
     });
@@ -89,9 +89,9 @@ fn test_modifier_chain_adds_node() {
 
 #[test]
 fn test_modifier_chain_removes_node() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(
             Modifier::empty()
@@ -119,9 +119,9 @@ fn test_modifier_chain_removes_node() {
 
 #[test]
 fn test_modifier_order_change() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(
             Modifier::empty().padding(10.0).size(Size {
@@ -186,9 +186,9 @@ fn test_modifier_order_change() {
 
 #[test]
 fn test_complex_modifier_chain_updates() {
-    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context = AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
-    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
+    _app_context.enter(reset_render_state_for_tests);
     let build_modifier = |step: i32| match step {
         0 => Modifier::empty().padding(5.0),
         1 => Modifier::empty().padding(5.0).size(Size {

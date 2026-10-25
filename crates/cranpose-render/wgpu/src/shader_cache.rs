@@ -224,7 +224,7 @@ struct PipelineJob {
 
 impl PipelineJob {
     fn build(self) -> Option<wgpu::RenderPipeline> {
-        let PipelineJob {
+        let Self {
             factory,
             source,
             key,

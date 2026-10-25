@@ -246,11 +246,11 @@ impl HttpMethod {
     /// The name that goes on the wire.
     pub fn name(self) -> &'static str {
         match self {
-            HttpMethod::Get => "GET",
-            HttpMethod::Head => "HEAD",
-            HttpMethod::Post => "POST",
-            HttpMethod::Put => "PUT",
-            HttpMethod::Delete => "DELETE",
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Delete => "DELETE",
         }
     }
 }
@@ -378,7 +378,7 @@ impl HttpBody for EmptyBody {
 /// and its callers cannot tell the difference.
 pub struct BytesBody {
     bytes: Vec<u8>,
-    offset: std::sync::Mutex<usize>,
+    offset: Mutex<usize>,
     chunk: usize,
 }
 
@@ -392,7 +392,7 @@ impl BytesBody {
     pub fn chunked(bytes: impl Into<Vec<u8>>, chunk: usize) -> Self {
         Self {
             bytes: bytes.into(),
-            offset: std::sync::Mutex::new(0),
+            offset: Mutex::new(0),
             chunk: chunk.max(1),
         }
     }

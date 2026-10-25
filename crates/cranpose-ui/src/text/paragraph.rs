@@ -110,52 +110,38 @@ impl TextDirection {
     /// uses the variant's fallback, which is LTR except for `ContentOrRtl`.
     pub fn resolve(self, text: &str) -> ResolvedTextDirection {
         match self {
-            TextDirection::Ltr => ResolvedTextDirection::Ltr,
-            TextDirection::Rtl => ResolvedTextDirection::Rtl,
-            TextDirection::Content | TextDirection::ContentOrLtr => {
+            Self::Ltr => ResolvedTextDirection::Ltr,
+            Self::Rtl => ResolvedTextDirection::Rtl,
+            Self::Content | Self::ContentOrLtr => {
                 resolve_content_direction(text, ResolvedTextDirection::Ltr)
             }
-            TextDirection::ContentOrRtl => {
-                resolve_content_direction(text, ResolvedTextDirection::Rtl)
+            Self::ContentOrRtl => resolve_content_direction(text, ResolvedTextDirection::Rtl),
+            Self::Unspecified => resolve_content_direction(text, ResolvedTextDirection::Ltr),
+        }
+    }
+}
+
+macro_rules! impl_unspecified_fallback {
+    ($($choice:ty),*) => {$(
+        impl $choice {
+            /// Returns true unless the value is `Unspecified`.
+            pub fn is_specified(self) -> bool {
+                !matches!(self, Self::Unspecified)
             }
-            TextDirection::Unspecified => {
-                resolve_content_direction(text, ResolvedTextDirection::Ltr)
+
+            /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
+            pub fn take_or_else(self, fallback: impl FnOnce() -> Self) -> Self {
+                if self.is_specified() {
+                    self
+                } else {
+                    fallback()
+                }
             }
         }
-    }
+    )*};
 }
 
-impl LineBreak {
-    /// Returns true unless the value is `Unspecified`.
-    pub fn is_specified(self) -> bool {
-        !matches!(self, Self::Unspecified)
-    }
-
-    /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
-    pub fn take_or_else(self, fallback: impl FnOnce() -> LineBreak) -> LineBreak {
-        if self.is_specified() {
-            self
-        } else {
-            fallback()
-        }
-    }
-}
-
-impl Hyphens {
-    /// Returns true unless the value is `Unspecified`.
-    pub fn is_specified(self) -> bool {
-        !matches!(self, Self::Unspecified)
-    }
-
-    /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
-    pub fn take_or_else(self, fallback: impl FnOnce() -> Hyphens) -> Hyphens {
-        if self.is_specified() {
-            self
-        } else {
-            fallback()
-        }
-    }
-}
+impl_unspecified_fallback!(LineBreak, Hyphens);
 
 /// Resolves a paragraph's direction, using content with an LTR fallback when
 /// no direction is specified.

@@ -263,7 +263,7 @@ impl Drop for Path {
 /// count or a non-positive sum draws the stroke whole, as Skia does.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DashPathEffect {
-    intervals: [f32; DashPathEffect::MAX_INTERVALS],
+    intervals: [f32; Self::MAX_INTERVALS],
     count: usize,
     phase: f32,
 }

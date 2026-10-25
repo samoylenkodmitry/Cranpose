@@ -589,7 +589,7 @@ impl TextLineIndexCache {
                 .upgrade()
                 .is_some_and(|cached_text| Arc::ptr_eq(&cached_text, text))
         {
-            return cached.starts.clone();
+            return Rc::clone(&cached.starts);
         }
 
         let starts = Rc::<[usize]>::from(line_start_offsets(text.text()));
@@ -598,7 +598,7 @@ impl TextLineIndexCache {
             CachedTextLineIndex {
                 text: Arc::downgrade(text),
                 len: text.text().len(),
-                starts: starts.clone(),
+                starts: Rc::clone(&starts),
             },
         );
         starts
@@ -2145,7 +2145,7 @@ impl Vertex {
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &Self::ATTRIBS,
         }
@@ -2177,7 +2177,7 @@ impl GlyphInstance {
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<GlyphInstance>() as wgpu::BufferAddress,
+            array_stride: size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
@@ -2285,7 +2285,7 @@ impl TurnedGlyph {
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<TurnedGlyph>() as wgpu::BufferAddress,
+            array_stride: size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
@@ -3176,24 +3176,21 @@ pub(crate) struct ImageSlot {
 }
 
 fn image_vertex_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::vertex("Image Vertex Buffer", std::mem::size_of::<Vertex>() as u64)
+    UploadAllocatorSpec::vertex("Image Vertex Buffer", size_of::<Vertex>() as u64)
 }
 
 fn image_index_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::index("Image Index Buffer", std::mem::size_of::<u32>() as u64)
+    UploadAllocatorSpec::index("Image Index Buffer", size_of::<u32>() as u64)
 }
 
 fn glyph_instance_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::vertex(
-        "Glyph Instance Buffer",
-        std::mem::size_of::<GlyphInstance>() as u64,
-    )
+    UploadAllocatorSpec::vertex("Glyph Instance Buffer", size_of::<GlyphInstance>() as u64)
 }
 
 fn turned_glyph_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::vertex(
         "Turned Glyph Instance Buffer",
-        std::mem::size_of::<TurnedGlyph>() as u64,
+        size_of::<TurnedGlyph>() as u64,
     )
 }
 
@@ -3221,7 +3218,7 @@ impl ViewportUniforms {
             UploadAllocatorSpec::uniform(
                 "Viewport Uniform Buffer",
                 "Viewport Uniform Bind Group",
-                std::mem::size_of::<Uniforms>() as u64,
+                size_of::<Uniforms>() as u64,
             ),
             device,
             layout,
@@ -3730,9 +3727,7 @@ impl GpuRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<Uniforms>() as u64
-                        ),
+                        min_binding_size: wgpu::BufferSize::new(size_of::<Uniforms>() as u64),
                     },
                     count: None,
                 }],
@@ -4172,12 +4167,7 @@ impl GpuRenderer {
         let compiler = self.effect_renderer.compiler();
         self.for_each_fixed_pipeline(&mut |pipeline, job| {
             if wanted(pipeline.label()) {
-                pipeline.queue(
-                    compiler,
-                    crate::pipeline_compiler::CompileLane::WarmUp,
-                    self.adapter_backend,
-                    job(),
-                );
+                pipeline.queue(compiler, CompileLane::WarmUp, self.adapter_backend, job());
             }
         });
     }
@@ -4317,9 +4307,7 @@ impl GpuRenderer {
         job: impl FnOnce() -> J,
     ) -> Option<&'p wgpu::RenderPipeline>
     where
-        J: FnOnce() -> Option<wgpu::RenderPipeline>
-            + crate::pipeline_compiler::CompilerSend
-            + 'static,
+        J: FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static,
     {
         let ready = pipeline.when_ready(
             (
@@ -4752,7 +4740,7 @@ impl GpuRenderer {
         recorder.upload_buffer(
             UploadAllocatorSpec::vertex(
                 "Shadow Instance Buffer",
-                std::mem::size_of::<ShadowInstance>() as u64,
+                size_of::<ShadowInstance>() as u64,
             ),
             &self.device,
             bytemuck::cast_slice(instances),
@@ -5720,8 +5708,8 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        let device = self.device.clone();
-        let queue = self.queue.clone();
+        let device = Arc::clone(&self.device);
+        let queue = Arc::clone(&self.queue);
         let mut graph = WgpuFrameGraph::new(Some("Screenshot Copy Encoder"));
         let source = graph.import_surface("screenshot-copy-source");
         graph.add_fallible_command_pass(Some("Screenshot Copy Pass"), &[source], &[], |context| {
@@ -5817,8 +5805,11 @@ impl GpuRenderer {
         output: OutputStep<'_>,
     ) -> Result<bool, String> {
         #[cfg(target_arch = "wasm32")]
-        let (device, queue, graph_start) =
-            (self.device.clone(), self.queue.clone(), Instant::now());
+        let (device, queue, graph_start) = (
+            Arc::clone(&self.device),
+            Arc::clone(&self.queue),
+            Instant::now(),
+        );
         let FramePacket {
             root,
             overlay,
@@ -5898,8 +5889,8 @@ impl GpuRenderer {
         output_mode: OutputMode,
         output: OutputStep<'_>,
     ) -> (Result<(), String>, bool) {
-        let device = self.device.clone();
-        let queue = self.queue.clone();
+        let device = Arc::clone(&self.device);
+        let queue = Arc::clone(&self.queue);
         let graph_start = Instant::now();
         let mut executor = std::mem::take(&mut self.frame_graph_executor);
         let mut frame_graph = WgpuFrameGraph::new(Some("Renderer Frame Graph"));
@@ -6226,7 +6217,7 @@ impl GpuRenderer {
         transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
     ) -> Option<Rc<OffscreenTarget>> {
         let (width, height) = (bounds.width, bounds.height);
-        let device = self.device.clone();
+        let device = Arc::clone(&self.device);
         let (scratch_width, scratch_height) =
             crate::effect_renderer::blur_scratch_size(pixel_radius, pixel_radius, width, height);
         let full_size_result = shadow.post_blur_cutouts.is_some()
@@ -7025,7 +7016,7 @@ impl GpuRenderer {
                 recorder.upload_buffer(
                     UploadAllocatorSpec::vertex(
                         "Image Clip Buffer",
-                        std::mem::size_of::<DeviceRoundedClip>() as u64,
+                        size_of::<DeviceRoundedClip>() as u64,
                     ),
                     &self.device,
                     bytemuck::cast_slice(clips),
@@ -8116,7 +8107,7 @@ impl DeviceRoundedClip {
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            array_stride: size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
@@ -8289,7 +8280,7 @@ fn snap_nearest_image_to_device_pixels(
     };
 
     *rect = snapped;
-    *quad = crate::rect_to_quad(snapped);
+    *quad = rect_to_quad(snapped);
 }
 
 fn nearest_image_device_quad(
@@ -8571,7 +8562,7 @@ pub(crate) fn interior_run_draws(draws: &[RunDrawCall]) -> SmallVec<[PlannedRunD
 /// Drops the entries of `cache` no frame drew for more than `idle_frames`
 /// before `frame`: the least recently used first, which is the order they
 /// were last drawn in.
-fn evict_idle<K: Clone + Eq + std::hash::Hash, V>(
+fn evict_idle<K: Clone + Eq + Hash, V>(
     cache: &mut BoundedLruCache<K, V>,
     frame: u64,
     idle_frames: u64,

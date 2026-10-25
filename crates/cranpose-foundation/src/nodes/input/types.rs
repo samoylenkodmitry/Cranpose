@@ -119,7 +119,7 @@ impl PointerSource {
     /// Whether this source is a direct-touch device (finger or stylus), used
     /// for contact-specific release and velocity semantics.
     pub fn is_touch_like(self) -> bool {
-        matches!(self, PointerSource::Touch | PointerSource::Stylus)
+        matches!(self, Self::Touch | Self::Stylus)
     }
 }
 
@@ -202,7 +202,7 @@ pub struct Modifiers {
 
 impl Modifiers {
     /// No modifiers pressed.
-    pub const NONE: Modifiers = Modifiers {
+    pub const NONE: Self = Self {
         shift: false,
         ctrl: false,
         alt: false,
@@ -511,7 +511,7 @@ impl PointerEvent {
             source: self.source,
             modifiers: self.modifiers,
             ray: self.ray,
-            consumed: self.consumed.clone(),
+            consumed: Rc::clone(&self.consumed),
             deferred_post_dispatch: self.deferred_post_dispatch.clone(),
         }
     }

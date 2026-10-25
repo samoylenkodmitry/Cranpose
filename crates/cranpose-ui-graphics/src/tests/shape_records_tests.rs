@@ -72,8 +72,8 @@ fn columns_preserve_every_record_bit_and_gpu_field() {
     assert_eq!(records.bodies()[0].arc_geometry, [13.0, 14.0, 19.0, 20.0]);
     assert_eq!(records.curves()[0].radii, record.radii);
     assert_eq!(records.curves()[0].arc_normalized, record.arc_normalized);
-    assert_eq!(std::mem::size_of::<ShapeRecordBody>(), 64);
-    assert_eq!(std::mem::size_of::<ShapeRecordCurve>(), 32);
+    assert_eq!(size_of::<ShapeRecordBody>(), 64);
+    assert_eq!(size_of::<ShapeRecordCurve>(), 32);
     // The sources hold each record's index, then its arguments.
     assert_eq!(
         &records.source_bytes()[4..20],

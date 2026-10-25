@@ -409,17 +409,14 @@ fn composed_group_with_value_and_node_table(group_key: Key) -> SlotTable {
     harness.table
 }
 
-fn detached_group_payloads(
-    subtree: &DetachedSubtree,
-    group_index: usize,
-) -> &[super::PayloadRecord] {
+fn detached_group_payloads(subtree: &DetachedSubtree, group_index: usize) -> &[PayloadRecord] {
     let group = &subtree.groups[group_index];
     let start = group.payload_start as usize;
     let end = start + group.payload_len as usize;
     &subtree.payloads[start..end]
 }
 
-fn detached_group_nodes(subtree: &DetachedSubtree, group_index: usize) -> &[super::NodeRecord] {
+fn detached_group_nodes(subtree: &DetachedSubtree, group_index: usize) -> &[NodeRecord] {
     let group = &subtree.groups[group_index];
     let start = group.node_start as usize;
     let end = start + group.node_len as usize;

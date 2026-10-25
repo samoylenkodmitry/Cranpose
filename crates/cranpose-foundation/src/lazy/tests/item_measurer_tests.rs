@@ -43,7 +43,7 @@ fn slow_first_item(
     Source {
         measure: |i| {
             if i == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(8));
+                std::thread::sleep(Duration::from_millis(8));
             }
             create_test_item(i, 40.0)
         },

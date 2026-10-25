@@ -2366,7 +2366,7 @@ fn any_intersect_true_only_when_one_range_matches() {
 #[test]
 fn cargo_bin_dir_honors_cargo_home() {
     let dir = gate_diff::cargo_bin_dir_for(
-        Some(std::ffi::OsString::from("/scratch/cargo")),
+        Some(OsString::from("/scratch/cargo")),
         PathBuf::from("/unused"),
     );
     assert_eq!(dir, PathBuf::from("/scratch/cargo/bin"));
@@ -3185,6 +3185,36 @@ fn duplication_find_violations_clone_that_moved_with_its_code_passes() {
     let other = duplication_gate::clone_text("    let z = 3;\n");
     assert_eq!(
         duplication_gate::find_violations(&[moved], &[], &[other], &ranges).len(),
+        1
+    );
+}
+
+#[test]
+fn duplication_find_violations_clone_that_only_lost_module_paths_passes() {
+    let ranges = BTreeMap::from([("src/tests/a_tests.rs".to_owned(), vec![(1, 40)])]);
+    let unqualified = duplicate_of(
+        ("src/tests/a_tests.rs", 1, 12),
+        ("src/tests/b_tests.rs", 20, 31),
+        12,
+        "fn rebuild(&mut self, applier: &mut MemoryApplier, root: NodeId) {\n    Rc::clone(&root);\n}\n",
+    );
+    let old_source = duplication_gate::clone_text(
+        "fn rebuild(&mut self, applier: &mut cranpose_core::MemoryApplier, root: cranpose_core::NodeId) {\n    std::rc::Rc::clone(&root);\n}\n",
+    );
+    assert_eq!(
+        duplication_gate::find_violations(
+            std::slice::from_ref(&unqualified),
+            &[],
+            &[old_source],
+            &ranges
+        ),
+        Vec::<String>::new()
+    );
+    let renamed = duplication_gate::clone_text(
+        "fn rebuild(&mut self, applier: &mut cranpose_core::OtherApplier, root: NodeId) {}\n",
+    );
+    assert_eq!(
+        duplication_gate::find_violations(&[unqualified], &[], &[renamed], &ranges).len(),
         1
     );
 }

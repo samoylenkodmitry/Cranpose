@@ -847,7 +847,7 @@ fn apply_model_operation(
             let mut next_retained = previous_retained;
             let mut next_active = BTreeMap::<Key, ModelGroup>::new();
             let mut next_node_id = model.next_node_id;
-            let mut carried_retained = std::mem::take(retained_subtrees);
+            let mut carried_retained = mem::take(retained_subtrees);
 
             for key in &drop_retained {
                 next_retained.remove(key);

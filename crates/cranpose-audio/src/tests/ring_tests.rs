@@ -55,9 +55,9 @@ fn drops_pending_values_exactly_once() {
     #[derive(Debug)]
     struct Tracked;
     impl Tracked {
-        fn new() -> Tracked {
+        fn new() -> Self {
             ALIVE.fetch_add(1, Ordering::SeqCst);
-            Tracked
+            Self
         }
     }
     impl Drop for Tracked {

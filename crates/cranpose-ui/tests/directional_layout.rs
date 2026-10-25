@@ -139,10 +139,10 @@ fn lazy_lists_update_positions_after_direction_changes_and_scroll() {
         composition.runtime_handle(),
     );
     let row_state = std::rc::Rc::new(std::cell::Cell::new(None));
-    let captured_state = row_state.clone();
+    let captured_state = std::rc::Rc::clone(&row_state);
     composition
         .render(992, move || {
-            DirectionalLists(direction, captured_state.clone());
+            DirectionalLists(direction, std::rc::Rc::clone(&captured_state));
         })
         .expect("list composition");
     for (mode, expected) in [

@@ -47,13 +47,13 @@ pub trait AxisAlignment {
 
 impl AxisAlignment for crate::HorizontalAlignment {
     fn bias(&self) -> f32 {
-        crate::HorizontalAlignment::bias(self)
+        Self::bias(self)
     }
 }
 
 impl AxisAlignment for crate::VerticalAlignment {
     fn bias(&self) -> f32 {
-        crate::VerticalAlignment::bias(self)
+        Self::bias(self)
     }
 }
 
@@ -133,31 +133,31 @@ impl Arrangement for LinearArrangement {
         let count = sizes.len() as f32;
 
         match *self {
-            LinearArrangement::Start => {
+            Self::Start => {
                 Self::fill_positions(density, 0.0, 0.0, sizes, out_positions);
             }
-            LinearArrangement::End => {
+            Self::End => {
                 Self::fill_positions(density, remaining, 0.0, sizes, out_positions);
             }
-            LinearArrangement::Center => {
+            Self::Center => {
                 Self::fill_positions(density, remaining / 2.0, 0.0, sizes, out_positions);
             }
-            LinearArrangement::SpaceBetween => {
+            Self::SpaceBetween => {
                 let gap = remaining / (count - 1.0).max(1.0);
                 Self::fill_positions(density, 0.0, gap, sizes, out_positions);
             }
-            LinearArrangement::SpaceAround => {
+            Self::SpaceAround => {
                 let gap = remaining / count;
                 Self::fill_positions(density, gap / 2.0, gap, sizes, out_positions);
             }
-            LinearArrangement::SpaceEvenly => {
+            Self::SpaceEvenly => {
                 let gap = remaining / (count + 1.0);
                 Self::fill_positions(density, gap, gap, sizes, out_positions);
             }
-            LinearArrangement::SpacedBy(_) => {
+            Self::SpacedBy(_) => {
                 Self::spaced_positions(self.spacing(density), total_size, sizes, out_positions);
             }
-            LinearArrangement::SpacedByAligned { bias, .. } => {
+            Self::SpacedByAligned { bias, .. } => {
                 Self::spaced_positions(self.spacing(density), total_size, sizes, out_positions);
                 let (Some(&last), Some(&last_size)) = (out_positions.last(), sizes.last()) else {
                     return;

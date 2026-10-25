@@ -136,9 +136,9 @@ impl ShapeRecords {
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.bodies.capacity() * std::mem::size_of::<ShapeRecordBody>()
-            + self.curves.capacity() * std::mem::size_of::<ShapeRecordCurve>()
-            + self.sources.capacity() * std::mem::size_of::<RecordSource>()
+        self.bodies.capacity() * size_of::<ShapeRecordBody>()
+            + self.curves.capacity() * size_of::<ShapeRecordCurve>()
+            + self.sources.capacity() * size_of::<RecordSource>()
     }
 
     pub(crate) fn source_bytes(&self) -> &[u8] {

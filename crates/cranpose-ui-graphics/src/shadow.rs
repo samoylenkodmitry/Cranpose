@@ -18,7 +18,7 @@ impl DpOffset {
     }
 
     /// An offset of zero in both directions.
-    pub const ZERO: DpOffset = DpOffset {
+    pub const ZERO: Self = Self {
         x: Dp(0.0),
         y: Dp(0.0),
     };

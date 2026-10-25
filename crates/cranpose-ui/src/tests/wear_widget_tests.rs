@@ -63,7 +63,7 @@ fn compose_fixed_rows(
     let composition = run_test_composition({
         let captured_state = Rc::clone(&captured_state);
         move || {
-            crate::set_density(PX);
+            set_density(PX);
             let state = rememberWearScalingListState(CentreAnchor::default());
             *captured_state.borrow_mut() = Some(state);
             let heights = heights.clone();
@@ -91,7 +91,7 @@ fn state(captured_state: &CapturedListState) -> WearScalingListState {
     (*captured_state.borrow()).expect("state captured")
 }
 
-fn tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
+fn tree(composition: &mut TestComposition, root: NodeId) -> LayoutTree {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
@@ -110,8 +110,8 @@ fn tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
     tree
 }
 
-fn item_layers(tree: &crate::LayoutTree) -> Vec<(f32, f32, Rc<ModifierNodeSlices>)> {
-    fn walk(node: &crate::LayoutBox, out: &mut Vec<(f32, f32, Rc<ModifierNodeSlices>)>) {
+fn item_layers(tree: &LayoutTree) -> Vec<(f32, f32, Rc<ModifierNodeSlices>)> {
+    fn walk(node: &LayoutBox, out: &mut Vec<(f32, f32, Rc<ModifierNodeSlices>)>) {
         if node.node_data.modifier_slices().graphics_layer().is_some() {
             out.push((
                 node.rect.y,
@@ -288,7 +288,7 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
     );
 }
 
-fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling_list::PlacedRow> {
+fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<round_scaling_list::PlacedRow> {
     use crate::round_scaling_list::{RowRun, Slot, centre_offset, place_rows, stack_into};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
@@ -416,7 +416,7 @@ fn the_indicator_travel_runs_between_the_first_and_last_row_centres() {
 
 fn compose_widget(mut build: impl FnMut() + 'static) -> TestComposition {
     run_test_composition(move || {
-        crate::set_density(PX);
+        set_density(PX);
         build();
     })
 }
@@ -540,7 +540,7 @@ fn a_switch_row_is_fifty_two_dp_tall_and_its_switch_sits_two_dp_above_centre() {
     let row = tree.root().rect;
     assert_eq!(row.height, ROW_HEIGHT);
 
-    fn find_switch(node: &crate::LayoutBox) -> Option<crate::modifier::Rect> {
+    fn find_switch(node: &LayoutBox) -> Option<Rect> {
         if (node.rect.width - 32.0).abs() < 1e-3 && (node.rect.height - 22.0).abs() < 1e-3 {
             return Some(node.rect);
         }
@@ -561,9 +561,9 @@ fn a_switch_row_is_fifty_two_dp_tall_and_its_switch_sits_two_dp_above_centre() {
 #[test]
 fn a_switch_row_is_toggleable_and_reports_the_value_it_is_moving_to() {
     let seen: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
-    let sink = seen.clone();
+    let sink = Rc::clone(&seen);
     let mut composition = compose_widget(move || {
-        let sink = sink.clone();
+        let sink = Rc::clone(&sink);
         SwitchButton(
             Modifier::empty(),
             SwitchButtonSpec::default(),
@@ -575,14 +575,14 @@ fn a_switch_row_is_toggleable_and_reports_the_value_it_is_moving_to() {
     });
     let root = composition.root().expect("switch root");
     let tree = tree(&mut composition, root);
-    fn find_pointer(node: &crate::LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
+    fn find_pointer(node: &LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
             return Some(Rc::clone(handler));
         }
         node.children.iter().find_map(find_pointer)
     }
     let handler = find_pointer(tree.root()).expect("a toggleable row takes pointer input");
-    let at = crate::modifier::Point { x: 40.0, y: 26.0 };
+    let at = Point { x: 40.0, y: 26.0 };
     for kind in [PointerEventKind::Down, PointerEventKind::Up] {
         let mut event = PointerEvent::new(kind, at, at);
         event.buttons = PointerButtons::new().with(PointerButton::Primary);
@@ -598,7 +598,7 @@ fn a_switch_row_is_toggleable_and_reports_the_value_it_is_moving_to() {
 #[test]
 fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
     let mut composition = run_test_composition(|| {
-        crate::set_density(PX);
+        set_density(PX);
         let state = rememberWearScalingListState(CentreAnchor::default());
         let inner = state;
         ScreenScaffold(
@@ -774,7 +774,7 @@ fn a_list_that_fits_on_its_screen_has_no_indicator_at_all() {
 
 #[test]
 fn the_indicator_sweep_is_the_one_measured_on_a_454_pixel_watch() {
-    let arc = crate::round_scroll_indicator::indicator_arc(113.5);
+    let arc = round_scroll_indicator::indicator_arc(113.5);
     let degrees = arc.sweep().to_degrees();
     assert!((degrees - 30.536).abs() < 0.01, "{degrees}");
     assert!((arc.centreline() - 108.5).abs() < 1e-3);
@@ -806,15 +806,15 @@ fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
 
 #[test]
 fn wear_tracking_widens_a_string_by_one_letter_space_per_character() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     const HEADER: &str = "SETTINGS";
     // The paragraph's own width: a text node rounds its layout size up to
     // whole pixels, which would hide a fraction of the tracking.
     let width = |tracking_sp: f32| {
         let mut style = WearTextStyle::TITLE_MEDIUM;
         style.tracking_sp = tracking_sp;
-        crate::text::measure_text(
-            &crate::text::AnnotatedString::from(HEADER),
+        measure_text(
+            &text::AnnotatedString::from(HEADER),
             &style.resolve(measured_colors().on_background),
         )
         .width
@@ -858,7 +858,7 @@ fn compose_credits_screen() -> (TestComposition, CapturedListState) {
     let composition = run_test_composition({
         let captured_state = Rc::clone(&captured_state);
         move || {
-            crate::set_density(PX);
+            set_density(PX);
             let state = rememberWearScalingListState(CentreAnchor::default());
             *captured_state.borrow_mut() = Some(state);
             let inner = state;
@@ -995,13 +995,13 @@ fn a_row_below_the_fold_paints_once_it_is_scrolled_to() {
     );
 }
 
-fn scene_texts(tree: &crate::LayoutTree) -> Vec<String> {
-    crate::renderer::HeadlessRenderer::new()
+fn scene_texts(tree: &LayoutTree) -> Vec<String> {
+    HeadlessRenderer::new()
         .render(tree)
         .operations()
         .iter()
         .filter_map(|op| match op {
-            crate::renderer::RenderOp::Text { value, .. } => Some(value.clone()),
+            RenderOp::Text { value, .. } => Some(value.clone()),
             _ => None,
         })
         .collect()

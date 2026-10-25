@@ -376,7 +376,7 @@ fn field_window_origin_follows_vertical_scroll() {
         }
     };
 
-    fn find_field_rect(node: &LayoutBox) -> Option<cranpose_ui_graphics::Rect> {
+    fn find_field_rect(node: &LayoutBox) -> Option<Rect> {
         if node.node_data.modifier_slices().text_window().is_some() {
             return Some(node.rect);
         }
@@ -404,7 +404,7 @@ fn field_window_origin_follows_vertical_scroll() {
         let layout = applier
             .compute_layout(
                 root,
-                cranpose_ui_graphics::Size {
+                Size {
                     width: 400.0,
                     height: 600.0,
                 },
@@ -509,8 +509,8 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
     with_test_runtime(|| {
         let text = "aaaaaaaaaaaaaaaaaaaaaaaa";
         let style = TextStyle::default();
-        let annotated = crate::text::AnnotatedString::from(text);
-        let full = crate::text::measure_text(&annotated, &style);
+        let annotated = AnnotatedString::from(text);
+        let full = measure_text(&annotated, &style);
         let wrap_width = full.width / 3.0;
         let ranges = crate::text::wrapped_line_ranges(
             None,

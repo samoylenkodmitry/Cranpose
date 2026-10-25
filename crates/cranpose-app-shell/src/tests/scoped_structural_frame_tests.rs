@@ -269,7 +269,7 @@ fn assert_scene_matches_rebuild(shell: &mut AppShell<ScopedUpdateCountingRendere
 }
 
 fn drawn_texts(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<String> {
-    super::graph_scene_text_values(shell.surfaces[0].renderer.scene())
+    graph_scene_text_values(shell.surfaces[0].renderer.scene())
 }
 
 struct CountedShell {
@@ -279,7 +279,7 @@ struct CountedShell {
 }
 
 impl CountedShell {
-    fn settled(root_key: cranpose_core::Key, content: impl FnMut() + 'static) -> Self {
+    fn settled(root_key: Key, content: impl FnMut() + 'static) -> Self {
         let rebuilds = Rc::new(Cell::new(0));
         let updates = Rc::new(Cell::new(0));
         let mut shell = AppShell::new(

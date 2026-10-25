@@ -1222,9 +1222,9 @@ pub fn WearScalingLazyColumnNode(
     content: WearScalingListContent,
 ) -> NodeId {
     let transforms = remember(|| Rc::new(RefCell::new(Vec::<WearItemTransform>::new())))
-        .with(|value| value.clone());
+        .with(|value| Rc::clone(value));
     let inputs = remember(|| Rc::new(RefCell::new(WearScalingListInputs::default())))
-        .with(|value| value.clone());
+        .with(|value| Rc::clone(value));
     let fling = remember(|| {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("WearScalingLazyColumn requires an active runtime");
@@ -1282,7 +1282,7 @@ pub fn WearScalingLazyColumnNode(
             policy
         }
     })
-    .with(|policy| policy.clone());
+    .with(|policy| Rc::clone(policy));
 
     let caller_modifier_changed = crate::widgets::layout::caller_modifier_changed(&modifier);
     let modifier = wear_scaling_list_input(modifier, state, fling).clip_to_bounds();
@@ -1408,7 +1408,7 @@ fn measure_wear_scaling_list(
             ..WearScalingLayoutInfo::default()
         });
         indicator.borrow_mut().clear();
-        return scope.layout_with_placement_builder(width, viewport, std::vec::Vec::clear);
+        return scope.layout_with_placement_builder(width, viewport, Vec::clear);
     }
 
     scope.set_reusable_pool_limits(REUSABLE_SLOTS, REUSABLE_SLOTS);

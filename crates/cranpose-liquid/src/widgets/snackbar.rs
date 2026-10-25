@@ -342,7 +342,7 @@ fn colored(style: &TextStyle, color: Color) -> TextStyle {
 }
 
 #[composable]
-fn SnackbarButton(label: String, style: cranpose_ui::TextStyle, on_click: impl Fn() + 'static) {
+fn SnackbarButton(label: String, style: TextStyle, on_click: impl Fn() + 'static) {
     Box(
         Modifier::empty()
             .minimum_interactive_component_size()

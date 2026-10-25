@@ -1,52 +1,7 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::state::{PREEXISTING_SNAPSHOT_ID, StateObject};
-
-fn mock_state_record() -> Rc<crate::state::StateRecord> {
-    crate::state::StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
-}
-
-struct MockStateObject;
-
-impl StateObject for MockStateObject {
-    fn object_id(&self) -> crate::state::ObjectId {
-        crate::state::ObjectId(0)
-    }
-
-    fn first_record(&self) -> Rc<crate::state::StateRecord> {
-        mock_state_record()
-    }
-
-    fn try_readable_record(
-        &self,
-        snapshot_id: crate::snapshot_id_set::SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Option<Rc<crate::state::StateRecord>> {
-        Some(self.readable_record(snapshot_id, invalid))
-    }
-
-    fn readable_record(
-        &self,
-        _snapshot_id: crate::snapshot_id_set::SnapshotId,
-        _invalid: &SnapshotIdSet,
-    ) -> Rc<crate::state::StateRecord> {
-        mock_state_record()
-    }
-
-    fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
-
-    fn promote_record(
-        &self,
-        _child_id: crate::snapshot_id_set::SnapshotId,
-    ) -> Result<(), &'static str> {
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
+use crate::{state::StateObject, tests::state_mock::MockState};
 
 #[test]
 fn test_readonly_snapshot_creation() {
@@ -118,14 +73,14 @@ fn test_readonly_snapshot_read_observer() {
     use std::{rc::Rc as ObserverRef, sync::Mutex};
 
     let read_count = ObserverRef::new(Mutex::new(0));
-    let read_count_clone = read_count.clone();
+    let read_count_clone = Rc::clone(&read_count);
 
     let observer = Rc::new(move |_: &dyn StateObject| {
         *read_count_clone.lock().unwrap() += 1;
     });
 
     let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(observer));
-    let mock_state = MockStateObject;
+    let mock_state = MockState::with_id(0);
 
     snapshot.record_read(&mock_state);
     snapshot.record_read(&mock_state);
@@ -138,13 +93,13 @@ fn test_readonly_snapshot_nested_with_observer() {
     use std::{rc::Rc as ObserverRef, sync::Mutex};
 
     let parent_reads = ObserverRef::new(Mutex::new(0));
-    let parent_reads_clone = parent_reads.clone();
+    let parent_reads_clone = Rc::clone(&parent_reads);
     let parent_observer = Rc::new(move |_: &dyn StateObject| {
         *parent_reads_clone.lock().unwrap() += 1;
     });
 
     let nested_reads = ObserverRef::new(Mutex::new(0));
-    let nested_reads_clone = nested_reads.clone();
+    let nested_reads_clone = Rc::clone(&nested_reads);
     let nested_observer = Rc::new(move |_: &dyn StateObject| {
         *nested_reads_clone.lock().unwrap() += 1;
     });
@@ -152,7 +107,7 @@ fn test_readonly_snapshot_nested_with_observer() {
     let parent = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(parent_observer));
     let nested = parent.take_nested_snapshot(Some(nested_observer));
 
-    let mock_state = MockStateObject;
+    let mock_state = MockState::with_id(0);
 
     nested.record_read(&mock_state);
 
@@ -164,7 +119,7 @@ fn test_readonly_snapshot_nested_with_observer() {
 #[should_panic(expected = "Cannot write to a read-only snapshot")]
 fn test_readonly_snapshot_write_panics() {
     let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
-    let mock_state = Rc::new(MockStateObject);
+    let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
 }
 

@@ -162,11 +162,11 @@ impl ModifierNodeElement for PointerInputElement {
     type Node = SuspendingPointerInputNode;
 
     fn create(&self) -> Self::Node {
-        SuspendingPointerInputNode::new(self.site, self.keys.clone(), self.handler.clone())
+        SuspendingPointerInputNode::new(self.site, self.keys.clone(), Rc::clone(&self.handler))
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.update(self.site, self.keys.clone(), self.handler.clone());
+        node.update(self.site, self.keys.clone(), Rc::clone(&self.handler));
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -206,7 +206,7 @@ impl PointerInputScope {
         Fut: Future<Output = R>,
     {
         let scope = AwaitPointerEventScope {
-            state: self.state.clone(),
+            state: Rc::clone(&self.state),
         };
         block(scope).await
     }
@@ -226,7 +226,7 @@ impl AwaitPointerEventScope {
 
     pub async fn await_pointer_event(&self) -> PointerEvent {
         NextPointerEvent {
-            state: self.state.clone(),
+            state: Rc::clone(&self.state),
         }
         .await
     }
@@ -288,7 +288,7 @@ struct PointerEventDispatcher {
 impl PointerEventDispatcher {
     fn new() -> Self {
         let state = Rc::new(RefCell::new(None::<Rc<PointerInputScopeState>>));
-        let state_for_handler = state.clone();
+        let state_for_handler = Rc::clone(&state);
         let handler = Rc::new(move |event: PointerEvent| {
             if let Some(inner) = state_for_handler.borrow().as_ref() {
                 inner.push_event(event);
@@ -298,7 +298,7 @@ impl PointerEventDispatcher {
     }
 
     fn handler(&self) -> Rc<dyn Fn(PointerEvent)> {
-        self.handler.clone()
+        Rc::clone(&self.handler)
     }
 
     fn set_state(&self, state: Option<Rc<PointerInputScopeState>>) {
@@ -316,7 +316,7 @@ impl PointerInputTask {
     fn new(future: PointerInputFuture) -> Self {
         let inner = Rc::new(PointerInputTaskInner::new(future));
         let id = Rc::as_ptr(&inner) as usize as u64;
-        let owner = crate::render_state::register_pointer_input_task(id, inner.clone());
+        let owner = crate::render_state::register_pointer_input_task(id, Rc::clone(&inner));
         Self { id, owner, inner }
     }
 
@@ -441,8 +441,8 @@ impl SuspendingPointerInputNode {
     }
 
     fn start(&mut self) {
-        let state = Rc::new(PointerInputScopeState::new(self.layout_size.clone()));
-        self.dispatcher.set_state(Some(state.clone()));
+        let state = Rc::new(PointerInputScopeState::new(Rc::clone(&self.layout_size)));
+        self.dispatcher.set_state(Some(Rc::clone(&state)));
         let scope = PointerInputScope::new(state);
         let future = (self.handler)(scope);
         let task = PointerInputTask::new(future);
@@ -490,7 +490,7 @@ impl PointerInputNode for SuspendingPointerInputNode {
     }
 
     fn layout_size_sink(&self) -> Option<Rc<Cell<Size>>> {
-        Some(self.layout_size.clone())
+        Some(Rc::clone(&self.layout_size))
     }
 }
 

@@ -82,8 +82,8 @@ pub(super) fn test_guard() -> MutexGuard<'static, ()> {
 
 fn reset_public_render_state_for_test() {}
 
-fn layout_tree_texts(tree: &cranpose_ui::LayoutTree) -> Vec<String> {
-    fn collect(node: &cranpose_ui::LayoutBox, out: &mut Vec<String>) {
+fn layout_tree_texts(tree: &LayoutTree) -> Vec<String> {
+    fn collect(node: &LayoutBox, out: &mut Vec<String>) {
         if let Some(text) = node.node_data.modifier_slices().text_content() {
             out.push(text.to_string());
         }
@@ -97,7 +97,7 @@ fn layout_tree_texts(tree: &cranpose_ui::LayoutTree) -> Vec<String> {
     texts
 }
 
-fn semantics_tree_descriptions(tree: &cranpose_ui::SemanticsTree) -> Vec<String> {
+fn semantics_tree_descriptions(tree: &SemanticsTree) -> Vec<String> {
     fn collect(node: &cranpose_ui::SemanticsNode, out: &mut Vec<String>) {
         if let Some(description) = &node.description {
             out.push(description.clone());
@@ -112,10 +112,7 @@ fn semantics_tree_descriptions(tree: &cranpose_ui::SemanticsTree) -> Vec<String>
     descriptions
 }
 
-fn find_layout_box_with_text<'a>(
-    node: &'a cranpose_ui::LayoutBox,
-    text: &str,
-) -> Option<&'a cranpose_ui::LayoutBox> {
+fn find_layout_box_with_text<'a>(node: &'a LayoutBox, text: &str) -> Option<&'a LayoutBox> {
     if node.node_data.modifier_slices().text_content().as_deref() == Some(text) {
         return Some(node);
     }
@@ -128,7 +125,7 @@ fn find_layout_box_with_text<'a>(
 fn click_text<R>(shell: &mut AppShell<R>, text: &str)
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     shell.update();
     let layout_tree = shell.layout_tree().expect("layout tree available");
@@ -154,7 +151,7 @@ where
 fn click_text_like_robot<R>(shell: &mut AppShell<R>, text: &str)
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     shell.update();
     let layout_tree = shell.layout_tree().expect("layout tree available");
@@ -179,7 +176,7 @@ where
 fn pump_like_robot<R>(shell: &mut AppShell<R>)
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
     if shell.needs_redraw() || shell.has_active_animations() {
         shell.update();
@@ -364,7 +361,7 @@ fn AppShellLifecycleIndicatorsLazyList() {
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
-    let lifecycle_count = cranpose_core::rememberMutableStateOf(|| 0usize);
+    let lifecycle_count = rememberMutableStateOf(|| 0usize);
 
     Column(
         Modifier::empty().fill_max_size(),
@@ -400,7 +397,7 @@ thread_local! {
 
 #[composable]
 fn AppShellKeyedSiblingIndicatorsRoot() {
-    let active = cranpose_core::rememberMutableStateOf(|| 0i32);
+    let active = rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active);
     });
@@ -423,7 +420,7 @@ fn AppShellKeyedSiblingIndicatorsRoot() {
 
 #[composable]
 fn AppShellSwitchingKeyedLazyListRoot() {
-    let active = cranpose_core::rememberMutableStateOf(|| 0i32);
+    let active = rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active);
     });
@@ -547,7 +544,7 @@ struct TestHitTarget;
 impl HitTestTarget for TestHitTarget {
     fn dispatch(&self, _event: PointerEvent) {}
 
-    fn node_id(&self) -> cranpose_core::NodeId {
+    fn node_id(&self) -> NodeId {
         0
     }
 }
@@ -564,17 +561,17 @@ impl RenderScene for TestScene {
         vec![]
     }
 
-    fn find_target(&self, _node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+    fn find_target(&self, _node_id: NodeId) -> Option<Self::HitTarget> {
         None
     }
 }
 
 #[derive(Clone)]
 struct RecordingHitTarget {
-    node_id: cranpose_core::NodeId,
+    node_id: NodeId,
     consume: bool,
     events: Rc<RefCell<Vec<PointerEvent>>>,
-    capture_path: Vec<cranpose_core::NodeId>,
+    capture_path: Vec<NodeId>,
 }
 
 impl HitTestTarget for RecordingHitTarget {
@@ -585,11 +582,11 @@ impl HitTestTarget for RecordingHitTarget {
         }
     }
 
-    fn node_id(&self) -> cranpose_core::NodeId {
+    fn node_id(&self) -> NodeId {
         self.node_id
     }
 
-    fn capture_path(&self) -> Vec<cranpose_core::NodeId> {
+    fn capture_path(&self) -> Vec<NodeId> {
         self.capture_path.clone()
     }
 }
@@ -597,7 +594,7 @@ impl HitTestTarget for RecordingHitTarget {
 #[derive(Default)]
 struct RecordingScene {
     hits: Vec<RecordingHitTarget>,
-    hit_node_ids: Option<Vec<cranpose_core::NodeId>>,
+    hit_node_ids: Option<Vec<NodeId>>,
 }
 
 impl RecordingScene {
@@ -608,10 +605,7 @@ impl RecordingScene {
         }
     }
 
-    fn with_hit_node_ids(
-        hits: Vec<RecordingHitTarget>,
-        hit_node_ids: Vec<cranpose_core::NodeId>,
-    ) -> Self {
+    fn with_hit_node_ids(hits: Vec<RecordingHitTarget>, hit_node_ids: Vec<NodeId>) -> Self {
         Self {
             hits,
             hit_node_ids: Some(hit_node_ids),
@@ -636,7 +630,7 @@ impl RenderScene for RecordingScene {
         self.hits.clone()
     }
 
-    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+    fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
         self.hits
             .iter()
             .find(|target| target.node_id == node_id)
@@ -646,7 +640,7 @@ impl RenderScene for RecordingScene {
 
 #[derive(Clone)]
 struct AppContextProbeHitTarget {
-    node_id: cranpose_core::NodeId,
+    node_id: NodeId,
     densities: Rc<RefCell<Vec<f32>>>,
 }
 
@@ -657,11 +651,11 @@ impl HitTestTarget for AppContextProbeHitTarget {
             .push(cranpose_ui::current_density());
     }
 
-    fn node_id(&self) -> cranpose_core::NodeId {
+    fn node_id(&self) -> NodeId {
         self.node_id
     }
 
-    fn capture_path(&self) -> Vec<cranpose_core::NodeId> {
+    fn capture_path(&self) -> Vec<NodeId> {
         vec![self.node_id]
     }
 }
@@ -679,7 +673,7 @@ impl RenderScene for AppContextProbeScene {
         vec![self.target.clone()]
     }
 
-    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+    fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
         (node_id == self.target.node_id).then(|| self.target.clone())
     }
 }
@@ -749,7 +743,7 @@ impl RenderScene for MutableRecordingScene {
         self.hits.borrow().clone()
     }
 
-    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+    fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
         self.hits
             .borrow()
             .iter()
@@ -758,18 +752,42 @@ impl RenderScene for MutableRecordingScene {
     }
 }
 
-struct FixedWidthTextMeasurer(f32);
+#[derive(Clone, Copy)]
+enum StubTextMeasurer {
+    Fixed(f32),
+    FontSized,
+}
 
-impl cranpose_ui::TextMeasurer for FixedWidthTextMeasurer {
+impl StubTextMeasurer {
+    fn width(self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
+        match self {
+            Self::Fixed(width) => width,
+            Self::FontSized => text.text.chars().count() as f32 * style.resolve_font_size(14.0),
+        }
+    }
+
+    fn char_width_and_line_height(self, style: &TextStyle) -> (f32, f32) {
+        match self {
+            Self::Fixed(width) => (width, 1.0),
+            Self::FontSized => {
+                let size = style.resolve_font_size(14.0);
+                (size, size)
+            }
+        }
+    }
+}
+
+impl cranpose_ui::TextMeasurer for StubTextMeasurer {
     fn measure(
         &self,
-        _text: &cranpose_ui::text::AnnotatedString,
-        _style: &cranpose_ui::TextStyle,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
     ) -> cranpose_ui::TextMetrics {
+        let (_, line_height) = self.char_width_and_line_height(style);
         cranpose_ui::TextMetrics {
-            width: self.0,
-            height: 1.0,
-            line_height: 1.0,
+            width: self.width(text, style),
+            height: line_height,
+            line_height,
             line_count: 1,
         }
     }
@@ -777,7 +795,7 @@ impl cranpose_ui::TextMeasurer for FixedWidthTextMeasurer {
     fn get_offset_for_position(
         &self,
         _text: &cranpose_ui::text::AnnotatedString,
-        _style: &cranpose_ui::TextStyle,
+        _style: &TextStyle,
         _x: f32,
         _y: f32,
     ) -> usize {
@@ -786,19 +804,20 @@ impl cranpose_ui::TextMeasurer for FixedWidthTextMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        _text: &cranpose_ui::text::AnnotatedString,
-        _style: &cranpose_ui::TextStyle,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
         _offset: usize,
     ) -> f32 {
-        self.0
+        self.width(text, style)
     }
 
     fn layout(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
-        _style: &cranpose_ui::TextStyle,
+        style: &TextStyle,
     ) -> cranpose_ui::TextLayoutResult {
-        cranpose_ui::TextLayoutResult::monospaced(&text.text, self.0, 1.0)
+        let (char_width, line_height) = self.char_width_and_line_height(style);
+        cranpose_ui::TextLayoutResult::monospaced(&text.text, char_width, line_height)
     }
 }
 
@@ -820,37 +839,37 @@ impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
     fn measure(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::TextStyle,
+        style: &TextStyle,
     ) -> cranpose_ui::TextMetrics {
         self.measure_calls.set(self.measure_calls.get() + 1);
-        FixedWidthTextMeasurer(self.width).measure(text, style)
+        StubTextMeasurer::Fixed(self.width).measure(text, style)
     }
 
     fn get_offset_for_position(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::TextStyle,
+        style: &TextStyle,
         x: f32,
         y: f32,
     ) -> usize {
-        FixedWidthTextMeasurer(self.width).get_offset_for_position(text, style, x, y)
+        StubTextMeasurer::Fixed(self.width).get_offset_for_position(text, style, x, y)
     }
 
     fn get_cursor_x_for_offset(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::TextStyle,
+        style: &TextStyle,
         offset: usize,
     ) -> f32 {
-        FixedWidthTextMeasurer(self.width).get_cursor_x_for_offset(text, style, offset)
+        StubTextMeasurer::Fixed(self.width).get_cursor_x_for_offset(text, style, offset)
     }
 
     fn layout(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::TextStyle,
+        style: &TextStyle,
     ) -> cranpose_ui::TextLayoutResult {
-        FixedWidthTextMeasurer(self.width).layout(text, style)
+        StubTextMeasurer::Fixed(self.width).layout(text, style)
     }
 }
 
@@ -891,7 +910,7 @@ impl Renderer for TestRenderer {
                     measure_calls,
                 ));
             } else {
-                app_context.set_text_measurer(FixedWidthTextMeasurer(text_width));
+                app_context.set_text_measurer(StubTextMeasurer::Fixed(text_width));
             }
         }
     }
@@ -1030,11 +1049,11 @@ fn a_bare_render_invalidation_re_presents_without_scene_work() {
         shell.update();
     }
     assert!(rebuilds.get() > 0, "settling must have built the scene");
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
     let settled = (rebuilds.get(), updates.get(), visual_updates.get());
 
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     let result = shell.update();
 
     assert!(
@@ -1357,7 +1376,7 @@ fn two_app_shells_do_not_share_text_measurers() {
         || {},
     );
     let text = cranpose_ui::text::AnnotatedString::from("same text");
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
 
     let first_width =
         first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
@@ -1389,7 +1408,7 @@ fn two_app_shells_have_independent_text_caches() {
         || {},
     );
     let text = cranpose_ui::text::AnnotatedString::from("same cached text");
-    let style = cranpose_ui::TextStyle::default();
+    let style = TextStyle::default();
 
     let first_width =
         first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
@@ -1428,7 +1447,7 @@ fn pointer_dispatch_enters_shell_app_context() {
     let scene = AppContextProbeScene {
         target: AppContextProbeHitTarget {
             node_id: 1,
-            densities: densities.clone(),
+            densities: Rc::clone(&densities),
         },
     };
     let renderer = AppContextProbeRenderer { scene };
@@ -1510,8 +1529,8 @@ impl Renderer for RecordingRenderer {
 
     fn rebuild_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         let renderer = HeadlessRenderer::new();
@@ -1560,8 +1579,8 @@ impl Renderer for CountingRenderer {
 
     fn rebuild_scene_from_applier(
         &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
+        _applier: &mut MemoryApplier,
+        _root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.rebuilds.set(self.rebuilds.get() + 1);
@@ -1650,14 +1669,14 @@ pub(super) struct ScopedUpdateCountingRenderer {
     rebuilds: Rc<Cell<usize>>,
     updates: Rc<Cell<usize>>,
     visual_updates: Rc<Cell<usize>>,
-    last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
+    last_dirty_nodes: Rc<RefCell<Vec<NodeId>>>,
 }
 
 impl ScopedUpdateCountingRenderer {
     fn new(
         rebuilds: Rc<Cell<usize>>,
         updates: Rc<Cell<usize>>,
-        last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
+        last_dirty_nodes: Rc<RefCell<Vec<NodeId>>>,
     ) -> Self {
         Self::with_visual_updates(rebuilds, updates, Rc::new(Cell::new(0)), last_dirty_nodes)
     }
@@ -1666,7 +1685,7 @@ impl ScopedUpdateCountingRenderer {
         rebuilds: Rc<Cell<usize>>,
         updates: Rc<Cell<usize>>,
         visual_updates: Rc<Cell<usize>>,
-        last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
+        last_dirty_nodes: Rc<RefCell<Vec<NodeId>>>,
     ) -> Self {
         Self {
             scene: cranpose_render_common::graph_scene::Scene::default(),
@@ -1679,9 +1698,9 @@ impl ScopedUpdateCountingRenderer {
 
     fn update_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
-        updates: cranpose_render_common::SceneUpdates<'_>,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        updates: SceneUpdates<'_>,
         visual: bool,
     ) {
         if visual {
@@ -1733,8 +1752,8 @@ impl Renderer for ScopedUpdateCountingRenderer {
 
     fn rebuild_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.rebuilds.set(self.rebuilds.get() + 1);
@@ -1749,10 +1768,10 @@ impl Renderer for ScopedUpdateCountingRenderer {
 
     fn update_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         _viewport: Size,
-        updates: cranpose_render_common::SceneUpdates<'_>,
+        updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.update_from_applier(applier, root, updates, false);
         Ok(())
@@ -1760,10 +1779,10 @@ impl Renderer for ScopedUpdateCountingRenderer {
 
     fn update_visual_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         _viewport: Size,
-        updates: cranpose_render_common::SceneUpdates<'_>,
+        updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.update_from_applier(applier, root, updates, true);
         Ok(())
@@ -1817,8 +1836,8 @@ impl Renderer for HitGraphRenderer {
 
     fn rebuild_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
@@ -2206,7 +2225,7 @@ fn nested_branch_content() {
 }
 
 #[composable]
-fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
+fn draw_width_app(width_state: MutableState<f32>) {
     Box(
         Modifier::empty()
             .size(Size {
@@ -2232,7 +2251,7 @@ fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
     );
 }
 
-fn draw_observed_width_app(width_state: cranpose_core::MutableState<f32>) {
+fn draw_observed_width_app(width_state: MutableState<f32>) {
     Box(
         Modifier::empty()
             .size(Size {
@@ -2257,7 +2276,7 @@ fn draw_observed_width_app(width_state: cranpose_core::MutableState<f32>) {
 }
 
 #[composable]
-fn graphics_layer_observed_offset_app(offset_state: cranpose_core::MutableState<f32>) {
+fn graphics_layer_observed_offset_app(offset_state: MutableState<f32>) {
     Box(
         Modifier::empty()
             .size(Size {
@@ -2287,7 +2306,7 @@ fn graphics_layer_observed_offset_app(offset_state: cranpose_core::MutableState<
 }
 
 #[composable]
-fn graphics_layer_composed_offset_app(offset_state: cranpose_core::MutableState<f32>) {
+fn graphics_layer_composed_offset_app(offset_state: MutableState<f32>) {
     let offset = offset_state.get();
     Box(
         Modifier::empty()
@@ -2325,8 +2344,8 @@ fn shader_rect_like_effect(seed: usize, time: f32, intensity: f32) -> RenderEffe
 
 #[composable]
 fn shader_rect_like_effect_layers_app(
-    time_state: cranpose_core::MutableState<f32>,
-    intensity_state: cranpose_core::MutableState<f32>,
+    time_state: MutableState<f32>,
+    intensity_state: MutableState<f32>,
 ) {
     let time = time_state.get();
     let intensity = intensity_state.get();
@@ -2392,8 +2411,8 @@ fn shader_rect_like_effect_layers_app(
 
 #[composable]
 fn shader_rect_like_lazy_effect_layers_app(
-    time_state: cranpose_core::MutableState<f32>,
-    intensity_state: cranpose_core::MutableState<f32>,
+    time_state: MutableState<f32>,
+    intensity_state: MutableState<f32>,
 ) {
     Column(
         Modifier::empty().fill_max_width(),
@@ -2458,7 +2477,7 @@ fn shader_rect_like_lazy_effect_layers_app(
 }
 
 #[composable]
-fn graphics_layer_observed_point_app(position_state: cranpose_core::MutableState<Point>) {
+fn graphics_layer_observed_point_app(position_state: MutableState<Point>) {
     Box(
         Modifier::empty()
             .size(Size {
@@ -2492,7 +2511,7 @@ fn graphics_layer_observed_point_app(position_state: cranpose_core::MutableState
 }
 
 #[composable]
-fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::MutableState<Point>) {
+fn pointer_driven_graphics_layer_point_app(position_state: MutableState<Point>) {
     Box(
         Modifier::empty()
             .size(Size {
@@ -2584,7 +2603,7 @@ pub(super) struct TextFieldDispatchProbe {
 }
 
 impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatchProbe {
-    fn handle_key(&self, _event: &cranpose_ui::KeyEvent) -> bool {
+    fn handle_key(&self, _event: &KeyEvent) -> bool {
         false
     }
 
@@ -2638,8 +2657,8 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatc
         self.last_selection.set(Some((start_bytes, end_bytes)));
     }
 
-    fn editor_state(&self) -> Option<cranpose_ui::ImeEditorState> {
-        Some(cranpose_ui::ImeEditorState {
+    fn editor_state(&self) -> Option<ImeEditorState> {
+        Some(ImeEditorState {
             text: "probe".to_string(),
             selection_start: 1,
             selection_end: 2,
@@ -2678,12 +2697,29 @@ fn layout_recovers_after_tab_switching_updates() {
     );
 }
 
+pub(super) fn request_probe_focus<R>(
+    shell: &AppShell<R>,
+    focus_flag: &Rc<RefCell<bool>>,
+    handler: &Rc<TextFieldDispatchProbe>,
+) where
+    R: Renderer,
+    R::Error: Debug,
+{
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(
+            Rc::clone(focus_flag),
+            Rc::<TextFieldDispatchProbe>::clone(handler),
+            0,
+        );
+    });
+}
+
 #[derive(Default)]
 pub(super) struct SoftKeyboardProbe {
     pub(super) calls: RefCell<Vec<&'static str>>,
 }
 
-impl cranpose_ui::PlatformTextInputHandler for SoftKeyboardProbe {
+impl PlatformTextInputHandler for SoftKeyboardProbe {
     fn show_keyboard(&self) {
         self.calls.borrow_mut().push("show");
     }
@@ -2701,14 +2737,12 @@ fn text_field_focus_drives_platform_soft_keyboard() {
     shell.update();
 
     let keyboard = Rc::new(SoftKeyboardProbe::default());
-    shell.set_platform_text_input(keyboard.clone());
+    shell.set_platform_text_input(Rc::<SoftKeyboardProbe>::clone(&keyboard));
 
     let focus_flag = Rc::new(RefCell::new(false));
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
-    shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
-    });
+    request_probe_focus(&shell, &focus_flag, &handler);
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
     shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
@@ -2723,18 +2757,12 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
     shell.update();
 
     let keyboard = Rc::new(SoftKeyboardProbe::default());
-    shell.set_platform_text_input(keyboard.clone());
+    shell.set_platform_text_input(Rc::<SoftKeyboardProbe>::clone(&keyboard));
 
     let handler = Rc::new(TextFieldDispatchProbe::default());
     {
         let focus_flag = Rc::new(RefCell::new(false));
-        shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(
-                Rc::clone(&focus_flag),
-                handler.clone(),
-                0,
-            );
-        });
+        request_probe_focus(&shell, &focus_flag, &handler);
     }
 
     let event = KeyEvent::key_down(KeyCode::A, "a");
@@ -2778,11 +2806,11 @@ fn escape_closes_the_menu_on_top_when_no_dialog_is_open() {
     let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
         let captured = Rc::clone(&captured_for_content);
         cranpose_ui::widgets::popup::PopupHost(move || {
-            let open = cranpose_core::rememberMutableStateOf(|| true);
+            let open = rememberMutableStateOf(|| true);
             *captured.borrow_mut() = Some(open);
             if open.get() {
                 cranpose_ui::widgets::popup::PopupDismissable(
-                    cranpose_ui_graphics::Rect {
+                    Rect {
                         x: 10.0,
                         y: 10.0,
                         width: 40.0,
@@ -2924,7 +2952,7 @@ fn focus_returns_to_the_opener_when_a_dialog_closes() {
     let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
         let captured = Rc::clone(&captured_for_content);
         cranpose_ui::widgets::popup::PopupHost(move || {
-            let open = cranpose_core::rememberMutableStateOf(|| false);
+            let open = rememberMutableStateOf(|| false);
             *captured.borrow_mut() = Some(open);
             Box(
                 Modifier::empty()
@@ -3011,18 +3039,12 @@ fn frame_update_after_field_removal_hides_soft_keyboard() {
     shell.update();
 
     let keyboard = Rc::new(SoftKeyboardProbe::default());
-    shell.set_platform_text_input(keyboard.clone());
+    shell.set_platform_text_input(Rc::<SoftKeyboardProbe>::clone(&keyboard));
 
     let handler = Rc::new(TextFieldDispatchProbe::default());
     {
         let focus_flag = Rc::new(RefCell::new(false));
-        shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(
-                Rc::clone(&focus_flag),
-                handler.clone(),
-                0,
-            );
-        });
+        request_probe_focus(&shell, &focus_flag, &handler);
     }
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
@@ -3065,13 +3087,13 @@ fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
         RecordingHitTarget {
             node_id: 1,
             consume: true,
-            events: consumed_events.clone(),
+            events: Rc::clone(&consumed_events),
             capture_path: vec![1],
         },
         RecordingHitTarget {
             node_id: 2,
             consume: false,
-            events: skipped_events.clone(),
+            events: Rc::clone(&skipped_events),
             capture_path: vec![2],
         },
     ]);
@@ -3104,13 +3126,13 @@ fn pointer_scrolled_dispatches_capture_path_ancestors() {
             RecordingHitTarget {
                 node_id: 1,
                 consume: false,
-                events: child_events.clone(),
+                events: Rc::clone(&child_events),
                 capture_path: vec![1, 99],
             },
             RecordingHitTarget {
                 node_id: 99,
                 consume: true,
-                events: ancestor_events.clone(),
+                events: Rc::clone(&ancestor_events),
                 capture_path: vec![99],
             },
         ],
@@ -3144,12 +3166,12 @@ fn captured_gesture_cancels_when_original_targets_disappear() {
     let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
         node_id: 1,
         consume: false,
-        events: first_target_events.clone(),
+        events: Rc::clone(&first_target_events),
         capture_path: vec![1],
     }]));
 
     let root_key = location_key(file!(), line!(), column!());
-    let scene = MutableRecordingScene::new(active_hits.clone());
+    let scene = MutableRecordingScene::new(Rc::clone(&active_hits));
     let mut shell = AppShell::new(
         MutableRecordingRenderer::new(scene),
         root_key,
@@ -3175,7 +3197,7 @@ fn captured_gesture_cancels_when_original_targets_disappear() {
     *active_hits.borrow_mut() = vec![RecordingHitTarget {
         node_id: 2,
         consume: false,
-        events: rebound_target_events.clone(),
+        events: Rc::clone(&rebound_target_events),
         capture_path: vec![2],
     }];
 
@@ -3211,12 +3233,12 @@ fn captured_gesture_continues_on_render_supplied_ancestor_when_child_disappears(
     let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
         node_id: 1,
         consume: false,
-        events: child_events.clone(),
+        events: Rc::clone(&child_events),
         capture_path: vec![1, 99],
     }]));
 
     let root_key = location_key(file!(), line!(), column!());
-    let scene = MutableRecordingScene::new(active_hits.clone());
+    let scene = MutableRecordingScene::new(Rc::clone(&active_hits));
     let mut shell = AppShell::new(
         MutableRecordingRenderer::new(scene),
         root_key,
@@ -3244,13 +3266,13 @@ fn captured_gesture_continues_on_render_supplied_ancestor_when_child_disappears(
         RecordingHitTarget {
             node_id: 99,
             consume: false,
-            events: ancestor_events.clone(),
+            events: Rc::clone(&ancestor_events),
             capture_path: vec![99],
         },
         RecordingHitTarget {
             node_id: 2,
             consume: false,
-            events: unrelated_events.clone(),
+            events: Rc::clone(&unrelated_events),
             capture_path: vec![2],
         },
     ];
@@ -3287,13 +3309,13 @@ fn consumed_pointer_down_only_captures_targets_that_received_the_down_event() {
         RecordingHitTarget {
             node_id: 1,
             consume: true,
-            events: top_events.clone(),
+            events: Rc::clone(&top_events),
             capture_path: vec![1],
         },
         RecordingHitTarget {
             node_id: 2,
             consume: false,
-            events: lower_events.clone(),
+            events: Rc::clone(&lower_events),
             capture_path: vec![2],
         },
     ]));
@@ -3366,19 +3388,19 @@ fn captured_gesture_preserves_hit_order_when_paths_share_an_ancestor() {
         RecordingHitTarget {
             node_id: 1,
             consume: false,
-            events: first_child_events.clone(),
+            events: Rc::clone(&first_child_events),
             capture_path: vec![1, 99],
         },
         RecordingHitTarget {
             node_id: 2,
             consume: false,
-            events: second_child_events.clone(),
+            events: Rc::clone(&second_child_events),
             capture_path: vec![2, 99],
         },
     ]));
 
     let root_key = location_key(file!(), line!(), column!());
-    let scene = MutableRecordingScene::new(active_hits.clone());
+    let scene = MutableRecordingScene::new(Rc::clone(&active_hits));
     let mut shell = AppShell::new(
         MutableRecordingRenderer::new(scene),
         root_key,
@@ -3398,19 +3420,19 @@ fn captured_gesture_preserves_hit_order_when_paths_share_an_ancestor() {
         RecordingHitTarget {
             node_id: 1,
             consume: false,
-            events: first_child_events.clone(),
+            events: Rc::clone(&first_child_events),
             capture_path: vec![1, 99],
         },
         RecordingHitTarget {
             node_id: 2,
             consume: false,
-            events: second_child_events.clone(),
+            events: Rc::clone(&second_child_events),
             capture_path: vec![2, 99],
         },
         RecordingHitTarget {
             node_id: 99,
             consume: true,
-            events: shared_ancestor_events.clone(),
+            events: Rc::clone(&shared_ancestor_events),
             capture_path: vec![99],
         },
     ];
@@ -3458,12 +3480,12 @@ fn captured_gesture_release_reaches_ancestor_even_when_child_consumes() {
     let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
         node_id: 1,
         consume: true,
-        events: child_events.clone(),
+        events: Rc::clone(&child_events),
         capture_path: vec![1, 99],
     }]));
 
     let root_key = location_key(file!(), line!(), column!());
-    let scene = MutableRecordingScene::new(active_hits.clone());
+    let scene = MutableRecordingScene::new(Rc::clone(&active_hits));
     let mut shell = AppShell::new(
         MutableRecordingRenderer::new(scene),
         root_key,
@@ -3478,13 +3500,13 @@ fn captured_gesture_release_reaches_ancestor_even_when_child_consumes() {
         RecordingHitTarget {
             node_id: 1,
             consume: true,
-            events: child_events.clone(),
+            events: Rc::clone(&child_events),
             capture_path: vec![1, 99],
         },
         RecordingHitTarget {
             node_id: 99,
             consume: false,
-            events: ancestor_events.clone(),
+            events: Rc::clone(&ancestor_events),
             capture_path: vec![99],
         },
     ];
@@ -4047,8 +4069,7 @@ fn pointer_dispatch_uses_rendered_frame_handlers_when_recomposition_is_pending()
 fn draw_repass_updates_render_data_without_layout() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
@@ -4109,8 +4130,7 @@ fn draw_repass_updates_render_data_without_layout() {
 fn draw_state_reads_schedule_draw_repass_without_composition_read() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
@@ -4159,8 +4179,7 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
 fn stale_draw_observations_are_pruned_once_per_interval() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let mut shell = AppShell::new(
         ScopedUpdateCountingRenderer::with_visual_updates(
@@ -4194,8 +4213,7 @@ fn stale_draw_observations_are_pruned_once_per_interval() {
         "a redrawn frame before the interval does not walk the graph"
     );
 
-    shell.app.rebuilt_frames_since_observation_prune =
-        crate::shell_frame::OBSERVATION_PRUNE_INTERVAL - 1;
+    shell.app.rebuilt_frames_since_observation_prune = shell_frame::OBSERVATION_PRUNE_INTERVAL - 1;
     width_state.set(120.0);
     shell.update();
     assert!(
@@ -4212,8 +4230,7 @@ fn stale_draw_observations_are_pruned_once_per_interval() {
 fn draw_only_repass_uses_scoped_renderer_update() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
@@ -4275,8 +4292,7 @@ fn draw_only_repass_uses_scoped_renderer_update() {
 fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
@@ -4338,10 +4354,7 @@ fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
 const KEYED_PAGE_A_COLOR: Color = Color(0.9, 0.1, 0.5, 1.0);
 
 #[composable]
-fn keyed_page_switch_app(
-    tab: cranpose_core::MutableState<i32>,
-    width_state: cranpose_core::MutableState<f32>,
-) {
+fn keyed_page_switch_app(tab: MutableState<i32>, width_state: MutableState<f32>) {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         draw_observed_width_app(width_state);
         cranpose_core::with_key(&tab.get(), || {
@@ -4409,11 +4422,9 @@ fn graph_layer_contains_rect_color(
 fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let tab_holder: Rc<RefCell<Option<cranpose_core::MutableState<i32>>>> =
-        Rc::new(RefCell::new(None));
+    let tab_holder: Rc<RefCell<Option<MutableState<i32>>>> = Rc::new(RefCell::new(None));
     let tab_holder_for_app = Rc::clone(&tab_holder);
-    let width_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let width_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let width_holder_for_app = Rc::clone(&width_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
@@ -4645,8 +4656,7 @@ fn lazy_column_scroll_never_rebuilds_the_whole_scene() {
 fn graphics_layer_state_repass_does_not_recompose() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
@@ -4714,8 +4724,7 @@ fn graphics_layer_state_repass_does_not_recompose() {
 fn recomposed_graphics_layer_update_uses_scoped_renderer_update() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
@@ -4774,10 +4783,8 @@ fn recomposed_graphics_layer_update_uses_scoped_renderer_update() {
 fn recomposed_shader_effect_layers_use_scoped_renderer_update() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let time_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
-    let intensity_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let time_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
+    let intensity_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let time_holder_for_app = Rc::clone(&time_holder);
     let intensity_holder_for_app = Rc::clone(&intensity_holder);
     let rebuilds = Rc::new(Cell::new(0));
@@ -4848,10 +4855,8 @@ fn recomposed_shader_effect_layers_use_scoped_renderer_update() {
 fn lazy_shader_effect_layers_use_draw_repass_without_recomposition() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let time_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
-    let intensity_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
-        Rc::new(RefCell::new(None));
+    let time_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
+    let intensity_holder: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let time_holder_for_app = Rc::clone(&time_holder);
     let intensity_holder_for_app = Rc::clone(&intensity_holder);
     let rebuilds = Rc::new(Cell::new(0));
@@ -4928,8 +4933,7 @@ fn lazy_shader_effect_layers_use_draw_repass_without_recomposition() {
 fn graphics_layer_point_state_repass_does_not_recompose() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<Point>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<Point>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
@@ -4997,8 +5001,7 @@ fn graphics_layer_point_state_repass_does_not_recompose() {
 fn pointer_driven_graphics_layer_point_state_does_not_recompose() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
-    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<Point>>>> =
-        Rc::new(RefCell::new(None));
+    let state_holder: Rc<RefCell<Option<MutableState<Point>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, move || {
@@ -5176,7 +5179,7 @@ fn AppShellGrowerBox() {
     );
 }
 
-const ORDINARY_SIBLING_COLOR: cranpose_ui::Color = cranpose_ui::Color(0.9, 0.05, 0.55, 1.0);
+const ORDINARY_SIBLING_COLOR: Color = Color(0.9, 0.05, 0.55, 1.0);
 
 #[composable]
 fn AppShellOrdinaryColumnSiblings() {
@@ -5185,11 +5188,11 @@ fn AppShellOrdinaryColumnSiblings() {
         ColumnSpec::default(),
         move || {
             AppShellGrowerBox();
-            cranpose_ui::Box(
+            Box(
                 Modifier::empty()
-                    .size(cranpose_ui::Size::new(120.0, 24.0))
+                    .size(Size::new(120.0, 24.0))
                     .background(ORDINARY_SIBLING_COLOR),
-                cranpose_ui::BoxSpec::default(),
+                BoxSpec::default(),
                 || {},
             );
         },
@@ -5198,10 +5201,10 @@ fn AppShellOrdinaryColumnSiblings() {
 
 #[composable]
 fn AppShellSizeReactiveTopology() {
-    let size = rememberMutableStateOf(cranpose_ui::Size::default);
-    cranpose_ui::Box(
+    let size = rememberMutableStateOf(Size::default);
+    Box(
         Modifier::empty().fill_max_size().report_size_state(size),
-        cranpose_ui::BoxSpec::default(),
+        BoxSpec::default(),
         move || {
             if size.get().width < 700.0 {
                 Text(
@@ -5273,19 +5276,19 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
 
 #[composable]
 fn AppShellSelfReferentialSize() {
-    let size = rememberMutableStateOf(cranpose_ui::Size::default);
+    let size = rememberMutableStateOf(Size::default);
     let height = if size.get().height < 100.0 {
         200.0
     } else {
         50.0
     };
-    cranpose_ui::Box(
+    Box(
         Modifier::empty().fill_max_width().report_size_state(size),
-        cranpose_ui::BoxSpec::default(),
+        BoxSpec::default(),
         move || {
-            cranpose_ui::Box(
-                Modifier::empty().size(cranpose_ui::Size::new(80.0, height)),
-                cranpose_ui::BoxSpec::default(),
+            Box(
+                Modifier::empty().size(Size::new(80.0, height)),
+                BoxSpec::default(),
                 || {},
             );
         },
@@ -5335,7 +5338,7 @@ fn app_shell_clean_slot_scroll_probe() {
             CLEAN_SLOT_MEASURE_COUNT.with(|count| count.set(count.get() + 1));
             let width = constraints.max_width.max(constraints.min_width);
             let height = constraints.max_height.max(constraints.min_height);
-            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+            let nodes = scope.subcompose(SlotId::new(0), (), move || {
                 CLEAN_SLOT_COMPOSE_COUNT.with(|count| count.set(count.get() + 1));
                 let list_state = rememberLazyListState();
                 CLEAN_SLOT_LIST_STATE.with(|slot| {
@@ -5471,7 +5474,7 @@ fn app_shell_slot_reads_state_probe() {
         move |scope, constraints| {
             let width = constraints.max_width.max(constraints.min_width);
             let height = constraints.max_height.max(constraints.min_height);
-            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+            let nodes = scope.subcompose(SlotId::new(0), (), move || {
                 Text(
                     format!("slot value {}", value.get()),
                     Modifier::empty(),
@@ -5562,7 +5565,7 @@ fn app_shell_unkeyed_cell_slot_probe() {
             let height = constraints.max_height.max(constraints.min_height);
             let poison = UNKEYED_CELL.with(Cell::get);
             let mut placements = Vec::new();
-            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+            let nodes = scope.subcompose(SlotId::new(0), (), move || {
                 for row in 0..=poison.min(3) {
                     Text(
                         format!("poisoned row {row}"),
@@ -5580,7 +5583,7 @@ fn app_shell_unkeyed_cell_slot_probe() {
                     1,
                 ));
             }
-            let list_nodes = scope.subcompose(cranpose_core::SlotId::new(1), (), move || {
+            let list_nodes = scope.subcompose(SlotId::new(1), (), move || {
                 let list_state = rememberLazyListState();
                 CLEAN_SLOT_LIST_STATE.with(|slot| {
                     *slot.borrow_mut() = Some(list_state);
@@ -5659,7 +5662,7 @@ fn app_shell_keyed_measure_input_probe() {
         move |scope, constraints| {
             let width = constraints.max_width.max(constraints.min_width);
             let total_height = constraints.max_height.max(constraints.min_height);
-            let bar_nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+            let bar_nodes = scope.subcompose(SlotId::new(0), (), move || {
                 Box(
                     Modifier::empty().height(height.get()),
                     BoxSpec::default(),
@@ -5680,14 +5683,13 @@ fn app_shell_keyed_measure_input_probe() {
                 ));
             }
             let padding = bar_height;
-            let content_nodes =
-                scope.subcompose(cranpose_core::SlotId::new(1), padding, move || {
-                    Text(
-                        format!("content top pad {padding}"),
-                        Modifier::empty(),
-                        TextStyle::default(),
-                    );
-                });
+            let content_nodes = scope.subcompose(SlotId::new(1), padding, move || {
+                Text(
+                    format!("content top pad {padding}"),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+            });
             for node in content_nodes {
                 let placeable = scope.measure(
                     node,
@@ -5861,10 +5863,10 @@ fn a_horizontal_scroll_inside_a_lazy_item_still_moves_when_its_measurement_is_ca
 
 fn graph_scene_solid_rect_y(
     scene: &cranpose_render_common::graph_scene::Scene,
-    color: cranpose_ui::Color,
+    color: Color,
 ) -> Option<f32> {
-    fn brush_matches(brush: &cranpose_ui_graphics::Brush, color: cranpose_ui::Color) -> bool {
-        matches!(brush, cranpose_ui_graphics::Brush::Solid(c) if (c.0 - color.0).abs() < 0.01
+    fn brush_matches(brush: &Brush, color: Color) -> bool {
+        matches!(brush, Brush::Solid(c) if (c.0 - color.0).abs() < 0.01
             && (c.1 - color.1).abs() < 0.01
             && (c.2 - color.2).abs() < 0.01)
     }
@@ -5872,12 +5874,12 @@ fn graph_scene_solid_rect_y(
     fn walk(
         layer: &cranpose_render_common::graph::LayerNode,
         offset_y: f32,
-        color: cranpose_ui::Color,
+        color: Color,
     ) -> Option<f32> {
         let base = offset_y
             + layer
                 .transform_to_parent
-                .map_point(cranpose_ui_graphics::Point { x: 0.0, y: 0.0 })
+                .map_point(Point { x: 0.0, y: 0.0 })
                 .y
             + layer.content_offset.y;
         for child in &layer.children {
@@ -5890,10 +5892,10 @@ fn graph_scene_solid_rect_y(
                 cranpose_render_common::graph::RenderNode::Primitive(entry) => {
                     if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
                         match &draw.primitive {
-                            cranpose_ui_graphics::DrawPrimitive::Rect { rect, brush, .. }
-                            | cranpose_ui_graphics::DrawPrimitive::RoundRect {
-                                rect, brush, ..
-                            } if brush_matches(brush, color) => {
+                            DrawPrimitive::Rect { rect, brush, .. }
+                            | DrawPrimitive::RoundRect { rect, brush, .. }
+                                if brush_matches(brush, color) =>
+                            {
                                 return Some(base + rect.y);
                             }
                             _ => {}
@@ -5903,10 +5905,10 @@ fn graph_scene_solid_rect_y(
                 cranpose_render_common::graph::RenderNode::DrawRun(run) => {
                     for primitive in run.primitives() {
                         match &primitive {
-                            cranpose_ui_graphics::DrawPrimitive::Rect { rect, brush, .. }
-                            | cranpose_ui_graphics::DrawPrimitive::RoundRect {
-                                rect, brush, ..
-                            } if brush_matches(brush, color) => {
+                            DrawPrimitive::Rect { rect, brush, .. }
+                            | DrawPrimitive::RoundRect { rect, brush, .. }
+                                if brush_matches(brush, color) =>
+                            {
                                 return Some(base + rect.y);
                             }
                             _ => {}
@@ -6066,7 +6068,7 @@ fn graph_scene_text_y(
         let base = offset_y
             + layer
                 .transform_to_parent
-                .map_point(cranpose_ui_graphics::Point { x: 0.0, y: 0.0 })
+                .map_point(Point { x: 0.0, y: 0.0 })
                 .y
             + layer.content_offset.y;
         for child in &layer.children {
@@ -6396,7 +6398,7 @@ fn dev_overlay_fits_a_phone_width_viewport() {
             let started = index * 20_000_000;
             shell.record_presented_frame_for_test(started, started + 1_000_000);
         }
-        shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+        shell.debug_enter_app_context(request_render_invalidation);
         shell.update();
         overlay_texts
             .borrow()
@@ -6447,7 +6449,7 @@ fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
     shell.reset_fps_stats();
     shell.record_presented_frame_for_test(0, 1_000_000);
     shell.record_presented_frame_for_test(20_000_000, 21_000_000);
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
     let slow_overlay = overlay_texts
         .borrow()
@@ -6464,7 +6466,7 @@ fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
         let started = 20_000_000 + index * 4_000_000;
         shell.record_presented_frame_for_test(started, started + 1_000_000);
     }
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
     let cached_overlay = overlay_texts
         .borrow()
@@ -6477,9 +6479,8 @@ fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
     );
 
     overlay_texts.borrow_mut().clear();
-    shell.surfaces[0].dev_overlay_last_refresh =
-        Some(web_time::Instant::now() - Duration::from_millis(300));
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.surfaces[0].dev_overlay_last_refresh = Some(Instant::now() - Duration::from_millis(300));
+    shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
     let fast_overlay = overlay_texts
         .borrow()
@@ -7039,7 +7040,7 @@ fn layout_bounds_index_matches_cached_layout_tree() {
     let cached_tree_ptr = shell.surfaces[0]
         .layout_tree
         .as_ref()
-        .map(|tree| tree as *const cranpose_ui::LayoutTree)
+        .map(|tree| tree as *const LayoutTree)
         .expect("expected retained layout tree");
 
     let (root_id, root_bounds, left_leaf_id, left_leaf_bounds, right_id, right_bounds) = {
@@ -7079,7 +7080,7 @@ fn layout_bounds_index_matches_cached_layout_tree() {
         shell.surfaces[0]
             .layout_tree
             .as_ref()
-            .map(|tree| tree as *const cranpose_ui::LayoutTree),
+            .map(|tree| tree as *const LayoutTree),
         Some(cached_tree_ptr),
         "root_layout_size should reuse the retained layout tree cache",
     );
@@ -7093,7 +7094,7 @@ fn layout_bounds_index_matches_cached_layout_tree() {
         shell.surfaces[0]
             .layout_tree
             .as_ref()
-            .map(|tree| tree as *const cranpose_ui::LayoutTree),
+            .map(|tree| tree as *const LayoutTree),
         Some(cached_tree_ptr),
         "layout bound queries should not rebuild the layout tree",
     );
@@ -7645,7 +7646,7 @@ fn app_shell_demo_like_counter_tab() {
                                         1.0,
                                     ),
                                 ]),
-                                cranpose_ui::CornerRadii::uniform(24.0),
+                                CornerRadii::uniform(24.0),
                             );
                         })
                         .padding(20.0),
@@ -7667,7 +7668,7 @@ fn app_shell_demo_like_counter_tab() {
                                     cache.on_draw_behind(|scope| {
                                         scope.draw_round_rect(
                                             Brush::solid(Color(0.16, 0.18, 0.26, 0.95)),
-                                            cranpose_ui::CornerRadii::uniform(20.0),
+                                            CornerRadii::uniform(20.0),
                                         );
                                     });
                                 })
@@ -7685,7 +7686,7 @@ fn app_shell_demo_like_counter_tab() {
                                                 position,
                                                 120.0,
                                             ),
-                                            cranpose_ui::CornerRadii::uniform(20.0),
+                                            CornerRadii::uniform(20.0),
                                         );
                                     }
                                 })
@@ -7752,7 +7753,7 @@ fn app_shell_demo_like_counter_tab() {
                                                                 Color(0.2, 0.45, 0.9, 1.0),
                                                                 Color(0.15, 0.3, 0.65, 1.0),
                                                             ]),
-                                                            cranpose_ui::CornerRadii::uniform(16.0),
+                                                            CornerRadii::uniform(16.0),
                                                         );
                                                     });
                                                 })
@@ -8420,7 +8421,7 @@ fn app_shell_animated_draw_counter_tab() {
                 let phase = phase_state.value();
                 scope.draw_round_rect(
                     Brush::solid(Color(0.15 + phase * 0.2, 0.2, 0.35, 1.0)),
-                    cranpose_ui::CornerRadii::uniform(12.0),
+                    CornerRadii::uniform(12.0),
                 );
             }),
         ColumnSpec::default(),
@@ -8815,7 +8816,7 @@ fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<
             cranpose_render_common::graph::RenderNode::Primitive(entry) => {
                 if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node
                     && let DrawPrimitive::Rect {
-                        brush: cranpose_ui_graphics::Brush::Solid(color),
+                        brush: Brush::Solid(color),
                         ..
                     } = &draw.primitive
                 {
@@ -8825,7 +8826,7 @@ fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<
             cranpose_render_common::graph::RenderNode::DrawRun(run) => {
                 for primitive in run.primitives() {
                     if let DrawPrimitive::Rect {
-                        brush: cranpose_ui_graphics::Brush::Solid(color),
+                        brush: Brush::Solid(color),
                         ..
                     } = &primitive
                     {
@@ -9578,10 +9579,7 @@ fn headless_shell_many_tabs_precise_counter_click_updates_with_robot_click_order
     );
 }
 
-fn layout_box_at_path<'a>(
-    layout: &'a cranpose_ui::LayoutBox,
-    path: &[usize],
-) -> &'a cranpose_ui::LayoutBox {
+fn layout_box_at_path<'a>(layout: &'a LayoutBox, path: &[usize]) -> &'a LayoutBox {
     let mut current = layout;
     for &index in path {
         current = current
@@ -9592,7 +9590,7 @@ fn layout_box_at_path<'a>(
     current
 }
 
-fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_core::NodeId {
+fn node_id_at_path(layout: &LayoutBox, path: &[usize]) -> NodeId {
     layout_box_at_path(layout, path).node_id
 }
 
@@ -9872,10 +9870,10 @@ fn rotary_scene(targets: Vec<RecordingHitTarget>) -> RecordingScene {
 }
 
 fn rotary_target(
-    node_id: cranpose_core::NodeId,
+    node_id: NodeId,
     consume: bool,
     events: Rc<RefCell<Vec<PointerEvent>>>,
-    capture_path: Vec<cranpose_core::NodeId>,
+    capture_path: Vec<NodeId>,
 ) -> RecordingHitTarget {
     RecordingHitTarget {
         node_id,
@@ -9892,8 +9890,8 @@ fn rotary_scrolled_runs_capture_then_bubble_passes() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, false, child_events.clone(), vec![1, 99]),
-            rotary_target(99, false, ancestor_events.clone(), vec![99]),
+            rotary_target(1, false, Rc::clone(&child_events), vec![1, 99]),
+            rotary_target(99, false, Rc::clone(&ancestor_events), vec![99]),
         ],
         vec![1],
     );
@@ -9932,8 +9930,8 @@ fn rotary_capture_pass_runs_root_to_leaf() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, false, child_events.clone(), vec![1, 99]),
-            rotary_target(99, false, ancestor_events.clone(), vec![99]),
+            rotary_target(1, false, Rc::clone(&child_events), vec![1, 99]),
+            rotary_target(99, false, Rc::clone(&ancestor_events), vec![99]),
         ],
         vec![1],
     );
@@ -9967,8 +9965,8 @@ fn rotary_capture_consumption_stops_the_bubble_pass() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, false, child_events.clone(), vec![1, 99]),
-            rotary_target(99, true, ancestor_events.clone(), vec![99]),
+            rotary_target(1, false, Rc::clone(&child_events), vec![1, 99]),
+            rotary_target(99, true, Rc::clone(&ancestor_events), vec![99]),
         ],
         vec![1],
     );
@@ -9997,8 +9995,8 @@ fn rotary_bubble_consumption_stops_at_the_consuming_node() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, true, child_events.clone(), vec![1, 99]),
-            rotary_target(99, false, ancestor_events.clone(), vec![99]),
+            rotary_target(1, true, Rc::clone(&child_events), vec![1, 99]),
+            rotary_target(99, false, Rc::clone(&ancestor_events), vec![99]),
         ],
         vec![1],
     );
@@ -10024,7 +10022,7 @@ fn rotary_bubble_consumption_stops_at_the_consuming_node() {
 fn rotary_event_carries_its_payload_to_targets() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(1, true, Rc::clone(&events), vec![1])]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10044,7 +10042,7 @@ fn rotary_event_carries_its_payload_to_targets() {
 fn empty_rotary_events_are_dropped_before_dispatch() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(1, true, Rc::clone(&events), vec![1])]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10203,9 +10201,9 @@ fn a_frame_reports_moved_and_redrawn_content_only_when_it_changed() {
     while shell.frame_schedule().needs_update {
         shell.update();
     }
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
-    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.debug_enter_app_context(request_render_invalidation);
     let presented = shell.update();
     assert!(
         !presented.content_moved && !presented.content_redrawn,
@@ -10284,14 +10282,11 @@ fn the_shell_stores_the_frame_rate_preference_it_is_given() {
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, || {});
 
+    assert_eq!(shell.frame_rate_preference(), FrameRatePreference::Auto);
+    shell.set_frame_rate_preference(FrameRatePreference::Exact(60.0));
     assert_eq!(
         shell.frame_rate_preference(),
-        crate::FrameRatePreference::Auto
-    );
-    shell.set_frame_rate_preference(crate::FrameRatePreference::Exact(60.0));
-    assert_eq!(
-        shell.frame_rate_preference(),
-        crate::FrameRatePreference::Exact(60.0)
+        FrameRatePreference::Exact(60.0)
     );
 }
 
@@ -10800,12 +10795,9 @@ fn radio_keyboard_navigation_wraps_selects_and_uses_one_tab_stop() {
 fn focused_description<R>(shell: &mut AppShell<R>) -> Option<String>
 where
     R: Renderer,
-    R::Error: std::fmt::Debug,
+    R::Error: Debug,
 {
-    fn description_of(
-        node: &cranpose_ui::SemanticsNode,
-        node_id: cranpose_core::NodeId,
-    ) -> Option<String> {
+    fn description_of(node: &cranpose_ui::SemanticsNode, node_id: NodeId) -> Option<String> {
         if node.node_id == node_id {
             return node.description.clone();
         }
@@ -10841,7 +10833,7 @@ fn assert_focus_semantics_before_next_frame(check_revision: bool) {
     for focused in [Some(ids[0]), Some(ids[1]), None] {
         let before = shell.semantics_snapshot_revision();
         shell.debug_enter_app_context(|| {
-            cranpose_core::run_in_mutable_snapshot(|| {
+            run_in_mutable_snapshot(|| {
                 if let Some(target) = focused {
                     assert!(cranpose_ui::request_focus_from_platform(target));
                 } else {
@@ -10903,7 +10895,7 @@ fn closing_modal_publishes_restored_focus_in_the_same_frame() {
     let open = open_state.get().expect("modal state");
     for (shown, expected) in [(true, "Modal"), (false, "Opener")] {
         shell.debug_enter_app_context(|| {
-            cranpose_core::run_in_mutable_snapshot(|| open.set(shown)).expect("modal snapshot");
+            run_in_mutable_snapshot(|| open.set(shown)).expect("modal snapshot");
         });
         shell.update();
         assert!(
@@ -10931,7 +10923,7 @@ fn pointer_text_focus_is_published_to_accessibility() {
                 Modifier::empty()
                     .size(Size::new(200.0, 48.0))
                     .content_description("Notes"),
-                cranpose_ui::TextStyle::default(),
+                TextStyle::default(),
             );
         },
     );
@@ -11065,14 +11057,14 @@ fn arrow_keys_move_focus_inside_a_selectable_group_and_nowhere_else() {
 
 #[derive(Clone)]
 struct PointerIconHitTarget {
-    node_id: cranpose_core::NodeId,
+    node_id: NodeId,
     pointer_icon: Option<PointerIcon>,
 }
 
 impl HitTestTarget for PointerIconHitTarget {
     fn dispatch(&self, _event: PointerEvent) {}
 
-    fn node_id(&self) -> cranpose_core::NodeId {
+    fn node_id(&self) -> NodeId {
         self.node_id
     }
 
@@ -11095,7 +11087,7 @@ impl RenderScene for PointerIconScene {
         self.hits.borrow().clone()
     }
 
-    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+    fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
         self.hits
             .borrow()
             .iter()
@@ -11345,7 +11337,7 @@ fn a_finger_beside_a_small_control_presses_it_and_a_mouse_does_not() {
     });
     shell.update();
 
-    shell.set_pointer_source(cranpose_foundation::PointerSource::Touch);
+    shell.set_pointer_source(PointerSource::Touch);
     shell.set_cursor(125.0, 110.0);
     assert!(
         shell.pointer_pressed(),
@@ -11366,7 +11358,7 @@ fn a_finger_beside_a_small_control_presses_it_and_a_mouse_does_not() {
     shell.pointer_released();
     assert_eq!(presses.get(), 1);
 
-    shell.set_pointer_source(cranpose_foundation::PointerSource::Mouse);
+    shell.set_pointer_source(PointerSource::Mouse);
     shell.set_cursor(125.0, 110.0);
     assert!(!shell.pointer_pressed(), "a mouse keeps its exact point");
     shell.pointer_released();
@@ -11424,7 +11416,7 @@ fn a_finger_beside_a_small_control_in_a_scroll_container_presses_it_unless_a_sib
         );
     });
     shell.update();
-    shell.set_pointer_source(cranpose_foundation::PointerSource::Touch);
+    shell.set_pointer_source(PointerSource::Touch);
 
     shell.set_cursor(125.0, 110.0);
     assert!(shell.pointer_pressed());
@@ -11616,7 +11608,7 @@ impl Gate {
         }
     }
 
-    fn opened(&self) -> impl std::future::Future<Output = ()> + '_ {
+    fn opened(&self) -> impl Future<Output = ()> + '_ {
         std::future::poll_fn(move |context| {
             let mut state = self
                 .0

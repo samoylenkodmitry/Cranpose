@@ -53,10 +53,10 @@ enum Row {
 impl Row {
     fn content_type(&self) -> u64 {
         match self {
-            Row::Header(_) => 0,
-            Row::Switch { .. } => 1,
-            Row::Button { .. } => 2,
-            Row::Body(_) => 3,
+            Self::Header(_) => 0,
+            Self::Switch { .. } => 1,
+            Self::Button { .. } => 2,
+            Self::Body(_) => 3,
         }
     }
 }
@@ -148,10 +148,10 @@ impl WearState {
 
 #[cranpose::composable]
 pub fn wear_tab() {
-    let state = remember(|| Rc::new(RefCell::new(WearState::new()))).with(|value| value.clone());
+    let state = remember(|| Rc::new(RefCell::new(WearState::new()))).with(|value| Rc::clone(value));
     let list = rememberWearScalingListState(CentreAnchor::default());
 
-    let tick_state = state.clone();
+    let tick_state = Rc::clone(&state);
     LaunchedEffectAsync((), move |scope| {
         Box::pin(async move {
             let clock = scope.runtime().frame_clock();
@@ -172,7 +172,7 @@ pub fn wear_tab() {
         Modifier::empty().fill_max_size(),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
-            let state = state.clone();
+            let state = Rc::clone(&state);
             ScreenScaffold(
                 Modifier::empty()
                     .size(Size::new(WATCH, WATCH))
@@ -181,7 +181,7 @@ pub fn wear_tab() {
                 ScreenScaffoldSpec::default()
                     .indicator(ScrollIndicatorSpec::default().colors(colors())),
                 move || {
-                    let state = state.clone();
+                    let state = Rc::clone(&state);
                     WearScalingLazyColumn(
                         Modifier::empty().fill_max_size(),
                         list,
@@ -196,7 +196,7 @@ pub fn wear_tab() {
                                     .content_type(move |index: usize| types[index]),
                                 move |index| {
                                     let row = rows[index].clone();
-                                    let state = state.clone();
+                                    let state = Rc::clone(&state);
                                     match row {
                                         Row::Header(label) => {
                                             ListHeader(

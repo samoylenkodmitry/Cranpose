@@ -178,11 +178,11 @@ fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
 }
 
 fn render_scroll_indicator_lazy_list() -> (
-    crate::render_state::TestAppContextScope,
+    render_state::TestAppContextScope,
     Composition<MemoryApplier>,
     Rc<RefCell<Option<LazyListState>>>,
 ) {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let captured_state = Rc::new(RefCell::new(None));
 
@@ -304,7 +304,7 @@ fn StableKeyedCountingLazyList(
 }
 
 type RenderedCountingLazyList = (
-    crate::render_state::TestAppContextScope,
+    render_state::TestAppContextScope,
     Composition<MemoryApplier>,
     Rc<Cell<usize>>,
     Rc<RefCell<Option<LazyListState>>>,
@@ -313,7 +313,7 @@ type RenderedCountingLazyList = (
 fn render_counting_lazy_list_composable(
     mut build: impl FnMut(Rc<Cell<usize>>, Rc<RefCell<Option<LazyListState>>>) + 'static,
 ) -> RenderedCountingLazyList {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let item_invocations = Rc::new(Cell::new(0));
     let captured_state = Rc::new(RefCell::new(None));
     let mut composition = Composition::new(MemoryApplier::new());
@@ -669,7 +669,7 @@ fn SelectableScrolledLazyList(
 
 #[test]
 fn lazy_list_item_recomposes_on_state_change() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let label_state = MutableState::with_runtime(0u32, runtime);
@@ -720,7 +720,7 @@ fn lazy_list_item_recomposes_on_state_change() {
 fn a_state_read_in_a_row_of_a_lazy_item_recomposes_the_item() {
     // A row is inline: what its content reads belongs to the item around it,
     // which recomposes without a render of the composition's root.
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let label_state = MutableState::with_runtime(0u32, composition.runtime_handle());
 
@@ -773,7 +773,7 @@ fn a_state_read_in_a_row_of_a_lazy_item_recomposes_the_item() {
 
 #[test]
 fn a_state_read_in_a_column_inside_box_with_constraints_recomposes_its_content() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let label_state = MutableState::with_runtime(0u32, composition.runtime_handle());
 
@@ -839,7 +839,7 @@ fn ThemedLazyList(theme_state: MutableState<bool>) {
 
 #[test]
 fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let theme_state = MutableState::with_runtime(false, runtime);
@@ -872,9 +872,9 @@ fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
 
 #[test]
 fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let prepare_calls = Rc::new(Cell::new(0));
-    crate::text::set_text_measurer(CountingPreparedTextMeasurer::new(Rc::clone(&prepare_calls)));
+    set_text_measurer(CountingPreparedTextMeasurer::new(Rc::clone(&prepare_calls)));
 
     let item_invocations = Rc::new(Cell::new(0));
     let captured_state = Rc::new(RefCell::new(None));
@@ -1025,8 +1025,8 @@ fn large_forward_lazy_scroll_reuses_skipped_active_slots_in_same_measure_pass() 
 
 #[test]
 fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    crate::text::set_text_measurer(TallMultilineTextMeasurer);
+    let _app_context = render_state::app_context_test_scope();
+    set_text_measurer(TallMultilineTextMeasurer);
 
     let body = Rc::new(
         (0..48)
@@ -1072,7 +1072,7 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
 
 #[test]
 fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let captured_row_scroll = Rc::new(RefCell::new(None));
     composition
@@ -1116,7 +1116,7 @@ fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
 
 #[test]
 fn invalidated_cached_lazy_item_recomposes_instead_of_reusing_stale_content() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let item_invocations = Rc::new(Cell::new(0));
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
@@ -1160,7 +1160,7 @@ fn invalidated_cached_lazy_item_recomposes_instead_of_reusing_stale_content() {
 
 #[test]
 fn invalidated_cached_lazy_item_remeasures_when_text_height_shrinks() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let short_body_state = MutableState::with_runtime(false, runtime);
@@ -1202,7 +1202,7 @@ fn invalidated_cached_lazy_item_remeasures_when_text_height_shrinks() {
 }
 #[test]
 fn visible_lazy_item_infinite_transition_advances_after_measure_subcomposition() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     composition
@@ -1243,7 +1243,7 @@ fn visible_lazy_item_infinite_transition_advances_after_measure_subcomposition()
 
 #[test]
 fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_index = MutableState::with_runtime(usize::MAX, runtime);
@@ -1386,7 +1386,7 @@ fn GrowingLazyList(
 
 #[test]
 fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let item_count = MutableState::with_runtime(2usize, runtime);
@@ -1501,7 +1501,7 @@ fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
 
 #[test]
 fn scroll_to_item_updates_child_indicator_scope() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     let captured_state = Rc::new(RefCell::new(None));
@@ -1579,7 +1579,7 @@ fn GrowingRootChildLazyItemList(show_extra: MutableState<bool>) {
 
 #[test]
 fn recomposed_lazy_item_places_a_newly_emitted_root_child() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let show_extra = MutableState::with_runtime(false, runtime);
@@ -1659,7 +1659,7 @@ fn KeptRowsLazyList(
 
 #[test]
 fn a_row_kept_beyond_the_viewport_keeps_its_composition_and_follows_its_state() {
-    let _app_context = crate::render_state::app_context_test_scope();
+    let _app_context = render_state::app_context_test_scope();
     let compositions = Rc::new(RefCell::new(vec![0; KEPT_ROWS]));
     let remembers = Rc::new(RefCell::new(vec![0; KEPT_ROWS]));
     let captured_state = Rc::new(RefCell::new(None));

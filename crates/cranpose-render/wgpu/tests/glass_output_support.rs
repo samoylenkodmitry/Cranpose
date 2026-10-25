@@ -233,8 +233,7 @@ fn disjoint_glass_outputs_share_a_stage_without_changing_the_picture() {
         !support::differing_pixels(FRAME_WIDTH, &with_support.pixels, &plain.pixels).is_empty(),
         "the glass surfaces must visibly render over the patterned page"
     );
-    let jobs =
-        |stats: &cranpose_render_wgpu::RenderStatsSnapshot| stats.pass_count + stats.copy_count;
+    let jobs = |stats: &RenderStatsSnapshot| stats.pass_count + stats.copy_count;
     eprintln!(
         "glass stages {} -> {}, passes and copies {} -> {}",
         conservative_stats.stages,

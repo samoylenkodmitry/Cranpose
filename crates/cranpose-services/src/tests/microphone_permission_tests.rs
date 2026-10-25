@@ -75,7 +75,7 @@ fn the_platform_releases_the_audio_when_the_last_recording_lets_go() {
         prepared: AtomicUsize::new(0),
         finished: AtomicUsize::new(0),
     });
-    set_platform_microphone_access(Some(platform.clone()));
+    set_platform_microphone_access(Some(Arc::<Counted>::clone(&platform)));
     let first = prepare_microphone().expect("ready");
     let second = prepare_microphone().expect("ready");
     assert_eq!(platform.prepared.load(Ordering::SeqCst), 2);
@@ -115,7 +115,7 @@ fn preparing_reports_why_the_platform_cannot_record() {
 fn reading_never_asks_and_asking_is_explicit() {
     let _guard = crate::registry::test_service_guard();
     let platform = Platform::with(MicrophonePermission::NotAsked);
-    set_platform_microphone_access(Some(platform.clone()));
+    set_platform_microphone_access(Some(Arc::<Platform>::clone(&platform)));
     assert_eq!(microphone_permission(), MicrophonePermission::NotAsked);
     let observer = observe_microphone_permission(|_| {});
     assert_eq!(platform.requests.load(Ordering::SeqCst), 0);
@@ -129,7 +129,7 @@ fn reading_never_asks_and_asking_is_explicit() {
 fn only_a_prompt_that_can_still_show_is_requested() {
     let _guard = crate::registry::test_service_guard();
     let platform = Platform::with(MicrophonePermission::Denied);
-    set_platform_microphone_access(Some(platform.clone()));
+    set_platform_microphone_access(Some(Arc::<Platform>::clone(&platform)));
     request_microphone_permission();
     assert_eq!(platform.requests.load(Ordering::SeqCst), 1);
     for permission in [MicrophonePermission::Granted, MicrophonePermission::Blocked] {
@@ -146,7 +146,7 @@ fn only_a_prompt_that_can_still_show_is_requested() {
 fn observers_see_the_permission_at_once_and_each_answer() {
     let _guard = crate::registry::test_service_guard();
     let platform = Platform::with(MicrophonePermission::NotAsked);
-    set_platform_microphone_access(Some(platform.clone()));
+    set_platform_microphone_access(Some(Arc::<Platform>::clone(&platform)));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let observer = {
         let seen = Arc::clone(&seen);

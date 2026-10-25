@@ -1321,14 +1321,14 @@ pub fn parse_slider_value(text: &str) -> Option<f32> {
 /// Scroll down by dragging from `from_y` to `to_y` at `center_x`.
 pub fn scroll_down(robot: &cranpose::Robot, center_x: f32, from_y: f32, to_y: f32) {
     let _ = robot.drag(center_x, from_y, center_x, to_y);
-    std::thread::sleep(std::time::Duration::from_millis(180));
+    std::thread::sleep(Duration::from_millis(180));
     let _ = robot.wait_for_idle();
 }
 
 /// Scroll up by dragging from `from_y` to `to_y` at `center_x`.
 pub fn scroll_up(robot: &cranpose::Robot, center_x: f32, from_y: f32, to_y: f32) {
     let _ = robot.drag(center_x, from_y, center_x, to_y);
-    std::thread::sleep(std::time::Duration::from_millis(180));
+    std::thread::sleep(Duration::from_millis(180));
     let _ = robot.wait_for_idle();
 }
 
@@ -1356,7 +1356,7 @@ fn scroll_toward_y(robot: &cranpose::Robot, y: f32, cfg: ScrollConfig) {
         let target_y = (cfg.up_from_y + distance).min(cfg.up_to_y);
         let _ = robot.drag(cfg.center_x, cfg.up_from_y, cfg.center_x, target_y);
     }
-    std::thread::sleep(std::time::Duration::from_millis(140));
+    std::thread::sleep(Duration::from_millis(140));
     let _ = robot.wait_for_idle();
 }
 
@@ -1458,7 +1458,7 @@ pub fn set_slider_fraction(
     let left_x = x + 2.0;
     let target_x = x + slider_width * fraction.clamp(0.0, 1.0);
     let _ = robot.drag(left_x, slider_y, target_x, slider_y);
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    std::thread::sleep(Duration::from_millis(120));
     let _ = robot.wait_for_idle();
     find_text_by_prefix_in_semantics(robot, prefix)
         .and_then(|(_, _, _, _, t)| parse_slider_value(&t))

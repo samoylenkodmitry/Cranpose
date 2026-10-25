@@ -24,10 +24,10 @@ const BAND_TOP: f32 = 8.0;
 const BAND_BOTTOM: f32 = 22.0;
 const TOLERANCE: f32 = 3.0;
 const TABS: [(&str, &str); 4] = [
-    (cranpose::liquid::icons::STAR, FIRST),
-    (cranpose::liquid::icons::LIST_OUTLINE, "Library"),
-    (cranpose::liquid::icons::SCHEDULE, "Recent"),
-    (cranpose::liquid::icons::ACCOUNT_CIRCLE, LAST),
+    (icons::STAR, FIRST),
+    (icons::LIST_OUTLINE, "Library"),
+    (icons::SCHEDULE, "Recent"),
+    (icons::ACCOUNT_CIRCLE, LAST),
 ];
 
 type Bounds = (f32, f32, f32, f32);

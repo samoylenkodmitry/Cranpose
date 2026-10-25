@@ -89,7 +89,7 @@ fn event_is_copy_and_allocation_free() {
     fn assert_copy<T: Copy>() {}
     assert_copy::<RotaryScrollEvent>();
     assert_eq!(
-        std::mem::size_of::<RotaryScrollEvent>(),
-        std::mem::size_of::<f32>() * 2 + std::mem::size_of::<u64>()
+        size_of::<RotaryScrollEvent>(),
+        size_of::<f32>() * 2 + size_of::<u64>()
     );
 }

@@ -84,9 +84,9 @@ where
     ) -> bool {
         let capture_paths = hits
             .iter()
-            .map(cranpose_render_common::HitTestTarget::capture_path)
+            .map(HitTestTarget::capture_path)
             .collect::<Vec<_>>();
-        let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
+        let targets = hit_path_tracker::dispatch_order_for_paths(&capture_paths)
             .into_iter()
             .filter_map(|node_id| self.surface().renderer.scene().find_target(node_id))
             .collect::<Vec<_>>();
@@ -186,10 +186,7 @@ where
         } else {
             self.surface().renderer.scene().hit_test(x, y)
         };
-        let new_ids: Vec<NodeId> = hits
-            .iter()
-            .map(cranpose_render_common::HitTestTarget::node_id)
-            .collect();
+        let new_ids: Vec<NodeId> = hits.iter().map(HitTestTarget::node_id).collect();
 
         let pos = Point { x, y };
         let previously_hovered = self.surface().hovered_nodes.clone();
@@ -847,7 +844,7 @@ where
     /// ended up scrolling backwards and never delivering rotary at all: the
     /// policy lived in the desktop event loop, and the second host that grew a
     /// wheel reimplemented the parts of it that were obvious from the outside.
-    pub fn wheel_scrolled(&mut self, wheel: crate::WheelScroll) -> bool {
+    pub fn wheel_scrolled(&mut self, wheel: WheelScroll) -> bool {
         if self.inspector_scroll(wheel.delta.y) {
             return true;
         }
@@ -1072,7 +1069,7 @@ where
         {
             let path = target.capture_path();
             if !path.is_empty() {
-                return crate::hit_path_tracker::dispatch_order_for_paths(&[path]);
+                return hit_path_tracker::dispatch_order_for_paths(&[path]);
             }
         }
 
@@ -1086,9 +1083,9 @@ where
         }
         let capture_paths = hits
             .iter()
-            .map(cranpose_render_common::HitTestTarget::capture_path)
+            .map(HitTestTarget::capture_path)
             .collect::<Vec<_>>();
-        crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
+        hit_path_tracker::dispatch_order_for_paths(&capture_paths)
     }
 
     /// Cancels any active gesture, dispatching Cancel events to cached targets.
@@ -1301,7 +1298,7 @@ where
 
     fn note_focus_moved_by_keyboard(&mut self, keyboard: bool) {
         if cranpose_ui::set_keyboard_focus_visible(keyboard) {
-            cranpose_ui::request_render_invalidation();
+            request_render_invalidation();
             self.mark_dirty();
         }
     }
@@ -1432,7 +1429,7 @@ where
         handled
     }
 
-    fn key_event_root(&self) -> Option<cranpose_core::NodeId> {
+    fn key_event_root(&self) -> Option<NodeId> {
         self.surface()
             .modal_focus
             .last()
@@ -1723,7 +1720,7 @@ where
     /// Returns a snapshot of the focused text field's editable state for
     /// platform IMEs (text, selection and composition in UTF-8 bytes), or
     /// `None` when this surface has no focused text field.
-    pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
+    pub fn ime_editor_state(&mut self) -> Option<ImeEditorState> {
         let _app_context = self.shell.app.app_context.enter_scope();
         self.receives_focused_input()
             .then(cranpose_ui::text_field_focus::focused_editor_state)
@@ -1745,7 +1742,7 @@ where
     /// Window bounds of the focused field in logical pixels, for platforms
     /// that place a native editor over it, or `None` when this surface has
     /// no focused text field that has been laid out.
-    pub fn ime_field_bounds(&mut self) -> Option<cranpose_ui_graphics::Rect> {
+    pub fn ime_field_bounds(&mut self) -> Option<Rect> {
         let _app_context = self.shell.app.app_context.enter_scope();
         self.receives_focused_input()
             .then(cranpose_ui::text_field_focus::focused_field_bounds)
@@ -2104,7 +2101,7 @@ where
     }
 
     /// Primary-surface form of [`SurfaceMut::wheel_scrolled`].
-    pub fn wheel_scrolled(&mut self, wheel: crate::WheelScroll) -> bool {
+    pub fn wheel_scrolled(&mut self, wheel: WheelScroll) -> bool {
         self.primary().wheel_scrolled(wheel)
     }
 
@@ -2170,10 +2167,7 @@ where
     /// or when text-field focus is cleared or goes stale (`hide_keyboard`).
     /// Platform runtimes with an on-screen keyboard (Android, iOS) call this
     /// once after creating the shell.
-    pub fn set_platform_text_input(
-        &mut self,
-        handler: Rc<dyn cranpose_ui::PlatformTextInputHandler>,
-    ) {
+    pub fn set_platform_text_input(&mut self, handler: Rc<dyn PlatformTextInputHandler>) {
         self.primary().set_platform_text_input(handler);
     }
 
@@ -2234,7 +2228,7 @@ where
     }
 
     /// Primary-surface form of [`SurfaceMut::ime_editor_state`].
-    pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
+    pub fn ime_editor_state(&mut self) -> Option<ImeEditorState> {
         self.primary().ime_editor_state()
     }
 
@@ -2246,7 +2240,7 @@ where
     }
 
     /// Primary-surface form of [`SurfaceMut::ime_field_bounds`].
-    pub fn ime_field_bounds(&mut self) -> Option<cranpose_ui_graphics::Rect> {
+    pub fn ime_field_bounds(&mut self) -> Option<Rect> {
         self.primary().ime_field_bounds()
     }
 

@@ -42,17 +42,17 @@ impl Form {
         let second = FocusRequester::new();
         let actions = Rc::new(RefCell::new(Vec::new()));
         let (content_first, content_second, content_actions) =
-            (first.clone(), second.clone(), actions.clone());
+            (first.clone(), second.clone(), Rc::clone(&actions));
         let (mut shell, keyboard) = shell_with_keyboard(move || {
             let (first, second, actions) = (
                 content_first.clone(),
                 content_second.clone(),
-                content_actions.clone(),
+                Rc::clone(&content_actions),
             );
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 let state = remember(|| TextFieldState::new("ab")).with(|state| *state);
                 let other = remember(|| TextFieldState::new("")).with(|state| *state);
-                let actions = actions.clone();
+                let actions = Rc::clone(&actions);
                 let on_keyboard_action = (handler != Handler::None).then(|| {
                     KeyboardActionHandler::new(move |scope| {
                         actions.borrow_mut().push(scope.action());

@@ -18,7 +18,7 @@ impl SlotTable {
     pub(in crate::slot) fn subtree_restore_ready(
         &self,
         cursor: ChildCursor,
-        key: super::GroupKey,
+        key: GroupKey,
         subtree: &DetachedSubtree,
     ) -> bool {
         if !self.child_cursor_boundary_is_valid(cursor) {

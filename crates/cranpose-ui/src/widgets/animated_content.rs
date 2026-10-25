@@ -156,7 +156,7 @@ struct Entry<T> {
     motion: Rc<EntryMotion>,
 }
 
-type ContentFn<T> = std::boxed::Box<dyn FnMut(T)>;
+type ContentFn<T> = Box<dyn FnMut(T)>;
 
 struct ContentState<T> {
     runtime: RuntimeHandle,
@@ -476,7 +476,7 @@ fn animated_content<T, F>(
         StateHandle(Rc::new(ContentState::<T>::new(runtime)))
     })
     .with(StateHandle::clone);
-    *state.0.content.borrow_mut() = Some(std::boxed::Box::new(content));
+    *state.0.content.borrow_mut() = Some(Box::new(content));
     state
         .0
         .sync(&target_state, seek.as_ref(), transition_spec, same);

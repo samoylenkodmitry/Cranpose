@@ -160,7 +160,7 @@ fn test_items_slice() {
     let mut content = LazyListIntervalContent::new();
     let data = vec!["Apple", "Banana", "Cherry"];
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_slice(&data, move |item: &&str| {
         items_clone.borrow_mut().push((*item).to_string());
@@ -185,7 +185,7 @@ fn test_items_indexed() {
         "Cherry".to_string(),
     ];
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_indexed(data, move |index, item: &String| {
         items_clone.borrow_mut().push((index, item.clone()));
@@ -213,7 +213,7 @@ fn test_items_indexed_slice() {
     let mut content = LazyListIntervalContent::new();
     let data = vec!["Apple", "Banana", "Cherry"];
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_indexed(data.as_slice(), move |index, item: &&str| {
         items_clone.borrow_mut().push((index, (*item).to_string()));
@@ -241,7 +241,7 @@ fn test_items_slice_rc() {
     let mut content = LazyListIntervalContent::new();
     let data: Rc<[String]> = Rc::from(vec!["Apple".into(), "Banana".into()]);
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_slice_rc(Rc::clone(&data), move |item: &String| {
         items_clone.borrow_mut().push(item.clone());
@@ -262,7 +262,7 @@ fn test_items_indexed_rc() {
     let mut content = LazyListIntervalContent::new();
     let data: Rc<[String]> = Rc::from(vec!["Apple".into(), "Banana".into()]);
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_indexed_rc(Rc::clone(&data), move |index, item: &String| {
         items_clone.borrow_mut().push((index, item.clone()));
@@ -286,7 +286,7 @@ fn test_items_with_provider() {
     let mut content = LazyListIntervalContent::new();
     let data = ["Apple", "Banana", "Cherry"];
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_with_provider(
         data.len(),
@@ -311,7 +311,7 @@ fn test_items_indexed_with_provider() {
     let mut content = LazyListIntervalContent::new();
     let data = ["Apple", "Banana", "Cherry"];
     let items_visited = Rc::new(RefCell::new(Vec::new()));
-    let items_clone = items_visited.clone();
+    let items_clone = Rc::clone(&items_visited);
 
     content.items_indexed_with_provider(
         data.len(),

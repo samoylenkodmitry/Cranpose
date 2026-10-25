@@ -80,6 +80,6 @@ fn a_glyph_past_the_compact_form_has_no_run() {
 
 #[test]
 fn a_compact_glyph_takes_sixteen_bytes() {
-    assert_eq!(std::mem::size_of::<RunGlyph>(), 16);
-    assert!(std::mem::size_of::<SoftwareGlyphAtlasPlacement>() >= 64);
+    assert_eq!(size_of::<RunGlyph>(), 16);
+    assert!(size_of::<SoftwareGlyphAtlasPlacement>() >= 64);
 }

@@ -74,7 +74,7 @@ fn responder_identity_equality() {
 #[test]
 fn responder_forwards_request() {
     let seen: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
-    let seen2 = seen.clone();
+    let seen2 = Rc::clone(&seen);
     let r = BringIntoViewResponder::new(move |caret: Rect, ime: f32| {
         seen2.set(Some((caret.y, ime)));
     });

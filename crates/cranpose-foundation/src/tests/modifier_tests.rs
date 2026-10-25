@@ -104,7 +104,7 @@ impl ModifierNodeElement for LoggingElement {
     fn create(&self) -> Self::Node {
         LoggingNode {
             id: self.id,
-            log: self.log.clone(),
+            log: Rc::clone(&self.log),
             value: self.value,
             state: NodeState::new(),
         }
@@ -134,12 +134,12 @@ fn chain_attaches_updates_and_detaches_nodes() {
         modifier_element(LoggingElement {
             id: "a",
             value: 1,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
         modifier_element(LoggingElement {
             id: "b",
             value: 2,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
     ];
     chain.update_from_slice(&initial, &mut context);
@@ -154,12 +154,12 @@ fn chain_attaches_updates_and_detaches_nodes() {
         modifier_element(LoggingElement {
             id: "a",
             value: 7,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
         modifier_element(LoggingElement {
             id: "b",
             value: 9,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
     ];
     chain.update_from_slice(&updated, &mut context);
@@ -172,7 +172,7 @@ fn chain_attaches_updates_and_detaches_nodes() {
     let trimmed = vec![modifier_element(LoggingElement {
         id: "a",
         value: 11,
-        log: log.clone(),
+        log: Rc::clone(&log),
     })];
     chain.update_from_slice(&trimmed, &mut context);
     assert_eq!(chain.len(), 1);
@@ -198,12 +198,12 @@ fn chain_reuses_nodes_when_reordered() {
         modifier_element(LoggingElement {
             id: "a",
             value: 1,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
         modifier_element(LoggingElement {
             id: "b",
             value: 2,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
     ];
     chain.update_from_slice(&initial, &mut context);
@@ -213,12 +213,12 @@ fn chain_reuses_nodes_when_reordered() {
         modifier_element(LoggingElement {
             id: "b",
             value: 5,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
         modifier_element(LoggingElement {
             id: "a",
             value: 3,
-            log: log.clone(),
+            log: Rc::clone(&log),
         }),
     ];
     chain.update_from_slice(&reordered, &mut context);
@@ -289,7 +289,7 @@ fn element_equality_controls_node_reuse() {
     let updates = Rc::new(Cell::new(0));
     let initial = vec![modifier_element(EqualityElement {
         value: 1,
-        updates: updates.clone(),
+        updates: Rc::clone(&updates),
     })];
     chain.update_from_slice(&initial, &mut context);
     let first_ptr = {
@@ -300,7 +300,7 @@ fn element_equality_controls_node_reuse() {
 
     let same = vec![modifier_element(EqualityElement {
         value: 1,
-        updates: updates.clone(),
+        updates: Rc::clone(&updates),
     })];
     chain.update_from_slice(&same, &mut context);
     let reused_ptr = {
@@ -315,7 +315,7 @@ fn element_equality_controls_node_reuse() {
 
     let different = vec![modifier_element(EqualityElement {
         value: 2,
-        updates: updates.clone(),
+        updates: Rc::clone(&updates),
     })];
     chain.update_from_slice(&different, &mut context);
     let updated_ptr = {
@@ -346,11 +346,11 @@ fn an_element_of_the_same_type_updates_the_node_in_its_place() {
     let initial = vec![
         modifier_element(EqualityElement {
             value: 1,
-            updates: updates.clone(),
+            updates: Rc::clone(&updates),
         }),
         modifier_element(EqualityElement {
             value: 2,
-            updates: updates.clone(),
+            updates: Rc::clone(&updates),
         }),
     ];
     chain.update_from_slice(&initial, &mut context);
@@ -363,11 +363,11 @@ fn an_element_of_the_same_type_updates_the_node_in_its_place() {
     let shifted = vec![
         modifier_element(EqualityElement {
             value: 2,
-            updates: updates.clone(),
+            updates: Rc::clone(&updates),
         }),
         modifier_element(EqualityElement {
             value: 3,
-            updates: updates.clone(),
+            updates: Rc::clone(&updates),
         }),
     ];
     chain.update_from_slice(&shifted, &mut context);
@@ -537,11 +537,11 @@ impl AnyModifierElement for DirectElement {
         match self.kind {
             DirectNodeKind::A => Rc::new(RefCell::new(DirectNodeA {
                 state: NodeState::new(),
-                log: self.log.clone(),
+                log: Rc::clone(&self.log),
             })),
             DirectNodeKind::B => Rc::new(RefCell::new(DirectNodeB {
                 state: NodeState::new(),
-                log: self.log.clone(),
+                log: Rc::clone(&self.log),
             })),
         }
     }
@@ -596,7 +596,7 @@ impl AnyModifierElement for DirectElement {
         None
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -611,7 +611,7 @@ fn node_type_mismatch_recreates_entry_instead_of_updating_wrong_node() {
     let first: Vec<DynModifierElement> = vec![Rc::new(DirectElement::new(
         DirectNodeKind::A,
         shared_element_type,
-        log.clone(),
+        Rc::clone(&log),
     ))];
     chain.update_from_slice(&first, &mut context);
     assert!(chain.node::<DirectNodeA>(0).is_some());
@@ -620,7 +620,7 @@ fn node_type_mismatch_recreates_entry_instead_of_updating_wrong_node() {
     let second: Vec<DynModifierElement> = vec![Rc::new(DirectElement::new(
         DirectNodeKind::B,
         shared_element_type,
-        log.clone(),
+        Rc::clone(&log),
     ))];
     chain.update_from_slice(&second, &mut context);
 
@@ -731,7 +731,7 @@ fn basic_context_records_invalidations_and_updates() {
     let attaches = Rc::new(Cell::new(0));
 
     let elements = vec![modifier_element(InvalidationElement {
-        attach_count: attaches.clone(),
+        attach_count: Rc::clone(&attaches),
     })];
     chain.update_from_slice(&elements, &mut context);
 
@@ -762,7 +762,7 @@ fn basic_context_records_invalidations_and_updates() {
 
     context.clear_invalidations();
     let elements = vec![modifier_element(InvalidationElement {
-        attach_count: attaches.clone(),
+        attach_count: Rc::clone(&attaches),
     })];
     chain.update_from_slice(&elements, &mut context);
     assert_eq!(attaches.get(), 2);
@@ -1559,7 +1559,7 @@ fn an_element_updated_in_place_keeps_the_chain_linked() {
             modifier_element(TestLayoutElement),
             modifier_element(EqualityElement {
                 value,
-                updates: updates.clone(),
+                updates: Rc::clone(&updates),
             }),
             modifier_element(TestDrawElement),
         ]
@@ -1845,7 +1845,7 @@ fn walking_a_chain_backward_visits_every_node_in_reverse_order() {
                 modifier_element(LoggingElement {
                     id,
                     value: index as i32,
-                    log: log.clone(),
+                    log: Rc::clone(&log),
                 })
             })
             .collect::<Vec<_>>(),
@@ -1873,7 +1873,7 @@ fn a_chain_updated_from_a_reference_iterator_matches_one_updated_from_a_slice() 
             modifier_element(LoggingElement {
                 id,
                 value: 1,
-                log: log.clone(),
+                log: Rc::clone(&log),
             })
         })
         .collect::<Vec<_>>();
@@ -1902,7 +1902,7 @@ fn descendants_and_ancestors_walk_the_same_chain_from_opposite_ends() {
                 modifier_element(LoggingElement {
                     id,
                     value: 0,
-                    log: log.clone(),
+                    log: Rc::clone(&log),
                 })
             })
             .collect::<Vec<_>>(),

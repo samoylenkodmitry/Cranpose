@@ -2367,17 +2367,17 @@ struct AbsOrigin {
 }
 
 impl AbsOrigin {
-    const ROOT: AbsOrigin = AbsOrigin {
+    const ROOT: Self = Self {
         content_origin: Point { x: 0.0, y: 0.0 },
         window_transform: ProjectiveTransform::identity(),
     };
 
-    fn children_of(self, layer: &LayerNode) -> AbsOrigin {
+    fn children_of(self, layer: &LayerNode) -> Self {
         let top_left = Point {
             x: self.content_origin.x + layer.origin_in_parent.x,
             y: self.content_origin.y + layer.origin_in_parent.y,
         };
-        AbsOrigin {
+        Self {
             content_origin: Point {
                 x: self.content_origin.x + layer.origin_in_parent.x + layer.content_offset.x,
                 y: self.content_origin.y + layer.origin_in_parent.y + layer.content_offset.y,
@@ -2826,7 +2826,7 @@ impl<'a> GroupedDraws<'a> {
                 .layer
                 .map(crate::layer_composition::local_content_layer_for)
                 .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some())
-                .map(std::borrow::Cow::into_owned),
+                .map(Cow::into_owned),
         }
     }
 
