@@ -20,6 +20,13 @@
 # that norm.
 max_cyclomatic = 20
 
+# Lines of code (rust-code-analysis `ploc`: lines with code, not blank or
+# comment-only) above this, in a function the diff adds or modifies, fails
+# the gate unless the function was already at least that long. Cyclomatic
+# complexity misses long straight functions; clippy's `too_many_lines` uses
+# the same 100 in clippy.toml, and its budget counts how many there are.
+max_function_lines = 100
+
 [duplication]
 # A cloned block at or above this many lines fails the gate when at least one
 # copy falls inside the diff -- matches AGENTS.md's "duplicated code (10+

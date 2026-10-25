@@ -106,6 +106,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just duplication-gate
 
+      - name: Check the source budgets
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just source-budgets
+
       - name: Check the generated modifier matrix is current
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just twin-matrix-check

@@ -2862,6 +2862,11 @@ fn functions_in_sibling_functions_are_both_reported() {
     assert_eq!(names, BTreeSet::from(["a".to_owned(), "b".to_owned()]));
 }
 
+const LIMITS: complexity_gate::Limits = complexity_gate::Limits {
+    max_cyclomatic: 20,
+    max_function_lines: 100,
+};
+
 fn function_metric(
     name: &str,
     start: usize,
@@ -2873,6 +2878,14 @@ fn function_metric(
         start: Some(start),
         end: Some(end),
         cyclomatic: Some(cyclomatic),
+        lines: Some(5),
+    }
+}
+
+fn straight_function(name: &str, end: usize, lines: i64) -> complexity_gate::FunctionMetric {
+    complexity_gate::FunctionMetric {
+        lines: Some(lines),
+        ..function_metric(name, 1, end, 1)
     }
 }
 
@@ -2888,7 +2901,7 @@ fn complexity_find_violations_flags_only_functions_the_diff_touches() {
         ],
     )]);
     let violations =
-        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20);
+        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), LIMITS);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].contains("touched_and_complex"));
     assert!(violations[0].contains("is new at 25"));
@@ -2902,7 +2915,7 @@ fn complexity_find_violations_no_violations_when_nothing_over_the_limit() {
         vec![function_metric("fine", 1, 10, 5)],
     )]);
     assert_eq!(
-        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20),
+        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), LIMITS),
         Vec::<String>::new()
     );
 }
@@ -2915,7 +2928,7 @@ fn complexity_find_violations_untouched_file_contributes_no_violations() {
         vec![function_metric("huge", 1, 500, 500)],
     )]);
     assert_eq!(
-        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20),
+        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), LIMITS),
         Vec::<String>::new()
     );
 }
@@ -2932,7 +2945,7 @@ fn complexity_find_violations_already_over_limit_function_untouched_by_a_real_ed
         vec![function_metric("run", 1, 305, 174)],
     )]);
     assert_eq!(
-        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20),
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS),
         Vec::<String>::new()
     );
 }
@@ -2949,7 +2962,7 @@ fn complexity_find_violations_already_over_limit_function_made_simpler_passes() 
         vec![function_metric("run", 1, 305, 174)],
     )]);
     assert_eq!(
-        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20),
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS),
         Vec::<String>::new()
     );
 }
@@ -2965,7 +2978,8 @@ fn complexity_find_violations_already_over_limit_function_made_worse_still_trips
         "src/lib.rs".to_owned(),
         vec![function_metric("run", 1, 305, 174)],
     )]);
-    let violations = complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+    let violations =
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].contains("was 174, is now 180"));
 }
@@ -2981,7 +2995,8 @@ fn complexity_find_violations_under_the_limit_before_and_over_after_still_trips_
         "src/lib.rs".to_owned(),
         vec![function_metric("f", 1, 18, 18)],
     )]);
-    let violations = complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+    let violations =
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].contains("was 18, is now 25"));
 }
@@ -2994,7 +3009,7 @@ fn complexity_find_violations_new_function_with_no_old_counterpart_is_judged_aga
         vec![function_metric("brand_new", 1, 20, 25)],
     )]);
     let violations =
-        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20);
+        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), LIMITS);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].contains("is new at 25"));
 }
@@ -3016,7 +3031,8 @@ fn complexity_find_violations_same_named_functions_are_matched_by_occurrence_ord
             function_metric("new", 9, 14, 18),
         ],
     )]);
-    let violations = complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+    let violations =
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].contains(":10-15"));
     assert!(violations[0].contains("was 18, is now 30"));
@@ -3033,28 +3049,80 @@ fn complexity_find_violations_anonymous_function_has_no_old_counterpart_even_if_
         "src/lib.rs".to_owned(),
         vec![function_metric("<anonymous>", 1, 5, 99)],
     )]);
-    let violations = complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+    let violations =
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS);
     assert_eq!(violations.len(), 1);
     assert!(violations[0].contains("is new at 25"));
 }
 
 #[test]
-fn load_max_cyclomatic_reads_the_configured_limit() {
-    let dir = unique_temp_dir();
-    let config_path = dir.join("code_quality_gates.toml");
-    fs::write(&config_path, "[complexity]\nmax_cyclomatic = 20\n").expect("write config");
+fn complexity_find_violations_long_straight_function_trips_the_lines_limit() {
+    let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 200)])]);
+    let new_functions = BTreeMap::from([(
+        "src/lib.rs".to_owned(),
+        vec![straight_function("setup", 160, 150)],
+    )]);
+    let violations =
+        complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), LIMITS);
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].contains("setup lines of code is new at 150 (limit 100)"));
+}
+
+#[test]
+fn complexity_find_violations_long_function_that_grew_trips_the_gate() {
+    let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(40, 41)])]);
+    let new_functions = BTreeMap::from([(
+        "src/lib.rs".to_owned(),
+        vec![straight_function("about_to_wait", 170, 160)],
+    )]);
+    let old_functions = BTreeMap::from([(
+        "src/lib.rs".to_owned(),
+        vec![straight_function("about_to_wait", 160, 150)],
+    )]);
+    let violations =
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS);
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].contains("was 150, is now 160"));
+}
+
+#[test]
+fn complexity_find_violations_long_function_that_did_not_grow_passes() {
+    let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(40, 41)])]);
+    let new_functions = BTreeMap::from([(
+        "src/lib.rs".to_owned(),
+        vec![straight_function("about_to_wait", 150, 140)],
+    )]);
+    let old_functions = BTreeMap::from([(
+        "src/lib.rs".to_owned(),
+        vec![straight_function("about_to_wait", 160, 150)],
+    )]);
     assert_eq!(
-        complexity_gate::load_max_cyclomatic(&config_path).expect("load succeeds"),
-        20
+        complexity_gate::find_violations(&ranges, &new_functions, &old_functions, LIMITS),
+        Vec::<String>::new()
     );
 }
 
 #[test]
-fn load_max_cyclomatic_fails_when_the_key_is_missing() {
+fn load_limits_reads_both_configured_limits() {
     let dir = unique_temp_dir();
     let config_path = dir.join("code_quality_gates.toml");
-    fs::write(&config_path, "[complexity]\n").expect("write config");
-    assert!(complexity_gate::load_max_cyclomatic(&config_path).is_err());
+    fs::write(
+        &config_path,
+        "[complexity]\nmax_cyclomatic = 20\nmax_function_lines = 100\n",
+    )
+    .expect("write config");
+    assert_eq!(
+        complexity_gate::load_limits(&config_path).expect("load succeeds"),
+        LIMITS
+    );
+}
+
+#[test]
+fn load_limits_fails_when_a_key_is_missing() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("code_quality_gates.toml");
+    fs::write(&config_path, "[complexity]\nmax_cyclomatic = 20\n").expect("write config");
+    assert!(complexity_gate::load_limits(&config_path).is_err());
 }
 
 fn duplicate(
