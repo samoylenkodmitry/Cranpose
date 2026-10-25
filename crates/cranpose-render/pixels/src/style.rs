@@ -1,11 +1,9 @@
 #[cfg(test)]
 pub(crate) use cranpose_render_common::graph::quad_bounds;
 #[cfg(test)]
-pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
+pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_quad;
 #[cfg(test)]
-pub(crate) use cranpose_render_common::layer_transform::{
-    apply_layer_affine_to_rect, apply_layer_to_quad,
-};
+pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::style_shared::{DrawPlacement, primitives_for_placement};
 pub(crate) use cranpose_render_common::style_shared::{
@@ -18,7 +16,7 @@ use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, ShadowPrimit
 use cranpose_ui_graphics::{CornerRadii, Rect};
 
 #[cfg(test)]
-use crate::scene::RasterScene;
+use crate::scene::{ImageDraw, RasterScene};
 
 #[cfg(test)]
 pub(crate) fn apply_draw_commands(
@@ -76,24 +74,23 @@ pub(crate) fn apply_draw_commands(
                 src_rect,
             } => {
                 let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
                 let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
                 let transformed = quad_bounds(quad);
                 let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
                 let combined_filter =
                     compose_color_filters(color_filter.as_ref(), layer.color_filter.as_ref());
-                scene.push_image_with_geometry(
-                    transformed,
-                    local_rect,
-                    quad,
+                scene.push_image(ImageDraw {
+                    rect: transformed,
+                    snap_anchor: None,
                     image,
-                    combined_alpha,
-                    combined_filter,
+                    alpha: combined_alpha,
+                    color_filter: combined_filter,
                     sampling,
                     clip,
+                    blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
                     src_rect,
-                    blend_mode.unwrap_or(BlendMode::SrcOver),
-                );
+                    transform: None,
+                });
             }
             DrawPrimitive::Shadow(shadow_primitive) => match shadow_primitive {
                 ShadowPrimitive::Drop {

@@ -590,25 +590,24 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         },
         ..Default::default()
     };
-    scene.push_text(
-        1,
-        Rect {
+    scene.push_text(TextDraw {
+        node_id: 1,
+        rect: Rect {
             x,
             y: 4.0,
             width: 30.0,
             height: 24.0,
         },
-        DrawnText::of(cranpose_ui::text::shared_plain_render_string("MM"), &style),
+        snap_anchor: None,
+        text: DrawnText::of(cranpose_ui::text::shared_plain_render_string("MM"), &style),
         color,
-        {
-            let hash = style.render_hash();
-            (Arc::new(style), hash)
-        },
-        18.0,
-        1.0,
-        TextLayoutOptions::default(),
-        None,
-    );
+        style_hash: style.render_hash(),
+        text_style: Arc::new(style),
+        font_size: 18.0,
+        scale: 1.0,
+        layout_options: TextLayoutOptions::default(),
+        clip: None,
+    });
 }
 
 /// Draws `scene` into a 128×32 target; the target's pixels and the draws

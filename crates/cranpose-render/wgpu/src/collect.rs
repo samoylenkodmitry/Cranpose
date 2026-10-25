@@ -23,8 +23,8 @@ use cranpose_ui_graphics::{
 
 use crate::{
     pipeline::{
-        TextLayoutResolver, layer_casts_shadow, push_draw_primitive, push_layer_shadow,
-        push_text_style_draws,
+        TextLayoutResolver, TextPlacement, layer_casts_shadow, push_draw_primitive,
+        push_layer_shadow, push_text_style_draws,
     },
     scene::{
         BackdropLayer, ClipRounding, CompositorScene, LayerRoundedClip, Placement as RunPlacement,
@@ -1732,16 +1732,14 @@ fn push_primitive(
             push_text_style_draws(
                 &mut out.scene,
                 text_layout,
-                text.node_id,
-                layer_bounds,
-                text_rect,
-                local_layer,
-                (&text.text, &text.render_text),
-                (&text.text_style, text.paint()),
-                text.font_size,
-                text.layout_options,
-                text_clip,
-                snap_anchor,
+                text,
+                TextPlacement {
+                    bounds: layer_bounds,
+                    text_rect,
+                    layer: local_layer,
+                    clip: text_clip,
+                    snap_anchor,
+                },
             );
         }
     }

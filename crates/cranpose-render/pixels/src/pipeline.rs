@@ -27,7 +27,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::TextRaster,
-    scene::{ItemCounts, PassedDown, RasterScene, Scene},
+    scene::{ImageDraw, ItemCounts, PassedDown, RasterScene, Scene, TextDraw},
     style::{
         apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
     },
@@ -445,28 +445,29 @@ fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default:
     color
 }
 
-#[expect(clippy::too_many_arguments)]
+// Where a text node draws: the bounds and transform of its layer, its box
+// before the transform and its clip.
+#[derive(Clone, Copy)]
+struct TextPlacement<'a> {
+    bounds: Rect,
+    text_rect: Rect,
+    layer: &'a GraphicsLayer,
+    clip: Option<Rect>,
+}
+
 fn push_text_style_draws(
     scene: &mut RasterScene,
-    rect: Rect,
-    text_rect: Rect,
-    node_layer: &GraphicsLayer,
-    text: &Rc<cranpose_ui::text::AnnotatedString>,
-    text_style: &Arc<TextStyle>,
-    font_size: f32,
-    text_clip: Option<Rect>,
+    node: &TextPrimitiveNode,
+    placement: TextPlacement<'_>,
 ) {
+    let (rect, node_layer, text_clip) = (placement.bounds, placement.layer, placement.clip);
+    let (text, text_style, font_size) = (&node.text, &node.text_style, node.font_size);
     let baseline_shift_px = text_style
         .span_style
         .baseline_shift
         .filter(|shift| shift.is_specified())
         .map_or(0.0, |shift| -(shift.0 * font_size));
-    let shifted_text_rect = Rect {
-        x: text_rect.x,
-        y: text_rect.y + baseline_shift_px,
-        width: text_rect.width,
-        height: text_rect.height,
-    };
+    let shifted_text_rect = placement.text_rect.translate(0.0, baseline_shift_px);
     let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, node_layer);
 
     if let Some(background) = text_style.span_style.background {
@@ -505,12 +506,7 @@ fn push_text_style_draws(
         .unwrap_or_else(|| Brush::solid(transformed_text_color));
 
     if let Some(shadow) = text_style.span_style.shadow {
-        let shadow_rect = Rect {
-            x: shifted_text_rect.x + shadow.offset.x,
-            y: shifted_text_rect.y + shadow.offset.y,
-            width: shifted_text_rect.width,
-            height: shifted_text_rect.height,
-        };
+        let shadow_rect = shifted_text_rect.translate(shadow.offset.x, shadow.offset.y);
         let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, node_layer);
         let transformed_shadow_color = apply_layer_to_color(shadow.color, node_layer);
         let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
@@ -520,50 +516,46 @@ fn push_text_style_draws(
             offset: Point::new(0.0, 0.0),
             blur_radius: shadow.blur_radius,
         });
-        scene.push_text(
-            transformed_shadow_rect,
-            Rc::clone(text),
-            Color::TRANSPARENT,
-            Arc::new(shadow_text_style),
+        scene.push_text(TextDraw {
+            rect: transformed_shadow_rect,
+            snap_anchor: None,
+            text: Rc::clone(text),
+            color: Color::TRANSPARENT,
+            text_style: Arc::new(shadow_text_style),
             font_size,
-            layer_uniform_scale(node_layer),
-            text_clip,
-        );
+            scale: layer_uniform_scale(node_layer),
+            clip: text_clip,
+        });
     }
 
-    scene.push_text(
-        transformed_shifted_text_rect,
-        Rc::clone(text),
-        transformed_text_color,
-        transformed_text_style,
+    scene.push_text(TextDraw {
+        rect: transformed_shifted_text_rect,
+        snap_anchor: None,
+        text: Rc::clone(text),
+        color: transformed_text_color,
+        text_style: transformed_text_style,
         font_size,
-        layer_uniform_scale(node_layer),
-        text_clip,
-    );
+        scale: layer_uniform_scale(node_layer),
+        clip: text_clip,
+    });
 
-    push_text_decorations(
-        scene,
-        rect,
-        shifted_text_rect,
-        node_layer,
-        text,
-        text_style,
-        &text_brush,
-        text_clip,
-    );
+    let decoration_placement = TextPlacement {
+        text_rect: shifted_text_rect,
+        ..placement
+    };
+    push_text_decorations(scene, decoration_placement, text, text_style, &text_brush);
 }
 
-#[expect(clippy::too_many_arguments)]
+// `placement.text_rect` is the text's box shifted to its baseline.
 fn push_text_decorations(
     scene: &mut RasterScene,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
+    placement: TextPlacement<'_>,
     annotated_text: &cranpose_ui::text::AnnotatedString,
     global_style: &TextStyle,
     text_brush: &Brush,
-    text_clip: Option<Rect>,
 ) {
+    let (rect, text_rect) = (placement.bounds, placement.text_rect);
+    let (content_layer, text_clip) = (placement.layer, placement.clip);
     // A span draws a line only when its style or a span over it has one;
     // without any, measuring the spans finds nothing to draw.
     let decorated = |style: &cranpose_ui::text::SpanStyle| {
@@ -1343,16 +1335,13 @@ fn render_graph_text(
         return;
     }
 
-    push_text_style_draws(
-        scene,
-        rect,
+    let placement = TextPlacement {
+        bounds: rect,
         text_rect,
-        node_layer,
-        &text.text,
-        &text.text_style,
-        text.font_size,
-        text_clip,
-    );
+        layer: node_layer,
+        clip: text_clip,
+    };
+    push_text_style_draws(scene, text, placement);
 }
 
 pub(crate) fn push_draw_primitive(
@@ -1374,18 +1363,18 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_image(&mut self, params: ImageDrawParams) {
-            self.scene.push_image_with_geometry(
-                params.rect,
-                params.local_rect,
-                params.quad,
-                params.image,
-                params.alpha,
-                params.color_filter,
-                params.sampling,
-                params.clip,
-                params.src_rect,
-                params.blend_mode,
-            );
+            self.scene.push_image(ImageDraw {
+                rect: params.rect,
+                snap_anchor: None,
+                image: params.image,
+                alpha: params.alpha,
+                color_filter: params.color_filter,
+                sampling: params.sampling,
+                clip: params.clip,
+                blend_mode: params.blend_mode,
+                src_rect: params.src_rect,
+                transform: None,
+            });
         }
 
         fn push_shadow(
@@ -1399,15 +1388,16 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            self.scene.push_text(
-                params.rect,
-                params.text,
-                params.color,
-                Arc::new(params.text_style),
-                params.font_size,
-                params.scale,
-                params.clip,
-            );
+            self.scene.push_text(TextDraw {
+                rect: params.rect,
+                snap_anchor: None,
+                text: params.text,
+                color: params.color,
+                text_style: Arc::new(params.text_style),
+                font_size: params.font_size,
+                scale: params.scale,
+                clip: params.clip,
+            });
         }
     }
 
