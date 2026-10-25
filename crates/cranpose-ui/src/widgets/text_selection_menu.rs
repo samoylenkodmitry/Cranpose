@@ -60,16 +60,10 @@ const MENU_FONT_SP: f32 = 15.0;
 /// it from its scheme; without a theme it is `false` (a dark surface), and a
 /// light screen provides `true`.
 pub fn local_on_light_surface() -> cranpose_core::CompositionLocal<bool> {
-    use std::cell::RefCell;
-    thread_local! {
-        static LOCAL: RefCell<Option<cranpose_core::CompositionLocal<bool>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(|| false))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.on_light_surface,
+        || cranpose_core::compositionLocalOf(|| false),
+    )
 }
 
 /// Label ink: near-white over a dark surface, near-black over a light one.

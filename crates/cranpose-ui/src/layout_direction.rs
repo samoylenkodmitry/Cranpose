@@ -42,15 +42,10 @@ impl LayoutDirection {
 
 /// The [`CompositionLocal`] carrying the current layout direction.
 pub fn local_layout_direction() -> CompositionLocal<LayoutDirection> {
-    thread_local! {
-        static LOCAL: std::cell::RefCell<Option<CompositionLocal<LayoutDirection>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(LayoutDirection::default))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.direction,
+        || compositionLocalOf(LayoutDirection::default),
+    )
 }
 
 /// The layout direction in force here.

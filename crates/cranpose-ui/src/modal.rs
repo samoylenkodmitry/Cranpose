@@ -124,14 +124,10 @@ pub(crate) fn current_modal_depth() -> usize {
 /// thread), so the modal that provides it and the field that reads it observe
 /// one shared local.
 pub fn local_modal_depth() -> CompositionLocal<usize> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<usize>>> = const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(|| 0usize))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.modal_depth,
+        || compositionLocalOf(|| 0usize),
+    )
 }
 
 /// Asks the innermost modal surface to close.

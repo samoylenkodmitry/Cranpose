@@ -1,7 +1,5 @@
 //! Platform safe-area insets exposed to composition.
 
-use std::cell::RefCell;
-
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui_graphics::EdgeInsets;
 
@@ -37,14 +35,10 @@ impl WindowInsets {
 /// thread), so the platform that provides it and the app that reads it observe
 /// one shared local.
 pub fn local_safe_area_insets() -> CompositionLocal<EdgeInsets> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<EdgeInsets>>> = const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(EdgeInsets::default))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.safe_area,
+        || compositionLocalOf(EdgeInsets::default),
+    )
 }
 
 /// CompositionLocal carrying the on-screen soft-keyboard (IME) insets in logical
@@ -60,14 +54,10 @@ pub fn local_safe_area_insets() -> CompositionLocal<EdgeInsets> {
 /// Like [`local_safe_area_insets`], the same `CompositionLocal` instance is
 /// returned on every call (cached per thread).
 pub fn local_ime_insets() -> CompositionLocal<EdgeInsets> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<EdgeInsets>>> = const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(EdgeInsets::default))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.ime,
+        || compositionLocalOf(EdgeInsets::default),
+    )
 }
 
 /// Returns the framework-owned insets currently visible to the composition.

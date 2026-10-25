@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use cranpose_core::{CompositionLocal, NodeId};
 
 use crate::{
@@ -43,16 +41,10 @@ impl FocusManager {
 /// CompositionLocal carrying the [`FocusManager`], as `LocalFocusManager` does
 /// in Compose. The same instance comes back on every call.
 pub fn local_focus_manager() -> CompositionLocal<FocusManager> {
-    thread_local! {
-        static LOCAL_FOCUS_MANAGER: RefCell<Option<CompositionLocal<FocusManager>>> =
-            const { RefCell::new(None) };
-    }
-
-    LOCAL_FOCUS_MANAGER.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(FocusManager::default))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.focus_manager,
+        || cranpose_core::compositionLocalOf(FocusManager::default),
+    )
 }
 
 /// Moves focus onto `node_id` when it holds a focus target. A platform's

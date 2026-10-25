@@ -17,6 +17,7 @@ mod debug;
 pub mod density;
 pub mod draggable;
 mod draw;
+mod environment_locals;
 pub mod fling_animation;
 mod focus_dispatch;
 pub mod focus_manager;
