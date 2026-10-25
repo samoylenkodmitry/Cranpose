@@ -43,7 +43,10 @@ use crate::{
     layer_cache::{Retained, RetainedContent},
     offscreen::OffscreenTarget,
     opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix, page_fill_color},
-    render::GpuRenderer,
+    render::{
+        GpuRenderer,
+        admission_gate::{AdmissionGate, NodeGate},
+    },
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
 };
 
@@ -2263,188 +2266,6 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     prefix_admitted_pixels: u64,
 }
 
-const MAX_ADMISSION_PATIENCE: u32 = 16;
-/// The frames a layer that can draw in place holds its content still before
-/// its surface is kept.
-const IN_PLACE_PATIENCE: u32 = MAX_ADMISSION_PATIENCE;
-/// The longest that wait grows after surfaces kept for such a layer went
-/// unread: about four seconds at 60 Hz.
-const IN_PLACE_MAX_PATIENCE: u32 = 16 * IN_PLACE_PATIENCE;
-
-/// The reads a kept surface needs to pay for itself. Keeping it costs a
-/// copy or a draw into a surface of its own, and the texture it holds; read
-/// once and then replaced -- a cell whose size holds two or three frames of
-/// a relayout -- it cost about what drawing it again would have, and its
-/// texture churned the pool.
-const READS_TO_PAY: u32 = 2;
-
-enum AdmissionCost {
-    Pin,
-    /// A kept surface costs a copy. `patience` is the frames the content
-    /// holds still before its surface is kept: it doubles, up to `ceiling`,
-    /// whenever a kept surface was replaced before it was read
-    /// [`READS_TO_PAY`] times, and halves, down to `floor`, when one was.
-    Copy {
-        patience: u32,
-        floor: u32,
-        ceiling: u32,
-    },
-}
-
-pub(crate) struct AdmissionGate {
-    key: LayerRasterCacheKey,
-    run: u32,
-    cost: AdmissionCost,
-    admitted: bool,
-    /// Frames the kept surface of the current key has been read.
-    reads: u32,
-    seen: bool,
-}
-
-impl AdmissionGate {
-    fn pinned(key: LayerRasterCacheKey) -> Self {
-        Self::with_cost(key, AdmissionCost::Pin)
-    }
-
-    /// A gate for a surface kept by copying it out of the pass it was drawn
-    /// in: kept once its content has held still for a second frame.
-    fn copied(key: LayerRasterCacheKey) -> Self {
-        Self::with_cost(
-            key,
-            AdmissionCost::Copy {
-                patience: 1,
-                floor: 1,
-                ceiling: MAX_ADMISSION_PATIENCE,
-            },
-        )
-    }
-
-    /// A gate for a surface rendered into a texture of its own, kept from
-    /// its first sight: still content reads it back the next frame.
-    fn rendered(key: LayerRasterCacheKey) -> Self {
-        Self::with_cost(
-            key,
-            AdmissionCost::Copy {
-                patience: 0,
-                floor: 0,
-                ceiling: MAX_ADMISSION_PATIENCE,
-            },
-        )
-    }
-
-    /// A gate for a member of a shared atlas, whose kept surface is copied
-    /// out of it: kept once its content has held still for two frames after
-    /// its first. A screen's second frame repeats its first, since a
-    /// frame-clock animation takes its start time there, so content seen
-    /// alike on both has not yet shown whether it moves. Kept on its first
-    /// or second sight, every member of a starting screen took a copy and a
-    /// texture of its own that the next frame left unread wherever the
-    /// member animated: the Mate 20 X gauntlet copied 96 cards at tier 12
-    /// for the 14 that held still, and its GPU allocator held 3 to 8 MB
-    /// more for as long as it ran.
-    fn copied_out_of_atlas(key: LayerRasterCacheKey) -> Self {
-        Self::with_cost(
-            key,
-            AdmissionCost::Copy {
-                patience: 2,
-                floor: 1,
-                ceiling: MAX_ADMISSION_PATIENCE,
-            },
-        )
-    }
-
-    /// A gate for a surface its layer can do without by drawing in place:
-    /// the surface is kept only once its content has held still for
-    /// `IN_PLACE_PATIENCE` frames. Drawing in place meanwhile costs nothing
-    /// a surface would save, and a shorter hold -- a relayout pausing at the
-    /// turn of its motion -- would keep surfaces read for a frame or two.
-    /// A pause longer than that at every turn keeps surfaces nothing reads,
-    /// so each one that goes unread doubles the wait, up to
-    /// `IN_PLACE_MAX_PATIENCE`.
-    fn drawn_in_place(key: LayerRasterCacheKey) -> Self {
-        Self::with_cost(
-            key,
-            AdmissionCost::Copy {
-                patience: IN_PLACE_PATIENCE,
-                floor: IN_PLACE_PATIENCE,
-                ceiling: IN_PLACE_MAX_PATIENCE,
-            },
-        )
-    }
-
-    fn with_cost(key: LayerRasterCacheKey, cost: AdmissionCost) -> Self {
-        Self {
-            key,
-            run: 1,
-            cost,
-            admitted: false,
-            reads: 0,
-            seen: true,
-        }
-    }
-
-    fn observe(&mut self, key: LayerRasterCacheKey) -> Option<LayerRasterCacheKey> {
-        self.seen = true;
-        if self.key == key {
-            self.run = self.run.saturating_add(1);
-            return None;
-        }
-        if let AdmissionCost::Copy {
-            patience, ceiling, ..
-        } = &mut self.cost
-            && self.admitted
-            && self.reads < READS_TO_PAY
-        {
-            *patience = (*patience * 2).clamp(1, *ceiling);
-        }
-        let dead = self.dead_entry();
-        self.admitted = false;
-        self.reads = 0;
-        self.key = key;
-        self.run = 1;
-        dead
-    }
-
-    pub(crate) fn dead_entry(&self) -> Option<LayerRasterCacheKey> {
-        let dead = match self.cost {
-            AdmissionCost::Pin => self.admitted,
-            AdmissionCost::Copy { .. } => self.admitted && self.reads == 0,
-        };
-        dead.then_some(self.key)
-    }
-
-    fn admits(&self) -> bool {
-        match self.cost {
-            AdmissionCost::Pin => true,
-            AdmissionCost::Copy { patience, .. } => self.run > patience,
-        }
-    }
-
-    fn admitted(&mut self) {
-        self.admitted = true;
-        self.reads = 0;
-    }
-
-    fn hit(&mut self, key: LayerRasterCacheKey) {
-        self.observe(key);
-        self.reads = self.reads.saturating_add(1);
-        // A kept surface that paid for itself halves the wait, once: content
-        // that holds still at the turns of a motion and churns between them
-        // keeps a wait the churn does not get past.
-        if let AdmissionCost::Copy {
-            patience, floor, ..
-        } = &mut self.cost
-            && self.reads == READS_TO_PAY
-        {
-            *patience = (*patience / 2).max(*floor);
-        }
-    }
-
-    pub(crate) fn end_frame(&mut self) -> bool {
-        std::mem::take(&mut self.seen)
-    }
-}
-
 /// A texture a composite draws and what it holds.
 #[derive(Clone)]
 struct CompositeSource {
@@ -3475,7 +3296,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 pixel_width,
                 pixel_height,
             );
-            if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
+            if let Some(gate) = self.renderer.gates.fills.get_mut(&prefix.command) {
                 gate.hit(prefix.key);
             }
             composites.push(prefix_blit(&prefix, retained.texture));
@@ -3490,7 +3311,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer
             .frame_stats
             .record_layer_cache_miss(&prefix.key, pixel_width, pixel_height);
-        let admits = match self.renderer.fill_gates.entry(prefix.command) {
+        let admits = match self.renderer.gates.fills.entry(prefix.command) {
             Entry::Occupied(mut gate) => {
                 if let Some(dead) = gate.get_mut().observe(prefix.key) {
                     self.renderer.layer_cache.remove(&dead);
@@ -3549,7 +3370,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .insert(prefix.key, Retained::surface(texture), None)
         {
             self.renderer.frame_stats.record_prefix_admission();
-            if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
+            if let Some(gate) = self.renderer.gates.fills.get_mut(&prefix.command) {
                 gate.admitted();
             }
         }
@@ -3712,7 +3533,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         if let Some(gate) = item
             .node_id
-            .and_then(|node_id| self.renderer.backdrop_gates.get_mut(&node_id))
+            .and_then(|node_id| self.renderer.gates.node(node_id, NodeGate::Backdrop))
         {
             gate.hit(key);
         }
@@ -3743,17 +3564,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.renderer
                 .frame_stats
                 .record_layer_cache_miss(&key, width, height);
-            let gate = match self.renderer.backdrop_gates.entry(node_id) {
-                Entry::Occupied(gate) => {
-                    let gate = gate.into_mut();
-                    if let Some(dead) = gate.observe(key) {
-                        self.renderer.layer_cache.remove(&dead);
-                    }
-                    gate
-                }
-                Entry::Vacant(slot) => slot.insert(AdmissionGate::pinned(key)),
-            };
-            if gate.admits() {
+            if self.renderer.gates.observe_node(
+                (node_id, NodeGate::Backdrop),
+                key,
+                AdmissionGate::pinned,
+                &mut self.renderer.layer_cache,
+            ) {
                 self.admit_backdrop(item, key, node_id, outputs);
             }
         }
@@ -3784,7 +3600,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return;
         }
         self.renderer.frame_stats.record_backdrop_admission();
-        if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
+        if let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Backdrop) {
             gate.admitted();
         }
         output.content = SourceContent::retained(&key);
@@ -4713,7 +4529,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 self.renderer
                     .frame_stats
                     .record_layer_cache_hit(&key, width, height);
-                if let Some(gate) = self.renderer.effect_gates.get_mut(&node_id) {
+                if let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Effect) {
                     gate.hit(key);
                 }
                 return Ok(Some(CompositeSource {
@@ -4724,15 +4540,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.renderer
                 .frame_stats
                 .record_layer_cache_miss(&key, width, height);
-            let admits = match self.renderer.effect_gates.entry(node_id) {
-                Entry::Occupied(mut gate) => {
-                    if let Some(dead) = gate.get_mut().observe(key) {
-                        self.renderer.layer_cache.remove(&dead);
-                    }
-                    gate.get().admits()
-                }
-                Entry::Vacant(slot) => slot.insert(AdmissionGate::copied(key)).admits(),
-            };
+            let admits = self.renderer.gates.observe_node(
+                (node_id, NodeGate::Effect),
+                key,
+                AdmissionGate::copied,
+                &mut self.renderer.layer_cache,
+            );
             if admits && self.renderer.layer_cache.fits(width, height) {
                 let dest = Rc::new(self.renderer.acquire_retained_surface(width, height));
                 self.apply_effect_into(
@@ -4746,7 +4559,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     .renderer
                     .layer_cache
                     .insert(key, Retained::surface(Rc::clone(&dest)), None)
-                    && let Some(gate) = self.renderer.effect_gates.get_mut(&node_id)
+                    && let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Effect)
                 {
                     gate.admitted();
                 }
@@ -5398,11 +5211,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     }
 
     fn source_gate(&mut self, node_id: Option<NodeId>) -> Option<&mut AdmissionGate> {
-        node_id.and_then(|node_id| self.renderer.source_gates.get_mut(&node_id))
+        node_id.and_then(|node_id| self.renderer.gates.node(node_id, NodeGate::Source))
     }
 
     fn supersede_source(&mut self, node_id: Option<NodeId>, key: LayerRasterCacheKey) {
-        let Some(previous) = self.source_gate(node_id).map(|gate| gate.key) else {
+        let Some(previous) = self.source_gate(node_id).map(|gate| gate.key()) else {
             return;
         };
         if previous.draws_other_content(key) {
@@ -5420,15 +5233,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.supersede_source(node_id, key);
         let admits = match node_id {
             None => true,
-            Some(node_id) => match self.renderer.source_gates.entry(node_id) {
-                Entry::Occupied(mut gate) => {
-                    if let Some(dead) = gate.get_mut().observe(key) {
-                        self.renderer.layer_cache.remove(&dead);
-                    }
-                    gate.get().admits()
-                }
-                Entry::Vacant(slot) => slot.insert(gate(key)).admits(),
-            },
+            Some(node_id) => self.renderer.gates.observe_node(
+                (node_id, NodeGate::Source),
+                key,
+                gate,
+                &mut self.renderer.layer_cache,
+            ),
         };
         admits && self.renderer.layer_cache.fits(width, height)
     }

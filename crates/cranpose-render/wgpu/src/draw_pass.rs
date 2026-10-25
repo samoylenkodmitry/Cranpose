@@ -615,25 +615,12 @@ impl GpuRenderer {
             }
         };
         drop(batches);
-        self.return_pass_scratch(scratch);
+        self.pass_scratch = scratch;
         result
     }
 
     fn take_pass_scratch(&mut self) -> PassScratch {
-        let mut scratch = PassScratch {
-            image_vertices: std::mem::take(&mut self.scratch_image_vertices),
-            image_indices: std::mem::take(&mut self.scratch_image_indices),
-            image_cmds: std::mem::take(&mut self.scratch_image_cmds),
-            image_clips: std::mem::take(&mut self.scratch_image_clips),
-            glyph_instances: std::mem::take(&mut self.scratch_glyph_instances),
-            glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
-            glyph_moved: std::mem::take(&mut self.scratch_glyph_moved),
-            shadow_instances: std::mem::take(&mut self.scratch_shadow_instances),
-            arena_draws: std::mem::take(&mut self.scratch_arena_draws),
-            pipelines: std::mem::take(&mut self.scratch_pipelines),
-            held: std::mem::take(&mut self.scratch_held),
-            meshes: std::mem::take(&mut self.scratch_meshes),
-        };
+        let mut scratch = std::mem::take(&mut self.pass_scratch);
         scratch.meshes.clear();
         scratch.arena_draws.clear();
         scratch.image_vertices.clear();
@@ -644,21 +631,6 @@ impl GpuRenderer {
         scratch.glyph_cmds.clear();
         scratch.shadow_instances.clear();
         scratch
-    }
-
-    fn return_pass_scratch(&mut self, scratch: PassScratch) {
-        self.scratch_image_vertices = scratch.image_vertices;
-        self.scratch_image_indices = scratch.image_indices;
-        self.scratch_image_cmds = scratch.image_cmds;
-        self.scratch_image_clips = scratch.image_clips;
-        self.scratch_glyph_instances = scratch.glyph_instances;
-        self.scratch_glyph_cmds = scratch.glyph_cmds;
-        self.scratch_glyph_moved = scratch.glyph_moved;
-        self.scratch_shadow_instances = scratch.shadow_instances;
-        self.scratch_arena_draws = scratch.arena_draws;
-        self.scratch_pipelines = scratch.pipelines;
-        self.scratch_held = scratch.held;
-        self.scratch_meshes = scratch.meshes;
     }
 
     /// Starts on `lane` the builds of the image, glyph and shadow pipelines a
@@ -1251,12 +1223,13 @@ impl PassBuffers {
     }
 }
 
-struct PassScratch {
-    image_vertices: Vec<crate::render::Vertex>,
-    image_indices: Vec<u32>,
-    image_cmds: Vec<crate::render::ImageDrawCmd>,
+#[derive(Default)]
+pub(crate) struct PassScratch {
+    pub(crate) image_vertices: Vec<crate::render::Vertex>,
+    pub(crate) image_indices: Vec<u32>,
+    pub(crate) image_cmds: Vec<crate::render::ImageDrawCmd>,
     image_clips: Vec<crate::render::DeviceRoundedClip>,
-    glyph_instances: crate::render::GlyphInstances,
+    pub(crate) glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
     /// Where a glyph batch's draws of one kind wait while it groups them.
     glyph_moved: Vec<crate::render::GlyphDrawCmd>,
@@ -1264,7 +1237,7 @@ struct PassScratch {
     arena_draws: Vec<RunDrawCall>,
     pipelines: PipelineDemand,
     held: HeldDraws,
-    meshes: crate::mesh_fallback::PassMeshes,
+    pub(crate) meshes: crate::mesh_fallback::PassMeshes,
 }
 
 /// Where the image draws an item appends start in a pass's scratch.
