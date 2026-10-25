@@ -4582,6 +4582,9 @@ fn measure_text_impl_cached(
     }
 }
 
+// Out of line, so the layout it builds holds stack only while text with
+// spans or several faces is measured.
+#[inline(never)]
 fn measure_annotated_text_with_resolver<'a>(
     text: impl Into<StyledTextRef<'a>>,
     style: &TextStyle,
