@@ -62,7 +62,7 @@ def rust_files(*roots: str) -> list[pathlib.Path]:
 
 
 def half_state_sites() -> list[str]:
-    files = [ROOT / "README.md"]
+    files = [path for path in [ROOT / "README.md"] if path.exists()]
     for root in HALF_STATE_ROOTS:
         for directory, subdirectories, names in os.walk(ROOT / root):
             subdirectories[:] = [name for name in subdirectories if name not in SKIP_DIRS]

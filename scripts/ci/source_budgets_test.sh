@@ -46,6 +46,7 @@ private_docs = 1
 for_test_fns = 1
 cranpose_env_names = 1
 source_text_checks = 1
+half_state_words = 0
 
 [file_lines]
 limit = 11
@@ -89,6 +90,12 @@ else
   cat "$budget_file"
   failures=$((failures + 1))
 fi
+
+budgets 1 12
+mkdir -p "$repo/docs"
+printf 'a workaround for now\n' > "$repo/docs/notes.md"
+expect "a half-state word in the docs fails" 1
+rm -f "$repo/docs/notes.md"
 
 budgets 1 12
 seq 1 13 | sed 's/.*/const _: u8 = 0;/' > "$repo/crates/a/src/new.rs"
