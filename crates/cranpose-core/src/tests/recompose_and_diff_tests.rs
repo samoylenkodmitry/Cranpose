@@ -862,7 +862,7 @@ fn source_origins_survive_independent_child_recomposition() {
         let _ = state.value();
         ORIGINS.with(|origins| {
             origins.borrow_mut().push(
-                crate::source_trace::current_source_trace()
+                source_trace::current_source_trace()
                     .iter()
                     .map(|origin| origin.name)
                     .collect(),
@@ -891,5 +891,5 @@ fn source_origins_survive_independent_child_recomposition() {
             assert_eq!(origin, &["traced_parent", "traced_child"]);
         }
     });
-    assert!(crate::source_trace::current_source_trace().is_empty());
+    assert!(source_trace::current_source_trace().is_empty());
 }

@@ -269,7 +269,7 @@ fn location_key_hashes_file_contents_not_string_addresses() {
 
 #[test]
 fn location_key_generated_source_grid_has_no_collisions() {
-    let mut keys = std::collections::HashSet::new();
+    let mut keys: HashSet<_> = HashSet::default();
     for file_index in 0..64 {
         let file = format!("src/generated/module_{file_index}.rs");
         for line in 1..=64 {

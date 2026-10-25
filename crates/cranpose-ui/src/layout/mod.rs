@@ -1123,7 +1123,7 @@ fn snapshot_node_data(
     let data = LayoutNodeData {
         #[cfg(feature = "inspection")]
         source_trace: applier
-            .with_node::<LayoutNode, _>(node_id, |node| node.source_trace.clone())
+            .with_node::<LayoutNode, _>(node_id, |node| Rc::clone(&node.source_trace))
             .unwrap_or_default(),
         modifier,
         resolved_modifiers,

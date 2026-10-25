@@ -1426,7 +1426,7 @@ impl Clone for LayoutNode {
     fn clone(&self) -> Self {
         let mut node = Self {
             #[cfg(feature = "inspection")]
-            source_trace: self.source_trace.clone(),
+            source_trace: Rc::clone(&self.source_trace),
             modifier: self.modifier.clone(),
             modifier_chain: ModifierChainHandle::for_layout_direction(
                 self.modifier_chain.layout_direction(),

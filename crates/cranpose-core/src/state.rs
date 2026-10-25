@@ -2232,12 +2232,12 @@ where
 
     /// Returns the number of entries.
     pub fn len(&self) -> usize {
-        self.state.with(std::collections::HashMap::len)
+        self.state.with(HashMap::len)
     }
 
     /// Returns `true` if the map has no entries.
     pub fn is_empty(&self) -> bool {
-        self.state.with(std::collections::HashMap::is_empty)
+        self.state.with(HashMap::is_empty)
     }
 
     /// Returns `true` if the map has an entry for `key`.
