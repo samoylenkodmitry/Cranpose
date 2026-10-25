@@ -182,6 +182,7 @@ pub fn update_graph_from_applier(
 
 /// Like `update_graph_from_applier`, and also reports whether the hit targets must be collected
 /// again or why the graph must be rebuilt.
+#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 pub fn update_graph_from_applier_report(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
@@ -245,6 +246,7 @@ fn dirty_node_updates(updates: SceneUpdates<'_>, dirty: &mut HashMap<NodeId, Nod
     dirty.extend(updates.content.iter().map(|&id| (id, NodeUpdate::Content)));
 }
 
+#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 fn update_graph_from_applier_report_inner(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
@@ -863,6 +865,7 @@ fn update_dirty_layer(
     Some((hit_graph_dirty, false))
 }
 
+#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 fn translate_bail(reason: &str) -> bool {
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!("[scene-update-diag] translate bail: {reason}");
@@ -2603,6 +2606,7 @@ fn prepare_node_layer(
     (head, child_context)
 }
 
+#[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 fn write_node_layer(
     applier: &MemoryApplier,
     node_id: NodeId,

@@ -1,6 +1,10 @@
 //! A font file installed while an app runs draws the text it covers from the
 //! next frame on, as in an app started with the font, though the running
 //! renderer drew that text with missing glyphs before.
+#![allow(
+    clippy::print_stderr,
+    reason = "the test support prints what a test measured"
+)]
 
 #[path = "../src/record_columns.rs"]
 #[allow(dead_code)]

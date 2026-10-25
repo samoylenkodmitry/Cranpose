@@ -152,6 +152,7 @@ use_self = "warn"
 # Libraries report through `log`; a binary, test or example allows printing
 # at its crate root, and a library function that prints by design expects it.
 print_stdout = "warn"
+print_stderr = "warn"
 
 # `a + &b` hides an allocation; `push_str` or `format!` shows it.
 string_add = "warn"

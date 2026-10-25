@@ -1,4 +1,8 @@
-#![allow(clippy::print_stdout, reason = "an example prints its results")]
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "an example prints its results"
+)]
 
 use std::time::Duration;
 

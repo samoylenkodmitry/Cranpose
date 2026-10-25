@@ -1,3 +1,8 @@
+#![allow(
+    clippy::print_stderr,
+    reason = "the app reports a launch failure on the terminal"
+)]
+
 #[cfg(target_os = "ios")]
 fn main() {
     if let Err(error) =

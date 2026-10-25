@@ -1,3 +1,8 @@
+#![allow(
+    clippy::print_stderr,
+    reason = "the reference app reports a touch trace it could not save"
+)]
+
 #[path = "test_screens/liquid_control_reference.rs"]
 mod liquid_control_reference;
 #[path = "test_screens/liquid_tab_reference.rs"]
