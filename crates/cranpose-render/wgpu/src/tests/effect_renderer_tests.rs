@@ -37,7 +37,7 @@ fn a_small_target_keeps_its_full_scratch() {
 
 #[test]
 fn a_scissor_shrinks_with_the_scratch() {
-    use super::scaled_scissor;
+    use crate::scissor::scaled_scissor;
     assert_eq!(
         scaled_scissor(Some((10, 20, 100, 200)), 2.0, 2.0, 540, 200),
         Some((5, 10, 50, 100))

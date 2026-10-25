@@ -27,8 +27,7 @@ use crate::{
     debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
-        SourceContent, intersect_scissors, op_draw_bounds, scissor_in_target,
-        segment_draws_anything,
+        SourceContent, op_draw_bounds, segment_draws_anything,
     },
     effect_renderer::{
         AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
@@ -48,6 +47,7 @@ use crate::{
         admission_gate::{AdmissionGate, NodeGate},
     },
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
+    scissor::{intersect_scissors, scissor_in_target},
 };
 
 const MAX_SURFACE_PIXELS: u64 = 16 * 1024 * 1024;

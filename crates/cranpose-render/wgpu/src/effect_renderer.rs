@@ -20,6 +20,7 @@ use crate::{
     offscreen::{OffscreenPool, OffscreenTarget},
     pipeline_compiler::{CompileLane, PipelineCompiler},
     pipeline_recorder::PipelineRecorder,
+    scissor::{read_scissor, scaled_scissor, widened_scissor},
     shader_cache::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
         shader_specialization_enabled,
@@ -59,29 +60,6 @@ fn scratch_size_at(mut scale: u32, width: u32, height: u32) -> (u32, u32) {
         return (width, height);
     }
     (width.div_ceil(scale).max(1), height.div_ceil(scale).max(1))
-}
-
-fn scaled_scissor(
-    scissor: Option<(u32, u32, u32, u32)>,
-    scale_x: f32,
-    scale_y: f32,
-    width: u32,
-    height: u32,
-) -> Option<(u32, u32, u32, u32)> {
-    let (x, y, w, h) = scissor?;
-    if scale_x <= 1.0 && scale_y <= 1.0 {
-        return scissor;
-    }
-    let left = ((x as f32 / scale_x).floor() as u32).min(width);
-    let top = ((y as f32 / scale_y).floor() as u32).min(height);
-    let right = (((x + w) as f32 / scale_x).ceil() as u32).min(width);
-    let bottom = (((y + h) as f32 / scale_y).ceil() as u32).min(height);
-    Some((
-        left,
-        top,
-        right.saturating_sub(left),
-        bottom.saturating_sub(top),
-    ))
 }
 
 const MAX_BLUR_KERNEL_CACHE_ITEMS: usize = 32;
@@ -802,45 +780,6 @@ pub(crate) enum SubstrateAverage {
     Mean,
 }
 
-fn axis_span(start: i64, end: i64, margin: u32, len: u32, wraps: bool) -> (u32, u32) {
-    let (low, high) = (start - i64::from(margin), end + i64::from(margin));
-    if wraps && (low < 0 || high > i64::from(len)) {
-        return (0, len.max(1));
-    }
-    let low = low.max(0) as u32;
-    (low, (high.min(i64::from(len)) as u32).max(low + 1))
-}
-
-fn read_scissor(
-    source: (u32, u32, u32, u32),
-    scratch: (u32, u32, u32, u32),
-    read: Option<(u32, u32, u32, u32)>,
-    margin: (u32, u32),
-    wraps: bool,
-) -> (u32, u32, u32, u32) {
-    let Some((ux, uy, uw, uh)) = read else {
-        return scratch;
-    };
-    let fx = scratch.2 as f32 / source.2.max(1) as f32;
-    let fy = scratch.3 as f32 / source.3.max(1) as f32;
-    let span = |start: u32, end: u32, origin: u32, factor: f32| {
-        (
-            ((start as f32 - origin as f32) * factor).floor() as i64,
-            ((end as f32 - origin as f32) * factor).ceil() as i64,
-        )
-    };
-    let (x0, x1) = span(ux, ux + uw, source.0, fx);
-    let (y0, y1) = span(uy, uy + uh, source.1, fy);
-    let (left, right) = axis_span(x0, x1, margin.0, scratch.2, wraps);
-    let (top, bottom) = axis_span(y0, y1, margin.1, scratch.3, wraps);
-    (
-        scratch.0 + left,
-        scratch.1 + top,
-        right - left,
-        bottom - top,
-    )
-}
-
 struct ChainedSubstrates {
     width: u32,
     height: u32,
@@ -931,30 +870,6 @@ pub(crate) struct EffectReads {
     pub(crate) shader_input: Option<(u32, u32, u32, u32)>,
 }
 
-fn widened_scissor(
-    scissor: Option<(u32, u32, u32, u32)>,
-    margin: (u32, u32),
-    bounds: (u32, u32),
-    wraps: bool,
-) -> Option<(u32, u32, u32, u32)> {
-    let (x, y, width, height) = scissor?;
-    let (left, right) = axis_span(
-        i64::from(x),
-        i64::from(x + width),
-        margin.0,
-        bounds.0,
-        wraps,
-    );
-    let (top, bottom) = axis_span(
-        i64::from(y),
-        i64::from(y + height),
-        margin.1,
-        bounds.1,
-        wraps,
-    );
-    Some((left, top, right - left, bottom - top))
-}
-
 fn kernel_margin((radius_x, radius_y): (f32, f32)) -> (u32, u32) {
     (radius_x.ceil() as u32 + 1, radius_y.ceil() as u32 + 1)
 }
@@ -980,14 +895,20 @@ impl BlurRegion {
             self.scratch,
             self.read,
             (radius_x * steps.0, radius_y * steps.1),
-            self.tile_mode == TileMode::Repeated,
+            self.tile_mode,
         )
     }
 }
 
 impl SubstrateRegion {
     fn pass_scissor(&self) -> (u32, u32, u32, u32) {
-        read_scissor(self.source, self.scratch, self.read, (1, 1), false)
+        read_scissor(
+            self.source,
+            self.scratch,
+            self.read,
+            (1, 1),
+            TileMode::Clamp,
+        )
     }
 }
 
@@ -2193,10 +2114,9 @@ impl EffectRenderer {
         let block = blur_block(whole_source, whole_scratch);
         let margin = kernel_margin(radius);
         let scratch_size = (scratch.width, scratch.height);
-        let wraps = tile_mode == TileMode::Repeated;
         let horizontal_scissor =
-            widened_scissor(scratch_scissor, (0, margin.1), scratch_size, wraps);
-        let downsample_scissor = widened_scissor(scratch_scissor, margin, scratch_size, wraps);
+            widened_scissor(scratch_scissor, (0, margin.1), scratch_size, tile_mode);
+        let downsample_scissor = widened_scissor(scratch_scissor, margin, scratch_size, tile_mode);
         let small = (block > 1).then(|| {
             let descriptor = FrameTextureDescriptor::render_attachment(
                 "Blur Downsample",

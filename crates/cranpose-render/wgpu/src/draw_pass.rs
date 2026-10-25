@@ -21,6 +21,7 @@ use crate::{
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
     scene::{CompositorScene, DrawOp, DrawOpKind, RRectShadowDraw, RunDraw, TextDraw},
+    scissor::{intersect_scissors, scissor_in_target},
     shape_pipelines::PipelineDemand,
 };
 
@@ -362,48 +363,6 @@ impl<'a, 'p> TrackedPass<'a, 'p> {
         self.groups = [const { None }; TRACKED_GROUPS];
         self.vertices = [const { None }; TRACKED_SLOTS];
         self.pass
-    }
-}
-
-pub(crate) fn scissor_in_target(
-    scissor: (f32, f32, f32, f32),
-    target_size: (u32, u32),
-    segment_offset: [f32; 2],
-) -> Option<(u32, u32, u32, u32)> {
-    let (x, y, width, height) = scissor;
-    let left = (x - segment_offset[0]).floor().max(0.0);
-    let top = (y - segment_offset[1]).floor().max(0.0);
-    let right = (x + width - segment_offset[0])
-        .ceil()
-        .min(target_size.0 as f32);
-    let bottom = (y + height - segment_offset[1])
-        .ceil()
-        .min(target_size.1 as f32);
-    if right <= left || bottom <= top {
-        return None;
-    }
-    Some((
-        left as u32,
-        top as u32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ))
-}
-
-pub(crate) fn intersect_scissors(
-    a: Option<(u32, u32, u32, u32)>,
-    b: Option<(u32, u32, u32, u32)>,
-) -> Option<Option<(u32, u32, u32, u32)>> {
-    match (a, b) {
-        (None, None) => Some(None),
-        (Some(rect), None) | (None, Some(rect)) => Some(Some(rect)),
-        (Some((ax, ay, aw, ah)), Some((bx, by, bw, bh))) => {
-            let left = ax.max(bx);
-            let top = ay.max(by);
-            let right = (ax + aw).min(bx + bw);
-            let bottom = (ay + ah).min(by + bh);
-            (right > left && bottom > top).then(|| Some((left, top, right - left, bottom - top)))
-        }
     }
 }
 
