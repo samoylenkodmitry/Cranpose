@@ -11,6 +11,7 @@ use cranpose_ui::{Brush, text::TextMotion};
 use cranpose_ui_graphics::Color;
 
 use super::*;
+use crate::scene::ImageDraw;
 
 #[test]
 fn alpha_masks_render_exactly_as_rgba_images() {
