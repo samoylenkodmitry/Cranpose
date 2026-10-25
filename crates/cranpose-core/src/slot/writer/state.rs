@@ -54,10 +54,6 @@ impl SlotWriteSessionState {
         self.folds = folds;
     }
 
-    pub(crate) fn recycle_group_frames(&mut self) {
-        self.group_stack.recycle();
-    }
-
     pub(in crate::slot) const COMPACT_PAYLOAD_THRESHOLD: usize = 16 * 1024;
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;

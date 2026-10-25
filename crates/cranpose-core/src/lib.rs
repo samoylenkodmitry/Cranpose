@@ -5471,7 +5471,6 @@ impl SlotsHost {
             let mut session = table.write_session(lifecycle, state);
             session.finalize_pass(applier)?
         };
-        state.recycle_group_frames();
 
         let outcome = SlotPassOutcome {
             compacted: state.request_compaction,
