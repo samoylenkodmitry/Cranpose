@@ -202,7 +202,7 @@ pub fn run(
     })?;
     framebuffer.set_active(true);
     let mut screen = Screen {
-        framebuffer,
+        framebuffer: &mut framebuffer,
         presenter,
         panel,
         touch: &mut touch,
@@ -257,7 +257,7 @@ fn drive(
 /// The application's side of the loop: its composition, the panel it is
 /// drawn on and the touch panel it reads.
 struct Screen<'d, 't> {
-    framebuffer: Framebuffer,
+    framebuffer: &'t mut Framebuffer,
     presenter: Presenter,
     panel: Panel<'d>,
     touch: &'t mut dyn Touch,
@@ -292,7 +292,7 @@ impl Screen<'_, '_> {
         }
         let updated = Instant::now();
         self.presenter
-            .present(&mut self.framebuffer, &mut self.panel)?;
+            .present(self.framebuffer, &mut self.panel)?;
         let presented = Instant::now();
         let phases = FramePhases {
             update: updated.duration_since(now),
