@@ -42,6 +42,11 @@ component_dirs = ["components/cranpose_fast_tls"]
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["components/cranpose_fast_time"]
 
+# f32 division with the FPU's divide steps on the classic ESP32: see
+# components/cranpose_fast_fdiv/fdiv.S.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_fast_fdiv"]
+
 # Small blocks from per-task lists: see
 # components/cranpose_small_alloc/small_alloc.c.
 [[package.metadata.esp-idf-sys.extra_components]]
