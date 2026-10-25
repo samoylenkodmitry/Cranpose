@@ -579,8 +579,9 @@ async fn load_comment_page(
 fn launch_initial_load(
     trigger: u64,
     state: cranpose_core::MutableState<NewsState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         state.set(NewsState::Loading);
         let client = Arc::clone(&client);
@@ -603,8 +604,9 @@ fn launch_initial_load(
 fn launch_load_more(
     trigger: u64,
     state: cranpose_core::MutableState<NewsState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         if trigger == 0 {
             return;
@@ -665,8 +667,9 @@ fn launch_comment_thread(
     selected_story: Option<Story>,
     refresh_trigger: u64,
     state: cranpose_core::MutableState<ThreadState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     let selected_story_id = selected_story.as_ref().map(|story| story.id);
 
     cranpose_core::LaunchedEffect((selected_story_id, refresh_trigger), move |scope| {
@@ -697,8 +700,9 @@ fn launch_comment_thread(
 fn launch_load_more_comments(
     trigger: u64,
     state: cranpose_core::MutableState<ThreadState>,
-    client: HttpClientRef,
+    client: &HttpClientRef,
 ) {
+    let client = Arc::clone(client);
     cranpose_core::LaunchedEffect(trigger, move |scope| {
         if trigger == 0 {
             return;
@@ -1789,23 +1793,15 @@ pub fn HackerNewsTab() {
     let is_dark = theme_override.get().unwrap_or(system_dark);
     let palette = HackerNewsPalette::new(is_dark);
 
-    launch_initial_load(refresh_trigger.get(), news_state, Arc::clone(&http_client));
-    launch_load_more(
-        load_more_trigger.get(),
-        news_state,
-        Arc::clone(&http_client),
-    );
+    launch_initial_load(refresh_trigger.get(), news_state, &http_client);
+    launch_load_more(load_more_trigger.get(), news_state, &http_client);
     launch_comment_thread(
         selected_story.clone(),
         thread_refresh_trigger.get(),
         thread_state,
-        Arc::clone(&http_client),
+        &http_client,
     );
-    launch_load_more_comments(
-        comment_load_more_trigger.get(),
-        thread_state,
-        Arc::clone(&http_client),
-    );
+    launch_load_more_comments(comment_load_more_trigger.get(), thread_state, &http_client);
     AutoLoadMore(list_state, news_state, auto_load_guard, load_more_trigger);
     cranpose_core::LaunchedEffect(
         (
