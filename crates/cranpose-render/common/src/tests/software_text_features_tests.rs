@@ -18,7 +18,7 @@ fn featured(settings: Option<&str>) -> TextStyle {
 }
 
 fn shaped_glyph_ids(font: &SoftwareTextFont, style: &TextStyle, text: &str) -> Vec<u16> {
-    let shaped = font.shaped_for(style);
+    let shaped = ShapedFont::new(font, style);
     text.chars().map(|ch| shaped.font.glyph_id(ch).0).collect()
 }
 
@@ -187,7 +187,7 @@ fn no_settings_or_disabled_features_give_todays_glyphs_and_advances() {
     ] {
         let style = featured(Some(settings));
         assert!(
-            matches!(font.shaped_for(&style), Cow::Borrowed(_)),
+            matches!(ShapedFont::new(&font, &style), ShapedFont::Borrowed(_)),
             "{settings} should shape nothing"
         );
         assert_eq!(
@@ -197,20 +197,23 @@ fn no_settings_or_disabled_features_give_todays_glyphs_and_advances() {
         assert_eq!(atlas_glyph_ids(&fonts, &annotated, &style), plain_glyphs);
         assert_eq!(layout_widths(&font, text, &style), plain_layout);
     }
-    assert!(matches!(font.shaped_for(&plain), Cow::Borrowed(_)));
+    assert!(matches!(
+        ShapedFont::new(&font, &plain),
+        ShapedFont::Borrowed(_)
+    ));
 }
 
 #[test]
 fn a_shaped_face_shares_raster_caches_but_not_character_glyphs() {
     let font = font();
-    let zero = font.shaped_for(&featured(Some("zero")));
+    let zero = ShapedFont::new(&font, &featured(Some("zero")));
     assert_eq!(zero.content_hash(), font.content_hash());
     assert_ne!(zero.glyph_map_hash, font.glyph_map_hash);
     assert!(matches!(
-        zero.shaped_for(&featured(Some("\"zero\" 1"))),
-        Cow::Borrowed(_)
+        ShapedFont::new(&zero, &featured(Some("\"zero\" 1"))),
+        ShapedFont::Borrowed(_)
     ));
-    let unshaped = zero.shaped_for(&featured(None));
+    let unshaped = ShapedFont::new(&zero, &featured(None));
     assert_eq!(unshaped.glyph_map_hash, font.glyph_map_hash);
     assert_eq!(
         shaped_glyph_ids(&unshaped, &featured(None), "0"),

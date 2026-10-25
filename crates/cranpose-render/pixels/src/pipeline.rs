@@ -697,8 +697,10 @@ pub(crate) fn build_raster_scene(
 /// the frame before, holds for the same content in the same place are
 /// copied from it.
 mod in_place;
+mod space;
 
 pub(crate) use in_place::InPlaceUpdate;
+use space::{push_seen_surfaces, seen_surfaces};
 
 /// The shadow light of a scene `graph` gives at `scale`.
 fn scene_light(graph: &RenderGraph, scale: f32) -> ShadowLight {
@@ -864,6 +866,11 @@ fn raster_layer_mapping(
 
 /// Queues `layer`'s elevation shadow, when it casts one, cut to its shadow
 /// clip within `parent_visual_clip`.
+// Out of line, as are the surface and a text's draw: inlined, their locals
+// would take room on the stack at every layer nesting level of the walk,
+// which recurses through `push_layer_items`. A child's other draws stay
+// inline: out of line, the ESP32-S3 demo waited longer for their code.
+#[inline(never)]
 fn push_layer_shadow_of(
     scene: &mut RasterScene,
     layer: &LayerNode,
@@ -951,6 +958,7 @@ fn populate_draws_from_graph(
 /// Draws `layer` and its subtree into a surface of its own and queues the
 /// surface's pixels, placed by `transform`, the layer's map to device
 /// pixels.
+#[inline(never)]
 fn push_layer_surface(
     layer: &LayerNode,
     scene: &mut RasterScene,
@@ -1151,38 +1159,6 @@ fn push_layer_items(
     for_each_in_draw_order(&layer.children, |child| push_child(child, scene, reuse));
 }
 
-/// Draws `surfaces`, which the eye of a scene sees, each placed by its
-/// parent map, with the scene layer's content style and clip.
-#[cold]
-#[inline(never)]
-fn push_seen_surfaces(
-    surfaces: Vec<(&LayerNode, ProjectiveTransform)>,
-    scene: &mut RasterScene,
-    context: &RasterTraversalContext<'_>,
-    (content_style, visual_clip): (&ContentStyle, Option<Rect>),
-) {
-    for (surface, parent_transform) in surfaces {
-        populate_draws_from_graph(
-            surface,
-            scene,
-            &RasterTraversalContext {
-                parent_transform: &parent_transform,
-                parent_content_style: content_style,
-                parent_visual_clip: visual_clip,
-                inherited_translated_snap_anchor: None,
-                inherited_translated_content_context: false,
-                diagnostics: context.diagnostics,
-                light: context.light,
-                same_as_before: false,
-                text: context.text,
-                surface_root: false,
-                in_space: true,
-            },
-            &mut None,
-        );
-    }
-}
-
 /// The surfaces `layer` draws for the eye of the scene it shows, if it shows
 /// one (see [`seen_surfaces`]), and whether its children lie in a scene's
 /// space, given whether `layer` does.
@@ -1206,50 +1182,6 @@ fn drawn_by_its_scene(layer: &LayerNode, in_space: bool) -> bool {
     in_space
         && layer.graphics_layer.space.is_some()
         && cranpose_render_common::space::scene_of(layer).is_none()
-}
-
-/// The surfaces the eye of the scene `layer` shows sees in the space it
-/// stands in, far ones first, each with the map its layer's parent would
-/// take for the layer to land where the camera shows it, given `transform`
-/// from `layer` to device pixels; `None` when `layer` shows no scene.
-#[cold]
-#[inline(never)]
-fn seen_surfaces<'a>(
-    layer: &'a LayerNode,
-    transform: &ProjectiveTransform,
-) -> Option<Vec<(&'a LayerNode, ProjectiveTransform)>> {
-    use cranpose_render_common::space::{EyeView, SpaceTree, node_size};
-    let tree = SpaceTree::of(layer)?;
-    let view = EyeView::of(&tree, node_size(layer));
-    let rect = layer.node_rect();
-    let to_device = ProjectiveTransform::translation(rect.x, rect.y).then(*transform);
-    let mut surfaces: Vec<(f32, &'a LayerNode, ProjectiveTransform)> = view
-        .surfaces
-        .iter()
-        .filter(|seen| seen.seen == 0)
-        .filter_map(|seen| {
-            let content = seen
-                .surface
-                .content_transform(&view.camera, view.size, seen.size)?;
-            let parent = seen
-                .layer
-                .transform_to_parent
-                .inverse()?
-                .then(content)
-                .then(to_device);
-            let (low, high) = seen.surface.mesh.bounds();
-            let middle = seen.surface.transform.transform_point(low.lerp(high, 0.5));
-            let depth = view.camera.view.transform_point(middle).z;
-            Some((depth, seen.layer, parent))
-        })
-        .collect();
-    surfaces.sort_by(|a, b| b.0.total_cmp(&a.0));
-    Some(
-        surfaces
-            .into_iter()
-            .map(|(_, layer, parent)| (layer, parent))
-            .collect(),
-    )
 }
 
 /// The snap anchor `layer`'s child layers inherit and the one its own draws
@@ -1384,6 +1316,8 @@ fn render_graph_primitive(
     assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
+// Out of line for the walk's stack, as `push_layer_shadow_of` tells.
+#[inline(never)]
 fn render_graph_text(
     scene: &mut RasterScene,
     text: &TextPrimitiveNode,

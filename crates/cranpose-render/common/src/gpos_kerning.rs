@@ -555,6 +555,10 @@ impl KernedFont {
         })
     }
 
+    pub(crate) fn has_substitutions(&self) -> bool {
+        self.substitutions.is_some()
+    }
+
     pub(crate) fn feature_key(&self) -> u64 {
         self.substitutions
             .as_ref()
