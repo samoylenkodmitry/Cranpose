@@ -188,7 +188,8 @@ counters.
 
 The crate brings ESP-IDF components of its own (`components/`), which
 esp-idf-sys finds in its metadata: fast thread-locals, a clock without a
-64-bit division, a small-block allocator and the per-frame code in IRAM.
+64-bit division, `f32` division on the FPU, a small-block allocator and the
+per-frame code in IRAM.
 esp-idf-sys configures its CMake project once and runs it again only when
 its own settings change, so an application that moves to another revision of
 this crate would keep the components of the revision it built first. The
@@ -267,6 +268,19 @@ screen ran out of memory with 29 KB free in holes of at most 352 bytes. The
 allocator never asks the heap for an alignment: a block that needs 8 bytes
 or more is taken that much longer, starts at the first aligned address past
 the heap block's first word, and keeps the distance back there.
+
+## Float division
+
+Rust's `compiler_builtins` divides `f32` in software, from flash: on the
+E32R35T it took 2% of a frame of text that changes every frame. The classic
+ESP32's FPU has the steps of a division, which libgcc's `__divsf3` for the
+chip runs without a branch. The [`cranpose_fast_fdiv`](components/cranpose_fast_fdiv/fdiv.S)
+component wraps `__divsf3` with that sequence, in IRAM. It gave the same bits
+as `compiler_builtins` for 400,400 divisions on the board, special values and
+subnormals among them, and the E32R35T's frames went from 1.31 to 1.28 ms
+(demo), 3.99 to 3.91 ms (drawn text) and 6.87 to 6.79 ms (composed text).
+The ESP32-S3's ROM holds the same sequence, and ESP-IDF's linker script
+points `__divsf3` there.
 
 ## QEMU
 
