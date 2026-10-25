@@ -3,7 +3,8 @@
 
 The apps are the Cranpose demo (apps/esp32-demo) and the LVGL benchmark
 (benchmarks/esp32/lvgl-app). `--component` links an ESP-IDF component into
-either, such as scripts/esp32/sampler or benchmarks/esp32/perfstats. The ELF
+either, with the settings of its sdkconfig.defaults, such as
+scripts/esp32/sampler or benchmarks/esp32/perfstats. The ELF
 is copied beside the log, so a profile in the log can be read later.
 
 Run it in the Xtensa Rust environment (`. ~/export-esp-1.98.1.sh`); the LVGL
@@ -200,6 +201,10 @@ def main():
     component = args.component.resolve() if args.component else None
     args.log.parent.mkdir(parents=True, exist_ok=True)
     extra = [path.resolve() for path in args.sdkconfig]
+    # A component's own settings, such as the run time counter perfstats
+    # reads, come before the ones the command line adds.
+    if component and (component / "sdkconfig.defaults").exists():
+        extra.insert(0, component / "sdkconfig.defaults")
     if args.app == "demo":
         elf, bootloader, partitions = build_demo(args.board, component, extra, args.feature, args.log)
     elif args.feature:

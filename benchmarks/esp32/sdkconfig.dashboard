@@ -1,0 +1,2 @@
+# The LVGL benchmark shows the dashboard in place of the demo's screen.
+CONFIG_BENCH_DASHBOARD=y

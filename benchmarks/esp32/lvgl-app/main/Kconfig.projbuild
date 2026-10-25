@@ -8,4 +8,12 @@ config BENCH_TEXT_EVERY_FRAME
         clock or a sensor reading does, instead of the seconds. The Cranpose
         demo's text-drawn and text-composed features show the same line.
 
+config BENCH_DASHBOARD
+    bool "The dashboard in place of the demo's screen"
+    default n
+    help
+        The dashboard of crates/cranpose/tests/support/dashboard.rs, which
+        changes most of the display every frame. The Cranpose demo's
+        dashboard feature and the Slint benchmark show the same screen.
+
 endmenu
