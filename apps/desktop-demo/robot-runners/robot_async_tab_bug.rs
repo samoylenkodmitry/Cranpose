@@ -20,7 +20,7 @@ pub(crate) fn main() {
 
             println!("\n--- Step 1: Switch to Async Runtime Tab ---");
 
-            let semantics = robot.get_semantics().unwrap();
+            let semantics = robot.get_semantics().expect("the robot reads the semantics tree");
             let async_tab_pos = semantics
                 .iter()
                 .find_map(|root| find_text_center(root, "Async Runtime"));
@@ -42,7 +42,7 @@ pub(crate) fn main() {
                 let _ = robot.exit();
             }
 
-            let semantics = robot.get_semantics().unwrap();
+            let semantics = robot.get_semantics().expect("the robot reads the semantics tree");
             if semantics
                 .iter()
                 .any(|root| find_text_center(root, "Async Runtime Demo").is_some())
@@ -55,7 +55,7 @@ pub(crate) fn main() {
 
             println!("\n--- Step 2: Switch back to Counter App Tab ---");
 
-            let semantics = robot.get_semantics().unwrap();
+            let semantics = robot.get_semantics().expect("the robot reads the semantics tree");
             let counter_tab_pos = semantics
                 .iter()
                 .find_map(|root| find_text_center(root, "Counter App"));
@@ -77,7 +77,7 @@ pub(crate) fn main() {
                 let _ = robot.exit();
             }
 
-            let semantics = robot.get_semantics().unwrap();
+            let semantics = robot.get_semantics().expect("the robot reads the semantics tree");
             if semantics
                 .iter()
                 .any(|root| find_text_center(root, "Counter: 0").is_some())

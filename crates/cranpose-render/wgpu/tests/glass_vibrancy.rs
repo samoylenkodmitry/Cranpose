@@ -173,7 +173,9 @@ fn content_test_frame(
         ],
     );
     renderer.scene_mut().graph = Some(RenderGraph::new(root));
-    renderer.capture_frame(1206, 360).unwrap()
+    renderer
+        .capture_frame(1206, 360)
+        .expect("the renderer captures a frame")
 }
 
 #[test]
@@ -679,14 +681,18 @@ fn held_tab_capture_with_input(
 
 fn save_optical_capture(root: &str, name: &str, frame: &cranpose_render_wgpu::CapturedFrame) {
     let path = std::path::Path::new(root).join(format!("{name}.png"));
-    let mut encoder = png::Encoder::new(std::fs::File::create(&path).unwrap(), 1206, 360);
+    let mut encoder = png::Encoder::new(
+        std::fs::File::create(&path).expect("the reference png is writable"),
+        1206,
+        360,
+    );
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder
         .write_header()
-        .unwrap()
+        .expect("the reference png encodes")
         .write_image_data(&frame.pixels)
-        .unwrap();
+        .expect("the reference png writes");
 }
 
 fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdrop: TabBackdrop) {
@@ -713,15 +719,24 @@ fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdro
     };
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("tests/fixtures/native_pane/probe-{index:02}.png"));
-    let mut decoder =
-        png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(
+        std::fs::File::open(path).expect("the reference png exists"),
+    ));
     decoder.set_transformations(png::Transformations::ALPHA);
-    let mut reader = decoder.read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
+    let mut reader = decoder.read_info().expect("the reference png has a header");
+    let mut pixels = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .expect("the reference png has a frame size")
+    ];
+    let info = reader
+        .next_frame(&mut pixels)
+        .expect("the reference png decodes");
     assert_eq!(info.color_type, png::ColorType::Rgba);
     pixels.truncate(info.buffer_size());
-    let image = ImageBitmap::from_rgba8(info.width, 339, pixels).unwrap();
+    let image =
+        ImageBitmap::from_rgba8(info.width, 339, pixels).expect("the reference png is RGBA");
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -746,7 +761,12 @@ fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdro
         })),
     });
     let lens = extract_lens(
-        &renderer.scene_mut().graph.as_ref().unwrap().root,
+        &renderer
+            .scene_mut()
+            .graph
+            .as_ref()
+            .expect("the scene has a graph")
+            .root,
         ProjectiveTransform::identity(),
     )
     .expect("composed raised lens");
@@ -977,12 +997,12 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
             let mut rows = route.lines();
             let initial: f32 = rows
                 .next()
-                .unwrap()
+                .expect("the trace has rows")
                 .split(',')
                 .nth(1)
-                .unwrap()
+                .expect("the first trace row has a position")
                 .parse()
-                .unwrap();
+                .expect("the first trace position parses");
             shell.set_cursor(72.333 + initial, 61.0);
             if initial != 0.0 {
                 assert!(shell.pointer_pressed());
@@ -996,9 +1016,9 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
             let mut frame_time = 0u64;
             for row in rows {
                 let parts: Vec<_> = row.split(',').collect();
-                let time = parts[1].parse::<f64>().unwrap();
+                let time = parts[1].parse::<f64>().expect("the trace time parses");
                 let nanos = (time * 1e9).round() as u64;
-                let position: f32 = parts[2].parse().unwrap();
+                let position: f32 = parts[2].parse().expect("the trace position parses");
                 if parts[0] == "up" {
                     assert!(shell.pointer_released_at_event_time(
                         cranpose_app_shell::PointerEventTime {
@@ -1168,7 +1188,11 @@ fn settled_tab_pixels(backdrop: TabBackdrop) -> Vec<u8> {
         for _ in 0..240 {
             shell.update_after_exact_interval(std::time::Duration::from_millis(16));
         }
-        shell.renderer().capture_frame(1206, 360).unwrap().pixels
+        shell
+            .renderer()
+            .capture_frame(1206, 360)
+            .expect("the renderer captures a frame")
+            .pixels
     })
 }
 

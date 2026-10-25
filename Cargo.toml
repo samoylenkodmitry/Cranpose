@@ -140,6 +140,14 @@ dbg_macro = "deny"
 clone_on_copy = "deny"
 redundant_locals = "deny"
 
+# A panic names its cause: `expect` with the reason.
+unwrap_used = "deny"
+
+# clippy.toml lists what these forbid. They stay off here while
+# scripts/ci/clippy_budget.py still counts sites left for them.
+disallowed_types = "allow"
+disallowed_methods = "allow"
+
 # Work the code asks for and then throws away: a clone nobody needed, a default
 # computed on the path that does not use it, a copy spelled as a clone, a fresh
 # allocation where the destination's could be reused. A clone is only ever

@@ -154,7 +154,7 @@ fn main() {
     let start = std::time::Instant::now();
     composition
         .render(location_key(file!(), line!(), column!()), showcase)
-        .unwrap();
+        .expect("the demo composes");
     let initial_duration = start.elapsed();
     println!("✅ Initial render: {initial_duration:?}\n");
 
@@ -175,7 +175,7 @@ fn main() {
                 reorderable_modifiers(false);
             });
         })
-        .unwrap();
+        .expect("the demo composes");
     let recomp_duration = recomp_start.elapsed();
     println!("✅ Recomposition: {recomp_duration:?}");
     println!(
@@ -189,7 +189,7 @@ fn main() {
         .render(location_key(file!(), line!(), column!()), || {
             long_list(1000);
         })
-        .unwrap();
+        .expect("the demo composes");
     let stress_duration = stress_start.elapsed();
     println!("✅ 1000 items rendered: {stress_duration:?}");
     println!("📈 Per-item average: {:?}", stress_duration / 1000);

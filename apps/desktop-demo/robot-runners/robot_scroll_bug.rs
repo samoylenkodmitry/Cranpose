@@ -32,16 +32,16 @@ pub(crate) fn main() {
             }
 
             println!("Scrolling down past item 4...");
-            robot.mouse_move(512.0, 600.0).unwrap();
-            robot.mouse_down().unwrap();
+            robot.mouse_move(512.0, 600.0).expect("the robot drives the pointer");
+            robot.mouse_down().expect("the robot drives the pointer");
             let steps = 10;
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
                 let y = 600.0 + (200.0 - 600.0) * t;
-                robot.mouse_move(512.0, y).unwrap();
+                robot.mouse_move(512.0, y).expect("the robot drives the pointer");
                 std::thread::sleep(Duration::from_millis(16));
             }
-            robot.mouse_up().unwrap();
+            robot.mouse_up().expect("the robot drives the pointer");
 
             println!("Waiting for scroll to settle...");
             std::thread::sleep(Duration::from_secs(1));

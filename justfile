@@ -80,10 +80,17 @@ fmt-check:
 
 # Lint the whole workspace, every target, then `cranpose` alone on its default
 # features. The workspace build unifies the desktop features other members
-# turn on, so it never compiles `cranpose` or its tests without them.
+# turn on, so it never compiles `cranpose` or its tests without them. The
+# workspace run also counts the lints that still have sites left against
+# scripts/ci/clippy_budget.toml.
 clippy: _disk-guard
-    cargo clippy --workspace --all-targets -- -D warnings
+    python3 scripts/ci/clippy_budget.py
     cargo clippy -p cranpose --all-targets -- -D warnings
+
+# Write the lint counts that fell below their budget, for the commit that
+# removed the sites.
+clippy-budget-lower:
+    python3 scripts/ci/clippy_budget.py --lower
 
 # A plain build does not catch `Arc<dyn Trait>` values that pay for
 # synchronisation the single-threaded wasm target cannot use; only clippy does.
@@ -511,6 +518,7 @@ _benchmark-python:
 # The shell helpers agents run by hand, pinned so they cannot rot.
 test-shell-helpers: _benchmark-python ci-contract-gates
     python3 scripts/ci/tests/test_rustup_lock.py
+    scripts/ci/clippy_budget_test.sh
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh

@@ -100,7 +100,7 @@ pub(crate) fn main() {
                 if item0.is_none() {
                     return Err("Item #0 not found in initial state".to_string());
                 }
-                let (_, y) = item0.unwrap();
+                let (_, y) = item0.expect("the element is on screen");
 
                 let viewport =
                     find_in_semantics(&robot, |elem| find_text(elem, "LazyListViewport"));
@@ -123,7 +123,7 @@ pub(crate) fn main() {
                 if before.is_none() {
                     return Err("Item #0 not found before scroll".to_string());
                 }
-                let (_, before_y) = before.unwrap();
+                let (_, before_y) = before.expect("the element is on screen");
 
                 let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(50));

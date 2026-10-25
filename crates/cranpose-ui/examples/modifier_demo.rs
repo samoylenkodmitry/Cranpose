@@ -144,7 +144,7 @@ fn main() {
     let start = std::time::Instant::now();
     composition
         .render(location_key(file!(), line!(), column!()), demo)
-        .unwrap();
+        .expect("the demo composes");
     let duration = start.elapsed();
 
     println!("✅ Rendered in {duration:?}\n");
@@ -168,7 +168,7 @@ fn main() {
                 item_list(10);
             });
         })
-        .unwrap();
+        .expect("the demo composes");
     let recomp_duration = recomp_start.elapsed();
 
     println!("✅ Recomposed in {recomp_duration:?}");
@@ -177,7 +177,7 @@ fn main() {
     let perf_start = std::time::Instant::now();
     composition
         .render(location_key(file!(), line!(), column!()), || item_list(100))
-        .unwrap();
+        .expect("the demo composes");
     let perf_duration = perf_start.elapsed();
 
     println!("✅ 100 items in {perf_duration:?}");

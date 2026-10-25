@@ -68,14 +68,18 @@ fn hold(compiler: &PipelineCompiler, lane: CompileLane, count: usize) -> Vec<mps
             let (release, held) = mpsc::channel::<()>();
             let started = started.clone();
             compiler.enqueue(lane, move || {
-                started.send(()).unwrap();
+                started
+                    .send(())
+                    .expect("the compiler test channel stays open");
                 let _ = held.recv();
             });
             release
         })
         .collect();
     for _ in 0..count {
-        holding.recv_timeout(Duration::from_secs(5)).unwrap();
+        holding
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the compiler test channel stays open");
     }
     releases
 }

@@ -13,7 +13,6 @@ Read only the sections required by the current operation. These are project requ
 
 AGENTS.md holds the code rules every change follows; these are the rest.
 
-- `unwrap()` is forbidden.
 - Use `cargo add` for dependencies and `cargo upgrade` for upgrades.
 - Use idiomatic Rust names; composable functions use CamelCase.
 - Suppress a lint with `#[expect]`, which fails once nothing needs it; use `#[allow]` only where the lint fires in some build configurations and not in others.
