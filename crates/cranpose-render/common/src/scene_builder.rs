@@ -889,14 +889,11 @@ fn try_update_retained_layer(
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
     match kind {
-        NodeUpdate::Moved if !root => {
-            move_retained_layer(applier, layer, ancestors).or_else(|| {
-                try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
-            })
-        }
+        NodeUpdate::Moved if !root => move_retained_layer(applier, layer, ancestors)
+            .or_else(|| translate_tracking_hits(applier, layer, dirty_nodes, ancestors)),
         NodeUpdate::Draws if redraw_retained_layer(applier, layer, root, ancestors) => Some(false),
         NodeUpdate::Content | NodeUpdate::Draws | NodeUpdate::Moved => {
-            try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
+            translate_tracking_hits(applier, layer, dirty_nodes, ancestors)
         }
         NodeUpdate::Layer => update_layer_properties(applier, layer, root, false, ancestors),
         NodeUpdate::MovedLayer => update_layer_properties(applier, layer, root, true, ancestors),
@@ -1140,6 +1137,28 @@ fn publish_retained_window_geometry(
             publish_retained_window_geometry(applier, child, child_abs);
         }
     }
+}
+
+/// [`try_translate_scrolled_layer`], returning whether hit geometry may
+/// have changed: a layer that neither held nor holds a hit target and lies
+/// in no 3D space leaves the hit graph as it was, as
+/// [`rebuild_tracking_hits`] would find. `None` when the layer cannot be
+/// translated.
+fn translate_tracking_hits(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    ancestors: TranslateAncestorContext,
+) -> Option<bool> {
+    let held = holds_hit_geometry(layer);
+    try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors)
+        .then(|| held || holds_hit_geometry(layer))
+}
+
+/// Whether the hit graph reads `layer`: it is a hit target, holds one or is
+/// a 3D space, the states [`HitGraphState::dirty_against`] compares.
+fn holds_hit_geometry(layer: &LayerNode) -> bool {
+    layer.hit_test.is_some() || layer.has_hit_targets || layer.graphics_layer.space.is_some()
 }
 
 fn try_translate_scrolled_layer(

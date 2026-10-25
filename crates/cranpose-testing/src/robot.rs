@@ -544,19 +544,7 @@ impl Renderer for TestRenderer {
         _viewport: Size,
         updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        self.scene.update_from_applier(applier, root, updates, true);
-        Ok(())
-    }
-
-    fn update_visual_scene_from_applier(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        _viewport: Size,
-        updates: SceneUpdates<'_>,
-    ) -> Result<(), Self::Error> {
-        self.scene
-            .update_from_applier(applier, root, updates, false);
+        self.scene.update_from_applier(applier, root, updates);
         Ok(())
     }
 }

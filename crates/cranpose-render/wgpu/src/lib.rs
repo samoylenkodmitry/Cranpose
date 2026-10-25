@@ -1394,23 +1394,7 @@ impl Renderer for WgpuRenderer {
         }
         self.frontend
             .scene
-            .update_from_applier(applier, root, updates, true);
-        Ok(())
-    }
-
-    fn update_visual_scene_from_applier(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        _viewport: Size,
-        updates: cranpose_render_common::SceneUpdates<'_>,
-    ) -> Result<(), Self::Error> {
-        if updates.is_empty() {
-            self.frontend.clear_fps_overlay();
-        }
-        self.frontend
-            .scene
-            .update_from_applier(applier, root, updates, false);
+            .update_from_applier(applier, root, updates);
         Ok(())
     }
 

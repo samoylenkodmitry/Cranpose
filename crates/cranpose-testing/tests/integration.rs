@@ -29,6 +29,7 @@ mod pointer_icon_end_to_end_test;
 mod pointer_input_end_to_end_test;
 mod pointer_input_integration_test;
 mod ray_pointer_test;
+mod relayout_hit_test;
 mod remember_keyed_test;
 mod render_invalidation_test;
 mod robot_input;

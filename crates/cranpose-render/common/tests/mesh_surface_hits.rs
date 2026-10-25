@@ -296,7 +296,6 @@ pub(crate) fn camera_moved(
             layers: &[scene_id],
             moved: &[],
         },
-        false,
     );
 }
 
