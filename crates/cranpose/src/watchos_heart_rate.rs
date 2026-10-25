@@ -37,7 +37,7 @@ use objc2_health_kit::{
     HKWorkoutConfiguration, HKWorkoutSession, HKWorkoutSessionLocationType,
 };
 
-use crate::apple_mobile::on_main_after;
+use crate::apple::mobile::on_main_after;
 
 /// How often the reading is taken from the workout. The watch measures about
 /// every five seconds during one; a second keeps the reading at most a second

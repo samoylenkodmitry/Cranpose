@@ -12,8 +12,8 @@ pub use system_languages::{
     ProvideApplicationLocalization, local_system_languages, system_languages,
 };
 
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_file_picker;
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+pub mod android;
 /// An in-process Cranpose component driven by its native host.
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
@@ -49,7 +49,7 @@ pub mod native_view;
 mod offscreen_instance;
 mod scoped_weak_stack;
 #[cfg(all(feature = "android", target_os = "android"))]
-pub use android_file_picker::open_content_uri;
+pub use android::file_picker::open_content_uri;
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
@@ -66,109 +66,15 @@ mod accessibility;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod accessibility_publish_policy;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_accessibility;
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
-))]
-mod android_accessibility_wire;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_app_info;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_app_update;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_camera;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_display_timing;
 mod android_entry;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_finish;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_font_scale;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_frame_rate;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_frame_telemetry;
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
-mod android_frame_work;
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
-))]
-mod android_haptics_queue;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_heart_rate;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_host;
 #[cfg_attr(
     not(all(feature = "android", target_os = "android")),
     expect(dead_code)
 )]
 mod android_host_window;
 mod android_input;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_jni;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_keyboard;
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
-mod android_launch_args;
-#[cfg(all(feature = "android", feature = "media-backend", target_os = "android"))]
-mod android_media;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_microphone;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_microphone_standby;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_overlay_window;
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
-mod android_panic_hook;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_perf_hint;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_permissions;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_pipeline_update;
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
-))]
-mod android_poll;
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
-))]
-mod android_present_thread;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_process;
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "playbilling", target_os = "android")
-))]
-mod android_purchase_wire;
-#[cfg(all(
-    feature = "android",
-    feature = "playbilling",
-    feature = "renderer-wgpu",
-    target_os = "android"
-))]
-mod android_purchases;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_services;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_surface;
 #[cfg(target_os = "android")]
 mod android_symbols;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_text_input;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_vsync;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_wearable;
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
-mod android_wire_escape;
-#[cfg(all(feature = "android", target_os = "android"))]
-mod android_writable_folder;
 mod app_launcher;
 #[cfg(feature = "framebuffer")]
 pub mod framebuffer;
@@ -186,7 +92,7 @@ pub use cranpose_app_shell::inspector::{
 };
 mod host_environment;
 #[cfg(all(feature = "ios", target_os = "ios"))]
-mod ios_host;
+pub mod ios;
 mod native_window;
 mod thread_state;
 mod window_local;
@@ -521,8 +427,6 @@ mod embed_protocol;
 #[cfg(feature = "embed")]
 mod embed_surfaces;
 
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-pub mod android;
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -550,27 +454,7 @@ mod cursor_scale;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_accessibility;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_integration;
-#[cfg(all(
-    feature = "desktop-menus",
-    feature = "renderer-wgpu",
-    any(
-        target_os = "macos",
-        target_os = "windows",
-        all(target_os = "linux", not(target_arch = "wasm32"))
-    )
-))]
-mod desktop_menus;
-#[cfg(all(
-    feature = "desktop-menus",
-    feature = "renderer-wgpu",
-    target_os = "windows"
-))]
-mod windows_menu;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-pub use desktop_integration::{
+pub use desktop::integration::{
     DesktopIntegration, DesktopIntegrationContext, DesktopWaker, DesktopWindow, DesktopWindowId,
 };
 #[cfg(all(
@@ -582,70 +466,18 @@ pub use desktop_integration::{
         all(target_os = "linux", not(target_arch = "wasm32"))
     )
 ))]
-pub use desktop_menus::{
+pub use desktop::menus::{
     CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec, WindowMenuBar,
 };
 /// The raw window handle traits a [`DesktopWindow`] implements, at the
 /// version the shell uses.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use raw_window_handle;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_accessibility_options;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_bundled_assets;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_cursor;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_host_surface;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_incoming;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_input;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_lifecycle;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-mod desktop_power;
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod host_surface_resize;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "macos"
-))]
-mod macos_cursor;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "macos"
-))]
-mod macos_menu;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "macos"
-))]
-mod macos_open;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "macos"
-))]
-mod macos_power;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "macos"
-))]
-mod macos_window;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "windows"
-))]
-mod windows_cursor;
 
 #[cfg(all(
     unix,
@@ -677,87 +509,14 @@ mod winit_wheel;
 ))]
 mod robot;
 
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-pub mod ios;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_accessibility;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_pick_future;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_file_picker;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_uri_handler;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_clipboard;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_share_sheet;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_image_picker;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_notifier;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_haptics;
-
-#[cfg(any(
-    all(feature = "ios", target_os = "ios"),
-    all(feature = "watchos", target_os = "watchos")
-))]
-mod apple_mobile;
-
-#[cfg(any(
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-    all(feature = "watchos", target_os = "watchos")
-))]
-mod apple_audio_session;
-
-#[cfg(any(
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-    all(feature = "watchos", target_os = "watchos")
-))]
-mod apple_microphone;
-
-#[cfg(all(
-    feature = "wearable",
-    any(
-        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-        all(feature = "watchos", target_os = "watchos")
-    )
-))]
-mod apple_wearable;
+#[cfg(target_vendor = "apple")]
+mod apple;
 
 #[cfg(all(feature = "watchos", target_os = "watchos"))]
 mod watchos_services;
 
 #[cfg(all(feature = "watchos", feature = "heart-rate", target_os = "watchos"))]
 mod watchos_heart_rate;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_media;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_app_info;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_device_info;
-
-#[cfg(any(
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-    all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        target_os = "macos"
-    )
-))]
-mod apple_network;
 
 #[cfg(all(
     feature = "desktop-shell",
@@ -766,58 +525,6 @@ mod apple_network;
 ))]
 mod linux_network;
 
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    target_os = "windows"
-))]
-mod windows_network;
-
-#[cfg(any(
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-    all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        target_os = "macos"
-    )
-))]
-mod apple_thermal;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_writable_folder;
-
-#[cfg(any(
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-    all(
-        feature = "camera-desktop",
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        target_os = "macos"
-    )
-))]
-mod apple_camera;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_keyboard;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_back_gesture;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_scene;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_background;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_downloads;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_storage;
-
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_bundled_assets;
-
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 #[expect(
     clippy::print_stderr,
@@ -825,93 +532,11 @@ mod ios_bundled_assets;
 )]
 pub mod recorder;
 
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
 pub mod web;
-
-#[cfg(any(
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
-    test
-))]
-mod web_canvas_layout;
-
-#[cfg(any(
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
-    test
-))]
-mod web_surface_scale;
-
-#[cfg(any(
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
-    test
-))]
-mod web_floating_window;
-
-#[cfg(any(
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
-    test
-))]
-mod web_wheel;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_accessibility;
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-mod web_accessibility_attributes;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_accessibility_options;
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-mod web_accessibility_order;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_device_loss;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_idle_prefetch;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_lifecycle;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_pipeline_discovery;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_text_input;
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-mod web_text_span;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_clipboard;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_cursor;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_pointer;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_canvas_watch;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_frame_host;
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_host_surface;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_media;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_history;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_services;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_power;
-
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-mod web_drop;
 
 /// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
@@ -939,20 +564,6 @@ pub(crate) fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
 mod webview;
 pub use webview::{WebView, WebViewEvent};
 
-#[cfg(all(
-    feature = "webview",
-    feature = "renderer-wgpu",
-    feature = "android",
-    target_os = "android"
-))]
-mod android_webview;
-#[cfg(all(
-    feature = "webview",
-    feature = "renderer-wgpu",
-    feature = "web",
-    target_arch = "wasm32"
-))]
-mod web_webview;
 #[cfg(all(
     feature = "webview",
     feature = "renderer-wgpu",

@@ -41,7 +41,7 @@ fn problems_after_edit(file: &str, after: &str, from: &str, to: &str) -> String 
     files.extend(
         [
             "scripts/ci/android_env.sh",
-            "crates/cranpose/src/tests/android_accessibility_wire.rs",
+            "crates/cranpose/src/android/tests/accessibility_wire.rs",
             PARSER_TEST,
             APPLICATION_MANIFEST,
             "apps/isolated-demo/android/app/src/main/AndroidManifest.xml",

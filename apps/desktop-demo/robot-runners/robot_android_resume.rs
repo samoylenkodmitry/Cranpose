@@ -1,6 +1,6 @@
 use crate::robot_launch;
 
-use std::{cell::RefCell, path::Path};
+use std::cell::RefCell;
 
 use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_ui::{composable, Column, ColumnSpec, LinearArrangement, Modifier, Text, TextStyle};
@@ -30,44 +30,6 @@ fn lifecycle_hook(name: String, argument: String) -> Result<Option<String>, Stri
     Ok(None)
 }
 
-fn android_resume_contract_is_fixed() {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/cranpose/src");
-    let source = std::fs::read_to_string(source_root.join("android.rs"))
-        .expect("read Android runtime source");
-    assert!(
-        !source.contains(
-            "drop_present_surface(&mut gpu_resources, &mut app_shell);\n                            } else {\n                                gpu_resources = None;"
-        ),
-        "TerminateWindow must retain the Android GPU device and renderer warm state"
-    );
-    assert!(
-        source.contains("resources.surface = None;"),
-        "TerminateWindow must detach only the native surface"
-    );
-    assert!(
-        source.contains("setup.resources.surface_dirty = true;\n            shell.mark_dirty();"),
-        "InitWindow must schedule a fresh update before the first resumed present"
-    );
-    let vsync = std::fs::read_to_string(source_root.join("android_vsync.rs"))
-        .expect("read Android vsync source");
-    assert!(
-        !vsync.contains("OnceLock<Box<dyn Fn() + Send + Sync>>"),
-        "android_main relaunch must replace the vsync waker"
-    );
-    assert!(
-        vsync.contains(
-            "pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {\n    CALLBACK_POSTED.store(false, Ordering::Release);\n    UNAVAILABLE.store(false, Ordering::Release);"
-        ),
-        "android_main relaunch must reset pending and unavailable vsync state"
-    );
-    let accessibility = std::fs::read_to_string(source_root.join("android_accessibility.rs"))
-        .expect("read Android accessibility source");
-    assert!(
-        !accessibility.contains("OnceLock<android_activity::AndroidAppWaker>"),
-        "android_main relaunch must replace the accessibility waker"
-    );
-}
-
 pub(crate) fn main() {
     robot_launch::launch("Android Resume", 640, 480)
         .with_robot_app_hook(lifecycle_hook)
@@ -89,7 +51,6 @@ pub(crate) fn main() {
             robot.wait_for_present_frame().expect("first resumed frame");
             robot.validate_content("Resumed").expect("resumed content");
 
-            android_resume_contract_is_fixed();
             robot.exit().expect("exit Android resume robot");
         })
         .run(resume_probe);

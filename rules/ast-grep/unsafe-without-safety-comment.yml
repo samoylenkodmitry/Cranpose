@@ -3,9 +3,9 @@ language: rust
 severity: warning
 message: An unsafe block in a reviewed boundary module states its invariant in a `// SAFETY:` comment above its statement.
 files:
-  - crates/cranpose/src/android_jni.rs
-  - crates/cranpose/src/android_surface.rs
-  - crates/cranpose/src/ios_accessibility.rs
+  - crates/cranpose/src/android/jni.rs
+  - crates/cranpose/src/android/surface.rs
+  - crates/cranpose/src/ios/accessibility.rs
   - crates/cranpose/src/watchos_heart_rate.rs
   - crates/cranpose/src/android_entry.rs
   - crates/cranpose-audio/src/ring.rs

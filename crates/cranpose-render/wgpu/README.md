@@ -19,7 +19,7 @@ let renderer = WgpuRenderer::new(APP_FONTS);
 Platform-shell authors call `init_gpu` and the render methods for GPU setup
 and frame presentation. The
 [desktop shell](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose/src)
-and [web shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/web.rs)
+and [web shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/web/event_loop.rs)
 show platform setup and surface presentation.
 
 Default features are empty. `backend-gles` adds the GL-class

@@ -26,7 +26,7 @@
 - Android input helpers use `InputManagerGlobal` on API 34 and later; confirm injection failures from stderr and logcat.
 - Android `screencap` selects PNG encoding for `.png` paths; use a different extension and validate the header when collecting raw pixels.
 - Review original captures when OCR rejects a visible label; preserve the automatic result and record any manual correction separately.
-- Android forwards only registered properties in `android_frame_telemetry.rs`; prove a diagnostic changed its marker or counter inside the process.
+- Android forwards only registered properties in `android/frame_telemetry.rs`; prove a diagnostic changed its marker or counter inside the process.
 - Acceptance runs disable detailed diagnostics; per-item logging overhead varies with the work the optimization removes.
 - `[GPU f#N]` describes one sampled frame, not a window average; use consecutive-frame totals to assess periodic cache misses.
 - Preserve live log streams and check packet continuity; missing log messages do not establish missing presents or stalls.

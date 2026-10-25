@@ -127,7 +127,7 @@ fn robot_runners_do_not_hardcode_tmpfs_output_paths() {
 }
 
 /// `wait_for_idle` returns `Err` on its own timeout while the app is still
-/// mid-animation (`crates/cranpose/src/desktop.rs`'s `wait_for_idle`
+/// mid-animation (`crates/cranpose/src/desktop/event_loop.rs`'s `wait_for_idle`
 /// handler) -- discarding that `Err` right before reading a position and
 /// trusting it as a delta assertion's ground truth lets a timeout under
 /// host load masquerade as "settled", silently measuring an unsettled

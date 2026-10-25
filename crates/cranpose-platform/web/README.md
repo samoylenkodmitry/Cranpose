@@ -15,7 +15,7 @@ assert_eq!((event.position.x, event.position.y), (24.0, 32.0));
 ```
 
 The browser shell owns DOM registration, canvas state and frame presentation.
-The [web shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/web.rs)
+The [web shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/web/event_loop.rs)
 shows the browser event path and WGPU backend selection. See the
 [`WebPlatform` API](https://docs.rs/cranpose-platform-web/latest/cranpose_platform_web/struct.WebPlatform.html),
 and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-platform/web).

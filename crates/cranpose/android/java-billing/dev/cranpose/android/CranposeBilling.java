@@ -47,7 +47,7 @@ import java.util.TreeSet;
  * loop.
  *
  * <p>What crosses JNI. State goes over as one flattened snapshot per update rather than one
- * call per product, in the format {@code crates/cranpose/src/android_purchase_wire.rs}
+ * call per product, in the format {@code crates/cranpose/src/android/purchase_wire.rs}
  * decodes. Because this class holds everything the billing client has told it, each snapshot
  * is complete: the Rust side can swap it in wholesale and never shows a half-built price
  * list.

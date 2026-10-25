@@ -17,7 +17,7 @@ assert_eq!((position.x, position.y), (12.0, 16.0));
 ```
 
 The adapter adds the native-surface offset before density conversion. The
-[Android shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/android.rs)
+[Android shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/android/event_loop.rs)
 connects Android events, surface state and the renderer.
 
 The feature set is empty. See the [`AndroidPlatform` API](https://docs.rs/cranpose-platform-android/latest/cranpose_platform_android/struct.AndroidPlatform.html),

@@ -12,20 +12,20 @@ use cranpose_services::{
 };
 use objc2_watch_kit::{WKHapticType, WKInterfaceDevice};
 
-use crate::apple_mobile::{buzz_starts, on_main_after, sandbox_directories};
+use crate::apple::mobile::{buzz_starts, on_main_after, sandbox_directories};
 
 /// Installs the services once per process.
 pub(crate) fn register() {
     static REGISTERED: Once = Once::new();
     REGISTERED.call_once(|| {
-        crate::apple_mobile::init_logging();
+        crate::apple::mobile::init_logging();
         set_host_controller(Arc::new(WatchHost));
         set_platform_haptics(Arc::new(WatchHaptics));
-        crate::apple_microphone::register();
+        crate::apple::microphone::register();
         #[cfg(feature = "heart-rate")]
         crate::watchos_heart_rate::register();
         #[cfg(feature = "wearable")]
-        crate::apple_wearable::register();
+        crate::apple::wearable::register();
     });
 }
 

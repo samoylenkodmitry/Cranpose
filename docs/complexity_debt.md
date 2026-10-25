@@ -76,8 +76,8 @@ still nobody's job to fix as a side effect of a comment sweep.
 
 ## Complexity: 24 functions over the limit (20)
 
-The two largest are worth naming on their own: `crates/cranpose/src/web.rs`'s
-`run` at cyclomatic complexity **224**, and `crates/cranpose/src/android.rs`'s
+The two largest are worth naming on their own: `crates/cranpose/src/web/event_loop.rs`'s
+`run` at cyclomatic complexity **224**, and `crates/cranpose/src/android/event_loop.rs`'s
 `run` at **174** -- both roughly an order of magnitude over the ceiling every
 other function here is held to. Both numbers already include their own
 nested closures' complexity (see above) -- there is no separate `<anonymous>`
@@ -106,8 +106,8 @@ crates/cranpose-ui/src/tests/modifier_nodes_tests.rs:1015-1146 custom_layout_mod
 crates/cranpose-ui/src/tests/modifier_nodes_tests.rs:1198-1325 stateful_measure_uses_live_retained_node_state (21)
 crates/cranpose-ui/src/tests/renderer_tests.rs:101-225 renderer_translates_draw_commands (37)
 crates/cranpose-ui/src/text_field_modifier_node.rs:453-645 create_handler (27)
-crates/cranpose/src/android.rs:1494-2438 run (174)
-crates/cranpose/src/web.rs:111-924 run (224)
+crates/cranpose/src/android/event_loop.rs:1494-2438 run (174)
+crates/cranpose/src/web/event_loop.rs:111-924 run (224)
 ```
 
 (Line ranges are as measured on `docs/comment-policy`'s branch tip at the

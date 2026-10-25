@@ -1456,7 +1456,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         context: jni::objects::JObject<'_>,
         share: jni::sys::jboolean,
     ) {
-        crate::android_process::start_for_service(
+        crate::android::process::start_for_service(
             env,
             class,
             context,

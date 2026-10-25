@@ -35,7 +35,7 @@ local development profile; `--release` selects the optimized profile.
 
 ## Implementation
 
-The backend preference is read by `crates/cranpose/src/web.rs`. wgpu's web
+The backend preference is read by `crates/cranpose/src/web/event_loop.rs`. wgpu's web
 renderer enables its `webgl` feature in
 `crates/cranpose-render/wgpu/Cargo.toml`; the runtime chooses browser WebGPU or
 WebGL2 according to the URL preference and available adapters.
