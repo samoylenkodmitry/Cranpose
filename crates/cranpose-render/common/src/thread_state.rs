@@ -7,8 +7,9 @@ use cranpose_core::{NodeMarks, collections::map::HashMap as NodeMap};
 use cranpose_ui_graphics::FxBuildHasher;
 
 use crate::{
+    NodeUpdate,
     layer_recycling::Pool,
-    scene_builder::{HitGraphState, NodeUpdate, RecorderKey, RecorderSlot, TranslateScratch},
+    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
 };
 
 pub(crate) struct RenderThreadState {

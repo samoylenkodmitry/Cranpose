@@ -1,10 +1,8 @@
 use super::*;
 
-const DEV_OVERLAY_PADDING: f32 = 8.0;
-const DEV_OVERLAY_FONT_SIZE: f32 = 14.0;
-const DEV_OVERLAY_CHAR_WIDTH: f32 = 7.0;
-const DEV_OVERLAY_SEPARATOR: &str = " | ";
-const DEV_OVERLAY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+mod dev_overlay;
+use dev_overlay::draw_dev_overlay;
+
 const DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
 #[derive(Copy, Clone, Debug)]
@@ -77,7 +75,7 @@ struct RenderPhaseDirtyDiagnostics<'a> {
     layout_dirty_nodes: usize,
     moved_nodes: usize,
     structural_dirty_nodes: usize,
-    partial_dirty_nodes: usize,
+    scene_updates: usize,
     dirty_node_ids: Option<String>,
     render_only_dirty: bool,
     recomposed_this_frame: bool,
@@ -99,7 +97,7 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
         layout_dirty_nodes,
         moved_nodes,
         structural_dirty_nodes,
-        partial_dirty_nodes,
+        scene_updates,
         dirty_node_ids,
         render_only_dirty,
         recomposed_this_frame,
@@ -107,11 +105,11 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
     } = diagnostics;
     if let Some(dirty_node_ids) = dirty_node_ids {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} scene_updates={scene_updates} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
         );
     } else {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} scene_updates={scene_updates} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
         );
     }
 }
@@ -131,7 +129,9 @@ struct SurfaceDirt {
     layout_dirty_nodes: Vec<NodeId>,
     moved_nodes: Vec<NodeId>,
     structural_parents: Vec<NodeId>,
-    partial_dirty_nodes: Vec<NodeId>,
+    // What the scene updates in place, the shell's lists in one: kept from
+    // frame to frame for its capacity.
+    scene_updates: Vec<(NodeId, NodeUpdate)>,
     draw_repass_pending: bool,
     render_only_dirty: bool,
     visual_only_partial_dirty: bool,
@@ -150,6 +150,10 @@ struct ScopedLayoutNodes {
     moved: Vec<NodeId>,
 }
 
+fn any_nodes(lists: &[&[NodeId]]) -> bool {
+    lists.iter().any(|nodes| !nodes.is_empty())
+}
+
 impl SurfaceDirt {
     fn classify(
         frame: &FrameDirt,
@@ -158,7 +162,7 @@ impl SurfaceDirt {
         visual_nodes: ScopedVisualNodes,
         layout: ScopedLayoutNodes,
         structural_parents: Vec<NodeId>,
-        mut partial_dirty_nodes: Vec<NodeId>,
+        scene_updates: Vec<(NodeId, NodeUpdate)>,
     ) -> Self {
         let ScopedVisualNodes {
             draw: draw_dirty_nodes,
@@ -169,17 +173,15 @@ impl SurfaceDirt {
             moved: moved_nodes,
         } = layout;
         let structural_dirty = !structural_parents.is_empty();
-        // A node in two of the lists stays in both: the scene keys its
-        // updates by node, so sorting every id to drop the second copy would
-        // do that work twice.
-        partial_dirty_nodes.clear();
-        partial_dirty_nodes.extend(draw_dirty_nodes.iter().copied());
-        partial_dirty_nodes.extend(layout_dirty_nodes.iter().copied());
-        partial_dirty_nodes.extend(structural_parents.iter().copied());
 
         // Moved nodes are not part of the partial list: the scene moves them.
         let layout_changed = !layout_dirty_nodes.is_empty() || !moved_nodes.is_empty();
-        let partial_scene_dirty = !partial_dirty_nodes.is_empty() || !moved_nodes.is_empty();
+        let partial_scene_dirty = any_nodes(&[
+            &draw_dirty_nodes,
+            &layout_dirty_nodes,
+            &moved_nodes,
+            &structural_parents,
+        ]);
         let render_only_dirty = frame.render_dirty
             && !frame.attributed
             && !partial_scene_dirty
@@ -201,26 +203,63 @@ impl SurfaceDirt {
             || !layer_property_nodes.is_empty()
             || draw_repass_pending
             || structural_dirty;
-        Self {
+        let mut dirt = Self {
             draw_dirty_nodes,
             layer_property_nodes,
             layout_dirty_nodes,
             moved_nodes,
             structural_parents,
-            partial_dirty_nodes,
+            scene_updates,
             draw_repass_pending,
             render_only_dirty,
             visual_only_partial_dirty,
             full_scene_dirty,
             needs_scene_rebuild,
+        };
+        dirt.fill_scene_updates();
+        dirt
+    }
+
+    // A node in two of the lists stays in both: the scene merges a node's
+    // updates as it keys them, so sorting every id to drop the second copy
+    // would do that work twice. Nothing was composed or laid out for a
+    // visual update, so its draw nodes' draws read state that changed;
+    // otherwise they, the laid out nodes and the structural parents are
+    // recorded again.
+    fn fill_scene_updates(&mut self) {
+        let visual = self.use_visual_update();
+        let updates = &mut self.scene_updates;
+        updates.clear();
+        updates.extend(self.moved_nodes.iter().map(|&id| (id, NodeUpdate::Moved)));
+        updates.extend(
+            self.layer_property_nodes
+                .iter()
+                .map(|&id| (id, NodeUpdate::Layer)),
+        );
+        if visual {
+            updates.extend(
+                self.draw_dirty_nodes
+                    .iter()
+                    .map(|&id| (id, NodeUpdate::Draws)),
+            );
+        } else {
+            let recorded = self
+                .draw_dirty_nodes
+                .iter()
+                .chain(&self.layout_dirty_nodes)
+                .chain(&self.structural_parents);
+            updates.extend(recorded.map(|&id| (id, NodeUpdate::Content)));
         }
     }
 
     fn use_partial_update(&self) -> bool {
-        (!self.partial_dirty_nodes.is_empty()
-            || !self.layer_property_nodes.is_empty()
-            || !self.moved_nodes.is_empty())
-            && !self.render_only_dirty
+        any_nodes(&[
+            &self.draw_dirty_nodes,
+            &self.layer_property_nodes,
+            &self.layout_dirty_nodes,
+            &self.moved_nodes,
+            &self.structural_parents,
+        ]) && !self.render_only_dirty
             && !self.full_scene_dirty
     }
 
@@ -249,16 +288,16 @@ impl SurfaceDirt {
             layout_dirty_nodes: self.layout_dirty_nodes.len(),
             moved_nodes: self.moved_nodes.len(),
             structural_dirty_nodes: self.structural_parents.len(),
-            partial_dirty_nodes: self.partial_dirty_nodes.len(),
+            scene_updates: self.scene_updates.len(),
             dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
                 format!(
-                    "draw={:?} layers={:?} layout={:?} moved={:?} structural={:?} partial={:?}",
+                    "draw={:?} layers={:?} layout={:?} moved={:?} structural={:?} updates={:?}",
                     self.draw_dirty_nodes,
                     self.layer_property_nodes,
                     self.layout_dirty_nodes,
                     self.moved_nodes,
                     self.structural_parents,
-                    self.partial_dirty_nodes,
+                    self.scene_updates,
                 )
             }),
             render_only_dirty: self.render_only_dirty,
@@ -823,7 +862,7 @@ where
         reshaped: std::mem::take(&mut surface.scoped_layout_scene_nodes),
         moved: std::mem::take(&mut surface.scoped_moved_scene_nodes),
     };
-    let partial_dirty_nodes = std::mem::take(&mut surface.partial_scene_nodes);
+    let scene_updates = std::mem::take(&mut surface.scene_updates);
     let scene_dirty = surface.scene_dirty;
     let mut dirt = SurfaceDirt::classify(
         frame,
@@ -835,7 +874,7 @@ where
         },
         layout,
         structural_parents,
-        partial_dirty_nodes,
+        scene_updates,
     );
 
     if !dirt.needs_scene_rebuild {
@@ -853,7 +892,7 @@ where
         surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
         surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
         surface.structural_scene_nodes = dirt.structural_parents;
-        surface.partial_scene_nodes = dirt.partial_dirty_nodes;
+        surface.scene_updates = dirt.scene_updates;
         if dirt.render_only_dirty && app.dev_options.fps_counter {
             draw_dev_overlay(app, surface);
         }
@@ -878,7 +917,7 @@ where
     surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
     surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
     surface.structural_scene_nodes = dirt.structural_parents;
-    surface.partial_scene_nodes = dirt.partial_dirty_nodes;
+    surface.scene_updates = dirt.scene_updates;
     surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
     SurfaceFrame {
         result: FrameUpdateResult {
@@ -914,24 +953,14 @@ fn rebuild_surface_scene<R>(
             &mut applier,
             root,
             viewport_size,
-            SceneUpdates {
-                content: &[],
-                draws: &dirt.draw_dirty_nodes,
-                layers: &dirt.layer_property_nodes,
-                moved: &dirt.moved_nodes,
-            },
+            &dirt.scene_updates,
         )
     } else if dirt.use_partial_update() {
         surface.renderer.update_scene_from_applier(
             &mut applier,
             root,
             viewport_size,
-            SceneUpdates {
-                content: &dirt.partial_dirty_nodes,
-                draws: &[],
-                layers: &dirt.layer_property_nodes,
-                moved: &dirt.moved_nodes,
-            },
+            &dirt.scene_updates,
         )
     } else {
         surface
@@ -946,14 +975,6 @@ fn rebuild_surface_scene<R>(
 
 fn dev_overlay_belongs_on(id: RootId, fps_counter: bool) -> bool {
     fps_counter && matches!(id, RootId::Primary)
-}
-
-fn draw_dev_overlay<R: Renderer>(app: &ShellApp, surface: &mut RootSurface<R>) {
-    let viewport_size = surface.viewport_size();
-    surface.refresh_dev_overlay_text_for_frame_at(app, viewport_size, Instant::now());
-    surface
-        .renderer
-        .draw_dev_overlay(surface.dev_overlay_text.as_str(), viewport_size);
 }
 
 fn refresh_draw_nodes<R: Renderer>(
@@ -1002,130 +1023,6 @@ fn refresh_retained_redraw_nodes<R: Renderer>(
         );
     }
     refresh_draw_nodes(app, surface, dirty_nodes)
-}
-
-impl<R: Renderer> RootSurface<R> {
-    fn refresh_dev_overlay_text_for_frame_at(
-        &mut self,
-        app: &ShellApp,
-        viewport_size: Size,
-        now: Instant,
-    ) {
-        if !self.dev_overlay_text_needs_refresh(viewport_size, now) {
-            return;
-        }
-        self.dev_overlay_text = self.build_dev_overlay_text(app, viewport_size);
-        self.dev_overlay_last_refresh = Some(now);
-        self.dev_overlay_viewport = Some(viewport_size);
-    }
-
-    fn dev_overlay_text_needs_refresh(&self, viewport_size: Size, now: Instant) -> bool {
-        if self.dev_overlay_text.is_empty() || self.dev_overlay_viewport != Some(viewport_size) {
-            return true;
-        }
-
-        self.dev_overlay_last_refresh.is_none_or(|last| {
-            now.checked_duration_since(last).unwrap_or_default() >= DEV_OVERLAY_REFRESH_INTERVAL
-        })
-    }
-
-    fn build_dev_overlay_text(&mut self, app: &ShellApp, viewport_size: Size) -> String {
-        self.dev_overlay_controls.clear();
-
-        let stats = app.fps_monitor.stats();
-        // Each field with its rank: a viewport too narrow for the whole line,
-        // such as a phone browser's, drops the highest ranks first.
-        let fields = [
-            (0, format!("{:.0} FPS", stats.fps)),
-            (3, format!("avg {:.1}ms", stats.avg_ms)),
-            (2, format!("p95 {:.1}ms", stats.p95_ms)),
-            (4, format!("max {:.1}ms", stats.max_ms)),
-            (1, format!("work {:.1}ms", stats.work_avg_ms)),
-            (5, format!("{} recomp/s", stats.recomps_per_second)),
-        ];
-        let line_len = |max_rank: u8| {
-            let (count, chars) = fields
-                .iter()
-                .filter(|(rank, _)| *rank <= max_rank)
-                .fold((0_usize, 0_usize), |(count, chars), (_, field)| {
-                    (count + 1, chars + field.len())
-                });
-            chars + count.saturating_sub(1) * DEV_OVERLAY_SEPARATOR.len()
-        };
-        let fitting_chars = ((viewport_size.width - DEV_OVERLAY_PADDING * 2.0)
-            / DEV_OVERLAY_CHAR_WIDTH)
-            .max(0.0) as usize;
-        let controls_chars = if app.dev_options.frame_pacing_controls {
-            DEV_OVERLAY_SEPARATOR.len() + frame_pacing_controls_len()
-        } else {
-            0
-        };
-        let mut max_rank = 5;
-        while max_rank > 0 && line_len(max_rank) + controls_chars > fitting_chars {
-            max_rank -= 1;
-        }
-        let mut text = String::with_capacity(line_len(max_rank) + controls_chars);
-        for (_, field) in fields.iter().filter(|(rank, _)| *rank <= max_rank) {
-            if !text.is_empty() {
-                text.push_str(DEV_OVERLAY_SEPARATOR);
-            }
-            text.push_str(field);
-        }
-
-        if !app.dev_options.frame_pacing_controls {
-            return text;
-        }
-
-        text.push_str(DEV_OVERLAY_SEPARATOR);
-        let mut controls = Vec::with_capacity(FramePacingMode::ALL.len());
-        for (index, mode) in FramePacingMode::ALL.into_iter().enumerate() {
-            if index > 0 {
-                text.push(' ');
-            }
-            let start = text.len();
-            if mode == app.dev_options.frame_pacing_mode {
-                text.push('[');
-                text.push_str(mode.label());
-                text.push(']');
-            } else {
-                text.push_str(mode.label());
-            }
-            controls.push((start, text.len(), mode));
-        }
-
-        let overlay_width = text.len() as f32 * DEV_OVERLAY_CHAR_WIDTH;
-        let overlay_x = (viewport_size.width - overlay_width - DEV_OVERLAY_PADDING * 2.0)
-            .max(DEV_OVERLAY_PADDING);
-        let overlay_y = DEV_OVERLAY_PADDING;
-        let text_x = overlay_x + DEV_OVERLAY_PADDING / 2.0;
-        let text_y = overlay_y + DEV_OVERLAY_PADDING / 4.0;
-        let text_height = DEV_OVERLAY_FONT_SIZE * 1.4;
-
-        self.dev_overlay_controls = controls
-            .into_iter()
-            .map(|(start, end, mode)| DevOverlayControl {
-                bounds: Rect {
-                    x: text_x + start as f32 * DEV_OVERLAY_CHAR_WIDTH - 3.0,
-                    y: text_y - 3.0,
-                    width: (end - start) as f32 * DEV_OVERLAY_CHAR_WIDTH + 6.0,
-                    height: text_height + 6.0,
-                },
-                mode,
-            })
-            .collect();
-
-        text
-    }
-}
-
-/// The length of the frame pacing controls: every mode's label, a space
-/// between labels and brackets around the selected one.
-fn frame_pacing_controls_len() -> usize {
-    let labels: usize = FramePacingMode::ALL
-        .iter()
-        .map(|mode| mode.label().len())
-        .sum();
-    labels + FramePacingMode::ALL.len() - 1 + 2
 }
 
 fn clear_dispatch_invalidation(

@@ -3,7 +3,6 @@
 
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
-use cranpose_render_common::SceneUpdates;
 use cranpose_render_pixels::{Scene, draw_scene};
 use cranpose_ui::{
     Color, LayoutEngine, Modifier, Size,
@@ -103,12 +102,7 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
         scene.update_from_applier(
             &applier,
             root,
-            SceneUpdates {
-                content: &[],
-                draws: &[],
-                layers: &[panel],
-                moved: &[],
-            },
+            &[(panel, cranpose_render_common::NodeUpdate::Layer)],
         );
         let mut frame = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
         draw_scene(&mut frame, WIDTH, HEIGHT, &scene);

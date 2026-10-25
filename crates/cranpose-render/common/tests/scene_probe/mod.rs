@@ -3,7 +3,6 @@
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    SceneUpdates,
     graph::{LayerNode, PrimitiveNode, RenderGraph, RenderNode},
     scene_builder::{build_graph_from_applier, update_graph_from_applier},
 };
@@ -64,12 +63,20 @@ pub(crate) fn update_scene(
             update_graph_from_applier(
                 applier,
                 graph,
-                SceneUpdates {
-                    content: &content,
-                    draws: &[],
-                    layers: &layers,
-                    moved: &moved,
-                },
+                &content
+                    .iter()
+                    .map(|&id| (id, cranpose_render_common::NodeUpdate::Content))
+                    .chain(
+                        layers
+                            .iter()
+                            .map(|&id| (id, cranpose_render_common::NodeUpdate::Layer))
+                    )
+                    .chain(
+                        moved
+                            .iter()
+                            .map(|&id| (id, cranpose_render_common::NodeUpdate::Moved))
+                    )
+                    .collect::<Vec<_>>(),
                 1.0,
             ),
             "the scoped update applies"
