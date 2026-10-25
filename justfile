@@ -380,6 +380,17 @@ state-holder-gate:
 thread-local-budget:
     cargo xtask thread-local-budget
 
+# Counts that written rules keep low, each with a budget that only goes down:
+# lines per file, `too_many_arguments` suppressions, private doc comments,
+# `*_for_test` functions, `CRANPOSE_*` names in library crates and
+# source-text checks in tests. See scripts/ci/source_budgets.toml.
+source-budgets:
+    python3 scripts/ci/source_budgets.py
+
+# Write the source budget counts that fell, for the commit that cut them.
+source-budgets-lower:
+    python3 scripts/ci/source_budgets.py --lower
+
 # The modifier matrix's Cranpose and Compose halves are generated from one
 # description (tools/compose-twin/matrix.toml); a hand edit to either, or a
 # description changed without generating, fails here.
@@ -388,7 +399,7 @@ twin-matrix-check:
 
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate thread-local-budget twin-matrix-check ci-contract-gates
+precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate thread-local-budget source-budgets twin-matrix-check ci-contract-gates
 
 # The gates that describe CI to itself: which scheduling class each robot
 # example is in, what a parallel worker can reach, and the twenty-minute cap
@@ -519,6 +530,7 @@ _benchmark-python:
 test-shell-helpers: _benchmark-python ci-contract-gates
     python3 scripts/ci/tests/test_rustup_lock.py
     scripts/ci/clippy_budget_test.sh
+    scripts/ci/source_budgets_test.sh
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
@@ -1126,7 +1138,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate source-budgets test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
