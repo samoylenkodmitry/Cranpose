@@ -553,16 +553,7 @@ impl ShapePipelineKey {
             ..self
         }
     }
-}
 
-/// The entry points and pipeline constants of the shape program a key names.
-pub(crate) struct ShapeProgram {
-    pub(crate) vertex_entry: &'static str,
-    pub(crate) fragment_entry: &'static str,
-    pub(crate) constants: [(&'static str, f64); 14],
-}
-
-impl ShapePipelineKey {
     pub(crate) fn program(self, mode: RunBufferMode) -> ShapeProgram {
         let Self {
             tier,
@@ -604,6 +595,13 @@ impl ShapePipelineKey {
             constants,
         }
     }
+}
+
+/// The entry points and pipeline constants of the shape program a key names.
+pub(crate) struct ShapeProgram {
+    pub(crate) vertex_entry: &'static str,
+    pub(crate) fragment_entry: &'static str,
+    pub(crate) constants: [(&'static str, f64); 14],
 }
 
 pub(crate) fn create_shape_pipeline(

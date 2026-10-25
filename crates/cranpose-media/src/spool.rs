@@ -145,6 +145,13 @@ impl Spool {
             cancel,
         ))
     }
+
+    fn end(&self) -> io::Result<u64> {
+        match self.len {
+            Some(len) => Ok(len),
+            None => self.shared.wait_for(u64::MAX),
+        }
+    }
 }
 
 impl Read for Spool {
@@ -170,15 +177,6 @@ impl Seek for Spool {
         };
         self.position = target;
         Ok(target)
-    }
-}
-
-impl Spool {
-    fn end(&self) -> io::Result<u64> {
-        match self.len {
-            Some(len) => Ok(len),
-            None => self.shared.wait_for(u64::MAX),
-        }
     }
 }
 

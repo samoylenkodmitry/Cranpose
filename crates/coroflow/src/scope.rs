@@ -262,6 +262,32 @@ impl Scope<Dispatcher> {
             dispatcher: self.dispatcher.clone(),
         }
     }
+
+    /// Starts computing `future` concurrently — Kotlin's `async`.
+    pub fn async_<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        Deferred::spawn(|sender| {
+            self.start(async move { sender.send(future.await) }, Launch::DEFERRED)
+        })
+    }
+
+    /// Like [`async_`](Scope::async_), but starts only when awaited or
+    /// started — Kotlin's `async(start = CoroutineStart.LAZY)`.
+    pub fn async_lazy<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        Deferred::spawn(|sender| {
+            self.start(
+                async move { sender.send(future.await) },
+                Launch::LAZY_DEFERRED,
+            )
+        })
+    }
 }
 
 impl Scope<ConfinedDispatcher> {
@@ -288,6 +314,34 @@ impl Scope<ConfinedDispatcher> {
         F: Future<Output = ()> + 'static,
     {
         self.launch_with(|dispatcher| spawn_local(dispatcher, future, launch))
+    }
+
+    /// Starts computing `future` concurrently on the main thread — Kotlin's
+    /// `async`.
+    pub fn async_<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        Deferred::spawn(|sender| {
+            self.start(async move { sender.send(future.await) }, Launch::DEFERRED)
+        })
+    }
+
+    /// Like [`async_`](Scope::async_), but starts only when awaited or
+    /// started on the main thread — Kotlin's
+    /// `async(start = CoroutineStart.LAZY)`.
+    pub fn async_lazy<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        Deferred::spawn(|sender| {
+            self.start(
+                async move { sender.send(future.await) },
+                Launch::LAZY_DEFERRED,
+            )
+        })
     }
 }
 
@@ -371,64 +425,6 @@ impl<T> Future for Deferred<T> {
         Pin::new(&mut this.receiver)
             .poll(cx)
             .map(|value| value.ok_or(TaskFailed))
-    }
-}
-
-impl Scope<Dispatcher> {
-    /// Starts computing `future` concurrently — Kotlin's `async`.
-    pub fn async_<T, F>(&self, future: F) -> Deferred<T>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        Deferred::spawn(|sender| {
-            self.start(async move { sender.send(future.await) }, Launch::DEFERRED)
-        })
-    }
-
-    /// Like [`async_`](Scope::async_), but starts only when awaited or
-    /// started — Kotlin's `async(start = CoroutineStart.LAZY)`.
-    pub fn async_lazy<T, F>(&self, future: F) -> Deferred<T>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        Deferred::spawn(|sender| {
-            self.start(
-                async move { sender.send(future.await) },
-                Launch::LAZY_DEFERRED,
-            )
-        })
-    }
-}
-
-impl Scope<ConfinedDispatcher> {
-    /// Starts computing `future` concurrently on the main thread — Kotlin's
-    /// `async`.
-    pub fn async_<T, F>(&self, future: F) -> Deferred<T>
-    where
-        F: Future<Output = T> + 'static,
-        T: 'static,
-    {
-        Deferred::spawn(|sender| {
-            self.start(async move { sender.send(future.await) }, Launch::DEFERRED)
-        })
-    }
-
-    /// Like [`async_`](Scope::async_), but starts only when awaited or
-    /// started on the main thread — Kotlin's
-    /// `async(start = CoroutineStart.LAZY)`.
-    pub fn async_lazy<T, F>(&self, future: F) -> Deferred<T>
-    where
-        F: Future<Output = T> + 'static,
-        T: 'static,
-    {
-        Deferred::spawn(|sender| {
-            self.start(
-                async move { sender.send(future.await) },
-                Launch::LAZY_DEFERRED,
-            )
-        })
     }
 }
 

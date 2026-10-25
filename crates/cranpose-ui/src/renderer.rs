@@ -109,6 +109,91 @@ impl HeadlessRenderer {
 
         append_overlay(operations, layout.node_id, rect, overlay);
     }
+
+    /// Renders the scene by traversing LayoutNodes directly via the Applier.
+    /// This is the new architecture that eliminates per-frame LayoutTree reconstruction.
+    pub fn render_from_applier(
+        &self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+    ) -> RecordedRenderScene {
+        let mut operations = Vec::new();
+        let mut child_stack = Vec::new();
+        self.render_node_from_applier(
+            applier,
+            root,
+            Point::default(),
+            &mut operations,
+            &mut child_stack,
+        );
+        RecordedRenderScene::new(operations)
+    }
+
+    /// Records `node_id` and its subtree. `child_stack` is shared by the whole
+    /// walk: a node pushes its children, visits them while its descendants
+    /// push and pop above them, and pops them, so no child list is copied out
+    /// of the applier.
+    fn render_node_from_applier(
+        &self,
+        applier: &mut MemoryApplier,
+        node_id: NodeId,
+        parent_offset: Point,
+        operations: &mut Vec<RenderOp>,
+        child_stack: &mut Vec<NodeId>,
+    ) {
+        let first_child = child_stack.len();
+        let Ok(Some((layout_state, modifier_slices))) =
+            applier.with_node::<LayoutNode, _>(node_id, |node| {
+                let state = node.layout_state();
+                state.is_placed().then(|| {
+                    child_stack.extend_from_slice(&node.children);
+                    (state, node.modifier_slices_snapshot())
+                })
+            })
+        else {
+            return;
+        };
+
+        let abs_x = parent_offset.x + layout_state.position().x;
+        let abs_y = parent_offset.y + layout_state.position().y;
+
+        let rect = Rect {
+            x: abs_x,
+            y: abs_y,
+            width: layout_state.size().width,
+            height: layout_state.size().height,
+        };
+
+        let size = Size {
+            width: rect.width,
+            height: rect.height,
+        };
+
+        let (behind, overlay) =
+            collect_primitives_from_commands(node_id, rect, size, modifier_slices.draw_commands());
+        operations.extend(behind);
+
+        if let Some(text) = modifier_slices.text_content() {
+            operations.push(RenderOp::Text {
+                node_id,
+                rect,
+                value: text.to_string(),
+            });
+        }
+
+        let child_offset = Point {
+            x: abs_x + layout_state.content_offset().x,
+            y: abs_y + layout_state.content_offset().y,
+        };
+
+        for index in first_child..child_stack.len() {
+            let child_id = child_stack[index];
+            self.render_node_from_applier(applier, child_id, child_offset, operations, child_stack);
+        }
+        child_stack.truncate(first_child);
+
+        append_overlay(operations, node_id, rect, overlay);
+    }
 }
 
 enum PendingOverlay<'a> {
@@ -221,93 +306,6 @@ fn append_primitives(
                 primitive,
             }),
     );
-}
-
-impl HeadlessRenderer {
-    /// Renders the scene by traversing LayoutNodes directly via the Applier.
-    /// This is the new architecture that eliminates per-frame LayoutTree reconstruction.
-    pub fn render_from_applier(
-        &self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-    ) -> RecordedRenderScene {
-        let mut operations = Vec::new();
-        let mut child_stack = Vec::new();
-        self.render_node_from_applier(
-            applier,
-            root,
-            Point::default(),
-            &mut operations,
-            &mut child_stack,
-        );
-        RecordedRenderScene::new(operations)
-    }
-
-    /// Records `node_id` and its subtree. `child_stack` is shared by the whole
-    /// walk: a node pushes its children, visits them while its descendants
-    /// push and pop above them, and pops them, so no child list is copied out
-    /// of the applier.
-    fn render_node_from_applier(
-        &self,
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        parent_offset: Point,
-        operations: &mut Vec<RenderOp>,
-        child_stack: &mut Vec<NodeId>,
-    ) {
-        let first_child = child_stack.len();
-        let Ok(Some((layout_state, modifier_slices))) =
-            applier.with_node::<LayoutNode, _>(node_id, |node| {
-                let state = node.layout_state();
-                state.is_placed().then(|| {
-                    child_stack.extend_from_slice(&node.children);
-                    (state, node.modifier_slices_snapshot())
-                })
-            })
-        else {
-            return;
-        };
-
-        let abs_x = parent_offset.x + layout_state.position().x;
-        let abs_y = parent_offset.y + layout_state.position().y;
-
-        let rect = Rect {
-            x: abs_x,
-            y: abs_y,
-            width: layout_state.size().width,
-            height: layout_state.size().height,
-        };
-
-        let size = Size {
-            width: rect.width,
-            height: rect.height,
-        };
-
-        let (behind, overlay) =
-            collect_primitives_from_commands(node_id, rect, size, modifier_slices.draw_commands());
-        operations.extend(behind);
-
-        if let Some(text) = modifier_slices.text_content() {
-            operations.push(RenderOp::Text {
-                node_id,
-                rect,
-                value: text.to_string(),
-            });
-        }
-
-        let child_offset = Point {
-            x: abs_x + layout_state.content_offset().x,
-            y: abs_y + layout_state.content_offset().y,
-        };
-
-        for index in first_child..child_stack.len() {
-            let child_id = child_stack[index];
-            self.render_node_from_applier(applier, child_id, child_offset, operations, child_stack);
-        }
-        child_stack.truncate(first_child);
-
-        append_overlay(operations, node_id, rect, overlay);
-    }
 }
 
 #[cfg(test)]

@@ -229,9 +229,7 @@ impl<F: Flow, S> SharingTask<F, S> {
             }
         }
     }
-}
 
-impl<F: Flow, S> SharingTask<F, S> {
     fn follow_commands(&mut self, cx: &mut Context<'_>) -> bool
     where
         S: ShareTarget<F::Item>,

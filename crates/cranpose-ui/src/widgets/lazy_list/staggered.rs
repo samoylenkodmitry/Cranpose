@@ -187,6 +187,16 @@ impl LazyStaggeredGridState {
     pub fn lazy_list_state(&self) -> LazyListState {
         self.list
     }
+
+    /// The layout a grid of `cells` with `spacing` between its lanes
+    /// measures with.
+    fn layout(&self, cells: GridCells, spacing: f32) -> Option<CellLayout> {
+        Some(CellLayout::Staggered(StaggeredLayout {
+            cells,
+            spacing,
+            lanes: Rc::clone(&self.lanes),
+        }))
+    }
 }
 
 /// What a staggered grid measures with beside a list's configuration.
@@ -331,18 +341,6 @@ pub(super) fn measure_staggered_viewport(
     );
     request_beyond_items(source.items.beyond, node_id);
     (result, count)
-}
-
-impl LazyStaggeredGridState {
-    /// The layout a grid of `cells` with `spacing` between its lanes
-    /// measures with.
-    fn layout(&self, cells: GridCells, spacing: f32) -> Option<CellLayout> {
-        Some(CellLayout::Staggered(StaggeredLayout {
-            cells,
-            spacing,
-            lanes: Rc::clone(&self.lanes),
-        }))
-    }
 }
 
 /// Composes and measures the items needed for a vertical staggered grid's

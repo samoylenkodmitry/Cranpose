@@ -122,11 +122,7 @@ impl LiquidColors {
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 46),
         }
     }
-}
 
-/// The iOS text-style ramp as ready-to-use [`TextStyle`]s (colors come from
-/// [`LiquidColors::label`] by default at the call site).
-impl LiquidColors {
     /// The palette for a person who asked the system for more contrast: the
     /// secondary and tertiary labels, the separator, the fills and the glass
     /// edge move toward the label color, and the off toggle darkens.

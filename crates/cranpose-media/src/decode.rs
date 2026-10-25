@@ -154,9 +154,7 @@ impl Decoder {
             }
         }
     }
-}
 
-impl Decoder {
     fn drop_skipped_frames(&mut self) {
         if self.skip_frames == 0 {
             return;

@@ -295,9 +295,7 @@ impl Brush {
             center,
         }
     }
-}
 
-impl Brush {
     /// The color this brush paints at `point` when it fills `rect`, before
     /// any dithering. Gradient coordinates are offsets from `rect`'s
     /// top-left corner, and an infinite one is `rect`'s far edge. Where a

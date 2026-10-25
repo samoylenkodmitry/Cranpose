@@ -245,6 +245,15 @@ impl LazyGridState {
     pub fn lazy_list_state(&self) -> LazyListState {
         self.list
     }
+
+    /// The layout a grid of `cells` with `spacing` between them measures with.
+    fn layout(&self, cells: GridCells, spacing: f32) -> Option<CellLayout> {
+        Some(CellLayout::Grid(GridLayout {
+            cells,
+            spacing,
+            lines: Rc::clone(&self.lines),
+        }))
+    }
 }
 
 /// What a lazy column or row lays its items out as, beside a list.
@@ -845,17 +854,6 @@ pub(super) fn grid_semantics(
         };
         config.collection = Some(cranpose_foundation::CollectionInfo { rows, columns });
     })
-}
-
-impl LazyGridState {
-    /// The layout a grid of `cells` with `spacing` between them measures with.
-    fn layout(&self, cells: GridCells, spacing: f32) -> Option<CellLayout> {
-        Some(CellLayout::Grid(GridLayout {
-            cells,
-            spacing,
-            lines: Rc::clone(&self.lines),
-        }))
-    }
 }
 
 /// Composes and measures the items needed for a vertical grid's viewport,

@@ -829,9 +829,28 @@ impl GpuRenderer {
         }
         Ok(())
     }
-}
 
-impl GpuRenderer {
+    /// Begins the pass `encode_pass` records into, with a depth buffer when
+    /// its opaque interiors go down first.
+    fn begin_scene_pass<'p, C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &'p mut C,
+        label: &'static str,
+        target: PassTarget<'_>,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        depth: bool,
+    ) -> wgpu::RenderPass<'p> {
+        if depth {
+            self.frame_stats
+                .depth_passes
+                .set(self.frame_stats.depth_passes.get() + 1);
+            let depth_view = self.depth_target((target.width, target.height));
+            recorder.begin_depth_pass(label, target.view, load_op, &depth_view)
+        } else {
+            recorder.begin_color_pass(label, target.view, load_op)
+        }
+    }
+
     /// Records one shape batch's stage; other batches draw nothing here.
     /// An arena batch's draws are ranges of `arena`.
     fn draw_shape_batch(
@@ -883,29 +902,6 @@ impl GpuRenderer {
                 )
             }
             _ => Ok(()),
-        }
-    }
-}
-
-impl GpuRenderer {
-    /// Begins the pass `encode_pass` records into, with a depth buffer when
-    /// its opaque interiors go down first.
-    fn begin_scene_pass<'p, C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &'p mut C,
-        label: &'static str,
-        target: PassTarget<'_>,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        depth: bool,
-    ) -> wgpu::RenderPass<'p> {
-        if depth {
-            self.frame_stats
-                .depth_passes
-                .set(self.frame_stats.depth_passes.get() + 1);
-            let depth_view = self.depth_target((target.width, target.height));
-            recorder.begin_depth_pass(label, target.view, load_op, &depth_view)
-        } else {
-            recorder.begin_color_pass(label, target.view, load_op)
         }
     }
 }
