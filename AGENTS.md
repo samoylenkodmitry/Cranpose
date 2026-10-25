@@ -23,6 +23,7 @@ Code rules (lints and gates check the rest; follow their errors):
 - Several maps with one key become one map of a struct.
 - Items are private, then `pub(crate)`; `pub` is the crate API only, and a public signature holds no `Rc`, `RefCell` or `Box`. A `RefCell` borrow or a lock lasts a few lines and never spans a callback.
 - Names: no `get_` prefix; `as_` is free, `to_` costs, `into_` consumes; no `Manager`, `Helper` or `Util` types; no module name repeated in a type name. A trait exists for generic or `dyn` use, never to group methods; a function with a clear receiver is a method.
+- Public API matches Jetpack Compose in names and behavior, so Google's Compose documentation serves developers who move to Cranpose. Modifiers use snake case (`Modifier.focusRestorer()` is `Modifier::focus_restorer()`); composables, types and enum variants keep Compose's names. Where Compose uses a bit mask or a sentinel, an enum of the same name takes its place.
 - `let _guard = x` keeps a guard alive; `let _ = x` drops it at once.
 - Doc comments go on public API only. A `//` comment states a reason the code cannot show, never history.
 - A refactor keeps behavior and output bytes identical; untested behavior gets a test first.
