@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{
     Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
@@ -6,8 +8,11 @@ use cranpose_ui_layout::{
 use smallvec::SmallVec;
 
 use super::empty_measure_policy::empty_layout_hold;
-use crate::layout::core::{
-    Arrangement, HorizontalAlignment, LinearArrangement, Measurable, VerticalAlignment,
+use crate::{
+    layout::core::{
+        Arrangement, HorizontalAlignment, LinearArrangement, Measurable, VerticalAlignment,
+    },
+    thread_state,
 };
 
 /// Unified Flex layout policy that powers both Row and Column.
@@ -502,6 +507,36 @@ struct FlexChild {
     placeable: Option<cranpose_ui_layout::Placeable>,
 }
 
+// The child lists of a thread's rows and columns, kept between measures. A
+// list on the stack took 548 bytes on the ESP32 at every nesting level a
+// measure passes through, eight children inline.
+pub(crate) struct SpareFlexChildren(RefCell<Vec<Vec<FlexChild>>>);
+
+// Nested rows and columns each hold one list while they measure; a list over
+// this many spares goes back to the heap.
+const SPARE_LISTS: usize = 32;
+
+impl SpareFlexChildren {
+    pub(crate) const fn new() -> Self {
+        Self(RefCell::new(Vec::new()))
+    }
+
+    fn take() -> Vec<FlexChild> {
+        thread_state::with(|state| state.spare_flex_children.0.borrow_mut().pop())
+            .unwrap_or_default()
+    }
+
+    fn give(mut children: Vec<FlexChild>) {
+        children.clear();
+        thread_state::with(|state| {
+            let mut spares = state.spare_flex_children.0.borrow_mut();
+            if spares.len() < SPARE_LISTS {
+                spares.push(children);
+            }
+        });
+    }
+}
+
 /// The measured children with their parent data: every child, once both
 /// measuring passes ran, since each child is fixed or weighted.
 fn measured(
@@ -612,9 +647,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         let (min_main, max_main, min_cross, max_cross) = self.get_axis_constraints(constraints);
         let spacing = self.get_spacing();
 
-        // Filled in place: a collected list of eight inline children is a
-        // 776-byte value moved out of `collect`.
-        let mut children: SmallVec<[FlexChild; 8]> = SmallVec::new();
+        let mut children = SpareFlexChildren::take();
         children.extend(measurables.iter().map(|child| FlexChild {
             data: child.parent_data(),
             placeable: None,
@@ -682,6 +715,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
             placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
         }
+        SpareFlexChildren::give(children);
 
         let (width, height) = match self.axis {
             Axis::Horizontal => (container_main, container_cross),
