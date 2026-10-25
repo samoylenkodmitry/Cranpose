@@ -2,7 +2,7 @@ use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::Color;
 
 use super::*;
-use crate::scene::DrawnText;
+use crate::{render::glyph_draws::glyph_clip_edges, scene::DrawnText};
 
 #[test]
 fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() {
