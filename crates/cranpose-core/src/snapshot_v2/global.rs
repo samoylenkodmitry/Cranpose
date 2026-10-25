@@ -67,16 +67,7 @@ impl GlobalSnapshot {
             std::mem::swap(&mut *slot, &mut modified);
         }
     }
-}
 
-#[cfg(test)]
-pub(crate) fn clear_global_snapshot_for_tests() {
-    crate::thread_state::snapshots(|state| {
-        *state.global.borrow_mut() = None;
-    });
-}
-
-impl GlobalSnapshot {
     /// Returns the id of this snapshot. Ids grow with every snapshot taken.
     pub fn snapshot_id(&self) -> SnapshotId {
         self.state.id.get()
@@ -188,6 +179,13 @@ impl GlobalSnapshot {
 
         child
     }
+}
+
+#[cfg(test)]
+pub(crate) fn clear_global_snapshot_for_tests() {
+    crate::thread_state::snapshots(|state| {
+        *state.global.borrow_mut() = None;
+    });
 }
 
 impl NestedMutableHost for GlobalSnapshot {

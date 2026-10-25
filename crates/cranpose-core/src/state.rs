@@ -1188,6 +1188,14 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
         true
     }
+
+    fn try_readable_record(
+        &self,
+        snapshot_id: SnapshotId,
+        invalid: &SnapshotIdSet,
+    ) -> Option<Rc<StateRecord>> {
+        self.readable_for(snapshot_id, invalid)
+    }
 }
 
 pub(crate) struct UpdateScope {
@@ -1234,16 +1242,6 @@ fn mark_update_write(id: ObjectId) {
             state.pending_writes.borrow_mut().insert(id);
         }
     });
-}
-
-impl<T: Clone + 'static> SnapshotMutableState<T> {
-    fn try_readable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Option<Rc<StateRecord>> {
-        self.readable_for(snapshot_id, invalid)
-    }
 }
 
 impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {

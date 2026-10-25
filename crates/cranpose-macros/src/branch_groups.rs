@@ -869,9 +869,7 @@ impl BranchGroupInjector<'_> {
         block.stmts.insert(0, guard);
         self.in_content_closure = previous;
     }
-}
 
-impl BranchGroupInjector<'_> {
     fn open_fold(&mut self, expr: &Expr, folds_whole_statement: bool) -> Option<String> {
         if folds_whole_statement {
             self.hot.open("fold", &fold_name(expr))

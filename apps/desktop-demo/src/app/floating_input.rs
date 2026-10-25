@@ -21,14 +21,7 @@ impl FloatingInput {
             clicks: mutableStateOf(0u32),
         }
     }
-}
 
-#[composable]
-pub fn rememberFloatingInput() -> FloatingInput {
-    remember(FloatingInput::new).with(|input| *input)
-}
-
-impl FloatingInput {
     pub(super) fn pressed(self) -> bool {
         self.pressed.get()
     }
@@ -40,6 +33,11 @@ impl FloatingInput {
     pub(super) fn clicks(self) -> u32 {
         self.clicks.get()
     }
+}
+
+#[composable]
+pub fn rememberFloatingInput() -> FloatingInput {
+    remember(FloatingInput::new).with(|input| *input)
 }
 
 pub(super) trait FloatingInputModifierExt {

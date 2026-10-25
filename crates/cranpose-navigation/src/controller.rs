@@ -28,9 +28,7 @@ impl<R> Entry<R> {
             saveables: stack.child(id),
         }
     }
-}
 
-impl<R> Entry<R> {
     /// Tells this visit apart from every other entry of its back stack.
     pub(crate) fn id(&self) -> u64 {
         self.id

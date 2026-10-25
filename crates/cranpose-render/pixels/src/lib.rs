@@ -263,9 +263,7 @@ impl PixelsRenderer {
         };
         draw::draw_raster_window(&mut target, raster, self.scene.diagnostics(), &self.text);
     }
-}
 
-impl PixelsRenderer {
     /// The scene at `scale` device pixels per point as sprites for a GPU
     /// compositor, into `frame`, which keeps its textures from the frames
     /// before. Invalid scales use 1.0.

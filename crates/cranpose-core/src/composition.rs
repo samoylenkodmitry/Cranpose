@@ -625,6 +625,16 @@ impl<A: Applier + 'static> Composition<A> {
         composer.install(|composer| composer.forget_movables(&ids))?;
         self.apply_commands_and_updates_for_host(&host, &runtime_handle, &composer)
     }
+
+    /// Applies the node updates that the runtime has queued to the applier, without recomposing.
+    pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
+        let updates = self.runtime.take_updates();
+        let mut applier = self.applier.borrow_dyn();
+        for update in updates {
+            update.apply(&mut *applier)?;
+        }
+        Ok(())
+    }
 }
 
 /// Whether running these scopes can change what the composition shows: a pass
@@ -642,18 +652,6 @@ fn recycle_scope_groups(
 ) {
     for (_, scopes) in scope_groups {
         runtime.recycle_scopes(scopes);
-    }
-}
-
-impl<A: Applier + 'static> Composition<A> {
-    /// Applies the node updates that the runtime has queued to the applier, without recomposing.
-    pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
-        let updates = self.runtime.take_updates();
-        let mut applier = self.applier.borrow_dyn();
-        for update in updates {
-            update.apply(&mut *applier)?;
-        }
-        Ok(())
     }
 }
 

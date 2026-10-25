@@ -986,6 +986,13 @@ impl TextFieldModifierNode {
         self.cached_selection = selection;
         changed
     }
+
+    fn intrinsic_height(&self, width: f32, density: f32) -> f32 {
+        self.text_size(self.wrap_width(width), density)
+            .0
+            .height
+            .max(self.min_size(density).height)
+    }
 }
 
 impl DelegatableNode for TextFieldModifierNode {
@@ -1113,15 +1120,6 @@ impl LayoutModifierNode for TextFieldModifierNode {
 
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         self.intrinsic_height(width, density)
-    }
-}
-
-impl TextFieldModifierNode {
-    fn intrinsic_height(&self, width: f32, density: f32) -> f32 {
-        self.text_size(self.wrap_width(width), density)
-            .0
-            .height
-            .max(self.min_size(density).height)
     }
 }
 
@@ -1569,6 +1567,20 @@ impl TextFieldElement {
         self.modal_depth = depth;
         self
     }
+
+    /// Gives the field's refs what its input reads when it runs: keyboard,
+    /// action handler and transformations.
+    fn hand_input_options_to(&self, refs: &TextFieldRefs) {
+        refs.keyboard_options.set(self.keyboard_options);
+        refs.keyboard_action.replace(self.keyboard_action.clone());
+        refs.input_transformation
+            .replace(self.input_transformation.clone());
+        refs.presentation
+            .set_transformation(self.output_transformation.clone());
+        if let Some(controller) = &self.handle_controller {
+            controller.adopt_presentation(&refs.presentation);
+        }
+    }
 }
 
 impl std::fmt::Debug for TextFieldElement {
@@ -1614,22 +1626,6 @@ impl PartialEq for TextFieldElement {
 }
 
 impl Eq for TextFieldElement {}
-
-impl TextFieldElement {
-    /// Gives the field's refs what its input reads when it runs: keyboard,
-    /// action handler and transformations.
-    fn hand_input_options_to(&self, refs: &TextFieldRefs) {
-        refs.keyboard_options.set(self.keyboard_options);
-        refs.keyboard_action.replace(self.keyboard_action.clone());
-        refs.input_transformation
-            .replace(self.input_transformation.clone());
-        refs.presentation
-            .set_transformation(self.output_transformation.clone());
-        if let Some(controller) = &self.handle_controller {
-            controller.adopt_presentation(&refs.presentation);
-        }
-    }
-}
 
 impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;

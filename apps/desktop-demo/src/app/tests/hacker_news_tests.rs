@@ -78,10 +78,8 @@ impl TrackingHttpClient {
     fn max_active_requests(&self) -> usize {
         self.tracker.max_active_requests()
     }
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-impl TrackingHttpClient {
+    #[cfg(not(target_arch = "wasm32"))]
     fn as_client(self: &Arc<Self>) -> HttpClientRef {
         let inner = Arc::clone(self);
         Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
@@ -89,6 +87,7 @@ impl TrackingHttpClient {
         }))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn text_for(&self, url: &str) -> Result<String, cranpose_services::HttpError> {
         let id = parse_story_id(url);
         self.tracker.record_request_start();
@@ -120,10 +119,8 @@ impl CommentThreadHttpClient {
     fn max_active_requests(&self) -> usize {
         self.tracker.max_active_requests()
     }
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-impl CommentThreadHttpClient {
+    #[cfg(not(target_arch = "wasm32"))]
     fn as_client(self: &Arc<Self>) -> HttpClientRef {
         let inner = Arc::clone(self);
         Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
@@ -131,6 +128,7 @@ impl CommentThreadHttpClient {
         }))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn text_for(&self, url: &str) -> Result<String, cranpose_services::HttpError> {
         let id = parse_story_id(url);
         self.tracker.record_request_start();
@@ -256,10 +254,8 @@ impl RegressionHttpClient {
         let id_str = suffix.strip_suffix(".json")?;
         id_str.parse::<u64>().ok()
     }
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-impl RegressionHttpClient {
+    #[cfg(not(target_arch = "wasm32"))]
     fn as_client(self: &Arc<Self>) -> HttpClientRef {
         let inner = Arc::clone(self);
         Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
@@ -267,6 +263,7 @@ impl RegressionHttpClient {
         }))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn text_for(&self, url: &str) -> Result<String, cranpose_services::HttpError> {
         if url.ends_with("/topstories.json") {
             return Ok(self.topstories_json());
