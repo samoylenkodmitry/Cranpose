@@ -251,10 +251,11 @@ every task's stack.
 ESP-IDF's heap takes a spinlock for each call: about 500 instructions for an
 allocation and its free. With the default `small-block-alloc` feature the
 crate installs [`SmallBlockAllocator`](src/small_alloc.rs) as the global
-allocator. Each task keeps up to 8 freed blocks of each size class, 8 to 128
-bytes in steps of 8, in lists of its own and takes them back without a lock;
-other blocks come from the heap. A task's blocks go back to the heap when it
-is deleted. An application that installs another global allocator, or links
+allocator. Each task keeps up to 2 KB of freed blocks in lists of its own,
+one for each size class, 8 to 128 bytes in steps of 8, and takes them back
+without a lock; other blocks come from the heap. A task's blocks go back to
+the heap when it is deleted. The allocator's code runs from IRAM, since every
+allocation runs it. An application that installs another global allocator, or links
 code that frees memory from C `malloc` through Rust's allocator, turns the
 feature off with `default-features = false`.
 

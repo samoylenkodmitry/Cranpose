@@ -4,11 +4,11 @@
 // 500 instructions for an allocation and its free. A frame of a Cranpose app
 // allocates and frees the same few small blocks again and again.
 //
-// Each task keeps up to MAX_CACHED freed blocks of each size class, and up to
-// CACHED_BYTES in all, in lists of its own, in C thread-locals that ESP-IDF
-// places in the task's TLS area:
-// a block of up to MAX_SMALL bytes and alignment of up to 8 comes from the
-// task's list when it holds one, in a few instructions and without a lock.
+// Each task keeps up to CACHED_BYTES of freed blocks in lists of its own, one
+// for each size class, in C thread-locals that ESP-IDF places in the task's
+// TLS area: a block of up to MAX_SMALL bytes and alignment of up to 8 comes
+// from the task's list when it holds one, in a few instructions and without a
+// lock.
 // Every block of a class is allocated at the class's size, so any block a
 // list holds fits any request of its class. A block may be freed on another
 // task than the one that allocated it: it joins that task's list. When a task
@@ -30,15 +30,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 
 // Size classes: 8 to 128 bytes in steps of 8, for blocks of either alignment.
 #define CLASS_STEP 8
 #define CLASSES 16
 #define MAX_SMALL (CLASS_STEP * CLASSES)
-#define MAX_CACHED 8
-// A steady frame frees a few dozen small blocks; the lists of a task that
-// kept 8 of every class would hold 17 KB the heap could give to others.
+// A steady frame frees a few dozen small blocks; larger lists would hold
+// memory the heap could give to others.
 #define CACHED_BYTES 2048
 #define HEAP_ALIGN 4
 #define BLOCK_ALIGN 8
@@ -48,7 +48,6 @@
 
 typedef struct {
     void *head[KINDS][CLASSES];
-    uint8_t count[KINDS][CLASSES];
     uint16_t bytes;
     bool registered;
     // Drained: the task is being deleted, and what it frees from here on
@@ -122,7 +121,6 @@ static void drain_cache(void *arg)
                 block = next;
             }
             cache->head[kind][class] = NULL;
-            cache->count[kind][class] = 0;
         }
     }
     cache->bytes = 0;
@@ -134,7 +132,9 @@ static void create_cleanup_key(void)
     s_cleanup_ready = pthread_key_create(&s_cleanup_key, drain_cache) == 0;
 }
 
-void *cranpose_small_alloc(size_t size, size_t align)
+// Every Rust allocation runs these three; from IRAM they take no room in the
+// instruction cache.
+IRAM_ATTR void *cranpose_small_alloc(size_t size, size_t align)
 {
     if (!is_small(size, align)) {
         return heap_alloc(size, align);
@@ -145,14 +145,13 @@ void *cranpose_small_alloc(size_t size, size_t align)
     void *block = cache->head[kind][class];
     if (block != NULL) {
         cache->head[kind][class] = *(void **)block;
-        cache->count[kind][class]--;
         cache->bytes -= class_size(class);
         return block;
     }
     return heap_alloc(class_size(class), kind ? BLOCK_ALIGN : HEAP_ALIGN);
 }
 
-void cranpose_small_free(void *ptr, size_t size, size_t align)
+IRAM_ATTR void cranpose_small_free(void *ptr, size_t size, size_t align)
 {
     if (ptr == NULL) {
         return;
@@ -174,18 +173,16 @@ void cranpose_small_free(void *ptr, size_t size, size_t align)
             return;
         }
     }
-    if (cache->closed || cache->count[kind][class] >= MAX_CACHED ||
-        cache->bytes + class_size(class) > CACHED_BYTES) {
+    if (cache->closed || cache->bytes + class_size(class) > CACHED_BYTES) {
         heap_free(ptr, kind ? BLOCK_ALIGN : HEAP_ALIGN);
         return;
     }
     *(void **)ptr = cache->head[kind][class];
     cache->head[kind][class] = ptr;
-    cache->count[kind][class]++;
     cache->bytes += class_size(class);
 }
 
-void *cranpose_small_realloc(void *ptr, size_t old_size, size_t align, size_t new_size)
+IRAM_ATTR void *cranpose_small_realloc(void *ptr, size_t old_size, size_t align, size_t new_size)
 {
     // Large blocks grow in place when the heap can. A block of a larger
     // alignment than the heap's may land at another distance from its new
