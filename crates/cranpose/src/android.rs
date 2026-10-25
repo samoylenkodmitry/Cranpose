@@ -1341,6 +1341,34 @@ fn hand_surface_to_present_thread(renderer: &mut WgpuRenderer, setup: &mut Andro
     setup.resources.surface_dirty = true;
 }
 
+fn create_android_app_shell<F>(
+    renderer: WgpuRenderer,
+    content: &Rc<RefCell<F>>,
+    width: u32,
+    height: u32,
+    density: f32,
+    host_window_registry: &Rc<android_host_window::AndroidHostWindowRegistry>,
+) -> AppShell<WgpuRenderer>
+where
+    F: FnMut() + 'static,
+{
+    let content_clone = content.clone();
+    let density = density.max(f32::EPSILON);
+    let platform_env = android_platform_env();
+    android_host_window::with_android_host_window_registry(host_window_registry, || {
+        AppShell::new_with_size_and_density(
+            renderer,
+            default_root_key(),
+            move || {
+                platform_env.compose_root(|| content_clone.borrow_mut()());
+            },
+            (width, height),
+            (width as f32 / density, height as f32 / density),
+            density,
+        )
+    })
+}
+
 #[expect(clippy::too_many_arguments)]
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
@@ -1349,7 +1377,7 @@ fn initialize_android_rendering<F>(
     content: &Rc<RefCell<F>>,
     settings: &AppSettings,
     frame_driver: &AndroidFrameDriver,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
+    host_window_registry: &Rc<android_host_window::AndroidHostWindowRegistry>,
     native_window_ptr: NonNull<c_void>,
     native_window_owner: Option<NativeWindow>,
     width: u32,
@@ -1389,18 +1417,13 @@ where
             );
         }
 
-        let content_clone = content.clone();
-        let density = density.max(f32::EPSILON);
-        let platform_env = android_platform_env();
-        let mut shell = AppShell::new_with_size_and_density(
+        let mut shell = create_android_app_shell(
             renderer,
-            default_root_key(),
-            move || {
-                platform_env.compose_root(|| content_clone.borrow_mut()());
-            },
-            (width, height),
-            (width as f32 / density, height as f32 / density),
+            content,
+            width,
+            height,
             density,
+            host_window_registry,
         );
         shell.set_semantics_enabled(true);
         crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
@@ -1486,7 +1509,7 @@ fn initialize_android_rendering_with_backend_fallback<F>(
     content: &Rc<RefCell<F>>,
     settings: &AppSettings,
     frame_driver: &AndroidFrameDriver,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
+    host_window_registry: &Rc<android_host_window::AndroidHostWindowRegistry>,
     native_window_ptr: NonNull<c_void>,
     native_window_owner: Option<NativeWindow>,
     width: u32,
