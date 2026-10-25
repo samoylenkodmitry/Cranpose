@@ -11,22 +11,16 @@ Read only the sections required by the current operation. These are project requ
 
 ## Rust and API conventions
 
-- No unsafe code.
-- Add per-thread state as a field of the crate's existing thread-local struct (its `thread_state.rs`), never as a new `thread_local!` static: on Android each static takes one of about 128 pthread keys the whole process shares, and `cargo xtask thread-local-budget` fails on a new one.
-- `unwrap()` is forbidden
-- Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
-- Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.
-- A wrong value fixed at one consumer is still wrong at the others; audit every consumer of that value before calling the bug fixed.
-- Review architecture, correctness and maintainability before completion; fix supported problems without inventing new ones.
+AGENTS.md holds the code rules every change follows; these are the rest.
+
+- `unwrap()` is forbidden.
 - Use `cargo add` for dependencies and `cargo upgrade` for upgrades.
-- Use `anyhow` in applications and `thiserror` in libraries.
-- Use specific `Result<T, E>` errors for failure and `Option<T>` for absence.
 - Use idiomatic Rust names; composable functions use CamelCase.
 - Suppress a lint with `#[expect]`, which fails once nothing needs it; use `#[allow]` only where the lint fires in some build configurations and not in others.
 - Prefer `async`/`await` and Tokio for asynchronous work.
-- Document every public API reachable from a published crate root; all other code comments are forbidden (`scripts/dev/strip_private_docs.py <file>...` removes the rest).
+- Document every public API reachable from a published crate root. `scripts/dev/strip_private_docs.py <file>...` removes doc comments from everything else; `--check` counts them.
 - Write integration tests for observable behavior through public entry points; put them in `tests/`. Do not test implementation details such as private storage, type sizes, allocation capacities or pointer reuse. Measure performance with benchmarks and profiles.
-- do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
+- Do not write tests in the same file as the implementation; all tests go under a `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out).
 - Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
 - `#[cfg(feature = "robot-app")]` is forbidden.
 - Use plain, direct explanations about current behavior; omit historical or transitional labels and conditional offers to fix known problems.
@@ -37,6 +31,8 @@ Read only the sections required by the current operation. These are project requ
 - Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
 - After a push, arm a CI watcher before the turn ends (`gh pr checks <n> --watch` under a monitor, or the desktop app's Auto-fix) and act on each result; a wait with no watcher is a stale session.
 - Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
+- Before opening a PR, run `/simplify` on the diff, or review it the same way where that command is missing: the gates check shape, and review catches renamed copies and code in the wrong module.
+- Cut budgets in cleanup PRs of their own, with no feature work. A PR that lowers a budgeted count lowers its budget in the same commit.
 - A batch merge means merging each ready PR straight into main on its own green CI run, never through a combined branch; a PR is not rebased or run again after another PR of the batch lands, unless the two conflict. Watch main's CI once after the batch and fix any failure there.
 - Never use `git reset`; preserve work with a stash when needed.
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
