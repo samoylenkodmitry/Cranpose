@@ -419,7 +419,10 @@ pub(crate) enum RenderItem {
 }
 
 /// Draws one pass of an elevation shadow: its color at the shadow's
-/// coverage of each pixel's centre.
+/// coverage of each pixel's centre. Out of line, as are images and the
+/// shapes a fill does not paint: the item loop keeps the solid fills and
+/// text that most frames draw, and the rest takes code only where it draws.
+#[inline(never)]
 fn draw_shadow(
     target: &mut Target,
     draw: &crate::scene::ShadowDraw,
@@ -591,7 +594,9 @@ impl ShapeRows<'_, '_> {
         }
     }
 
-    /// Paints the pixels of each row's `runs` by their `coverage`.
+    /// Paints the pixels of each row's `runs` by their `coverage`. Out of
+    /// line, as [`draw_shadow`] is.
+    #[inline(never)]
     fn paint(self, runs: impl Fn(f32, i32, i32) -> RowRuns, coverage: impl Fn(Point) -> f32) {
         let Self {
             target,
@@ -1033,6 +1038,7 @@ fn image_rect(draw: &ImageDraw) -> Rect {
     draw.rect.translate(snap_delta.x, snap_delta.y)
 }
 
+#[inline(never)]
 fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
     let rect = image_rect(draw);
     if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
