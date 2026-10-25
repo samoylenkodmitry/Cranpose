@@ -30,6 +30,8 @@ mod node_marks;
 pub mod owned;
 pub mod platform;
 mod recompose;
+mod recycle_pool;
+use recycle_pool::RecyclePool;
 mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.
@@ -3818,9 +3820,7 @@ struct MemoryApplierState {
     physical_warm_recycled_origins: Vec<bool>,
     stable_index: stable_index::StableIndex,
     free_ids: BinaryHeap<Reverse<usize>>,
-    high_id_nodes: HashMap<NodeId, Box<dyn Node>>,
-    high_id_warm_recycled_origins: HashMap<NodeId, bool>,
-    high_id_generations: HashMap<NodeId, u32>,
+    high_ids: HashMap<NodeId, HighIdSlot>,
     next_stable_id: NodeId,
     layout_runtime: Option<RuntimeHandle>,
     recycle_pools: HashMap<TypeId, RecyclePool>,
@@ -3830,166 +3830,14 @@ struct MemoryApplierState {
     layout_dirt_roots: layout_dirt_roots::LayoutDirtRoots,
 }
 
-// The recycled shells of one node type, and what sizes its pool: the shells
-// warm from the last pass, the ones returned this pass by a node that came
-// warm or cold, the limit its nodes ask for, the warm count it keeps, the
-// shells this pass had to create fresh and a prototype to make more from.
+// A node stored under an id too high for the dense table: the node while it
+// lives, whether it came from a warm shell, and the generation its id has
+// reached, which stays after the node goes.
 #[derive(Default)]
-struct RecyclePool {
-    warm: Vec<RecycledNode>,
-    returning: Vec<RecycledNode>,
-    cold: Vec<RecycledNode>,
-    limit: Option<usize>,
-    warm_target: Option<usize>,
-    fresh_creations: usize,
-    prototype: Option<Box<dyn Node>>,
-}
-
-impl RecyclePool {
-    fn len(&self) -> usize {
-        self.warm.len() + self.returning.len() + self.cold.len()
-    }
-
-    fn capacity(&self) -> usize {
-        self.warm.capacity() + self.returning.capacity() + self.cold.capacity()
-    }
-
-    fn nodes(&self) -> impl Iterator<Item = &RecycledNode> {
-        self.warm.iter().chain(&self.returning).chain(&self.cold)
-    }
-
-    fn remember_prototype(&mut self, shell: &dyn Node) {
-        if self.prototype.is_none() {
-            self.prototype = shell.rehouse_for_recycle();
-        }
-    }
-
-    fn push(&mut self, recycled: RecycledNode) {
-        let pool = if recycled.warm_origin() {
-            &mut self.returning
-        } else {
-            &mut self.cold
-        };
-        pool.push(recycled);
-        drop_oldest_past(pool, self.limit);
-    }
-
-    fn push_warm(&mut self, mut recycled: RecycledNode) {
-        recycled.set_warm_origin(true);
-        self.warm.push(recycled);
-        drop_oldest_past(&mut self.warm, self.limit);
-    }
-
-    fn take(&mut self) -> Option<RecycledNode> {
-        self.returning.pop().or_else(|| self.warm.pop())
-    }
-
-    fn warm_target_limit(&self) -> usize {
-        match self.limit {
-            None => usize::MAX,
-            Some(limit) if limit <= 8 => limit,
-            Some(limit) => limit / 4,
-        }
-    }
-
-    fn update_warm_target(&mut self, observed_demand: usize) -> usize {
-        let target_limit = self.warm_target_limit();
-        let existing = self.warm_target.unwrap_or(0).min(target_limit);
-        if observed_demand == 0 {
-            return existing;
-        }
-        let target = match self.limit {
-            Some(limit) if limit > 8 => target_limit,
-            Some(_) => observed_demand.min(target_limit),
-            None => observed_demand,
-        };
-        self.warm_target = Some(target);
-        target
-    }
-
-    // Seeds warm shells made from the prototype until the warm pool holds
-    // `target`, each under a new stable id.
-    fn replenish_warm(&mut self, target: usize, next_stable_id: &mut NodeId) {
-        let missing = target.saturating_sub(self.warm.len());
-        let Some(prototype) = &self.prototype else {
-            return;
-        };
-        let mut shells = Vec::with_capacity(missing);
-        for _ in 0..missing {
-            let Some(shell) = prototype.rehouse_for_recycle() else {
-                break;
-            };
-            shells.push(shell);
-        }
-        for shell in shells {
-            if self.warm.len() >= self.limit.unwrap_or(usize::MAX) {
-                return;
-            }
-            let stable_id = *next_stable_id;
-            *next_stable_id = next_stable_id.saturating_add(1);
-            self.push_warm(RecycledNode::from_shell(stable_id, shell, true));
-        }
-    }
-
-    fn trim_warm_to(&mut self, target: usize) {
-        let removable = self.warm.len().saturating_sub(target);
-        let dropped: Vec<_> = self.warm.drain(0..removable).collect();
-        drop(dropped);
-    }
-
-    fn compact_warm(&mut self) {
-        if self.warm.capacity() <= self.warm.len().saturating_mul(4).max(64) {
-            return;
-        }
-        let mut compacted = Vec::with_capacity(self.warm.len());
-        compacted.append(&mut self.warm);
-        self.warm = compacted;
-    }
-
-    // At the end of an apply pass: the returned shells join the warm ones,
-    // the cold ones this pass needed fresh shells for turn warm and the rest
-    // go, and the warm pool moves to its target.
-    fn end_pass(&mut self, next_stable_id: &mut NodeId) {
-        self.warm.append(&mut std::mem::take(&mut self.returning));
-        let needed = std::mem::take(&mut self.fresh_creations);
-        let mut cold = std::mem::take(&mut self.cold);
-        if needed > 0 {
-            let remaining_limit = self
-                .limit
-                .unwrap_or(usize::MAX)
-                .saturating_sub(self.warm.len());
-            let promote = cold.len().min(needed).min(remaining_limit);
-            let split_at = cold.len().saturating_sub(promote);
-            for mut recycled in cold.split_off(split_at) {
-                recycled.set_warm_origin(true);
-                self.warm.push(recycled);
-            }
-        }
-        drop(cold);
-        // A type that only had shells created fresh has nothing to size yet.
-        if self.warm.is_empty()
-            && self.limit.is_none()
-            && self.warm_target.is_none()
-            && self.prototype.is_none()
-        {
-            return;
-        }
-        let target = self.update_warm_target(needed);
-        self.replenish_warm(target, next_stable_id);
-        self.trim_warm_to(target);
-        self.compact_warm();
-    }
-}
-
-// Drops the oldest shells of `pool` past `limit`.
-fn drop_oldest_past(pool: &mut Vec<RecycledNode>, limit: Option<usize>) {
-    if let Some(limit) = limit
-        && pool.len() > limit
-    {
-        let excess = pool.len() - limit;
-        let dropped: Vec<_> = pool.drain(0..excess).collect();
-        drop(dropped);
-    }
+struct HighIdSlot {
+    node: Option<Box<dyn Node>>,
+    warm_origin: bool,
+    generation: u32,
 }
 
 /// Reusable ancestry storage for [`MemoryApplier::scene_nodes_attached_to_into`].
@@ -4353,10 +4201,10 @@ impl MemoryApplier {
             stable_generations_cap: self.state.stable_index.capacity(),
             free_ids_len: self.state.free_ids.len(),
             free_ids_cap: self.state.free_ids.capacity(),
-            high_id_nodes_len: self.state.high_id_nodes.len(),
-            high_id_nodes_cap: self.state.high_id_nodes.capacity(),
-            high_id_generations_len: self.state.high_id_generations.len(),
-            high_id_generations_cap: self.state.high_id_generations.capacity(),
+            high_id_nodes_len: self.high_id_nodes().count(),
+            high_id_nodes_cap: self.state.high_ids.capacity(),
+            high_id_generations_len: self.state.high_ids.len(),
+            high_id_generations_cap: self.state.high_ids.capacity(),
             recycled_type_count: self
                 .state
                 .recycle_pools
@@ -4381,7 +4229,12 @@ impl MemoryApplier {
         for node in self.state.nodes.iter_mut().flatten() {
             visit(node.as_mut());
         }
-        for node in self.state.high_id_nodes.values_mut() {
+        for node in self
+            .state
+            .high_ids
+            .values_mut()
+            .filter_map(|slot| slot.node.as_mut())
+        {
             visit(node.as_mut());
         }
     }
@@ -4396,10 +4249,8 @@ impl MemoryApplier {
             .map(|node| size_of_val(&**node) + node.debug_heap_bytes())
             .sum::<usize>();
         let high_id_nodes = self
-            .state
-            .high_id_nodes
-            .values()
-            .map(|node| size_of_val(&**node) + node.debug_heap_bytes())
+            .high_id_nodes()
+            .map(|node| size_of_val(node) + node.debug_heap_bytes())
             .sum::<usize>();
         dense_nodes + high_id_nodes
     }
@@ -4488,15 +4339,21 @@ impl MemoryApplier {
             .count()
             + self
                 .state
-                .high_id_warm_recycled_origins
+                .high_ids
                 .values()
-                .filter(|warm_origin| **warm_origin)
+                .filter(|slot| slot.warm_origin && slot.node.is_some())
                 .count()
     }
 
+    fn high_id_nodes(&self) -> impl Iterator<Item = &dyn Node> {
+        self.state
+            .high_ids
+            .values()
+            .filter_map(|slot| slot.node.as_deref())
+    }
+
     fn live_warm_recycled_origin_capacity(&self) -> usize {
-        self.state.physical_warm_recycled_origins.capacity()
-            + self.state.high_id_warm_recycled_origins.capacity()
+        self.state.physical_warm_recycled_origins.capacity() + self.state.high_ids.capacity()
     }
 
     fn push_recycled_node(
@@ -4596,15 +4453,13 @@ impl MemoryApplier {
     }
 
     fn contains_node_id(&self, id: NodeId) -> bool {
-        self.resolve_node_index(id).is_some() || self.state.high_id_nodes.contains_key(&id)
+        self.resolve_node_index(id).is_some() || self.high_id_node(id).is_ok()
     }
 
     fn insert_high_id_node(&mut self, stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) {
-        self.state.high_id_nodes.insert(stable_id, node);
-        self.state
-            .high_id_warm_recycled_origins
-            .insert(stable_id, warm_origin);
-        self.state.high_id_generations.entry(stable_id).or_insert(0);
+        let slot = self.state.high_ids.entry(stable_id).or_default();
+        slot.node = Some(node);
+        slot.warm_origin = warm_origin;
     }
 
     fn insert_available_with_id(&mut self, stable_id: NodeId, node: Box<dyn Node>) {
@@ -4651,17 +4506,17 @@ impl MemoryApplier {
 
     fn high_id_node(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         self.state
-            .high_id_nodes
+            .high_ids
             .get(&id)
-            .map(AsRef::as_ref)
+            .and_then(|slot| slot.node.as_deref())
             .ok_or(NodeError::Missing { id })
     }
 
     fn high_id_node_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
         self.state
-            .high_id_nodes
+            .high_ids
             .get_mut(&id)
-            .map(AsMut::as_mut)
+            .and_then(|slot| slot.node.as_deref_mut())
             .ok_or(NodeError::Missing { id })
     }
 
@@ -4684,24 +4539,19 @@ impl MemoryApplier {
 
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
         self.state.virtual_node_ids.remove(&node_id);
-        if self.state.high_id_nodes.contains_key(&node_id) {
-            if let Some(node) = self.state.high_id_nodes.remove(&node_id)
-                && let Some(key) = node.recycle_key()
-            {
+        if let Some(slot) = self.state.high_ids.get_mut(&node_id)
+            && let Some(node) = slot.node.take()
+        {
+            let warm_origin = std::mem::take(&mut slot.warm_origin);
+            slot.generation = slot.generation.wrapping_add(1);
+            if let Some(key) = node.recycle_key() {
                 let recycle_pool_limit = node.recycle_pool_limit();
-                let warm_origin = self
-                    .state
-                    .high_id_warm_recycled_origins
-                    .remove(&node_id)
-                    .unwrap_or(false);
                 self.push_recycled_node(
                     key,
                     recycle_pool_limit,
                     RecycledNode::new(node_id, node, warm_origin),
                 );
             }
-            let generation = self.state.high_id_generations.entry(node_id).or_insert(0);
-            *generation = generation.wrapping_add(1);
             return Ok(());
         }
 
@@ -4820,10 +4670,9 @@ impl Applier for MemoryApplier {
         if id >= Self::HIGH_ID_THRESHOLD {
             return self
                 .state
-                .high_id_generations
+                .high_ids
                 .get(&id)
-                .copied()
-                .unwrap_or(0);
+                .map_or(0, |slot| slot.generation);
         }
         self.state.stable_index.generation(id)
     }
@@ -4870,7 +4719,11 @@ impl Applier for MemoryApplier {
     /// One lookup of the node's slot serves the pass note and the node.
     fn bubble_node(&mut self, id: NodeId, flags: u8, note: bool) -> Option<&mut dyn Node> {
         let Some(index) = self.resolve_node_index(id) else {
-            return self.state.high_id_nodes.get_mut(&id).map(AsMut::as_mut);
+            return self
+                .state
+                .high_ids
+                .get_mut(&id)
+                .and_then(|slot| slot.node.as_deref_mut());
         };
         if note && self.state.bubble_passes.note(index, flags) {
             return None;
@@ -4969,10 +4822,10 @@ impl Applier for MemoryApplier {
     fn set_recycled_node_origin(&mut self, id: NodeId, warm_origin: bool) {
         if let Some(physical_id) = self.resolve_node_index(id) {
             self.state.physical_warm_recycled_origins[physical_id] = warm_origin;
-        } else if self.state.high_id_nodes.contains_key(&id) {
-            self.state
-                .high_id_warm_recycled_origins
-                .insert(id, warm_origin);
+        } else if let Some(slot) = self.state.high_ids.get_mut(&id)
+            && slot.node.is_some()
+        {
+            slot.warm_origin = warm_origin;
         }
     }
 
