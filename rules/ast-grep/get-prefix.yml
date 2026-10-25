@@ -1,0 +1,14 @@
+id: get-prefix
+language: rust
+severity: warning
+message: A getter is named after what it returns, without a get_ prefix.
+rule:
+  kind: function_item
+  has:
+    field: name
+    regex: ^get_
+  all:
+    - has:
+        field: parameters
+        has:
+          kind: self_parameter

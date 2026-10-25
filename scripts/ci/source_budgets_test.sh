@@ -94,6 +94,34 @@ budgets 1 12
 seq 1 13 | sed 's/.*/const _: u8 = 0;/' > "$repo/crates/a/src/new.rs"
 expect "a new file over the limit fails" 1
 
+if command -v ast-grep >/dev/null; then
+  rm -f "$repo/crates/a/src/new.rs"
+  mkdir -p "$repo/rules/ast-grep"
+  printf 'ruleDirs:\n  - rules/ast-grep\n' > "$repo/sgconfig.yml"
+  cat > "$repo/rules/ast-grep/drain-collect.yml" <<'RULE'
+id: drain-collect
+language: rust
+severity: warning
+message: drained into a new collection
+rule:
+  pattern: $SOURCE.drain($$$RANGE).collect()
+RULE
+  printf 'pub fn take(items: &mut Vec<u8>) -> Vec<u8> {\n    items.drain(..).collect()\n}\n' > "$repo/crates/a/src/drain.rs"
+  rule_budget() {
+    budgets 1 12
+    printf '\n[ast_grep]\n"drain-collect" = %s\n' "$1" >> "$budget_file"
+  }
+  rule_budget 1
+  expect "a rule at its budget passes" 0
+  rule_budget 0
+  expect "a rule over its budget fails" 1
+  budgets 1 12
+  printf '\n[ast_grep]\n' >> "$budget_file"
+  expect "a rule with no budget fails" 1
+else
+  echo "skip: ast-grep is not installed, so the rule budgets went unchecked"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "source_budgets: $failures check(s) failed"
   exit 1

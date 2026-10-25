@@ -9,6 +9,15 @@ for_test_fns = 40
 cranpose_env_names = 78
 source_text_checks = 1225
 
+[ast_grep]
+"bool-parameter" = 313
+"drain-collect" = 12
+"get-prefix" = 133
+"hashset-of-node-ids" = 17
+"manager-helper-util" = 8
+"rc-refcell-in-public-signature" = 3
+"state-holder-rebuilt" = 0
+
 [file_lines]
 limit = 1000
 
@@ -19,7 +28,7 @@ limit = 1000
 "apps/desktop-demo/robot-runners/robot_perf_harness.rs" = 1642
 "apps/desktop-demo/robot-runners/robot_wsz_native_window_geometry.rs" = 1811
 "apps/desktop-demo/robot-runners/scroll_stability_external_helpers.rs" = 1086
-"apps/desktop-demo/src/app.rs" = 3163
+"apps/desktop-demo/src/app.rs" = 3161
 "apps/desktop-demo/src/app/hacker_news.rs" = 2019
 "apps/desktop-demo/src/app/highlight.rs" = 1095
 "apps/desktop-demo/src/app/liquid_ui.rs" = 2376

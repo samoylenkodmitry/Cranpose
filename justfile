@@ -363,15 +363,6 @@ duplication-gate base="origin/main":
 wrapper-gate base="origin/main":
     python3 scripts/ci/pointless_wrapper_gate.py --base {{base}}
 
-# A state holder rebuilt on every pass: a struct whose fields are each their
-# own `rememberMutableStateOf`, so the values are remembered but the struct
-# around them is not. Remember the struct itself instead, the way Jetpack
-# Compose does: `remember(|| Holder { field: mutableStateOf(..) })`.
-#
-# Tree-wide rather than diff-based: there are none left to grandfather.
-state-holder-gate:
-    python3 scripts/ci/state_holder_gate.py
-
 # Every `thread_local!` static in the framework crates takes one of the
 # process's pthread keys on Android, where bionic allows about 128 for the
 # whole process and std aborts once they run out. New per-thread state goes
@@ -382,14 +373,34 @@ thread-local-budget:
 
 # Counts that written rules keep low, each with a budget that only goes down:
 # lines per file, `too_many_arguments` suppressions, private doc comments,
-# `*_for_test` functions, `CRANPOSE_*` names in library crates and
-# source-text checks in tests. See scripts/ci/source_budgets.toml.
+# `*_for_test` functions, `CRANPOSE_*` names in library crates, source-text
+# checks in tests and the sites of each structural rule in rules/ast-grep.
+# See scripts/ci/source_budgets.toml.
 source-budgets:
+    @command -v ast-grep >/dev/null || cargo install ast-grep --locked --version 0.51.0
     python3 scripts/ci/source_budgets.py
 
 # Write the source budget counts that fell, for the commit that cut them.
 source-budgets-lower:
     python3 scripts/ci/source_budgets.py --lower
+
+# Licenses, bans and sources of the dependency graph, as deny.toml allows
+# them. Reads Cargo.lock and the manifests, builds nothing: about 4 seconds.
+deny:
+    @command -v cargo-deny >/dev/null || cargo install cargo-deny --locked --version 0.20.2
+    cargo deny check bans licenses sources
+
+# The advisory database, nightly: a new advisory cannot block a merge.
+deny-advisories:
+    @command -v cargo-deny >/dev/null || cargo install cargo-deny --locked --version 0.20.2
+    cargo deny check advisories
+
+# Dependencies that no code uses. Parses the sources, builds nothing: about
+# 2 seconds. A dependency named only to turn on a feature goes in its
+# manifest's [package.metadata.cargo-shear] ignored list, with the reason.
+shear:
+    @command -v cargo-shear >/dev/null || cargo install cargo-shear --locked --version 1.14.0
+    cargo shear
 
 # The modifier matrix's Cranpose and Compose halves are generated from one
 # description (tools/compose-twin/matrix.toml); a hand edit to either, or a
@@ -399,7 +410,7 @@ twin-matrix-check:
 
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate thread-local-budget source-budgets twin-matrix-check ci-contract-gates
+precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate thread-local-budget source-budgets shear twin-matrix-check ci-contract-gates
 
 # The gates that describe CI to itself: which scheduling class each robot
 # example is in, what a parallel worker can reach, and the twenty-minute cap
@@ -1138,7 +1149,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate source-budgets test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

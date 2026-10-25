@@ -407,8 +407,6 @@ ndk-context = "0.1.1"
 # `android_frame_telemetry`; the safe `ndk` crate does not wrap it.
 ndk-sys = "0.6.0"
 raw-window-handle = "0.6"
-zune-core = "0.5.3"
-zune-jpeg = "0.5.15"
 wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",

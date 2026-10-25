@@ -1,0 +1,18 @@
+id: rc-refcell-in-public-signature
+language: rust
+severity: warning
+message: A public signature holds no Rc<RefCell<..>>; the type owns its sharing.
+rule:
+  pattern:
+    context: type T = Rc<RefCell<$U>>;
+    selector: generic_type
+  inside:
+    kind: function_item
+    has:
+      kind: visibility_modifier
+      regex: ^pub$
+    stopBy: end
+  not:
+    inside:
+      kind: block
+      stopBy: end

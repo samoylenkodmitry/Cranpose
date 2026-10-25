@@ -23,7 +23,6 @@ cranpose-ui = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-coroflow = { workspace = true }
 cranpose-core = { workspace = true, features = ["internal"] }
 # Path-only dev-deps: stripped from the published manifest.
 cranpose-testing = { path = "../cranpose-testing" }

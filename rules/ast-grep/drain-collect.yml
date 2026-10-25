@@ -1,0 +1,6 @@
+id: drain-collect
+language: rust
+severity: warning
+message: A drain collected into a new collection allocates each pass; drain into storage the owner keeps.
+rule:
+  pattern: $SOURCE.drain($$$RANGE).collect()

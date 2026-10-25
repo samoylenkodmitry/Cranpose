@@ -1,0 +1,8 @@
+id: hashset-of-node-ids
+language: rust
+severity: warning
+message: A set of node ids hashes each id; node data lives in a table by node slot.
+rule:
+  pattern:
+    context: type T = HashSet<NodeId>;
+    selector: generic_type

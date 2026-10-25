@@ -210,7 +210,7 @@ pub(crate) fn LazyScrollbarRail(
                 use std::time::Duration;
 
                 use cranpose_foundation::{PointerButton, PointerEventKind};
-                use instant::Instant;
+                use web_time::Instant;
 
                 loop {
                     scope

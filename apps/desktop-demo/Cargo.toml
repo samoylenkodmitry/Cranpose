@@ -6,6 +6,7 @@ edition = "2021"
 description = "Cranpose desktop demo application."
 repository = "https://github.com/samoylenkodmitry/cranpose"
 license = "Apache-2.0 OR MIT"
+publish = false
 autotests = false
 
 [lints]
@@ -49,8 +50,6 @@ android = [
 web = [
     "cranpose/web",
     "cranpose-services/web-http",
-    "dep:wasm-bindgen",
-    "dep:wasm-logger",
 ]
 # Enable real app robot testing
 robot-app = ["logging", "cranpose-ui/test-helpers", "cranpose/desktop-menus"]
@@ -64,9 +63,7 @@ cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-ui = { path = "../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../crates/cranpose-foundation" }
 log = "0.4"
-instant = { version = "0.1", features = ["wasm-bindgen"] }
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-logger = { version = "0.2", optional = true }
+web-time = { workspace = true }
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
 anyhow = "1.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -82,12 +79,6 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }
-
-
-# WASM-specific dependencies
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-console_error_panic_hook = "0.1"
-wasm-bindgen-futures = "0.4.79"
 
 [dev-dependencies]
 cranpose-app-shell = { path = "../../crates/cranpose-app-shell", features = ["test-support"] }

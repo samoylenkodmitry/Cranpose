@@ -1,0 +1,12 @@
+id: state-holder-rebuilt
+language: rust
+severity: warning
+message: A struct built from remember calls is rebuilt every pass; remember the holder itself with mutableStateOf fields inside.
+rule:
+  kind: field_initializer
+  has:
+    field: value
+    kind: call_expression
+    has:
+      field: function
+      regex: (^|::)(rememberMutableStateOf|rememberMutableStateOfNeverEqual|rememberUpdatedState|rememberKeyed)$

@@ -40,7 +40,6 @@ required-features = ["robot"]
 [dependencies]
 coroflow = { workspace = true }
 cranpose = { workspace = true, features = ["embedded-default-font"] }
-cranpose-core = { workspace = true }
 cranpose-coroflow = { workspace = true }
 cranpose-navigation = { workspace = true }
 cranpose-foundation = { workspace = true }

@@ -1,0 +1,47 @@
+# cargo-deny: what the dependency graph may hold. `just deny` checks licenses,
+# bans and sources in the pull request gate; `just deny-advisories` checks the
+# advisory database nightly, where a new advisory cannot block a merge.
+
+[graph]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+ignore = [
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser reads the font tables of every text path; no maintained replacement reads them yet" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz shapes over ttf-parser and goes with it" },
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+# xtask dependency-budget owns duplicate versions, with recorded debt.
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
