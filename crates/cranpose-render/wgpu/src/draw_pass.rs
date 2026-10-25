@@ -14,9 +14,9 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect, ViewportUniformParams,
-        image_draw_bounds, run_draw_bounds, scissor_rect_for_rect, segment_scene_rect,
-        supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
+        ArenaPlacement, DrawSpace, GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect,
+        ViewportUniformParams, image_draw_bounds, run_draw_bounds, scissor_rect_for_rect,
+        segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
@@ -24,6 +24,9 @@ use crate::{
     scissor::{intersect_scissors, scissor_in_target},
     shape_pipelines::PipelineDemand,
 };
+
+mod held_draws;
+use held_draws::{HeldCmds, HeldDraws};
 
 /// A render target and its size in pixels.
 #[derive(Clone, Copy)]
@@ -468,12 +471,12 @@ impl GpuRenderer {
                     bytemuck::cast_slice(builder.indices()),
                 ),
             }),
-            images: (!scratch.image_indices.is_empty()).then(|| {
+            images: (!scratch.images.indices.is_empty()).then(|| {
                 self.upload_image_slot(
                     recorder,
-                    &scratch.image_vertices,
-                    &scratch.image_indices,
-                    &scratch.image_clips,
+                    &scratch.images.vertices,
+                    &scratch.images.indices,
+                    &scratch.images.clips,
                 )
             }),
             shadows: (!scratch.shadow_instances.is_empty())
@@ -577,7 +580,7 @@ impl GpuRenderer {
                         frame,
                         &batches,
                         PassCmds {
-                            images: &scratch.image_cmds,
+                            images: &scratch.images.cmds,
                             glyphs: &scratch.glyph_cmds,
                             arena: &scratch.arena_draws,
                             meshes: &scratch.meshes,
@@ -598,10 +601,10 @@ impl GpuRenderer {
         let mut scratch = std::mem::take(&mut self.pass_scratch);
         scratch.meshes.clear();
         scratch.arena_draws.clear();
-        scratch.image_vertices.clear();
-        scratch.image_indices.clear();
-        scratch.image_cmds.clear();
-        scratch.image_clips.clear();
+        scratch.images.vertices.clear();
+        scratch.images.indices.clear();
+        scratch.images.cmds.clear();
+        scratch.images.clips.clear();
         scratch.glyph_instances.clear();
         scratch.glyph_cmds.clear();
         scratch.shadow_instances.clear();
@@ -630,7 +633,7 @@ impl GpuRenderer {
                 Batch::Images {
                     cmds, blend_mode, ..
                 } => self.prefetch_image_pipelines(
-                    &scratch.image_cmds[cmds.clone()],
+                    &scratch.images.cmds[cmds.clone()],
                     *blend_mode,
                     depth_lane,
                     awaited,
@@ -838,19 +841,30 @@ impl GpuRenderer {
                     return Ok(());
                 };
                 let meshes = meshes.map(|(meshes, depth)| (meshes.of(draws.clone()), depth));
-                self.draw_arena(
-                    pass,
-                    *chunk,
-                    *uniform_slot,
-                    &arena[draws],
+                let calls = RunCalls {
+                    uniform_slot: *uniform_slot,
+                    draws: &arena[draws],
                     scissor,
                     stage,
                     meshes,
-                )
+                };
+                self.draw_arena(pass, *chunk, calls)
             }
             _ => Ok(()),
         }
     }
+}
+
+// A batch of run draw calls: the uniform slot and scissor they draw under,
+// the calls, the stage they draw and the meshes a call falls back to while
+// its pipeline compiles, with the depth buffer or not.
+#[derive(Clone, Copy)]
+pub(crate) struct RunCalls<'a> {
+    pub(crate) uniform_slot: usize,
+    pub(crate) draws: &'a [RunDrawCall],
+    pub(crate) scissor: (u32, u32, u32, u32),
+    pub(crate) stage: RunStage,
+    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, bool)>,
 }
 
 /// Changes between flat and turned segments a pass takes before its shapes
@@ -1200,10 +1214,7 @@ impl PassBuffers {
 
 #[derive(Default)]
 pub(crate) struct PassScratch {
-    pub(crate) image_vertices: Vec<crate::render::Vertex>,
-    pub(crate) image_indices: Vec<u32>,
-    pub(crate) image_cmds: Vec<crate::render::ImageDrawCmd>,
-    image_clips: Vec<crate::render::DeviceRoundedClip>,
+    pub(crate) images: crate::render::ImageBatch,
     pub(crate) glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
     /// Where a glyph batch's draws of one kind wait while it groups them.
@@ -1226,9 +1237,9 @@ struct ImageMark {
 impl PassScratch {
     fn image_mark(&self) -> ImageMark {
         ImageMark {
-            vertices: self.image_vertices.len(),
-            clips: self.image_clips.len(),
-            cmds: self.image_cmds.len(),
+            vertices: self.images.vertices.len(),
+            clips: self.images.clips.len(),
+            cmds: self.images.cmds.len(),
         }
     }
 
@@ -1239,9 +1250,9 @@ impl PassScratch {
         if let Some(slot) = run.slot {
             crate::render::place_image_draws(
                 (
-                    &mut self.image_vertices[mark.vertices..],
-                    &mut self.image_clips[mark.clips..],
-                    &mut self.image_cmds[mark.cmds..],
+                    &mut self.images.vertices[mark.vertices..],
+                    &mut self.images.clips[mark.clips..],
+                    &mut self.images.cmds[mark.cmds..],
                 ),
                 run.shift,
                 slot,
@@ -1287,182 +1298,8 @@ fn group_glyph_batches(batches: &[Batch<'_>], scratch: &mut PassScratch) {
     }
 }
 
-/// Most glyph and image draws held back at once; past this they draw, so a
-/// long stretch of shapes checks each against a bounded list.
-const MAX_HELD_DRAWS: usize = 256;
-
 pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
     a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
-}
-
-fn target_rect_union(a: TargetRect, b: TargetRect) -> TargetRect {
-    let left = a.0.min(b.0);
-    let top = a.1.min(b.1);
-    let right = (a.0 + a.2).max(b.0 + b.2);
-    let bottom = (a.1 + a.3).max(b.1 + b.3);
-    (left, top, right - left, bottom - top)
-}
-
-/// Log2 of the side, in target pixels, of the cells [`HeldDraws`] marks.
-const HELD_CELL_SHIFT: u32 = 6;
-
-/// The rows of cells `rect` touches and the mask of its columns in each,
-/// columns past the 63rd sharing the last bit. An empty side counts as one
-/// pixel: [`target_rects_overlap`] lets a rect that thin overlap one it lies
-/// inside, and the pixel it stands on is in that one too.
-fn held_cells(rect: TargetRect) -> (std::ops::Range<usize>, u64) {
-    let (x, y, width, height) = rect;
-    let last_column = (x.saturating_add(width.max(1) - 1) >> HELD_CELL_SHIFT).min(63);
-    let first_column = (x >> HELD_CELL_SHIFT).min(63);
-    let columns = last_column - first_column + 1;
-    let mask = if columns >= 64 {
-        u64::MAX
-    } else {
-        ((1_u64 << columns) - 1) << first_column
-    };
-    let first_row = (y >> HELD_CELL_SHIFT) as usize;
-    let last_row = (y.saturating_add(height.max(1) - 1) >> HELD_CELL_SHIFT) as usize;
-    (first_row..last_row + 1, mask)
-}
-
-/// Glyph and src-over image draws held back so the shapes after them keep
-/// filling one arena chunk: the text and avatar of a card no longer split
-/// the backgrounds around them into draws of their own. A shape that
-/// overlaps a held draw, or any draw of another kind, draws them first, so
-/// nothing is reordered past a pixel it shares. The held glyphs draw before
-/// the held images, so an image may lie over held glyphs and a text that
-/// lies over a held image draws what is held first.
-#[derive(Default)]
-pub(crate) struct HeldDraws {
-    cmds: Option<std::ops::Range<usize>>,
-    /// The held image commands and the viewport they draw under.
-    images: Option<(std::ops::Range<usize>, ViewportUniformParams)>,
-    /// How many draws are held.
-    held: usize,
-    /// The target pixels the held images touch.
-    image_bounds: Vec<TargetRect>,
-    union: Option<TargetRect>,
-    /// Per band of cell rows, the cell columns a held draw touches. A shape
-    /// touching none of them overlaps no held draw.
-    cells: Vec<u64>,
-    /// Per band of cell rows, the target pixels of each held draw touching
-    /// it: a shape that touches a held cell is checked only against the
-    /// draws of its own bands. A list's tickers held a few hundred glyph
-    /// draws, which every background after them was checked against.
-    rows: Vec<Vec<TargetRect>>,
-}
-
-impl HeldDraws {
-    /// Holds the glyph commands at `cmds`, which touch `bounds`.
-    fn hold(&mut self, cmds: std::ops::Range<usize>, bounds: impl IntoIterator<Item = TargetRect>) {
-        self.cmds = Some(match self.cmds.take() {
-            Some(held) => held.start..cmds.end,
-            None => cmds,
-        });
-        for rect in bounds {
-            self.mark(rect);
-        }
-    }
-
-    /// Holds the image command at `cmds`, drawn under `viewport` within
-    /// `bounds`.
-    fn hold_image(
-        &mut self,
-        cmds: std::ops::Range<usize>,
-        viewport: ViewportUniformParams,
-        bounds: TargetRect,
-    ) {
-        let cmds = match self.images.take() {
-            Some((held, _)) => held.start..cmds.end,
-            None => cmds,
-        };
-        self.images = Some((cmds, viewport));
-        self.image_bounds.push(bounds);
-        self.mark(bounds);
-    }
-
-    fn mark(&mut self, rect: TargetRect) {
-        self.union = Some(
-            self.union
-                .map_or(rect, |union| target_rect_union(union, rect)),
-        );
-        self.held += 1;
-        let (rows, mask) = held_cells(rect);
-        if self.cells.len() < rows.end {
-            self.cells.resize(rows.end, 0);
-        }
-        if self.rows.len() < rows.end {
-            self.rows.resize_with(rows.end, Vec::new);
-        }
-        for (cells, held) in self.cells[rows.clone()]
-            .iter_mut()
-            .zip(&mut self.rows[rows])
-        {
-            *cells |= mask;
-            held.push(rect);
-        }
-    }
-
-    /// Whether nothing is held.
-    fn is_empty(&self) -> bool {
-        self.union.is_none()
-    }
-
-    /// Whether a draw touching `rect` would cover a held draw: one that
-    /// overlaps it shares a band of cell rows with it.
-    fn overlaps(&self, rect: TargetRect) -> bool {
-        if !self
-            .union
-            .is_some_and(|union| target_rects_overlap(union, rect))
-        {
-            return false;
-        }
-        let (rows, mask) = held_cells(rect);
-        let end = rows.end.min(self.cells.len());
-        let start = rows.start.min(end);
-        self.cells[start..end]
-            .iter()
-            .zip(&self.rows[start..end])
-            .any(|(cells, held)| {
-                cells & mask != 0 && held.iter().any(|held| target_rects_overlap(*held, rect))
-            })
-    }
-
-    /// Whether glyphs touching `rect` would cover a held image.
-    fn covers_image(&self, rect: TargetRect) -> bool {
-        self.image_bounds
-            .iter()
-            .any(|held| target_rects_overlap(*held, rect))
-    }
-
-    /// The viewport the held images draw under.
-    fn image_viewport(&self) -> Option<ViewportUniformParams> {
-        self.images.as_ref().map(|(_, viewport)| *viewport)
-    }
-
-    fn full(&self) -> bool {
-        self.held >= MAX_HELD_DRAWS
-    }
-
-    fn take(&mut self) -> HeldCmds {
-        self.held = 0;
-        self.image_bounds.clear();
-        for held in &mut self.rows[..self.cells.len()] {
-            held.clear();
-        }
-        self.cells.clear();
-        self.union = None;
-        HeldCmds {
-            glyphs: self.cmds.take(),
-            images: self.images.take(),
-        }
-    }
-}
-
-/// The commands [`HeldDraws::take`] hands back to draw.
-struct HeldCmds {
-    glyphs: Option<std::ops::Range<usize>>,
-    images: Option<(std::ops::Range<usize>, ViewportUniformParams)>,
 }
 
 /// Turns the segments of one pass into batches, one item run at a time.
@@ -2072,23 +1909,24 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
                 self.close_chunk(renderer, run.binding);
-                let viewport = ViewportUniformParams {
-                    depth_base: self.depth_seq as f32,
-                    ..run.viewport
+                let space = DrawSpace {
+                    viewport: ViewportUniformParams {
+                        depth_base: self.depth_seq as f32,
+                        ..run.viewport
+                    },
+                    scale: run.segment.scale,
                 };
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
-                    viewport,
-                    run.segment.scale,
+                    space,
                     &window,
                     (self.depth, self.depth_keys.as_mut()),
                     (&mut self.arena_draws, &mut self.pipelines),
                 );
                 renderer.mesh_store_run(
                     draw,
-                    viewport,
-                    run.segment.scale,
+                    space,
                     batch.draws.clone(),
                     &self.arena_draws,
                     self.depth,
@@ -2116,6 +1954,12 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 }
                 self.chunk_clip = clip.paint;
                 let segment_clip = clip.tested;
+                let at = ArenaPlacement {
+                    space: run.space(),
+                    shift: run.shift,
+                    mixed_turns: self.mixed_turns,
+                    depth: self.depth,
+                };
                 while from < total {
                     if self
                         .chunk
@@ -2131,10 +1975,8 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         open,
                         draw,
                         from..total,
-                        (run.segment.scale, run.shift),
-                        run.viewport,
-                        self.mixed_turns,
-                        (self.depth, segment_clip),
+                        at,
+                        segment_clip,
                         (&mut self.pipelines, self.depth_keys.as_mut()),
                     );
                     if taken == 0 {
@@ -2176,22 +2018,16 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             self.draw_held(renderer, run.binding);
         }
         let mark = scratch.image_mark();
-        renderer.append_image_draw_cmd(
-            image,
-            run.viewport,
-            run.segment.scale,
-            (&mut scratch.image_vertices, &mut scratch.image_indices),
-            &mut scratch.image_clips,
-            &mut scratch.image_cmds,
-        )?;
+        renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
         scratch.place_images(mark, run);
         if let Some(bounds) = scratch
-            .image_cmds
+            .images
+            .cmds
             .get(mark.cmds)
             .map(crate::render::ImageDrawCmd::bounds)
         {
             self.held
-                .hold_image(mark.cmds..scratch.image_cmds.len(), viewport, bounds);
+                .hold_image(mark.cmds..scratch.images.cmds.len(), viewport, bounds);
         }
         Ok(())
     }
@@ -2213,20 +2049,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
             let image = &images[index];
-            renderer.append_image_draw_cmd(
-                image,
-                run.viewport,
-                run.segment.scale,
-                (&mut scratch.image_vertices, &mut scratch.image_indices),
-                &mut scratch.image_clips,
-                &mut scratch.image_cmds,
-            )?;
+            renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
         }
         scratch.place_images(mark, run);
         self.push_images(
             renderer,
             (run.binding, run.image_viewport()),
-            mark.cmds..scratch.image_cmds.len(),
+            mark.cmds..scratch.images.cmds.len(),
             (blend_mode, None),
         );
         Ok(())
@@ -2295,19 +2124,12 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         }
         self.flush(renderer, run.binding);
         let mark = scratch.image_mark();
-        renderer.append_text_image_draw_cmds(
-            text,
-            run.viewport,
-            run.segment.scale,
-            &mut scratch.image_vertices,
-            &mut scratch.image_indices,
-            &mut scratch.image_cmds,
-        )?;
+        renderer.append_text_image_draw_cmds(text, run.space(), &mut scratch.images)?;
         scratch.place_images(mark, run);
         self.push_images(
             renderer,
             (run.binding, run.image_viewport()),
-            mark.cmds..scratch.image_cmds.len(),
+            mark.cmds..scratch.images.cmds.len(),
             (BlendMode::SrcOver, None),
         );
         Ok(())
@@ -2448,6 +2270,13 @@ struct ArenaClip {
 }
 
 impl SegmentRun<'_, '_> {
+    fn space(&self) -> DrawSpace {
+        DrawSpace {
+            viewport: self.viewport,
+            scale: self.segment.scale,
+        }
+    }
+
     /// The viewport the segment's images draw under: a member's are moved
     /// into its binding's space.
     fn image_viewport(&self) -> ViewportUniformParams {

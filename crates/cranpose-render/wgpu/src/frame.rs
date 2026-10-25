@@ -2252,6 +2252,13 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     prefix_admitted_pixels: u64,
 }
 
+// Where a frame records its commands and keeps the transient surfaces it
+// releases at its end.
+pub(crate) struct FrameRecording<'a, C> {
+    pub(crate) recorder: &'a mut C,
+    pub(crate) transients: &'a mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
+}
+
 /// A texture a composite draws and what it holds.
 #[derive(Clone)]
 struct CompositeSource {
@@ -2736,12 +2743,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             &blank.view,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
-        let texel = DeviceRect {
-            x: 0.0,
-            y: 0.0,
-            width: 1.0,
-            height: 1.0,
-        };
+        let texel = DeviceRect::from_tuple((0.0, 0.0, 1.0, 1.0));
         let blit = page_blit(&blank, [0.0, 0.0], texel, page.rect());
         let segment = PassSegment {
             scene: &self.empty_scene,
@@ -3002,13 +3004,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }
                 Event::Shadow(index) => {
                     let shadow = &scene.shadow_draws[index];
+                    let mut frame = FrameRecording {
+                        recorder: self.recorder,
+                        transients: &mut self.transients,
+                    };
                     self.renderer.resolve_blurred_shadow(
-                        self.recorder,
+                        &mut frame,
                         shadow,
                         z,
                         scale,
                         &window,
-                        &mut self.transients,
                         &mut pass.pending,
                     );
                 }
@@ -3338,12 +3343,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let copy = pass
             .page
             .copy(
-                DeviceRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                },
+                DeviceRect::from_tuple((x, y, width, height)),
                 &texture,
                 [0.0, 0.0],
             )

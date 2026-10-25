@@ -16,7 +16,7 @@ static ENCODE_DELAY_MS: DebugToggle = DebugToggle::new("CRANPOSE_ENCODE_DELAY_MS
 
 use crate::{
     frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
-    render::{GpuRenderer, GpuRendererInit},
+    render::{FrameOutput, GpuRenderer, GpuRendererInit},
 };
 
 pub(crate) type PresentWaker = Arc<dyn Fn() + Send + Sync>;
@@ -323,14 +323,12 @@ impl PresentState {
         let image = crate::frame::ImageContent::of(&frame);
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
-            &frame.texture,
-            &view,
             width,
             height,
             packet,
             self.surface_epoch,
             &mut returns,
-            image,
+            FrameOutput::display(&frame.texture, &view, image),
         );
         let after_render_ns = self.now();
         self.present(frame);
@@ -453,14 +451,12 @@ impl PresentState {
         let after_acquire_ns = self.now();
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
-            &texture,
-            &view,
             width,
             height,
             packet,
             self.surface_epoch,
             &mut returns,
-            crate::frame::ImageContent::Untracked,
+            FrameOutput::display(&texture, &view, crate::frame::ImageContent::Untracked),
         );
         let after_render_ns = self.now();
         returns.timings = PresentTimings {

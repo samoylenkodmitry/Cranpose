@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -199,9 +201,7 @@ struct PipelineFactory {
 impl PipelineFactory {
     fn module(&self, source: &str, source_hash: u64) -> Option<RuntimeShaderModule> {
         #[cfg(test)]
-        self.counters
-            .modules
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.counters.modules.fetch_add(1, Relaxed);
         create_runtime_shader_module(&self.device, source, source_hash, self.backend)
     }
 }
@@ -209,8 +209,8 @@ impl PipelineFactory {
 #[cfg(test)]
 #[derive(Default)]
 struct BuildCounters {
-    modules: std::sync::atomic::AtomicUsize,
-    pipelines: std::sync::atomic::AtomicUsize,
+    modules: AtomicUsize,
+    pipelines: AtomicUsize,
 }
 
 struct PipelineJob {
@@ -237,11 +237,8 @@ impl PipelineJob {
             .as_ref()?;
         let mode = key.mode;
         #[cfg(test)]
-        factory
-            .counters
-            .pipelines
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Some(crate::render::create_fullscreen_strip_pipeline(
+        factory.counters.pipelines.fetch_add(1, Relaxed);
+        Some(crate::shared_shader::create_fullscreen_strip_pipeline(
             &factory.device,
             factory.pipeline_cache.as_ref(),
             &format!(
@@ -254,9 +251,11 @@ impl PipelineJob {
             ),
             "RuntimeShader Effect Pipeline",
             &factory.layout,
-            (&module.module, &module.module),
-            (crate::render::FULLSCREEN_VS, "effect_fs"),
-            &constants,
+            crate::shared_shader::StripStages {
+                vertex: (&module.module, crate::render::FULLSCREEN_VS),
+                fragment: (&module.module, "effect_fs"),
+                constants: &constants,
+            },
             (
                 wgpu::ColorTargetState {
                     format: factory.format,
