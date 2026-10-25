@@ -9,6 +9,8 @@
 //! dictionary, replaces the one in the property list, or is added before the
 //! closing tag when the list has none.
 
+#![allow(clippy::print_stderr, reason = "a command-line tool prints its output")]
+
 use std::{env, fs, ops::Range, process::ExitCode};
 
 fn main() -> ExitCode {

@@ -1,3 +1,5 @@
+#![allow(clippy::print_stderr, reason = "a test prints what it measured")]
+
 mod animate_scroll_test;
 mod animated_content_test;
 #[cfg(feature = "image-loading")]

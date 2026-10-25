@@ -1,3 +1,5 @@
+#![allow(clippy::print_stderr, reason = "a test prints what it measured")]
+
 // The render tests' device helper; these tests draw only on the background
 // compiler, so its inline reference mode goes unused here.
 #[path = "../../../crates/cranpose-render/wgpu/tests/support/device.rs"]

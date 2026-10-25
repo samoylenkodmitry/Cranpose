@@ -1,3 +1,4 @@
+#![allow(clippy::print_stderr, reason = "a command-line tool prints its output")]
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 fn main() {

@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "an example prints its results"
+)]
+
 use std::{alloc::System, cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;

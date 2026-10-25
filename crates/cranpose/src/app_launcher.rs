@@ -441,6 +441,7 @@ pub enum LaunchError {
     feature = "renderer-wgpu",
     any(feature = "desktop-shell", feature = "ios")
 ))]
+#[expect(clippy::print_stderr, reason = "a failed launch is reported")]
 pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
     eprintln!("{context}: {error}");
     std::process::exit(1)
@@ -1393,6 +1394,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// Use [`AppLauncher::try_run_embedded`] when the caller needs a typed
     /// failure.
     #[cfg(feature = "embed")]
+    #[expect(clippy::print_stderr, reason = "a failed launch is reported")]
     pub fn run_embedded(
         self,
         endpoint: crate::embed::EmbedEndpoint,

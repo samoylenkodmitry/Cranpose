@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "an example prints its results")]
+
 use std::{alloc::System, hint::black_box, time::Instant};
 
 use cranpose_render_common::{

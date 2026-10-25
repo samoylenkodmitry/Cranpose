@@ -2,6 +2,8 @@
 //! at its bottom, as a trade tape does, with more content after it in the
 //! slot table. Each new row inserts its groups before every later group.
 
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::{hint::black_box, time::Instant};
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, key, location_key, remember};

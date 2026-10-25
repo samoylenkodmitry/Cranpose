@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "an example prints its results"
+)]
+
 #[path = "../robot-runners/robot_launch.rs"]
 #[expect(dead_code)]
 mod robot_launch;

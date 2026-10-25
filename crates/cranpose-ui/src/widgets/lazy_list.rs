@@ -1319,8 +1319,6 @@ fn log_lazy_cache_telemetry(
         measured_item_cache.borrow().entries.len(),
     );
     log::warn!("{message}");
-    #[cfg(test)]
-    eprintln!("{message}");
 }
 
 fn normalized_axis_bits(size: f32) -> u32 {

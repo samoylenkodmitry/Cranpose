@@ -4923,6 +4923,7 @@ fn native_window_timing_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_WINDOW_TIMING").is_some())
 }
 
+#[expect(clippy::print_stdout, reason = "native window timing on request")]
 fn print_native_window_timing(args: std::fmt::Arguments<'_>) {
     println!(
         "native window timing: t={:.1}ms {args}",
@@ -4940,6 +4941,7 @@ fn native_window_trace_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some())
 }
 
+#[expect(clippy::print_stdout, reason = "CRANPOSE_NATIVE_TRACE asks for it")]
 fn print_native_window_trace(args: std::fmt::Arguments<'_>) {
     println!("native window trace: {args}");
 }
@@ -5920,11 +5922,8 @@ impl ApplicationHandler for App {
         let mut sync_native_windows_after_event = false;
         match event {
             WindowEvent::CloseRequested => {
-                if let Some(recorder) = self.recorder.take()
-                    && let Err(e) = recorder.finish()
-                {
-                    eprintln!("[Recorder] Error saving recording: {e}");
-                }
+                // Dropping the recorder writes its test once and reports a failure.
+                drop(self.recorder.take());
                 self.exiting = true;
                 event_loop.exit();
             }

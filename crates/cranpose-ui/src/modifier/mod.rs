@@ -883,6 +883,7 @@ impl Modifier {
             }
         }
 
+        #[expect(clippy::print_stderr, reason = "debug_chain prints its lifecycle")]
         impl ModifierNode for DebugChainNode {
             fn on_attach(&mut self, _context: &mut dyn ModifierNodeContext) {
                 eprintln!("[debug_chain:{}] Modifier chain attached", self.tag);

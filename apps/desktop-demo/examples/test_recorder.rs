@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "an example prints its results"
+)]
+
 use std::path::PathBuf;
 
 use cranpose::AppLauncher;

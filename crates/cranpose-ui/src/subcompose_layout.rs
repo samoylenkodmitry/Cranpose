@@ -278,7 +278,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     fn record_error(&self, err: NodeError) {
         let mut slot = self.error.borrow_mut();
         if slot.is_none() {
-            eprintln!("[SubcomposeLayout] Error suppressed: {err:?}");
+            log::warn!("[SubcomposeLayout] Error suppressed: {err:?}");
             *slot = Some(err);
         }
     }

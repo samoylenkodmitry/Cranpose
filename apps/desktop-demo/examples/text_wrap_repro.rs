@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "an example prints its results")]
+
 use std::time::Duration;
 
 use cranpose::AppLauncher;

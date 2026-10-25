@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::{
     alloc::System, cell::RefCell, collections::hash_map::DefaultHasher, hash::Hasher, rc::Rc,
     time::Instant,

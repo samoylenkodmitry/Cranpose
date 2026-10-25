@@ -819,6 +819,10 @@ mod ios_storage;
 mod ios_bundled_assets;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+#[expect(
+    clippy::print_stderr,
+    reason = "the recorder reports to the developer who started it"
+)]
 pub mod recorder;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]

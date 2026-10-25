@@ -7,6 +7,11 @@ pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
 pub mod robot;
 pub mod robot_assertions;
 #[cfg(feature = "desktop-robot")]
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a robot run reports each step on the terminal"
+)]
 pub mod robot_helpers;
 /// Composition tests without a window: `ComposeTestRule` composes content,
 /// runs frames and reads the placed semantics.

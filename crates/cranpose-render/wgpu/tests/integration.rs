@@ -1,3 +1,5 @@
+#![allow(clippy::print_stderr, reason = "a test prints what it measured")]
+
 #[path = "../src/record_columns.rs"]
 mod record_columns;
 #[path = "../src/test_support.rs"]

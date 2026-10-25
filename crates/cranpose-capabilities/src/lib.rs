@@ -466,6 +466,7 @@ impl<'a> Declaration<'a> {
     ///
     /// Call this from a build script. It panics when the files cannot be
     /// written, which is what a build script does with a failure.
+    #[expect(clippy::print_stdout, reason = "build scripts talk to cargo on stdout")]
     pub fn emit(self) {
         let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set for a build script"));
         let package = env::var("CARGO_PKG_NAME").expect("CARGO_PKG_NAME is set for a build script");

@@ -7,6 +7,8 @@
 //! `FRAMES=0` and `FRAMES=100` and divide the difference in instructions by
 //! `FRAMES * COUNT`.
 
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::{any::Any, hint::black_box};
 
 use cranpose_core::{MemoryApplier, MutableState, location_key};

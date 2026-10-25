@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "a test prints what it measured")]
+
 use std::{alloc::System, cell::Cell, rc::Rc};
 
 use cranpose_animation::{

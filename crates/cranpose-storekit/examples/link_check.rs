@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "an example prints its results")]
+
 fn main() {
     cranpose_storekit::register();
     #[cfg(any(target_os = "ios", target_os = "macos"))]
