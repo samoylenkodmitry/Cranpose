@@ -556,13 +556,13 @@ impl GpuRenderer {
         self.prefetch_overlay_pipelines(
             &prep.batches,
             &scratch,
-            (depth, self.frame_lane()),
+            (depth, self.pipelines.frame_lane()),
             &mut |_| {},
         );
         if let Some(depth_keys) = prep.depth_keys.take() {
             self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
         }
-        self.ensure_run_pipelines(&mut prep.pipelines);
+        self.pipelines.ensure_run_pipelines(&mut prep.pipelines);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
         scratch.meshes = prep.meshes;
@@ -695,7 +695,7 @@ impl GpuRenderer {
         depth_keys: &PipelineDemand,
     ) {
         let mut awaited = self.depth_gate.take_awaited();
-        self.warm_shapes_later(depth_keys, &mut |pending| awaited.push(pending));
+        self.pipelines.warm_shapes_later(depth_keys, &mut awaited);
         self.prefetch_overlay_pipelines(
             batches,
             scratch,

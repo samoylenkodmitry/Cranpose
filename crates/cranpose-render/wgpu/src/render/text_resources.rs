@@ -123,6 +123,7 @@ impl TextResources {
             }
         }
     }
+
     /// What every pixel of a frame depends on besides its items: the clear
     /// colour, the glyph atlas and the debug switches.
     pub(super) fn frame_setting(&self, clear: wgpu::Color) -> u64 {
@@ -134,6 +135,7 @@ impl TextResources {
         state.write_u64(cranpose_render_common::debug_toggles::debug_toggle_generation());
         state.finish()
     }
+
     pub(super) fn rasterize_text_draw_to_image(
         &mut self,
         text_draw: &TextDraw,
@@ -154,6 +156,7 @@ impl TextResources {
         )
         .and_then(TextPixels::into_image)
     }
+
     pub(super) fn retained_text_glyph_run(
         &mut self,
         cache_key: TextGlyphRunCacheKey,
@@ -166,6 +169,7 @@ impl TextResources {
             .inspect(|cached| cached.last_frame.set(frame))
             .cloned()
     }
+
     pub(super) fn text_image_raster_source<'a>(
         &mut self,
         text_draw: &'a TextDraw,
@@ -211,6 +215,7 @@ impl TextResources {
             line_starts.as_ref(),
         )
     }
+
     /// The run of `text_draw` from the cache, or collected into
     /// `collected_run` and cached; `None` when the text cannot draw from the
     /// atlas.
@@ -286,6 +291,7 @@ impl TextResources {
             entries: None,
         })
     }
+
     pub(super) fn ensure_retained_text_glyph_run(
         &mut self,
         cache_key: TextGlyphRunCacheKey,
@@ -317,6 +323,7 @@ impl TextResources {
         );
         true
     }
+
     pub(super) fn glyph_atlas_entry_for_cached(
         &mut self,
         glyph: &SoftwareGlyphAtlasPlacement,
