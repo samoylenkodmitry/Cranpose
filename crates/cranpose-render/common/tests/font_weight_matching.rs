@@ -1,8 +1,8 @@
 use cranpose_render_common::{
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
-        SoftwareGlyphRasterCache, SoftwareTextFontSet, SoftwareTextMeasurer,
-        rasterize_annotated_text_to_image_with_glyph_cache,
+        SoftwareGlyphRasterCache, SoftwareTextFontSet, SoftwareTextMeasurer, TextPixels,
+        TextRasterRequest, rasterize_text,
     },
 };
 use cranpose_ui::text::{
@@ -42,21 +42,26 @@ fn output(fonts: &SoftwareTextFontSet, requested: u16) -> (ImageBitmap, f32) {
         ..Default::default()
     };
     let measured = SoftwareTextMeasurer::from_font_set(fonts.clone(), 16).measure(&text, &style);
-    let image = rasterize_annotated_text_to_image_with_glyph_cache(
-        &text,
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 400.0,
-            height: 48.0,
-        },
-        &style,
-        Color::BLACK,
-        24.0,
-        1.0,
+    let image = rasterize_text(
+        TextRasterRequest::new(
+            &text,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 48.0,
+            },
+            &style,
+            Color::BLACK,
+            24.0,
+            1.0,
+        ),
         fonts,
-        &mut SoftwareGlyphRasterCache::with_capacity_at_least_one(128),
+        Some(&mut SoftwareGlyphRasterCache::with_capacity_at_least_one(
+            128,
+        )),
     )
+    .and_then(TextPixels::into_image)
     .expect("visible glyphs");
     (image, measured.width)
 }

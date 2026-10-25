@@ -25,15 +25,14 @@ use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect, whole};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 use unicode_segmentation::UnicodeSegmentation;
 
+pub use crate::annotated_text::TextFonts;
 #[cfg(test)]
 use crate::font_layout::layout_line_glyphs;
 #[cfg(feature = "text-hyphenation")]
 use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::{
     Brush,
-    annotated_text::{
-        AnnotatedBrushExtent, AnnotatedTextLayout, AnnotatedTextSegment, FontResolver,
-    },
+    annotated_text::{AnnotatedBrushExtent, AnnotatedTextLayout, AnnotatedTextSegment},
     ascii_glyphs::{ASCII_COUNT, ascii_slot},
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     direct_mapped_cache::DirectMappedCache,
@@ -2009,102 +2008,76 @@ impl TextPixels {
     }
 }
 
-/// Rasterizes `text` with `font` into an RGBA image that covers `rect`, in logical pixels, at
-/// `scale` device pixels per logical pixel. `fallback_color` paints text whose style names no
-/// color, and `font_size` is in logical pixels. Returns `None` when there is nothing to draw.
-pub fn rasterize_text_to_image(
-    text: &str,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    font: &SoftwareTextFont,
-) -> Option<ImageBitmap> {
-    rasterize_text_pixels(
-        text,
-        rect,
-        Point::new(rect.x, rect.y),
-        style,
-        fallback_color,
-        font_size,
-        scale,
-        font,
-        None,
-    )
-    .and_then(TextPixels::into_image)
+/// What to rasterize: `text` in `style`, laid out from `origin` and cut to `rect`, at `scale`
+/// device pixels per logical pixel. `rect`, `origin` and `font_size` are in logical pixels;
+/// `fallback_color` paints text whose style names no color.
+#[derive(Clone, Copy)]
+pub struct TextRasterRequest<'a> {
+    /// The text and its span styles.
+    pub text: StyledTextRef<'a>,
+    /// The part of the laid-out text the pixels cover.
+    pub rect: Rect,
+    /// Where the text's first line starts.
+    pub origin: Point,
+    /// The style of the whole text, under its span styles.
+    pub style: &'a TextStyle,
+    /// The color of text whose style names none.
+    pub fallback_color: Color,
+    /// The font size in logical pixels.
+    pub font_size: f32,
+    /// Device pixels per logical pixel.
+    pub scale: f32,
 }
 
-/// Like `rasterize_text_to_image`, and reuses glyph masks from `glyph_cache`.
-#[expect(clippy::too_many_arguments)]
-pub fn rasterize_text_to_image_with_glyph_cache(
-    text: &str,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    font: &SoftwareTextFont,
-    glyph_cache: &mut SoftwareGlyphRasterCache,
-) -> Option<ImageBitmap> {
-    rasterize_text_pixels(
-        text,
-        rect,
-        Point::new(rect.x, rect.y),
-        style,
-        fallback_color,
-        font_size,
-        scale,
-        font,
-        Some(glyph_cache),
-    )
-    .and_then(TextPixels::into_image)
+impl<'a> TextRasterRequest<'a> {
+    /// `text` laid out from the corner of `rect`, which it covers whole.
+    pub fn new(
+        text: impl Into<StyledTextRef<'a>>,
+        rect: Rect,
+        style: &'a TextStyle,
+        fallback_color: Color,
+        font_size: f32,
+        scale: f32,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            rect,
+            origin: Point::new(rect.x, rect.y),
+            style,
+            fallback_color,
+            font_size,
+            scale,
+        }
+    }
+
+    /// The same request laid out from `origin`: an image of part of a paragraph keeps each
+    /// line where the whole paragraph puts it.
+    pub fn with_origin(self, origin: Point) -> Self {
+        Self { origin, ..self }
+    }
 }
 
-#[expect(clippy::too_many_arguments)]
+/// Rasterizes `request` with `fonts` into RGBA pixels that cover its rect, reusing glyph masks
+/// from `glyph_cache` when one is given. Returns `None` when there is nothing to draw.
+pub fn rasterize_text<'f>(
+    request: TextRasterRequest<'_>,
+    fonts: impl Into<TextFonts<'f>>,
+    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+) -> Option<TextPixels> {
+    rasterize_styled_text_region(request, fonts.into(), glyph_cache)
+}
+
 fn rasterize_text_pixels(
-    text: &str,
-    rect: Rect,
-    text_origin: Point,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
+    request: TextRasterRequest<'_>,
     font: &SoftwareTextFont,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
 ) -> Option<TextPixels> {
-    if requires_font_layout(text, style) {
-        return rasterize_styled_text_region(
-            StyledTextRef {
-                text,
-                span_styles: &[],
-            },
-            rect,
-            text_origin,
-            style,
-            fallback_color,
-            font_size,
-            scale,
-            font.into(),
-            glyph_cache,
-        );
+    if requires_font_layout(request.text.text, request.style) {
+        return rasterize_styled_text_region(request, font.into(), glyph_cache);
     }
-    let shaped = font.shaped_for(style);
+    let shaped = font.shaped_for(request.style);
     let font = &*shaped;
-    rasterize_text_to_image_impl(
-        TextRasterImageRequest {
-            text,
-            rect,
-            text_origin,
-            style,
-            fallback_color,
-            font_size,
-            scale,
-        },
-        font.raster_ref(),
-        font.content_hash(),
-        glyph_cache,
-    )
+    rasterize_text_to_image_impl(request, font.raster_ref(), font.content_hash(), glyph_cache)
 }
 
 /// The slice of a text payload that solid-run rasterization reads: content
@@ -2135,6 +2108,15 @@ impl StyledTextRef<'_> {
         boundaries.dedup();
         boundaries.retain(|b| *b <= self.text.len() && self.text.is_char_boundary(*b));
         boundaries
+    }
+}
+
+impl<'a> From<&'a str> for StyledTextRef<'a> {
+    fn from(text: &'a str) -> Self {
+        Self {
+            text,
+            span_styles: &[],
+        }
     }
 }
 
@@ -2317,81 +2299,27 @@ fn visit_annotated_text_segments<'a>(
     layout.walk(offsets.as_deref(), visit)
 }
 
-/// Rasterizes annotated `text` with `fonts` into an RGBA image that covers `rect`, reusing glyph
-/// masks from `glyph_cache`. Arguments are as for `rasterize_text_to_image`.
-#[expect(clippy::too_many_arguments)]
-pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
-    text: impl Into<StyledTextRef<'a>>,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    fonts: &SoftwareTextFontSet,
-    glyph_cache: &mut SoftwareGlyphRasterCache,
-) -> Option<ImageBitmap> {
-    let text = text.into();
-    rasterize_annotated_text_region(
-        text,
-        rect,
-        Point::new(rect.x, rect.y),
-        style,
-        fallback_color,
-        font_size,
-        scale,
-        fonts,
-        Some(glyph_cache),
-    )
-}
-
-/// Like [`rasterize_annotated_text_region`], as pixels: a caller that draws
-/// them right away skips hashing a bitmap's content.
-#[expect(clippy::too_many_arguments)]
-pub fn rasterize_annotated_text_region_pixels<'a>(
-    text: impl Into<StyledTextRef<'a>>,
-    rect: Rect,
-    text_origin: Point,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    fonts: &SoftwareTextFontSet,
-    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
-) -> Option<TextPixels> {
-    rasterize_styled_text_region(
-        text.into(),
-        rect,
-        text_origin,
-        style,
-        fallback_color,
-        font_size,
-        scale,
-        fonts.into(),
-        glyph_cache,
-    )
-}
-
-/// Paints the part of an annotated paragraph that `rect` covers straight
-/// over `window`, the renderer's pixels under `rect`, when the paragraph
+/// Paints the part of an annotated paragraph that the request's rect covers straight
+/// over `window`, the renderer's pixels under that rect, when the paragraph
 /// takes no image of its own: one style and one font, in a solid color with
 /// no shadow, its glyphs on whole pixels. Returns whether it painted; for any
-/// other text, [`rasterize_annotated_text_region_pixels`] makes the image to
+/// other text, [`rasterize_text`] makes the image to
 /// draw. Each glyph goes over the pixels as that image's pixel would, so a
 /// glyph that overlaps no other gives the same bytes.
-#[expect(clippy::too_many_arguments)]
-pub fn paint_annotated_text_region<'a>(
-    text: impl Into<StyledTextRef<'a>>,
-    rect: Rect,
-    text_origin: Point,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
+pub fn paint_text(
+    request: TextRasterRequest<'_>,
     fonts: &SoftwareTextFontSet,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
     window: TextPixelWindow<'_>,
 ) -> bool {
-    let text: StyledTextRef<'a> = text.into();
+    let TextRasterRequest {
+        text,
+        rect,
+        style,
+        font_size,
+        scale,
+        ..
+    } = request;
     if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return true;
     }
@@ -2402,21 +2330,13 @@ pub fn paint_annotated_text_region<'a>(
     {
         return false;
     }
-    let Some(font) = FontResolver::from(fonts).single_font_for_text(text.text, style) else {
+    let Some(font) = TextFonts::from(fonts).single_font_for_text(text.text, style) else {
         return false;
     };
     let shaped = font.shaped_for(style);
     let font = &*shaped;
     paint_text_glyphs(
-        TextRasterImageRequest {
-            text: text.text,
-            rect,
-            text_origin,
-            style,
-            fallback_color,
-            font_size,
-            scale,
-        },
+        request,
         font.raster_ref(),
         font.content_hash(),
         glyph_cache,
@@ -2425,48 +2345,21 @@ pub fn paint_annotated_text_region<'a>(
     true
 }
 
-/// Rasterizes an annotated paragraph into `rect`, preserving its original
-/// `text_origin` when the image covers only a clipped portion of the paragraph.
-/// Glyphs from every span share line baselines and may extend across line boxes.
-#[expect(clippy::too_many_arguments)]
-pub fn rasterize_annotated_text_region<'a>(
-    text: impl Into<StyledTextRef<'a>>,
-    rect: Rect,
-    text_origin: Point,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    fonts: &SoftwareTextFontSet,
-    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
-) -> Option<ImageBitmap> {
-    rasterize_annotated_text_region_pixels(
+#[inline(never)]
+fn rasterize_styled_text_region(
+    request: TextRasterRequest<'_>,
+    fonts: TextFonts<'_>,
+    mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+) -> Option<TextPixels> {
+    let TextRasterRequest {
         text,
         rect,
-        text_origin,
+        origin: text_origin,
         style,
         fallback_color,
         font_size,
         scale,
-        fonts,
-        glyph_cache,
-    )
-    .and_then(TextPixels::into_image)
-}
-
-#[expect(clippy::too_many_arguments)]
-#[inline(never)]
-fn rasterize_styled_text_region(
-    text: StyledTextRef<'_>,
-    rect: Rect,
-    text_origin: Point,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    fonts: FontResolver<'_>,
-    mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
-) -> Option<TextPixels> {
+    } = request;
     if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return None;
     }
@@ -2475,17 +2368,7 @@ fn rasterize_styled_text_region(
         && ((text_origin.x == rect.x && text_origin.y == rect.y) || paints_part_directly(style))
         && let Some(font) = fonts.single_font_for_text(text.text, style)
     {
-        return rasterize_text_pixels(
-            text.text,
-            rect,
-            text_origin,
-            style,
-            fallback_color,
-            font_size,
-            scale,
-            font,
-            glyph_cache.as_deref_mut(),
-        );
+        return rasterize_text_pixels(request, font, glyph_cache.as_deref_mut());
     }
     let layout = AnnotatedTextLayout::new(text, style, font_size, scale, 1.0, fonts)?;
     let solid = layout.all_styles(style_can_rasterize_direct_solid);
@@ -3150,7 +3033,7 @@ fn cursor_edges(glyph: &GlyphLayout, rtl: bool) -> [(f32, usize); 2] {
 pub(crate) fn layout_annotated_text_with_font_set<'a>(
     text: impl Into<StyledTextRef<'a>>,
     style: &TextStyle,
-    fonts: impl Into<FontResolver<'a>>,
+    fonts: impl Into<TextFonts<'a>>,
 ) -> TextLayoutResult {
     let text = text.into();
     let fonts = fonts.into();
@@ -3227,7 +3110,7 @@ pub(crate) fn annotated_cursor_x_for_offset<'a>(
     text: impl Into<StyledTextRef<'a>>,
     style: &TextStyle,
     offset: usize,
-    fonts: impl Into<FontResolver<'a>>,
+    fonts: impl Into<TextFonts<'a>>,
 ) -> f32 {
     let text = text.into();
     let fonts = fonts.into();
@@ -3288,7 +3171,7 @@ pub(crate) fn annotated_offset_for_position<'a>(
     style: &TextStyle,
     x: f32,
     y: f32,
-    fonts: impl Into<FontResolver<'a>>,
+    fonts: impl Into<TextFonts<'a>>,
 ) -> usize {
     let text = text.into();
     let fonts = fonts.into();
@@ -3337,40 +3220,6 @@ pub(crate) fn annotated_offset_for_position<'a>(
     } else {
         best
     }
-}
-
-/// Rasterize a raw font at its ab_glyph pixel scale with explicit style spacing.
-/// Use [`rasterize_text_to_image`] for registered font sizing and automatic tracking.
-pub fn rasterize_text_to_image_with_font(
-    text: &str,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-    font: &impl Font,
-) -> Option<ImageBitmap> {
-    rasterize_text_to_image_impl(
-        TextRasterImageRequest {
-            text,
-            rect,
-            text_origin: Point::new(rect.x, rect.y),
-            style,
-            fallback_color,
-            font_size,
-            scale,
-        },
-        RasterFontRef {
-            font: &font,
-            ab_glyph_scale_factor: 1.0,
-            weight: FontWeight::NORMAL,
-            style: FontStyle::Normal,
-            tracking: &FontTracking::default(),
-        },
-        0,
-        None,
-    )
-    .and_then(TextPixels::into_image)
 }
 
 struct GlyphPaint<'a> {
@@ -3552,18 +3401,8 @@ impl<'a> TextRasterCanvas<'a> {
 /// A text to rasterize: the image covers `rect`, the text's lines start at
 /// `text_origin`. A static text with a solid brush may cover only part of
 /// `rect` from an origin outside it.
-struct TextRasterImageRequest<'a> {
-    text: &'a str,
-    rect: Rect,
-    text_origin: Point,
-    style: &'a TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
-}
-
 fn rasterize_text_to_image_impl(
-    request: TextRasterImageRequest<'_>,
+    request: TextRasterRequest<'_>,
     font_ref: RasterFontRef<'_, impl RasterFace>,
     font_cache_key: u64,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
@@ -3600,21 +3439,22 @@ fn paints_solid(style: &TextStyle) -> bool {
 /// Paints the glyphs of `request`'s text over `canvas`, which covers
 /// `request.rect`.
 fn paint_text_glyphs(
-    request: TextRasterImageRequest<'_>,
+    request: TextRasterRequest<'_>,
     font_ref: RasterFontRef<'_, impl RasterFace>,
     font_cache_key: u64,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
     canvas: &mut TextRasterCanvas<'_>,
 ) {
-    let TextRasterImageRequest {
+    let TextRasterRequest {
         text,
         rect,
-        text_origin,
+        origin: text_origin,
         style,
         fallback_color,
         font_size,
         scale,
     } = request;
+    let text = text.text;
 
     let fallback_brush = Brush::solid(fallback_color);
     let (brush, brush_alpha_multiplier) = match style.span_style.brush.as_ref() {
@@ -4762,7 +4602,7 @@ fn measure_annotated_text_with_resolver<'a>(
     text: impl Into<StyledTextRef<'a>>,
     style: &TextStyle,
     font_size: f32,
-    fonts: impl Into<FontResolver<'a>>,
+    fonts: impl Into<TextFonts<'a>>,
     cache: Option<&mut SoftwareTextMetricsCache>,
 ) -> TextMetrics {
     let text = text.into();

@@ -1,6 +1,6 @@
 use cranpose_render_common::software_text_raster::{
-    SoftwareTextFont, SoftwareTextMeasurer, cursor_x_for_offset_with_font, measure_text_with_font,
-    rasterize_text_to_image,
+    SoftwareTextFont, SoftwareTextMeasurer, TextPixels, TextRasterRequest,
+    cursor_x_for_offset_with_font, measure_text_with_font, rasterize_text,
 };
 use cranpose_ui::text::{AnnotatedString, SpanStyle, TextMeasurer, TextStyle, TextUnit};
 use cranpose_ui_graphics::{Color, Rect, Size};
@@ -76,15 +76,19 @@ fn automatic_tracking_raster_matches_explicit_spacing_and_can_be_overridden() {
     let tracked = tracked_font();
     let plain = SoftwareTextFont::from_bytes(FONT).unwrap();
     let raster = |font: &SoftwareTextFont, style: &TextStyle, scale| {
-        rasterize_text_to_image(
-            "Account",
-            Rect::from_size(Size::new(100.0, 20.0)),
-            style,
-            Color::BLACK,
-            10.0,
-            scale,
+        rasterize_text(
+            TextRasterRequest::new(
+                "Account",
+                Rect::from_size(Size::new(100.0, 20.0)),
+                style,
+                Color::BLACK,
+                10.0,
+                scale,
+            ),
             font,
+            None,
         )
+        .and_then(TextPixels::into_image)
         .unwrap()
         .pixels()
         .to_vec()

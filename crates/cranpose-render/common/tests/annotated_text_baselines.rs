@@ -2,8 +2,8 @@
 
 use cranpose_render_common::{
     software_text_raster::{
-        SoftwareGlyphAtlasGlyph, SoftwareGlyphRasterCache, SoftwareTextMeasurer,
-        collect_solid_text_atlas_glyphs, rasterize_annotated_text_to_image_with_glyph_cache,
+        SoftwareGlyphAtlasGlyph, SoftwareGlyphRasterCache, SoftwareTextMeasurer, TextPixels,
+        TextRasterRequest, collect_solid_text_atlas_glyphs, rasterize_text,
         software_text_font_set_from_fonts_or_default,
     },
     text_measure::{CachedFontTextMeasurer, SoftwareTextResources},
@@ -49,22 +49,25 @@ fn cropped_shadowed_strokes_keep_the_full_paragraphs_visible_pixels() {
     base.span_style.font_weight = Some(cranpose_ui::text::FontWeight::BLACK);
     base.span_style.font_style = Some(cranpose_ui::text::FontStyle::Italic);
     let raster = |offset: f32, height: f32| {
-        cranpose_render_common::software_text_raster::rasterize_annotated_text_region(
-            &text,
-            Rect {
-                x: 4.0,
-                y: 0.0,
-                width: 64.0,
-                height,
-            },
-            cranpose_ui_graphics::Point::new(4.0, -offset),
-            &base,
-            Color::WHITE,
-            10.0,
-            1.0,
+        rasterize_text(
+            TextRasterRequest::new(
+                &text,
+                Rect {
+                    x: 4.0,
+                    y: 0.0,
+                    width: 64.0,
+                    height,
+                },
+                &base,
+                Color::WHITE,
+                10.0,
+                1.0,
+            )
+            .with_origin(cranpose_ui_graphics::Point::new(4.0, -offset)),
             &fonts,
             None,
         )
+        .and_then(TextPixels::into_image)
         .expect("paragraph raster")
     };
     let whole = raster(0.0, 360.0);
@@ -295,16 +298,19 @@ fn render(
         height: 256.0,
     };
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(32);
-    let bitmap = rasterize_annotated_text_to_image_with_glyph_cache(
-        text,
-        rect,
-        style,
-        Color::WHITE,
-        style.resolve_font_size(10.0),
-        1.0,
+    let bitmap = rasterize_text(
+        TextRasterRequest::new(
+            text,
+            rect,
+            style,
+            Color::WHITE,
+            style.resolve_font_size(10.0),
+            1.0,
+        ),
         &fonts,
-        &mut cache,
+        Some(&mut cache),
     )
+    .and_then(TextPixels::into_image)
     .expect("the styled text renders to a bitmap");
     let mut glyphs = Vec::new();
     collect_solid_text_atlas_glyphs(

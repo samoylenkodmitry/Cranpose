@@ -21,25 +21,28 @@ pub(crate) struct AnnotatedBrushExtent {
     pub rect: Rect,
 }
 
+/// The fonts text draws with.
 #[derive(Clone, Copy)]
-pub(crate) enum FontResolver<'a> {
+pub enum TextFonts<'a> {
+    /// One font for every style and character.
     Single(&'a SoftwareTextFont),
+    /// A set that picks a font for each style and falls back per character.
     Set(&'a SoftwareTextFontSet),
 }
 
-impl<'a> From<&'a SoftwareTextFont> for FontResolver<'a> {
+impl<'a> From<&'a SoftwareTextFont> for TextFonts<'a> {
     fn from(font: &'a SoftwareTextFont) -> Self {
         Self::Single(font)
     }
 }
 
-impl<'a> From<&'a SoftwareTextFontSet> for FontResolver<'a> {
+impl<'a> From<&'a SoftwareTextFontSet> for TextFonts<'a> {
     fn from(fonts: &'a SoftwareTextFontSet) -> Self {
         Self::Set(fonts)
     }
 }
 
-impl<'a> FontResolver<'a> {
+impl<'a> TextFonts<'a> {
     fn resolve(self, style: &TextStyle) -> Option<&'a SoftwareTextFont> {
         match self {
             Self::Single(font) => Some(font),
@@ -132,7 +135,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         font_size: f32,
         scale: f32,
         grid: f32,
-        fonts: impl Into<FontResolver<'a>>,
+        fonts: impl Into<TextFonts<'a>>,
     ) -> Option<Self> {
         Self::new_range(
             text,
@@ -152,7 +155,7 @@ impl<'a> AnnotatedTextLayout<'a> {
         font_size: f32,
         scale: f32,
         grid: f32,
-        fonts: impl Into<FontResolver<'a>>,
+        fonts: impl Into<TextFonts<'a>>,
     ) -> Option<Self> {
         text.text.get(range.clone())?;
         #[cfg(feature = "text-shaping")]
