@@ -1,3 +1,9 @@
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a command-line tool reports on stdout and stderr"
+)]
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -67,12 +73,7 @@ const COMMANDS: &[XtaskCommand] = &[
     },
     XtaskCommand {
         name: "versions",
-        run: |args| {
-            if let Some(extra) = args.first() {
-                return Err(format!("unknown versions option `{extra}`"));
-            }
-            check_versions()
-        },
+        run: |args| no_options("versions", args).and_then(|()| check_versions()),
         print_usage: print_versions_usage,
     },
     XtaskCommand {
@@ -92,12 +93,7 @@ const COMMANDS: &[XtaskCommand] = &[
     },
     XtaskCommand {
         name: "publish-order",
-        run: |args| {
-            if let Some(extra) = args.first() {
-                return Err(format!("unknown publish-order option `{extra}`"));
-            }
-            publish_order()
-        },
+        run: |args| no_options("publish-order", args).and_then(|()| publish_order()),
         print_usage: print_publish_order_usage,
     },
     XtaskCommand {
@@ -117,45 +113,57 @@ const COMMANDS: &[XtaskCommand] = &[
     },
     XtaskCommand {
         name: "robot-suite-partition",
-        run: |args| {
-            if let Some(extra) = args.first() {
-                return Err(format!("unknown robot-suite-partition option `{extra}`"));
-            }
-            robot_suite_partition::run_at(&workspace_root()?)
-        },
+        run: |args| workspace_check("robot-suite-partition", args, robot_suite_partition::run_at),
         print_usage: print_robot_suite_partition_usage,
     },
     XtaskCommand {
         name: "ci-gate-reachability",
-        run: |args| {
-            if let Some(extra) = args.first() {
-                return Err(format!("unknown ci-gate-reachability option `{extra}`"));
-            }
-            ci_gate_reachability::run_at(&workspace_root()?)
-        },
+        run: |args| workspace_check("ci-gate-reachability", args, ci_gate_reachability::run_at),
         print_usage: print_ci_gate_reachability_usage,
     },
     XtaskCommand {
         name: "test-layout",
-        run: |args| {
-            if let Some(extra) = args.first() {
-                return Err(format!("unknown test-layout option `{extra}`"));
-            }
-            test_layout::run_at(&workspace_root()?)
-        },
+        run: |args| workspace_check("test-layout", args, test_layout::run_at),
         print_usage: print_test_layout_usage,
     },
     XtaskCommand {
         name: "thread-local-budget",
-        run: |args| {
-            if let Some(extra) = args.first() {
-                return Err(format!("unknown thread-local-budget option `{extra}`"));
-            }
-            thread_local_budget::run_at(&workspace_root()?)
-        },
+        run: |args| workspace_check("thread-local-budget", args, thread_local_budget::run_at),
         print_usage: print_thread_local_budget_usage,
     },
+    XtaskCommand {
+        name: "platform-contracts",
+        run: |args| workspace_check("platform-contracts", args, platform_contracts),
+        print_usage: print_platform_contracts_usage,
+    },
 ];
+
+fn no_options(name: &str, args: &[String]) -> Result<(), String> {
+    match args.first() {
+        Some(extra) => Err(format!("unknown {name} option `{extra}`")),
+        None => Ok(()),
+    }
+}
+
+// A check that takes no option runs on the workspace root.
+fn workspace_check(
+    name: &str,
+    args: &[String],
+    check: fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    no_options(name, args)?;
+    check(&workspace_root()?)
+}
+
+fn platform_contracts(root: &Path) -> Result<(), String> {
+    let mut problems = workflow_contracts::problems(root)?;
+    problems.extend(android_contracts::problems(root)?);
+    if problems.is_empty() {
+        println!("platform-contracts: the workflows and the Android sources keep their contracts");
+        return Ok(());
+    }
+    Err(format!("platform-contracts:\n  {}", problems.join("\n  ")))
+}
 
 fn run(args: Vec<String>) -> Result<(), String> {
     let Some(command_name) = args.first().map(String::as_str) else {
@@ -199,6 +207,7 @@ fn print_usage() {
            ci-gate-reachability  Every `just` recipe CI runs must be reachable from `ci`/`ci-full`\n\
            test-layout          Every integration test file and robot runner must be linked into its binary\n\
            thread-local-budget  Framework `thread_local!` statics must stay at their budget\n\
+           platform-contracts   CI workflows and Android sources keep the contracts past failures set\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -389,6 +398,15 @@ fn print_robot_suite_partition_usage() {
          runs, and the reverse. CI splits the suite across those two halves;\n\
          an example dropped from one and not added to the other stops running\n\
          anywhere, in silence.\n"
+    );
+}
+
+fn print_platform_contracts_usage() {
+    eprintln!(
+        "usage: cargo xtask platform-contracts\n\
+         \n\
+         Parses the workflows under .github/workflows and the Android manifests, and\n\
+         reads the Java bridges, for the rules that each guard a past failure."
     );
 }
 
@@ -3105,10 +3123,12 @@ fn wait_for_crates_io(tag_or_version: &str) -> Result<(), String> {
     Ok(())
 }
 
+mod android_contracts;
 mod complexity_gate;
 mod duplication_gate;
 mod test_layout;
 mod thread_local_budget;
+mod workflow_contracts;
 
 mod gate_diff {
     use std::{

@@ -4,19 +4,24 @@
 
 [counts]
 too_many_arguments = 88
-private_docs = 14115
+private_docs = 14101
 for_test_fns = 40
 cranpose_env_names = 78
-source_text_checks = 1225
+source_text_checks = 476
+half_state_words = 0
 
 [ast_grep]
 "bool-parameter" = 313
+"cfg-on-robot-app-feature" = 0
 "drain-collect" = 12
 "get-prefix" = 133
 "hashset-of-node-ids" = 17
 "manager-helper-util" = 8
 "rc-refcell-in-public-signature" = 3
 "state-holder-rebuilt" = 0
+"std-time-in-wasm-sources" = 0
+"unsafe-outside-boundary-modules" = 0
+"unsafe-without-safety-comment" = 0
 
 [file_lines]
 limit = 1000
@@ -107,4 +112,4 @@ limit = 1000
 "crates/cranpose/src/robot.rs" = 1968
 "crates/cranpose/src/web.rs" = 1194
 "crates/cranpose/src/web_accessibility.rs" = 1254
-"xtask/src/main.rs" = 3849
+"xtask/src/main.rs" = 3869

@@ -1,0 +1,22 @@
+id: std-time-in-wasm-sources
+language: rust
+severity: warning
+message: std::time::Instant and SystemTime panic in the browser; code that ships to wasm reads clocks through web_time.
+files:
+  - crates/cranpose-core/src/**/*.rs
+  - crates/cranpose-runtime-std/src/**/*.rs
+  - crates/cranpose-app-shell/src/**/*.rs
+  - crates/cranpose-ui/src/**/*.rs
+  - crates/cranpose-foundation/src/**/*.rs
+  - crates/cranpose-render/common/src/**/*.rs
+  - crates/cranpose-render/wgpu/src/**/*.rs
+  - crates/cranpose-platform/web/src/**/*.rs
+  - crates/cranpose/src/web.rs
+rule:
+  any:
+    - kind: scoped_identifier
+      regex: ^(::)?std::time::(Instant|SystemTime)$
+    - kind: scoped_type_identifier
+      regex: ^(::)?std::time::(Instant|SystemTime)$
+    - kind: use_declaration
+      regex: \bstd::(\{[^;]*\b)?time::\{[^}]*\b(Instant|SystemTime)\b

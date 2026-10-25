@@ -1,0 +1,37 @@
+id: unsafe-without-safety-comment
+language: rust
+severity: warning
+message: An unsafe block in a reviewed boundary module states its invariant in a `// SAFETY:` comment above its statement.
+files:
+  - crates/cranpose/src/android_jni.rs
+  - crates/cranpose/src/android_surface.rs
+  - crates/cranpose/src/ios_accessibility.rs
+  - crates/cranpose/src/watchos_heart_rate.rs
+  - crates/cranpose/src/android_entry.rs
+  - crates/cranpose-audio/src/ring.rs
+  - crates/cranpose-audio/src/backend/aaudio.rs
+  - crates/cranpose-audio/src/backend/avaudio.rs
+  - crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs
+utils:
+  after-safety-comment:
+    follows:
+      kind: line_comment
+      regex: "^//\\s*SAFETY:"
+      stopBy:
+        not:
+          any:
+            - kind: line_comment
+            - kind: attribute_item
+rule:
+  any:
+    - kind: unsafe_block
+    - kind: impl_item
+      regex: ^unsafe\s
+  not:
+    any:
+      - matches: after-safety-comment
+      - inside:
+          stopBy: end
+          inside:
+            kind: block
+          matches: after-safety-comment

@@ -1,0 +1,12 @@
+id: cfg-on-robot-app-feature
+language: rust
+severity: warning
+message: The robot-app feature only builds the desktop robot binary; framework behavior never depends on it.
+rule:
+  any:
+    - kind: attribute_item
+      regex: \bcfg(_attr)?\s*\([^\]]*feature\s*=\s*"robot-app"
+    - kind: inner_attribute_item
+      regex: \bcfg(_attr)?\s*\([^\]]*feature\s*=\s*"robot-app"
+    - kind: macro_invocation
+      regex: ^cfg!\s*\([^)]*feature\s*=\s*"robot-app"

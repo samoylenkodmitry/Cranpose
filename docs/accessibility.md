@@ -790,9 +790,7 @@ the answer on the next frame; a change while the app runs takes a restart. A
 run a robot drives reads only the environment variables, so a screenshot test
 does not follow the host's text scale.
 iOS, Android and the web follow a change at once. The demo's robot and a test
-set an option through the environment or `ProvideAccessibilityOptions`; the
-static test `every_platform_reports_the_display_options_and_the_framework_acts_on_them`
-keeps the four platforms and the three framework hooks in step.
+set an option through the environment or `ProvideAccessibilityOptions`.
 
 ## What the built-in widgets say on their own
 
@@ -877,14 +875,10 @@ size of the set.
 4. An action that reaches the live tree runs through
    `accessibility::run_reader_action`, inside the app context and a mutable
    snapshot, the way a click or a key runs. Outside that context the first
-   state write trips the render state; the static test
-   `every_reader_action_runs_inside_the_app_context` keeps every bridge on it.
+   state write trips the render state.
 
 The shared projection keeps names and control boundaries consistent. Each
-platform still needs its own behavioral checks. The static test
-`every_platform_bridge_reads_announcements_out` and its focus counterpart in
-`crates/cranpose/tests/platform_scheduling_static.rs` keep the four bridges in
-step.
+platform still needs its own behavioral checks.
 
 ## Check a screen without a hand
 

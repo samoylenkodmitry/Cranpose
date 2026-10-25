@@ -148,6 +148,8 @@ unwrap_used = "deny"
 # review always means a copy of the value; `Self` inside its own impl.
 clone_on_ref_ptr = "warn"
 use_self = "warn"
+# `a + &b` hides an allocation; `push_str` or `format!` shows it.
+string_add = "warn"
 
 # clippy.toml lists what these forbid. They stay off here while
 # scripts/ci/clippy_budget.py still counts sites left for them.

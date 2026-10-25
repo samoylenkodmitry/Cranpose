@@ -660,6 +660,11 @@ test-ci-gate-reachability:
 test-layout:
     cargo xtask test-layout
 
+# The rules that each guard a past failure of a CI board or an Android
+# bridge, read from the parsed workflows and manifests and the Java sources.
+platform-contracts:
+    cargo xtask platform-contracts
+
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
     cargo test --profile ci -p cranpose-core deterministic_model_render_frames_match_slot_table
@@ -1209,7 +1214,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
