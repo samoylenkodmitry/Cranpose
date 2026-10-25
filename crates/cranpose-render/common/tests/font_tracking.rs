@@ -9,12 +9,20 @@ const FONT: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 const TRACKING: &[u8] = include_bytes!("fixtures/default_tracking.trak");
 
 fn tracked_font() -> SoftwareTextFont {
-    let tables = u16::from_be_bytes(FONT[4..6].try_into().unwrap());
+    let tables = u16::from_be_bytes(
+        FONT[4..6]
+            .try_into()
+            .expect("the font fixture is well formed"),
+    );
     let directory_end = 12 + usize::from(tables) * 16;
     let mut bytes = FONT[..directory_end].to_vec();
     bytes[4..6].copy_from_slice(&(tables + 1).to_be_bytes());
     for record in bytes[12..].as_chunks_mut::<16>().0 {
-        let offset = u32::from_be_bytes(record[8..12].try_into().unwrap());
+        let offset = u32::from_be_bytes(
+            record[8..12]
+                .try_into()
+                .expect("the font fixture is well formed"),
+        );
         record[8..12].copy_from_slice(&(offset + 16).to_be_bytes());
     }
     bytes.extend_from_slice(b"trak");
@@ -23,7 +31,7 @@ fn tracked_font() -> SoftwareTextFont {
     bytes.extend_from_slice(&(TRACKING.len() as u32).to_be_bytes());
     bytes.extend_from_slice(&FONT[directory_end..]);
     bytes.extend_from_slice(TRACKING);
-    SoftwareTextFont::from_bytes(bytes).unwrap()
+    SoftwareTextFont::from_bytes(bytes).expect("the font fixture is well formed")
 }
 
 fn style(spacing: TextUnit) -> TextStyle {

@@ -42,7 +42,7 @@ pub(crate) fn main() {
                 let _ = robot.exit();
                 return;
             }
-            let (fx, fy, fw, fh) = text_field.unwrap();
+            let (fx, fy, fw, fh) = text_field.expect("the element is on screen");
             println!(
                 "✓ Found text field at ({}, {}, {}x{})\n",
                 fx as i32, fy as i32, fw as i32, fh as i32

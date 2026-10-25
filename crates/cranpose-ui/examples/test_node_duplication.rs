@@ -23,7 +23,7 @@ fn main() {
 
     composition
         .render(location_key(file!(), line!(), column!()), outer_content)
-        .unwrap();
+        .expect("the demo composes");
 
     if let Some(root) = composition.root() {
         let mut applier = composition.applier_mut();

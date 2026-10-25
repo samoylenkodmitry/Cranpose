@@ -1,0 +1,14 @@
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use cranpose_core::collections::map::HashMap, which hashes with foldhash" },
+    { path = "std::collections::HashSet", reason = "use cranpose_core::collections::map::HashSet, which hashes with foldhash" },
+]
+disallowed-methods = [
+    { path = "std::env::var", reason = "a CRANPOSE_* switch is read in the diagnostics module, behind its feature" },
+    { path = "std::env::var_os", reason = "a CRANPOSE_* switch is read in the diagnostics module, behind its feature" },
+    { path = "std::thread::sleep", reason = "no sleep in the frame loop; where a sleep is right, #[expect] it with the reason" },
+]
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 100
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true

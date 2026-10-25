@@ -20,7 +20,7 @@ pub(crate) fn caller_modifier_changed(modifier: &Modifier) -> bool {
     cranpose_core::remember(|| RefCell::new(modifier.clone())).with(|last| {
         let changed = *last.borrow() != *modifier;
         if changed {
-            last.replace(modifier.clone());
+            *last.borrow_mut() = modifier.clone();
         }
         changed
     })

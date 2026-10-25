@@ -474,7 +474,10 @@ fn assert_resized_atlas_substrates(effect: impl Fn(usize) -> RenderEffect, subst
         let packed = support::capture_graph(&mut renderer, scene(&[0, 1, 2]), width, height);
         assert_eq!(renderer.device_error_count_for_tests(), 0);
         assert_eq!(
-            renderer.last_frame_stats().unwrap().substrates,
+            renderer
+                .last_frame_stats()
+                .expect("the renderer drew a frame")
+                .substrates,
             substrates * 3
         );
         for index in 0..3 {

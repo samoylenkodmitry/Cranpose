@@ -384,6 +384,7 @@ impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
 ///     .clickable(|| println!("Clicked")) // Applied last (inner)
 /// ```
 #[derive(Clone)]
+#[must_use = "a modifier does nothing until a composable receives it"]
 pub struct Modifier {
     kind: ModifierKind,
     element_count: usize,

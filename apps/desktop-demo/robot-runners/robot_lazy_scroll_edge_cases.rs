@@ -26,7 +26,7 @@ pub(crate) fn main() {
 
             let item_0 = find_text_in_semantics(&robot, "Item 0");
             assert!(item_0.is_some(), "Item 0 should be visible initially");
-            let (_, y0, _, _) = item_0.unwrap();
+            let (_, y0, _, _) = item_0.expect("the element is on screen");
             println!("  Item 0 y={y0:.1}");
 
             let (_, header_y, _, header_h) =
@@ -36,7 +36,7 @@ pub(crate) fn main() {
 
             let item_1 = find_text_in_semantics(&robot, "Item 1");
             assert!(item_1.is_some(), "Item 1 should be visible");
-            let (_, y1, _, _) = item_1.unwrap();
+            let (_, y1, _, _) = item_1.expect("the element is on screen");
             let spacing_0_1 = y1 - y0;
             println!("  Item 1 y={y1:.1}, spacing from Item 0: {spacing_0_1:.1}px");
 
@@ -59,7 +59,7 @@ pub(crate) fn main() {
 
             let item_50 = find_text_in_semantics(&robot, "Item 50");
             assert!(item_50.is_some(), "Item 50 should be visible after jump");
-            let (_, y50, _, _) = item_50.unwrap();
+            let (_, y50, _, _) = item_50.expect("the element is on screen");
             println!("  Item 50 y={y50:.1} after jump");
 
             let item_51 = find_text_in_semantics(&robot, "Item 51");

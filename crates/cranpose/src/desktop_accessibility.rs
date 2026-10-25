@@ -920,7 +920,9 @@ impl PlatformAdapter {
         _deactivation: impl 'static + DeactivationHandler,
     ) -> Self {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw() else {
+        let Ok(RawWindowHandle::AppKit(handle)) =
+            window.window_handle().map(|handle| handle.as_raw())
+        else {
             unreachable!("macOS desktop window did not expose an AppKit view")
         };
         Self(unsafe {
@@ -955,7 +957,9 @@ impl PlatformAdapter {
         _deactivation: impl 'static + DeactivationHandler,
     ) -> Self {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let RawWindowHandle::Win32(handle) = window.window_handle().unwrap().as_raw() else {
+        let Ok(RawWindowHandle::Win32(handle)) =
+            window.window_handle().map(|handle| handle.as_raw())
+        else {
             unreachable!("Windows desktop window did not expose an HWND")
         };
         Self(accesskit_windows::SubclassingAdapter::new(
