@@ -2513,7 +2513,7 @@ impl GpuRenderer {
     /// The fallback pipeline for a pass with a depth buffer or not, once it
     /// is built; none on the web, which leaves every fallback out of its
     /// build.
-    #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
+    #[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "no meshes"))]
     fn mesh_pipeline(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
         #[cfg(not(target_arch = "wasm32"))]
         return self.pipelines.mesh_pipelines[usize::from(depth)].built();

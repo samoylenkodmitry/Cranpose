@@ -43,7 +43,10 @@ pub(crate) struct ArcTrigFill {
     pipeline: LazyGpuResource<wgpu::ComputePipeline>,
     bind_group_layout: wgpu::BindGroupLayout,
     window_rows: u64,
-    #[cfg_attr(target_arch = "wasm32", expect(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web build never marks the fill used")
+    )]
     used: AtomicBool,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }

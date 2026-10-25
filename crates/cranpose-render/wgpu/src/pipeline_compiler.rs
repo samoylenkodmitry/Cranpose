@@ -326,7 +326,11 @@ impl PipelineCompiler {
     }
 
     pub(crate) fn spawn(
-        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))] backend: wgpu::Backend,
+        #[cfg_attr(
+            target_arch = "wasm32",
+            expect(unused_variables, reason = "the web build compiles on its one thread")
+        )]
+        backend: wgpu::Backend,
     ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         {

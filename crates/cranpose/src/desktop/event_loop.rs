@@ -3343,17 +3343,37 @@ fn wrap_primary_window_to_content(
     Some((width, height))
 }
 
-#[expect(clippy::too_many_arguments)]
+// The primary window's surface, its configuration and the viewport a
+// headless run asks for in place of the window's.
+struct PrimarySurface<'a> {
+    window: &'a Arc<dyn Window>,
+    surface: &'a wgpu::Surface<'static>,
+    config: &'a mut wgpu::SurfaceConfiguration,
+    viewport_override: Option<(f32, f32)>,
+}
+
+impl PrimarySurface<'_> {
+    // Configures the surface at `width` by `height` and gives `app` the
+    // viewport that size shows.
+    fn configure(&mut self, app: &mut AppShell<WgpuRenderer>, width: u32, height: u32) {
+        let viewport = viewport_for_surface_size(
+            self.viewport_override,
+            width,
+            height,
+            self.window.scale_factor(),
+        );
+        configure_app_surface_size(app, self.surface, self.config, width, height, viewport);
+    }
+}
+
 fn wrap_primary_window_for_frame(
     app: &mut AppShell<WgpuRenderer>,
-    surface: &wgpu::Surface<'static>,
-    surface_config: &mut wgpu::SurfaceConfiguration,
-    window: &Arc<dyn Window>,
+    primary: &mut PrimarySurface<'_>,
     registry: &Rc<native_window::NativeWindowRegistry>,
-    primary_viewport_override: Option<(f32, f32)>,
     wraps_content: bool,
     last: &mut Option<(u32, u32)>,
 ) {
+    let window = primary.window;
     let content = wraps_content.then(|| app.primary_content_size()).flatten();
     let Some((width, height)) = primary_wrap_request(content, *last) else {
         return;
@@ -3366,20 +3386,7 @@ fn wrap_primary_window_for_frame(
     }
     *last = Some((width, height));
     if let Some(size) = applied {
-        let viewport = viewport_for_surface_size(
-            primary_viewport_override,
-            size.width,
-            size.height,
-            window.scale_factor(),
-        );
-        configure_app_surface_size(
-            app,
-            surface,
-            surface_config,
-            size.width,
-            size.height,
-            viewport,
-        );
+        primary.configure(app, size.width, size.height);
         update_app_with_native_window_registry(app, registry);
     }
 }
@@ -4532,7 +4539,10 @@ fn reveal_staged_primary(staged: &mut bool, ready: bool, window: &dyn Window) {
 /// Shows the primary window as its content arrives: at once, without the
 /// animation macOS plays as a window opens (`macos_window`). A window whose
 /// first frame `builds_pipelines` goes to the window server before it.
-#[cfg_attr(not(target_os = "macos"), expect(unused_variables))]
+#[cfg_attr(
+    not(target_os = "macos"),
+    expect(unused_variables, reason = "only macOS skips the open animation")
+)]
 fn show_primary_window(window: &dyn Window, builds_pipelines: bool) {
     #[cfg(target_os = "macos")]
     super::macos_window::show_without_open_animation(window, builds_pipelines);
@@ -4824,13 +4834,9 @@ fn viewport_for_surface_size(
     requested_viewport.unwrap_or_else(|| surface_logical_viewport_size(width, height, scale_factor))
 }
 
-#[expect(clippy::too_many_arguments)]
 fn apply_primary_surface_resize(
     app: &mut AppShell<WgpuRenderer>,
-    surface: &wgpu::Surface<'static>,
-    surface_config: &mut wgpu::SurfaceConfiguration,
-    window: &Arc<dyn Window>,
-    primary_viewport_override: Option<(f32, f32)>,
+    primary: &mut PrimarySurface<'_>,
     width: u32,
     height: u32,
     primary_surface_dirty: &mut bool,
@@ -4839,16 +4845,10 @@ fn apply_primary_surface_resize(
     if width == 0 || height == 0 {
         return;
     }
-    let viewport = viewport_for_surface_size(
-        primary_viewport_override,
-        width,
-        height,
-        window.scale_factor(),
-    );
-    configure_app_surface_size(app, surface, surface_config, width, height, viewport);
+    primary.configure(app, width, height);
     *primary_surface_dirty = true;
     *primary_redraw_pending = false;
-    request_redraw_once(window, primary_redraw_pending);
+    request_redraw_once(primary.window, primary_redraw_pending);
 }
 
 fn primary_viewport_for_surface_size(
@@ -5442,6 +5442,12 @@ impl ApplicationHandler for App {
         let Some(surface_config) = &mut self.surface_config else {
             return;
         };
+        let mut primary = PrimarySurface {
+            window,
+            surface,
+            config: surface_config,
+            viewport_override: primary_viewport_override,
+        };
 
         let mut sync_native_windows_after_event = false;
         match event {
@@ -5459,10 +5465,7 @@ impl ApplicationHandler for App {
             WindowEvent::SurfaceResized(new_size) => {
                 apply_primary_surface_resize(
                     app,
-                    surface,
-                    surface_config,
-                    window,
-                    primary_viewport_override,
+                    &mut primary,
                     new_size.width,
                     new_size.height,
                     &mut self.primary_surface_dirty,
@@ -5479,10 +5482,7 @@ impl ApplicationHandler for App {
                 let _ = surface_size_writer.request_surface_size(new_size);
                 apply_primary_surface_resize(
                     app,
-                    surface,
-                    surface_config,
-                    window,
-                    primary_viewport_override,
+                    &mut primary,
                     new_size.width,
                     new_size.height,
                     &mut self.primary_surface_dirty,
@@ -5688,15 +5688,15 @@ impl ApplicationHandler for App {
                 let robot_surface_dirty_before_update = false;
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
-                #[cfg_attr(not(feature = "robot"), expect(unused_variables))]
+                #[cfg_attr(
+                    not(feature = "robot"),
+                    expect(unused_variables, reason = "only the robot reads the update result")
+                )]
                 let update_result = update_app_with_native_window_registry(app, &registry);
                 wrap_primary_window_for_frame(
                     app,
-                    surface,
-                    surface_config,
-                    window,
+                    &mut primary,
                     &registry,
-                    primary_viewport_override,
                     self.settings.primary_wraps_content,
                     &mut self.primary_wrap_size,
                 );
@@ -5725,24 +5725,11 @@ impl ApplicationHandler for App {
                 if present_required {
                     self.primary_surface_dirty = true;
                     let acquire_started_at = Instant::now();
-                    let output = match current_surface_texture(surface, "primary window") {
+                    let output = match current_surface_texture(primary.surface, "primary window") {
                         SurfaceFrame::Ready(output) => output,
                         SurfaceFrame::Reconfigure => {
                             let size = window.surface_size();
-                            let viewport = viewport_for_surface_size(
-                                primary_viewport_override,
-                                size.width,
-                                size.height,
-                                window.scale_factor(),
-                            );
-                            configure_app_surface_size(
-                                app,
-                                surface,
-                                surface_config,
-                                size.width,
-                                size.height,
-                                viewport,
-                            );
+                            primary.configure(app, size.width, size.height);
                             if surface_reconfigure_requires_redraw(size.width, size.height) {
                                 request_redraw_once(window, &mut self.primary_redraw_pending);
                             }
@@ -5771,7 +5758,7 @@ impl ApplicationHandler for App {
 
                     let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
                         format: Some(crate::surface_format::display_surface_view_format(
-                            surface_config.format,
+                            primary.config.format,
                         )),
                         ..Default::default()
                     });
@@ -5779,8 +5766,8 @@ impl ApplicationHandler for App {
                     if let Err(err) = app.renderer().render_surface_texture(
                         &output,
                         &view,
-                        surface_config.width,
-                        surface_config.height,
+                        primary.config.width,
+                        primary.config.height,
                     ) {
                         log::error!("render failed: {err:?}");
                         return;

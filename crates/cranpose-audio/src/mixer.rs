@@ -7,7 +7,7 @@
             not(any(target_os = "android", target_arch = "wasm32"))
         )
     )),
-    allow(dead_code)
+    allow(dead_code, reason = "only the AAudio and cpal backends mix")
 )]
 
 use std::sync::{

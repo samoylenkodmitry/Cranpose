@@ -593,7 +593,13 @@ impl ReadObservationStack {
     }
 }
 
-#[cfg_attr(feature = "std-hash", expect(clippy::box_collection))]
+#[cfg_attr(
+    feature = "std-hash",
+    expect(
+        clippy::box_collection,
+        reason = "a boxed map keeps the enum the size of its small variant"
+    )
+)]
 enum ObservedIds {
     Small(SmallVec<[ObservedState; 1]>),
     Large(Box<HashMap<StateObjectId, Option<Rc<dyn Any>>>>),

@@ -700,24 +700,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             let is_impl_trait = matches!(**ty, Type::ImplTrait(_));
 
             if is_impl_trait {
-                let original_pat: Box<Pat> = pat.clone();
-                if let Pat::Ident(pat_ident) = &**pat {
-                    param_info.push(ParamInfo {
-                        ident: pat_ident.ident.clone(),
-                        pat: original_pat,
-                        ty: ty.as_ref().clone(),
-                        pat_is_mut,
-                        is_impl_trait: true,
-                    });
+                let ident = if let Pat::Ident(pat_ident) = &**pat {
+                    pat_ident.ident.clone()
                 } else {
-                    param_info.push(ParamInfo {
-                        ident: Ident::new(&format!("__arg{index}"), Span::mixed_site()),
-                        pat: original_pat,
-                        ty: ty.as_ref().clone(),
-                        pat_is_mut,
-                        is_impl_trait: true,
-                    });
-                }
+                    Ident::new(&format!("__arg{index}"), Span::mixed_site())
+                };
+                param_info.push(ParamInfo {
+                    ident,
+                    pat: pat.clone(),
+                    ty: ty.as_ref().clone(),
+                    pat_is_mut,
+                    is_impl_trait: true,
+                });
             } else {
                 let ident = Ident::new(&format!("__arg{index}"), Span::mixed_site());
                 let original_pat: Box<Pat> = pat.clone();
@@ -741,7 +735,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     if has_rust_abi {
         func.attrs.push(syn::parse_quote!(#[track_caller]));
     }
-    func.attrs.push(syn::parse_quote!(#[allow(non_snake_case)]));
+    func.attrs.push(syn::parse_quote!(
+        #[allow(non_snake_case, reason = "names follow Compose's casing")]
+    ));
 
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
