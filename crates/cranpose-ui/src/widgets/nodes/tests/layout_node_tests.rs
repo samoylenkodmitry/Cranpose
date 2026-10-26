@@ -81,7 +81,7 @@ fn modifier_slices_cache_preserves_live_snapshot_isolation() {
     let old_snapshot = node.modifier_slices_snapshot();
     let old_snapshot_ptr = Rc::as_ptr(&old_snapshot);
 
-    node.set_modifier(Modifier::empty().padding(4.0));
+    node.set_modifier(Modifier::empty().background(crate::modifier::Color::WHITE));
 
     let updated = node.modifier_slices_snapshot();
     assert_ne!(Rc::as_ptr(&updated), old_snapshot_ptr);
@@ -112,16 +112,21 @@ fn a_changed_modifier_collects_its_slices_once_when_they_are_read() {
 fn an_equal_modifier_leaves_the_chain_and_its_slices_as_they_were() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();
-    node.set_modifier(Modifier::empty().padding(4.0));
+    let padded = |padding| {
+        Modifier::empty()
+            .padding(padding)
+            .background(crate::modifier::Color::WHITE)
+    };
+    node.set_modifier(padded(4.0));
     let held = node.modifier_slices_snapshot();
 
-    node.set_modifier(Modifier::empty().padding(4.0));
+    node.set_modifier(padded(4.0));
     assert!(
         Rc::ptr_eq(&held, &node.modifier_slices_snapshot()),
         "an equal modifier is not synced or collected again"
     );
 
-    node.set_modifier(Modifier::empty().padding(5.0));
+    node.set_modifier(padded(5.0));
     assert!(
         !Rc::ptr_eq(&held, &node.modifier_slices_snapshot()),
         "a changed modifier is"

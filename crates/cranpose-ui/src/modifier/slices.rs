@@ -65,6 +65,21 @@ struct RareSlices {
 }
 
 impl RareSlices {
+    fn is_empty(&self) -> bool {
+        self.pointer_inputs.is_empty()
+            && self.pointer_input_sizes.is_empty()
+            && self.pointer_icon.is_none()
+            && !self.motion_context_animated
+            && !self.translated_content_context
+            && self.translated_content_context_identity.is_none()
+            && self.translated_content_offset_reader.is_none()
+            && self.text_window.is_none()
+            && self.viewport_window_rect.is_none()
+            && self.graphics_layer_resolver.is_none()
+            && self.chain_guard.is_none()
+            && self.z_index == 0.0
+    }
+
     fn clear(&mut self) {
         self.pointer_inputs.clear();
         self.pointer_input_sizes.clear();
@@ -633,6 +648,20 @@ impl ModifierNodeSlices {
                 .is_some_and(|rare| rare.graphics_layer_resolver.is_some()),
             heap_bytes: draw_command_bytes + pointer_input_bytes,
         }
+    }
+
+    // Whether the chain gave nothing: no draws, text, layer, clip, shape or
+    // rare part.
+    fn is_empty(&self) -> bool {
+        self.draw_commands.is_empty()
+            && self.layer_draw_boundary.is_none()
+            && !self.clip_to_bounds
+            && self.layer_coordinator.is_none()
+            && self.text.is_none()
+            && self.text_coordinator.is_none()
+            && self.graphics_layer.is_none()
+            && self.corner_shape.is_none()
+            && self.rare.as_deref().is_none_or(RareSlices::is_empty)
     }
 
     /// Resets the slice collection for reuse, retaining vector capacity.

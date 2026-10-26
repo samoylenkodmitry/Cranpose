@@ -46,8 +46,8 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 }
 
 /// A node's modifier slices, shared with the render graph. A node whose
-/// chain draws, lays out and handles pointers in none of its modifiers holds
-/// none: it reads the one empty snapshot such nodes share.
+/// chain gives no slices, as one that only pads and sizes, holds none: it
+/// reads the one empty snapshot such nodes share.
 #[derive(Default)]
 pub(crate) struct SlicesSnapshot(std::cell::Cell<Option<Rc<ModifierNodeSlices>>>);
 
@@ -83,14 +83,23 @@ impl SlicesSnapshot {
             return;
         }
         let mut snapshot = self.0.take();
-        if !snapshot
-            .as_mut()
-            .is_some_and(|slices| Rc::get_mut(slices).is_some())
-        {
-            snapshot = Some(Rc::default());
-        }
         if let Some(slices) = snapshot.as_mut().and_then(Rc::get_mut) {
             collect_modifier_slices_into(chain, slices, parts, density);
+            if slices.is_empty() {
+                snapshot = None;
+            }
+        } else {
+            // A chain that gives no slices allocates none: it collects into
+            // the thread's spare, which a chain that gives some takes.
+            let spare = crate::thread_state::with(|state| state.spare_slices.take());
+            let mut slices = spare.unwrap_or_default();
+            collect_modifier_slices_into(chain, &mut slices, parts, density);
+            snapshot = if slices.is_empty() {
+                crate::thread_state::with(|state| state.spare_slices.set(Some(slices)));
+                None
+            } else {
+                Some(Rc::new(slices))
+            };
         }
         self.0.set(snapshot);
     }

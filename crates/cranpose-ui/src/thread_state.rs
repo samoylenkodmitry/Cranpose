@@ -78,6 +78,9 @@ pub(crate) struct UiThreadState {
     pub(crate) fill_size: OnceCell<Modifier>,
     pub(crate) clip_to_bounds: OnceCell<Modifier>,
     pub(crate) empty_slices: OnceCell<Rc<ModifierNodeSlices>>,
+    // Where a node with no slices of its own collects its chain, to learn
+    // whether the chain gives any.
+    pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
     pub(crate) draw_text_measurer: OnceCell<Rc<dyn DrawTextMeasurer>>,
     pub(crate) spare_flex_children: SpareFlexChildren,
@@ -100,6 +103,7 @@ impl UiThreadState {
             fill_size: OnceCell::new(),
             clip_to_bounds: OnceCell::new(),
             empty_slices: OnceCell::new(),
+            spare_slices: Cell::new(None),
             empty_measure_policy: OnceCell::new(),
             draw_text_measurer: OnceCell::new(),
             spare_flex_children: SpareFlexChildren::new(),
