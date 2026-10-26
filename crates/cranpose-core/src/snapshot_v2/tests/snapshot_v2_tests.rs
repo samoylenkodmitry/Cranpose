@@ -97,8 +97,8 @@ impl TestStateObject {
 }
 
 impl StateObject for TestStateObject {
-    fn object_id(&self) -> crate::state::ObjectId {
-        crate::state::ObjectId(self.id)
+    fn object_id(&self) -> ObjectId {
+        ObjectId(self.id)
     }
 
     fn first_record(&self) -> Rc<StateRecord> {
@@ -139,7 +139,7 @@ fn test_apply_observer_receives_correct_modified_objects() {
     use std::sync::Mutex;
 
     let received_count = Rc::new(Mutex::new(0));
-    let received_snapshot_id = Rc::new(Mutex::new(0));
+    let received_snapshot_id = Rc::new(Mutex::new(SnapshotId(0)));
 
     let received_count_clone = Rc::clone(&received_count);
     let received_snapshot_id_clone = Rc::clone(&received_snapshot_id);
@@ -153,9 +153,9 @@ fn test_apply_observer_receives_correct_modified_objects() {
     let obj2: Rc<dyn StateObject> = TestStateObject::new(99);
     let modified = vec![obj1, obj2];
 
-    notify_apply_observers(&modified, 123);
+    notify_apply_observers(&modified, SnapshotId(123));
 
-    assert_eq!(*received_snapshot_id.lock().unwrap(), 123);
+    assert_eq!(*received_snapshot_id.lock().unwrap(), SnapshotId(123));
     assert_eq!(*received_count.lock().unwrap(), 2);
 }
 
@@ -163,16 +163,16 @@ fn test_apply_observer_receives_correct_modified_objects() {
 fn test_apply_observer_receives_correct_snapshot_id() {
     use std::sync::Mutex;
 
-    let received_id = Rc::new(Mutex::new(0));
+    let received_id = Rc::new(Mutex::new(SnapshotId(0)));
     let received_id_clone = Rc::clone(&received_id);
 
     let _handle = register_apply_observer(Rc::new(move |_, snapshot_id| {
         *received_id_clone.lock().unwrap() = snapshot_id;
     }));
 
-    notify_apply_observers(&[], 456);
+    notify_apply_observers(&[], SnapshotId(456));
 
-    assert_eq!(*received_id.lock().unwrap(), 456);
+    assert_eq!(*received_id.lock().unwrap(), SnapshotId(456));
 }
 
 #[test]
@@ -199,13 +199,13 @@ fn test_multiple_apply_observers_all_called() {
         *call_count3_clone.lock().unwrap() += 1;
     }));
 
-    notify_apply_observers(&[], 1);
+    notify_apply_observers(&[], SnapshotId(1));
 
     assert_eq!(*call_count1.lock().unwrap(), 1);
     assert_eq!(*call_count2.lock().unwrap(), 1);
     assert_eq!(*call_count3.lock().unwrap(), 1);
 
-    notify_apply_observers(&[], 2);
+    notify_apply_observers(&[], SnapshotId(2));
 
     assert_eq!(*call_count1.lock().unwrap(), 2);
     assert_eq!(*call_count2.lock().unwrap(), 2);
@@ -224,7 +224,7 @@ fn test_apply_observer_not_called_for_empty_modifications() {
         assert_eq!(modified.len(), 0);
     }));
 
-    notify_apply_observers(&[], 1);
+    notify_apply_observers(&[], SnapshotId(1));
 
     assert_eq!(*call_count.lock().unwrap(), 1);
 }
@@ -244,7 +244,7 @@ fn test_observer_handle_drop_removes_correct_observer() {
     let handle2 = register_counting_observer(&calls, 2);
     let handle3 = register_counting_observer(&calls, 3);
 
-    notify_apply_observers(&[], 1);
+    notify_apply_observers(&[], SnapshotId(1));
     let result = calls.lock().unwrap().clone();
     assert_eq!(result.len(), 3);
     assert!(result.contains(&1));
@@ -254,7 +254,7 @@ fn test_observer_handle_drop_removes_correct_observer() {
 
     drop(handle2);
 
-    notify_apply_observers(&[], 2);
+    notify_apply_observers(&[], SnapshotId(2));
     let result = calls.lock().unwrap().clone();
     assert_eq!(result.len(), 2);
     assert!(result.contains(&1));
@@ -264,7 +264,7 @@ fn test_observer_handle_drop_removes_correct_observer() {
 
     drop(handle1);
 
-    notify_apply_observers(&[], 3);
+    notify_apply_observers(&[], SnapshotId(3));
     let result = calls.lock().unwrap().clone();
     assert_eq!(result.len(), 1);
     assert!(result.contains(&3));
@@ -272,7 +272,7 @@ fn test_observer_handle_drop_removes_correct_observer() {
 
     drop(handle3);
 
-    notify_apply_observers(&[], 4);
+    notify_apply_observers(&[], SnapshotId(4));
     assert_eq!(calls.lock().unwrap().len(), 0);
 }
 
@@ -286,20 +286,20 @@ fn test_observer_handle_drop_in_different_orders() {
         let h3 = register_counting_observer(&calls, 3);
 
         drop(h3);
-        notify_apply_observers(&[], 1);
+        notify_apply_observers(&[], SnapshotId(1));
         let result = calls.lock().unwrap().clone();
         assert!(result.contains(&1) && result.contains(&2) && !result.contains(&3));
         calls.lock().unwrap().clear();
 
         drop(h2);
-        notify_apply_observers(&[], 2);
+        notify_apply_observers(&[], SnapshotId(2));
         let result = calls.lock().unwrap().clone();
         assert_eq!(result.len(), 1);
         assert!(result.contains(&1));
         calls.lock().unwrap().clear();
 
         drop(h1);
-        notify_apply_observers(&[], 3);
+        notify_apply_observers(&[], SnapshotId(3));
         assert_eq!(calls.lock().unwrap().len(), 0);
     }
 
@@ -311,20 +311,20 @@ fn test_observer_handle_drop_in_different_orders() {
         let h3 = register_counting_observer(&calls, 3);
 
         drop(h1);
-        notify_apply_observers(&[], 1);
+        notify_apply_observers(&[], SnapshotId(1));
         let result = calls.lock().unwrap().clone();
         assert!(!result.contains(&1) && result.contains(&2) && result.contains(&3));
         calls.lock().unwrap().clear();
 
         drop(h2);
-        notify_apply_observers(&[], 2);
+        notify_apply_observers(&[], SnapshotId(2));
         let result = calls.lock().unwrap().clone();
         assert_eq!(result.len(), 1);
         assert!(result.contains(&3));
         calls.lock().unwrap().clear();
 
         drop(h3);
-        notify_apply_observers(&[], 3);
+        notify_apply_observers(&[], SnapshotId(3));
         assert_eq!(calls.lock().unwrap().len(), 0);
     }
 }
@@ -345,14 +345,14 @@ fn test_remaining_observers_still_work_after_drop() {
         calls2.lock().unwrap().push((2, snapshot_id));
     }));
 
-    notify_apply_observers(&[], 100);
+    notify_apply_observers(&[], SnapshotId(100));
     assert_eq!(calls.lock().unwrap().len(), 2);
     calls.lock().unwrap().clear();
 
     drop(handle1);
 
-    notify_apply_observers(&[], 200);
-    assert_eq!(*calls.lock().unwrap(), vec![(2, 200)]);
+    notify_apply_observers(&[], SnapshotId(200));
+    assert_eq!(*calls.lock().unwrap(), vec![(2, SnapshotId(200))]);
     calls.lock().unwrap().clear();
 
     let calls3 = Rc::clone(&calls);
@@ -360,11 +360,11 @@ fn test_remaining_observers_still_work_after_drop() {
         calls3.lock().unwrap().push((3, snapshot_id));
     }));
 
-    notify_apply_observers(&[], 300);
+    notify_apply_observers(&[], SnapshotId(300));
     let result = calls.lock().unwrap().clone();
     assert_eq!(result.len(), 2);
-    assert!(result.contains(&(2, 300)));
-    assert!(result.contains(&(3, 300)));
+    assert!(result.contains(&(2, SnapshotId(300))));
+    assert!(result.contains(&(3, SnapshotId(300))));
 
     drop(handle2);
 }
@@ -385,7 +385,7 @@ fn test_observer_ids_are_unique() {
         handles.push(handle);
     }
 
-    notify_apply_observers(&[], 1);
+    notify_apply_observers(&[], SnapshotId(1));
     assert_eq!(ids.lock().unwrap().len(), 100);
 
     for i in (0..100).step_by(2) {
@@ -393,39 +393,39 @@ fn test_observer_ids_are_unique() {
     }
 
     ids.lock().unwrap().clear();
-    notify_apply_observers(&[], 2);
+    notify_apply_observers(&[], SnapshotId(2));
     assert_eq!(ids.lock().unwrap().len(), 50);
 }
 
 #[test]
 fn test_state_object_storage_in_modified_set() {
-    let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
+    let state = SnapshotState::new(SnapshotId(1), SnapshotIdSet::new(), None, None, false);
 
     let state_obj = TestStateObject::new(12345) as Rc<dyn StateObject>;
 
-    state.record_write(Rc::clone(&state_obj), 1);
+    state.record_write(Rc::clone(&state_obj), SnapshotId(1));
 
     let modified = state.modified.borrow();
     assert_eq!(modified.len(), 1);
-    assert!(modified.contains_key(&12345));
+    assert!(modified.contains_key(&ObjectId(12345)));
 
-    let (stored, writer_id) = modified.get(&12345).unwrap();
-    assert_eq!(stored.object_id().as_usize(), 12345);
-    assert_eq!(*writer_id, 1);
+    let (stored, writer_id) = modified.get(&ObjectId(12345)).unwrap();
+    assert_eq!(stored.object_id(), ObjectId(12345));
+    assert_eq!(*writer_id, SnapshotId(1));
 }
 
 #[test]
 fn test_multiple_writes_to_same_state_object() {
-    let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
+    let state = SnapshotState::new(SnapshotId(1), SnapshotIdSet::new(), None, None, false);
     let state_obj = TestStateObject::new(99999) as Rc<dyn StateObject>;
 
-    state.record_write(Rc::clone(&state_obj), 1);
+    state.record_write(Rc::clone(&state_obj), SnapshotId(1));
     assert_eq!(state.modified.borrow().len(), 1);
 
-    state.record_write(Rc::clone(&state_obj), 2);
+    state.record_write(Rc::clone(&state_obj), SnapshotId(2));
     let modified = state.modified.borrow();
     assert_eq!(modified.len(), 1);
-    assert!(modified.contains_key(&99999));
-    let (_, writer_id) = modified.get(&99999).unwrap();
-    assert_eq!(*writer_id, 2);
+    assert!(modified.contains_key(&ObjectId(99999)));
+    let (_, writer_id) = modified.get(&ObjectId(99999)).unwrap();
+    assert_eq!(*writer_id, SnapshotId(2));
 }

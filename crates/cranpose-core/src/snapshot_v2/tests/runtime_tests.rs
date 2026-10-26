@@ -36,7 +36,7 @@ fn test_close_snapshot_clears_open_flag() {
 #[test]
 fn test_advance_global_snapshot_updates_open_set() {
     let _guard = reset_runtime_for_tests();
-    let new_id = INITIAL_GLOBAL_SNAPSHOT_ID + 1;
+    let new_id = INITIAL_GLOBAL_SNAPSHOT_ID.next();
     let open = advance_global_snapshot(new_id);
     assert!(open.get(new_id));
     assert!(!open.get(INITIAL_GLOBAL_SNAPSHOT_ID));

@@ -5,38 +5,38 @@ fn test_empty_heap() {
     let heap = SnapshotDoubleIndexHeap::new();
     assert_eq!(heap.len(), 0);
     assert!(heap.is_empty());
-    assert_eq!(heap.lowest_or_default(999), 999);
+    assert_eq!(heap.lowest_or_default(SnapshotId(999)), SnapshotId(999));
 }
 
 #[test]
 fn test_add_single_element() {
     let mut heap = SnapshotDoubleIndexHeap::new();
-    let handle = heap.add(42);
+    let handle = heap.add(SnapshotId(42));
 
     assert_eq!(heap.len(), 1);
     assert!(!heap.is_empty());
-    assert_eq!(heap.lowest_or_default(999), 42);
+    assert_eq!(heap.lowest_or_default(SnapshotId(999)), SnapshotId(42));
 
     heap.remove(handle);
     assert_eq!(heap.len(), 0);
-    assert_eq!(heap.lowest_or_default(999), 999);
+    assert_eq!(heap.lowest_or_default(SnapshotId(999)), SnapshotId(999));
 }
 
 #[test]
 fn test_add_multiple_maintains_min() {
     let mut heap = SnapshotDoubleIndexHeap::new();
 
-    heap.add(50);
-    assert_eq!(heap.lowest_or_default(0), 50);
+    heap.add(SnapshotId(50));
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(50));
 
-    heap.add(30);
-    assert_eq!(heap.lowest_or_default(0), 30);
+    heap.add(SnapshotId(30));
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(30));
 
-    heap.add(70);
-    assert_eq!(heap.lowest_or_default(0), 30);
+    heap.add(SnapshotId(70));
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(30));
 
-    heap.add(10);
-    assert_eq!(heap.lowest_or_default(0), 10);
+    heap.add(SnapshotId(10));
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(10));
 
     assert_eq!(heap.len(), 4);
 }
@@ -45,28 +45,28 @@ fn test_add_multiple_maintains_min() {
 fn test_remove_maintains_heap_invariant() {
     let mut heap = SnapshotDoubleIndexHeap::new();
 
-    let h1 = heap.add(50);
-    let h2 = heap.add(30);
-    let h3 = heap.add(70);
-    let h4 = heap.add(10);
+    let h1 = heap.add(SnapshotId(50));
+    let h2 = heap.add(SnapshotId(30));
+    let h3 = heap.add(SnapshotId(70));
+    let h4 = heap.add(SnapshotId(10));
 
-    assert_eq!(heap.lowest_or_default(0), 10);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(10));
 
     heap.remove(h4);
-    assert_eq!(heap.lowest_or_default(0), 30);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(30));
     assert_eq!(heap.len(), 3);
 
     heap.remove(h1);
-    assert_eq!(heap.lowest_or_default(0), 30);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(30));
     assert_eq!(heap.len(), 2);
 
     heap.remove(h2);
-    assert_eq!(heap.lowest_or_default(0), 70);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(70));
     assert_eq!(heap.len(), 1);
 
     heap.remove(h3);
     assert!(heap.is_empty());
-    assert_eq!(heap.lowest_or_default(999), 999);
+    assert_eq!(heap.lowest_or_default(SnapshotId(999)), SnapshotId(999));
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn test_heap_invariant_after_operations() {
     let mut handles = Vec::new();
 
     for &v in &values {
-        handles.push(heap.add(v));
+        handles.push(heap.add(SnapshotId(v)));
     }
 
     fn verify_heap_invariant(heap: &SnapshotDoubleIndexHeap) {
@@ -110,15 +110,15 @@ fn test_heap_invariant_after_operations() {
     }
 
     verify_heap_invariant(&heap);
-    assert_eq!(heap.lowest_or_default(0), 3);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(3));
 
     heap.remove(handles[3]);
     verify_heap_invariant(&heap);
-    assert_eq!(heap.lowest_or_default(0), 3);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(3));
 
     heap.remove(handles[7]);
     verify_heap_invariant(&heap);
-    assert_eq!(heap.lowest_or_default(0), 15);
+    assert_eq!(heap.lowest_or_default(SnapshotId(0)), SnapshotId(15));
 
     heap.remove(handles[1]);
     verify_heap_invariant(&heap);
@@ -128,15 +128,15 @@ fn test_heap_invariant_after_operations() {
 fn test_handle_reuse() {
     let mut heap = SnapshotDoubleIndexHeap::new();
 
-    let h1 = heap.add(1);
-    let h2 = heap.add(2);
-    let h3 = heap.add(3);
+    let h1 = heap.add(SnapshotId(1));
+    let h2 = heap.add(SnapshotId(2));
+    let h3 = heap.add(SnapshotId(3));
 
     heap.remove(h2);
     heap.remove(h1);
 
-    let h4 = heap.add(4);
-    let h5 = heap.add(5);
+    let h4 = heap.add(SnapshotId(4));
+    let h5 = heap.add(SnapshotId(5));
 
     assert_eq!(heap.len(), 3);
     heap.remove(h3);
@@ -151,11 +151,11 @@ fn test_capacity_growth() {
 
     let mut handles = Vec::new();
     for i in 0..20 {
-        handles.push(heap.add(i));
+        handles.push(heap.add(SnapshotId(i)));
     }
 
     assert_eq!(heap.len(), 20);
-    assert_eq!(heap.lowest_or_default(999), 0);
+    assert_eq!(heap.lowest_or_default(SnapshotId(999)), SnapshotId(0));
 
     for handle in handles {
         heap.remove(handle);
@@ -170,7 +170,7 @@ fn test_stress_random_operations() {
     let mut handles = Vec::new();
 
     for i in 0..100 {
-        handles.push(heap.add(i * 7 % 97));
+        handles.push(heap.add(SnapshotId(i * 7 % 97)));
     }
 
     for i in (0..handles.len()).step_by(2) {
@@ -180,10 +180,10 @@ fn test_stress_random_operations() {
     assert_eq!(heap.len(), 50);
 
     for i in 100..150 {
-        handles.push(heap.add(i * 3 % 89));
+        handles.push(heap.add(SnapshotId(i * 3 % 89)));
     }
 
     assert_eq!(heap.len(), 100);
 
-    let _ = heap.lowest_or_default(0);
+    let _ = heap.lowest_or_default(SnapshotId(0));
 }

@@ -93,7 +93,7 @@ fn test_conflict_detection_after_record_reuse() {
     let global = GlobalSnapshot::get_or_create();
     let state = new_state(0);
 
-    const INVALID_SNAPSHOT_ID: SnapshotId = 0;
+    const INVALID_SNAPSHOT_ID: SnapshotId = SnapshotId(0);
 
     let head = state.first_record();
     let original_head_id = head.snapshot_id();

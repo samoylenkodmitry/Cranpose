@@ -23,11 +23,11 @@ use crate::{
     with_current_composer_opt,
 };
 
-pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
+pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = SnapshotId(1);
 
-const INVALID_SNAPSHOT_ID: SnapshotId = 0;
+const INVALID_SNAPSHOT_ID: SnapshotId = SnapshotId(0);
 
-const SNAPSHOT_ID_MAX: SnapshotId = usize::MAX;
+const SNAPSHOT_ID_MAX: SnapshotId = SnapshotId(usize::MAX);
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Default)]
 pub struct ObjectId(pub(crate) usize);
@@ -36,11 +36,6 @@ impl ObjectId {
     #[cfg(test)]
     pub(crate) fn new<T: ?Sized + 'static>(object: &Rc<T>) -> Self {
         Self(Rc::as_ptr(object) as *const () as usize)
-    }
-
-    #[inline]
-    pub(crate) fn as_usize(self) -> usize {
-        self.0
     }
 }
 
@@ -350,8 +345,8 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
     let mut valid_record: Option<Rc<StateRecord>> = None;
 
     let reuse_limit = lowest_pinned_snapshot().map_or_else(
-        || crate::snapshot_v2::peek_next_snapshot_id().saturating_sub(1),
-        |lowest| lowest.saturating_sub(1),
+        || crate::snapshot_v2::peek_next_snapshot_id().previous(),
+        SnapshotId::previous,
     );
 
     let invalid = SnapshotIdSet::EMPTY;

@@ -54,7 +54,7 @@ impl PinningTable {
         if self.heap.is_empty() {
             None
         } else {
-            Some(self.heap.lowest_or_default(0))
+            Some(self.heap.lowest_or_default(SnapshotId(0)))
         }
     }
 

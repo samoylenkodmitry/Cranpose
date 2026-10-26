@@ -10,8 +10,8 @@ fn reset_runtime() -> TestRuntimeGuard {
 #[test]
 fn test_global_snapshot_creation() {
     let _guard = reset_runtime();
-    let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
-    assert_eq!(snapshot.snapshot_id(), 1);
+    let snapshot = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(1));
     assert!(!snapshot.read_only());
     assert!(!snapshot.is_disposed());
 }
@@ -29,20 +29,20 @@ fn test_global_snapshot_get_or_create() {
 #[test]
 fn test_global_snapshot_advance() {
     let _guard = reset_runtime();
-    let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
-    assert_eq!(snapshot.snapshot_id(), 1);
+    let snapshot = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(1));
 
-    snapshot.state.id.set(5);
-    assert_eq!(snapshot.snapshot_id(), 5);
+    snapshot.state.id.set(SnapshotId(5));
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(5));
 
-    snapshot.state.id.set(10);
-    assert_eq!(snapshot.snapshot_id(), 10);
+    snapshot.state.id.set(SnapshotId(10));
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(10));
 }
 
 #[test]
 fn test_global_snapshot_never_disposed() {
     let _guard = reset_runtime();
-    let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
+    let snapshot = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
     assert!(!snapshot.is_disposed());
 
     snapshot.dispose();
@@ -52,7 +52,7 @@ fn test_global_snapshot_never_disposed() {
 #[test]
 fn test_global_snapshot_apply_always_succeeds() {
     let _guard = reset_runtime();
-    let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
+    let snapshot = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
     let result = snapshot.apply();
     assert!(result.is_success());
 }
@@ -60,11 +60,11 @@ fn test_global_snapshot_apply_always_succeeds() {
 #[test]
 fn test_global_snapshot_nested() {
     let _guard = reset_runtime();
-    let global = GlobalSnapshot::new(1, SnapshotIdSet::new());
+    let global = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
     let nested = global.take_nested_snapshot(None);
 
     // The snapshot takes an id of its own, and the global moves past it.
-    assert!(nested.snapshot_id() > 1);
+    assert!(nested.snapshot_id() > SnapshotId(1));
     assert!(nested.snapshot_id() < global.snapshot_id());
     assert!(nested.read_only());
     assert_eq!(global.nested_count.get(), 0);
@@ -73,7 +73,7 @@ fn test_global_snapshot_nested() {
 #[test]
 fn test_global_snapshot_nested_mutable() {
     let _guard = reset_runtime();
-    let global = GlobalSnapshot::new(1, SnapshotIdSet::new());
+    let global = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
     let nested = global.take_nested_mutable_snapshot(None, None);
 
     assert!(nested.snapshot_id() < global.snapshot_id());
@@ -102,24 +102,30 @@ fn test_advance_global_snapshot_function() {
 
     let initial_id = global_snapshot_id();
 
-    advance_global_snapshot(initial_id + 10);
-    assert_eq!(global_snapshot_id(), initial_id + 10);
+    advance_global_snapshot(SnapshotId::new(initial_id.index() + 10));
+    assert_eq!(
+        global_snapshot_id(),
+        SnapshotId::new(initial_id.index() + 10)
+    );
 
-    advance_global_snapshot(initial_id + 20);
-    assert_eq!(global_snapshot_id(), initial_id + 20);
+    advance_global_snapshot(SnapshotId::new(initial_id.index() + 20));
+    assert_eq!(
+        global_snapshot_id(),
+        SnapshotId::new(initial_id.index() + 20)
+    );
 }
 
 #[test]
 fn test_global_snapshot_has_no_pending_changes_initially() {
     let _guard = reset_runtime();
-    let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
+    let snapshot = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
     assert!(!snapshot.has_pending_changes());
 }
 
 #[test]
 fn test_global_snapshot_enter() {
     let _guard = reset_runtime();
-    let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
+    let snapshot = GlobalSnapshot::new(SnapshotId(1), SnapshotIdSet::new());
 
     set_current_snapshot(None);
     snapshot.enter(|| {

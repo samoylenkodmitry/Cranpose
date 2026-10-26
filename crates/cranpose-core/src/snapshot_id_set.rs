@@ -1,7 +1,41 @@
 use std::fmt;
 
 /// The identifier of a snapshot. Ids grow in the order that snapshots are created.
-pub type SnapshotId = usize;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SnapshotId(pub(crate) usize);
+
+impl SnapshotId {
+    /// The id `raw`, as the snapshot runtime counts them.
+    pub const fn new(raw: usize) -> Self {
+        Self(raw)
+    }
+
+    /// The id as the runtime counts it.
+    pub const fn index(self) -> usize {
+        self.0
+    }
+
+    /// The id the runtime hands out after this one.
+    pub(crate) const fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+
+    /// The id the runtime handed out before this one, or the first id.
+    pub(crate) const fn previous(self) -> Self {
+        Self(self.0.saturating_sub(1))
+    }
+
+    /// How many ids the runtime handed out from `earlier` to this one.
+    pub(crate) const fn since(self, earlier: Self) -> usize {
+        self.0.saturating_sub(earlier.0)
+    }
+}
+
+impl fmt::Display for SnapshotId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 const BITS_PER_SET: usize = 64;
 const SNAPSHOT_ID_SIZE: usize = 64;
@@ -12,8 +46,8 @@ const SNAPSHOT_ID_SIZE: usize = 64;
 pub struct SnapshotIdSet {
     upper_set: u64,
     lower_set: u64,
-    lower_bound: SnapshotId,
-    below_bound: Option<Box<[SnapshotId]>>,
+    lower_bound: usize,
+    below_bound: Option<Box<[usize]>>,
 }
 
 impl SnapshotIdSet {
@@ -32,6 +66,7 @@ impl SnapshotIdSet {
 
     /// Check if a snapshot ID is in the set.
     pub fn get(&self, id: SnapshotId) -> bool {
+        let id = id.0;
         let offset = id.wrapping_sub(self.lower_bound);
 
         if offset < BITS_PER_SET {
@@ -51,6 +86,7 @@ impl SnapshotIdSet {
 
     /// Add a snapshot ID to the set (returns a new set if modified).
     pub fn set(&self, id: SnapshotId) -> Self {
+        let id = id.0;
         if id < self.lower_bound {
             if let Some(ref arr) = self.below_bound {
                 match arr.binary_search(&id) {
@@ -102,7 +138,7 @@ impl SnapshotIdSet {
                     below_bound: self.below_bound.clone(),
                 };
             }
-        } else if offset >= BITS_PER_SET * 2 && !self.get(id) {
+        } else if offset >= BITS_PER_SET * 2 && !self.get(SnapshotId(id)) {
             return self.shift_and_set(id);
         }
 
@@ -111,6 +147,7 @@ impl SnapshotIdSet {
 
     /// Remove a snapshot ID from the set (returns a new set if modified).
     pub fn clear(&self, id: SnapshotId) -> Self {
+        let id = id.0;
         let offset = id.wrapping_sub(self.lower_bound);
 
         if offset < BITS_PER_SET {
@@ -207,17 +244,18 @@ impl SnapshotIdSet {
 
     /// Find the lowest snapshot ID in the set that is <= upper.
     pub fn lowest(&self, upper: SnapshotId) -> SnapshotId {
+        let upper = upper.0;
         if let Some(ref arr) = self.below_bound
             && let Some(&lowest) = arr.first()
             && lowest <= upper
         {
-            return lowest;
+            return SnapshotId(lowest);
         }
 
         if self.lower_set != 0 {
             let lowest_in_lower = self.lower_bound + self.lower_set.trailing_zeros() as usize;
             if lowest_in_lower <= upper {
-                return lowest_in_lower;
+                return SnapshotId(lowest_in_lower);
             }
         }
 
@@ -225,11 +263,11 @@ impl SnapshotIdSet {
             let lowest_in_upper =
                 self.lower_bound + BITS_PER_SET + self.upper_set.trailing_zeros() as usize;
             if lowest_in_upper <= upper {
-                return lowest_in_upper;
+                return SnapshotId(lowest_in_upper);
             }
         }
 
-        upper
+        SnapshotId(upper)
     }
 
     /// Check if the set is empty.
@@ -257,12 +295,12 @@ impl SnapshotIdSet {
         let mut id = from;
         while id < until {
             result = result.set(id);
-            id += 1;
+            id = id.next();
         }
         result
     }
 
-    fn below_bound_equals(&self, other: &Option<Box<[SnapshotId]>>) -> bool {
+    fn below_bound_equals(&self, other: &Option<Box<[usize]>>) -> bool {
         match (&self.below_bound, other) {
             (None, None) => true,
             (Some(a), Some(b)) => a == b,
@@ -270,13 +308,13 @@ impl SnapshotIdSet {
         }
     }
 
-    fn shift_and_set(&self, id: SnapshotId) -> Self {
+    fn shift_and_set(&self, id: usize) -> Self {
         let target_lower_bound = (id / SNAPSHOT_ID_SIZE) * SNAPSHOT_ID_SIZE;
 
         let mut new_upper_set = self.upper_set;
         let mut new_lower_set = self.lower_set;
         let mut new_lower_bound = self.lower_bound;
-        let mut new_below_bound: Vec<SnapshotId> = if let Some(ref arr) = self.below_bound {
+        let mut new_below_bound: Vec<usize> = if let Some(ref arr) = self.below_bound {
             arr.to_vec()
         } else {
             Vec::new()
@@ -317,7 +355,7 @@ impl SnapshotIdSet {
             },
         };
 
-        result.set(id)
+        result.set(SnapshotId(id))
     }
 }
 
@@ -371,14 +409,14 @@ impl Iterator for SnapshotIdSetIter<'_> {
         {
             let id = arr[self.below_index];
             self.below_index += 1;
-            return Some(id);
+            return Some(SnapshotId(id));
         }
 
         while self.current_offset < BITS_PER_SET {
             if (self.lower_set & (1u64 << self.current_offset)) != 0 {
                 let id = self.set.lower_bound + self.current_offset;
                 self.current_offset += 1;
-                return Some(id);
+                return Some(SnapshotId(id));
             }
             self.current_offset += 1;
         }
@@ -388,7 +426,7 @@ impl Iterator for SnapshotIdSetIter<'_> {
             if (self.upper_set & (1u64 << bit_offset)) != 0 {
                 let id = self.set.lower_bound + self.current_offset;
                 self.current_offset += 1;
-                return Some(id);
+                return Some(SnapshotId(id));
             }
             self.current_offset += 1;
         }

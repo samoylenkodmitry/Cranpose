@@ -30,7 +30,7 @@ use crate::{
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
     snapshot_pinning::{self, PinHandle},
     snapshot_weak_set::SnapshotWeakSetDebugStats,
-    state::{StateObject, StateRecord},
+    state::{ObjectId, StateObject, StateRecord},
 };
 
 mod global;
@@ -88,9 +88,6 @@ impl SnapshotApplyResult {
         assert!(!self.is_failure(), "Snapshot apply failed");
     }
 }
-
-/// Unique identifier for a state object in the modified set.
-pub type StateObjectId = usize;
 
 /// Enum wrapper for all snapshot types.
 ///
@@ -594,8 +591,8 @@ impl ApplyObservers {
     }
 }
 
-const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 2;
-const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 1;
+const UNUSED_RECORD_CLEANUP_INTERVAL: usize = 2;
+const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: usize = 1;
 const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 64;
 
 /// Size figures of the snapshot system's bookkeeping on the current thread, from
@@ -693,7 +690,7 @@ pub(crate) fn notify_apply_observers(modified: &[Rc<dyn StateObject>], snapshot_
     }
 }
 
-pub(crate) fn set_last_write(id: StateObjectId, snapshot_id: SnapshotId) {
+pub(crate) fn set_last_write(id: ObjectId, snapshot_id: SnapshotId) {
     crate::thread_state::snapshots(|state| {
         state.last_writes.borrow_mut().insert(id, snapshot_id);
     });
@@ -725,8 +722,7 @@ pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_i
         } else {
             UNUSED_RECORD_CLEANUP_INTERVAL
         };
-        let due =
-            current_snapshot_id.saturating_sub(state.last_unused_record_cleanup.get()) >= interval;
+        let due = current_snapshot_id.since(state.last_unused_record_cleanup.get()) >= interval;
         if due {
             state.last_unused_record_cleanup.set(current_snapshot_id);
         }
@@ -740,13 +736,13 @@ pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_i
 
 #[cfg(test)]
 pub(crate) fn clear_unused_record_cleanup_for_tests() {
-    crate::thread_state::snapshots(|state| state.last_unused_record_cleanup.set(0));
+    crate::thread_state::snapshots(|state| state.last_unused_record_cleanup.set(SnapshotId(0)));
 }
 
 pub(crate) fn optimistic_merges(
     current_snapshot_id: SnapshotId,
     base_parent_id: SnapshotId,
-    modified_objects: &[(StateObjectId, Rc<dyn StateObject>, SnapshotId)],
+    modified_objects: &[(ObjectId, Rc<dyn StateObject>, SnapshotId)],
     invalid_snapshots: &SnapshotIdSet,
     applying_invalid: &SnapshotIdSet,
 ) -> Option<HashMap<usize, Rc<StateRecord>>> {
@@ -837,7 +833,7 @@ pub(crate) struct SnapshotState {
     pub(crate) read_observer: RefCell<Option<ReadObserver>>,
     pub(crate) write_observer: RefCell<Option<WriteObserver>>,
     #[expect(clippy::type_complexity, reason = "modified states by id")]
-    pub(crate) modified: RefCell<HashMap<StateObjectId, (Rc<dyn StateObject>, SnapshotId)>>,
+    pub(crate) modified: RefCell<HashMap<ObjectId, (Rc<dyn StateObject>, SnapshotId)>>,
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
     runtime_tracked: bool,
     pending_children: RefCell<HashSet<SnapshotId>>,
@@ -895,7 +891,7 @@ impl SnapshotState {
     }
 
     pub(crate) fn record_write(&self, state: Rc<dyn StateObject>, writer_id: SnapshotId) {
-        let state_id = state.object_id().as_usize();
+        let state_id = state.object_id();
 
         let mut modified = self.modified.borrow_mut();
 
@@ -997,7 +993,7 @@ where
     let parent_invalid_with_child = current_invalid.set(new_id);
     state.invalid.replace(parent_invalid_with_child);
 
-    let invalid = current_invalid.add_range(parent_id + 1, new_id);
+    let invalid = current_invalid.add_range(parent_id.next(), new_id);
 
     let nested = NestedMutableSnapshot::new(
         new_id,
