@@ -354,7 +354,8 @@ impl GpuRenderer {
         );
         let prepared = prep.segments(self, (segments, layout), &mut scratch);
         prep.finish(self);
-        self.flush_glyph_uploads();
+        let mut parts = self.draw_parts();
+        parts.text.flush_glyph_uploads(&mut parts.upload);
         self.prefetch_overlay_pipelines(
             &prep.batches,
             &scratch,
@@ -1283,7 +1284,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             _ => {
                 self.finish(renderer);
                 let open = SegmentBinding {
-                    uniform_slot: renderer.claim_uniform_slot(bound),
+                    uniform_slot: renderer
+                        .viewport_uniforms
+                        .claim_viewport(&renderer.pipelines, bound),
                     bound,
                     scissor,
                 };
@@ -1451,10 +1454,13 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             return slot;
         }
         let slot = if self.depth.is_on() {
-            renderer.claim_uniform_slot(ViewportUniformParams {
-                depth_base: self.chunk_base as f32,
-                ..binding.bound
-            })
+            renderer.viewport_uniforms.claim_viewport(
+                &renderer.pipelines,
+                ViewportUniformParams {
+                    depth_base: self.chunk_base as f32,
+                    ..binding.bound
+                },
+            )
         } else {
             binding.uniform_slot
         };
@@ -1568,14 +1574,19 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     ) -> usize {
         if self.depth.is_on() {
             let base = base.unwrap_or_else(|| self.next_place());
-            renderer.claim_uniform_slot(ViewportUniformParams {
-                depth_base: base as f32,
-                ..viewport
-            })
+            renderer.viewport_uniforms.claim_viewport(
+                &renderer.pipelines,
+                ViewportUniformParams {
+                    depth_base: base as f32,
+                    ..viewport
+                },
+            )
         } else if viewport == binding.bound {
             binding.uniform_slot
         } else {
-            renderer.claim_uniform_slot(viewport)
+            renderer
+                .viewport_uniforms
+                .claim_viewport(&renderer.pipelines, viewport)
         }
     }
 
@@ -1892,9 +1903,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             self.draw_held(renderer, run.binding);
         }
         let mark = scratch.image_mark();
-        scratch
-            .images
-            .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
+        let mut parts = renderer.draw_parts();
+        let images = (parts.images, &mut parts.upload);
+        scratch.images.push_image_draw(image, run.space(), images)?;
         scratch.place_images(mark, run);
         if let Some(bounds) = scratch
             .images
@@ -1925,9 +1936,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
             let image = &images[index];
-            scratch
-                .images
-                .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
+            let mut parts = renderer.draw_parts();
+            let images = (parts.images, &mut parts.upload);
+            scratch.images.push_image_draw(image, run.space(), images)?;
         }
         scratch.place_images(mark, run);
         self.push_images(
@@ -1978,12 +1989,15 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     ) -> Result<(), String> {
         let glyph_start = scratch.glyph_cmds.len();
         let instance_start = scratch.glyph_instances.plain.len();
-        let drew_glyphs = renderer.append_text_glyph_draws(
+        let viewport = self.text_viewport(renderer, run);
+        let mut parts = renderer.draw_parts();
+        let drew_glyphs = parts.text.append_text_glyph_draws(
             (text, geometry),
-            self.text_viewport(renderer, run),
+            viewport,
             run.segment.scale,
             &mut scratch.glyph_instances,
             &mut scratch.glyph_cmds,
+            &mut parts.upload,
         );
         scratch.place_glyphs((instance_start, glyph_start), run);
         if drew_glyphs {
@@ -2002,7 +2016,11 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         }
         self.flush(renderer, run.binding);
         let mark = scratch.image_mark();
-        renderer.append_text_image_draw_cmds(text, run.space(), &mut scratch.images)?;
+        let mut parts = renderer.draw_parts();
+        let images = (&mut scratch.images, parts.images);
+        parts
+            .text
+            .append_text_image_draw_cmds(text, run.space(), images, &mut parts.upload)?;
         scratch.place_images(mark, run);
         self.push_images(
             renderer,

@@ -1,36 +1,49 @@
 //! The renderer's text state: its fonts, the caches from text to pixels, the
 //! glyph atlas and the scratch the text draws reuse.
 
-use std::{borrow::Cow, cell::Cell, hash::Hasher, rc::Rc};
-
-use cranpose_core::collections::bounded_lru::BoundedLruCache;
-use cranpose_render_common::software_text_raster::{
-    SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
-    SoftwareTextFontSet, TextPixels, collect_solid_text_atlas_run, rasterize_text,
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    hash::{Hash, Hasher},
+    rc::Rc,
 };
-use cranpose_ui_graphics::{FxHasher, ImageBitmap, Point, Rect};
+
+use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default as default_hash};
+use cranpose_render_common::software_text_raster::{
+    SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph,
+    SoftwareGlyphRasterCache, SoftwareTextFontSet, TextPixels, collect_solid_text_atlas_run,
+    rasterize_text,
+};
+use cranpose_ui_graphics::{FxHasher, ImageBitmap, ImageSampling, Point, Rect};
 
 use super::{
-    GlyphAtlasSlotKey, GlyphRunBounds, GlyphRunQuads, MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
-    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MAX_TEXT_LINE_INDEX_CACHE_ITEMS,
-    MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES,
-    TextGlyphRunLookup, TextRasterSource, clipped_text_raster_source_with_line_starts, evict_idle,
+    DrawSpace, FrameUploads, GlyphAtlasSlotKey, GlyphDrawCmd, GlyphExtent, GlyphInstances,
+    GlyphQuads, GlyphRunBounds, GlyphRunQuads, GlyphSamplers, ImageBatch, ImageTextures,
+    MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS, MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
+    MAX_TEXT_IMAGE_CACHE_ITEMS, MAX_TEXT_LINE_INDEX_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
+    RETAINED_TEXT_GLYPH_RUN_MIN_QUADS, RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES,
+    TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw, TextGlyphRunLookup, TextRasterSource,
+    TurnedGlyph, ViewportUniformParams, clipped_text_raster_source_with_line_starts, evict_idle,
+    for_each_visible_glyph,
     glyph_atlas::{GlyphAtlasEntry, TextGlyphAtlas},
-    log_text_atlas_fallback,
+    glyph_cut_edges, glyph_rect_aligned, hash_text_draw_for_cache,
+    hash_text_raster_geometry_for_cache, log_text_atlas_fallback, sampling_under,
+    scissor_rect_for_layer, shared_glyph_clip, text_draw_is_visible_in_viewport,
     text_glyph_cache::{
         CachedGpuTextGlyphRun, CachedTextGlyphRun, CachedTextImage, TextGlyphRunCacheKey,
         TextImageCacheKey, TextLineIndexCache,
     },
+    text_raster_geometry_at, text_raster_geometry_for_draw,
 };
 use crate::{
     frame_graph::UploadMode,
     glyph_run::{RunGlyphScratch, RunGlyphs},
     glyph_run_arena::GlyphRunArena,
-    gpu_stats,
+    gpu_stats::FrameStats,
     scene::TextDraw,
 };
 
-pub(super) struct TextResources {
+pub(crate) struct TextResources {
     pub(super) fonts: SoftwareTextFontSet,
     pub(super) image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
     pub(super) glyph_atlas: TextGlyphAtlas,
@@ -136,7 +149,7 @@ impl TextResources {
         state.finish()
     }
 
-    pub(super) fn rasterize_text_draw_to_image(
+    fn rasterize_text_draw_to_image(
         &mut self,
         text_draw: &TextDraw,
         raster_rect: Rect,
@@ -170,7 +183,7 @@ impl TextResources {
             .cloned()
     }
 
-    pub(super) fn text_image_raster_source<'a>(
+    fn text_image_raster_source<'a>(
         &mut self,
         text_draw: &'a TextDraw,
         logical_rect: Rect,
@@ -219,14 +232,14 @@ impl TextResources {
     /// The run of `text_draw` from the cache, or collected into
     /// `collected_run` and cached; `None` when the text cannot draw from the
     /// atlas.
-    pub(super) fn text_glyph_run(
+    fn text_glyph_run(
         &mut self,
         text_draw: &TextDraw,
         raster_rect: Rect,
         text_scale: f32,
         run_key: TextGlyphRunCacheKey,
         collected_run: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
-        frame_stats: &gpu_stats::FrameStats,
+        frame_stats: &FrameStats,
     ) -> Option<TextGlyphRunLookup> {
         let atlas_generation = self.glyph_atlas.generation();
         let frame = self.glyph_run_frame;
@@ -324,15 +337,530 @@ impl TextResources {
         true
     }
 
-    pub(super) fn glyph_atlas_entry_for_cached(
+    fn glyph_atlas_entry_for_cached(
         &mut self,
         glyph: &SoftwareGlyphAtlasPlacement,
-        frame_stats: &gpu_stats::FrameStats,
+        frame_stats: &FrameStats,
     ) -> Option<GlyphAtlasEntry> {
         let entry = self
             .glyph_atlas
             .entry(&GlyphAtlasSlotKey::new(glyph.key, glyph.color))?;
         frame_stats.record_text_glyph_atlas_hits(1);
         Some(entry)
+    }
+
+    pub(super) fn glyph_atlas_entry_for(
+        &mut self,
+        glyph: &SoftwareGlyphAtlasGlyph,
+        upload: &mut FrameUploads<'_>,
+    ) -> Result<GlyphAtlasEntry, String> {
+        if let Some(entry) = self.glyph_atlas.upload_glyph(glyph, upload.stats) {
+            return Ok(entry);
+        }
+
+        // The draws queued so far bind the full atlas: the glyphs they placed
+        // reach it before a new atlas takes its place.
+        self.flush_glyph_uploads(upload);
+        self.glyph_atlas.reset(
+            &upload.pipelines.device,
+            &upload.pipelines.image_bind_group_layout,
+            GlyphSamplers {
+                nearest: &upload.pipelines.image_nearest_sampler,
+                linear: &upload.pipelines.image_linear_sampler,
+            },
+        );
+        Err("text glyph atlas filled and was reset".to_string())
+    }
+
+    /// Writes the glyphs the pass placed in the atlas to its texture, ahead
+    /// of the submit that draws them.
+    pub(crate) fn flush_glyph_uploads(&mut self, upload: &mut FrameUploads<'_>) {
+        self.glyph_atlas
+            .flush_uploads(upload.queue, upload.executor, upload.stats);
+    }
+
+    fn glyph_atlas_entry_for_placement(
+        &mut self,
+        glyph: &SoftwareGlyphAtlasPlacement,
+        upload: &mut FrameUploads<'_>,
+    ) -> Result<GlyphAtlasEntry, String> {
+        if let Some(entry) = self.glyph_atlas_entry_for_cached(glyph, upload.stats) {
+            return Ok(entry);
+        }
+
+        let Some(upload_glyph) = self.glyph_mask_cache.atlas_glyph_for_placement(glyph) else {
+            return Err("text glyph placement has no retained raster mask".to_string());
+        };
+        self.glyph_atlas_entry_for(&upload_glyph, upload)
+    }
+
+    /// The atlas entries of a run's drawing glyphs: of `cached_glyph_run`,
+    /// which holds only those, or of the drawing glyphs of `collected_run`,
+    /// a run just collected, whose new glyphs are uploaded here.
+    fn prepare_text_glyph_entries(
+        &mut self,
+        run_key: TextGlyphRunCacheKey,
+        atlas_generation: u64,
+        cached_glyph_run: Option<&RunGlyphs>,
+        collected_run: &[SoftwareGlyphAtlasRunGlyph],
+        entries: &mut Vec<GlyphAtlasEntry>,
+        upload: &mut FrameUploads<'_>,
+    ) -> Result<Rc<[GlyphAtlasEntry]>, String> {
+        entries.clear();
+        let mut seen = RunAtlasEntries::new();
+        if let Some(glyph_run) = cached_glyph_run {
+            for glyph in glyph_run.iter() {
+                entries.push(
+                    seen.entry((&mut *self, &mut *upload), &glyph, |text, upload| {
+                        text.glyph_atlas_entry_for_placement(&glyph, upload)
+                    })?,
+                );
+            }
+        } else {
+            for run_glyph in collected_run {
+                entries.push(seen.entry(
+                    (&mut *self, &mut *upload),
+                    &run_glyph.placement(),
+                    |text, upload| match run_glyph {
+                        SoftwareGlyphAtlasRunGlyph::Cached(placement) => {
+                            text.glyph_atlas_entry_for_placement(placement, upload)
+                        }
+                        SoftwareGlyphAtlasRunGlyph::New(glyph) => {
+                            text.glyph_atlas_entry_for(glyph, upload)
+                        }
+                    },
+                )?);
+            }
+        }
+
+        let entries: Rc<[GlyphAtlasEntry]> = Rc::from(entries.as_slice());
+        if let Some(cached) = self.glyph_run_cache.get_mut(&run_key) {
+            cached.atlas_entries = Some(Rc::clone(&entries));
+            cached.atlas_generation = atlas_generation;
+        }
+        Ok(entries)
+    }
+
+    fn append_text_glyph_quad_run(
+        source_raster_rect: Rect,
+        quads: GlyphRunQuads<'_>,
+        (clip, cut): (Option<Rect>, Option<[f32; 4]>),
+        space: DrawSpace,
+        glyph_instances: &mut GlyphInstances,
+        hits: Option<&FrameStats>,
+    ) -> (GlyphQuads, GlyphExtent) {
+        let (viewport, root_scale) = (space.viewport, space.scale);
+        let start = glyph_instances.lens();
+        let mut extent = GlyphExtent::EMPTY;
+        let origin = [source_raster_rect.x, source_raster_rect.y];
+        let bounds = quads.bounds.at(origin);
+        let kind = if viewport.transform.is_identity()
+            && cut.is_none_or(|edges| {
+                bounds[0] >= edges[0]
+                    && bounds[1] >= edges[1]
+                    && bounds[2] <= edges[2]
+                    && bounds[3] <= edges[3]
+            })
+            && quads
+                .bounds
+                .within_viewport(source_raster_rect, clip, viewport, root_scale)
+        {
+            // Every quad shows whole and uncut: they sit at whole pixels from
+            // the run's origin, which then decides their alignment, and
+            // their extent is the run's bounds.
+            glyph_instances.plain.extend(quads.instances_at(origin));
+            extent.add(bounds);
+            GlyphQuads::plain_at(
+                [origin[0], origin[1], origin[0], origin[1]],
+                viewport.offset,
+            )
+        } else if viewport.transform.is_identity() {
+            let plain = &mut glyph_instances.plain;
+            let mut aligned = true;
+            for_each_visible_glyph(
+                source_raster_rect,
+                quads,
+                (clip, cut),
+                viewport,
+                root_scale,
+                |glyph| {
+                    aligned &= glyph_rect_aligned(glyph.rect, viewport.offset);
+                    extent.add(glyph.rect);
+                    plain.push(glyph);
+                },
+            );
+            if aligned {
+                GlyphQuads::Aligned
+            } else {
+                GlyphQuads::Plain
+            }
+        } else {
+            let turn = viewport.transform;
+            let turned = &mut glyph_instances.turned;
+            for_each_visible_glyph(
+                source_raster_rect,
+                quads,
+                (clip, cut),
+                viewport,
+                root_scale,
+                |glyph| turned.push(TurnedGlyph::new(glyph, turn)),
+            );
+            GlyphQuads::Turned
+        };
+        let end = glyph_instances.lens();
+        let appended = (end.0 - start.0) + (end.1 - start.1);
+        if let Some(stats) = hits {
+            stats.record_text_glyph_atlas_hits(u32::try_from(appended).unwrap_or(u32::MAX));
+        }
+        (kind, extent)
+    }
+
+    /// The viewport a retained glyph run draws under: its vertices sit at
+    /// its raster rect's origin, so an untransformed target moves its offset
+    /// back by that origin, and a transformed one adds the origin to each
+    /// vertex before its transform, as the shared path's vertices hold it.
+    pub(super) fn retained_glyph_viewport(
+        viewport: ViewportUniformParams,
+        source_raster_rect: Rect,
+    ) -> ViewportUniformParams {
+        if !viewport.transform.is_identity() {
+            return ViewportUniformParams {
+                origin: [source_raster_rect.x, source_raster_rect.y],
+                ..viewport
+            };
+        }
+        ViewportUniformParams {
+            offset: [
+                viewport.offset[0] - source_raster_rect.x,
+                viewport.offset[1] - source_raster_rect.y,
+            ],
+            ..viewport
+        }
+    }
+
+    pub(super) fn emit_retained_text_glyph_run_if_ready(
+        &mut self,
+        cache_key: TextGlyphRunCacheKey,
+        quads: GlyphRunQuads<'_>,
+        (viewport, source_raster_rect): (ViewportUniformParams, Rect),
+        scissor: (u32, u32, u32, u32),
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+        upload: &mut FrameUploads<'_>,
+    ) -> bool {
+        let Some(run) = self.retained_text_glyph_run(cache_key).or_else(|| {
+            if self.ensure_retained_text_glyph_run(cache_key, quads, &upload.pipelines.device) {
+                self.retained_text_glyph_run(cache_key)
+            } else {
+                None
+            }
+        }) else {
+            return false;
+        };
+        let uniform_slot = upload.uniforms.claim_viewport(
+            upload.pipelines,
+            Self::retained_glyph_viewport(viewport, source_raster_rect),
+        );
+        upload
+            .stats
+            .record_text_glyph_atlas_hits(u32::try_from(quads.len()).unwrap_or(u32::MAX));
+        // The run's quads sit at whole texels from its raster origin.
+        let aligned = viewport.transform.is_identity()
+            && glyph_rect_aligned(
+                [source_raster_rect.x, source_raster_rect.y, 0.0, 0.0],
+                [viewport.offset[0], viewport.offset[1]],
+            );
+        glyph_cmds.push(GlyphDrawCmd::retained(
+            (run, uniform_slot, aligned),
+            scissor,
+            self.glyph_atlas.bind_group(viewport.transform),
+        ));
+        true
+    }
+
+    /// Appends the glyph atlas draws of `text_draw`, whose logical geometry
+    /// `logical` the caller found drawing into a rect `viewport` shows.
+    /// `false` when the text cannot draw from the atlas (animated motion, or
+    /// a run the atlas cannot hold): nothing was appended, and the caller
+    /// draws the text as a rasterized image instead.
+    pub(crate) fn append_text_glyph_draws(
+        &mut self,
+        (text_draw, logical): (&TextDraw, (Rect, f32)),
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        glyph_instances: &mut GlyphInstances,
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+        upload: &mut FrameUploads<'_>,
+    ) -> bool {
+        let (_, raster_rect, _, text_scale, static_text_motion) =
+            text_raster_geometry_at(text_draw, logical, root_scale);
+        if !static_text_motion {
+            return false;
+        }
+        let run_key = Self::text_glyph_run_cache_key(text_draw, raster_rect, text_scale);
+        let mut collected_run = std::mem::take(&mut self.scratch_glyph_run);
+        let mut generated_entries = std::mem::take(&mut self.scratch_glyph_entries);
+        let initial_instance_len = glyph_instances.lens();
+        let initial_cmd_len = glyph_cmds.len();
+        let drew = self
+            .text_glyph_run(
+                text_draw,
+                raster_rect,
+                text_scale,
+                run_key,
+                &mut collected_run,
+                upload.stats,
+            )
+            .is_some_and(|run| {
+                self.append_text_glyph_run(
+                    TextGlyphRunDraw {
+                        text_draw,
+                        raster_rect,
+                        run_key,
+                        run,
+                    },
+                    (viewport, root_scale),
+                    (&collected_run, &mut generated_entries),
+                    glyph_instances,
+                    glyph_cmds,
+                    upload,
+                )
+            });
+        self.scratch_glyph_run = collected_run;
+        self.scratch_glyph_entries = generated_entries;
+        if !drew {
+            glyph_instances.truncate(initial_instance_len);
+            glyph_cmds.truncate(initial_cmd_len);
+        }
+        drew
+    }
+
+    /// Appends the draws of a text's run: its retained quads when it has
+    /// them, else its visible quads into the frame's shared glyphs. `false`
+    /// when the atlas cannot hold its glyphs.
+    fn append_text_glyph_run(
+        &mut self,
+        draw: TextGlyphRunDraw<'_>,
+        (viewport, root_scale): (ViewportUniformParams, f32),
+        (collected_run, generated_entries): (
+            &[SoftwareGlyphAtlasRunGlyph],
+            &mut Vec<GlyphAtlasEntry>,
+        ),
+        glyph_instances: &mut GlyphInstances,
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+        upload: &mut FrameUploads<'_>,
+    ) -> bool {
+        let TextGlyphRunDraw {
+            text_draw,
+            raster_rect,
+            run_key,
+            run,
+        } = draw;
+        let draw_rect = Rect {
+            x: raster_rect.x / root_scale,
+            y: raster_rect.y / root_scale,
+            width: raster_rect.width / root_scale,
+            height: raster_rect.height / root_scale,
+        };
+        let Some(scissor) = scissor_rect_for_layer(draw_rect, text_draw.clip, root_scale, viewport)
+        else {
+            return true;
+        };
+        let texel = self.glyph_atlas.texel();
+
+        // A retained run's quads are uploaded whole: under a turn only the
+        // shared path cuts them to a clip.
+        let clip_needs_cut = !viewport.transform.is_identity() && text_draw.clip.is_some();
+        if let Some(entries) = run.entries.as_ref()
+            && entries.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
+            && !clip_needs_cut
+            && self.emit_retained_text_glyph_run_if_ready(
+                run_key,
+                GlyphRunQuads {
+                    glyphs: &run.glyphs,
+                    entries,
+                    texel,
+                    bounds: run.bounds,
+                },
+                (viewport, raster_rect),
+                scissor,
+                glyph_cmds,
+                upload,
+            )
+        {
+            return true;
+        }
+
+        let turned = !viewport.transform.is_identity();
+        let instance_start = glyph_instances.len_for(viewport.transform);
+        let (entries, entries_cached) = match run.entries {
+            Some(entries) => (entries, true),
+            None => {
+                let Ok(entries) = self.prepare_text_glyph_entries(
+                    run_key,
+                    self.glyph_atlas.generation(),
+                    run.cached.then_some(&run.glyphs),
+                    collected_run,
+                    generated_entries,
+                    upload,
+                ) else {
+                    return false;
+                };
+                (entries, false)
+            }
+        };
+        let quads = GlyphRunQuads {
+            glyphs: &run.glyphs,
+            entries: &entries,
+            texel: self.glyph_atlas.texel(),
+            bounds: run.bounds,
+        };
+        let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
+        let (kind, extent) = Self::append_text_glyph_quad_run(
+            raster_rect,
+            quads,
+            (text_draw.clip, cut),
+            DrawSpace {
+                viewport,
+                scale: root_scale,
+            },
+            glyph_instances,
+            entries_cached.then_some(&*upload.stats),
+        );
+        let instance_end = glyph_instances.len_for(viewport.transform);
+        if instance_end > instance_start {
+            let (clip, bounds) = if turned {
+                (None, scissor)
+            } else {
+                shared_glyph_clip(extent, scissor, viewport)
+            };
+            glyph_cmds.push(GlyphDrawCmd::shared(
+                (instance_start..instance_end, kind),
+                clip,
+                bounds,
+                self.glyph_atlas.bind_group(viewport.transform),
+            ));
+        }
+        true
+    }
+
+    /// Appends `text_draw` as a rasterized image if `viewport` shows it.
+    pub(crate) fn append_text_image_draw_cmds(
+        &mut self,
+        text_draw: &TextDraw,
+        space: DrawSpace,
+        (images, textures): (&mut ImageBatch, &mut ImageTextures),
+        upload: &mut FrameUploads<'_>,
+    ) -> Result<(), String> {
+        let (viewport, root_scale) = (space.viewport, space.scale);
+        let Some((logical_rect, raster_rect, clip, text_scale, static_text_motion)) =
+            text_raster_geometry_for_draw(text_draw, root_scale)
+        else {
+            return Ok(());
+        };
+        if !text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
+            return Ok(());
+        }
+
+        let raster_source =
+            self.text_image_raster_source(text_draw, logical_rect, raster_rect, clip, root_scale);
+        let source_draw = raster_source.draw.as_ref();
+        let source_raster_rect = raster_source.raster_rect;
+        let source_origin = if source_draw.text.string().span_styles().is_empty() {
+            Point::new(source_raster_rect.x, source_raster_rect.y)
+        } else {
+            Point::new(raster_rect.x, raster_rect.y)
+        };
+
+        let mut cache_key = Self::text_image_cache_key(
+            source_draw,
+            source_raster_rect,
+            text_scale,
+            static_text_motion,
+        );
+        if !source_draw.text.string().span_styles().is_empty() {
+            let mut state = default_hash::new();
+            cache_key.0.hash(&mut state);
+            (source_origin.x - source_raster_rect.x)
+                .to_bits()
+                .hash(&mut state);
+            (source_origin.y - source_raster_rect.y)
+                .to_bits()
+                .hash(&mut state);
+            cache_key = TextImageCacheKey(state.finish());
+        }
+        let image = if let Some(cached) = self.image_cache.get(&cache_key) {
+            upload
+                .stats
+                .record_text_image_cache_hit(cached.image.width(), cached.image.height());
+            cached.image.clone()
+        } else {
+            let Some(image) = self.rasterize_text_draw_to_image(
+                source_draw,
+                source_raster_rect,
+                source_origin,
+                text_scale,
+            ) else {
+                return Ok(());
+            };
+            upload
+                .stats
+                .record_text_image_cache_miss(image.width(), image.height());
+            self.image_cache.put(
+                cache_key,
+                CachedTextImage {
+                    image: image.clone(),
+                },
+            );
+            image
+        };
+
+        let draw_origin = if static_text_motion {
+            Point::new(
+                source_raster_rect.x / root_scale,
+                source_raster_rect.y / root_scale,
+            )
+        } else {
+            Point::new(logical_rect.x, logical_rect.y)
+        };
+        let draw_rect = Rect {
+            x: draw_origin.x,
+            y: draw_origin.y,
+            width: image.width() as f32 / root_scale,
+            height: image.height() as f32 / root_scale,
+        };
+        images.push_bitmap(
+            &image,
+            (draw_rect, clip),
+            sampling_under(ImageSampling::Nearest, viewport.transform),
+            space,
+            (textures, upload),
+        )
+    }
+
+    fn text_image_cache_key(
+        text_draw: &TextDraw,
+        raster_rect: Rect,
+        text_scale: f32,
+        static_text_motion: bool,
+    ) -> TextImageCacheKey {
+        let mut state = default_hash::new();
+        hash_text_draw_for_cache(text_draw, raster_rect, text_scale, &mut state);
+        hash_text_raster_geometry_for_cache(raster_rect, static_text_motion, &mut state);
+        TextImageCacheKey(state.finish())
+    }
+
+    /// The key of a static text's glyph run. A run places its glyphs from
+    /// the text's origin and aligns its lines within the text block, so the
+    /// size of the rect it draws in does not change it: only an empty rect,
+    /// which draws nothing, does.
+    fn text_glyph_run_cache_key(
+        text_draw: &TextDraw,
+        raster_rect: Rect,
+        text_scale: f32,
+    ) -> TextGlyphRunCacheKey {
+        let mut state = default_hash::new();
+        hash_text_draw_for_cache(text_draw, raster_rect, text_scale, &mut state);
+        (raster_rect.width <= 0.0 || raster_rect.height <= 0.0).hash(&mut state);
+        TextGlyphRunCacheKey(state.finish())
     }
 }

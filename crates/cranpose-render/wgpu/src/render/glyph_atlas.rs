@@ -10,7 +10,7 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{BlendMode, Color};
 
 use super::{
-    GlyphInstance, GlyphQuads, GpuRenderer, ImageUvRect, PassDepth, TurnedGlyph,
+    FrameUploads, GlyphInstance, GlyphQuads, ImageUvRect, PassDepth, TextResources, TurnedGlyph,
     blend_state_for_mode, create_render_pipeline_logged,
 };
 use crate::{
@@ -152,21 +152,24 @@ impl RunAtlasEntries {
 
     /// `glyph`'s entry from an earlier glyph of the run, else from
     /// `look_up`, remembered for the rest of it.
-    pub(super) fn entry(
+    pub(super) fn entry<'u>(
         &mut self,
-        renderer: &mut GpuRenderer,
+        (text, upload): (&mut TextResources, &mut FrameUploads<'u>),
         glyph: &SoftwareGlyphAtlasPlacement,
-        look_up: impl FnOnce(&mut GpuRenderer) -> Result<GlyphAtlasEntry, String>,
+        look_up: impl FnOnce(
+            &mut TextResources,
+            &mut FrameUploads<'u>,
+        ) -> Result<GlyphAtlasEntry, String>,
     ) -> Result<GlyphAtlasEntry, String> {
         let key = GlyphAtlasSlotKey::new(glyph.key, glyph.color);
         let slot = &mut self.slots[glyph.key.glyph_id as usize % RUN_ATLAS_ENTRY_SLOTS];
         if let Some((seen, entry)) = *slot
             && seen == key
         {
-            renderer.frame_stats.record_text_glyph_atlas_hits(1);
+            upload.stats.record_text_glyph_atlas_hits(1);
             return Ok(entry);
         }
-        let entry = look_up(renderer)?;
+        let entry = look_up(text, upload)?;
         *slot = Some((key, entry));
         Ok(entry)
     }
