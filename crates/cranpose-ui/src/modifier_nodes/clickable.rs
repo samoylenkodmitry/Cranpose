@@ -106,7 +106,7 @@ impl ClickableNode {
                         // A release with no press before it clicks for the
                         // primary pointer only: another finger's release after
                         // the first one clicked is not a click of its own.
-                        ClickPress::Idle => event.id == PointerId::PRIMARY,
+                        ClickPress::Idle => event.id.is_primary(),
                         ClickPress::Cancelled => false,
                     };
 

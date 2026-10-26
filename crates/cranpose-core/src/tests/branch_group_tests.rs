@@ -3557,7 +3557,7 @@ fn erased_calls_inside_one_statement_are_positional_by_construction() {
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
         composition.render(Key(106), || {
-            erased_pair_in_one_statement_probe(first, Some(7))
+            erased_pair_in_one_statement_probe(first, Some(7));
         })
     };
 

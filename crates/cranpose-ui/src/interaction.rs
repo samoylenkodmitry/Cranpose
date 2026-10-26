@@ -12,7 +12,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerId, PointerInputNode,
+    NodeCapabilities, NodeState, PointerInputNode,
 };
 
 use crate::{
@@ -545,7 +545,7 @@ impl<T: InteractionTracker> InteractionNode<T> {
         active: Rc<RefCell<Option<T::Active>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            if event.id == PointerId::PRIMARY {
+            if event.id.is_primary() {
                 tracker.handle(interaction_source, &active, &event);
             }
         })

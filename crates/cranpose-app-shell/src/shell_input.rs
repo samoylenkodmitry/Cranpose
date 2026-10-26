@@ -675,7 +675,7 @@ where
         y: f32,
         event_time: PointerEventTime,
     ) -> bool {
-        if pointer_id == PointerId::PRIMARY {
+        if pointer_id.is_primary() {
             log::warn!(
                 target: "cranpose::input",
                 "secondary pointer dispatch called with the primary pointer id"
@@ -731,7 +731,7 @@ where
         ray: cranpose_ui_graphics::space::Ray,
         kind: PointerEventKind,
     ) -> bool {
-        if pointer_id == PointerId::PRIMARY {
+        if pointer_id.is_primary() {
             log::warn!(
                 target: "cranpose::input",
                 "ray pointer dispatch called with the primary pointer id"

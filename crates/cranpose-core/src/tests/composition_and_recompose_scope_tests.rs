@@ -4359,7 +4359,7 @@ fn a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves() {
 
     composition
         .render(Key(864), || {
-            tree(local.clone(), with_leading, survivor_value)
+            tree(local.clone(), with_leading, survivor_value);
         })
         .expect("initial composition");
     assert_eq!(SAME_LOCAL_READ.with(Cell::get), 10);
@@ -4528,7 +4528,7 @@ fn sibling_provider_scopes_from_one_construction_site_stay_distinct() {
 
     composition
         .render(Key(867), || {
-            tree(local.clone(), with_leading, survivor_value)
+            tree(local.clone(), with_leading, survivor_value);
         })
         .expect("initial composition");
     assert_eq!(SIBLING_READ.with(Cell::get), 10);

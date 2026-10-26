@@ -7,7 +7,7 @@ use std::{
 use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerId, PointerInputNode,
+    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     gesture_constants::LONG_PRESS_TIMEOUT_NANOS, impl_pointer_input_node,
 };
 use cranpose_ui_graphics::Point;
@@ -115,7 +115,7 @@ impl Press {
     }
 
     fn on_event(press: &Rc<Self>, event: &PointerEvent) {
-        if event.id != PointerId::PRIMARY {
+        if !event.id.is_primary() {
             return;
         }
         match event.kind {

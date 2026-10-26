@@ -15,6 +15,11 @@ pub struct PointerId(pub u64);
 impl PointerId {
     /// The mouse, or the first finger of a touch.
     pub const PRIMARY: Self = Self(0);
+
+    /// Whether this is [`PointerId::PRIMARY`].
+    pub const fn is_primary(self) -> bool {
+        self.0 == Self::PRIMARY.0
+    }
 }
 
 impl std::fmt::Display for PointerId {
