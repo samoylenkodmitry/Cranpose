@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: flag-and-id-types
+expected_outcome: |
+  A crate whose types carry the rules: pointer ids and node ids are distinct
+  newtypes, so one cannot be passed for the other; the axis lock and the
+  delivery choice are enums, not bool parameters; a pointer that is not down
+  or a node that is missing is an Option, never a sentinel such as u64::MAX
+  or 0; tests exercise the public API only. cargo test passes.

@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: borrow-without-clone
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  render_frame no longer clones the device Arc or the pending list. The fix
+  uses a shorter borrow, std::mem::take of the pending list, or moves the work
+  onto a part of the struct (the glyph cache and the drawn list borrowed apart
+  from the device), not Rc, RefCell, a new allocation per frame or unsafe code.
+  The public API is unchanged and cargo test passes.
