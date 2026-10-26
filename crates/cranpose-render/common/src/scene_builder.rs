@@ -11,8 +11,8 @@ use cranpose_ui::{
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
 };
 use cranpose_ui_graphics::{
-    CommandRecording, CompositingStrategy, CornerRadii, DrawGroup, GraphicsLayer, LayerShape,
-    RecordLane, RoundedCornerShape, rounded_corner_alpha_mask_effect,
+    CommandRecording, CompositingStrategy, CornerRadii, DrawGroup, DrawPlacement, GraphicsLayer,
+    LayerShape, RecordLane, RoundedCornerShape, rounded_corner_alpha_mask_effect,
 };
 
 use crate::{
@@ -25,7 +25,7 @@ use crate::{
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    style_shared::{DrawPlacement, recording_for_placement_reusing},
+    style_shared::recording_for_placement_reusing,
     text_paint::{TextPaint, TextPaintCache},
 };
 
@@ -2971,7 +2971,7 @@ fn append_draw_nodes(
             placement,
         };
         let (shared, segments) = if let Some(shared) = pass.take_recording(command, nodes) {
-            let segments = shared.content_split(false);
+            let segments = shared.content_split(DrawPlacement::Overlay);
             (shared, segments)
         } else {
             let Some((recording, segments)) =

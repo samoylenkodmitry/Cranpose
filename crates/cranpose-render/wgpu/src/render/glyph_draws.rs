@@ -328,8 +328,28 @@ impl GlyphQuads {
         }
     }
 
-    pub(super) fn turned(self) -> bool {
-        self == Self::Turned
+    pub(super) fn kind(self) -> GlyphKind {
+        match self {
+            Self::Plain | Self::Aligned => GlyphKind::Plain,
+            Self::Turned => GlyphKind::Turned,
+        }
+    }
+}
+
+/// Which instances a shared glyph quad reads: plain [`GlyphInstance`]s, or
+/// [`TurnedGlyph`]s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlyphKind {
+    Plain,
+    Turned,
+}
+
+impl GlyphKind {
+    fn other(self) -> Self {
+        match self {
+            Self::Plain => Self::Turned,
+            Self::Turned => Self::Plain,
+        }
     }
 }
 
@@ -507,17 +527,17 @@ impl GlyphDrawCmd {
         self.bounds
     }
 
-    /// Whether the draw's quads are [`TurnedGlyph`]s, or `None` for a
-    /// retained run, which draws on its own.
-    fn turned(&self) -> Option<bool> {
+    // The kind of the draw's shared quads, or `None` for a retained run,
+    // which draws on its own.
+    fn kind(&self) -> Option<GlyphKind> {
         match self.source {
-            GlyphDrawSource::Shared { quads, .. } => Some(quads.turned()),
+            GlyphDrawSource::Shared { quads, .. } => Some(quads.kind()),
             GlyphDrawSource::Retained { .. } => None,
         }
     }
 }
 
-/// The kind of glyph draw, turned (`true`) or plain, that can move after
+/// The kind of glyph draw, turned or plain, that can move after
 /// every draw of the other kind in `draws` without moving past a draw it
 /// shares a pixel with: glyphs blend, so only draws that share pixels must
 /// keep their order. The fewer kind is tried first, which checks fewer
@@ -525,12 +545,12 @@ impl GlyphDrawCmd {
 /// the kinds do not change back and forth.
 pub(crate) fn movable_glyph_kind<T>(
     draws: &[T],
-    kind: impl Fn(&T) -> Option<bool>,
+    kind: impl Fn(&T) -> Option<GlyphKind>,
     bounds: impl Fn(&T) -> TargetRect,
-) -> Option<bool> {
+) -> Option<GlyphKind> {
     let mut turned = 0;
     for draw in draws {
-        turned += usize::from(kind(draw)?);
+        turned += usize::from(kind(draw)? == GlyphKind::Turned);
     }
     let changes = draws
         .windows(2)
@@ -539,8 +559,12 @@ pub(crate) fn movable_glyph_kind<T>(
     if changes < 2 {
         return None;
     }
-    let fewer = turned * 2 < draws.len();
-    [fewer, !fewer].into_iter().find(|&moved| {
+    let fewer = if turned * 2 < draws.len() {
+        GlyphKind::Turned
+    } else {
+        GlyphKind::Plain
+    };
+    [fewer, fewer.other()].into_iter().find(|&moved| {
         draws.iter().enumerate().all(|(index, draw)| {
             kind(draw) != Some(moved)
                 || draws[index + 1..].iter().all(|later| {
@@ -562,7 +586,7 @@ pub(crate) fn defer_retained_glyph_runs(
     cmds: &mut [GlyphDrawCmd],
     moved: &mut Vec<GlyphDrawCmd>,
 ) -> usize {
-    let retained = |cmd: &GlyphDrawCmd| cmd.turned().is_none();
+    let retained = |cmd: &GlyphDrawCmd| cmd.kind().is_none();
     let shared = cmds.iter().filter(|cmd| !retained(cmd)).count();
     if cmds[..shared].iter().all(|cmd| !retained(cmd)) {
         return shared;
@@ -597,13 +621,13 @@ pub(crate) fn defer_retained_glyph_runs(
 /// after those of the other kind, each kind in its order, so each draws
 /// once instead of once per change between them. `moved` is scratch.
 pub(crate) fn group_glyph_kinds(cmds: &mut [GlyphDrawCmd], moved: &mut Vec<GlyphDrawCmd>) {
-    let Some(kind) = movable_glyph_kind(cmds, GlyphDrawCmd::turned, GlyphDrawCmd::bounds) else {
+    let Some(kind) = movable_glyph_kind(cmds, GlyphDrawCmd::kind, GlyphDrawCmd::bounds) else {
         return;
     };
     moved.clear();
     let mut kept = 0;
     for read in 0..cmds.len() {
-        if cmds[read].turned() == Some(kind) {
+        if cmds[read].kind() == Some(kind) {
             moved.push(cmds[read].clone());
         } else {
             cmds.swap(kept, read);

@@ -1,5 +1,5 @@
 use cranpose_ui::Brush;
-use cranpose_ui_graphics::Color;
+use cranpose_ui_graphics::{Color, DrawPlacement};
 
 use super::*;
 

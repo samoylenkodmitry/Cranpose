@@ -8,8 +8,8 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 
 use crate::{
-    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawGroup, DrawPrimitive, FxHasher,
-    GroupMarker, LineFrame, LineGeometry, Point, Rect, RenderHash, ShapeRecordBody,
+    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawGroup, DrawPlacement, DrawPrimitive,
+    FxHasher, GroupMarker, LineFrame, LineGeometry, Point, Rect, RenderHash, ShapeRecordBody,
     ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, Trapezoid,
     arc_band,
     float::{at_least, within},
@@ -2098,23 +2098,23 @@ impl CommandRecording {
         summary
     }
 
-    /// The segments before the last content marker (`behind`) or after it;
-    /// with no marker, behind is empty and overlay is everything.
-    pub fn content_split(&self, behind: bool) -> Range<u32> {
-        if self.content.content_markers == 0 {
-            return if behind { 0..0 } else { self.all_segments() };
-        }
-        let last_marker = self
-            .shapes
-            .tables
-            .segments
-            .iter()
-            .rposition(|segment| segment.lane == RecordLane::Content);
-        match (last_marker, behind) {
-            (Some(index), true) => 0..index as u32,
-            (Some(index), false) => index as u32 + 1..self.content.segment_count,
-            (None, true) => 0..0,
-            (None, false) => self.all_segments(),
+    /// The segments before the last content marker (`Behind`) or after it
+    /// (`Overlay`); with no marker, behind is empty and overlay is everything.
+    pub fn content_split(&self, placement: DrawPlacement) -> Range<u32> {
+        let last_marker = if self.content.content_markers == 0 {
+            None
+        } else {
+            self.shapes
+                .tables
+                .segments
+                .iter()
+                .rposition(|segment| segment.lane == RecordLane::Content)
+        };
+        match (last_marker, placement) {
+            (Some(index), DrawPlacement::Behind) => 0..index as u32,
+            (Some(index), DrawPlacement::Overlay) => index as u32 + 1..self.content.segment_count,
+            (None, DrawPlacement::Behind) => 0..0,
+            (None, DrawPlacement::Overlay) => self.all_segments(),
         }
     }
 

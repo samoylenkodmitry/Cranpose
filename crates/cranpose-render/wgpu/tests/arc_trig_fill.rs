@@ -1,13 +1,10 @@
 use cranpose_core::NodeId;
-use cranpose_render_common::{
-    graph::{
-        DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    },
-    style_shared::DrawPlacement,
+use cranpose_render_common::graph::{
+    DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CompositingStrategy, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer,
-    Point, Rect, Size, Stroke, StrokeCap,
+    Brush, Color, CompositingStrategy, CornerRadii, DrawPlacement, DrawScope, DrawScopeDefault,
+    GraphicsLayer, Point, Rect, Size, Stroke, StrokeCap,
 };
 
 use crate::{shared_test_support, support};

@@ -9,11 +9,10 @@ use cranpose_render_common::{
     graph::{
         DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     },
-    style_shared::DrawPlacement,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, DrawScope, DrawScopeDefault, GraphicsLayer, Point,
-    Rect, Size, Stroke, StrokeCap, StrokeJoin, TileMode,
+    Brush, Color, CornerRadii, DrawPlacement, DrawPrimitive, DrawScope, DrawScopeDefault,
+    GraphicsLayer, Point, Rect, Size, Stroke, StrokeCap, StrokeJoin, TileMode,
 };
 
 use crate::{shared_test_support, support};

@@ -15,7 +15,6 @@ use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
     graph::{DrawCommandId, DrawRunNode, PrimitivePhase, RenderGraph, RenderNode},
-    style_shared::DrawPlacement,
 };
 use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
@@ -24,8 +23,8 @@ use cranpose_ui::{
     text::{SpanStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
-    Brush, CornerRadii, Dp, DrawPrimitive, DrawScope, DrawStyle, ImageBitmap, Path, Point, Rect,
-    RoundedCornerShape, Stroke,
+    Brush, CornerRadii, Dp, DrawPlacement, DrawPrimitive, DrawScope, DrawStyle, ImageBitmap, Path,
+    Point, Rect, RoundedCornerShape, Stroke,
 };
 
 use crate::support::{self, rect_modifier};

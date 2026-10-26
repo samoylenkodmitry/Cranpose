@@ -5,14 +5,16 @@ pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_quad;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
 #[cfg(test)]
-pub(crate) use cranpose_render_common::style_shared::{DrawPlacement, primitives_for_placement};
+pub(crate) use cranpose_render_common::style_shared::primitives_for_placement;
 pub(crate) use cranpose_render_common::style_shared::{
     apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
 };
 #[cfg(test)]
 use cranpose_ui::DrawCommand;
 #[cfg(test)]
-use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, ShadowPrimitive, Size};
+use cranpose_ui_graphics::{
+    BlendMode, DrawPlacement, DrawPrimitive, GraphicsLayer, ShadowPrimitive, Size,
+};
 use cranpose_ui_graphics::{CornerRadii, Rect};
 
 #[cfg(test)]

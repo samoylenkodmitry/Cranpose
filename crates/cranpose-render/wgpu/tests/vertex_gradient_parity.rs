@@ -4,11 +4,10 @@ use cranpose_render_common::{
         PrimitivePhase, RenderGraph, RenderNode,
     },
     layer_transform::layer_transform_to_parent,
-    style_shared::DrawPlacement,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CommandRecording, CornerRadii, DrawPrimitive, DrawScope, DrawScopeDefault,
-    GraphicsLayer, Point, Rect, Size, TileMode,
+    Brush, Color, CommandRecording, CornerRadii, DrawPlacement, DrawPrimitive, DrawScope,
+    DrawScopeDefault, GraphicsLayer, Point, Rect, Size, TileMode,
 };
 
 use crate::{shared_test_support, support};

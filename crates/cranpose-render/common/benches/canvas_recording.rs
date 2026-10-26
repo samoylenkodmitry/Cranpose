@@ -8,13 +8,12 @@ use cranpose_render_common::{
         build_graph_from_applier, clear_command_recordings_for_tests, rebuild_graph_from_applier,
         update_graph_from_applier_report,
     },
-    style_shared::DrawPlacement,
 };
 use cranpose_ui::{Box, BoxSpec, Canvas, LayoutEngine, Modifier, Size, run_test_composition};
 use cranpose_ui_graphics::{
-    Brush, Color, CommandRecording, DrawPrimitive, DrawScope, DrawScopeDefault, DrawTextMeasurer,
-    DrawTextStyle, EdgeInsets, GraphicsLayer, Point, ShapeRecorder, Stroke, TextMeasurement,
-    estimate_text_measurement,
+    Brush, Color, CommandRecording, DrawPlacement, DrawPrimitive, DrawScope, DrawScopeDefault,
+    DrawTextMeasurer, DrawTextStyle, EdgeInsets, GraphicsLayer, Point, ShapeRecorder, Stroke,
+    TextMeasurement, estimate_text_measurement,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 

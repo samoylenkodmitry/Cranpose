@@ -680,13 +680,9 @@ impl<'scene> LayerPass<'scene> {
         self.resolved[index] = Some(resolved);
     }
 
-    /// Whether the child at `index` was resolved ahead of its z to draw in
-    /// place, or to a surface; `None` when it was not resolved ahead.
-    fn resolved_in_place(&self, index: usize) -> Option<bool> {
-        self.resolved
-            .get(index)
-            .and_then(Option::as_ref)
-            .map(|resolved| matches!(resolved, Resolved::InPlace))
+    // How the child at `index` draws when it was resolved ahead of its z.
+    fn resolved_at(&self, index: usize) -> Option<&Resolved> {
+        self.resolved.get(index).and_then(Option::as_ref)
     }
 
     /// The ops between the page's drawn z and `z` outside the excluded
@@ -3047,8 +3043,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if let Some(mesh) = &child.mesh {
             return self.resolve_mesh_child(pass, child, mesh);
         }
-        let in_place = match pass.resolved_in_place(index) {
-            Some(in_place) => in_place,
+        let in_place = match pass.resolved_at(index) {
+            Some(Resolved::InPlace) => true,
+            Some(Resolved::Surface(_)) => false,
             None => pass.can_draw_in_place(child) && self.draws_in_place(pass, index, child)?,
         };
         if in_place {

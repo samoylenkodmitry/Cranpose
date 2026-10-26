@@ -2,7 +2,8 @@ use std::{ops::Range, rc::Rc};
 
 use cranpose_ui::{Brush, DrawCommand, DrawCommandFn};
 use cranpose_ui_graphics::{
-    Color, ColorFilter, CommandRecording, CornerRadii, DrawPrimitive, GraphicsLayer, Size,
+    Color, ColorFilter, CommandRecording, CornerRadii, DrawPlacement, DrawPrimitive, GraphicsLayer,
+    Size,
 };
 
 pub use crate::graph::quad_bounds;
@@ -229,15 +230,6 @@ pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     }
 }
 
-/// Which half of a draw command is drawn, relative to the content of the node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum DrawPlacement {
-    /// Drawn behind the node's content.
-    Behind,
-    /// Drawn over the node's content.
-    Overlay,
-}
-
 /// Records `command` at `size` and returns the primitives that `placement` draws, or an empty
 /// list when the command has no part for that placement.
 pub fn primitives_for_placement(
@@ -274,24 +266,22 @@ pub fn recording_for_placement_reusing(
 }
 
 /// The closure `command` draws `placement` with, and for a with-content
-/// command whether `placement` takes the part before its content.
+/// command the half of it `placement` takes.
 fn placement_func(
     command: &DrawCommand,
     placement: DrawPlacement,
-) -> Option<(&DrawCommandFn, Option<bool>)> {
+) -> Option<(&DrawCommandFn, Option<DrawPlacement>)> {
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func))
         | (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => Some((func, None)),
-        (_, DrawCommand::WithContent(func)) => {
-            Some((func, Some(placement == DrawPlacement::Behind)))
-        }
+        (_, DrawCommand::WithContent(func)) => Some((func, Some(placement))),
         _ => None,
     }
 }
 
 fn record_with(
     func: &DrawCommandFn,
-    split: Option<bool>,
+    split: Option<DrawPlacement>,
     size: Size,
     recording: &mut CommandRecording,
 ) -> Range<u32> {
@@ -300,7 +290,7 @@ fn record_with(
     scope.finish();
     match split {
         None => recording.all_segments(),
-        Some(behind) => recording.content_split(behind),
+        Some(placement) => recording.content_split(placement),
     }
 }
 

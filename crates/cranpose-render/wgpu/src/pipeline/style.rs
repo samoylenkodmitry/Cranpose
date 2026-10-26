@@ -4,17 +4,19 @@ pub(crate) use cranpose_render_common::graph::quad_bounds;
 pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_quad;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
-#[cfg(test)]
-pub(crate) use cranpose_render_common::style_shared::{
-    DrawPlacement, compose_color_filters, primitives_for_placement,
-};
 pub(crate) use cranpose_render_common::style_shared::{
     apply_layer_to_brush, apply_layer_to_color, scale_corner_radii,
 };
 #[cfg(test)]
+pub(crate) use cranpose_render_common::style_shared::{
+    compose_color_filters, primitives_for_placement,
+};
+#[cfg(test)]
 use cranpose_ui::DrawCommand;
 #[cfg(test)]
-use cranpose_ui_graphics::{BlendMode, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, Size};
+use cranpose_ui_graphics::{
+    BlendMode, CornerRadii, DrawPlacement, DrawPrimitive, GraphicsLayer, Rect, Size,
+};
 
 #[cfg(test)]
 use crate::scene::{CompositorScene, ImageDraw};

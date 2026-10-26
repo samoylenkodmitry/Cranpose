@@ -563,7 +563,7 @@ fn stored_gradient_run(records: usize, marked: usize, alpha: f32) -> RunDraw {
     run.command = Some(DrawCommandId {
         node_id: NodeId(7),
         command_index: 0,
-        placement: cranpose_render_common::style_shared::DrawPlacement::Behind,
+        placement: cranpose_ui_graphics::DrawPlacement::Behind,
     });
     run
 }

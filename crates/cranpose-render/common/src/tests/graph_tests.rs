@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
+use cranpose_ui_graphics::{Brush, Color, DrawPlacement, DrawPrimitive};
 
 use super::*;
 

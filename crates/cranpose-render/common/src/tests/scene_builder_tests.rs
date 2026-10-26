@@ -7,7 +7,9 @@ use cranpose_ui::{
     TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
-use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect};
+use cranpose_ui_graphics::{
+    Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect,
+};
 
 use super::*;
 
