@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::media::PLATFORM_MEDIA_SOURCE;
 
 /// A media stream the platform opened, and what it knows about it.
@@ -83,6 +84,7 @@ pub trait MediaSourceOpener: Send + Sync {
 /// Shared handle to the platform media source opener.
 pub type MediaSourceOpenerRef = Arc<dyn MediaSourceOpener>;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn media_reference(path: &Path) -> io::Result<String> {
     match PLATFORM_MEDIA_SOURCE.get() {
         Some(opener) => opener.reference(path),
