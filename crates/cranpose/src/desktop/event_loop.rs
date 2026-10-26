@@ -6147,7 +6147,7 @@ pub fn try_run(
     super::host_surface::install(move || surface_wake.wake_up());
 
     #[cfg(feature = "media-backend")]
-    cranpose_media::install();
+    super::media::register();
 
     #[cfg(all(feature = "camera-desktop", target_os = "macos"))]
     crate::apple::camera::register();

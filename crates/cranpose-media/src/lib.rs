@@ -8,7 +8,11 @@ mod decode;
 #[cfg(not(target_arch = "wasm32"))]
 mod equalizer;
 #[cfg(not(target_arch = "wasm32"))]
+mod file_source;
+#[cfg(not(target_arch = "wasm32"))]
 mod http;
+#[cfg(all(not(target_arch = "wasm32"), feature = "all-codecs"))]
+mod opus;
 #[cfg(not(target_arch = "wasm32"))]
 mod player;
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,7 +20,7 @@ mod sink;
 #[cfg(not(target_arch = "wasm32"))]
 mod source;
 #[cfg(not(target_arch = "wasm32"))]
-mod spool;
+mod stream;
 
 pub use cranpose_services::media::{path_from_uri, uri_for_path};
 #[cfg(not(target_arch = "wasm32"))]
