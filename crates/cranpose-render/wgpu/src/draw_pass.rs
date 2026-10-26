@@ -14,9 +14,10 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        ArenaPlacement, DrawSpace, GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect,
-        ViewportUniformParams, image_draw_bounds, run_draw_bounds, scissor_rect_for_rect,
-        segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
+        ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassFrame, RunStage, StoreRunBatch,
+        TargetRect, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
+        scissor_rect_for_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
+        text_draw_geometry_in_rect,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
@@ -472,8 +473,9 @@ impl GpuRenderer {
                 ),
             }),
             images: (!scratch.images.indices.is_empty()).then(|| {
-                self.upload_image_slot(
+                ImageSlot::upload(
                     recorder,
+                    &self.device,
                     &scratch.images.vertices,
                     &scratch.images.indices,
                     &scratch.images.clips,
@@ -632,18 +634,20 @@ impl GpuRenderer {
             match batch {
                 Batch::Images {
                     cmds, blend_mode, ..
-                } => self.prefetch_image_pipelines(
+                } => self.pipelines.prefetch_image_pipelines(
                     &scratch.images.cmds[cmds.clone()],
                     *blend_mode,
                     depth_lane,
                     awaited,
                 ),
-                Batch::Glyphs { cmds, .. } => self.prefetch_glyph_pipelines(
+                Batch::Glyphs { cmds, .. } => self.pipelines.prefetch_glyph_pipelines(
                     &scratch.glyph_cmds[cmds.clone()],
                     depth_lane,
                     awaited,
                 ),
-                Batch::Shadows { .. } => self.prefetch_shadow_pipeline(depth_lane, awaited),
+                Batch::Shadows { .. } => {
+                    self.pipelines.prefetch_shadow_pipeline(depth_lane, awaited);
+                }
                 Batch::Composite(prepared) => self.effect_renderer.prefetch_composite_pipeline(
                     &self.device,
                     prepared,
@@ -794,7 +798,9 @@ impl GpuRenderer {
             self.frame_stats
                 .depth_passes
                 .set(self.frame_stats.depth_passes.get() + 1);
-            let depth_view = self.depth_target((target.width, target.height));
+            let depth_view = self
+                .depth_targets
+                .interior(&self.device, (target.width, target.height));
             recorder.begin_depth_pass(label, target.view, load_op, &depth_view)
         } else {
             recorder.begin_color_pass(label, target.view, load_op)
@@ -1189,7 +1195,7 @@ fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Op
 #[derive(Default)]
 struct PassBuffers {
     meshes: Option<crate::mesh_fallback::MeshBuffers>,
-    images: Option<crate::render::ImageSlot>,
+    images: Option<ImageSlot>,
     shadows: Option<crate::frame_graph::BufferUpload>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
     turned_glyphs: Option<crate::frame_graph::BufferUpload>,
@@ -2018,7 +2024,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             self.draw_held(renderer, run.binding);
         }
         let mark = scratch.image_mark();
-        renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
+        scratch
+            .images
+            .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
         scratch.place_images(mark, run);
         if let Some(bounds) = scratch
             .images
@@ -2049,7 +2057,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
             let image = &images[index];
-            renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
+            scratch
+                .images
+                .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
         }
         scratch.place_images(mark, run);
         self.push_images(

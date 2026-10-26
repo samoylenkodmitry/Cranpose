@@ -248,7 +248,10 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let volumes = StepPipeline::Volumes(VolumeVariant::Color);
         let portals = |pass: PortalPass| (StepPipeline::Portals(pass), ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
-        let depth = self.renderer.scene_depth_target(page.size);
+        let depth = self
+            .renderer
+            .depth_targets
+            .scene(&self.renderer.device, page.size);
         let Some(backdrop) = backdrop else {
             self.encode_steps(
                 (&page_texture, &depth, shadows),

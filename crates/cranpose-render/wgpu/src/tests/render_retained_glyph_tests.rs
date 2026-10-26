@@ -130,7 +130,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
     let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
-        renderer.composition_format,
+        renderer.pipelines.composition_format,
         8,
         8,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
@@ -638,7 +638,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
 fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, u32) {
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
-        renderer.composition_format,
+        renderer.pipelines.composition_format,
         128,
         32,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,

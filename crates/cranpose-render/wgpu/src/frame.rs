@@ -2788,7 +2788,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             composited,
         );
         if !ready {
-            renderer.note_placeholder();
+            renderer.pipelines.note_placeholder(&renderer.frame_stats);
         }
         ready
     }
@@ -2904,7 +2904,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             label,
             width.min(max),
             height.min(max),
-            self.renderer.composition_format,
+            self.renderer.pipelines.composition_format,
         ))
     }
 
@@ -4300,7 +4300,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         reads: EffectReads,
     ) -> Result<(), String> {
         let device = Arc::clone(&self.renderer.device);
-        let format = self.renderer.composition_format;
+        let format = self.renderer.pipelines.composition_format;
         let scratch = self
             .renderer
             .effect_renderer

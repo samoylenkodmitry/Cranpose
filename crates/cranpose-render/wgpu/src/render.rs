@@ -20,8 +20,8 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui_graphics::{
-    BlendMode, FRAGMENT_KIND_ARC, ImageBitmap, ImageSampling, Point, RecordLane, RecordSegment,
-    Rect, RenderHash, TileMode,
+    BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, RecordSegment, Rect,
+    RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -51,7 +51,7 @@ use crate::{
     frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
     geometry::{
         DevicePixelBounds, SegmentTransform, anchored_device_rect, canonicalize_device_coordinate,
-        offscreen_byte_size, snap_delta_for_anchor, snapped_anchor_device_origin, translate_quad,
+        snap_delta_for_anchor, snapped_anchor_device_origin, translate_quad,
         translation_stable_anchored_device_pixel_bounds,
     },
     glyph_run::RunGlyphs,
@@ -62,8 +62,8 @@ use crate::{
     offscreen::{COMPOSITION_BYTES_PER_PIXEL, OffscreenTarget},
     output_conversion::OutputConverter,
     pipeline_compiler::{CompileLane, CompilerSend, PipelineCompilation, PipelineCompiler},
-    rect_to_quad,
-    rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance, create_rrect_shadow_pipeline},
+    render::image_textures::ImageUploader,
+    rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
     shaders,
@@ -72,7 +72,6 @@ use crate::{
 };
 const MAX_TRANSPARENT_SOURCES: usize = 16;
 
-const CACHE_MISS_WARMUP_FRAMES: u8 = 1;
 pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: cranpose_render_common::FRAME_CLEAR_COLOR[0] as f64,
     g: cranpose_render_common::FRAME_CLEAR_COLOR[1] as f64,
@@ -106,14 +105,6 @@ pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Opti
     let threshold_ms = wgpu_render_stage_telemetry_threshold_ms()?;
     let total_ms = instant_ms(start, end);
     (total_ms >= threshold_ms).then_some(total_ms)
-}
-
-pub(crate) static PRESENTED_FRAMES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-/// How many frames this process has drawn and presented since it started.
-pub fn frames_presented() -> u64 {
-    PRESENTED_FRAMES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 type DeviceRect4 = (f32, f32, f32, f32);
@@ -639,32 +630,6 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
 /// The vertex entry point of every fullscreen strip.
 pub(crate) const FULLSCREEN_VS: &str = "fullscreen_vs";
 
-/// A depth target of `format` and `size` a pass draws against and drops,
-/// which a tiled GPU keeps in its tile memory.
-fn transient_depth_target(
-    device: &wgpu::Device,
-    (label, format): (&'static str, wgpu::TextureFormat),
-    size: (u32, u32),
-) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TRANSIENT_ATTACHMENT,
-            view_formats: &[],
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default())
-}
-
 pub(crate) fn create_render_pipeline_logged<'a>(
     device: &wgpu::Device,
     cache: Option<&'a wgpu::PipelineCache>,
@@ -1184,20 +1149,13 @@ pub(crate) struct GpuRenderer {
     pub(crate) queue: Arc<wgpu::Queue>,
     device_errors: Arc<DeviceErrorSentry>,
     renderer_epoch: u64,
-    pub(crate) composition_format: wgpu::TextureFormat,
     #[cfg(not(target_arch = "wasm32"))]
     display_format: wgpu::TextureFormat,
     composition_target: Option<CompositionTarget>,
     output_converter: OutputConverter,
     screenshot_converter: OutputConverter,
-    adapter_backend: wgpu::Backend,
     pub(crate) pipelines: RendererPipelines,
-    /// Transient depth buffers by target size, for passes that lay opaque
-    /// interiors down first, dropped once no frame has used them for
-    /// [`crate::idle_pool::IDLE_FRAMES`].
-    depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
-    /// The depth and stencil targets scenes' passes drew against, by size.
-    scene_depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
+    pub(crate) depth_targets: DepthTargets,
     /// The pipeline and mesh buffers of the 3D scenes; nothing in it is made
     /// until a scene draws.
     pub(crate) scene_pass: crate::scene_pass::ScenePass,
@@ -1231,12 +1189,9 @@ pub(crate) struct GpuRenderer {
     pub(crate) window_fill: Option<(wgpu::Color, Rc<OffscreenTarget>)>,
     pub(crate) gates: admission_gate::AdmissionGates,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
-    shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
-    shadow_surface_cache_bytes: u64,
+    shadow_surfaces: ShadowSurfaces,
     pub(crate) frame_stats: gpu_stats::FrameStats,
-    last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
-    pending_frame_warmup_frames: u8,
-    frame_count: u64,
+    history: FrameHistory,
     /// Whether the pipeline cache file holds the last launch's first screen,
     /// which builds ahead of this renderer's first frame.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1480,18 +1435,18 @@ impl GpuRenderer {
         );
 
         let mut renderer = Self {
-            device,
             queue,
             device_errors,
             renderer_epoch,
-            composition_format,
             #[cfg(not(target_arch = "wasm32"))]
             display_format,
             composition_target: None,
             output_converter,
             screenshot_converter,
-            adapter_backend,
             pipelines: RendererPipelines {
+                device: Arc::clone(&device),
+                composition_format,
+                adapter_backend,
                 pipeline_cache,
                 #[cfg(not(target_arch = "wasm32"))]
                 _pipeline_cache_watcher: pipeline_cache_watcher,
@@ -1519,8 +1474,8 @@ impl GpuRenderer {
                 image_nearest_sampler,
                 image_linear_sampler,
             },
-            depth_targets: crate::idle_pool::IdlePool::default(),
-            scene_depth_targets: crate::idle_pool::IdlePool::default(),
+            device,
+            depth_targets: DepthTargets::default(),
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
@@ -1544,14 +1499,9 @@ impl GpuRenderer {
             window_fill: None,
             gates: admission_gate::AdmissionGates::default(),
             transparent_sources: HashMap::default(),
-            shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
-                MAX_SHADOW_SURFACE_CACHE_ITEMS,
-            ),
-            shadow_surface_cache_bytes: 0,
+            shadow_surfaces: ShadowSurfaces::new(),
             frame_stats: gpu_stats::FrameStats::default(),
-            last_frame_stats: None,
-            pending_frame_warmup_frames: 0,
-            frame_count: 0,
+            history: FrameHistory::default(),
             #[cfg(not(target_arch = "wasm32"))]
             first_screen_recorded: records.shapes.iter().any(|shape| shape.first_screen),
             shader_warm_ups_queued: 0,
@@ -1581,7 +1531,7 @@ impl GpuRenderer {
         records: &crate::pipeline_records::PipelineRecords,
         holds_recorded: bool,
     ) {
-        self.warm_mesh_fallback();
+        self.pipelines.warm_mesh_fallback();
         self.warm_fixed_pipelines(&|label| {
             records
                 .fixed
@@ -1615,14 +1565,16 @@ impl GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     fn warm_every_screen(&mut self) {
         let lane = CompileLane::WarmUp;
-        let (compiler, backend) = (&self.pipelines.compiler, self.adapter_backend);
+        let (compiler, backend) = (&self.pipelines.compiler, self.pipelines.adapter_backend);
         for quads in [GlyphQuads::Aligned, GlyphQuads::Turned] {
-            self.glyph_atlas_pipeline_resource(false, quads).queue(
-                compiler,
-                lane,
-                backend,
-                self.glyph_atlas_pipeline_job(false, quads),
-            );
+            self.pipelines
+                .glyph_atlas_pipeline_resource(false, quads)
+                .queue(
+                    compiler,
+                    lane,
+                    backend,
+                    self.pipelines.glyph_atlas_pipeline_job(false, quads),
+                );
         }
         self.effect_renderer.warm_composites(&self.device);
         let rounded = ImageVariant {
@@ -1636,13 +1588,14 @@ impl GpuRenderer {
                 compiler,
                 lane,
                 backend,
-                self.image_pipeline_job(BlendMode::SrcOver, rounded),
+                self.pipelines
+                    .image_pipeline_job(BlendMode::SrcOver, rounded),
             );
         self.pipelines.rrect_shadow_pipeline[0].queue(
             compiler,
             lane,
             backend,
-            self.rrect_shadow_pipeline_job(false),
+            self.pipelines.rrect_shadow_pipeline_job(false),
         );
         self.pipelines
             .shape_pipelines
@@ -1685,7 +1638,12 @@ impl GpuRenderer {
         let compiler = self.effect_renderer.compiler();
         self.for_each_fixed_pipeline(&mut |pipeline, job| {
             if wanted(pipeline.label()) {
-                pipeline.queue(compiler, CompileLane::WarmUp, self.adapter_backend, job());
+                pipeline.queue(
+                    compiler,
+                    CompileLane::WarmUp,
+                    self.pipelines.adapter_backend,
+                    job(),
+                );
             }
         });
     }
@@ -1694,8 +1652,11 @@ impl GpuRenderer {
     /// first screens in `records` that this renderer's backend drew (see
     /// [`crate::WgpuRenderer::build_first_screen_pipelines`]).
     pub(crate) fn build_first_screen(&mut self, records: &[u8], viewport: (u32, u32)) {
-        let records =
-            crate::pipeline_records::decode_first_screen(records, self.adapter_backend, viewport);
+        let records = crate::pipeline_records::decode_first_screen(
+            records,
+            self.pipelines.adapter_backend,
+            viewport,
+        );
         for shape in &records.shapes {
             if let Some(key) = ShapePipelineKey::from_bits(shape.entry) {
                 self.pipelines.shape_pipelines.build_ahead(key);
@@ -1707,7 +1668,11 @@ impl GpuRenderer {
                 .iter()
                 .any(|fixed| fixed.entry == pipeline.label())
             {
-                pipeline.build_ahead(&self.pipelines.recorder, self.adapter_backend, job());
+                pipeline.build_ahead(
+                    &self.pipelines.recorder,
+                    self.pipelines.adapter_backend,
+                    job(),
+                );
             }
         });
     }
@@ -1716,15 +1681,6 @@ impl GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn first_screen_recorded(&self) -> bool {
         self.first_screen_recorded
-    }
-
-    /// See [`crate::WgpuRenderer::first_screen_pipelines`].
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn first_screen_pipelines(&self) -> Option<Vec<u8>> {
-        self.pipelines
-            .recorder
-            .first_screen_records(self.adapter_backend)
     }
 
     /// Hands `visit` every fixed pipeline, the effect renderer's too, with
@@ -1746,18 +1702,19 @@ impl GpuRenderer {
                 for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
                     visit(
                         self.pipelines.image_pipeline_resource(blend_mode, variant),
-                        &|| Box::new(self.image_pipeline_job(blend_mode, variant)),
+                        &|| Box::new(self.pipelines.image_pipeline_job(blend_mode, variant)),
                     );
                 }
             }
             for quads in [GlyphQuads::Plain, GlyphQuads::Aligned, GlyphQuads::Turned] {
-                visit(self.glyph_atlas_pipeline_resource(depth, quads), &|| {
-                    Box::new(self.glyph_atlas_pipeline_job(depth, quads))
-                });
+                visit(
+                    self.pipelines.glyph_atlas_pipeline_resource(depth, quads),
+                    &|| Box::new(self.pipelines.glyph_atlas_pipeline_job(depth, quads)),
+                );
             }
             visit(
                 &self.pipelines.rrect_shadow_pipeline[usize::from(depth)],
-                &|| Box::new(self.rrect_shadow_pipeline_job(depth)),
+                &|| Box::new(self.pipelines.rrect_shadow_pipeline_job(depth)),
             );
         }
         for kind in crate::scene_pass::ScenePipeline::ALL {
@@ -1778,9 +1735,11 @@ impl GpuRenderer {
         &self,
         kind: crate::scene_pass::ScenePipeline,
     ) -> Option<&wgpu::RenderPipeline> {
-        self.ready_or_left_out(self.scene_pipeline_resource(kind), || {
-            self.scene_surface_pipeline_job(kind)
-        })
+        self.pipelines.ready_or_left_out(
+            &self.frame_stats,
+            self.scene_pipeline_resource(kind),
+            || self.scene_surface_pipeline_job(kind),
+        )
     }
 
     /// The pipeline of `variant` of a volume shader a frame noted; `None`
@@ -1792,14 +1751,22 @@ impl GpuRenderer {
         variant: crate::scene_pass::VolumeVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let kept = self.scene_pass.volume(shader)?;
-        self.app_shader_pipeline(kept.pipeline(variant as usize), || {
-            crate::scene_pass::volume_pipeline_job(
-                &self.device,
-                self.pipelines.pipeline_cache.clone(),
-                (self.composition_format, self.adapter_backend, variant),
-                (self.scene_pipeline_parts(), kept),
-            )
-        })
+        self.pipelines.app_shader_pipeline(
+            &self.frame_stats,
+            kept.pipeline(variant as usize),
+            || {
+                crate::scene_pass::volume_pipeline_job(
+                    &self.device,
+                    self.pipelines.pipeline_cache.clone(),
+                    (
+                        self.pipelines.composition_format,
+                        self.pipelines.adapter_backend,
+                        variant,
+                    ),
+                    (self.scene_pipeline_parts(), kept),
+                )
+            },
+        )
     }
 
     /// The pipeline of `variant` of a shaded surface's shader a frame
@@ -1811,41 +1778,22 @@ impl GpuRenderer {
         variant: crate::scene_pass::ShadedVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let kept = self.scene_pass.shaded(shader)?;
-        self.app_shader_pipeline(kept.pipeline(variant as usize), || {
-            crate::scene_pass::shaded_pipeline_job(
-                &self.device,
-                self.pipelines.pipeline_cache.clone(),
-                (self.composition_format, self.adapter_backend, variant),
-                (self.scene_pipeline_parts(), kept),
-            )
-        })
-    }
-
-    /// One of an app shader's pipelines once built; `None` while `job`
-    /// builds it, which the frame notes, or when the shader does not build.
-    fn app_shader_pipeline<'p, J>(
-        &'p self,
-        pipeline: &'p crate::scene_pass::ShaderPipeline,
-        job: impl FnOnce() -> J,
-    ) -> Option<&'p wgpu::RenderPipeline>
-    where
-        J: FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static,
-    {
-        let ready = pipeline.when_ready(
-            (
-                &self.pipelines.recorder,
-                &self.pipelines.compiler,
-                self.adapter_backend,
-            ),
-            job,
-        );
-        match ready {
-            Some(built) => built.as_ref(),
-            None => {
-                self.note_placeholder();
-                None
-            }
-        }
+        self.pipelines.app_shader_pipeline(
+            &self.frame_stats,
+            kept.pipeline(variant as usize),
+            || {
+                crate::scene_pass::shaded_pipeline_job(
+                    &self.device,
+                    self.pipelines.pipeline_cache.clone(),
+                    (
+                        self.pipelines.composition_format,
+                        self.pipelines.adapter_backend,
+                        variant,
+                    ),
+                    (self.scene_pipeline_parts(), kept),
+                )
+            },
+        )
     }
 
     /// The bind group layout of a scene surface's uniforms.
@@ -1861,7 +1809,7 @@ impl GpuRenderer {
     fn scene_pipeline_parts(&self) -> &crate::scene_pass::ScenePipelineParts {
         self.scene_pass.parts(
             &self.device,
-            self.adapter_backend,
+            self.pipelines.adapter_backend,
             &self.effect_renderer.effect_texture_bind_group_layout,
         )
     }
@@ -1873,204 +1821,9 @@ impl GpuRenderer {
         crate::scene_pass::scene_pipeline_job(
             &self.device,
             self.pipelines.pipeline_cache.clone(),
-            (self.composition_format, kind),
+            (self.pipelines.composition_format, kind),
             self.scene_pipeline_parts(),
         )
-    }
-
-    fn image_pipeline_job(
-        &self,
-        blend_mode: BlendMode,
-        variant: ImageVariant,
-    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
-        let device = Arc::clone(&self.device);
-        let cache = self.pipelines.pipeline_cache.clone();
-        let format = self.composition_format;
-        let shader = self.pipelines.image_shader.clone();
-        move || {
-            create_image_pipeline(
-                &device,
-                cache.as_ref(),
-                format,
-                &shader,
-                blend_mode,
-                variant,
-            )
-        }
-    }
-
-    /// Queues the builds of the image pipelines `cmds` draw with that are
-    /// missing on `lane` (see [`FixedPipeline::prefetch`]), handing
-    /// `awaited` each still to land.
-    pub(crate) fn prefetch_image_pipelines(
-        &self,
-        cmds: &[ImageDrawCmd],
-        blend_mode: BlendMode,
-        (depth, lane): (bool, CompileLane),
-        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
-    ) {
-        let mut last = None;
-        for cmd in cmds {
-            let variant = ImageVariant {
-                depth,
-                alpha_mask: cmd.image.alpha_mask,
-                rounded: cmd.clip.is_some(),
-            };
-            if last.replace(variant) == Some(variant) {
-                continue;
-            }
-            if let Some(pending) = self
-                .pipelines
-                .image_pipeline_resource(blend_mode, variant)
-                .prefetch(lane, &self.pipelines.compiler, self.adapter_backend, || {
-                    self.image_pipeline_job(blend_mode, variant)
-                })
-            {
-                awaited(pending);
-            }
-        }
-    }
-
-    /// Queues the builds of the glyph pipelines `cmds` draw with that are
-    /// missing on `lane` (see [`FixedPipeline::prefetch`]), handing
-    /// `awaited` each still to land.
-    pub(crate) fn prefetch_glyph_pipelines(
-        &self,
-        cmds: &[GlyphDrawCmd],
-        (depth, lane): (bool, CompileLane),
-        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
-    ) {
-        let mut last = None;
-        for cmd in cmds {
-            let quads = cmd.quads();
-            if last.replace(quads) == Some(quads) {
-                continue;
-            }
-            if let Some(pending) = self.glyph_atlas_pipeline_resource(depth, quads).prefetch(
-                lane,
-                &self.pipelines.compiler,
-                self.adapter_backend,
-                || self.glyph_atlas_pipeline_job(depth, quads),
-            ) {
-                awaited(pending);
-            }
-        }
-    }
-
-    /// Queues the build of the shadow pipeline on `lane` when it is missing
-    /// (see [`FixedPipeline::prefetch`]), handing `awaited` the pipeline
-    /// while it is still to land.
-    pub(crate) fn prefetch_shadow_pipeline(
-        &self,
-        (depth, lane): (bool, CompileLane),
-        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
-    ) {
-        if let Some(pending) = self.pipelines.rrect_shadow_pipeline[usize::from(depth)].prefetch(
-            lane,
-            &self.pipelines.compiler,
-            self.adapter_backend,
-            || self.rrect_shadow_pipeline_job(depth),
-        ) {
-            awaited(pending);
-        }
-    }
-
-    /// The image pipeline for a draw, or `None` while it compiles: the draw
-    /// is left out, and the frame after the pipeline lands draws it.
-    pub(crate) fn image_pipeline(
-        &self,
-        blend_mode: BlendMode,
-        variant: ImageVariant,
-    ) -> Option<&wgpu::RenderPipeline> {
-        self.ready_or_left_out(
-            self.pipelines.image_pipeline_resource(blend_mode, variant),
-            || self.image_pipeline_job(blend_mode, variant),
-        )
-    }
-
-    /// `pipeline` for a draw, or `None` while it compiles, noting the draw
-    /// left out (see [`FixedPipeline::when_ready`]).
-    fn ready_or_left_out<'a, J>(
-        &self,
-        pipeline: &'a FixedPipeline,
-        job: impl FnOnce() -> J,
-    ) -> Option<&'a wgpu::RenderPipeline>
-    where
-        J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
-    {
-        let ready = pipeline.when_ready(
-            &self.pipelines.recorder,
-            &self.pipelines.compiler,
-            self.adapter_backend,
-            job,
-        );
-        if ready.is_none() {
-            self.note_placeholder();
-        }
-        ready
-    }
-
-    fn glyph_atlas_pipeline_job(
-        &self,
-        depth: bool,
-        quads: GlyphQuads,
-    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
-        let device = Arc::clone(&self.device);
-        let cache = self.pipelines.pipeline_cache.clone();
-        let format = self.composition_format;
-        let shader = self.pipelines.glyph_atlas_shader.clone();
-        move || {
-            create_glyph_atlas_pipeline(&device, cache.as_ref(), format, &shader, (depth, quads))
-        }
-    }
-
-    /// The glyph pipeline for a pass with a depth buffer or not, drawing
-    /// `quads`, or `None` while it compiles.
-    fn glyph_atlas_pipeline(
-        &self,
-        depth: bool,
-        quads: GlyphQuads,
-    ) -> Option<&wgpu::RenderPipeline> {
-        let resource = self.glyph_atlas_pipeline_resource(depth, quads);
-        let ready = resource.when_ready(
-            &self.pipelines.recorder,
-            &self.pipelines.compiler,
-            self.adapter_backend,
-            || self.glyph_atlas_pipeline_job(depth, quads),
-        );
-        // Quads on whole pixels draw the same through the plain pipeline
-        // while their own compiles.
-        let ready = ready.or_else(|| {
-            (quads == GlyphQuads::Aligned).then_some(())?;
-            self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Plain)
-                .built()
-        });
-        if ready.is_none() {
-            self.note_placeholder();
-        }
-        ready
-    }
-
-    /// Queues, ahead of every other pipeline, the fallback pipelines shape
-    /// draws take while their own compile.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn warm_mesh_fallback(&self) {
-        for (depth, pipeline) in [false, true]
-            .into_iter()
-            .zip(&self.pipelines.mesh_pipelines)
-        {
-            pipeline.queue(
-                &self.pipelines.compiler,
-                CompileLane::Demanded,
-                self.adapter_backend,
-                crate::mesh_fallback::mesh_pipeline_job(
-                    &self.device,
-                    self.pipelines.pipeline_cache.clone(),
-                    self.composition_format,
-                    depth,
-                ),
-            );
-        }
     }
 
     /// Lays out as fallback triangles a stored run's draws in `range` of
@@ -2084,7 +1837,7 @@ impl GpuRenderer {
         depth: bool,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
-        if self.mesh_pipeline(depth).is_none()
+        if self.pipelines.mesh_pipeline(depth).is_none()
             || !self.pipelines.awaits_shape_pipeline(draws, range.clone())
         {
             return;
@@ -2104,7 +1857,8 @@ impl GpuRenderer {
         )
         .mesh();
         let target = space.viewport.mesh_target(depth);
-        self.mesh_unready(draws, range, records, &|_| Some(placement), target, meshes);
+        self.pipelines
+            .mesh_unready(draws, range, records, &|_| Some(placement), target, meshes);
     }
 
     /// Lays out as fallback triangles the arena draws in `range` of `draws`,
@@ -2117,13 +1871,13 @@ impl GpuRenderer {
         depth: bool,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
-        if self.mesh_pipeline(depth).is_none()
+        if self.pipelines.mesh_pipeline(depth).is_none()
             || !self.pipelines.awaits_shape_pipeline(draws, range.clone())
         {
             return;
         }
         let (records, placements) = self.run_store.arena_mesh_records();
-        self.mesh_unready(
+        self.pipelines.mesh_unready(
             draws,
             range,
             records,
@@ -2135,17 +1889,6 @@ impl GpuRenderer {
             viewport.mesh_target(depth),
             meshes,
         );
-    }
-
-    fn rrect_shadow_pipeline_job(
-        &self,
-        depth: bool,
-    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
-        let device = Arc::clone(&self.device);
-        let cache = self.pipelines.pipeline_cache.clone();
-        let format = self.composition_format;
-        let shader = self.pipelines.rrect_shadow_shader.clone();
-        move || create_rrect_shadow_pipeline(&device, cache.as_ref(), format, &shader, depth)
     }
 
     /// Draws `instances` of the pass's uploaded shadow instances, bound with
@@ -2160,9 +1903,10 @@ impl GpuRenderer {
         frame: PassFrame,
     ) -> Result<(), String> {
         let depth = frame.depth;
-        let Some(pipeline) = self.ready_or_left_out(
+        let Some(pipeline) = self.pipelines.ready_or_left_out(
+            &self.frame_stats,
             &self.pipelines.rrect_shadow_pipeline[usize::from(depth)],
-            || self.rrect_shadow_pipeline_job(depth),
+            || self.pipelines.rrect_shadow_pipeline_job(depth),
         ) else {
             return Ok(());
         };
@@ -2191,162 +1935,6 @@ impl GpuRenderer {
         )
     }
 
-    /// The transient depth buffer for a target of `size`, created on first
-    /// use; the few sizes recent frames used are kept.
-    /// The depth and stencil a scene's pass draws against at `size`, kept
-    /// for the next frames of the same size.
-    pub(crate) fn scene_depth_target(&mut self, size: (u32, u32)) -> wgpu::TextureView {
-        const KEPT_SCENE_TARGETS: usize = 2;
-        let view = match self.scene_depth_targets.take(|(kept, _)| *kept == size) {
-            Some((_, view)) => view,
-            None => transient_depth_target(
-                &self.device,
-                (
-                    "Scene depth and stencil",
-                    crate::scene_pass::SCENE_DEPTH_FORMAT,
-                ),
-                size,
-            ),
-        };
-        self.scene_depth_targets
-            .put((size, view.clone()), KEPT_SCENE_TARGETS, u64::MAX, |_| 0);
-        view
-    }
-
-    pub(crate) fn depth_target(&mut self, size: (u32, u32)) -> wgpu::TextureView {
-        const KEPT_DEPTH_TARGETS: usize = 4;
-        let view = match self.depth_targets.take(|(kept, _)| *kept == size) {
-            Some((_, view)) => view,
-            None => self.create_depth_target(size),
-        };
-        self.depth_targets
-            .put((size, view.clone()), KEPT_DEPTH_TARGETS, u64::MAX, |_| 0);
-        view
-    }
-
-    fn create_depth_target(&self, size: (u32, u32)) -> wgpu::TextureView {
-        transient_depth_target(&self.device, ("Opaque interior depth", DEPTH_FORMAT), size)
-    }
-
-    /// The binding a draw of `image` sampled by `sampling` takes, uploading
-    /// the image the first time a draw needs it.
-    fn image_binding(
-        &mut self,
-        image: &ImageBitmap,
-        sampling: ImageSampling,
-    ) -> Result<ImageBinding, String> {
-        if image.format() == cranpose_ui_graphics::ImagePixelFormat::External {
-            return self.external_texture_binding(image, sampling);
-        }
-        if let Some(cached) = self.images.get(image.id()) {
-            return Ok(cached.bind_groups.binding(sampling));
-        }
-
-        let size = wgpu::Extent3d {
-            width: image.width(),
-            height: image.height(),
-            depth_or_array_layers: 1,
-        };
-
-        let alpha_mask = matches!(
-            image.format(),
-            cranpose_ui_graphics::ImagePixelFormat::Alpha8 { .. }
-        );
-        let (format, bytes_per_pixel) = if alpha_mask {
-            (wgpu::TextureFormat::R8Unorm, 1)
-        } else {
-            (wgpu::TextureFormat::Rgba8Unorm, 4)
-        };
-
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Image Texture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        let upload_stats = self.frame_graph_executor.upload_texture(
-            &self.queue,
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            image.pixels(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_pixel * image.width()),
-                rows_per_image: Some(image.height()),
-            },
-            size,
-        );
-        self.frame_stats.record_command_stats(upload_stats);
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bytes = image.pixels().len();
-        let cached = CachedImageTexture {
-            bind_groups: self.image_bind_groups(&view, alpha_mask),
-            _texture: texture,
-            _view: view,
-            bytes,
-        };
-        let binding = cached.bind_groups.binding(sampling);
-        self.images.insert(image.id(), cached);
-        Ok(binding)
-    }
-
-    fn external_texture_binding(
-        &mut self,
-        image: &ImageBitmap,
-        sampling: ImageSampling,
-    ) -> Result<ImageBinding, String> {
-        let key = image.storage_id();
-        if let Some(bind_groups) = self.images.external(key) {
-            return Ok(bind_groups.binding(sampling));
-        }
-        let view = image
-            .external_handle::<wgpu::TextureView>()
-            .ok_or("an external texture's handle is not a wgpu::TextureView")?;
-        let bind_groups = self.image_bind_groups(view, false);
-        let binding = bind_groups.binding(sampling);
-        self.images.insert_external(key, bind_groups);
-        Ok(binding)
-    }
-
-    fn image_bind_groups(&self, view: &wgpu::TextureView, alpha_mask: bool) -> ImageBindGroups {
-        ImageBindGroups {
-            alpha_mask,
-            nearest: self.image_bind_group(view, &self.pipelines.image_nearest_sampler),
-            linear: self.image_bind_group(view, &self.pipelines.image_linear_sampler),
-        }
-    }
-
-    fn image_bind_group(
-        &self,
-        view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) -> wgpu::BindGroup {
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Image Texture Bind Group"),
-            layout: &self.pipelines.image_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
-    }
-
     pub(crate) fn max_texture_dim(&self) -> u32 {
         self.effect_renderer.max_texture_dim()
     }
@@ -2369,7 +1957,12 @@ impl GpuRenderer {
     ) -> FrameRoot {
         if let (OutputMode::Display, Some(view), Some(texture)) =
             (output.mode, output.view, output.texture)
-            && surface_is_direct_root(texture, self.composition_format, viewport, reads_page)
+            && surface_is_direct_root(
+                texture,
+                self.pipelines.composition_format,
+                viewport,
+                reads_page,
+            )
         {
             let image = Rc::new(OffscreenTarget::from_surface(texture.clone(), view.clone()));
             if output.image == ImageContent::Cleared && self.cleared.copied {
@@ -2395,7 +1988,7 @@ impl GpuRenderer {
         }
         let target = Rc::new(OffscreenTarget::new(
             &self.device,
-            self.composition_format,
+            self.pipelines.composition_format,
             width,
             height,
         ));
@@ -2418,7 +2011,7 @@ impl GpuRenderer {
             label,
             width.min(max_texture_dim),
             height.min(max_texture_dim),
-            self.composition_format,
+            self.pipelines.composition_format,
         )
     }
 
@@ -2477,94 +2070,7 @@ impl GpuRenderer {
         self.scene_pass.end_frame();
         self.surface_atlas_sizes.end_frame();
     }
-
-    fn insert_cached_shadow_surface(
-        &mut self,
-        key: ShadowSurfaceCacheKey,
-        target: Rc<OffscreenTarget>,
-    ) {
-        let byte_size = offscreen_byte_size(target.width, target.height);
-        while self.shadow_surface_cache_bytes + byte_size > MAX_SHADOW_SURFACE_CACHE_BYTES {
-            let Some((_, evicted)) = self.shadow_surface_cache.pop_lru() else {
-                break;
-            };
-            self.shadow_surface_cache_bytes = self
-                .shadow_surface_cache_bytes
-                .saturating_sub(evicted.byte_size);
-        }
-        let cached = CachedShadowSurface { target, byte_size };
-        if let Some((_, replaced)) = self.shadow_surface_cache.push(key, cached) {
-            self.shadow_surface_cache_bytes = self
-                .shadow_surface_cache_bytes
-                .saturating_sub(replaced.byte_size);
-        }
-        self.shadow_surface_cache_bytes = self.shadow_surface_cache_bytes.saturating_add(byte_size);
-    }
-
-    fn glyph_atlas_pipeline_resource(&self, depth: bool, quads: GlyphQuads) -> &FixedPipeline {
-        let kind = match quads {
-            GlyphQuads::Plain => 0,
-            GlyphQuads::Aligned => 1,
-            GlyphQuads::Turned => 2,
-        };
-        &self.pipelines.glyph_atlas_pipeline[usize::from(depth) + 2 * kind]
-    }
-
-    /// The fallback pipeline for a pass with a depth buffer or not, once it
-    /// is built; none on the web, which leaves every fallback out of its
-    /// build.
-    #[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "no meshes"))]
-    fn mesh_pipeline(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
-        #[cfg(not(target_arch = "wasm32"))]
-        return self.pipelines.mesh_pipelines[usize::from(depth)].built();
-        #[cfg(target_arch = "wasm32")]
-        None
-    }
-
-    /// Lays out as fallback triangles the run draws of `draws` in `range`
-    /// whose shape pipelines still compile, each record of `tables` placed
-    /// by `placement`.
-    fn mesh_unready(
-        &self,
-        draws: &[RunDrawCall],
-        range: std::ops::Range<usize>,
-        tables: crate::mesh_fallback::MeshRecords<'_>,
-        placement: &dyn Fn(
-            &cranpose_ui_graphics::ShapeRecordBody,
-        ) -> Option<crate::mesh_fallback::MeshPlacement>,
-        target: crate::mesh_fallback::MeshTarget,
-        meshes: &mut crate::mesh_fallback::PassMeshes,
-    ) {
-        for index in range {
-            let Some(draw) = draws.get(index) else {
-                continue;
-            };
-            if self.pipelines.shape_pipelines.get(draw.key).is_some() {
-                continue;
-            }
-            let indices =
-                meshes
-                    .builder
-                    .push_records(tables, draw.records.clone(), placement, target);
-            meshes.set(index, indices);
-        }
-    }
 }
-fn frame_stats_need_warmup_frame(snapshot: &gpu_stats::FrameStatsSnapshot) -> bool {
-    snapshot.layer_cache_misses > 0
-        || snapshot.shadow_shape_cache_misses > 0
-        || snapshot.text_image_cache_misses > 0
-        || snapshot.text_glyph_atlas_misses > 0
-}
-
-fn update_frame_warmup_budget(pending_frames: &mut u8, snapshot: &gpu_stats::FrameStatsSnapshot) {
-    if *pending_frames > 0 {
-        *pending_frames = pending_frames.saturating_sub(1);
-    } else if frame_stats_need_warmup_frame(snapshot) {
-        *pending_frames = CACHE_MISS_WARMUP_FRAMES;
-    }
-}
-
 impl GpuRenderer {
     pub(crate) fn render(
         &mut self,
@@ -2641,7 +2147,7 @@ impl GpuRenderer {
         }
         let after_graph = Instant::now();
         if self.effect_renderer.take_skipped_draw() {
-            self.note_placeholder();
+            self.pipelines.note_placeholder(&self.frame_stats);
         }
         self.flush_deferred_offscreen_releases();
         self.pass_scratch.glyph_instances.end_frame();
@@ -2701,29 +2207,7 @@ impl GpuRenderer {
     // Takes the frame's stats, logs and prints them as asked, and resets
     // them for the next frame.
     fn close_frame_stats(&mut self) {
-        let snapshot = self.frame_stats.snapshot();
-        if crate::frame_graph::frame_graph_pass_telemetry_threshold_ms().is_some() {
-            log::warn!(
-                "[wgpu-render-stage:frame-stats] layer_hit={} layer_miss={} miss_px={} \
-                 offscreen_acq={} offscreen_new={} isolated={} draws={}",
-                snapshot.layer_cache_hits,
-                snapshot.layer_cache_misses,
-                snapshot.layer_cache_miss_pixels,
-                snapshot.offscreen_acquires,
-                snapshot.offscreen_news,
-                snapshot.isolated_layer_renders,
-                snapshot.draw_calls,
-            );
-        }
-        self.last_frame_stats = Some(snapshot);
-        PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
-        let gpu_stats_on = gpu_stats_enabled();
-        self.frame_stats
-            .maybe_print_snapshot(snapshot, &mut self.frame_count, gpu_stats_on);
-        if gpu_stats_on && self.frame_count.is_multiple_of(60) {
-            gpu_stats::print_gpu_memory_report(&self.device, self.frame_count);
-        }
+        self.history.close(&self.frame_stats, &self.device);
         self.frame_graph_executor
             .end_pass_timing_frame(&self.device, &self.queue);
         self.frame_stats.reset();
@@ -2745,7 +2229,7 @@ impl GpuRenderer {
     }
 
     pub(crate) fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
-        self.last_frame_stats
+        self.history.last()
     }
 
     pub(crate) fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
@@ -2753,19 +2237,7 @@ impl GpuRenderer {
     }
 
     pub(crate) fn needs_frame_warmup(&self) -> bool {
-        self.pending_frame_warmup_frames > 0 || self.placeholder_awaits_frame()
-    }
-
-    /// Whether a frame must follow to replace a placeholder: a pipeline it
-    /// waited for landed, or, with nothing to wake the app when one does,
-    /// this frame drew one.
-    fn placeholder_awaits_frame(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.pipelines.landing {
-            return landing.landed()
-                || (self.pipelines.drew_placeholder.get() && !landing.has_wake());
-        }
-        self.pipelines.drew_placeholder.get()
+        self.history.warming_up() || self.pipelines.placeholder_awaits_frame()
     }
 
     /// Starts a frame: once a pipeline a placeholder waited for has landed,
@@ -2793,8 +2265,7 @@ impl GpuRenderer {
     /// drew and kept.
     fn drop_kept_drawing(&mut self) {
         self.layer_cache.clear();
-        self.shadow_surface_cache.clear();
-        self.shadow_surface_cache_bytes = 0;
+        self.shadow_surfaces.clear();
         if let Some(composition) = self.composition_target.as_mut() {
             composition.kept.forget();
         }
@@ -2976,35 +2447,6 @@ impl GpuRenderer {
         }
     }
 
-    /// Notes an effect drawn as its placeholder, or a draw left out, while
-    /// its pipelines compile, and waits for the next one to land.
-    pub(crate) fn note_placeholder(&self) {
-        self.frame_stats
-            .placeholder_draws
-            .set(self.frame_stats.placeholder_draws.get() + 1);
-        self.await_landing();
-    }
-
-    /// Notes a shape drawn as fallback triangles while its pipeline
-    /// compiles, and waits for the next one to land.
-    fn note_mesh_fallback(&self) {
-        self.frame_stats
-            .shape_pipeline_fallback_draws
-            .set(self.frame_stats.shape_pipeline_fallback_draws.get() + 1);
-        self.await_landing();
-    }
-
-    /// Asks for the frame after the next pipeline lands: this one drew
-    /// something in place of what that pipeline draws.
-    fn await_landing(&self) {
-        self.pipelines.drew_placeholder.set(true);
-        self.pipelines.recorder.hold_first_screen();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.pipelines.landing {
-            landing.await_since(self.pipelines.built_at_frame_start);
-        }
-    }
-
     /// Queues every pipeline the cache file records, as the first frame of
     /// an updated build does, and returns whether any is left to build: for
     /// a renderer that prepares an app's pipelines without drawing.
@@ -3015,16 +2457,6 @@ impl GpuRenderer {
             self.warm_recent(&records);
         }
         self.pipelines.compiling()
-    }
-
-    /// Whether the last frame drew a placeholder and pipelines are still
-    /// compiling, so its picture is not final yet.
-    pub(crate) fn awaits_pipelines(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(landing) = &self.pipelines.landing {
-            return self.pipelines.drew_placeholder.get() && landing.in_flight();
-        }
-        self.pipelines.drew_placeholder.get()
     }
 
     pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
@@ -3146,9 +2578,7 @@ impl GpuRenderer {
         let execution = execution.map_err(|error| error.to_string())?;
         let submission_index = execution.submission;
         let copy_stats = execution.stats;
-        self.last_frame_stats = self
-            .last_frame_stats
-            .map(|snapshot| snapshot.with_command_stats_added(copy_stats));
+        self.history.add_command_stats(copy_stats);
 
         let buffer_slice = output_buffer.slice(..);
         let (tx, rx) = mpsc::channel();
@@ -3361,7 +2791,7 @@ impl GpuRenderer {
                     recorder,
                     output_view,
                     bind_group,
-                    self.adapter_backend,
+                    self.pipelines.adapter_backend,
                     &self.pipelines.recorder,
                 );
                 recorder.record_pass();
@@ -3433,8 +2863,8 @@ impl GpuRenderer {
         let content = key.map_or(SourceContent::Transient, |key| {
             SourceContent::retained(&key)
         });
-        if let Some(entry) = key.and_then(|key| self.shadow_surface_cache.get(&key)) {
-            return Some((Rc::clone(&entry.target), true, content));
+        if let Some(target) = key.and_then(|key| self.shadow_surfaces.get(&key)) {
+            return Some((Rc::clone(target), true, content));
         }
         // A shadow whose blur compiles is left out until the blur lands.
         if !self.effect_renderer.blur_draws_now(
@@ -3444,7 +2874,7 @@ impl GpuRenderer {
             pixel_radius,
             pixel_radius,
         ) {
-            self.note_placeholder();
+            self.pipelines.note_placeholder(&self.frame_stats);
             return None;
         }
         if !shape_only {
@@ -3468,7 +2898,7 @@ impl GpuRenderer {
                 shadow.shapes.as_ref().map_or(0, RunDraw::record_count) as usize,
                 shadow.clip,
             );
-            self.insert_cached_shadow_surface(key, Rc::clone(&source));
+            self.shadow_surfaces.insert(key, Rc::clone(&source));
         }
         Some((source, false, content))
     }
@@ -4039,13 +3469,13 @@ impl GpuRenderer {
                 // triangles, or is left out, until it lands.
                 let mesh = meshes.and_then(|(meshes, depth)| {
                     let range = meshes.ranges.get(position)?.clone()?;
-                    Some((range, meshes, self.mesh_pipeline(depth)?))
+                    Some((range, meshes, self.pipelines.mesh_pipeline(depth)?))
                 });
                 let Some((range, meshes, mesh_pipeline)) = mesh else {
-                    self.note_placeholder();
+                    self.pipelines.note_placeholder(&self.frame_stats);
                     continue;
                 };
-                self.note_mesh_fallback();
+                self.pipelines.note_mesh_fallback(&self.frame_stats);
                 pass.set_pipeline(mesh_pipeline);
                 meshes.draw(pass, range);
                 bound_class = None;
@@ -4167,7 +3597,10 @@ impl GpuRenderer {
                 rounded: cmd.clip.is_some(),
             };
             if bound_pipeline != Some(variant) {
-                let Some(pipeline) = self.image_pipeline(blend_mode, variant) else {
+                let Some(pipeline) =
+                    self.pipelines
+                        .image_pipeline(&self.frame_stats, blend_mode, variant)
+                else {
                     continue;
                 };
                 pass.set_pipeline(pipeline);
@@ -4235,7 +3668,11 @@ impl GpuRenderer {
             match draw.step {
                 GlyphDrawStep::Shared(instances, quads) => {
                     if bound_pipeline != Some(quads) {
-                        let Some(pipeline) = self.glyph_atlas_pipeline(frame.depth, quads) else {
+                        let Some(pipeline) = self.pipelines.glyph_atlas_pipeline(
+                            &self.frame_stats,
+                            frame.depth,
+                            quads,
+                        ) else {
                             continue;
                         };
                         pass.set_pipeline(pipeline);
@@ -4265,7 +3702,11 @@ impl GpuRenderer {
                         GlyphQuads::Plain
                     };
                     if bound_pipeline != Some(quads) {
-                        let Some(pipeline) = self.glyph_atlas_pipeline(frame.depth, quads) else {
+                        let Some(pipeline) = self.pipelines.glyph_atlas_pipeline(
+                            &self.frame_stats,
+                            frame.depth,
+                            quads,
+                        ) else {
                             continue;
                         };
                         pass.set_pipeline(pipeline);
@@ -4285,100 +3726,6 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(draws);
         Ok(())
     }
-    pub(crate) fn append_image_draw_cmd(
-        &mut self,
-        image_draw: &ImageDraw,
-        space: DrawSpace,
-        images: &mut ImageBatch,
-    ) -> Result<(), String> {
-        let (viewport, root_scale) = (space.viewport, space.scale);
-        let snap_delta = image_draw
-            .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-            .unwrap_or_default();
-        let rect = image_draw.rect.translate(snap_delta.x, snap_delta.y);
-        if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
-            return Ok(());
-        }
-
-        let (mut tint, cpu_filter) =
-            tint_for_image(image_draw.color_filter.as_ref(), image_draw.alpha);
-        if tint[3] <= 0.0 {
-            return Ok(());
-        }
-
-        let filtered_image = cpu_filter
-            .map(|filter| apply_filter_to_bitmap(&image_draw.image, filter))
-            .transpose()?;
-        let prepared_image = filtered_image.as_ref().unwrap_or(&image_draw.image);
-        if let cranpose_ui_graphics::ImagePixelFormat::Alpha8 { color } = prepared_image.format() {
-            for (channel, value) in tint[..3].iter_mut().zip(color) {
-                *channel *= value as f32 / 255.0;
-            }
-        }
-
-        let geometry = resolve_image_geometry_with_delta(image_draw, root_scale, snap_delta);
-        let Some(scissor) =
-            scissor_rect_for_layer(geometry.rect, geometry.clip, root_scale, viewport)
-        else {
-            return Ok(());
-        };
-
-        let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
-            return Ok(());
-        };
-        let device_quad = geometry.device_quad(root_scale);
-        let index_start = push_image_quad(
-            (&mut images.vertices, &mut images.indices),
-            device_quad,
-            tint,
-            &uv_rect,
-        );
-        let clip = DeviceRoundedClip::of(image_draw, root_scale).map(|clip| {
-            images.clips.push(clip);
-            images.clips.len() as u32 - 1
-        });
-        images.cmds.push(ImageDrawCmd {
-            index_start,
-            scissor,
-            image: self.image_binding(prepared_image, geometry.sampling)?,
-            clip,
-        });
-        Ok(())
-    }
-
-    /// Uploads a pass's image and glyph quads into the frame's buffers.
-    pub(crate) fn upload_image_slot<C: FrameCommandRecorder>(
-        &self,
-        recorder: &mut C,
-        vertices: &[Vertex],
-        indices: &[u32],
-        clips: &[DeviceRoundedClip],
-    ) -> ImageSlot {
-        ImageSlot {
-            vertices: recorder.upload_buffer(
-                image_vertex_spec(),
-                &self.device,
-                bytemuck::cast_slice(vertices),
-            ),
-            indices: recorder.upload_buffer(
-                image_index_spec(),
-                &self.device,
-                bytemuck::cast_slice(indices),
-            ),
-            clips: (!clips.is_empty()).then(|| {
-                recorder.upload_buffer(
-                    UploadAllocatorSpec::vertex(
-                        "Image Clip Buffer",
-                        size_of::<DeviceRoundedClip>() as u64,
-                    ),
-                    &self.device,
-                    bytemuck::cast_slice(clips),
-                )
-            }),
-        }
-    }
-
     pub(crate) fn upload_glyph_instances<C: FrameCommandRecorder>(
         &self,
         recorder: &mut C,
@@ -4801,72 +4148,6 @@ impl GpuRenderer {
         true
     }
 
-    fn append_image_bitmap_draw_cmd(
-        &mut self,
-        image: &ImageBitmap,
-        rect: Rect,
-        clip: Option<Rect>,
-        sampling: ImageSampling,
-        space: DrawSpace,
-        images: &mut ImageBatch,
-    ) -> Result<(), String> {
-        let (viewport, root_scale) = (space.viewport, space.scale);
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            return Ok(());
-        }
-
-        let (device_quad, scissor_rect) =
-            if sampling == ImageSampling::Nearest && root_scale.is_finite() && root_scale > 0.0 {
-                let left_px = (rect.x * root_scale).round();
-                let top_px = (rect.y * root_scale).round();
-                let width_px = (rect.width * root_scale).round().max(1.0);
-                let height_px = (rect.height * root_scale).round().max(1.0);
-                let snapped_rect = Rect {
-                    x: left_px / root_scale,
-                    y: top_px / root_scale,
-                    width: width_px / root_scale,
-                    height: height_px / root_scale,
-                };
-                let right_px = left_px + width_px;
-                let bottom_px = top_px + height_px;
-                (
-                    [
-                        [left_px, top_px],
-                        [right_px, top_px],
-                        [left_px, bottom_px],
-                        [right_px, bottom_px],
-                    ],
-                    snapped_rect,
-                )
-            } else {
-                (
-                    rect_to_quad(rect).map(|[x, y]| [x * root_scale, y * root_scale]),
-                    rect,
-                )
-            };
-
-        let Some(scissor) = scissor_rect_for_layer(scissor_rect, clip, root_scale, viewport) else {
-            return Ok(());
-        };
-        let Some(uv_rect) = image_uv_rect(image, None) else {
-            return Ok(());
-        };
-
-        let index_start = push_image_quad(
-            (&mut images.vertices, &mut images.indices),
-            device_quad,
-            [1.0, 1.0, 1.0, 1.0],
-            &uv_rect,
-        );
-        images.cmds.push(ImageDrawCmd {
-            index_start,
-            scissor,
-            image: self.image_binding(image, sampling)?,
-            clip: None,
-        });
-        Ok(())
-    }
-
     /// Appends `text_draw` as a rasterized image if `viewport` shows it.
     pub(crate) fn append_text_image_draw_cmds(
         &mut self,
@@ -4954,14 +4235,25 @@ impl GpuRenderer {
             width: image.width() as f32 / root_scale,
             height: image.height() as f32 / root_scale,
         };
-        self.append_image_bitmap_draw_cmd(
+        images.push_bitmap(
             &image,
-            draw_rect,
-            clip,
+            (draw_rect, clip),
             sampling_under(ImageSampling::Nearest, viewport.transform),
             space,
-            images,
+            &mut self.image_uploader(),
         )
+    }
+
+    // The uploader a draw of an image goes through, over the textures
+    // uploaded so far.
+    pub(crate) fn image_uploader(&mut self) -> ImageUploader<'_> {
+        ImageUploader {
+            textures: &mut self.images,
+            pipelines: &self.pipelines,
+            queue: &self.queue,
+            executor: &mut self.frame_graph_executor,
+            stats: &self.frame_stats,
+        }
     }
 
     fn text_raster_geometry(
@@ -5238,6 +4530,11 @@ mod text_resources;
 pub(crate) use image_draws::{
     ImageBatch, ImageDrawCmd, ImageSlot, place_image_draws, resolve_image_geometry,
 };
+mod depth_targets;
+use depth_targets::DepthTargets;
+mod frame_history;
+use frame_history::FrameHistory;
+pub use frame_history::frames_presented;
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
 mod shape_pipeline;
@@ -5257,14 +4554,11 @@ use glyph_draws::{
     shared_glyph_clip, turned_glyph_spec,
 };
 use image_draws::{
-    CachedImageTexture, ImageBindGroups, ImageBinding, ImageUvRect, ImageVariant,
-    apply_filter_to_bitmap, create_image_pipeline, image_index_spec, image_sampler_descriptor,
-    image_uv_rect, image_vertex_spec, push_image_quad, resolve_image_geometry_with_delta,
-    sampling_under, tint_for_image,
+    ImageBindGroups, ImageBinding, ImageUvRect, ImageVariant, create_image_pipeline,
+    image_sampler_descriptor, sampling_under,
 };
 use shadow_cache::{
-    CachedShadowSurface, MAX_SHADOW_SURFACE_CACHE_BYTES, MAX_SHADOW_SURFACE_CACHE_ITEMS,
-    ShadowSurfaceCacheKey, device_pixel_bounds, shadow_scene, shape_shadow_surface_cache_key,
+    ShadowSurfaces, device_pixel_bounds, shadow_scene, shape_shadow_surface_cache_key,
     skip_shadow_draws,
 };
 use shape_pipeline::{LINE_KINDS, shape_shader_code};
