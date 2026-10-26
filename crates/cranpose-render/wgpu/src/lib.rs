@@ -226,6 +226,19 @@ enum PresentBackend {
     Threaded(PresentHandle),
 }
 
+impl PresentBackend {
+    // The synchronous renderer, or the error a call that needs one reports.
+    fn sync_mut(&mut self) -> Result<&mut SyncPresenter, WgpuRendererError> {
+        match self {
+            Self::Sync(sync) => Ok(sync),
+            _ => Err(WgpuRendererError::Wgpu(
+                "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
+                    .to_string(),
+            )),
+        }
+    }
+}
+
 /// What [`WgpuRenderer::publish_frame`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishOutcome {
@@ -560,16 +573,10 @@ impl WgpuRenderer {
         height: u32,
         image: frame::ImageContent,
     ) -> Result<(), WgpuRendererError> {
-        let PresentBackend::Sync(sync) = &mut self.backend else {
-            return Err(WgpuRendererError::Wgpu(
-                "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
-                    .to_string(),
-            ));
-        };
         let SyncPresenter {
             renderer: gpu_renderer,
             submit,
-        } = &mut **sync;
+        } = self.backend.sync_mut()?;
         let packet = self
             .frontend
             .build_frame_packet(width, height, self.renderer_epoch, self.surface_epoch)
@@ -637,16 +644,10 @@ impl WgpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<CapturedFrame, WgpuRendererError> {
-        let PresentBackend::Sync(sync) = &mut self.backend else {
-            return Err(WgpuRendererError::Wgpu(
-                "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
-                    .to_string(),
-            ));
-        };
         let SyncPresenter {
             renderer: gpu_renderer,
             submit,
-        } = &mut **sync;
+        } = self.backend.sync_mut()?;
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
@@ -1126,16 +1127,10 @@ impl WgpuRenderer {
         height: u32,
         packet: HeldFramePacket,
     ) -> Result<PresentOutcome, WgpuRendererError> {
-        let PresentBackend::Sync(sync) = &mut self.backend else {
-            return Err(WgpuRendererError::Wgpu(
-                "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
-                    .to_string(),
-            ));
-        };
         let SyncPresenter {
             renderer: gpu_renderer,
             submit,
-        } = &mut **sync;
+        } = self.backend.sync_mut()?;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
             submit,
