@@ -47,7 +47,7 @@ fn apply_draw_commands_scales_round_rect_radii_with_uniform_axis_scale() {
         &mut scene,
     );
 
-    let shape = scene.shapes[0].shape.expect("rounded shape");
+    let shape = scene.shapes[0].outline.rounded().expect("rounded shape");
     let radii = shape.radii();
     assert!((radii.top_left - 5.0).abs() < 1e-6);
     assert!((radii.top_right - 5.0).abs() < 1e-6);

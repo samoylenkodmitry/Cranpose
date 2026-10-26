@@ -598,9 +598,9 @@ impl Drop for Panel<'_> {
     }
 }
 
-/// `len` encoded pixels in memory of the heap's capabilities.
-pub(crate) struct PixelBuffer {
-    pixels: NonNull<u16>,
+/// `len` pixels in memory of the heap's capabilities, zeroed.
+pub(crate) struct PixelBuffer<T = u16> {
+    pixels: NonNull<T>,
     len: usize,
 }
 
@@ -614,23 +614,31 @@ impl PixelBuffer {
     pub(crate) fn in_psram(len: usize) -> Option<Self> {
         Self::with_caps(len, sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT)
     }
+}
+
+impl<T: bytemuck::Zeroable> PixelBuffer<T> {
+    // Internal memory, which the CPU reads and writes without a cache: the
+    // heap of the ESP32-S3 serves its default allocations from PSRAM first.
+    pub(crate) fn internal(len: usize) -> Result<Self, SurfaceError> {
+        Self::with_caps(len, sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT).ok_or(SurfaceError)
+    }
 
     fn with_caps(len: usize, caps: u32) -> Option<Self> {
-        let memory = unsafe { sys::heap_caps_calloc(len, size_of::<u16>(), caps) };
-        let pixels = NonNull::new(memory.cast::<u16>())?;
+        let memory = unsafe { sys::heap_caps_calloc(len, size_of::<T>(), caps) };
+        let pixels = NonNull::new(memory.cast::<T>())?;
         Some(Self { pixels, len })
     }
 
-    pub(crate) fn as_slice(&self) -> &[u16] {
+    pub(crate) fn as_slice(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.pixels.as_ptr(), self.len) }
     }
 
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [u16] {
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.pixels.as_ptr(), self.len) }
     }
 }
 
-impl Drop for PixelBuffer {
+impl<T> Drop for PixelBuffer<T> {
     fn drop(&mut self) {
         unsafe { sys::heap_caps_free(self.pixels.as_ptr().cast()) };
     }

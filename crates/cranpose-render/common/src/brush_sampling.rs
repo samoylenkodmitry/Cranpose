@@ -177,17 +177,24 @@ impl DitherAxis {
         // `pixel - origin + 0.5`, exactly, so its cell is
         // `max(pixel - origin, 0) + 1` without the float steps.
         let cell = match self.whole_origin {
-            Some(origin) if pixel.abs() < WHOLE_COORDINATES as i32 => {
-                (pixel - origin).max(0) as u32 + 1
-            }
+            Some(origin) if pixel.abs() < WHOLE_PIXELS => (pixel - origin).max(0) as u32 + 1,
             _ => dither_cell(pixel as f32 + 0.5 - self.origin),
         };
         (cell & 3) as usize
+    }
+
+    /// The cell of `start`, when the cells of the pixels `start..end` step
+    /// by one from it and start over after the fourth: from a whole origin
+    /// on, they do.
+    pub fn stepping_cell(self, start: i32, end: i32) -> Option<usize> {
+        let origin = self.whole_origin?;
+        (start >= origin && start > -WHOLE_PIXELS && end <= WHOLE_PIXELS).then(|| self.cell(start))
     }
 }
 
 // Below this magnitude a pixel's centre and a whole origin subtract exactly.
 const WHOLE_COORDINATES: f32 = 4_194_304.0;
+const WHOLE_PIXELS: i32 = 4_194_304;
 
 #[cfg(test)]
 #[path = "tests/brush_sampling_tests.rs"]

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds Espressif's QEMU with TCG plugins, which its release builds leave
-# out, and the instruction cache plugin icache.c beside this script, into
+# out, and the cache plugin cache.c beside this script, into
 # ~/.local/esp-qemu-plugins. The same QEMU tag as scripts/esp32/setup.sh.
 # Needs a C compiler, ninja, pkg-config, glib, pixman, libgcrypt and libslirp
 # (Homebrew: brew install ninja pkgconf glib pixman libgcrypt libslirp).
@@ -30,5 +30,5 @@ case "$(uname -s)" in
 esac
 # shellcheck disable=SC2046,SC2086
 cc -O2 -fPIC -I"$source_dir/include/qemu" $(pkg-config --cflags glib-2.0) $link \
-    $(pkg-config --libs glib-2.0) -o "$install_dir/libicache.so" "$here/icache.c"
+    $(pkg-config --libs glib-2.0) -o "$install_dir/libcache.so" "$here/cache.c"
 echo "QEMU with plugins and the cache plugin are in $install_dir"

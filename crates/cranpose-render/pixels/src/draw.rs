@@ -18,7 +18,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     pipeline,
-    scene::{RasterScene, Scene},
+    scene::{Outline, RasterScene, Scene},
 };
 
 mod image;
@@ -242,8 +242,8 @@ fn clear_frame(frame: &mut [u8]) {
     fill_pixels(frame.as_chunks_mut::<4>().0, [18, 18, 24, 255]);
 }
 
-/// Paints every pixel of `pixels` with `bytes`: as whole 32-bit words where
-/// the pixels are aligned for them, a store a pixel instead of four.
+// Paints every pixel of `pixels` with `bytes`: as whole 32-bit words where
+// the pixels are aligned for them, a store a pixel instead of four.
 fn fill_pixels(pixels: &mut [[u8; 4]], bytes: [u8; 4]) {
     match bytemuck::try_cast_slice_mut::<[u8; 4], u32>(pixels) {
         Ok(words) => fill_words(words, u32::from_ne_bytes(bytes)),
@@ -251,14 +251,37 @@ fn fill_pixels(pixels: &mut [[u8; 4]], bytes: [u8; 4]) {
     }
 }
 
-/// `words.fill(word)` four words a step: a step of the plain loop stores one
-/// word, and its counter and branch cost more than the store.
+// `words.fill(word)` four words a step: a step of the plain loop stores one
+// word, and its counter and branch cost more than the store.
 fn fill_words(words: &mut [u32], word: u32) {
     let (quads, rest) = words.as_chunks_mut::<4>();
     for quad in quads {
         *quad = [word; 4];
     }
     rest.fill(word);
+}
+
+// Paints `pixels` with the four pixels of `pattern` over and over from the
+// first: as whole 32-bit words where the pixels are aligned for them, a
+// store a pixel instead of four.
+fn fill_pattern(pixels: &mut [[u8; 4]], pattern: [[u8; 4]; 4]) {
+    match bytemuck::try_cast_slice_mut::<[u8; 4], u32>(pixels) {
+        Ok(words) => repeat(words, pattern.map(u32::from_ne_bytes)),
+        Err(_) => repeat(pixels, pattern),
+    }
+}
+
+// Four items a step: a step of the plain loop stores one item, and its
+// counter and branch cost more than the store.
+fn repeat<T: Copy>(items: &mut [T], pattern: [T; 4]) {
+    let (quads, rest) = items.as_chunks_mut::<4>();
+    for quad in quads {
+        *quad = pattern;
+    }
+    // At most three items: a copy of a slice calls memcpy for them.
+    for (item, &value) in rest.iter_mut().zip(&pattern) {
+        *item = value;
+    }
 }
 
 fn draw_raster_scene(
@@ -600,8 +623,19 @@ impl ShapeRows<'_, '_> {
                 (draw.blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
                     .then(|| opaque_bytes(color))
             });
+            let opaque = match bytes {
+                [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
+                _ => None,
+            };
             for (start, end) in row_runs {
-                for (px, dst) in (start..).zip(target.row(py, start, end)) {
+                let pixels = target.row(py, start, end);
+                if let Some(cells) = opaque
+                    && let Some(first) = columns.stepping_cell(start, end)
+                {
+                    fill_pattern(pixels, [0, 1, 2, 3].map(|step| cells[(first + step) & 3]));
+                    continue;
+                }
+                for (px, dst) in (start..).zip(pixels) {
                     let cell = columns.cell(px);
                     match bytes[cell] {
                         Some(bytes) => *dst = bytes,
@@ -795,31 +829,35 @@ impl ShapeCoverage {
     /// `snap_delta` as the rect was; `None` when it covers nothing.
     fn of(draw: &crate::scene::DrawShape, rect: Rect, snap_delta: Point) -> Option<Self> {
         let shift = |point: Point| Point::new(point.x + snap_delta.x, point.y + snap_delta.y);
-        if let Some(line) = draw.line {
-            return (!line.is_degenerate())
-                .then(|| Self::Line(line.placed(shift(line.start), shift(line.end), 1.0)));
-        }
-        if let Some(trapezoid) = draw.trapezoid {
-            return Some(Self::Trapezoid(
-                trapezoid.translate(snap_delta.x, snap_delta.y),
-            ));
-        }
-        if let Some(arc) = draw.arc {
-            return (!arc.is_degenerate()).then(|| {
-                Self::Arc(ArcGeometry {
-                    center: shift(arc.center),
-                    ..arc
-                })
-            });
-        }
-        let outset = draw.stroke.map_or(0.0, |stroke| stroke.half_width());
-        let radii = draw.shape.map(|shape| {
+        let (shape, stroke) = match draw.outline {
+            Outline::Line(line) => {
+                return (!line.is_degenerate())
+                    .then(|| Self::Line(line.placed(shift(line.start), shift(line.end), 1.0)));
+            }
+            Outline::Trapezoid(trapezoid) => {
+                return Some(Self::Trapezoid(
+                    trapezoid.translate(snap_delta.x, snap_delta.y),
+                ));
+            }
+            Outline::Arc(arc) => {
+                return (!arc.is_degenerate()).then(|| {
+                    Self::Arc(ArcGeometry {
+                        center: shift(arc.center),
+                        ..arc
+                    })
+                });
+            }
+            Outline::Stroke(shape, stroke) => (shape, Some(stroke)),
+            Outline::Fill(shape) => (shape, None),
+        };
+        let outset = stroke.map_or(0.0, |stroke| stroke.half_width());
+        let radii = shape.map(|shape| {
             shape.resolve(
                 (rect.width - outset * 2.0).max(0.0),
                 (rect.height - outset * 2.0).max(0.0),
             )
         });
-        match draw.stroke {
+        match stroke {
             Some(stroke) if !stroke.is_visible() => None,
             Some(stroke) => Some(Self::Stroke {
                 rect,

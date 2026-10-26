@@ -198,12 +198,14 @@ esp32-profile board mode="demo" seconds="40": _disk-guard
 # For the ES3C35P's IRAM list (see crates/cranpose-platform/esp-idf/
 # components/cranpose_hot_code/README.md): builds the demo for QEMU's ESP32-S3
 # without the IRAM section and counts the misses of 120 frames. Needs
-# scripts/esp32/icache/setup.sh once. `mode` as for esp32-profile.
-# Profiles the demo in QEMU by its instruction cache misses, without a board.
-esp32-sim-profile mode="demo": _disk-guard
+# scripts/esp32/cache/setup.sh once. `mode` as for esp32-profile.
+# Profiles the demo in QEMU by its instruction cache misses, without a board;
+# with cache="data", by the data cache's misses at the code that made them,
+# into target/esp32/sim-<mode>-data.log.
+esp32-sim-profile mode="demo" cache="instructions": _disk-guard
     . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;{{justfile_directory()}}/scripts/esp32/sdkconfig.no_hot_code" CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-sim cargo build --release {{ if mode == "demo" { "" } else if mode == "workload" { "--features workload" } else if mode == "dashboard" { "--features dashboard" } else { "--features text-" + mode } }}
     mkdir -p target/esp32 && cp target/esp32-sim/xtensa-esp32s3-espidf/release/esp32-demo target/esp32/sim-{{mode}}.elf
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}.log --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
 
 # Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
 esp32-clippy: _disk-guard
