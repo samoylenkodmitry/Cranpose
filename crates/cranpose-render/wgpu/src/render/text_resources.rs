@@ -665,8 +665,6 @@ impl TextResources {
         else {
             return true;
         };
-        let texel = self.glyph_atlas.texel();
-
         // A retained run's quads are uploaded whole: under a turn only the
         // shared path cuts them to a clip.
         let clip_needs_cut = !viewport.transform.is_identity() && text_draw.clip.is_some();
@@ -678,7 +676,7 @@ impl TextResources {
                 GlyphRunQuads {
                     glyphs: &run.glyphs,
                     entries,
-                    texel,
+                    texel: self.glyph_atlas.texel(),
                     bounds: run.bounds,
                 },
                 (viewport, raster_rect),
