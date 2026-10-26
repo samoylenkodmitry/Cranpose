@@ -961,8 +961,7 @@ enum FrameRoot {
 enum OutputStep<'a> {
     /// Nothing: the frame rendered into the presentable image.
     None,
-    /// The output conversion into the view, from the bind group's source,
-    /// through the converter of `mode`.
+    /// The output conversion of `mode` into the view, from the bind group.
     Convert {
         view: &'a wgpu::TextureView,
         bind_group: &'a wgpu::BindGroup,

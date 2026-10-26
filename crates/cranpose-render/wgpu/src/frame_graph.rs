@@ -2140,8 +2140,7 @@ pub(crate) const TEST_READBACK: wgpu::BufferUsages = wgpu::BufferUsages::COPY_SR
 #[cfg(not(test))]
 pub(crate) const TEST_READBACK: wgpu::BufferUsages = wgpu::BufferUsages::empty();
 
-/// Writes `data` to `destination` through `queue`, counted as one upload
-/// write of the frame.
+// Writes `data` to `destination`, counted as one upload write of the frame.
 pub(crate) fn upload_texture(
     queue: &wgpu::Queue,
     destination: wgpu::TexelCopyTextureInfo<'_>,
