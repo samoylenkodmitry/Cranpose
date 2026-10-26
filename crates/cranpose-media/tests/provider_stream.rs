@@ -46,7 +46,8 @@ impl MediaSourceOpener for Provider {
                 return;
             }
             let block = [1_u8; 16 * 1024];
-            for _ in 0..data_len as usize / block.len() {
+            let data_len = usize::try_from(data_len).expect("fixture size fits usize");
+            for _ in 0..data_len / block.len() {
                 if writer.write_all(&block).is_err() {
                     break;
                 }
