@@ -107,13 +107,13 @@ fn request_focus_on_a_requester_with_no_focus_target_fails_predictably() {
     let requester = FocusRequester::new();
 
     let _chain = attach_at(
-        1,
+        NodeId(1),
         vec![cranpose_foundation::modifier_element(
             FocusRequesterElement::new(requester.clone()),
         )],
     );
 
-    assert_eq!(requester.node_id(), Some(1));
+    assert_eq!(requester.node_id(), Some(NodeId(1)));
     assert_eq!(
         requester.request_focus(),
         Err(FocusRequestError::NoFocusTarget)
@@ -126,7 +126,7 @@ fn a_focus_requester_moves_focus_onto_its_paired_focus_target() {
     let requester = FocusRequester::new();
 
     let chain = attach_at(
-        2,
+        NodeId(2),
         vec![
             cranpose_foundation::modifier_element(FocusRequesterElement::new(requester.clone())),
             cranpose_foundation::modifier_element(FocusTargetElement::new()),
@@ -137,7 +137,7 @@ fn a_focus_requester_moves_focus_onto_its_paired_focus_target() {
 
     let target = chain.node::<FocusTargetNode>(1).expect("focus target node");
     assert_eq!(target.focus_state(), FocusState::Active);
-    assert_eq!(focus_dispatch::active_focus_target(), Some(2));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(2)));
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn request_focus_after_the_node_leaves_composition_fails_predictably() {
     let requester = FocusRequester::new();
 
     let mut context = BasicModifierNodeContext::new();
-    context.set_node_id(Some(3));
+    context.set_node_id(Some(NodeId(3)));
     let mut chain = ModifierNodeChain::new();
     chain.update(
         vec![
@@ -171,7 +171,7 @@ fn focus_survives_the_requested_node_being_recomposed() {
     let requester = FocusRequester::new();
 
     let mut context = BasicModifierNodeContext::new();
-    context.set_node_id(Some(4));
+    context.set_node_id(Some(NodeId(4)));
     let mut chain = ModifierNodeChain::new();
     let make_elements = || {
         vec![
@@ -200,7 +200,7 @@ fn focus_survives_the_requested_node_being_recomposed() {
         FocusState::Active,
         "recomposing the focused node must not reset its focus state"
     );
-    assert_eq!(focus_dispatch::active_focus_target(), Some(4));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(4)));
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn requesting_focus_from_inside_on_focus_changed_does_not_double_borrow_or_recur
     let bounced_for_callback = Rc::clone(&bounced);
 
     let chain_a = attach_at(
-        10,
+        NodeId(10),
         vec![
             cranpose_foundation::modifier_element(FocusRequesterElement::new(requester_a.clone())),
             cranpose_foundation::modifier_element(FocusTargetElement::with_callback(
@@ -230,7 +230,7 @@ fn requesting_focus_from_inside_on_focus_changed_does_not_double_borrow_or_recur
         ],
     );
     let chain_b = attach_at(
-        20,
+        NodeId(20),
         vec![
             cranpose_foundation::modifier_element(FocusRequesterElement::new(requester_b)),
             cranpose_foundation::modifier_element(FocusTargetElement::new()),
@@ -247,5 +247,5 @@ fn requesting_focus_from_inside_on_focus_changed_does_not_double_borrow_or_recur
     let target_b = chain_b.node::<FocusTargetNode>(1).unwrap();
     assert_eq!(target_a.focus_state(), FocusState::Inactive);
     assert_eq!(target_b.focus_state(), FocusState::Active);
-    assert_eq!(focus_dispatch::active_focus_target(), Some(20));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(20)));
 }

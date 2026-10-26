@@ -59,7 +59,7 @@ fn an_eye_that_walks_back_out_of_a_doorway_stands_in_the_room_again() {
         eye.walk(Vec3::new(0.0, 0.0, -300.0));
         (inside, eye.pose())
     });
-    assert_eq!(&*inside.doorways, &[nested]);
+    assert_eq!(&*inside.doorways, &[nested.0]);
     assert!(
         outside.doorways.is_empty(),
         "walking back through the doorway leaves the space behind it: {outside:?}"
@@ -274,7 +274,7 @@ fn surfaces_the_eye_does_not_see_take_no_input() {
         }
         eye.pose()
     });
-    assert_eq!(&*walked.doorways, &[nested]);
+    assert_eq!(&*walked.doorways, &[nested.0]);
     assert_eq!(
         pressed
             .borrow()
@@ -296,7 +296,7 @@ fn an_eye_enters_the_space_of_a_scene_one_doorway_away() {
         nested,
     } = walk_room(Vec3::new(0.0, 0.0, -1000.0));
     let (unknown, entered, ahead) = with_scene(&mut composition, |mut view, applier, root| {
-        let unknown = eye.enter(scene + 1_000_000, eye.pose());
+        let unknown = eye.enter(NodeId(scene.0 + 1_000_000), eye.pose());
         // Where the panel behind the doorway stands 150 ahead of the eye.
         let standing = EyePose::standing(Vec3::new(0.0, 0.0, NESTED.1 - 150.0), 0.0, 0.0);
         let entered = eye.enter(nested, standing);
@@ -308,7 +308,7 @@ fn an_eye_enters_the_space_of_a_scene_one_doorway_away() {
         "a scene that is no space of the world is not entered"
     );
     assert!(entered);
-    assert_eq!(&*eye.pose().doorways, &[nested]);
+    assert_eq!(&*eye.pose().doorways, &[nested.0]);
     assert_eq!(
         ahead,
         Some("nested"),
@@ -331,7 +331,7 @@ fn an_eye_past_a_doorway_stands_where_it_walked_in_the_room_it_came_from() {
         camera_moved(&mut view, applier, (root, scene));
         (eye.pose(), eye.pose_in(scene))
     });
-    assert_eq!(&*inside.doorways, &[nested]);
+    assert_eq!(&*inside.doorways, &[nested.0]);
     let Some(seen) = seen_from_room else {
         panic!("the room the eye came from lies a doorway from it");
     };

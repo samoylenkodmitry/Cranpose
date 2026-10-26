@@ -14,7 +14,7 @@ fn failed_apply_abandons_root_slot_state() {
                 let _remembered = composer.remember(|| 17_i32);
                 composer.commands_mut().push(Command::callback(|_| {
                     Err(NodeError::MissingContext {
-                        id: 77,
+                        id: NodeId(77),
                         reason: "forced apply failure",
                     })
                 }));
@@ -25,7 +25,7 @@ fn failed_apply_abandons_root_slot_state() {
     assert_eq!(
         result,
         Err(NodeError::MissingContext {
-            id: 77,
+            id: NodeId(77),
             reason: "forced apply failure",
         })
     );

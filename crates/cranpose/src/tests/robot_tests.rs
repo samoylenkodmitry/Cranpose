@@ -123,12 +123,12 @@ fn find_button_in_trees(
 }
 
 fn sample_layout_box(
-    node_id: u64,
+    node_id: NodeId,
     rect: (f32, f32, f32, f32),
     children: Vec<LayoutBox>,
 ) -> LayoutBox {
     LayoutBox::new(
-        node_id as NodeId,
+        node_id,
         Rect {
             x: rect.0,
             y: rect.1,
@@ -148,7 +148,7 @@ fn sample_layout_box(
 }
 
 fn sample_semantics_node(
-    node_id: u64,
+    node_id: NodeId,
     role: SemanticsRole,
     clickable: bool,
     description: Option<&str>,
@@ -157,11 +157,11 @@ fn sample_semantics_node(
     let mut actions = Vec::new();
     if clickable {
         actions.push(SemanticsAction::Click {
-            handler: SemanticsCallback::new(node_id as NodeId),
+            handler: SemanticsCallback::new(node_id),
         });
     }
     SemanticsNode {
-        node_id: node_id as NodeId,
+        node_id,
         role,
         actions,
         children,
@@ -175,7 +175,7 @@ fn queries_find_a_drawn_control_ahead_of_the_canvas_that_drew_it() {
     use cranpose_ui::CanvasSemanticsNode;
 
     let mut canvas = sample_semantics_node(
-        2,
+        NodeId(2),
         SemanticsRole::Layout,
         true,
         Some("Settings screen"),
@@ -206,7 +206,7 @@ fn queries_find_a_drawn_control_ahead_of_the_canvas_that_drew_it() {
         ];
     });
     let bounds_by_node = HashMap::from_iter([(
-        2usize,
+        NodeId(2),
         SemanticRect {
             x: 10.0,
             y: 20.0,
@@ -251,7 +251,8 @@ fn queries_find_a_drawn_control_ahead_of_the_canvas_that_drew_it() {
 fn robot_snapshots_report_the_controls_a_canvas_published() {
     use cranpose_ui::{CanvasSemanticsNode, SemanticsWidgetRole};
 
-    let mut canvas = sample_semantics_node(2, SemanticsRole::Layout, false, None, Vec::new());
+    let mut canvas =
+        sample_semantics_node(NodeId(2), SemanticsRole::Layout, false, None, Vec::new());
     canvas.update_details(|details| {
         details.canvas_children = vec![
             CanvasSemanticsNode::control(
@@ -280,7 +281,7 @@ fn robot_snapshots_report_the_controls_a_canvas_published() {
     });
 
     let mut bounds_for = |node_id: NodeId| {
-        assert_eq!(node_id, 2);
+        assert_eq!(node_id, NodeId(2));
         SemanticRect {
             x: 10.0,
             y: 20.0,
@@ -305,7 +306,7 @@ fn robot_snapshots_report_the_controls_a_canvas_published() {
 
 fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {
     let button_label = sample_semantics_node(
-        3,
+        NodeId(3),
         SemanticsRole::Text {
             value: "Increase depth".into(),
         },
@@ -314,7 +315,7 @@ fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {
         Vec::new(),
     );
     let depth_label = sample_semantics_node(
-        4,
+        NodeId(4),
         SemanticsRole::Text {
             value: "Current depth: 15".into(),
         },
@@ -323,25 +324,35 @@ fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {
         Vec::new(),
     );
     let root = sample_semantics_node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         false,
         Some("Root"),
         vec![
-            sample_semantics_node(2, SemanticsRole::Button, true, None, vec![button_label]),
+            sample_semantics_node(
+                NodeId(2),
+                SemanticsRole::Button,
+                true,
+                None,
+                vec![button_label],
+            ),
             depth_label,
         ],
     );
     let layout = sample_layout_box(
-        1,
+        NodeId(1),
         (0.0, 0.0, 100.0, 100.0),
         vec![
             sample_layout_box(
-                2,
+                NodeId(2),
                 (10.0, 10.0, 40.0, 20.0),
-                vec![sample_layout_box(3, (12.0, 12.0, 36.0, 12.0), Vec::new())],
+                vec![sample_layout_box(
+                    NodeId(3),
+                    (12.0, 12.0, 36.0, 12.0),
+                    Vec::new(),
+                )],
             ),
-            sample_layout_box(4, (10.0, 40.0, 60.0, 12.0), Vec::new()),
+            sample_layout_box(NodeId(4), (10.0, 40.0, 60.0, 12.0), Vec::new()),
         ],
     );
     (root, layout)
@@ -436,8 +447,8 @@ fn robot_subtree_text_match_honors_exact_mode() {
 fn robot_semantics_export_uses_node_ids_for_bounds() {
     let (semantics, _) = sample_semantics_and_layout();
     let mut bounds_for = |node_id: NodeId| SemanticRect {
-        x: node_id as f32,
-        y: node_id as f32 * 2.0,
+        x: node_id.0 as f32,
+        y: node_id.0 as f32 * 2.0,
         width: 10.0,
         height: 5.0,
     };

@@ -1176,7 +1176,7 @@ pub(crate) fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) 
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Text(Box::new(cranpose_render_common::graph::TextPrimitiveNode {
-            node_id,
+            node_id: NodeId(node_id),
             rect,
             text: cranpose_ui::text::shared_plain_annotated_string(text),
             render_text: cranpose_ui::text::shared_plain_render_string(text),
@@ -1501,7 +1501,7 @@ pub(crate) fn contract_layer(
     }
 }
 
-pub(crate) const STORED_RUN_NODE: NodeId = 7_200;
+pub(crate) const STORED_RUN_NODE: NodeId = NodeId(7_200);
 
 pub(crate) fn stored_run_rect(index: usize) -> Rect {
     Rect {

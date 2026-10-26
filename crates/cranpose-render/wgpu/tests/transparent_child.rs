@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::graph::{CachePolicy, ProjectiveTransform, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
@@ -416,7 +417,7 @@ fn cached_backdrop_uses_the_current_modulated_opacity() {
             let Some(RenderNode::Layer(layer)) = page.last_mut() else {
                 panic!("backdrop layer");
             };
-            layer.node_id = Some(83);
+            layer.node_id = Some(NodeId(83));
             layer.cache_policy = CachePolicy::Auto;
             layer.graphics_layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
             layer.forget_raster_cache_hashes();

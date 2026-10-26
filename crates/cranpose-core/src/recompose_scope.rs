@@ -80,7 +80,7 @@ type OwnerLink = Cell<Option<(OwnerKind, Weak<RecomposeScopeInner>)>>;
 
 /// The node id a scope's `parent_hint` holds for none: ids index the
 /// applier's nodes, which never reach it.
-const NO_PARENT_HINT: NodeId = NodeId::MAX;
+const NO_PARENT_HINT: NodeId = NodeId(usize::MAX);
 
 pub(crate) struct RecomposeScopeInner {
     runtime: runtime::ScopeRuntime,

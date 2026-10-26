@@ -50,12 +50,12 @@ fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> Rende
         width: 128.0,
         height: 160.0,
     };
-    let mut card = card_layer(80_001, 20.0);
+    let mut card = card_layer(NodeId(80_001), 20.0);
     card.cache_policy = policy;
     card.graphics_layer.render_effect = Some(RenderEffect::blur(1.0));
     if nested {
         let mut glass = support::contract_layer(
-            Some(80_002),
+            Some(NodeId(80_002)),
             CachePolicy::None,
             card.local_bounds,
             ProjectiveTransform::identity(),
@@ -67,7 +67,7 @@ fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> Rende
         card.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
     }
     RenderGraph::new(support::contract_layer(
-        Some(80_000),
+        Some(NodeId(80_000)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
@@ -150,7 +150,7 @@ fn large_backdrops(radius: f32) -> RenderGraph {
             Color::BLACK,
         ));
         let mut glass = support::contract_layer(
-            Some(90_001 + index),
+            Some(NodeId(90_001 + index)),
             CachePolicy::Auto,
             pane,
             ProjectiveTransform::identity(),
@@ -160,7 +160,7 @@ fn large_backdrops(radius: f32) -> RenderGraph {
         let mut layer = glass;
         if index == 0 {
             layer = support::contract_layer(
-                Some(90_010),
+                Some(NodeId(90_010)),
                 CachePolicy::None,
                 pane,
                 ProjectiveTransform::identity(),
@@ -171,7 +171,7 @@ fn large_backdrops(radius: f32) -> RenderGraph {
         children.push(RenderNode::Layer(Box::new(layer)));
     }
     RenderGraph::new(support::contract_layer(
-        Some(90_000),
+        Some(NodeId(90_000)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
@@ -238,7 +238,7 @@ fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
         ))
     };
     let mut children = vec![run(
-        91_003,
+        NodeId(91_003),
         vec![DrawPrimitive::Rect {
             rect: bounds,
             brush: Brush::solid(Color(0.1, 0.1, 0.2, 1.0)),
@@ -267,7 +267,7 @@ fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
         });
     }
     let mut fill = support::contract_layer(
-        Some(91_002),
+        Some(NodeId(91_002)),
         CachePolicy::None,
         Rect {
             x: 35.5,
@@ -276,12 +276,12 @@ fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
             height: 240.0,
         },
         ProjectiveTransform::identity(),
-        vec![run(91_004, primitives)],
+        vec![run(NodeId(91_004), primitives)],
     );
     fill.clip_to_bounds = true;
     children.push(RenderNode::Layer(Box::new(fill)));
     let mut pane = support::contract_layer(
-        Some(91_001),
+        Some(NodeId(91_001)),
         CachePolicy::Auto,
         Rect {
             x: 0.0,
@@ -295,7 +295,7 @@ fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
     pane.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
     children.push(RenderNode::Layer(Box::new(pane)));
     RenderGraph::new(support::contract_layer(
-        Some(91_000),
+        Some(NodeId(91_000)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
@@ -345,10 +345,10 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
     let children = offsets
         .iter()
         .enumerate()
-        .map(|(index, y)| RenderNode::Layer(Box::new(card_layer(index + 1, *y))))
+        .map(|(index, y)| RenderNode::Layer(Box::new(card_layer(NodeId(index + 1), *y))))
         .collect();
     RenderGraph::new(support::contract_layer(
-        Some(10_000),
+        Some(NodeId(10_000)),
         CachePolicy::None,
         Rect {
             x: 0.0,
@@ -363,7 +363,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
 
 fn text_scroll_like_graph(y: f32) -> RenderGraph {
     RenderGraph::new(support::contract_layer(
-        Some(20_000),
+        Some(NodeId(20_000)),
         CachePolicy::None,
         Rect {
             x: 0.0,
@@ -373,7 +373,7 @@ fn text_scroll_like_graph(y: f32) -> RenderGraph {
         },
         ProjectiveTransform::identity(),
         vec![RenderNode::Layer(Box::new(text_layer(
-            77,
+            NodeId(77),
             16.0,
             y,
             "Markdown text row cache reuse",
@@ -383,7 +383,7 @@ fn text_scroll_like_graph(y: f32) -> RenderGraph {
 
 fn repeated_text_graph() -> RenderGraph {
     RenderGraph::new(support::contract_layer(
-        Some(20_001),
+        Some(NodeId(20_001)),
         CachePolicy::None,
         Rect {
             x: 0.0,
@@ -394,13 +394,13 @@ fn repeated_text_graph() -> RenderGraph {
         ProjectiveTransform::identity(),
         vec![
             RenderNode::Layer(Box::new(text_layer(
-                77,
+                NodeId(77),
                 16.0,
                 20.0,
                 "Repeated markdown heading",
             ))),
             RenderNode::Layer(Box::new(text_layer(
-                78,
+                NodeId(78),
                 16.0,
                 64.0,
                 "Repeated markdown heading",
@@ -603,10 +603,10 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
 }
 
 fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
-    let shaded = shaded_runtime_shader_layer(30_001, time);
+    let shaded = shaded_runtime_shader_layer(NodeId(30_001), time);
 
     let mut container = support::contract_layer(
-        Some(30_000),
+        Some(NodeId(30_000)),
         CachePolicy::Auto,
         Rect {
             x: 0.0,
@@ -621,7 +621,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     container.isolation.shape_clip = true;
 
     RenderGraph::new(support::contract_layer(
-        Some(30_002),
+        Some(NodeId(30_002)),
         CachePolicy::None,
         Rect {
             x: 0.0,
@@ -635,9 +635,9 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
 }
 
 fn shader_layer_graph(time: f32) -> RenderGraph {
-    let shaded = shaded_runtime_shader_layer(30_101, time);
+    let shaded = shaded_runtime_shader_layer(NodeId(30_101), time);
     RenderGraph::new(support::contract_layer(
-        Some(30_102),
+        Some(NodeId(30_102)),
         CachePolicy::None,
         Rect {
             x: 0.0,
@@ -756,7 +756,7 @@ fn scaled_shader_graph(
     empty: bool,
     declared: bool,
 ) -> RenderGraph {
-    let mut shaded = shaded_runtime_shader_layer(30_201, 0.25);
+    let mut shaded = shaded_runtime_shader_layer(NodeId(30_201), 0.25);
     shaded.cache_policy = CachePolicy::None;
     shaded.graphics_layer.scale_x = scale;
     shaded.graphics_layer.scale_y = scale;
@@ -929,7 +929,7 @@ fn uv_only_child_shaders_need_no_opt_in_to_avoid_extra_surface_passes() {
 }
 
 fn clipped_text_graph(y: f32) -> RenderGraph {
-    let mut layer = text_layer(77, 16.25, y, "Cached short label");
+    let mut layer = text_layer(NodeId(77), 16.25, y, "Cached short label");
     let RenderNode::Primitive(PrimitiveEntry {
         node: PrimitiveNode::Text(text),
         ..
@@ -972,7 +972,7 @@ fn nested_shadow_graph(padded: bool, scale: f32, shader: bool) -> RenderGraph {
         })),
     });
     let inner = support::contract_layer(
-        Some(90_002),
+        Some(NodeId(90_002)),
         CachePolicy::None,
         caster,
         ProjectiveTransform::identity(),
@@ -989,7 +989,7 @@ fn nested_shadow_graph(padded: bool, scale: f32, shader: bool) -> RenderGraph {
         caster
     };
     let mut outer = support::contract_layer(
-        Some(90_001),
+        Some(NodeId(90_001)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::uniform_scale(scale)

@@ -467,11 +467,8 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     pub(crate) fn activate_exact_retained_slot_with_known_children(
         &mut self,
         slot_id: SlotId,
-        known_children: &[u64],
+        known_children: &[NodeId],
     ) -> Option<RetainedSlotChildren> {
-        for &node_id in known_children {
-            NodeId::try_from(node_id).ok()?;
-        }
         if !self.ensure_pending_commands_applied() {
             return None;
         }
@@ -493,7 +490,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         for &virtual_node_id in activation.nodes {
             self.composer
                 .visit_node_children(virtual_node_id, |child, child_needs_relayout| {
-                    children_match &= expected.next() == Some(child as u64);
+                    children_match &= expected.next() == Some(child);
                     needs_relayout |= child_needs_relayout;
                 });
         }

@@ -1300,7 +1300,7 @@ impl Renderer for WgpuRenderer {
     }
 
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
-        const DEV_OVERLAY_NODE_ID: NodeId = NodeId::MAX;
+        const DEV_OVERLAY_NODE_ID: NodeId = NodeId(usize::MAX);
         let key = cranpose_render_common::dev_overlay::DevOverlayKey::new(text, viewport);
         if self.frontend.dev_overlay_graph.is_some()
             && self

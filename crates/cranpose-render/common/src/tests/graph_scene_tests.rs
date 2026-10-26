@@ -64,19 +64,19 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
         height: 30.0,
     };
     scene.push_hit(
-        1,
-        &[1, 9],
+        NodeId(1),
+        &[NodeId(1), NodeId(9)],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
             handlers: &first,
         },
     );
-    let captured = scene.find_target(1).expect("the first target");
+    let captured = scene.find_target(NodeId(1)).expect("the first target");
     let path_storage = scene.hits[0].capture_path.as_ptr();
     scene.clear_hits();
     assert!(scene.hits.is_empty());
-    assert!(scene.find_target(1).is_none());
+    assert!(scene.find_target(NodeId(1)).is_none());
     assert_eq!(scene.next_hit_z, 0);
     assert_eq!(
         Rc::strong_count(&first),
@@ -84,8 +84,8 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
         "after a clear only the captured target still shares the first slices"
     );
     scene.push_hit(
-        2,
-        &[2],
+        NodeId(2),
+        &[NodeId(2)],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
@@ -93,7 +93,7 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
         },
     );
     assert_eq!(scene.hits[0].capture_path.as_ptr(), path_storage);
-    assert_eq!(scene.hits[0].capture_path, [2]);
+    assert_eq!(scene.hits[0].capture_path, [NodeId(2)]);
     assert_eq!(scene.hits[0].z_index, 0);
     assert!(Rc::ptr_eq(&scene.hits[0].handlers, &second));
     let event = PointerEvent::new(
@@ -102,19 +102,19 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
         Point::new(5.0, 5.0),
     );
     scene
-        .find_target(2)
+        .find_target(NodeId(2))
         .expect("the second target")
         .dispatch(event.clone());
     assert_eq!(first_count.get(), 0);
     assert_eq!(second_count.get(), 1);
     captured.dispatch(event);
-    assert_eq!(captured.capture_path, [1, 9]);
+    assert_eq!(captured.capture_path, [NodeId(1), NodeId(9)]);
     assert_eq!(first_count.get(), 1);
     scene.clear_hits();
     assert_eq!(Rc::strong_count(&second), 1);
     scene.push_hit(
-        3,
-        &[3],
+        NodeId(3),
+        &[NodeId(3)],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
@@ -128,7 +128,7 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
 #[test]
 fn collecting_observation_owners_clears_an_empty_scene() {
     let scene = Scene::new();
-    let mut nodes = HashSet::from_iter([13, 17]);
+    let mut nodes = HashSet::from_iter([NodeId(13), NodeId(17)]);
     let capacity = nodes.capacity();
     assert!(scene.collect_retained_visual_observation_nodes(&mut nodes));
     assert!(nodes.is_empty());
@@ -160,8 +160,8 @@ fn rebuilding_clip_buffers_replaces_clips_without_changing_captured_targets() {
     let handler = make_handler(Rc::new(Cell::new(0)), false);
     let push = |scene: &mut Scene, clips: &[HitClip]| {
         scene.push_hit(
-            1,
-            &[1],
+            NodeId(1),
+            &[NodeId(1)],
             HitGeometry {
                 hit_clips: clips,
                 ..hit_geometry_for_rect(rect)
@@ -173,7 +173,7 @@ fn rebuilding_clip_buffers_replaces_clips_without_changing_captured_targets() {
         );
     };
     push(&mut scene, &[clip(left)]);
-    let captured = scene.find_target(1).unwrap();
+    let captured = scene.find_target(NodeId(1)).unwrap();
     let storage = scene.hits[0].hit_clips.as_ptr();
     assert!(captured.contains(25.0, 25.0));
     assert!(!captured.contains(75.0, 25.0));
@@ -206,8 +206,8 @@ fn hit_test_respects_hit_clip() {
         height: 40.0,
     };
     scene.push_hit(
-        1,
-        &[1],
+        NodeId(1),
+        &[NodeId(1)],
         HitGeometry {
             hit_clip_bounds: Some(clip),
             hit_clips: &[HitClip {
@@ -250,29 +250,29 @@ fn small_target(x: f32) -> Rect {
 #[test]
 fn a_press_beside_a_small_target_reaches_it_when_nothing_else_claims_the_point() {
     let mut scene = Scene::new();
-    push_input_target(&mut scene, 1, small_target(100.0));
+    push_input_target(&mut scene, NodeId(1), small_target(100.0));
 
     assert!(scene.hit_test(125.0, 110.0).is_empty());
     let near = scene
         .hit_test_near(125.0, 110.0)
         .expect("the press lands inside the target grown to 48");
-    assert_eq!(near.node_id, 1);
+    assert_eq!(near.node_id, NodeId(1));
     assert!(scene.hit_test_near(140.0, 110.0).is_none());
 }
 
 #[test]
 fn the_nearest_small_target_takes_the_press() {
     let mut scene = Scene::new();
-    push_input_target(&mut scene, 1, small_target(100.0));
-    push_input_target(&mut scene, 2, small_target(140.0));
+    push_input_target(&mut scene, NodeId(1), small_target(100.0));
+    push_input_target(&mut scene, NodeId(2), small_target(140.0));
 
     assert_eq!(
         scene.hit_test_near(122.0, 110.0).map(|hit| hit.node_id),
-        Some(1)
+        Some(NodeId(1))
     );
     assert_eq!(
         scene.hit_test_near(138.0, 110.0).map(|hit| hit.node_id),
-        Some(2)
+        Some(NodeId(2))
     );
 }
 
@@ -281,7 +281,7 @@ fn a_target_of_the_minimum_size_has_no_reach_beyond_its_box() {
     let mut scene = Scene::new();
     push_input_target(
         &mut scene,
-        1,
+        NodeId(1),
         Rect {
             x: 0.0,
             y: 0.0,
@@ -304,8 +304,8 @@ fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
     };
 
     scene.push_hit(
-        1,
-        &[1],
+        NodeId(1),
+        &[NodeId(1)],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
@@ -313,8 +313,8 @@ fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
         },
     );
     scene.push_hit(
-        2,
-        &[2],
+        NodeId(2),
+        &[NodeId(2)],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
@@ -322,16 +322,22 @@ fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
         },
     );
 
-    assert_eq!(scene.node_index.get(&1), Some(&0));
-    assert_eq!(scene.node_index.get(&2), Some(&1));
+    assert_eq!(scene.node_index.get(&NodeId(1)), Some(&0));
+    assert_eq!(scene.node_index.get(&NodeId(2)), Some(&1));
 
     let hits = scene.hit_test(10.0, 10.0);
     assert_eq!(
         hits.iter().map(|hit| hit.node_id).collect::<Vec<_>>(),
-        vec![2, 1]
+        vec![NodeId(2), NodeId(1)]
     );
-    assert_eq!(scene.find_target(1).map(|hit| hit.node_id), Some(1));
-    assert_eq!(scene.find_target(2).map(|hit| hit.node_id), Some(2));
+    assert_eq!(
+        scene.find_target(NodeId(1)).map(|hit| hit.node_id),
+        Some(NodeId(1))
+    );
+    assert_eq!(
+        scene.find_target(NodeId(2)).map(|hit| hit.node_id),
+        Some(NodeId(2))
+    );
 }
 
 #[test]
@@ -344,8 +350,8 @@ fn hit_test_rejects_points_in_rounded_corner_cutout() {
         height: 40.0,
     };
     scene.push_hit(
-        1,
-        &[1],
+        NodeId(1),
+        &[NodeId(1)],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: Some(RoundedCornerShape::uniform(20.0)),
@@ -372,8 +378,8 @@ fn dispatch_stops_after_event_consumed() {
     let count_second = Rc::new(Cell::new(0));
 
     let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
+        node_id: NodeId(1),
+        capture_path: vec![NodeId(1)],
         geometry: hit_geometry_for_rect(Rect {
             x: 0.0,
             y: 0.0,
@@ -404,8 +410,8 @@ fn dispatch_delivers_terminal_events_after_consumption_for_cleanup() {
     let count_second = Rc::new(Cell::new(0));
 
     let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
+        node_id: NodeId(1),
+        capture_path: vec![NodeId(1)],
         geometry: hit_geometry_for_rect(Rect {
             x: 0.0,
             y: 0.0,
@@ -434,8 +440,8 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
     let parent_count = Rc::new(Cell::new(0));
 
     let child_hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 2,
-        capture_path: vec![2, 1],
+        node_id: NodeId(2),
+        capture_path: vec![NodeId(2), NodeId(1)],
         geometry: hit_geometry_for_rect(Rect {
             x: 8.0,
             y: 8.0,
@@ -447,8 +453,8 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
         ..Default::default()
     });
     let parent_hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
+        node_id: NodeId(1),
+        capture_path: vec![NodeId(1)],
         geometry: hit_geometry_for_rect(Rect {
             x: 0.0,
             y: 0.0,
@@ -482,8 +488,8 @@ fn dispatch_passes_local_position_to_pointer_inputs() {
     });
 
     let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
+        node_id: NodeId(1),
+        capture_path: vec![NodeId(1)],
         geometry: hit_geometry_for_rect(Rect {
             x: 10.0,
             y: 12.0,
@@ -517,8 +523,8 @@ fn hit_test_uses_exact_quad_for_transformed_region() {
         .inverse()
         .expect("transformed hit region should be invertible");
     scene.push_hit(
-        1,
-        &[1],
+        NodeId(1),
+        &[NodeId(1)],
         HitGeometry {
             rect: Rect {
                 x: 10.0,
@@ -566,8 +572,8 @@ fn dispatch_uses_inverse_transform_for_local_position() {
         .inverse()
         .expect("translated quad should be invertible");
     let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
+        node_id: NodeId(1),
+        capture_path: vec![NodeId(1)],
         geometry: HitGeometry {
             rect: Rect {
                 x: 20.0,
@@ -601,8 +607,8 @@ fn dispatch_with_applier_counts_live_modifier_slice_lookup_misses() {
     let handler_calls_for_handler = Rc::clone(&handler_calls);
     let diagnostics = test_diagnostics();
     let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 42,
-        capture_path: vec![42],
+        node_id: NodeId(42),
+        capture_path: vec![NodeId(42)],
         geometry: hit_geometry_for_rect(Rect {
             x: 0.0,
             y: 0.0,

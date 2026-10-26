@@ -1,3 +1,5 @@
+use cranpose_core::NodeId;
+
 use super::*;
 use crate::{
     Key,
@@ -123,7 +125,7 @@ fn validate_allows_growing_payload_and_node_cursors() {
             crate::slot::BRANCH_PATH_ROOT,
             || 17_i32,
         );
-        session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(31), 1, None, crate::slot::BRANCH_PATH_ROOT);
     }
 
     assert_eq!(state.group_stack[0].old_payload_len, 0);
@@ -182,7 +184,7 @@ fn validate_allows_finished_frame_after_direct_node_removal() {
         let mut session = table.write_session(&mut lifecycle, &mut state);
         let key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(key, None, None);
-        session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(31), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let _ = session.finish_group_body();
         session.end_group();
     }

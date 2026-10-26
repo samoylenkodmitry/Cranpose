@@ -251,7 +251,7 @@ pub(crate) struct EmbeddedHost {
     registry: Rc<NativeWindowRegistry>,
     input: EmbedInput,
     surfaces: BTreeMap<SurfaceId, SurfaceSlot>,
-    windows: HashMap<u64, SurfaceId>,
+    windows: HashMap<NodeId, SurfaceId>,
     overlays: HashMap<NodeId, SurfaceId>,
     pending_overlays: HashMap<SurfaceId, (NodeId, Rc<dyn WindowRootDescriptor>)>,
     next_surface: SurfaceId,
@@ -469,7 +469,7 @@ impl EmbeddedHost {
         }
     }
 
-    fn add_surface(&mut self, key: u64, renderer: WgpuRenderer, size: SurfaceSize) {
+    fn add_surface(&mut self, key: NodeId, renderer: WgpuRenderer, size: SurfaceSize) {
         let (width, height) = size.viewport();
         self.shell
             .add_window_surface(key, renderer, (size.width, size.height), (width, height));
@@ -493,17 +493,17 @@ impl EmbeddedHost {
             .into_iter()
             .filter(|request| request.options.visible)
             .collect();
-        let closed: Vec<u64> = self
+        let closed: Vec<NodeId> = self
             .windows
             .keys()
             .copied()
-            .filter(|key| !requests.iter().any(|request| request.key.raw() == *key))
+            .filter(|key| !requests.iter().any(|request| request.key.node() == *key))
             .collect();
         for key in closed {
             self.close_window(key);
         }
         for request in &requests {
-            match self.windows.get(&request.key.raw()).copied() {
+            match self.windows.get(&request.key.node()).copied() {
                 Some(surface) => self.refresh_window(surface, request),
                 None => self.open_window(request),
             }
@@ -523,7 +523,7 @@ impl EmbeddedHost {
         );
         let kind = SurfaceKind::Window(window);
         let renderer = renderer_for(&self.text_system, &self.gpu, scale, kind.transparent());
-        let key = request.key.raw();
+        let key = request.key.node();
         if let SurfaceKind::Window(window) = &kind {
             window.set_content_size(content);
         }
@@ -555,7 +555,7 @@ impl EmbeddedHost {
         }
     }
 
-    fn close_window(&mut self, key: u64) {
+    fn close_window(&mut self, key: NodeId) {
         let Some(surface) = self.windows.remove(&key) else {
             return;
         };
@@ -618,11 +618,10 @@ impl EmbeddedHost {
         let (width, height) = size.viewport();
         kind.set_content_size(Size::new(width, height));
         let renderer = renderer_for(&self.text_system, &self.gpu, size.scale, true);
-        let key = node as u64;
-        self.add_surface(key, renderer, size);
+        self.add_surface(node, renderer, size);
         self.surfaces.insert(
             surface,
-            SurfaceSlot::new(surface, RootId::Window(key), kind, &self.gpu.device, size),
+            SurfaceSlot::new(surface, RootId::Window(node), kind, &self.gpu.device, size),
         );
     }
 
@@ -631,7 +630,7 @@ impl EmbeddedHost {
             return;
         };
         if self.pending_overlays.remove(&surface).is_none() {
-            self.shell.remove_window_surface(node as u64);
+            self.shell.remove_window_surface(node);
             self.surfaces.remove(&surface);
         }
         self.commands

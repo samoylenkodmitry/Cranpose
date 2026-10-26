@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -30,7 +31,7 @@ fn blur_backdrop(x: f32, y: f32, width: f32, height: f32) -> LayerNode {
         height,
     };
     let mut backdrop = LayerNode {
-        node_id: Some(20),
+        node_id: Some(NodeId(20)),
         local_bounds: bounds,
         transform_to_parent: ProjectiveTransform::translation(x, y),
         graphics_layer: GraphicsLayer {
@@ -49,7 +50,7 @@ fn blur_backdrop(x: f32, y: f32, width: f32, height: f32) -> LayerNode {
 fn rounded_clip_scene(clip_x: f32) -> RenderGraph {
     let backdrop = blur_backdrop(16.0, 12.0, 12.0, 64.0);
     let clipped = LayerNode {
-        node_id: Some(21),
+        node_id: Some(NodeId(21)),
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -64,13 +65,13 @@ fn rounded_clip_scene(clip_x: f32) -> RenderGraph {
         }
         .into(),
         children: vec![RenderNode::Layer(Box::new(LayerNode {
-            node_id: Some(22),
+            node_id: Some(NodeId(22)),
             local_bounds: CONTENT,
             transform_to_parent: ProjectiveTransform::translation(-clip_x, -10.0),
             children: vec![RenderNode::DrawRun(DrawRunNode::for_command(
                 PrimitivePhase::BeforeChildren,
                 Some(DrawCommandId {
-                    node_id: 22,
+                    node_id: NodeId(22),
                     command_index: 0,
                     placement: DrawPlacement::Behind,
                 }),
@@ -106,7 +107,7 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
     let moving_run = DrawRunNode::for_command(
         PrimitivePhase::BeforeChildren,
         Some(DrawCommandId {
-            node_id: 21,
+            node_id: NodeId(21),
             command_index: 0,
             placement: DrawPlacement::Behind,
         }),
@@ -117,7 +118,7 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
         }],
     );
     let moving_layer = LayerNode {
-        node_id: Some(21),
+        node_id: Some(NodeId(21)),
         local_bounds: moving_rect,
         transform_to_parent: ProjectiveTransform::translation(edge_x, 32.0),
         children: vec![RenderNode::DrawRun(moving_run)],
@@ -145,7 +146,7 @@ fn inspector_glass(cache_policy: CachePolicy) -> RenderGraph {
     RenderGraph::new(LayerNode {
         local_bounds: CONTENT,
         children: vec![RenderNode::Layer(Box::new(LayerNode {
-            node_id: Some(71),
+            node_id: Some(NodeId(71)),
             local_bounds: bounds,
             graphics_layer: GraphicsLayer {
                 backdrop_effect: Some(RenderEffect::blur(6.0)),
@@ -182,7 +183,7 @@ fn nested_backdrop_scene(
         height: 16.0,
     };
     let backdrop = LayerNode {
-        node_id: Some(42),
+        node_id: Some(NodeId(42)),
         local_bounds: backdrop_bounds,
         transform_to_parent: ProjectiveTransform::translation(4.0, 4.0),
         graphics_layer: GraphicsLayer {
@@ -198,7 +199,7 @@ fn nested_backdrop_scene(
         ..LayerNode::default()
     };
     let nested = LayerNode {
-        node_id: Some(43),
+        node_id: Some(NodeId(43)),
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -221,7 +222,7 @@ fn nested_backdrop_scene(
         height: 16.0,
     };
     let composite = LayerNode {
-        node_id: Some(44),
+        node_id: Some(NodeId(44)),
         local_bounds: composite_bounds,
         transform_to_parent: ProjectiveTransform::translation(7.0, 6.0),
         graphics_layer: GraphicsLayer {
@@ -240,7 +241,7 @@ fn nested_backdrop_scene(
         height: 36.0,
     };
     let parent = LayerNode {
-        node_id: Some(41),
+        node_id: Some(NodeId(41)),
         local_bounds: parent_bounds,
         transform_to_parent: ProjectiveTransform::uniform_scale(2.0)
             .then(ProjectiveTransform::translation(20.0, 8.0)),
@@ -252,7 +253,7 @@ fn nested_backdrop_scene(
         ..LayerNode::default()
     };
     RenderGraph::new(LayerNode {
-        node_id: Some(40),
+        node_id: Some(NodeId(40)),
         local_bounds: CONTENT,
         children: vec![
             support::solid_rect(CONTENT, root_color),

@@ -408,7 +408,7 @@ impl NativeWindowSurface {
     }
 
     fn root_id(&self) -> RootId {
-        RootId::Window(self.key.raw())
+        RootId::Window(self.key.node())
     }
 }
 
@@ -1154,7 +1154,7 @@ impl App {
                     self.let_the_first_window_take_focus(&native);
                     self.remember_native_window_position(&native);
                     self.native_window_ids.insert(native.key, window_id);
-                    let id = crate::DesktopWindowId::Native(native.key.raw());
+                    let id = crate::DesktopWindowId::Native(native.key.node());
                     let window = Arc::clone(&native.window);
                     self.native_windows.insert(window_id, native);
                     self.integration
@@ -1647,7 +1647,7 @@ impl App {
             surface_config.height as f32 / scale_factor as f32,
         );
         let registry = Rc::clone(&self.native_window_registry);
-        let root_id = request.key.raw();
+        let root_id = request.key.node();
         request
             .root
             .set_size(cranpose_ui::Size::new(viewport.0, viewport.1));
@@ -2657,9 +2657,9 @@ impl App {
                 self.remember_native_window_position(native);
                 self.native_window_ids.remove(&native.key);
                 self.closed_native_windows.insert(native.key);
-                app.remove_window_surface(native.key.raw());
+                app.remove_window_surface(native.key.node());
                 self.integration.window_closed(
-                    crate::DesktopWindowId::Native(native.key.raw()),
+                    crate::DesktopWindowId::Native(native.key.node()),
                     app,
                     &self.event_proxy,
                 );

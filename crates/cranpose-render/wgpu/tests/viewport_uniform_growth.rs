@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
@@ -20,7 +21,7 @@ fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
                 DrawScopeDefault::new(Size::new(TILE as f32, TILE as f32), &mut draw_recording);
             draw.draw_rect(Brush::solid(Color::from_rgb_u8(ink[0], ink[1], ink[2])));
             let mut layer = support::layer_node(
-                Some(index as usize + 1),
+                Some(NodeId(index as usize + 1)),
                 TILE as f32,
                 TILE as f32,
                 vec![RenderNode::DrawRun(DrawRunNode::new(
@@ -41,7 +42,7 @@ fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
         })
         .collect();
     let mut graph = RenderGraph::new(support::layer_node(
-        Some(0),
+        Some(NodeId(0)),
         (COLUMNS * TILE) as f32,
         (rows * TILE) as f32,
         children,

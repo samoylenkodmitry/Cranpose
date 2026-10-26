@@ -1338,7 +1338,7 @@ fn translated_children(
     } else {
         let old_ids = &mut scratch.old_ids;
         old_ids.clear();
-        let (mut lowest, mut highest) = (NodeId::MAX, NodeId::MIN);
+        let (mut lowest, mut highest) = (NodeId(usize::MAX), NodeId(0));
         for child in &container.children {
             let RenderNode::Layer(layer) = child else {
                 return Err("child without node id");

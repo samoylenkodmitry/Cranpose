@@ -954,7 +954,7 @@ fn apply_model_operation(
                         },
                         Some(_) if replacing_node => {
                             let node_id = next_node_id;
-                            next_node_id += 1;
+                            next_node_id = next_node_id.next();
                             ModelNode {
                                 node_id,
                                 generation: 1,
@@ -963,7 +963,7 @@ fn apply_model_operation(
                         Some(node) => node.clone(),
                         None => {
                             let node_id = next_node_id;
-                            next_node_id += 1;
+                            next_node_id = next_node_id.next();
                             ModelNode {
                                 node_id,
                                 generation: 1,

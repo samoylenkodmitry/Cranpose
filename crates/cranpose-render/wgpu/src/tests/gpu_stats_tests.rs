@@ -61,7 +61,7 @@ fn layer_cache_counters_accumulate_and_reset() {
     stats.record_isolated_layer_render(
         7,
         8,
-        Some(9),
+        Some(NodeId(9)),
         Rect {
             x: 2.0,
             y: 3.0,
@@ -98,7 +98,7 @@ fn layer_cache_counters_accumulate_and_reset() {
     assert_eq!(snapshot.text_image_raster_bytes, 1748);
     let top_layers = snapshot.top_isolated_layers().collect::<Vec<_>>();
     assert_eq!(top_layers.len(), 1);
-    assert_eq!(top_layers[0].node_id, Some(9));
+    assert_eq!(top_layers[0].node_id, Some(NodeId(9)));
     assert_eq!(stats.layer_cache_hits.get(), 2);
     assert_eq!(stats.layer_cache_misses.get(), 1);
 
@@ -215,7 +215,7 @@ fn top_isolated_layers_keep_largest_runtime_surfaces() {
         stats.record_isolated_layer_render(
             16 + index as u32,
             8 + index as u32,
-            Some(index),
+            Some(NodeId(index)),
             Rect {
                 x: index as f32,
                 y: 0.0,
@@ -228,6 +228,12 @@ fn top_isolated_layers_keep_largest_runtime_surfaces() {
     let snapshot = stats.snapshot();
     let top_layers = snapshot.top_isolated_layers().collect::<Vec<_>>();
     assert_eq!(top_layers.len(), TOP_ISOLATED_LAYER_LIMIT);
-    assert_eq!(top_layers[0].node_id, Some(TOP_ISOLATED_LAYER_LIMIT + 1));
-    assert_eq!(top_layers[1].node_id, Some(TOP_ISOLATED_LAYER_LIMIT));
+    assert_eq!(
+        top_layers[0].node_id,
+        Some(NodeId(TOP_ISOLATED_LAYER_LIMIT + 1))
+    );
+    assert_eq!(
+        top_layers[1].node_id,
+        Some(NodeId(TOP_ISOLATED_LAYER_LIMIT))
+    );
 }

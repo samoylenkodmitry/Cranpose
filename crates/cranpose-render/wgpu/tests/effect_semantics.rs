@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -1899,7 +1900,7 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                    node_id: 201,
+                    node_id: NodeId(201),
                     rect: Rect {
                         x: 20.0,
                         y: 36.0,
@@ -2758,7 +2759,7 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 99,
+                node_id: NodeId(99),
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -3047,7 +3048,7 @@ fn translation_only_wrapper_with_text_style_fixture(
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                    node_id: 1,
+                    node_id: NodeId(1),
                     rect: Rect {
                         x: 4.0,
                         y: 2.0,
@@ -3119,7 +3120,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 101,
+                node_id: NodeId(101),
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -3196,7 +3197,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                    node_id: 102,
+                    node_id: NodeId(102),
                     rect: Rect {
                         x: 8.0,
                         y: 4.0,
@@ -3264,7 +3265,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 103,
+                node_id: NodeId(103),
                 rect: Rect {
                     x: 8.0,
                     y: 4.0,
@@ -3323,7 +3324,7 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 77,
+                node_id: NodeId(77),
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -3424,7 +3425,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 104,
+                node_id: NodeId(104),
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,

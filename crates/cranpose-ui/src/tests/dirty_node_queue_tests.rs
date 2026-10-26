@@ -62,13 +62,13 @@ fn a_scheduled_node_reaches_the_processor_once() {
             queue.name
         );
 
-        (queue.schedule)(7);
-        (queue.schedule)(7);
-        (queue.schedule)(9);
+        (queue.schedule)(NodeId(7));
+        (queue.schedule)(NodeId(7));
+        (queue.schedule)(NodeId(9));
         assert!((queue.has_pending)(), "{} holds the nodes", queue.name);
         assert_eq!(
             queue.take(),
-            vec![7, 9],
+            vec![NodeId(7), NodeId(9)],
             "{} hands each node once",
             queue.name
         );
@@ -84,7 +84,7 @@ fn a_scheduled_node_reaches_the_processor_once() {
 fn a_cleared_queue_hands_nothing() {
     let _app_context = app_context_test_scope();
     for queue in &QUEUES {
-        (queue.schedule)(3);
+        (queue.schedule)(NodeId(3));
         (queue.clear)();
         assert!(
             !(queue.has_pending)(),
@@ -104,8 +104,8 @@ fn nodes_a_panicking_processor_did_not_reach_stay_queued() {
     let _app_context = app_context_test_scope();
     for queue in &QUEUES {
         (queue.clear)();
-        (queue.schedule)(1);
-        (queue.schedule)(2);
+        (queue.schedule)(NodeId(1));
+        (queue.schedule)(NodeId(2));
         let mut first = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             (queue.process)(&mut |node_id| {
@@ -115,7 +115,11 @@ fn nodes_a_panicking_processor_did_not_reach_stay_queued() {
         }));
         assert!(result.is_err(), "{} passes the panic on", queue.name);
 
-        let unreached = if first == Some(1) { 2 } else { 1 };
+        let unreached = if first == Some(NodeId(1)) {
+            NodeId(2)
+        } else {
+            NodeId(1)
+        };
         assert_eq!(
             queue.take(),
             vec![unreached],
@@ -131,10 +135,10 @@ fn a_processor_schedules_work_for_the_next_pass() {
     let _app_context = app_context_test_scope();
     for queue in &QUEUES {
         (queue.clear)();
-        (queue.schedule)(1);
+        (queue.schedule)(NodeId(1));
         let mut nested = Vec::new();
         (queue.process)(&mut |_| {
-            (queue.schedule)(2);
+            (queue.schedule)(NodeId(2));
             (queue.process)(&mut |node_id| nested.push(node_id));
         });
         assert!(
@@ -143,7 +147,12 @@ fn a_processor_schedules_work_for_the_next_pass() {
             queue.name
         );
         assert!((queue.has_pending)(), "{} holds the new node", queue.name);
-        assert_eq!(queue.take(), vec![2], "{} hands it next pass", queue.name);
+        assert_eq!(
+            queue.take(),
+            vec![NodeId(2)],
+            "{} hands it next pass",
+            queue.name
+        );
     }
 }
 
@@ -155,7 +164,7 @@ fn each_app_context_has_its_own_queues() {
     for queue in &QUEUES {
         first.enter(|| {
             (queue.clear)();
-            (queue.schedule)(7);
+            (queue.schedule)(NodeId(7));
         });
         second.enter(|| {
             (queue.clear)();
@@ -164,9 +173,16 @@ fn each_app_context_has_its_own_queues() {
                 "{} of another context is empty",
                 queue.name
             );
-            (queue.schedule)(9);
+            (queue.schedule)(NodeId(9));
         });
-        first.enter(|| assert_eq!(queue.take(), vec![7], "{} of the first", queue.name));
-        second.enter(|| assert_eq!(queue.take(), vec![9], "{} of the second", queue.name));
+        first.enter(|| assert_eq!(queue.take(), vec![NodeId(7)], "{} of the first", queue.name));
+        second.enter(|| {
+            assert_eq!(
+                queue.take(),
+                vec![NodeId(9)],
+                "{} of the second",
+                queue.name
+            );
+        });
     }
 }

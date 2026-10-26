@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
     BlendMode, Brush, ColorFilter, DrawScope, DrawScopeDefault, Point, Size, Stroke,
 };
@@ -560,7 +561,7 @@ fn stored_gradient_run(records: usize, marked: usize, alpha: f32) -> RunDraw {
     placement.alpha = alpha;
     let mut run = RunDraw::whole(Arc::new(recorder), placement).expect("recorded run");
     run.command = Some(DrawCommandId {
-        node_id: 7,
+        node_id: NodeId(7),
         command_index: 0,
         placement: cranpose_render_common::style_shared::DrawPlacement::Behind,
     });

@@ -1132,7 +1132,7 @@ fn reader_focus_reveals_other_controls_without_replacing_the_active_editor() {
     assert_eq!(after.text, before.text);
     assert_eq!((after.selection_start, after.selection_end), (2, 4));
     assert_control_visible(&mut shell, "Payment", false);
-    assert!(!shell.accessibility_reveal(NodeId::MAX));
+    assert!(!shell.accessibility_reveal(NodeId(usize::MAX)));
     assert!(shell.accessibility_activate(payment, None));
     shell.update();
     assert_eq!(
@@ -1247,7 +1247,7 @@ fn reader_activation_targets_identity_and_preserves_pointer_position() {
     assert!(shell.primary().accessibility_activate(front, None));
     assert_eq!(count.get(), 11);
     assert_eq!(shell.surfaces[0].cursor, (350.0, 250.0));
-    assert!(!shell.accessibility_activate(usize::MAX, None));
+    assert!(!shell.accessibility_activate(NodeId(usize::MAX), None));
     assert!(!shell.accessibility_activate(rear, Some(999)));
     assert_eq!(count.get(), 11);
 }

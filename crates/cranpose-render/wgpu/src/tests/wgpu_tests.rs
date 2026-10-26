@@ -33,7 +33,7 @@ fn dev_overlay_is_recorded_outside_app_graph() {
             .is_none_or(|graph| graph.root.children.iter().all(|child| {
                 !matches!(
                     child,
-                    RenderNode::Layer(layer) if layer.node_id == Some(NodeId::MAX)
+                    RenderNode::Layer(layer) if layer.node_id == Some(NodeId(usize::MAX))
                 )
             })),
         "dev overlay must not be mixed into the app scene graph"
@@ -48,7 +48,7 @@ fn dev_overlay_is_recorded_outside_app_graph() {
         panic!("dev overlay should be the final top-level layer");
     };
 
-    assert_eq!(overlay.node_id, Some(NodeId::MAX));
+    assert_eq!(overlay.node_id, Some(NodeId(usize::MAX)));
     assert_eq!(
         overlay.graphics_layer.compositing_strategy,
         GraphicsLayer::default().compositing_strategy,

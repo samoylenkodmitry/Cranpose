@@ -34,7 +34,7 @@ impl Applier for RemoveFailingApplier {
 
 #[test]
 fn immediate_detached_subtree_disposal_propagates_remove_failure() {
-    const NODE_ID: NodeId = 77;
+    const NODE_ID: NodeId = NodeId(77);
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
         groups: vec![GroupRecord {
@@ -75,7 +75,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
 
 #[test]
 fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
-    const NODE_ID: NodeId = 88;
+    const NODE_ID: NodeId = NodeId(88);
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
         groups: vec![GroupRecord {
@@ -131,7 +131,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
             crate::slot::BRANCH_PATH_ROOT,
             || 70_i32,
         );
-        session.record_node_with_parent(21, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(21), 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         let grandchild = begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         session.set_group_scope(grandchild.group, labeled_scope(GRANDCHILD_SCOPE));
@@ -140,7 +140,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
             crate::slot::BRANCH_PATH_ROOT,
             || 110_i32,
         );
-        session.record_node_with_parent(22, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(22), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -379,7 +379,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
     const CHILD_B_KEY: u64 = 342;
     const CHILD_C_KEY: u64 = 343;
     const CHILD_B_SCOPE: ScopeId = 344;
-    const CHILD_B_NODE: NodeId = 345;
+    const CHILD_B_NODE: NodeId = NodeId(345);
 
     let mut harness = SlotHarness::new();
 
@@ -635,7 +635,7 @@ fn removing_conditional_child_returns_detached_subtree() {
             crate::slot::BRANCH_PATH_ROOT,
             || 17_i32,
         );
-        session.record_node_with_parent(41, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(41), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -665,13 +665,16 @@ fn removing_conditional_child_returns_detached_subtree() {
     );
     assert_eq!(detached.group_count(), 1);
     assert_eq!(detached.node_count(), 1);
-    assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41]);
+    assert_eq!(
+        detached.node_ids_iter().collect::<Vec<_>>(),
+        vec![NodeId(41)]
+    );
     let mut root_nodes = Vec::new();
     detached.collect_root_nodes_into(&mut root_nodes);
-    assert_eq!(root_nodes, vec![41]);
+    assert_eq!(root_nodes, vec![NodeId(41)]);
     assert_eq!(
         detached.node_states().collect::<Vec<_>>(),
-        vec![(41, NodeLifecycle::Active)]
+        vec![(NodeId(41), NodeLifecycle::Active)]
     );
     assert_eq!(scope_labels(detached.scopes()), vec![CHILD_SCOPE]);
     assert_eq!(detached.group_anchors().count(), 1);

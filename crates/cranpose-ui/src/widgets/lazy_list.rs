@@ -366,10 +366,7 @@ fn measure_lazy_list_item(
     let was_reused = scope.was_last_slot_reused().unwrap_or(false);
     inputs.state.record_composition(was_reused);
 
-    let root_node_ids: SmallNodeVec = root_children
-        .iter()
-        .map(|child| child.node_id() as u64)
-        .collect();
+    let root_node_ids: SmallNodeVec = root_children.iter().map(SubcomposeChild::node_id).collect();
 
     let cache = inputs.measured_item_cache.borrow();
     let has_cached_item = cache.get(&item_context, &root_node_ids).is_some();
@@ -488,7 +485,7 @@ fn measure_lazy_list_children(
 
         child_offsets.push(total_main_size);
         child_cross_axis_sizes.push(cross);
-        node_ids.push(child.node_id() as u64);
+        node_ids.push(child.node_id());
         if let Some(retained) = retained {
             measurements.push(retained);
         }
@@ -1462,7 +1459,7 @@ fn push_lazy_item_placements(
                 viewport_size - x - extent
             };
         }
-        placements.push(Placement::new(node_id as NodeId, x, y, 0));
+        placements.push(Placement::new(node_id, x, y, 0));
     }
 }
 

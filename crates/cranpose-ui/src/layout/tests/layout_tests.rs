@@ -26,25 +26,29 @@ fn semantics_keep_only_the_last_visible_modal_and_its_descendants() {
         })),
         hidden,
         children: vec![SemanticsNode {
-            node_id: id + 1,
+            node_id: NodeId(id.0 + 1),
             ..Default::default()
         }],
         ..Default::default()
     };
     let root = SemanticsNode {
-        node_id: 1,
-        children: vec![modal(2, false), modal(4, false), modal(6, true)],
+        node_id: NodeId(1),
+        children: vec![
+            modal(NodeId(2), false),
+            modal(NodeId(4), false),
+            modal(NodeId(6), true),
+        ],
         ..Default::default()
     };
     let tree = SemanticsTree::new(root);
-    assert_eq!(tree.root().node_id, 4);
-    assert_eq!(tree.root().children[0].node_id, 5);
-    let mut outer = modal(10, false);
-    outer.children.push(modal(12, false));
-    assert_eq!(SemanticsTree::new(outer).root().node_id, 12);
+    assert_eq!(tree.root().node_id, NodeId(4));
+    assert_eq!(tree.root().children[0].node_id, NodeId(5));
+    let mut outer = modal(NodeId(10), false);
+    outer.children.push(modal(NodeId(12), false));
+    assert_eq!(SemanticsTree::new(outer).root().node_id, NodeId(12));
     assert_eq!(
         SemanticsTree::new(SemanticsNode::default()).root().node_id,
-        0
+        NodeId(0)
     );
 }
 
@@ -2942,7 +2946,7 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
         "Initial layout should succeed"
     );
 
-    let fake_id: NodeId = 99999;
+    let fake_id: NodeId = NodeId(99999);
     let error_result = measure_layout(
         &mut applier,
         fake_id,

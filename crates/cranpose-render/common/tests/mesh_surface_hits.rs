@@ -60,8 +60,8 @@ const NEAR: Vec3 = Vec3::new(60.0, 20.0, 0.0);
 
 struct Probe {
     scene: Scene,
-    far: usize,
-    near: usize,
+    far: NodeId,
+    near: NodeId,
     pressed: Rc<RefCell<Vec<(&'static str, Point)>>>,
 }
 
@@ -133,7 +133,7 @@ fn probe() -> Probe {
     }
 }
 
-fn press(probe: &Probe, at: Point) -> Option<usize> {
+fn press(probe: &Probe, at: Point) -> Option<NodeId> {
     let target = probe.scene.hit_test(at.x, at.y).into_iter().next()?;
     for kind in [PointerEventKind::Down, PointerEventKind::Up] {
         target.dispatch(PointerEvent::new(kind, at, at));
@@ -650,7 +650,7 @@ fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_back_through
     });
     assert_eq!(
         &*walked.doorways,
-        &[nested],
+        &[nested.0],
         "the step through the doorway takes the eye into the space behind it"
     );
     assert_eq!(

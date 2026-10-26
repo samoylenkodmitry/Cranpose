@@ -378,7 +378,7 @@ fn translated_plain_text_fixture(translation_x: f32, translation_y: f32) -> Rend
                 None,
             ),
             text_node(
-                33,
+                NodeId(33),
                 Rect {
                     x: 10.0,
                     y: 8.0,
@@ -404,7 +404,7 @@ fn multiline_text_fixture() -> RenderFixture {
         220,
         100,
         vec![text_node(
-            1,
+            NodeId(1),
             Rect {
                 x: 8.0,
                 y: 8.0,
@@ -422,7 +422,7 @@ fn clipped_text_fixture() -> RenderFixture {
         220,
         100,
         vec![text_node(
-            2,
+            NodeId(2),
             Rect {
                 x: 8.0,
                 y: 40.0,
@@ -465,7 +465,7 @@ fn translated_text_decorations_fixture(translation_x: f32, translation_y: f32) -
         Point::new(translation_x, translation_y),
         true,
         vec![text_node_with_style(
-            3,
+            NodeId(3),
             Rect {
                 x: 6.0,
                 y: 6.0,

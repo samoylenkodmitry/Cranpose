@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cranpose_core::{DefaultScheduler, Runtime};
+use cranpose_core::{DefaultScheduler, NodeId, Runtime};
 
 use super::*;
 use crate::text::TextStyle;
@@ -583,7 +583,7 @@ fn a_focus_requester_makes_the_text_field_receive_keyboard_input() {
         let requester = FocusRequester::new();
 
         let mut context = BasicModifierNodeContext::new();
-        context.set_node_id(Some(1));
+        context.set_node_id(Some(NodeId(1)));
         let mut chain = ModifierNodeChain::new();
         chain.update(
             vec![
@@ -629,7 +629,7 @@ fn two_text_fields_hand_off_keyboard_focus_via_their_requesters() {
         let requester_b = FocusRequester::new();
 
         let mut context = BasicModifierNodeContext::new();
-        context.set_node_id(Some(1));
+        context.set_node_id(Some(NodeId(1)));
         let mut chain_a = ModifierNodeChain::new();
         chain_a.update(
             vec![
@@ -644,7 +644,7 @@ fn two_text_fields_hand_off_keyboard_focus_via_their_requesters() {
             &mut context,
         );
 
-        context.set_node_id(Some(2));
+        context.set_node_id(Some(NodeId(2)));
         let mut chain_b = ModifierNodeChain::new();
         chain_b.update(
             vec![
@@ -662,14 +662,14 @@ fn two_text_fields_hand_off_keyboard_focus_via_their_requesters() {
         requester_a.request_focus().expect("field a accepts focus");
         assert_eq!(
             crate::text_field_focus::focused_field_node(),
-            Some(1),
+            Some(NodeId(1)),
             "field a should own text-field keyboard focus"
         );
 
         requester_b.request_focus().expect("field b accepts focus");
         assert_eq!(
             crate::text_field_focus::focused_field_node(),
-            Some(2),
+            Some(NodeId(2)),
             "field b must take over text-field keyboard focus from field a"
         );
     });
@@ -791,7 +791,7 @@ struct NoContent;
 
 impl Measurable for NoContent {
     fn measure(&self, _constraints: Constraints) -> cranpose_ui_layout::Placeable {
-        cranpose_ui_layout::Placeable::value(0.0, 0.0, 0)
+        cranpose_ui_layout::Placeable::value(0.0, 0.0, NodeId(0))
     }
 
     fn min_intrinsic_width(&self, _height: f32) -> f32 {

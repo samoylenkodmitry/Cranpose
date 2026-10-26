@@ -77,7 +77,7 @@ impl Eye {
     /// the space of the scene node `scene`: the one it stands in or one a
     /// doorway from it. `None` when no such space lies there.
     pub fn pose_in(&self, scene: NodeId) -> Option<EyePose> {
-        self.world.current().pose_in(&self.pose.get(), scene)
+        self.world.current().pose_in(&self.pose.get(), scene.0)
     }
 
     /// Puts the eye at `pose`, in the coordinates of the space of the scene
@@ -85,7 +85,7 @@ impl Eye {
     /// stands in or one a doorway from it. False, and the eye stays where
     /// it is, when no such space lies there.
     pub fn enter(&self, scene: NodeId, pose: EyePose) -> bool {
-        let Some(doorways) = self.world.current().doorways_to(scene) else {
+        let Some(doorways) = self.world.current().doorways_to(scene.0) else {
             return false;
         };
         self.pose.set(EyePose { doorways, ..pose });

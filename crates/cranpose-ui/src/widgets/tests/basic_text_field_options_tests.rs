@@ -9,7 +9,7 @@ fn default_options_use_default_line_limits() {
 #[test]
 fn decoration_scope_invokes_the_inner_field() {
     let scope = BasicTextFieldDecorationScope {
-        inner: Rc::new(|| 73),
+        inner: Rc::new(|| NodeId(73)),
     };
-    assert_eq!(scope.inner_text_field(), 73);
+    assert_eq!(scope.inner_text_field(), NodeId(73));
 }

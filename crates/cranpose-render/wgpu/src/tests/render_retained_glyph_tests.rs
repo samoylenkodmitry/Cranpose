@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::software_text_raster::{
     SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasMask,
     SoftwareGlyphAtlasPlacement,
@@ -628,7 +629,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         ..Default::default()
     };
     scene.push_text(TextDraw {
-        node_id: 1,
+        node_id: NodeId(1),
         rect: Rect {
             x,
             y: 4.0,

@@ -10,7 +10,7 @@
 use std::{cell::RefCell, rc::Rc, sync::MutexGuard};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key};
+use cranpose_core::{MutableState, NodeId, location_key};
 use cranpose_liquid::{Glass, GlassSurface};
 use cranpose_render_common::{
     Renderer,
@@ -1312,7 +1312,7 @@ fn page_with_dot(dot: Color) -> RenderGraph {
             RenderNode::DrawRun(DrawRunNode::for_command(
                 PrimitivePhase::BeforeChildren,
                 Some(DrawCommandId {
-                    node_id: 5,
+                    node_id: NodeId(5),
                     command_index: 0,
                     placement: DrawPlacement::Behind,
                 }),

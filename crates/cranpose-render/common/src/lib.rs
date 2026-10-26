@@ -122,8 +122,12 @@ impl NodeUpdate {
 /// (see [`NodeUpdate::merge`]).
 ///
 /// ```
+/// use cranpose_core::NodeId;
 /// use cranpose_render_common::{NodeUpdate, SceneUpdates};
-/// let updates: SceneUpdates<'_> = &[(1, NodeUpdate::Content), (3, NodeUpdate::Moved)];
+/// let updates: SceneUpdates<'_> = &[
+///     (NodeId(1), NodeUpdate::Content),
+///     (NodeId(3), NodeUpdate::Moved),
+/// ];
 /// assert_eq!(updates.len(), 2);
 /// ```
 pub type SceneUpdates<'a> = &'a [(cranpose_core::NodeId, NodeUpdate)];

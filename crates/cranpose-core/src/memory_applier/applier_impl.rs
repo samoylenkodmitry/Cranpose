@@ -12,7 +12,7 @@ impl Applier for MemoryApplier {
 
     fn create(&mut self, node: Box<dyn Node>) -> NodeId {
         let stable_id = self.state.next_stable_id;
-        self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
+        self.state.next_stable_id = self.state.next_stable_id.next();
         if stable_id >= Self::HIGH_ID_THRESHOLD {
             self.insert_high_id_node(stable_id, node, RecycleOrigin::Cold);
             return stable_id;

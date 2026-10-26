@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
         DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
@@ -12,7 +13,7 @@ use cranpose_ui_graphics::{
 use crate::{shared_test_support, support};
 
 const SIZE: f32 = support::SIZE as f32;
-const STORED_NODE: cranpose_core::NodeId = 7_400;
+const STORED_NODE: NodeId = NodeId(7_400);
 const ROW_MISALIGNING_RECORDS: usize = 3;
 
 type Frame = (usize, usize);

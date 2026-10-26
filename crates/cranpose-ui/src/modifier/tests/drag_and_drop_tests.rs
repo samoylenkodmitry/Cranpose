@@ -104,11 +104,12 @@ fn a_drag_past_the_threshold_starts_moves_and_drops() {
 fn routing_tells_the_target_enter_move_exit_and_drop() {
     let log = Rc::new(Log::default());
     let state = DragAndDropState::default();
-    state.register_target(5, logged_target(&log, true));
+    state.register_target(NodeId(5), logged_target(&log, true));
     let source = logged_source(&log);
     let mut gesture = SourceGesture::default();
     drag(&mut gesture, &source, &state);
-    let over_target = |point: DragAndDropPoint| (point.local.x > 50.0).then_some((5, point.local));
+    let over_target =
+        |point: DragAndDropPoint| (point.local.x > 50.0).then_some((NodeId(5), point.local));
     assert!(state.route(over_target));
     assert_eq!(log.take(), vec!["started Some(Point { x: 110.0, y: 0.0 })"]);
 
@@ -140,12 +141,12 @@ fn routing_tells_the_target_enter_move_exit_and_drop() {
 fn a_target_that_declines_leaves_the_source_with_a_miss() {
     let log = Rc::new(Log::default());
     let state = DragAndDropState::default();
-    state.register_target(5, logged_target(&log, false));
+    state.register_target(NodeId(5), logged_target(&log, false));
     let source = logged_source(&log);
     let mut gesture = SourceGesture::default();
     drag(&mut gesture, &source, &state);
     gesture.on_event(&event(PointerEventKind::Up, 70.0, 5.0), &source, &state);
-    state.route(|point| Some((5, point.local)));
+    state.route(|point| Some((NodeId(5), point.local)));
     assert_eq!(
         log.take(),
         vec![
@@ -163,14 +164,14 @@ fn a_target_that_declines_leaves_the_source_with_a_miss() {
 fn a_cancelled_gesture_exits_the_target_and_ends_cancelled() {
     let log = Rc::new(Log::default());
     let state = DragAndDropState::default();
-    state.register_target(5, logged_target(&log, true));
+    state.register_target(NodeId(5), logged_target(&log, true));
     let source = logged_source(&log);
     let mut gesture = SourceGesture::default();
     drag(&mut gesture, &source, &state);
-    state.route(|point| Some((5, point.local)));
+    state.route(|point| Some((NodeId(5), point.local)));
     log.take();
     gesture.on_event(&event(PointerEventKind::Cancel, 10.0, 0.0), &source, &state);
-    state.route(|point| Some((5, point.local)));
+    state.route(|point| Some((NodeId(5), point.local)));
     assert_eq!(log.take(), vec!["exited", "ended Cancelled"]);
     assert!(!state.is_active());
 }
@@ -178,10 +179,10 @@ fn a_cancelled_gesture_exits_the_target_and_ends_cancelled() {
 #[test]
 fn a_target_that_leaves_the_tree_is_forgotten() {
     let state = DragAndDropState::default();
-    state.register_target(5, DragAndDropTarget::new());
-    assert!(state.is_target(5));
-    state.unregister_target(5);
-    assert!(!state.is_target(5));
+    state.register_target(NodeId(5), DragAndDropTarget::new());
+    assert!(state.is_target(NodeId(5)));
+    state.unregister_target(NodeId(5));
+    assert!(!state.is_target(NodeId(5)));
 }
 
 #[test]

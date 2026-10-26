@@ -1,4 +1,4 @@
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{location_key, Composition, MemoryApplier, NodeId};
 use cranpose_ui::{
     composable, Box as ComposeBox, BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier,
     Row, RowSpec, Size, Spacer, Text, TextStyle,
@@ -252,7 +252,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
     });
 }
 
-fn collect_all_nodes(applier: &mut MemoryApplier, node_id: usize) -> Vec<usize> {
+fn collect_all_nodes(applier: &mut MemoryApplier, node_id: NodeId) -> Vec<NodeId> {
     let mut nodes = vec![node_id];
     if let Ok(children) = applier.with_node(node_id, |node: &mut cranpose_ui::LayoutNode| {
         node.children.to_vec()

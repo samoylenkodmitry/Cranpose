@@ -850,7 +850,7 @@ thread_local! {
     static DEBUG_SCOPE_TAGS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::new());
     static STORIES_PANE_CALLS: Cell<usize> = const { Cell::new(0) };
     static THREAD_PANE_CALLS: Cell<usize> = const { Cell::new(0) };
-    static LAST_STORIES_PANE_NODE_ID: RefCell<Option<usize>> = const { RefCell::new(None) };
+    static LAST_STORIES_PANE_NODE_ID: RefCell<Option<cranpose_core::NodeId>> = const { RefCell::new(None) };
     static LAST_STORIES_LIST_STATE: RefCell<Option<cranpose_foundation::lazy::LazyListState>> = const { RefCell::new(None) };
 }
 

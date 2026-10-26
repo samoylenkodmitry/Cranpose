@@ -1,4 +1,6 @@
-use cranpose_core::{self};
+use cranpose_core::{
+    NodeId, {self},
+};
 use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text, TextStyle};
 
 #[composable]
@@ -57,7 +59,7 @@ fn test_conditional_text_reactivity() {
         conditional_text_with_external_state(counter);
     });
 
-    let tree = composition.applier_mut().dump_tree(Some(0));
+    let tree = composition.applier_mut().dump_tree(Some(NodeId(0)));
     println!("\n=== Initial composition (counter=0) ===\n{tree}");
     let initial_node_count = tree.lines().count();
     println!("Initial node count: {initial_node_count}");
@@ -69,7 +71,7 @@ fn test_conditional_text_reactivity() {
     counter.set(1);
     drain_all(&mut composition).expect("drain after increment to 1");
 
-    let tree = composition.applier_mut().dump_tree(Some(0));
+    let tree = composition.applier_mut().dump_tree(Some(NodeId(0)));
     println!("\n=== After incrementing to 1 ===\n{tree}");
     let after_1_node_count = tree.lines().count();
     println!("After increment to 1, node count: {after_1_node_count}");
@@ -82,7 +84,7 @@ fn test_conditional_text_reactivity() {
     counter.set(2);
     drain_all(&mut composition).expect("drain after increment to 2");
 
-    let tree = composition.applier_mut().dump_tree(Some(0));
+    let tree = composition.applier_mut().dump_tree(Some(NodeId(0)));
     println!("\n=== After incrementing to 2 ===\n{tree}");
     let after_2_node_count = tree.lines().count();
     println!("After increment to 2, node count: {after_2_node_count}");

@@ -3,6 +3,7 @@
 //! never shaded. The pre-pass must change no pixel: every scene here draws
 //! the same with it and without it.
 
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -616,7 +617,7 @@ fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> RenderGraph {
         vec![RenderNode::DrawRun(DrawRunNode::for_command(
             PrimitivePhase::BeforeChildren,
             Some(DrawCommandId {
-                node_id: 7_500,
+                node_id: NodeId(7_500),
                 command_index: 0,
                 placement: DrawPlacement::Behind,
             }),

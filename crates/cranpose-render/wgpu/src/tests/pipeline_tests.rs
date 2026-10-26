@@ -283,7 +283,7 @@ fn clip_to_bounds_clips_shadow_and_content() {
 #[test]
 fn collect_hits_from_graph_only_populates_hit_regions() {
     let layer = cranpose_render_common::graph::LayerNode {
-        node_id: Some(7),
+        node_id: Some(NodeId(7)),
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -370,7 +370,7 @@ fn push_text_style_draws_emits_background_shadow_and_main_text() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            7 as NodeId,
+            NodeId(7),
             &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
             &style,
             14.0,
@@ -432,7 +432,7 @@ fn push_text_style_draws_hard_shadow_does_not_emit_effect_layer() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            7 as NodeId,
+            NodeId(7),
             &cranpose_ui::text::AnnotatedString::from("Hard shadow"),
             &style,
             14.0,
@@ -495,7 +495,7 @@ fn estimate_text_style_draw_bounds_matches_scene_emission() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            31 as NodeId,
+            NodeId(31),
             &text,
             &style,
             14.0,
@@ -507,7 +507,7 @@ fn estimate_text_style_draw_bounds_matches_scene_emission() {
     let estimated = with_test_app_context(|| {
         estimate_text_style_draw_bounds(
             &text_node(
-                31 as NodeId,
+                NodeId(31),
                 &text,
                 &style,
                 14.0,
@@ -541,7 +541,7 @@ fn push_text_style_draws_emits_decoration_shapes() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            7 as NodeId,
+            NodeId(7),
             &cranpose_ui::text::AnnotatedString::from("Decorated"),
             &style,
             14.0,
@@ -584,7 +584,7 @@ fn push_text_style_draws_preserves_subpixel_decoration_y() {
     push_text_style_draws_for_test(
         &mut base_scene,
         &text_node(
-            70 as NodeId,
+            NodeId(70),
             &text,
             &style,
             14.0,
@@ -595,7 +595,7 @@ fn push_text_style_draws_preserves_subpixel_decoration_y() {
     push_text_style_draws_for_test(
         &mut shifted_scene,
         &text_node(
-            71 as NodeId,
+            NodeId(71),
             &text,
             &style,
             14.0,
@@ -636,7 +636,7 @@ fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            22 as NodeId,
+            NodeId(22),
             &text,
             &style,
             14.0,
@@ -978,7 +978,7 @@ fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alp
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            23 as NodeId,
+            NodeId(23),
             &text,
             &style,
             14.0,
@@ -1029,7 +1029,7 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
     push_text_style_draws_for_test(
         &mut base_scene,
         &text_node(
-            24 as NodeId,
+            NodeId(24),
             &text,
             &base_style,
             14.0,
@@ -1040,7 +1040,7 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
     push_text_style_draws_for_test(
         &mut shifted_scene,
         &text_node(
-            25 as NodeId,
+            NodeId(25),
             &text,
             &shifted_style,
             14.0,
@@ -1080,7 +1080,7 @@ fn push_text_style_draws_applies_baseline_shift() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            7 as NodeId,
+            NodeId(7),
             &cranpose_ui::text::AnnotatedString::from("Shifted"),
             &style,
             14.0,
@@ -1121,7 +1121,7 @@ fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            7 as NodeId,
+            NodeId(7),
             &cranpose_ui::text::AnnotatedString::from("Gradient text"),
             &style,
             14.0,
@@ -1196,7 +1196,7 @@ fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoint
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            13 as NodeId,
+            NodeId(13),
             &cranpose_ui::text::AnnotatedString::from("Gradient fill"),
             &style,
             14.0,
@@ -1252,7 +1252,7 @@ fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            8 as NodeId,
+            NodeId(8),
             &cranpose_ui::text::AnnotatedString::from("Stroke text"),
             &style,
             14.0,
@@ -1335,7 +1335,7 @@ fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            18 as NodeId,
+            NodeId(18),
             &cranpose_ui::text::AnnotatedString::from("Scaled stroke"),
             &style,
             14.0,
@@ -1405,7 +1405,7 @@ fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            12 as NodeId,
+            NodeId(12),
             &cranpose_ui::text::AnnotatedString::from("Gradient stroke"),
             &style,
             14.0,
@@ -1489,7 +1489,7 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            19 as NodeId,
+            NodeId(19),
             &text,
             &style,
             14.0,
@@ -1563,7 +1563,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            20 as NodeId,
+            NodeId(20),
             &text,
             &style,
             14.0,
@@ -1678,7 +1678,7 @@ fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            21 as NodeId,
+            NodeId(21),
             &text,
             &style,
             14.0,
@@ -1729,7 +1729,7 @@ fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            24 as NodeId,
+            NodeId(24),
             &text,
             &style,
             14.0,
@@ -1784,7 +1784,7 @@ fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            25 as NodeId,
+            NodeId(25),
             &text,
             &style,
             14.0,
@@ -1839,7 +1839,7 @@ fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            26 as NodeId,
+            NodeId(26),
             &text,
             &style,
             14.0,
@@ -1903,7 +1903,7 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        &text_node(27 as NodeId, &prepared.text, &style, 14.0, options),
+        &text_node(NodeId(27), &prepared.text, &style, 14.0, options),
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
@@ -1946,7 +1946,7 @@ fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space(
     push_text_style_draws_for_test(
         &mut static_scene,
         &text_node(
-            9 as NodeId,
+            NodeId(9),
             &cranpose_ui::text::AnnotatedString::from("Motion"),
             &static_style,
             14.0,
@@ -1959,7 +1959,7 @@ fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space(
     push_text_style_draws_for_test(
         &mut animated_scene,
         &text_node(
-            10 as NodeId,
+            NodeId(10),
             &cranpose_ui::text::AnnotatedString::from("Motion"),
             &animated_style,
             14.0,
@@ -2006,7 +2006,7 @@ fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
     push_text_style_draws_for_test(
         &mut static_scene,
         &text_node(
-            22 as NodeId,
+            NodeId(22),
             &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
             &static_style,
             14.0,
@@ -2019,7 +2019,7 @@ fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
     push_text_style_draws_for_test(
         &mut animated_scene,
         &text_node(
-            23 as NodeId,
+            NodeId(23),
             &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
             &animated_style,
             14.0,
@@ -2084,7 +2084,7 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
     push_text_style_draws_for_test(
         &mut scene,
         &text_node(
-            11 as NodeId,
+            NodeId(11),
             &cranpose_ui::text::AnnotatedString::from("Gradient static"),
             &style,
             14.0,

@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{CachePolicy, ProjectiveTransform, RenderGraph, RenderNode},
     raster_cache::LAYER_RASTER_CACHE_KIND_LABELS,
@@ -36,7 +37,7 @@ fn blurred_layer_page() -> RenderGraph {
         },
         vec![support::solid_rect(INK, Color::WHITE)],
     );
-    layer.node_id = Some(7);
+    layer.node_id = Some(NodeId(7));
     layer.cache_policy = CachePolicy::Auto;
     page.push(RenderNode::Layer(Box::new(layer)));
     support::page_graph(WIDTH, HEIGHT, page)

@@ -173,7 +173,7 @@ fn without_a_modal_the_walk_finds_nothing() {
         });
     });
     assert_eq!(walked, None);
-    assert_ne!(tree_root, 0);
+    assert_ne!(tree_root, NodeId(0));
 }
 
 fn chain_reach(modifier: &Modifier) -> cranpose_foundation::SemanticsReach {

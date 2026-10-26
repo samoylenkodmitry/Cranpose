@@ -43,14 +43,14 @@ fn a_tree_that_says_something_else_names_the_node() {
 #[test]
 fn the_first_difference_is_the_first_node_that_differs() {
     let tree = |label: &str| SemanticsNode {
-        node_id: 1,
+        node_id: NodeId(1),
         children: vec![
             SemanticsNode {
-                node_id: 2,
+                node_id: NodeId(2),
                 ..Default::default()
             },
             SemanticsNode {
-                node_id: 3,
+                node_id: NodeId(3),
                 description: Some(label.to_owned()),
                 ..Default::default()
             },

@@ -778,7 +778,7 @@ where
     /// already installed; nothing is attached to the app context again.
     pub fn add_window_surface(
         &mut self,
-        window: u64,
+        window: NodeId,
         renderer: R,
         buffer_size: (u32, u32),
         viewport: (f32, f32),
@@ -796,7 +796,7 @@ where
     }
 
     /// Takes the surface of `window` away, handing back its renderer.
-    pub fn remove_window_surface(&mut self, window: u64) -> Option<R> {
+    pub fn remove_window_surface(&mut self, window: NodeId) -> Option<R> {
         let root = RootId::Window(window);
         let index = self.surface_index(root)?;
         self.app.text_input_routes.borrow_mut().remove(root);
@@ -917,7 +917,7 @@ where
             };
             let root = entries
                 .iter()
-                .find(|entry| entry.node as u64 == id)
+                .find(|entry| entry.node == id)
                 .map(|entry| entry.node);
             surface.set_root(root);
         }

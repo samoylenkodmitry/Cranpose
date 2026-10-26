@@ -1,6 +1,6 @@
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, Composition, MemoryApplier,
-    MutableState, Node, TaskSite, location_key,
+    MutableState, Node, NodeId, TaskSite, location_key,
 };
 use cranpose_macros::composable;
 
@@ -243,7 +243,7 @@ fn drain_all<A: cranpose_core::Applier + 'static>(
                 "drain_all: Exceeded 1000 iterations, giving up. This indicates an infinite recomposition loop. {iterations}"
             );
             return Err(cranpose_core::NodeError::MissingContext {
-                id: 0,
+                id: NodeId(0),
                 reason: "drain_all: Exceeded 1000 iterations",
             });
         }

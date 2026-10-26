@@ -1,10 +1,11 @@
 use std::rc::Rc;
 
+use cranpose_core::NodeId;
 use cranpose_ui::{LayoutNodeData, LayoutNodeKind, Modifier, Point, Rect};
 
 use super::*;
 
-fn layout(id: usize, children: Vec<LayoutBox>) -> LayoutBox {
+fn layout(id: NodeId, children: Vec<LayoutBox>) -> LayoutBox {
     LayoutBox::new(
         id,
         Rect {
@@ -36,9 +37,9 @@ fn empty_snapshot_keeps_request_identity() {
 
 #[test]
 fn snapshot_preserves_hierarchy_geometry_and_generation() {
-    let mut child = layout(2, Vec::new());
+    let mut child = layout(NodeId(2), Vec::new());
     child.node_generation = 7;
-    let tree = LayoutTree::new(layout(1, vec![child]));
+    let tree = LayoutTree::new(layout(NodeId(1), vec![child]));
     let value = snapshot(Some(&tree), 8, 20);
     assert_eq!(value.nodes.len(), 2);
     assert_eq!(value.nodes[1].id, "2:7");
@@ -58,7 +59,10 @@ fn snapshot_preserves_hierarchy_geometry_and_generation() {
 
 #[test]
 fn node_budget_never_leaves_orphaned_children() {
-    let tree = LayoutTree::new(layout(1, vec![layout(2, vec![layout(3, Vec::new())])]));
+    let tree = LayoutTree::new(layout(
+        NodeId(1),
+        vec![layout(NodeId(2), vec![layout(NodeId(3), Vec::new())])],
+    ));
     let value = snapshot(Some(&tree), 1, 2);
     assert_eq!(value.nodes.len(), 2);
     assert!(value.truncated);

@@ -243,7 +243,7 @@ fn button_bounds(
         .filter_map(|node| {
             shell
                 .node_layout_bounds(node.node_id)
-                .map(|(x, y, w, h)| (node.node_id as u64, x, y, w, h))
+                .map(|(x, y, w, h)| (node.node_id.0 as u64, x, y, w, h))
         })
         .collect()
 }

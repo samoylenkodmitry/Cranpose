@@ -2,6 +2,7 @@ mod bottom_up;
 /// Re-exports of the alignment, arrangement and measurable types that layout policies use.
 pub mod core;
 pub(crate) mod flex_box;
+mod frame_layout_arena;
 pub(crate) mod grid;
 mod measure_telemetry;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
@@ -28,6 +29,8 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
+pub(crate) use frame_layout_arena::FrameLayoutArena;
+use frame_layout_arena::VecPools;
 use web_time::Instant;
 
 #[cfg(test)]
@@ -169,53 +172,6 @@ struct ModifierChainMeasurement {
     ignores_child_sizes: bool,
 }
 
-struct ScratchVecPool<T> {
-    available: Vec<Vec<T>>,
-}
-
-impl<T> ScratchVecPool<T> {
-    fn acquire(&mut self) -> Vec<T> {
-        self.available.pop().unwrap_or_default()
-    }
-
-    fn release(&mut self, mut values: Vec<T>) {
-        values.clear();
-        self.available.push(values);
-    }
-
-    #[cfg(test)]
-    fn available_count(&self) -> usize {
-        self.available.len()
-    }
-}
-
-impl<T> Default for ScratchVecPool<T> {
-    fn default() -> Self {
-        Self {
-            available: Vec::new(),
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct FrameLayoutArena {
-    tmp_child_ids: ScratchVecPool<NodeId>,
-    tmp_placements: ScratchVecPool<Placement>,
-    /// The marks a pass that starts from the dirty nodes cleared.
-    cleared_marks: Vec<(NodeId, crate::widgets::nodes::LayoutDirt)>,
-}
-
-#[cfg(test)]
-impl FrameLayoutArena {
-    pub(crate) fn available_placement_scratch_count(&self) -> usize {
-        self.tmp_placements.available_count()
-    }
-
-    pub(crate) fn seed_placement_scratch_for_test(&mut self) {
-        self.tmp_placements.release(Vec::with_capacity(1));
-    }
-}
-
 /// Discrete event callback reference produced during semantics extraction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticsCallback {
@@ -352,7 +308,7 @@ pub struct SemanticsNode {
 impl Default for SemanticsNode {
     fn default() -> Self {
         Self {
-            node_id: 0,
+            node_id: NodeId::default(),
             bounds: GeometryRect::EMPTY,
             placement: SemanticsPlacement::default(),
             node_generation: 0,
@@ -1990,7 +1946,6 @@ impl LayoutBuilderState {
             ChildPass::Measure,
         )?;
         drop(applier);
-        pools.child_ids.clear();
 
         let runtime_state = runtime_state.borrow();
         let measurement = self.measure_through_modifier_chain(
@@ -1999,7 +1954,7 @@ impl LayoutBuilderState {
             chain,
             constraints,
             &mut pools.placements,
-            &mut pools.child_ids,
+            &mut pools.placement_indices,
         );
 
         if let Some(err) = runtime_state.take_child_error() {
@@ -2023,7 +1978,7 @@ impl LayoutBuilderState {
         } = spare;
         runtime_state.measured_children(
             &pools.placements,
-            &pools.child_ids,
+            &pools.placement_indices,
             measurement.content_offset,
             &mut children,
         );
@@ -2094,7 +2049,6 @@ impl LayoutBuilderState {
             ChildPass::Intrinsics,
         )?;
         drop(applier);
-        pools.child_ids.clear();
 
         let runtime_state = runtime_state.borrow();
         let value = if chain.uses_chain {
@@ -2105,7 +2059,7 @@ impl LayoutBuilderState {
                 runtime_state.child_measurables(),
                 runtime_state.child_states(),
                 &mut pools.placements,
-                &mut pools.child_ids,
+                &mut pools.placement_indices,
             );
             runtime_state
                 .coordinator_chain
@@ -2510,37 +2464,6 @@ impl LayoutBuilderState {
                     runtime_state.child_measurables(),
                 ),
         }
-    }
-}
-
-struct VecPools<'a> {
-    arena: &'a RefCell<FrameLayoutArena>,
-    child_ids: Vec<NodeId>,
-    placements: Vec<Placement>,
-}
-
-impl<'a> VecPools<'a> {
-    fn acquire(arena: &'a RefCell<FrameLayoutArena>) -> Self {
-        let mut pools = arena.borrow_mut();
-        let child_ids = pools.tmp_child_ids.acquire();
-        let placements = pools.tmp_placements.acquire();
-        Self {
-            arena,
-            child_ids,
-            placements,
-        }
-    }
-}
-
-impl Drop for VecPools<'_> {
-    fn drop(&mut self) {
-        let mut pools = self.arena.borrow_mut();
-        pools
-            .tmp_child_ids
-            .release(std::mem::take(&mut self.child_ids));
-        pools
-            .tmp_placements
-            .release(std::mem::take(&mut self.placements));
     }
 }
 

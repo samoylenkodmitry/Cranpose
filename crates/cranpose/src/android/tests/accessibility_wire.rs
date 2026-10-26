@@ -1,3 +1,5 @@
+use cranpose_core::NodeId;
+
 use super::*;
 use crate::accessibility::AccessibilityDetails;
 
@@ -132,7 +134,21 @@ fn record_ids(update: &AccessibilityUpdate) -> Vec<i32> {
         .collect()
 }
 
-fn labelled(node_id: cranpose_core::NodeId, label: &str, y: f32) -> AccessibilityElement {
+// Publishes "One" and "Two", then `next` over them; returns the second update
+// and the ids the first one assigned.
+fn republished(next: Vec<AccessibilityElement>) -> (AccessibilityUpdate, Vec<i32>) {
+    let (mut wire, mut snapshot) = published(&[
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ]);
+    let ids = snapshot.ids.clone();
+    let update = wire
+        .publish(&mut snapshot, next, 2.0)
+        .expect("unique identities");
+    (update, ids)
+}
+
+fn labelled(node_id: NodeId, label: &str, y: f32) -> AccessibilityElement {
     AccessibilityElement {
         node_id,
         label: label.into(),
@@ -145,7 +161,10 @@ fn labelled(node_id: cranpose_core::NodeId, label: &str, y: f32) -> Accessibilit
 
 #[test]
 fn the_first_update_sends_every_control_in_order() {
-    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let elements = [
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ];
     let mut snapshot = AccessibilitySnapshot::default();
     let update = AccessibilityWire::default()
         .publish(&mut snapshot, elements.to_vec(), 2.0)
@@ -158,7 +177,10 @@ fn the_first_update_sends_every_control_in_order() {
 
 #[test]
 fn an_unchanged_snapshot_leaves_the_host_alone() {
-    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let elements = [
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ];
     let (mut wire, mut snapshot) = published(&elements);
     let update = wire
         .publish(&mut snapshot, elements.to_vec(), 2.0)
@@ -168,15 +190,10 @@ fn an_unchanged_snapshot_leaves_the_host_alone() {
 
 #[test]
 fn the_host_reads_the_order_then_the_moves_then_the_records_in_one_message() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![labelled(1, "Uno", 0.0), labelled(2, "Two", 40.0)],
-            2.0,
-        )
-        .expect("unique identities");
+    let (update, ids) = republished(vec![
+        labelled(NodeId(1), "Uno", 0.0),
+        labelled(NodeId(2), "Two", 40.0),
+    ]);
     let message: Vec<u8> = update.message().collect();
     assert_eq!(message.len(), update.message_len());
     let mut reader = PayloadReader {
@@ -197,15 +214,10 @@ fn the_host_reads_the_order_then_the_moves_then_the_records_in_one_message() {
 
 #[test]
 fn a_control_that_only_moved_is_sent_as_its_new_bounds() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![labelled(1, "One", 0.0), labelled(2, "Two", 40.0)],
-            2.0,
-        )
-        .expect("unique identities");
+    let (update, ids) = republished(vec![
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 40.0),
+    ]);
     assert!(update.records.is_empty(), "a move resends no record");
     assert_eq!(update.moves, vec![ids[1], 0, 80, 200, 120]);
     assert_eq!(update.order, ids);
@@ -214,24 +226,19 @@ fn a_control_that_only_moved_is_sent_as_its_new_bounds() {
 
 #[test]
 fn a_move_smaller_than_a_pixel_leaves_the_host_alone() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0)]);
+    let (mut wire, mut snapshot) = published(&[labelled(NodeId(1), "One", 0.0)]);
     let update = wire
-        .publish(&mut snapshot, vec![labelled(1, "One", 0.1)], 2.0)
+        .publish(&mut snapshot, vec![labelled(NodeId(1), "One", 0.1)], 2.0)
         .expect("unique identities");
     assert!(update.is_empty(), "{update:?}");
 }
 
 #[test]
 fn a_control_that_says_something_else_is_resent_in_full() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![labelled(1, "One", 0.0), labelled(2, "Three", 40.0)],
-            2.0,
-        )
-        .expect("unique identities");
+    let (update, ids) = republished(vec![
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Three", 40.0),
+    ]);
     assert_eq!(record_ids(&update), vec![ids[1]]);
     assert_eq!(fields(&update.records)[0][9], "Three");
     assert!(
@@ -242,26 +249,24 @@ fn a_control_that_says_something_else_is_resent_in_full() {
 
 #[test]
 fn a_spoken_change_is_resent_with_its_flag() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![labelled(1, "One", 0.0), labelled(2, "Two now", 30.0)],
-            2.0,
-        )
-        .expect("unique identities");
+    let (update, ids) = republished(vec![
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two now", 30.0),
+    ]);
     assert_eq!(record_ids(&update), vec![ids[1]]);
     assert_eq!(fields(&update.records)[0][29], "1");
 }
 
 #[test]
 fn a_new_control_is_sent_and_the_order_names_it() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0)]);
+    let (mut wire, mut snapshot) = published(&[labelled(NodeId(1), "One", 0.0)]);
     let update = wire
         .publish(
             &mut snapshot,
-            vec![labelled(3, "New", 0.0), labelled(1, "One", 30.0)],
+            vec![
+                labelled(NodeId(3), "New", 0.0),
+                labelled(NodeId(1), "One", 30.0),
+            ],
             2.0,
         )
         .expect("unique identities");
@@ -272,10 +277,13 @@ fn a_new_control_is_sent_and_the_order_names_it() {
 
 #[test]
 fn a_removed_control_leaves_the_order() {
-    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
+    let (mut wire, mut snapshot) = published(&[
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ]);
     let kept = snapshot.ids[0];
     let update = wire
-        .publish(&mut snapshot, vec![labelled(1, "One", 0.0)], 2.0)
+        .publish(&mut snapshot, vec![labelled(NodeId(1), "One", 0.0)], 2.0)
         .expect("unique identities");
     assert_eq!(update.order, vec![kept]);
     assert!(update.records.is_empty());
@@ -286,11 +294,11 @@ fn a_removed_control_leaves_the_order() {
 fn a_row_whose_list_was_replaced_is_resent() {
     let list = |generation| AccessibilityElement {
         node_generation: generation,
-        ..list_scrolled_to(6, 0.0)
+        ..list_scrolled_to(NodeId(6), 0.0)
     };
     let row = AccessibilityElement {
-        scroll_parent: Some(6),
-        ..labelled(9, "Milk", 10.0)
+        scroll_parent: Some(NodeId(6)),
+        ..labelled(NodeId(9), "Milk", 10.0)
     };
     let (mut wire, mut snapshot) = published(&[list(0), row.clone()]);
     let update = wire
@@ -305,7 +313,10 @@ fn a_row_whose_list_was_replaced_is_resent() {
 
 #[test]
 fn a_new_density_resends_every_control() {
-    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let elements = [
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ];
     let (mut wire, mut snapshot) = published(&elements);
     let update = wire
         .publish(&mut snapshot, elements.to_vec(), 3.0)
@@ -315,7 +326,10 @@ fn a_new_density_resends_every_control() {
 
 #[test]
 fn a_forgotten_host_is_sent_every_control() {
-    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let elements = [
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ];
     let (mut wire, mut snapshot) = published(&elements);
     wire.forget();
     let update = wire
@@ -338,7 +352,7 @@ fn strings(fields: &[&str]) -> Vec<String> {
 fn records_carry_every_field_java_reads() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: NodeId(4),
             label: "Tab\tand%".into(),
             value: Some("line\nnext\r".into()),
             details: Some(Box::new(AccessibilityDetails {
@@ -358,7 +372,7 @@ fn records_carry_every_field_java_reads() {
             toggled: Some(ToggleableState::On),
             ..AccessibilityElement::default()
         },
-        element_with(5, Some(1)),
+        element_with(NodeId(5), Some(1)),
     ];
     let payload = encode_payload(&[said_before(&elements[0])], &elements, 1.5);
     assert_eq!(
@@ -428,7 +442,7 @@ fn tristate_distinguishes_unset_from_off() {
 fn every_encoded_record_carries_the_fields_java_parses() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: NodeId(4),
             label: "Haptics".into(),
             details: Some(Box::new(AccessibilityDetails {
                 state_description: Some("On".into()),
@@ -442,7 +456,7 @@ fn every_encoded_record_carries_the_fields_java_parses() {
             toggled: Some(ToggleableState::On),
             ..AccessibilityElement::default()
         },
-        element_with(5, Some(1)),
+        element_with(NodeId(5), Some(1)),
     ];
 
     let payload = encode_elements(&elements, 2.0);
@@ -474,7 +488,7 @@ fn every_encoded_record_carries_the_fields_java_parses() {
 fn the_record_carries_a_field_selection_in_utf16_units_and_nothing_for_the_rest() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: NodeId(4),
             label: "Note".into(),
             value: Some("añb😀c".into()),
             details: Some(Box::new(AccessibilityDetails {
@@ -485,7 +499,7 @@ fn the_record_carries_a_field_selection_in_utf16_units_and_nothing_for_the_rest(
             role: AccessibilityRole::TextField,
             ..AccessibilityElement::default()
         },
-        element_with(5, None),
+        element_with(NodeId(5), None),
     ];
 
     let payload = encode_elements(&elements, 1.0);
@@ -501,7 +515,7 @@ fn the_record_carries_a_field_selection_in_utf16_units_and_nothing_for_the_rest(
 fn the_record_names_what_a_long_press_does() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: NodeId(4),
             label: "Milk".into(),
             details: Some(Box::new(AccessibilityDetails {
                 long_click_label: Some("Remove receipt".into()),
@@ -512,7 +526,7 @@ fn the_record_names_what_a_long_press_does() {
             clickable: true,
             ..AccessibilityElement::default()
         },
-        save_button(5),
+        save_button(NodeId(5)),
     ];
 
     let payload = encode_elements(&elements, 1.0);
@@ -528,7 +542,7 @@ fn the_record_names_what_a_long_press_does() {
 fn the_record_carries_whether_focus_can_land_on_a_control_and_whether_it_has() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: NodeId(4),
             label: "Name".into(),
             bounds: AccessibilityRect::new(0.0, 0.0, 30.0, 40.0),
             role: AccessibilityRole::TextField,
@@ -537,7 +551,7 @@ fn the_record_carries_whether_focus_can_land_on_a_control_and_whether_it_has() {
             ..AccessibilityElement::default()
         },
         AccessibilityElement {
-            node_id: 5,
+            node_id: NodeId(5),
             label: "Save".into(),
             bounds: AccessibilityRect::new(0.0, 50.0, 30.0, 40.0),
             role: AccessibilityRole::Button,
@@ -558,7 +572,7 @@ fn the_record_carries_whether_focus_can_land_on_a_control_and_whether_it_has() {
     assert_eq!(other[18], "0", "but focus does not sit on it");
 }
 
-fn list_scrolled_to(node_id: cranpose_core::NodeId, offset: f32) -> AccessibilityElement {
+fn list_scrolled_to(node_id: NodeId, offset: f32) -> AccessibilityElement {
     AccessibilityElement {
         node_id,
         bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
@@ -570,7 +584,7 @@ fn list_scrolled_to(node_id: cranpose_core::NodeId, offset: f32) -> Accessibilit
     }
 }
 
-fn save_button(node_id: cranpose_core::NodeId) -> AccessibilityElement {
+fn save_button(node_id: NodeId) -> AccessibilityElement {
     AccessibilityElement {
         node_id,
         label: "Save".into(),
@@ -584,15 +598,15 @@ fn save_button(node_id: cranpose_core::NodeId) -> AccessibilityElement {
 #[test]
 fn the_record_names_the_list_above_a_row() {
     let elements = vec![
-        list_scrolled_to(6, 0.0),
+        list_scrolled_to(NodeId(6), 0.0),
         AccessibilityElement {
-            node_id: 9,
+            node_id: NodeId(9),
             label: "Milk".into(),
             bounds: AccessibilityRect::new(0.0, 10.0, 400.0, 40.0),
-            scroll_parent: Some(6),
+            scroll_parent: Some(NodeId(6)),
             ..AccessibilityElement::default()
         },
-        save_button(8),
+        save_button(NodeId(8)),
     ];
 
     let payload = encode_elements(&elements, 1.0);
@@ -612,9 +626,9 @@ fn the_record_names_the_list_above_a_row() {
 #[test]
 fn the_record_says_which_way_a_list_can_still_page() {
     let elements = vec![
-        list_scrolled_to(6, 0.0),
-        list_scrolled_to(7, 900.0),
-        save_button(8),
+        list_scrolled_to(NodeId(6), 0.0),
+        list_scrolled_to(NodeId(7), 900.0),
+        save_button(NodeId(8)),
     ];
 
     let payload = encode_elements(&elements, 1.0);
@@ -635,7 +649,7 @@ fn the_record_says_which_way_a_list_can_still_page() {
 fn the_record_carries_the_range_of_an_adjustable_control() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: NodeId(4),
             label: "Volume".into(),
             bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 40.0),
             details: Some(Box::new(AccessibilityDetails {
@@ -645,7 +659,7 @@ fn the_record_carries_the_range_of_an_adjustable_control() {
             })),
             ..AccessibilityElement::default()
         },
-        save_button(5),
+        save_button(NodeId(5)),
     ];
 
     let payload = encode_elements(&elements, 1.0);
@@ -662,7 +676,7 @@ fn the_record_carries_the_range_of_an_adjustable_control() {
 
 #[test]
 fn the_record_says_how_many_rows_a_list_holds() {
-    let mut list = list_scrolled_to(6, 0.0);
+    let mut list = list_scrolled_to(NodeId(6), 0.0);
     list.update_details(|details| {
         details.collection = Some(cranpose_ui::CollectionInfo {
             rows: 12,
@@ -670,7 +684,7 @@ fn the_record_says_how_many_rows_a_list_holds() {
         });
     });
 
-    let payload = encode_elements(&[list, save_button(8)], 1.0);
+    let payload = encode_elements(&[list, save_button(NodeId(8))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
     let list: Vec<_> = records[0].split('\t').collect();
     let button: Vec<_> = records[1].split('\t').collect();
@@ -685,8 +699,12 @@ fn the_record_says_how_many_rows_a_list_holds() {
 
 #[test]
 fn the_record_flags_a_control_that_says_something_new() {
-    let flagged = encode_after(&[said_before(&save_button(8))], &[save_button(8)], 1.0);
-    let quiet = encode_elements(&[save_button(8)], 1.0);
+    let flagged = encode_after(
+        &[said_before(&save_button(NodeId(8)))],
+        &[save_button(NodeId(8))],
+        1.0,
+    );
+    let quiet = encode_elements(&[save_button(NodeId(8))], 1.0);
 
     assert_eq!(
         flagged.split('\t').nth(29),
@@ -702,7 +720,7 @@ fn the_record_flags_a_control_that_says_something_new() {
 
 #[test]
 fn the_record_places_a_tab_in_its_group() {
-    let mut tab = save_button(8);
+    let mut tab = save_button(NodeId(8));
     tab.selected = Some(true);
     tab.collection_item = Some(CollectionItem {
         position: 2,
@@ -710,7 +728,7 @@ fn the_record_places_a_tab_in_its_group() {
         horizontal: true,
     });
 
-    let payload = encode_elements(&[tab, save_button(9)], 1.0);
+    let payload = encode_elements(&[tab, save_button(NodeId(9))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
     let placed: Vec<_> = records[0].split('\t').collect();
     let loose: Vec<_> = records[1].split('\t').collect();
@@ -730,13 +748,13 @@ fn the_record_places_a_tab_in_its_group() {
 #[test]
 fn the_record_carries_the_title_of_a_pane() {
     let mut screen = AccessibilityElement {
-        node_id: 1,
+        node_id: NodeId(1),
         bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
         ..AccessibilityElement::default()
     };
     screen.update_details(|details| details.pane_title = Some("Library".into()));
 
-    let payload = encode_elements(&[screen, save_button(8)], 1.0);
+    let payload = encode_elements(&[screen, save_button(NodeId(8))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(records[0].split('\t').nth(32), Some("Library"));
@@ -749,11 +767,11 @@ fn the_record_carries_the_title_of_a_pane() {
 
 #[test]
 fn the_record_carries_the_hint_last() {
-    let mut picker = save_button(8);
+    let mut picker = save_button(NodeId(8));
     picker
         .update_details(|details| details.hint_text = Some("double tap to choose a color".into()));
 
-    let payload = encode_elements(&[picker, save_button(9)], 1.0);
+    let payload = encode_elements(&[picker, save_button(NodeId(9))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(
@@ -765,10 +783,10 @@ fn the_record_carries_the_hint_last() {
 
 #[test]
 fn the_record_says_why_a_field_is_wrong() {
-    let mut field = save_button(8);
+    let mut field = save_button(NodeId(8));
     field.update_details(|details| details.error = Some("needs a number".into()));
 
-    let payload = encode_elements(&[field, save_button(9)], 1.0);
+    let payload = encode_elements(&[field, save_button(NodeId(9))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(records[0].split('\t').nth(33), Some("needs a number"));
@@ -781,10 +799,10 @@ fn the_record_says_why_a_field_is_wrong() {
 
 #[test]
 fn the_record_marks_a_field_that_holds_a_secret() {
-    let mut field = save_button(8);
+    let mut field = save_button(NodeId(8));
     field.update_details(|details| details.password = true);
 
-    let payload = encode_elements(&[field, save_button(9)], 1.0);
+    let payload = encode_elements(&[field, save_button(NodeId(9))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(records[0].split('\t').nth(34), Some("1"));
@@ -793,12 +811,12 @@ fn the_record_marks_a_field_that_holds_a_secret() {
 
 #[test]
 fn the_record_says_whether_a_control_is_open() {
-    let mut open = save_button(8);
+    let mut open = save_button(NodeId(8));
     open.update_details(|details| details.expanded = Some(true));
-    let mut closed = save_button(9);
+    let mut closed = save_button(NodeId(9));
     closed.update_details(|details| details.expanded = Some(false));
 
-    let payload = encode_elements(&[open, closed, save_button(10)], 1.0);
+    let payload = encode_elements(&[open, closed, save_button(NodeId(10))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(records[0].split('\t').nth(35), Some("1"));
@@ -812,10 +830,10 @@ fn the_record_says_whether_a_control_is_open() {
 
 #[test]
 fn the_record_says_whether_a_control_has_a_way_out() {
-    let mut row = save_button(8);
+    let mut row = save_button(NodeId(8));
     row.update_details(|details| details.dismissable = true);
 
-    let payload = encode_elements(&[row, save_button(9)], 1.0);
+    let payload = encode_elements(&[row, save_button(NodeId(9))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(records[0].split('\t').nth(37), Some("1"));
@@ -828,10 +846,10 @@ fn the_record_says_whether_a_control_has_a_way_out() {
 
 #[test]
 fn the_record_says_whether_a_list_takes_a_row_number() {
-    let mut list = save_button(8);
+    let mut list = save_button(NodeId(8));
     list.update_details(|details| details.scroll_to_index = true);
 
-    let payload = encode_elements(&[list, save_button(9)], 1.0);
+    let payload = encode_elements(&[list, save_button(NodeId(9))], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
 
     assert_eq!(records[0].split('\t').nth(38), Some("1"));
@@ -863,7 +881,7 @@ fn fields_are_written_little_endian_and_text_after_its_length() {
 #[test]
 fn a_partly_checked_box_encodes_its_state_as_two() {
     let elements = vec![AccessibilityElement {
-        node_id: 5,
+        node_id: NodeId(5),
         label: "Select all".into(),
         bounds: AccessibilityRect::new(1.0, 2.0, 30.0, 40.0),
         role: AccessibilityRole::Checkbox,

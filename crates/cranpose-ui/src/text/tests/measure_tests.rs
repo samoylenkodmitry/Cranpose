@@ -533,8 +533,8 @@ fn text_service_caches_metrics_and_layouts_per_context() {
     let text = crate::text::AnnotatedString::from("cached text");
     let style = TextStyle::default();
 
-    let first_metrics = service.measure(Some(7), &text, &style);
-    let second_metrics = service.measure(Some(7), &text, &style);
+    let first_metrics = service.measure(Some(NodeId(7)), &text, &style);
+    let second_metrics = service.measure(Some(NodeId(7)), &text, &style);
     let first_layout = service.layout(&text, &style);
     let second_layout = service.layout(&text, &style);
 
@@ -556,8 +556,8 @@ fn text_service_reuses_metrics_cache_across_node_ids() {
     let text = crate::text::AnnotatedString::from("same lazy item text");
     let style = TextStyle::default();
 
-    let first_metrics = service.measure(Some(7), &text, &style);
-    let second_metrics = service.measure(Some(8), &text, &style);
+    let first_metrics = service.measure(Some(NodeId(7)), &text, &style);
+    let second_metrics = service.measure(Some(NodeId(8)), &text, &style);
 
     assert_eq!(first_metrics, second_metrics);
     assert_eq!(measure_calls.get(), 1);
@@ -575,14 +575,14 @@ fn text_service_reuses_prepared_layout_cache_across_node_ids() {
     let options = TextLayoutOptions::default();
 
     let first = service.prepare_with_options(
-        Some(9),
+        Some(NodeId(9)),
         &Rc::new(text.clone()),
         &Arc::new(style.clone()),
         options,
         Some(120.0),
     );
     let second = service.prepare_with_options(
-        Some(10),
+        Some(NodeId(10)),
         &Rc::new(text),
         &Arc::new(style),
         options,
@@ -761,7 +761,7 @@ fn prepare_text_layout_uses_line_height_without_full_text_measurement() {
 
     let prepared = prepare_text_layout_with_measurer_for_node(
         &measurer,
-        Some(7),
+        Some(NodeId(7)),
         &text,
         &TextStyle::default(),
         TextLayoutOptions::default(),
@@ -1937,7 +1937,7 @@ fn metrics_at_options_a_text_was_laid_out_at_come_from_its_prepared_layout() {
     let options = TextLayoutOptions::default();
 
     let prepared = service.prepare_with_options(
-        Some(3),
+        Some(NodeId(3)),
         &Rc::new(text.clone()),
         &Arc::new(style.clone()),
         options,
@@ -1948,7 +1948,7 @@ fn metrics_at_options_a_text_was_laid_out_at_come_from_its_prepared_layout() {
         "laying a text out keeps its metrics in the prepared layout only"
     );
     let calls = (measure_calls.get(), layout_calls.get());
-    let metrics = service.measure_with_options(Some(3), &text, &style, options, Some(90.0));
+    let metrics = service.measure_with_options(Some(NodeId(3)), &text, &style, options, Some(90.0));
 
     assert_eq!(metrics, prepared.metrics);
     assert_eq!(

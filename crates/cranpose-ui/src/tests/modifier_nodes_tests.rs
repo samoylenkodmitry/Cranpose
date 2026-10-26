@@ -48,7 +48,7 @@ impl Measurable for TestMeasurable {
         Placeable::value(
             constraints.max_width.min(self.intrinsic_width),
             constraints.max_height.min(self.intrinsic_height),
-            0,
+            NodeId(0),
         )
     }
 

@@ -1,8 +1,8 @@
 use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Duration};
 
 use cranpose_core::{
-    Composition, ContentTypeReusePolicy, Key, MemoryApplier, MutableState, RecomposeOptions,
-    RecomposeScope, SlotId, State, SubcomposeState, location_key,
+    Composition, ContentTypeReusePolicy, Key, MemoryApplier, MutableState, NodeId,
+    RecomposeOptions, RecomposeScope, SlotId, State, SubcomposeState, location_key,
 };
 use cranpose_foundation::lazy::{
     LazyItems, LazyListScope, LazyListState, rememberLazyListStateWithPosition,
@@ -526,14 +526,14 @@ impl SubcomposeScrollFixture {
         }
     }
 
-    fn next_node_for_slot(&mut self, slot_id: SlotId) -> usize {
+    fn next_node_for_slot(&mut self, slot_id: SlotId) -> NodeId {
         self.state
             .take_node_from_reusables(slot_id)
             .map(|(node_id, _rebound)| node_id)
             .unwrap_or_else(|| {
                 let node_id = self.next_node_id;
                 self.next_node_id += 1;
-                node_id
+                NodeId(node_id)
             })
     }
 

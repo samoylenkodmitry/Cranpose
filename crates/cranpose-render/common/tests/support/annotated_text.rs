@@ -1,5 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
+use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
     TextPrimitiveNode,
@@ -38,7 +39,7 @@ pub(crate) fn text_graph(
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 1,
+                node_id: NodeId(1),
                 rect: text_rect,
                 render_text: Arc::new(text.render_string()),
                 text: Rc::new(text),

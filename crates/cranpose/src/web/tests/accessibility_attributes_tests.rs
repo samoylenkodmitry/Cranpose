@@ -1,3 +1,5 @@
+use cranpose_core::NodeId;
+
 use super::*;
 
 /// A field that was disabled and said it was required comes back enabled
@@ -7,7 +9,7 @@ use super::*;
 #[test]
 fn attributes_a_control_loses_are_removed_and_listener_attributes_stay() {
     let mut was = AccessibilityElement {
-        node_id: 3,
+        node_id: NodeId(3),
         label: "Name".into(),
         value: Some("Ada".into()),
         role: AccessibilityRole::TextField,
@@ -52,7 +54,7 @@ fn attributes_a_control_loses_are_removed_and_listener_attributes_stay() {
 #[test]
 fn a_partly_checked_box_is_aria_checked_mixed() {
     let element = AccessibilityElement {
-        node_id: 3,
+        node_id: NodeId(3),
         label: "Select all".into(),
         role: AccessibilityRole::Checkbox,
         clickable: true,

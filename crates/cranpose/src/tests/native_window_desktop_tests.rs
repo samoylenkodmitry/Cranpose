@@ -588,8 +588,8 @@ fn the_window_modifier_requests_a_window_for_its_own_node() {
     let page = TornPage::composed();
     let request = page.only_request();
     assert_eq!(
-        request.key.raw(),
-        page.node() as u64,
+        request.key.node(),
+        page.node(),
         "the request's key is the node, which names the window's surface root"
     );
     assert_eq!(request.options.title, "Torn page");

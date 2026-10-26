@@ -113,7 +113,7 @@ fn debug_stats_report_subtree_move_work_spans() {
             crate::slot::BRANCH_PATH_ROOT,
             || 10_i32,
         );
-        session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
@@ -124,7 +124,7 @@ fn debug_stats_report_subtree_move_work_spans() {
             crate::slot::BRANCH_PATH_ROOT,
             || 20_i32,
         );
-        session.record_node_with_parent(22, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(22), 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         begin_unkeyed(session, Key(NESTED_KEY), None);
         let _ = session.value_slot_with_kind(
@@ -132,7 +132,7 @@ fn debug_stats_report_subtree_move_work_spans() {
             crate::slot::BRANCH_PATH_ROOT,
             || 30_i32,
         );
-        session.record_node_with_parent(33, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(33), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let nested_result = session.finish_group_body();
         assert!(nested_result.detached_children.is_empty());
         session.end_group();
@@ -159,7 +159,7 @@ fn debug_stats_report_subtree_move_work_spans() {
             crate::slot::BRANCH_PATH_ROOT,
             || 0_i32,
         );
-        session.record_node_with_parent(22, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(22), 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         begin_unkeyed(session, Key(NESTED_KEY), None);
         let _ = session.value_slot_with_kind(
@@ -167,7 +167,7 @@ fn debug_stats_report_subtree_move_work_spans() {
             crate::slot::BRANCH_PATH_ROOT,
             || 0_i32,
         );
-        session.record_node_with_parent(33, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(33), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let nested_result = session.finish_group_body();
         assert!(nested_result.detached_children.is_empty());
         session.end_group();
@@ -182,7 +182,7 @@ fn debug_stats_report_subtree_move_work_spans() {
             crate::slot::BRANCH_PATH_ROOT,
             || 0_i32,
         );
-        session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();

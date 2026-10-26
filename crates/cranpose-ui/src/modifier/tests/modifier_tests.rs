@@ -1,5 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
+use cranpose_core::NodeId;
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
@@ -527,18 +528,18 @@ fn lazy_graphics_layer_resolver_update_self_invalidates_without_auto_draw_invali
     });
 
     let mut handle = ModifierChainHandle::new();
-    let _ = handle.update_on_node(Some(42), &first);
+    let _ = handle.update_on_node(Some(NodeId(42)), &first);
     let _ = crate::take_render_invalidation();
     let _ = crate::take_draw_repass_nodes();
 
-    let invalidations = handle.update_on_node(Some(42), &second);
+    let invalidations = handle.update_on_node(Some(NodeId(42)), &second);
 
     assert!(
         invalidations.is_empty(),
         "lazy graphics layer resolver replacement schedules an exact draw repass itself"
     );
     assert!(crate::take_render_invalidation());
-    assert_eq!(crate::take_draw_repass_nodes(), vec![42]);
+    assert_eq!(crate::take_draw_repass_nodes(), vec![NodeId(42)]);
 }
 
 #[test]

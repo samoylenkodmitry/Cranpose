@@ -1,10 +1,11 @@
+use cranpose_core::NodeId;
 use cranpose_ui::{Rect, SemanticsRole};
 
 use super::*;
 
 fn node(label: Option<&str>, rect: Rect) -> PlacedSemanticsNode {
     PlacedSemanticsNode {
-        node_id: 0,
+        node_id: NodeId(0),
         role: SemanticsRole::Unknown,
         widget_role: None,
         label: label.map(str::to_string),

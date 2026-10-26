@@ -235,7 +235,29 @@ impl std::fmt::Display for Key {
     }
 }
 /// Identifies a node in an applier.
-pub type NodeId = usize;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeId(pub usize);
+
+impl NodeId {
+    // The id an applier hands out after this one.
+    pub(crate) const fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
+impl std::str::FromStr for NodeId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        text.parse().map(Self)
+    }
+}
+
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 pub(crate) type ScopeId = usize;
 pub(crate) type FrameCallbackId = u64;

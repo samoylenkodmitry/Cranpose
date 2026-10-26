@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{CachePolicy, ProjectiveTransform, RenderGraph, RenderNode},
@@ -11,7 +12,7 @@ const HEIGHT: u32 = 80;
 
 fn layer(node_id: usize, color: Color, rect: Rect) -> RenderNode {
     let mut layer = support::contract_layer(
-        Some(node_id),
+        Some(NodeId(node_id)),
         CachePolicy::None,
         Rect {
             x: 0.0,
@@ -35,7 +36,7 @@ fn backdrop_graph(enabled: bool) -> RenderGraph {
         height: HEIGHT as f32,
     };
     let mut leaf = support::contract_layer(
-        Some(9_410),
+        Some(NodeId(9_410)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
@@ -56,7 +57,7 @@ fn backdrop_graph(enabled: bool) -> RenderGraph {
     }
     .into();
     let mut middle = support::contract_layer(
-        Some(9_411),
+        Some(NodeId(9_411)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
@@ -72,7 +73,7 @@ fn backdrop_graph(enabled: bool) -> RenderGraph {
     }
     .into();
     let mut outer = support::contract_layer(
-        Some(9_412),
+        Some(NodeId(9_412)),
         CachePolicy::None,
         bounds,
         ProjectiveTransform::identity(),
@@ -116,7 +117,7 @@ fn returned_packet_storage_reuses_both_slots_after_topology_shrinks() {
         },
     )]);
     let mut shadowed = support::contract_layer(
-        Some(9_300),
+        Some(NodeId(9_300)),
         CachePolicy::None,
         Rect {
             x: 0.0,
