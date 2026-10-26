@@ -23,6 +23,10 @@ use crate::{
     with_current_composer_opt,
 };
 
+mod snapshot_state_list;
+
+pub use snapshot_state_list::SnapshotStateList;
+
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = SnapshotId(1);
 
 const INVALID_SNAPSHOT_ID: SnapshotId = SnapshotId(0);
@@ -665,9 +669,67 @@ pub(crate) struct SnapshotMutableState<T> {
     id: ObjectId,
     weak_self: Weak<Self>,
     apply_observer: ApplyObserver,
-    read_observation_lease: Rc<()>,
-    scope_observation_count: Cell<usize>,
-    subscriber_callbacks: RefCell<Vec<Rc<dyn Fn()>>>,
+    subscribers: Subscribers,
+}
+
+// Who subscribes to a state, whatever its value's type: the leases on its
+// reads, the scopes that observe it and the callbacks to run when it gains
+// its first subscriber. Kept apart from the value's type, so its code is
+// compiled once for every state type.
+#[derive(Default)]
+pub(crate) struct Subscribers {
+    lease: Rc<()>,
+    scopes: Cell<usize>,
+    callbacks: RefCell<Vec<Rc<dyn Fn()>>>,
+}
+
+impl Subscribers {
+    fn acquire_observation_lease(&self) -> Option<Rc<dyn Any>> {
+        let was_empty = !self.has_subscribers();
+        let lease = Rc::clone(&self.lease);
+        if was_empty {
+            notify_subscriber_callbacks(&self.callbacks);
+        }
+        Some(lease)
+    }
+
+    fn add_scope_observer(&self) -> bool {
+        let was_empty = !self.has_subscribers();
+        let count = self
+            .scopes
+            .get()
+            .checked_add(1)
+            .expect("state scope observation count overflow");
+        self.scopes.set(count);
+        was_empty
+    }
+
+    fn remove_scope_observers(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let remaining = self
+            .scopes
+            .get()
+            .checked_sub(count)
+            .expect("state scope observation count underflow");
+        self.scopes.set(remaining);
+    }
+
+    fn has_subscribers(&self) -> bool {
+        Rc::strong_count(&self.lease) > 1 || self.scopes.get() > 0
+    }
+
+    fn subscriber_callback(&self, callback: Rc<dyn Fn()>, notify: bool) {
+        self.callbacks.borrow_mut().push(Rc::clone(&callback));
+        if notify {
+            callback();
+        }
+    }
+
+    fn notify_subscribers(&self) {
+        notify_subscriber_callbacks(&self.callbacks);
+    }
 }
 
 #[inline(always)]
@@ -883,6 +945,117 @@ impl WriteTarget<'_> {
     }
 }
 
+// The steps of a write that depend on the state's value type; `write_value`
+// takes the rest, compiled once for every state type.
+trait PendingWrite {
+    // Whether `record` holds a value the state's policy deems the new one.
+    fn matches(&self, record: &StateRecord) -> bool;
+    // Moves the new value into `record` and keeps the value it displaced, to
+    // drop once the write is published.
+    fn store(&mut self, record: &StateRecord);
+    // The state written, for the snapshots to report.
+    fn written(&self) -> Option<Rc<dyn StateObject>>;
+}
+
+struct TypedWrite<'a, T> {
+    state: &'a SnapshotMutableState<T>,
+    value: Option<T>,
+    displaced: Option<T>,
+}
+
+impl<T: Clone + 'static> PendingWrite for TypedWrite<'_, T> {
+    fn matches(&self, record: &StateRecord) -> bool {
+        self.value.as_ref().is_some_and(|value| {
+            record.with_value(|current: &T| self.state.policy.equivalent(current, value))
+        })
+    }
+
+    fn store(&mut self, record: &StateRecord) {
+        if let Some(value) = self.value.take() {
+            self.displaced = record.replace_value(value);
+        }
+    }
+
+    fn written(&self) -> Option<Rc<dyn StateObject>> {
+        self.state.written_state()
+    }
+}
+
+// Writes the value `write` holds to the state `target` names, in the active
+// snapshot, and returns whether it changed the value that snapshot reads.
+// Out of line, one function for every state type.
+#[inline(never)]
+fn write_value(target: &WriteTarget<'_>, write: &mut dyn PendingWrite) -> bool {
+    #[cfg(debug_assertions)]
+    {
+        let in_handler = crate::in_event_handler();
+        let in_snapshot = crate::in_applied_snapshot();
+        if in_handler && !in_snapshot {
+            log::warn!(
+                target: "cranpose::state",
+                "State modified in event handler without run_in_mutable_snapshot; \
+                 this can make updates invisible to other contexts. Wrap the handler \
+                 in run_in_mutable_snapshot() or dispatch_ui_event(). State: {:?}",
+                target.id
+            );
+        }
+    }
+
+    let snapshot = active_snapshot();
+    let snapshot_id = snapshot.snapshot_id();
+    let readable_for = |snapshot_id, invalid: &SnapshotIdSet| {
+        readable_record_for(&target.head.clone_head(), snapshot_id, invalid)
+    };
+
+    match &snapshot {
+        AnySnapshot::Global(global) => {
+            let readable = snapshot.with_invalid(|invalid| readable_for(snapshot_id, invalid));
+            if readable
+                .as_deref()
+                .is_some_and(|record| write.matches(record))
+            {
+                return false;
+            }
+            target.begin_global_write(global, snapshot_id);
+            // A record the global snapshot wrote at its current id is
+            // seen by no other snapshot: one taken since would have moved
+            // the global to a new id. The write replaces its value there,
+            // as Compose overwrites the record of the snapshot it writes.
+            if let Some(record) = readable.filter(|record| record.snapshot_id() == snapshot_id) {
+                write.store(&record);
+                target.finish_global_write(&record, write.written(), snapshot_id);
+            } else {
+                let (record, new_id) = target.push_global_record();
+                write.store(&record);
+                target.publish_global_record(&record, new_id, snapshot_id);
+                target.finish_global_write(&record, write.written(), snapshot_id);
+            }
+        }
+        AnySnapshot::Mutable(_)
+        | AnySnapshot::NestedMutable(_)
+        | AnySnapshot::TransparentMutable(_) => {
+            let invalid = snapshot.invalid();
+            if readable_for(snapshot_id, &invalid)
+                .as_deref()
+                .is_some_and(|record| write.matches(record))
+            {
+                return false;
+            }
+            let record =
+                target.begin_child_write(&snapshot, snapshot_id, &invalid, write.written());
+            write.store(&record);
+            target.assert_chain_integrity("set(child-writable)", Some(snapshot_id));
+        }
+        AnySnapshot::Readonly(_)
+        | AnySnapshot::NestedReadonly(_)
+        | AnySnapshot::TransparentReadonly(_) => {
+            panic!("Cannot write to a read-only snapshot");
+        }
+    }
+
+    true
+}
+
 #[cold]
 #[inline(never)]
 fn check_chain_integrity(
@@ -924,51 +1097,67 @@ fn should_check_chain_integrity() -> bool {
     }
 }
 
-impl<T: Clone + 'static> SnapshotMutableState<T> {
-    fn record_chain_debug(&self) -> Vec<(SnapshotId, bool)> {
-        let mut chain_ids = Vec::new();
-        let mut cursor = Some(self.first_record());
-        while let Some(record) = cursor {
-            chain_ids.push((record.snapshot_id(), record.is_tombstone()));
-            cursor = record.next();
-        }
-        chain_ids
+// The record of the state `state`, whose records start at `head`, that the
+// active snapshot reads, after a fresh snapshot's and the global one's when
+// that snapshot's own misses. Out of line, one function for every state
+// type.
+#[inline(never)]
+fn readable_record_for_active_snapshot(
+    state: &dyn StateObject,
+    head: &CurrentRecord,
+    id: ObjectId,
+) -> Result<Rc<StateRecord>, StateReadFailure> {
+    let readable = |snapshot_id, invalid: &SnapshotIdSet| {
+        readable_record_for(&head.clone_head(), snapshot_id, invalid)
+    };
+    let snapshot = active_snapshot();
+    snapshot.record_read(state);
+
+    let snapshot_id = snapshot.snapshot_id();
+    if let Some(record) = snapshot.with_invalid(|invalid| readable(snapshot_id, invalid)) {
+        return Ok(record);
     }
 
+    let fresh_snapshot = active_snapshot();
+    let fresh_id = fresh_snapshot.snapshot_id();
+    let fresh_invalid = fresh_snapshot.invalid();
+
+    if let Some(record) = readable(fresh_id, &fresh_invalid) {
+        return Ok(record);
+    }
+
+    let global = GlobalSnapshot::get_or_create();
+    let global_id = global.snapshot_id();
+    let global_invalid = global.invalid();
+
+    if let Some(record) = readable(global_id, &global_invalid) {
+        return Ok(record);
+    }
+
+    Err(StateReadFailure {
+        state_id: id,
+        snapshot_id,
+        fresh_snapshot_id: fresh_id,
+        fresh_invalid,
+        record_chain: record_chain(head),
+    })
+}
+
+// The snapshot id of each record from `head` on, and whether it is a
+// tombstone.
+fn record_chain(head: &CurrentRecord) -> Vec<(SnapshotId, bool)> {
+    let mut chain = Vec::new();
+    let mut cursor = Some(head.clone_head());
+    while let Some(record) = cursor {
+        chain.push((record.snapshot_id(), record.is_tombstone()));
+        cursor = record.next();
+    }
+    chain
+}
+
+impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn readable_record_for_active_snapshot(&self) -> Result<Rc<StateRecord>, StateReadFailure> {
-        let snapshot = active_snapshot();
-        snapshot.record_read(self);
-
-        let snapshot_id = snapshot.snapshot_id();
-        if let Some(record) =
-            snapshot.with_invalid(|invalid| self.readable_for(snapshot_id, invalid))
-        {
-            return Ok(record);
-        }
-
-        let fresh_snapshot = active_snapshot();
-        let fresh_id = fresh_snapshot.snapshot_id();
-        let fresh_invalid = fresh_snapshot.invalid();
-
-        if let Some(record) = self.readable_for(fresh_id, &fresh_invalid) {
-            return Ok(record);
-        }
-
-        let global = GlobalSnapshot::get_or_create();
-        let global_id = global.snapshot_id();
-        let global_invalid = global.invalid();
-
-        if let Some(record) = self.readable_for(global_id, &global_invalid) {
-            return Ok(record);
-        }
-
-        Err(StateReadFailure {
-            state_id: self.id,
-            snapshot_id,
-            fresh_snapshot_id: fresh_id,
-            fresh_invalid,
-            record_chain: self.record_chain_debug(),
-        })
+        readable_record_for_active_snapshot(self, &self.head, self.id)
     }
 
     fn readable_for(
@@ -978,12 +1167,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     ) -> Option<Rc<StateRecord>> {
         let head = self.first_record();
         readable_record_for(&head, snapshot_id, invalid)
-    }
-
-    fn is_equivalent_to(&self, readable: Option<&StateRecord>, new_value: &T) -> bool {
-        readable.is_some_and(|record| {
-            record.with_value(|current: &T| self.policy.equivalent(current, new_value))
-        })
     }
 
     pub(crate) fn new_in_rc(initial: T, policy: Rc<dyn MutationPolicy<T>>) -> Rc<Self> {
@@ -999,9 +1182,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             id: ObjectId(weak_self.as_ptr() as usize),
             weak_self: Weak::clone(weak_self),
             apply_observer: OnceCell::new(),
-            read_observation_lease: Rc::new(()),
-            scope_observation_count: Cell::new(0),
-            subscriber_callbacks: RefCell::new(Vec::new()),
+            subscribers: Subscribers::default(),
         })
     }
 
@@ -1010,55 +1191,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             self.apply_observer.set(observer).is_ok(),
             "state observer already installed"
         );
-    }
-
-    fn acquire_observation_lease(&self) -> Option<Rc<dyn Any>> {
-        let was_empty = !self.has_subscribers();
-        let lease = Rc::clone(&self.read_observation_lease);
-        if was_empty {
-            notify_subscriber_callbacks(&self.subscriber_callbacks);
-        }
-        Some(lease)
-    }
-
-    fn add_scope_observer(&self) -> bool {
-        let was_empty = !self.has_subscribers();
-        let count = self
-            .scope_observation_count
-            .get()
-            .checked_add(1)
-            .expect("state scope observation count overflow");
-        self.scope_observation_count.set(count);
-        was_empty
-    }
-
-    fn remove_scope_observers(&self, count: usize) {
-        if count == 0 {
-            return;
-        }
-        let remaining = self
-            .scope_observation_count
-            .get()
-            .checked_sub(count)
-            .expect("state scope observation count underflow");
-        self.scope_observation_count.set(remaining);
-    }
-
-    fn has_subscribers(&self) -> bool {
-        Rc::strong_count(&self.read_observation_lease) > 1 || self.scope_observation_count.get() > 0
-    }
-
-    fn subscriber_callback(&self, callback: Rc<dyn Fn()>, notify: bool) {
-        self.subscriber_callbacks
-            .borrow_mut()
-            .push(Rc::clone(&callback));
-        if notify {
-            callback();
-        }
-    }
-
-    fn notify_subscribers(&self) {
-        notify_subscriber_callbacks(&self.subscriber_callbacks);
     }
 
     fn finish_apply(&self, caller: &str, snapshot_id: SnapshotId) {
@@ -1106,82 +1238,19 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     pub(crate) fn set(&self, new_value: T) -> bool {
-        #[cfg(debug_assertions)]
-        {
-            let in_handler = crate::in_event_handler();
-            let in_snapshot = crate::in_applied_snapshot();
-            if in_handler && !in_snapshot {
-                log::warn!(
-                    target: "cranpose::state",
-                    "State modified in event handler without run_in_mutable_snapshot; \
-                     this can make updates invisible to other contexts. Wrap the handler \
-                     in run_in_mutable_snapshot() or dispatch_ui_event(). State: {:?}",
-                    self.id
-                );
-            }
-        }
-
-        let snapshot = active_snapshot();
-        let snapshot_id = snapshot.snapshot_id();
         let target = WriteTarget {
             head: &self.head,
             id: self.id,
             state: self,
         };
-
-        match &snapshot {
-            AnySnapshot::Global(global) => {
-                let readable =
-                    snapshot.with_invalid(|invalid| self.readable_for(snapshot_id, invalid));
-                if self.is_equivalent_to(readable.as_deref(), &new_value) {
-                    return false;
-                }
-                target.begin_global_write(global, snapshot_id);
-                // A record the global snapshot wrote at its current id is
-                // seen by no other snapshot: one taken since would have moved
-                // the global to a new id. The write replaces its value there,
-                // as Compose overwrites the record of the snapshot it writes.
-                if let Some(record) = readable.filter(|record| record.snapshot_id() == snapshot_id)
-                {
-                    let displaced = record.replace_value(new_value);
-                    target.finish_global_write(&record, self.written_state(), snapshot_id);
-                    drop(displaced);
-                } else {
-                    let (record, new_id) = target.push_global_record();
-                    let displaced = record.replace_value(new_value);
-                    target.publish_global_record(&record, new_id, snapshot_id);
-                    target.finish_global_write(&record, self.written_state(), snapshot_id);
-                    drop(displaced);
-                }
-            }
-            AnySnapshot::Mutable(_)
-            | AnySnapshot::NestedMutable(_)
-            | AnySnapshot::TransparentMutable(_) => {
-                let invalid = snapshot.invalid();
-                if self.is_equivalent_to(
-                    self.readable_for(snapshot_id, &invalid).as_deref(),
-                    &new_value,
-                ) {
-                    return false;
-                }
-                let record = target.begin_child_write(
-                    &snapshot,
-                    snapshot_id,
-                    &invalid,
-                    self.written_state(),
-                );
-                let displaced = record.replace_value(new_value);
-                target.assert_chain_integrity("set(child-writable)", Some(snapshot_id));
-                drop(displaced);
-            }
-            AnySnapshot::Readonly(_)
-            | AnySnapshot::NestedReadonly(_)
-            | AnySnapshot::TransparentReadonly(_) => {
-                panic!("Cannot write to a read-only snapshot");
-            }
-        }
-
-        true
+        let mut write = TypedWrite {
+            state: self,
+            value: Some(new_value),
+            displaced: None,
+        };
+        // The value the write displaced drops with `write`, once the write
+        // is published.
+        write_value(&target, &mut write)
     }
 
     fn try_readable_record(
@@ -1271,7 +1340,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn observation_lease(&self) -> Option<Rc<dyn Any>> {
-        self.acquire_observation_lease()
+        self.subscribers.acquire_observation_lease()
     }
 
     fn merge_records(
@@ -1335,7 +1404,14 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 
 pub(crate) struct MutableStateInner<T: Clone + 'static> {
     pub(crate) state: Rc<SnapshotMutableState<T>>,
-    pub(crate) watchers: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>,
+    watchers: StateWatchers,
+}
+
+// The scopes that read a state and the runtime they recompose in, whatever
+// the state's value type, so that registering a reader and invalidating the
+// readers are compiled once for every state type.
+struct StateWatchers {
+    scopes: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>,
     runtime: RuntimeHandle,
     state_id: Cell<Option<StateId>>,
 }
@@ -1358,6 +1434,18 @@ fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScope
     }
 }
 
+// What a state's apply observer runs: invalidates the scopes that read the
+// state, on the UI thread. The arena finds the readers by the state's id, so
+// the closure is one function for every state type.
+fn watcher_invalidation(runtime: RuntimeHandle, state_id: StateId) -> Box<dyn Fn()> {
+    Box::new(move || {
+        let ui_runtime = runtime.clone();
+        runtime.enqueue_ui_task(Box::new(move || {
+            ui_runtime.with_state_arena(|arena| arena.invalidate_watchers(state_id));
+        }));
+    })
+}
+
 impl<T: Clone + 'static> MutableStateInner<T> {
     pub(crate) fn new_with_policy(
         value: T,
@@ -1366,27 +1454,50 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     ) -> Self {
         Self {
             state: SnapshotMutableState::new_in_rc(value, policy),
-            watchers: RefCell::new(HashMap::default()),
-            runtime,
-            state_id: Cell::new(None),
+            watchers: StateWatchers {
+                scopes: RefCell::new(HashMap::default()),
+                runtime,
+                state_id: Cell::new(None),
+            },
         }
     }
 
     pub(crate) fn install_snapshot_observer(&self, state_id: StateId) {
-        self.state_id.set(Some(state_id));
-        let runtime_handle = self.runtime.clone();
-        self.state.set_apply_observer(Box::new(move || {
-            let runtime = runtime_handle.clone();
-            runtime_handle.enqueue_ui_task(Box::new(move || {
-                runtime.with_state_arena(|arena| {
-                    let _ = arena.with_typed_opt::<T, _>(state_id, |inner| {
-                        inner.invalidate_watchers();
-                    });
-                });
-            }));
-        }));
+        self.watchers.state_id.set(Some(state_id));
+        self.state.set_apply_observer(watcher_invalidation(
+            self.watchers.runtime.clone(),
+            state_id,
+        ));
     }
 
+    fn has_subscribers(&self) -> bool {
+        self.watchers.has_subscribers(&self.state.subscribers)
+    }
+
+    /// Removes the live scope `scope_id` from the watchers: its last body did
+    /// not read the state.
+    pub(crate) fn forget_scope(&self, scope_id: ScopeId) {
+        self.watchers
+            .forget_scope(&self.state.subscribers, scope_id);
+    }
+
+    pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
+        self.watchers
+            .unregister_scope(&self.state.subscribers, scope_id);
+    }
+
+    pub(crate) fn invalidate_watchers(&self) {
+        self.watchers
+            .invalidate(&self.state.subscribers, std::any::type_name::<T>());
+    }
+
+    // Subscribes the scope that is composing to this state.
+    fn register_current_scope(&self) {
+        register_current_state_scope(&self.watchers, &self.state.subscribers);
+    }
+}
+
+impl StateWatchers {
     /// Adds `scope` to the state's watchers, saying whether it was new and
     /// whether the state thereby gained its first subscriber.
     ///
@@ -1396,14 +1507,14 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     /// otherwise only when the map is full, before the insert would grow
     /// it: a state read by thousands of scopes, such as the density, must
     /// not scan them all for every new reader.
-    fn register_scope(&self, scope: &RecomposeScope) -> (bool, bool) {
-        let mut watchers = self.watchers.borrow_mut();
+    fn register_scope(&self, subscribers: &Subscribers, scope: &RecomposeScope) -> (bool, bool) {
+        let mut watchers = self.scopes.borrow_mut();
         let id = scope.id();
         match watchers.get(&id) {
             Some(existing) if existing.strong_count() > 0 => return (false, false),
             Some(_) => {
                 watchers.remove(&id);
-                self.state.remove_scope_observers(1);
+                subscribers.remove_scope_observers(1);
             }
             None => {}
         }
@@ -1411,35 +1522,33 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         if !any_live || watchers.len() >= watchers.capacity() {
             let before = watchers.len();
             watchers.retain(|_, watcher| watcher.strong_count() > 0);
-            self.state.remove_scope_observers(before - watchers.len());
+            subscribers.remove_scope_observers(before - watchers.len());
         }
         watchers.insert(id, scope.downgrade());
         drop(watchers);
-        (true, self.state.add_scope_observer())
+        (true, subscribers.add_scope_observer())
     }
 
-    fn has_subscribers(&self) -> bool {
-        let mut watchers = self.watchers.borrow_mut();
+    fn has_subscribers(&self, subscribers: &Subscribers) -> bool {
+        let mut watchers = self.scopes.borrow_mut();
         let before = watchers.len();
         watchers.retain(|_, existing| existing.upgrade().is_some());
-        self.state.remove_scope_observers(before - watchers.len());
-        self.state.has_subscribers()
+        subscribers.remove_scope_observers(before - watchers.len());
+        subscribers.has_subscribers()
     }
 
-    /// Removes the live scope `scope_id` from the watchers: its last body did
-    /// not read the state.
-    pub(crate) fn forget_scope(&self, scope_id: ScopeId) {
-        let mut watchers = self.watchers.borrow_mut();
+    fn forget_scope(&self, subscribers: &Subscribers, scope_id: ScopeId) {
+        let mut watchers = self.scopes.borrow_mut();
         let removed = watchers.remove(&scope_id).is_some();
         if removed {
             shrink_watchers_if_sparse(&mut watchers);
         }
         drop(watchers);
-        self.state.remove_scope_observers(usize::from(removed));
+        subscribers.remove_scope_observers(usize::from(removed));
     }
 
-    pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
-        let mut watchers = self.watchers.borrow_mut();
+    fn unregister_scope(&self, subscribers: &Subscribers, scope_id: ScopeId) {
+        let mut watchers = self.scopes.borrow_mut();
         let removed = if watchers
             .get(&scope_id)
             .is_some_and(|weak| weak.upgrade().is_none())
@@ -1451,17 +1560,15 @@ impl<T: Clone + 'static> MutableStateInner<T> {
             false
         };
         drop(watchers);
-        self.state.remove_scope_observers(usize::from(removed));
+        subscribers.remove_scope_observers(usize::from(removed));
     }
 
-    fn state_id(&self) -> Option<StateId> {
-        self.state_id.get()
-    }
-
-    fn invalidate_watchers(&self) {
+    // Invalidates the live scopes that read the state, whose value type is
+    // named `type_name`, and drops the dead ones.
+    fn invalidate(&self, subscribers: &Subscribers, type_name: &'static str) {
         // A state has few watchers: their copy stays inline.
         let (watchers, removed_count): (SmallVec<[RecomposeScope; 4]>, usize) = {
-            let mut watchers = self.watchers.borrow_mut();
+            let mut watchers = self.scopes.borrow_mut();
             let before = watchers.len();
             let mut live = SmallVec::new();
             watchers.retain(|_, scope| {
@@ -1476,14 +1583,10 @@ impl<T: Clone + 'static> MutableStateInner<T> {
             shrink_watchers_if_sparse(&mut watchers);
             (live, removed_count)
         };
-        self.state.remove_scope_observers(removed_count);
+        subscribers.remove_scope_observers(removed_count);
 
         for watcher in watchers {
-            debug_record_scope_invalidation(
-                watcher.id(),
-                self.state_id.get(),
-                std::any::type_name::<T>(),
-            );
+            debug_record_scope_invalidation(watcher.id(), self.state_id.get(), type_name);
             if let Some(state_id) = self.state_id.get() {
                 watcher.invalidate_from_state(state_id);
             } else {
@@ -1496,23 +1599,27 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 impl<T: Clone + 'static> Drop for MutableStateInner<T> {
     fn drop(&mut self) {
         self.state
-            .remove_scope_observers(self.watchers.get_mut().len());
+            .subscribers
+            .remove_scope_observers(self.watchers.scopes.get_mut().len());
     }
 }
 
-fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
-    let state_id = inner.state_id();
+// Out of line, one function for every state type: each read of a state
+// registers its reader here.
+#[inline(never)]
+fn register_current_state_scope(watchers: &StateWatchers, subscribers: &Subscribers) {
+    let state_id = watchers.state_id.get();
     let Some(Some((scope, read))) =
         with_current_composer_opt(|composer| composer.note_state_read(state_id))
     else {
         return;
     };
-    let (registered, became_subscribed) = inner.register_scope(&scope);
+    let (registered, became_subscribed) = watchers.register_scope(subscribers, &scope);
     if let (crate::ScopeRead::NotReading, true, Some(state_id)) = (read, registered, state_id) {
         scope.record_state_subscription(state_id);
     }
     if became_subscribed {
-        inner.state.notify_subscribers();
+        subscribers.notify_subscribers();
     }
 }
 
@@ -1545,7 +1652,7 @@ trait StateArenaHandle<T: Clone + 'static> {
     fn read_subscribed<R>(&self, read: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
         self.with_inner(|inner| {
             let result = read(inner);
-            register_current_state_scope(inner);
+            inner.register_current_scope();
             result
         })
     }
@@ -1720,7 +1827,7 @@ impl<T: Clone + 'static> State<T> {
     fn read_fresh_subscribed<R>(&self, read: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
         self.with_fresh_inner(|inner| {
             let result = read(inner);
-            register_current_state_scope(inner);
+            inner.register_current_scope();
             result
         })
     }
@@ -1740,6 +1847,7 @@ impl<T: Clone + 'static> State<T> {
         self.with_inner(|inner| {
             inner
                 .state
+                .subscribers
                 .subscriber_callback(callback, inner.has_subscribers());
         });
     }
@@ -1777,6 +1885,23 @@ impl<T: Clone + 'static> StateArenaHandle<T> for MutableState<T> {
 
     fn runtime_id(&self) -> runtime::RuntimeId {
         self.runtime_id
+    }
+}
+
+// Why a write to `state_id` of `runtime_id` stored nothing: its runtime
+// was dropped, or the runtime lives and the state was released. Out of line,
+// one function for every state type.
+#[cold]
+#[inline(never)]
+fn log_skipped_replace(runtime_id: runtime::RuntimeId, state_id: StateId, runtime_alive: bool) {
+    if runtime_alive {
+        log::debug!(
+            "MutableState::replace skipped: state cell released (slot={}, gen={})",
+            state_id.slot(),
+            state_id.generation(),
+        );
+    } else {
+        log::debug!("MutableState::replace skipped: runtime {runtime_id:?} dropped");
     }
 }
 
@@ -1894,17 +2019,8 @@ impl<T: Clone + 'static> MutableState<T> {
                 }
             })
         });
-        match replaced {
-            None => log::debug!(
-                "MutableState::replace skipped: runtime {:?} dropped",
-                self.runtime_id()
-            ),
-            Some(None) => log::debug!(
-                "MutableState::replace skipped: state cell released (slot={}, gen={})",
-                self.state_id().slot(),
-                self.state_id().generation(),
-            ),
-            Some(Some(())) => {}
+        if replaced != Some(Some(())) {
+            log_skipped_replace(self.runtime_id(), self.state_id(), replaced.is_some());
         }
     }
 
@@ -1945,17 +2061,17 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     fn subscribe_current_scope(&self) {
-        self.with_inner(register_current_state_scope::<T>);
+        self.with_inner(MutableStateInner::register_current_scope);
     }
 
     #[cfg(test)]
     pub(crate) fn watcher_count(&self) -> usize {
-        self.with_inner(|inner| inner.watchers.borrow().len())
+        self.with_inner(|inner| inner.watchers.scopes.borrow().len())
     }
 
     #[cfg(test)]
     pub(crate) fn watcher_capacity(&self) -> usize {
-        self.with_inner(|inner| inner.watchers.borrow().capacity())
+        self.with_inner(|inner| inner.watchers.scopes.borrow().capacity())
     }
 
     #[cfg(test)]
@@ -2026,13 +2142,15 @@ impl<T: Clone + 'static> Deref for OwnedMutableState<T> {
 impl<T: Clone + 'static> State<T> {
     pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
         self.with_inner(|inner| {
-            let (registered, became_subscribed) = inner.register_scope(scope);
+            let (registered, became_subscribed) = inner
+                .watchers
+                .register_scope(&inner.state.subscribers, scope);
             if registered {
-                if let Some(state_id) = inner.state_id() {
+                if let Some(state_id) = inner.watchers.state_id.get() {
                     scope.record_state_subscription(state_id);
                 }
                 if became_subscribed {
-                    inner.state.notify_subscribers();
+                    inner.state.subscribers.notify_subscribers();
                 }
             }
         });
@@ -2048,141 +2166,6 @@ impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
         } else {
             f.write_str("MutableState { value: <unavailable> }")
         }
-    }
-}
-
-/// A list whose reads subscribe the current scope and whose writes notify its readers, as Jetpack
-/// Compose's `SnapshotStateList`. Clones share the same list.
-#[derive(Clone)]
-pub struct SnapshotStateList<T: Clone + 'static> {
-    state: OwnedMutableState<Vec<T>>,
-}
-
-impl<T: Clone + 'static> SnapshotStateList<T> {
-    /// Creates a list holding `values` in `runtime`.
-    pub fn with_runtime<I>(values: I, runtime: RuntimeHandle) -> Self
-    where
-        I: IntoIterator<Item = T>,
-    {
-        let initial: Vec<T> = values.into_iter().collect();
-        Self {
-            state: OwnedMutableState::with_runtime(initial, runtime),
-        }
-    }
-
-    /// Returns a read-only view of the state that holds the elements.
-    pub fn as_state(&self) -> State<Vec<T>> {
-        self.state.as_state()
-    }
-
-    /// Returns the writable state that holds the elements.
-    pub fn as_mutable_state(&self) -> MutableState<Vec<T>> {
-        self.state.handle()
-    }
-
-    /// Returns the number of elements.
-    pub fn len(&self) -> usize {
-        self.state.with(Vec::len)
-    }
-
-    /// Returns `true` if the list has no elements.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns a copy of the elements.
-    pub fn to_vec(&self) -> Vec<T> {
-        self.state.with(Clone::clone)
-    }
-
-    /// Returns a copy of the elements for iteration. Later writes do not change that copy.
-    pub fn iter(&self) -> Vec<T> {
-        self.to_vec()
-    }
-
-    /// Returns a copy of the element at `index`. Panics if `index` is out of range.
-    pub fn get(&self, index: usize) -> T {
-        self.state.with(|values| values[index].clone())
-    }
-
-    /// Returns a copy of the element at `index`, or `None` if it is out of range.
-    pub fn get_opt(&self, index: usize) -> Option<T> {
-        self.state.with(|values| values.get(index).cloned())
-    }
-
-    /// Returns a copy of the first element, or `None` if the list is empty.
-    pub fn first(&self) -> Option<T> {
-        self.get_opt(0)
-    }
-
-    /// Returns a copy of the last element, or `None` if the list is empty.
-    pub fn last(&self) -> Option<T> {
-        self.state.with(|values| values.last().cloned())
-    }
-
-    /// Appends `value` at the end.
-    pub fn push(&self, value: T) {
-        self.state.update(|values| values.push(value));
-    }
-
-    /// Appends all elements of `iter` in one write.
-    pub fn extend<I>(&self, iter: I)
-    where
-        I: IntoIterator<Item = T>,
-    {
-        self.state.update(|values| values.extend(iter));
-    }
-
-    /// Inserts `value` at `index`, moving later elements back. Panics if `index` is past the end.
-    pub fn insert(&self, index: usize, value: T) {
-        self.state.update(|values| values.insert(index, value));
-    }
-
-    /// Replaces the element at `index` and returns the old one. Panics if `index` is out of range.
-    pub fn set(&self, index: usize, value: T) -> T {
-        self.state
-            .update(|values| std::mem::replace(&mut values[index], value))
-    }
-
-    /// Removes and returns the element at `index`. Panics if `index` is out of range.
-    pub fn remove(&self, index: usize) -> T {
-        self.state.update(|values| values.remove(index))
-    }
-
-    /// Removes and returns the last element, or `None` if the list is empty.
-    pub fn pop(&self) -> Option<T> {
-        self.state.update(Vec::pop)
-    }
-
-    /// Removes all elements.
-    pub fn clear(&self) {
-        self.state.replace(Vec::new());
-    }
-
-    /// Keeps the elements for which `predicate` returns `true`.
-    pub fn retain<F>(&self, mut predicate: F)
-    where
-        F: FnMut(&T) -> bool,
-    {
-        self.state
-            .update(|values| values.retain(|value| predicate(value)));
-    }
-
-    /// Replaces all elements with those of `iter` in one write.
-    pub fn replace_with<I>(&self, iter: I)
-    where
-        I: IntoIterator<Item = T>,
-    {
-        self.state.replace(iter.into_iter().collect());
-    }
-}
-
-impl<T: fmt::Debug + Clone + 'static> fmt::Debug for SnapshotStateList<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let contents = self.to_vec();
-        f.debug_struct("SnapshotStateList")
-            .field("values", &contents)
-            .finish()
     }
 }
 

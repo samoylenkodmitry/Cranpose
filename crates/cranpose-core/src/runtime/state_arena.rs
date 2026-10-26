@@ -18,6 +18,7 @@ struct TypedStateCell<T: Clone + 'static> {
 trait ScopeWatchCell {
     fn unregister_scope(&self, scope_id: ScopeId);
     fn forget_scope(&self, scope_id: ScopeId);
+    fn invalidate_watchers(&self);
 }
 
 impl<T: Clone + 'static> ScopeWatchCell for TypedStateCell<T> {
@@ -27,6 +28,10 @@ impl<T: Clone + 'static> ScopeWatchCell for TypedStateCell<T> {
 
     fn forget_scope(&self, scope_id: ScopeId) {
         self.inner.forget_scope(scope_id);
+    }
+
+    fn invalidate_watchers(&self) {
+        self.inner.invalidate_watchers();
     }
 }
 
@@ -262,6 +267,13 @@ impl StateArena {
     pub(crate) fn forget_scope(&self, id: StateId, scope_id: ScopeId) {
         if let Some(watcher_cell) = self.watcher_cell(id) {
             watcher_cell.forget_scope(scope_id);
+        }
+    }
+
+    // Invalidates the scopes that read the state `id`, while it lives.
+    pub(crate) fn invalidate_watchers(&self, id: StateId) {
+        if let Some(watcher_cell) = self.watcher_cell(id) {
+            watcher_cell.invalidate_watchers();
         }
     }
 
