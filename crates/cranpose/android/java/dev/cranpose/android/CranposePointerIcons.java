@@ -4,17 +4,20 @@ import android.app.Activity;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.util.LruCache;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.PointerIcon;
 import android.view.View;
 import android.view.ViewGroup;
 
 final class CranposePointerIcons {
     private final LruCache<Long, PointerIcon> icons = new LruCache<>(32);
+    private View pointerView;
 
     void apply(Activity activity, int type, long identity, byte[] rgba, int width,
             int height, float hotspotX, float hotspotY) {
         activity.runOnUiThread(() -> {
-            if (Build.VERSION.SDK_INT < 24) return;
+            if (Build.VERSION.SDK_INT < 24 || activity.isDestroyed()) return;
             PointerIcon icon;
             if (rgba == null) {
                 icon = PointerIcon.getSystemIcon(activity, type);
@@ -38,8 +41,33 @@ final class CranposePointerIcons {
                     icons.put(identity, icon);
                 }
             }
+            if (pointerView == null) {
+                pointerView = new PointerView(activity);
+                ViewGroup content = activity.findViewById(android.R.id.content);
+                // Keep native web views and editors above the pointer resolver.
+                content.addView(pointerView, Math.min(1, content.getChildCount()),
+                        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT));
+            }
             applyToView(activity.getWindow().getDecorView(), icon);
         });
+    }
+
+    private static final class PointerView extends View {
+        PointerView(Activity activity) {
+            super(activity);
+            setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            setWillNotDraw(true);
+        }
+
+        @Override public PointerIcon onResolvePointerIcon(MotionEvent event, int index) {
+            int tool = event.getToolType(index);
+            if (event.isFromSource(InputDevice.SOURCE_STYLUS)
+                    && (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER)) {
+                return getPointerIcon();
+            }
+            return super.onResolvePointerIcon(event, index);
+        }
     }
 
     private static void applyToView(View view, PointerIcon icon) {
