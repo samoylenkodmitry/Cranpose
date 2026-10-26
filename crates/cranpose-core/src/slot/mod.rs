@@ -65,7 +65,7 @@ use types::{NodeRecord, PayloadRecord, PayloadType};
 pub(crate) use validate::SlotInvariantError;
 #[cfg(test)]
 pub(crate) use validate::SlotTreeContext;
-pub(crate) use writer::{GroupFrameStorage, SlotWriteSessionState};
+pub(crate) use writer::SlotWriteSessionState;
 
 #[cfg(test)]
 pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
