@@ -6,9 +6,7 @@ const NODE: Size = Size {
 };
 
 fn parts() -> Rc<LayoutParts> {
-    Rc::new(LayoutParts::new(crate::layout::LayoutRuntimeState::new(
-        crate::widgets::nodes::layout_node::empty_measure_policy(),
-    )))
+    Rc::new(LayoutParts::empty())
 }
 
 fn padded(ordinal: usize, parts: &Rc<LayoutParts>) -> CoordinatorRect {

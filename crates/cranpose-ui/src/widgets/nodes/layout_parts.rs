@@ -26,6 +26,14 @@ impl LayoutParts {
         }
     }
 
+    // Parts with the empty measure policy, whose runtime state stays empty:
+    // a subcompose node measures its children through a policy of its own.
+    pub(crate) fn empty() -> Self {
+        Self::new(LayoutRuntimeState::new(
+            super::layout_node::empty_measure_policy(),
+        ))
+    }
+
     pub(crate) fn cache(&self) -> &NodeCache {
         &self.cache
     }

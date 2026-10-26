@@ -719,14 +719,6 @@ pub struct SubcomposeLayoutNode {
     modifier_slices_dirty: Cell<bool>,
 }
 
-// A subcompose node measures its children through its own policy, so the
-// runtime state of its parts stays empty.
-fn new_layout_parts() -> Rc<LayoutParts> {
-    Rc::new(LayoutParts::new(crate::layout::LayoutRuntimeState::new(
-        crate::widgets::nodes::layout_node::empty_measure_policy(),
-    )))
-}
-
 impl SubcomposeLayoutNode {
     /// Creates a node with `modifier` whose children `measure_policy` subcomposes and measures.
     pub fn new(modifier: Modifier, measure_policy: Rc<MeasurePolicy>) -> Self {
@@ -742,7 +734,7 @@ impl SubcomposeLayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            parts: new_layout_parts(),
+            parts: Rc::new(LayoutParts::empty()),
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -779,7 +771,7 @@ impl SubcomposeLayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            parts: new_layout_parts(),
+            parts: Rc::new(LayoutParts::empty()),
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -893,8 +885,7 @@ impl SubcomposeLayoutNode {
 
     fn update_modifier_slices_cache(&self) {
         let inner = self.inner.borrow();
-        // This node lays its chain out from padding, size and offset without
-        // coordinators, so its draws sit inside the padding before them.
+        // No coordinators: the draws sit inside the padding before them.
         self.modifier_slices_snapshot.collect(
             inner.modifier_chain.chain(),
             None,
