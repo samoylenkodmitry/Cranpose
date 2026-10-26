@@ -10,9 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_app_shell::{
-    AppShell, KeyEvent, PlatformFrameDriver, PointerSource, default_root_key,
-};
+use cranpose_app_shell::{AppShell, KeyEvent, PlatformFrameDriver, PointerSource};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::{DeviceLostHandler, PresentOutcome, PublishOutcome, WgpuRenderer};
 use cranpose_ui::{Point, PointerButton, PointerId, Size};
@@ -32,7 +30,7 @@ use super::{
 };
 use crate::{
     android_host_window,
-    app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppSettings},
+    app_launcher::{AndroidGpuBackend, AppSettings},
     frame_pacer::FramePacer,
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
@@ -1521,9 +1519,9 @@ fn init_gpu_threaded_for_android(
 // What an app shell on Android is built from: its content, the app's
 // settings, the frame driver, the registry of host windows and whether
 // frames present on their own thread.
-struct ShellInputs<'a, F> {
-    content: &'a Rc<RefCell<F>>,
-    settings: &'a AppSettings,
+pub(super) struct ShellInputs<'a, F> {
+    pub(super) content: &'a Rc<RefCell<F>>,
+    pub(super) settings: &'a AppSettings,
     frame_driver: &'a AndroidFrameDriver,
     host_window_registry: &'a android_host_window::AndroidHostWindowRegistry,
     present_thread: bool,
@@ -1670,26 +1668,7 @@ where
             renderer.init_gpu(setup.resources.gpu_target());
         }
 
-        let content_clone = Rc::clone(inputs.content);
-        let density = density.max(f32::EPSILON);
-        let platform_env = android_platform_env();
-        // The frame loop runs idle prefetch passes while it waits for a frame
-        // (`prefetch_while_waiting`): a lazy list leaves them the items
-        // beyond its viewport that its scroll does not soon reach.
-        cranpose_ui::set_idle_prefetch_passes(true);
-        let mut shell = AppShell::new_with_size_and_density(
-            renderer,
-            default_root_key(),
-            move || {
-                platform_env.compose_root(|| content_clone.borrow_mut()());
-            },
-            (width, height),
-            (width as f32 / density, height as f32 / density),
-            density,
-        );
-        shell.set_semantics_enabled(true);
-        crate::accessibility::install_inspector(&mut shell, inputs.settings.developer_inspector);
-        shell.set_safe_area(android_platform_env().safe_area());
+        let shell = super::shell_creation::create(renderer, inputs, width, height, density);
 
         *app_shell = Some(shell);
 
