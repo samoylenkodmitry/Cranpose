@@ -14,12 +14,12 @@ use cranpose_ui::{
 };
 pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
 use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
+    BlendMode, ColorFilter, CommandRecording, DrawPlacement, DrawPrimitive, RecordingSummary,
+    ShadowPrimitive,
 };
 
 use crate::{
     raster_cache::LayerRasterCacheHashes,
-    style_shared::DrawPlacement,
     text_paint::{TextPaint, TextPaintCache},
 };
 

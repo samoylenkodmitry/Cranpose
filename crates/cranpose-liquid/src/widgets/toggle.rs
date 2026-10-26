@@ -10,7 +10,7 @@ use cranpose_ui_graphics::{Brush, CornerRadii, GraphicsLayer};
 
 use crate::{
     material::{GlassDynamics, GlassMorph, LiquidModifierExt},
-    motion::LiquidMotion,
+    motion::{LiquidMotion, Press},
     theme::liquid_colors,
 };
 
@@ -92,7 +92,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                         grab_offset = event.position.x
                                             - (lens_axis.value() + THUMB_WIDTH * 0.5);
                                         lens_axis.begin(lens_axis.value(), event.time_ms);
-                                        contact.pressed(true, event.animation_time_nanos);
+                                        contact.pressed(Press::Down, event.animation_time_nanos);
                                         default_haptics().perform(HapticFeedback::Selection);
                                         event.consume();
                                     }
@@ -112,7 +112,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                     }
                                     PointerEventKind::Up if dragging => {
                                         dragging = false;
-                                        contact.pressed(false, event.animation_time_nanos);
+                                        contact.pressed(Press::Up, event.animation_time_nanos);
                                         let travelled =
                                             (event.position.x - down_x).abs() > TAP_SLOP;
                                         let next = if travelled {
@@ -134,7 +134,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                     }
                                     PointerEventKind::Cancel if dragging => {
                                         dragging = false;
-                                        contact.pressed(false, event.animation_time_nanos);
+                                        contact.pressed(Press::Up, event.animation_time_nanos);
                                         lens_axis.release_to(
                                             if checked { max_x } else { min_x },
                                             event.time_ms,

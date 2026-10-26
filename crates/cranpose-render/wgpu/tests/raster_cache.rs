@@ -7,7 +7,7 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{TextLayoutOptions, TextStyle, text::SpanStyle};
-use cranpose_ui_graphics::{Brush, Color, Rect, RenderEffect};
+use cranpose_ui_graphics::{Brush, Color, DrawPlacement, Rect, RenderEffect};
 
 use crate::support;
 
@@ -205,10 +205,7 @@ fn a_changing_large_backdrop_does_not_starve_the_still_backdrop_after_it() {
 }
 
 fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
-    use cranpose_render_common::{
-        graph::{DrawCommandId, DrawRunNode},
-        style_shared::DrawPlacement,
-    };
+    use cranpose_render_common::graph::{DrawCommandId, DrawRunNode};
     use cranpose_ui_graphics::DrawPrimitive;
     let bounds = Rect {
         x: 0.0,

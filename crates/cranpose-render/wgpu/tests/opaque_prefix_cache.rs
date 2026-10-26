@@ -4,12 +4,11 @@ use cranpose_render_common::{
     graph::{
         DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     },
-    style_shared::DrawPlacement,
 };
 use cranpose_render_wgpu::{RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
-    RenderEffect, Size, Stroke, TileMode,
+    Brush, Color, CornerRadii, DrawPlacement, DrawScope, DrawScopeDefault, GraphicsLayer, Point,
+    Rect, RenderEffect, Size, Stroke, TileMode,
 };
 
 use crate::{shared_test_support, support};

@@ -526,16 +526,22 @@ fn the_content_split_follows_the_last_marker() {
             })
             .collect()
     };
-    assert_eq!(xs(recording.content_split(true)), [1.0, 2.0]);
-    assert_eq!(xs(recording.content_split(false)), [3.0]);
+    assert_eq!(
+        xs(recording.content_split(DrawPlacement::Behind)),
+        [1.0, 2.0]
+    );
+    assert_eq!(xs(recording.content_split(DrawPlacement::Overlay)), [3.0]);
     assert_eq!(xs(recording.all_segments()), [1.0, 2.0, 3.0]);
     let unsplit = CommandRecording::from_primitives(vec![DrawPrimitive::Rect {
         rect: rect(4.0, 0.0, 1.0, 1.0),
         brush: solid(),
         stroke: None,
     }]);
-    assert!(unsplit.is_empty_in(&unsplit.content_split(true)));
-    assert_eq!(unsplit.content_split(false), unsplit.all_segments());
+    assert!(unsplit.is_empty_in(&unsplit.content_split(DrawPlacement::Behind)));
+    assert_eq!(
+        unsplit.content_split(DrawPlacement::Overlay),
+        unsplit.all_segments()
+    );
     assert_eq!(unsplit.len_in(&unsplit.all_segments()), 1);
 }
 
@@ -587,7 +593,7 @@ fn summary_and_bounds_are_what_a_scan_of_the_primitives_finds() {
         .reduce(|a, b| a.union(b));
     assert_eq!(recording.bounds(), expected_bounds);
     assert_eq!(
-        kinds_of(recording.summary_in(&recording.content_split(false))),
+        kinds_of(recording.summary_in(&recording.content_split(DrawPlacement::Overlay))),
         scan_summary(&primitives[primitives.len() - 1..])
     );
     let rects: Vec<Rect> = recording.coverage_rects(recording.all_segments()).collect();
@@ -1213,8 +1219,8 @@ fn only_a_run_of_shapes_alone_reads_as_shapes_only() {
     let with_content =
         CommandRecording::from_primitives([shape(), DrawPrimitive::Content, shape()]);
     assert!(!with_content.summary().shapes_only());
-    let behind = with_content.content_split(true);
-    let overlay = with_content.content_split(false);
+    let behind = with_content.content_split(DrawPlacement::Behind);
+    let overlay = with_content.content_split(DrawPlacement::Overlay);
     assert!(with_content.summary_in(&behind).shapes_only());
     assert!(with_content.summary_in(&overlay).shapes_only());
 
@@ -1244,8 +1250,8 @@ fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
         recorder.push_primitive(primitive);
     }
     recorder.finish();
-    let behind = first.content_split(true);
-    let overlay = first.content_split(false);
+    let behind = first.content_split(DrawPlacement::Behind);
+    let overlay = first.content_split(DrawPlacement::Overlay);
     assert_eq!(first.shape_count_in(&first.all_segments()), 3);
     assert_eq!(first.shape_count_in(&behind), 2);
     assert_eq!(first.shape_count_in(&overlay), 1);

@@ -16,7 +16,7 @@ use crate::{
         Glass, GlassDynamics, GlassFaceResponse, GlassKeyFill, GlassMorph, GlassShadow,
         LiquidModifierExt, neutral_surface_tint,
     },
-    motion::LiquidMotion,
+    motion::{LiquidMotion, Press},
     theme::{LiquidColors, LiquidTypography, liquid_colors, liquid_typography},
     widgets::{content_scope::ScopeContent, glass_surface::surface_material},
 };
@@ -576,8 +576,8 @@ struct TabBarTouch {
 }
 
 impl TabBarTouch {
-    fn pressed(self, down: bool) {
-        if down {
+    fn pressed(self, press: Press) {
+        if press.is_down() {
             self.origin.set(None);
             self.travel.set(0.0);
         }
@@ -1018,10 +1018,10 @@ impl TabGesture {
                             tab_lens_resting_left(index, geometry.pitch, count)
                         }),
                         selected,
-                        on_pressed: Rc::new(move |down, time| {
-                            lens_pressed.set(down);
-                            contact_motion.pressed(down, time);
-                            bar_touch.pressed(down);
+                        on_pressed: Rc::new(move |press, time| {
+                            lens_pressed.set(press.is_down());
+                            contact_motion.pressed(press, time);
+                            bar_touch.pressed(press);
                         }),
                         on_touch: Rc::new(move |x, y| {
                             bar_touch.update(

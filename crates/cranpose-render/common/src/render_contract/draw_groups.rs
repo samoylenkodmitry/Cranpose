@@ -7,8 +7,9 @@ use std::rc::Rc;
 use cranpose_core::NodeId;
 use cranpose_ui::{Box, BoxSpec, DrawCommand, LayoutEngine, Modifier, run_test_composition};
 use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, CompositingStrategy, DrawScope, DrawScopeDefault, DrawTextStyle,
-    DrawTransform, GraphicsLayer, Path, Point, Rect, Size, TextAlign, TextVerticalAlign,
+    Brush, Color, ColorFilter, CompositingStrategy, DrawPlacement, DrawScope, DrawScopeDefault,
+    DrawTextStyle, DrawTransform, GraphicsLayer, Path, Point, Rect, Size, TextAlign,
+    TextVerticalAlign,
 };
 
 use super::{
@@ -19,7 +20,6 @@ use crate::{
     graph::{PrimitivePhase, RenderGraph, RenderNode},
     image_compare::{pixel_difference, sample_pixel},
     scene_builder::{build_graph_from_applier, draw_command_nodes_for_tests},
-    style_shared::DrawPlacement,
 };
 
 const CELL: f32 = 60.0;

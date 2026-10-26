@@ -176,18 +176,13 @@ pub(crate) fn confined_scissor(scissor: Option<TargetRect>, slot: TargetRect) ->
 /// A draw's scissor cut down to the pixels its pass segment may touch;
 /// `None` when nothing of it remains.
 pub(crate) fn bounded_scissor(
-    scissor: (u32, u32, u32, u32),
-    bound: Option<(u32, u32, u32, u32)>,
-) -> Option<(u32, u32, u32, u32)> {
-    let Some((bx, by, bw, bh)) = bound else {
-        return (scissor.2 > 0 && scissor.3 > 0).then_some(scissor);
-    };
-    let (x, y, width, height) = scissor;
-    let left = x.max(bx);
-    let top = y.max(by);
-    let right = (x + width).min(bx + bw);
-    let bottom = (y + height).min(by + bh);
-    (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
+    scissor: TargetRect,
+    bound: Option<TargetRect>,
+) -> Option<TargetRect> {
+    match bound {
+        Some(bound) => intersect_target_rects(scissor, bound),
+        None => (scissor.2 > 0 && scissor.3 > 0).then_some(scissor),
+    }
 }
 
 fn intersect_device_rects(a: DeviceRect4, b: DeviceRect4) -> Option<DeviceRect4> {
@@ -3581,7 +3576,7 @@ impl GpuRenderer {
         let mut bound_atlas = None;
         // Which shared instances are bound, turned or plain, and which
         // pipeline; retained runs draw with a plain one.
-        let mut shared_bound: Option<bool> = None;
+        let mut shared_bound: Option<GlyphKind> = None;
         let mut bound_pipeline: Option<GlyphQuads> = None;
         let mut bound_run_instances: Option<&wgpu::Buffer> = None;
         let mut draws = 0u32;
@@ -3612,15 +3607,16 @@ impl GpuRenderer {
                         pass.set_pipeline(pipeline);
                         bound_pipeline = Some(quads);
                     }
-                    let turned = quads.turned();
-                    if shared_bound != Some(turned) {
-                        let slot =
-                            if turned { turned_slot } else { glyph_slot }.ok_or_else(|| {
-                                "shared glyph draw without glyph instances".to_string()
-                            })?;
+                    let kind = quads.kind();
+                    if shared_bound != Some(kind) {
+                        let slot = match kind {
+                            GlyphKind::Plain => glyph_slot,
+                            GlyphKind::Turned => turned_slot,
+                        }
+                        .ok_or_else(|| "shared glyph draw without glyph instances".to_string())?;
                         self.viewport_uniforms.bind(pass, uniform_slot)?;
                         pass.set_vertex_buffer(0, slot.slice());
-                        shared_bound = Some(turned);
+                        shared_bound = Some(kind);
                         bound_run_instances = None;
                     }
                     pass.draw(0..GLYPH_QUAD_CORNERS, instances);
@@ -3949,7 +3945,7 @@ use glyph_atlas::{
     TextGlyphAtlas, create_glyph_atlas_pipeline, glyph_atlas_uv_rect,
 };
 use glyph_draws::{
-    GLYPH_QUAD_CORNERS, GlyphDrawStep, GlyphDraws, GlyphExtent, GlyphQuads, TurnedGlyph,
+    GLYPH_QUAD_CORNERS, GlyphDrawStep, GlyphDraws, GlyphExtent, GlyphKind, GlyphQuads, TurnedGlyph,
     for_each_visible_glyph, glyph_cut_edges, glyph_instance_spec, glyph_rect_aligned,
     shared_glyph_clip, turned_glyph_spec,
 };

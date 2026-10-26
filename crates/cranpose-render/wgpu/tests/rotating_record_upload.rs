@@ -1,12 +1,11 @@
 use std::rc::Rc;
 
-use cranpose_render_common::{
-    graph::{DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode},
-    style_shared::DrawPlacement,
+use cranpose_render_common::graph::{
+    DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, RenderGraph, RenderNode,
 };
 use cranpose_ui_graphics::{
-    ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawScope, DrawScopeDefault, Point,
-    Rect, Size, normalized_band,
+    ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawPlacement, DrawScope,
+    DrawScopeDefault, Point, Rect, Size, normalized_band,
 };
 
 use crate::support;

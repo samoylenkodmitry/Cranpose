@@ -5,11 +5,11 @@ use cranpose_render_common::{
         CachePolicy, DrawCommandId, DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
     },
-    style_shared::DrawPlacement,
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect, RoundedCornerShape,
+    Brush, Color, DrawPlacement, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
+    RoundedCornerShape,
 };
 
 use crate::support;

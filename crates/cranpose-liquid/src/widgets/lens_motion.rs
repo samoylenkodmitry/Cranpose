@@ -8,6 +8,8 @@ use cranpose_core::{RuntimeHandle, State, with_current_composer};
 use cranpose_macros::composable;
 use cranpose_ui_graphics::Size;
 
+use crate::motion::Press;
+
 const STRAIN_LIMIT: f32 = 0.35;
 pub(super) const MAX_LENS_PROJECTION: f32 = 1.0 + STRAIN_LIMIT;
 
@@ -56,7 +58,8 @@ impl TabContactMotion {
         }
     }
 
-    pub(super) fn pressed(&self, down: bool, event_time: Option<u64>) {
+    pub(super) fn pressed(&self, press: Press, event_time: Option<u64>) {
+        let down = press.is_down();
         if down {
             self.local_glow_factor.borrow_mut().snapTo(1.0);
         }

@@ -82,7 +82,7 @@ fn contact_light_tracks_native_onset_and_keeps_the_dimmed_release() {
         let origin = (next as u64 + 1) * 10_000_000_000;
         if next != route {
             motion.glow.borrow_mut().snapTo(0.0);
-            motion.pressed(true, Some(origin));
+            motion.pressed(Press::Down, Some(origin));
             route = next;
         }
         runtime
@@ -100,7 +100,7 @@ fn contact_light_tracks_native_onset_and_keeps_the_dimmed_release() {
             .drain_frame_callbacks(40_250_000_000 + frame * 16_666_667);
     }
     assert_eq!(motion.local_glow_factor_state().get(), 0.5);
-    motion.pressed(false, Some(42_250_000_000));
+    motion.pressed(Press::Up, Some(42_250_000_000));
     runtime.handle().drain_frame_callbacks(42_350_000_000);
     assert!((motion.glow_state().get() - 0.64).abs() < 0.03);
     assert_eq!(motion.local_glow_factor_state().get(), 0.5);
@@ -111,13 +111,13 @@ fn contact_clock_integrates_from_input_and_keeps_release_velocity() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
     let motion = TabContactMotion::new(runtime.handle());
     runtime.handle().drain_frame_callbacks(1_000_000_000);
-    motion.pressed(true, Some(1_000_000_000));
+    motion.pressed(Press::Down, Some(1_000_000_000));
     runtime.handle().drain_frame_callbacks(1_050_000_000);
     let before = motion.lens_state().value();
     assert!(before > 0.34 && before < 0.35, "contact sample: {before}");
     assert!(motion.bar_state().value() > 0.1);
     let velocity = motion.lens.borrow().velocity();
-    motion.pressed(false, Some(1_050_000_000));
+    motion.pressed(Press::Up, Some(1_050_000_000));
     assert_eq!(motion.lens.borrow().velocity(), velocity);
     for frame in 1..=120 {
         runtime
@@ -133,7 +133,7 @@ fn contact_without_input_time_uses_the_shared_frame_clock() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
     let motion = TabContactMotion::new(runtime.handle());
     runtime.handle().drain_frame_callbacks(1_000_000_000);
-    motion.pressed(true, None);
+    motion.pressed(Press::Down, None);
     runtime.handle().drain_frame_callbacks(1_050_000_000);
     assert!(motion.lens_state().value() > 0.2);
     assert!(motion.bar_state().value() > 0.1);

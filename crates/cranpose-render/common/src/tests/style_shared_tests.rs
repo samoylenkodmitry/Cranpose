@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
+use cranpose_ui_graphics::{DrawPlacement, DrawScope, DrawScopeDefault, Rect};
 
 use super::*;
 

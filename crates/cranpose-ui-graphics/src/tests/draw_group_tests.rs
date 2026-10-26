@@ -1,6 +1,6 @@
 use crate::{
-    Brush, Color, CommandRecording, DrawGroup, DrawPrimitive, DrawScope, DrawScopeDefault,
-    DrawTransform, EdgeInsets, GroupMarker, Point, RecordLane, Rect, Size,
+    Brush, Color, CommandRecording, DrawGroup, DrawPlacement, DrawPrimitive, DrawScope,
+    DrawScopeDefault, DrawTransform, EdgeInsets, GroupMarker, Point, RecordLane, Rect, Size,
 };
 
 fn red() -> Brush {
@@ -130,8 +130,8 @@ fn walking_a_recording_draws_what_its_iterator_yields() {
     scope.finish();
     for segments in [
         recording.all_segments(),
-        recording.content_split(true),
-        recording.content_split(false),
+        recording.content_split(DrawPlacement::Behind),
+        recording.content_split(DrawPlacement::Overlay),
     ] {
         let iterated: Vec<_> = recording.primitives(segments.clone()).collect();
         let mut walked = Vec::new();
@@ -174,13 +174,19 @@ fn content_drawn_inside_a_group_leaves_both_halves_balanced() {
                 (depth, never_below && depth >= 0)
             })
     };
-    assert_eq!(balance(recording.content_split(true)), (0, true));
-    assert_eq!(balance(recording.content_split(false)), (0, true));
+    assert_eq!(
+        balance(recording.content_split(DrawPlacement::Behind)),
+        (0, true)
+    );
+    assert_eq!(
+        balance(recording.content_split(DrawPlacement::Overlay)),
+        (0, true)
+    );
     let behind: Vec<_> = recording
-        .primitives(recording.content_split(true))
+        .primitives(recording.content_split(DrawPlacement::Behind))
         .collect();
     let overlay: Vec<_> = recording
-        .primitives(recording.content_split(false))
+        .primitives(recording.content_split(DrawPlacement::Overlay))
         .collect();
     assert_eq!(
         starts(&behind),

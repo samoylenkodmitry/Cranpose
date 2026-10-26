@@ -1,6 +1,8 @@
 #![expect(dead_code, reason = "each test binary uses a part of the support")]
 
 use std::sync::PoisonError;
+
+use cranpose_ui_graphics::DrawPlacement;
 #[path = "support/device.rs"]
 pub(crate) mod device;
 
@@ -20,7 +22,6 @@ use cranpose_render_common::{
         PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     },
     software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
-    style_shared::DrawPlacement,
 };
 use cranpose_render_wgpu::{CapturedFrame, PresentOutcome, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{

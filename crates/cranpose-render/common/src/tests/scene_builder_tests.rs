@@ -7,9 +7,12 @@ use cranpose_ui::{
     TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
-use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect};
+use cranpose_ui_graphics::{
+    Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect,
+};
 
 use super::*;
+use crate::graph::DrawRunNode;
 
 // Each of `ids` with the update that records it again.
 fn content(ids: &[NodeId]) -> Vec<(NodeId, NodeUpdate)> {

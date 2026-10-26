@@ -4,12 +4,13 @@ use std::rc::Rc;
 
 use cranpose_core::NodeId;
 use cranpose_ui::DrawCommand;
-use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, DrawTextStyle, Size};
+use cranpose_ui_graphics::{
+    Brush, Color, DrawPlacement, DrawScope, DrawScopeDefault, DrawTextStyle, Size,
+};
 
 use super::{RenderFixture, build_fixture, is_background_like};
 use crate::{
-    graph::PrimitivePhase, image_compare::sample_pixel,
-    scene_builder::draw_command_nodes_for_tests, style_shared::DrawPlacement,
+    graph::PrimitivePhase, image_compare::sample_pixel, scene_builder::draw_command_nodes_for_tests,
 };
 
 const WIDTH: u32 = 200;
