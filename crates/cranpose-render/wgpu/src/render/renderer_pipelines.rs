@@ -54,8 +54,8 @@ pub(super) const RRECT_SHADOW_PIPELINES: [&str; 2] = ["shadow/rrect", "shadow/rr
 pub(super) const MESH_FALLBACK_PIPELINES: [&str; 2] = ["mesh/fallback", "mesh/fallback/depth"];
 
 pub(crate) struct RendererPipelines {
-    /// The device, target format and backend every pipeline here builds
-    /// for; a job that builds one off the frame holds the device.
+    // The device, target format and backend every pipeline here builds
+    // for; a job that builds one off the frame holds the device.
     pub(super) device: Arc<wgpu::Device>,
     pub(crate) composition_format: wgpu::TextureFormat,
     pub(crate) adapter_backend: wgpu::Backend,
