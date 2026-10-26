@@ -35,7 +35,7 @@ impl FilePicker for IosFilePicker {
         &self,
         _options: FilePickerOptions,
     ) -> PickerFuture<Result<Option<ContentHandle>, FilePickerError>> {
-        let picked = present_open(Kind::File, false);
+        let picked = present_open(Kind::File);
         Box::pin(async move {
             Ok(picked
                 .await?
@@ -49,7 +49,7 @@ impl FilePicker for IosFilePicker {
         &self,
         _options: FilePickerOptions,
     ) -> PickerFuture<Result<Vec<ContentHandle>, FilePickerError>> {
-        let picked = present_open(Kind::File, true);
+        let picked = present_open(Kind::Files);
         Box::pin(async move {
             Ok(picked
                 .await?
@@ -63,7 +63,7 @@ impl FilePicker for IosFilePicker {
         &self,
         _options: FilePickerOptions,
     ) -> PickerFuture<Result<Option<ContentFolderRef>, FilePickerError>> {
-        let picked = present_open(Kind::Folder, false);
+        let picked = present_open(Kind::Folder);
         Box::pin(async move {
             Ok(picked.await?.into_iter().next().map(|url| {
                 let path = url_path(&url);
@@ -122,7 +122,7 @@ impl FilePicker for IosFilePicker {
         &self,
         _options: FilePickerOptions,
     ) -> PickerFuture<Result<Option<String>, FilePickerError>> {
-        let picked = present_open(Kind::Folder, false);
+        let picked = present_open(Kind::Folder);
         Box::pin(async move {
             match picked.await?.into_iter().next() {
                 None => Ok(None),
@@ -135,6 +135,7 @@ impl FilePicker for IosFilePicker {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     File,
+    Files,
     Folder,
 }
 
@@ -206,19 +207,19 @@ fn present(
     })
 }
 
-fn present_open(kind: Kind, multiple: bool) -> PickerFuture<PickResult> {
+fn present_open(kind: Kind) -> PickerFuture<PickResult> {
     present(move |mtm| {
         // SAFETY: `UTTypeItem`/`UTTypeDirectory` are immutable framework
         // constants.
         let ty: &UTType = match kind {
-            Kind::File => unsafe { UTTypeItem },
+            Kind::File | Kind::Files => unsafe { UTTypeItem },
             Kind::Folder => unsafe { UTTypeDirectory },
         };
         let picker = UIDocumentPickerViewController::initForOpeningContentTypes(
             UIDocumentPickerViewController::alloc(mtm),
             &NSArray::from_slice(&[ty]),
         );
-        picker.setAllowsMultipleSelection(multiple);
+        picker.setAllowsMultipleSelection(kind == Kind::Files);
         picker
     })
 }

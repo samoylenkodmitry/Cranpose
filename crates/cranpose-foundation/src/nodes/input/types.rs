@@ -227,6 +227,36 @@ impl Modifiers {
         meta: false,
     };
 
+    /// Shift alone.
+    pub const SHIFT: Self = Self {
+        shift: true,
+        ..Self::NONE
+    };
+
+    /// Control alone.
+    pub const CTRL: Self = Self {
+        ctrl: true,
+        ..Self::NONE
+    };
+
+    /// The platform's command key alone: Cmd on macOS, Control elsewhere,
+    /// the key [`Modifiers::command_or_ctrl`] reads.
+    pub const COMMAND: Self = Self {
+        ctrl: cfg!(not(target_os = "macos")),
+        meta: cfg!(target_os = "macos"),
+        ..Self::NONE
+    };
+
+    /// The keys held in `self` or in `other`.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            shift: self.shift || other.shift,
+            ctrl: self.ctrl || other.ctrl,
+            alt: self.alt || other.alt,
+            meta: self.meta || other.meta,
+        }
+    }
+
     /// Returns true if any modifier is pressed.
     pub fn any(&self) -> bool {
         self.shift || self.ctrl || self.alt || self.meta

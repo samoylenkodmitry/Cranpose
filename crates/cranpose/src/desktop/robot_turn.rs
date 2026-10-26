@@ -27,7 +27,7 @@ use crate::{
     native_window,
     robot::{
         RobotCommand, RobotIdlePending, RobotResponse, RobotScreenshot, RobotTimelineAction,
-        char_to_key_code, find_button_in_app, find_text_in_app, robot_key_code_and_text,
+        char_to_key_code, find_button_in_app, find_text_in_app,
         robot_wait_for_idle_animation_loop_only,
     },
 };
@@ -160,9 +160,9 @@ impl RobotTurn<'_> {
             command @ (RobotCommand::LoseGpuDevice { .. } | RobotCommand::InvokeAppHook { .. }) => {
                 self.session(command);
             }
-            command @ (RobotCommand::TypeText(..)
-            | RobotCommand::SendKey { .. }
-            | RobotCommand::SendKeyWithModifiers { .. }) => self.keys(command),
+            command @ (RobotCommand::TypeText(..) | RobotCommand::SendKey { .. }) => {
+                self.keys(command);
+            }
             command @ (RobotCommand::WaitForIdle
             | RobotCommand::PumpFrames { .. }
             | RobotCommand::WaitForPresentFrame) => self.frames(&command),
@@ -430,31 +430,13 @@ impl RobotTurn<'_> {
                 self.visual_dirty |= update_result.visual_changed || self.app.needs_redraw();
                 let _ = self.controller.tx.send(RobotResponse::Ok);
             }
-            RobotCommand::SendKey { key, released } => {
-                self.app
-                    .on_key_event(&crate::robot::robot_key_event(&key, released));
-                let update_result = update_app_with_native_window_registry(self.app, self.registry);
-                self.visual_dirty |= update_result.visual_changed || self.app.needs_redraw();
-                let _ = self.controller.tx.send(RobotResponse::Ok);
-            }
-            RobotCommand::SendKeyWithModifiers {
+            RobotCommand::SendKey {
                 key,
-                shift,
-                ctrl,
-                alt,
-                meta,
+                modifiers,
+                event_type,
             } => {
-                use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
-
-                let (key_code, text) = robot_key_code_and_text(&key);
-                let modifiers = Modifiers {
-                    shift,
-                    ctrl,
-                    alt,
-                    meta,
-                };
-                let key_event = KeyEvent::new(key_code, text, modifiers, KeyEventType::KeyDown);
-                self.app.on_key_event(&key_event);
+                self.app
+                    .on_key_event(&crate::robot::robot_key_event(&key, modifiers, event_type));
                 let update_result = update_app_with_native_window_registry(self.app, self.registry);
                 self.visual_dirty |= update_result.visual_changed || self.app.needs_redraw();
                 let _ = self.controller.tx.send(RobotResponse::Ok);

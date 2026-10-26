@@ -2818,7 +2818,7 @@ impl<'a> GroupedDraws<'a> {
         self.write(&mut wrapper.children, first_group, segments.end);
         assign_layer(
             &mut wrapper,
-            self.head(&DrawGroup::plain(Rect::from_size(size), false)),
+            self.head(&DrawGroup::plain(Rect::from_size(size))),
         );
         RenderNode::Layer(wrapper)
     }

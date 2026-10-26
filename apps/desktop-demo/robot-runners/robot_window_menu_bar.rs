@@ -82,7 +82,7 @@ pub(crate) fn main() {
             wait_gone(&robot, "Count", "Escape closed the menus");
             println!("PASS: the arrow keys move between lines and Return chooses");
 
-            if let Err(error) = robot.send_key_with_modifiers("k", false, true, false, false) {
+            if let Err(error) = robot.send_key_with_modifiers("k", Modifiers::CTRL) {
                 robot_exit::fail(&robot, &format!("Ctrl+K failed: {error}"));
             }
             wait_for(&robot, "counted 2, marked", "the shortcut ran Count");

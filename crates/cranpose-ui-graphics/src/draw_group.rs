@@ -30,17 +30,24 @@ pub struct DrawGroup {
 }
 
 impl DrawGroup {
-    /// A group that draws in the holding scope's coordinates, cut to `bounds`
-    /// when `clip` is set.
-    pub fn plain(bounds: Rect, clip: bool) -> Self {
+    /// A group that draws in the holding scope's coordinates.
+    pub fn plain(bounds: Rect) -> Self {
         Self {
             translation: Point::default(),
             scale_x: 1.0,
             scale_y: 1.0,
             rotation: 0.0,
             bounds,
-            clip,
+            clip: false,
             isolated: false,
+        }
+    }
+
+    /// A [`DrawGroup::plain`] group cut to `bounds`.
+    pub fn clipped(bounds: Rect) -> Self {
+        Self {
+            clip: true,
+            ..Self::plain(bounds)
         }
     }
 
@@ -48,7 +55,7 @@ impl DrawGroup {
     pub(crate) fn moved(dx: f32, dy: f32, size: Size) -> Self {
         Self {
             translation: Point::new(dx, dy),
-            ..Self::plain(Rect::from_size(size), false)
+            ..Self::plain(Rect::from_size(size))
         }
     }
 
@@ -56,7 +63,7 @@ impl DrawGroup {
     pub(crate) fn masked(rect: Rect) -> Self {
         Self {
             isolated: true,
-            ..Self::plain(rect, true)
+            ..Self::clipped(rect)
         }
     }
 
@@ -73,7 +80,7 @@ impl DrawGroup {
             scale_x,
             scale_y,
             rotation,
-            ..Self::plain(Rect::from_size(size), false)
+            ..Self::plain(Rect::from_size(size))
         };
         let moved = turned.transform_to_parent().map_point(pivot);
         Self {

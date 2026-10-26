@@ -1751,7 +1751,7 @@ impl DrawScope for DrawScopeDefault<'_> {
                 );
                 (DrawGroup::moved(left, top, inner), inner)
             }
-            DrawTransform::ClipRect(rect) => (DrawGroup::plain(rect, true), outer),
+            DrawTransform::ClipRect(rect) => (DrawGroup::clipped(rect), outer),
             DrawTransform::ClipPath(path) => {
                 let mask = path.to_vector_path(PathFillRule::NonZero);
                 if !mask.is_empty() {
@@ -1759,7 +1759,7 @@ impl DrawScope for DrawScopeDefault<'_> {
                     return;
                 }
                 // A path with no fill leaves nothing of the block.
-                (DrawGroup::plain(Rect::EMPTY, true), outer)
+                (DrawGroup::clipped(Rect::EMPTY), outer)
             }
         };
         self.recording.push_group_start(group);

@@ -5,13 +5,13 @@ use cranpose_ui::{
     Color, TextStyle,
 };
 
-/// Text of `size` sp in `color`, bold when asked.
-pub(crate) fn text_style(size: f32, color: Color, bold: bool) -> TextStyle {
+/// Text of `size` sp in `color` and `font_weight`.
+pub(crate) fn text_style(size: f32, color: Color, font_weight: Option<FontWeight>) -> TextStyle {
     TextStyle {
         span_style: SpanStyle {
             color: Some(color),
             font_size: TextUnit::Sp(size),
-            font_weight: bold.then_some(FontWeight::BOLD),
+            font_weight,
             ..Default::default()
         },
         ..Default::default()

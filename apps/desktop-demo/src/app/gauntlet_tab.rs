@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use cranpose_core::{key, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
-    composable, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row,
-    RowSpec, Text,
+    composable, text::FontWeight, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement,
+    Modifier, Row, RowSpec, Text,
 };
 use perf_compare::{GauntletLoad, GauntletScreen};
 
@@ -50,7 +50,7 @@ fn TierChips(tier: MutableState<usize>) {
             Text(
                 "Tier",
                 Modifier::empty().padding_symmetric(4.0, 4.0),
-                text_style(13.0, INK, true),
+                text_style(13.0, INK, Some(FontWeight::BOLD)),
             );
             for chip in 1..=TIERS {
                 let chosen = tier.get() == chip;
@@ -67,7 +67,7 @@ fn TierChips(tier: MutableState<usize>) {
                         Text(
                             chip.to_string(),
                             Modifier::empty(),
-                            text_style(12.0, if chosen { Color::WHITE } else { INK }, false),
+                            text_style(12.0, if chosen { Color::WHITE } else { INK }, None),
                         );
                     },
                 );

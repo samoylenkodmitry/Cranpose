@@ -14,7 +14,7 @@ use crate::wearable::{
 struct Sent {
     peer: String,
     frame: Vec<u8>,
-    confirm: bool,
+    delivery: Delivery,
 }
 
 /// A transport that keeps what it sends, for the test to deliver.
@@ -35,11 +35,11 @@ impl WearableTransport for Outbox {
         Ok(Vec::new())
     }
 
-    fn send(&self, peer: &str, frame: &[u8], confirm: bool) -> Result<(), WearableError> {
+    fn send(&self, peer: &str, frame: &[u8], delivery: Delivery) -> Result<(), WearableError> {
         self.0.lock().push(Sent {
             peer: peer.to_owned(),
             frame: frame.to_vec(),
-            confirm,
+            delivery,
         });
         Ok(())
     }
@@ -75,7 +75,7 @@ fn a_message_arrives_with_its_path_and_data() {
             .0
             .lock()
             .iter()
-            .all(|sent| sent.peer == "phone" && sent.confirm)
+            .all(|sent| sent.peer == "phone" && sent.delivery == Delivery::Confirmed)
     );
     outbox.deliver(&phone, "watch");
 
@@ -105,7 +105,14 @@ fn a_stream_arrives_whole_in_few_frames_and_ends() {
     drop(stream);
     // The opening, three frames of bytes and the end.
     assert_eq!(outbox.0.lock().len(), 5);
-    assert!(outbox.0.lock().iter().skip(1).all(|sent| !sent.confirm));
+    assert!(
+        outbox
+            .0
+            .lock()
+            .iter()
+            .skip(1)
+            .all(|sent| sent.delivery == Delivery::Queued)
+    );
     outbox.deliver(&phone, "watch");
 
     let Some(WearableEvent::Stream(mut stream)) = received.lock().pop() else {
