@@ -6,6 +6,21 @@ use cranpose_services::{
     local_http_client,
 };
 
+#[cfg(feature = "http-native")]
+#[test]
+#[ignore = "requires public HTTPS and a local self-signed TLS test server"]
+fn native_https_accepts_trusted_certificates_and_rejects_untrusted_certificates() {
+    let trusted = std::env::var("CRANPOSE_TEST_TRUSTED_HTTPS").expect("trusted HTTPS URL");
+    let untrusted = std::env::var("CRANPOSE_TEST_UNTRUSTED_HTTPS").expect("self-signed HTTPS URL");
+    let client = cranpose_services::default_http_client();
+    let response = pollster::block_on(client.send(&HttpRequest::get(trusted), HttpControl::new()))
+        .expect("trusted TLS connection");
+    assert_eq!(response.status, 200);
+    assert!(
+        pollster::block_on(client.send(&HttpRequest::get(untrusted), HttpControl::new())).is_err()
+    );
+}
+
 struct TestHttpClient;
 
 impl HttpClient for TestHttpClient {
