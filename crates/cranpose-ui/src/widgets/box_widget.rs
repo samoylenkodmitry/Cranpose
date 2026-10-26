@@ -74,5 +74,5 @@ where
     let environment = LayoutEnvironment::current();
     let mut policy = BoxMeasurePolicy::new(spec.content_alignment, spec.propagate_min_constraints);
     policy.layout_direction = environment.direction;
-    compose_layout(modifier, policy, environment, content)
+    compose_layout(modifier, &policy, environment, content)
 }

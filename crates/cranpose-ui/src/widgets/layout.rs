@@ -57,7 +57,7 @@ where
 {
     compose_layout(
         modifier,
-        measure_policy,
+        &measure_policy,
         LayoutEnvironment::current(),
         content,
     )
@@ -67,7 +67,7 @@ where
 /// is one layout composes in one group rather than its own and `Layout`'s.
 pub(crate) fn compose_layout<F, P>(
     modifier: Modifier,
-    measure_policy: P,
+    measure_policy: &P,
     environment: LayoutEnvironment,
     mut content: F,
 ) -> NodeId
@@ -91,7 +91,7 @@ pub(crate) fn compose_empty_layout(modifier: Modifier, environment: LayoutEnviro
         let (id, provided, holds_children) = emit_layout_node(
             composer,
             modifier,
-            crate::layout::policies::EmptyMeasurePolicy,
+            &crate::layout::policies::EmptyMeasurePolicy,
             environment,
         );
         if provided.is_empty() {
@@ -105,24 +105,48 @@ pub(crate) fn compose_empty_layout(modifier: Modifier, environment: LayoutEnviro
     })
 }
 
-/// Emits and updates a layout node; returns it, the composition locals its
-/// modifier provides and whether it holds children. The node keeps the policy
-/// it holds while `policy` equals it.
-fn emit_layout_node<P: MeasurePolicy + Clone + PartialEq>(
+// The steps of emitting a layout node that know its policy's type;
+// `emit_layout_node` takes the rest, compiled once for every policy type.
+trait PolicyUpdate {
+    // A node with `modifier`, measured by the policy.
+    fn new_node(&self, modifier: Modifier) -> LayoutNode;
+    // Gives `node` the policy, unless the one it holds equals it.
+    fn update(&self, node: &mut LayoutNode);
+}
+
+impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
+    fn new_node(&self, modifier: Modifier) -> LayoutNode {
+        LayoutNode::new(modifier, Rc::new(self.clone()))
+    }
+
+    fn update(&self, node: &mut LayoutNode) {
+        let current: &dyn std::any::Any = &*node.measure_policy;
+        if current.downcast_ref::<P>() != Some(self) {
+            node.set_measure_policy(Rc::new(self.clone()));
+        }
+    }
+}
+
+// Emits and updates a layout node; returns it, the composition locals its
+// modifier provides and whether it holds children. The node keeps the policy
+// it holds while `policy` equals it. Out of line, one function for every
+// policy type.
+#[inline(never)]
+fn emit_layout_node(
     composer: &cranpose_core::Composer,
     modifier: Modifier,
-    policy: P,
+    policy: &dyn PolicyUpdate,
     environment: LayoutEnvironment,
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
     let provided = modifier.provided_composition_locals();
     let id = composer.emit_recyclable_node(
-        || LayoutNode::new(modifier.clone(), Rc::new(policy.clone())),
-        |node| *node = LayoutNode::new(modifier.clone(), Rc::new(policy.clone())),
+        || policy.new_node(modifier.clone()),
+        |node| *node = policy.new_node(modifier.clone()),
     );
     let holds_children = composer
         .with_node_mut(id, |node: &mut LayoutNode| {
             node.set_modifier(modifier);
-            node.update_measure_policy(policy);
+            policy.update(node);
             node.set_density(environment.density);
             node.set_layout_direction(environment.direction);
             !node.children.is_empty()
