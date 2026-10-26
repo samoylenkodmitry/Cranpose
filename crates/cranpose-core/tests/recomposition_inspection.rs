@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use cranpose_core::{
-    Composition, MemoryApplier, MutableState,
+    Composition, Key, MemoryApplier, MutableState,
     source_trace::{
         SourceLocation, current_source_trace, recomposition_snapshot, set_recomposition_tracking,
     },
@@ -66,12 +66,12 @@ fn recomposition_inspection_counts_instances_and_keeps_retained_ancestor_counts_
     let second = MutableState::with_runtime(0, runtime);
     let mut render = || Parent(parent, first, second);
     composition
-        .render(101, &mut render)
+        .render(Key(101), &mut render)
         .expect("initial composition");
     let retained = trace(1);
     assert_eq!(counts(&retained), expected(&[Some(0), Some(0), None]));
     composition
-        .render(101, &mut render)
+        .render(Key(101), &mut render)
         .expect("unchanged composition");
     assert_eq!(counts(&retained), expected(&[Some(0), Some(0), None]));
 
@@ -133,7 +133,7 @@ fn recomposition_inspection_starts_a_new_count_when_an_instance_is_recreated() {
     let show = MutableState::with_runtime(true, composition.runtime_handle());
     let value = MutableState::with_runtime(0, composition.runtime_handle());
     composition
-        .render(102, || Conditional(show, value))
+        .render(Key(102), || Conditional(show, value))
         .expect("initial composition");
     let old = trace(3);
     value.set(1);
@@ -162,7 +162,7 @@ fn recomposition_inspection_is_disabled_by_default() {
     let mut composition = Composition::new(MemoryApplier::new());
     let value = MutableState::with_runtime(0, composition.runtime_handle());
     composition
-        .render(103, || Counted(4, value))
+        .render(Key(103), || Counted(4, value))
         .expect("initial composition");
     value.set(1);
     composition.process_invalid_scopes().expect("child updates");
