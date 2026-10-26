@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, Size};
 
 use super::*;
+use crate::modifier::Modifier;
 
 #[test]
 fn local_pointer_dispatch_preserves_consumption_and_terminal_delivery() {
