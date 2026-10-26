@@ -239,7 +239,7 @@ where
 pub(crate) fn modifier_debug_enabled() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        cranpose_core::env_flag!("COMPOSE_DEBUG_MODIFIERS")
+        cranpose_core::DIAGNOSTICS.compose_debug_modifiers.is_set()
     }
     #[cfg(target_arch = "wasm32")]
     {

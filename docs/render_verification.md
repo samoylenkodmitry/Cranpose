@@ -20,6 +20,7 @@
 - Check scene state and motion before cache counters; a scroll clamped at offset zero can make every cache assertion pass.
 - Compare each incrementally scrolled picture with a fresh render at the same position; featureless glass lanes cannot establish motion.
 - Reproduce the actual failing page headlessly at CI density before inventing simplified fixtures; see `liquid_scroll_phase.rs`.
+- The diagnostic and ablation switches (`cranpose_core::DIAGNOSTICS`, the `CRANPOSE_*` variables and Android's `debug.cranpose.*` properties) read as unset unless the build enables the `diagnostics` feature of `cranpose` or `cranpose-core`; `robot` turns it on, and a measurement build that sets them must too.
 - Lock GPU tests before changing process-global debug toggles and restore them before releasing `support::gpu_test_lock`.
 - Headless GPU tests must request supported adapter limits. On Huawei, eight default color attachments exceed the GLES adapter's four; match the application's enabled backends when building Android library tests. [Device evidence](huawei_showcase_frame_budget.md).
 - Treat GPU-driver failures as hypotheses until the same binary, adapter and host conditions are checked; a clean-main failure alone proves no cause.

@@ -5,7 +5,7 @@
 [lints]
 "clippy::cast_possible_truncation" = 1027
 "clippy::cast_sign_loss" = 564
-"clippy::disallowed_methods" = 182
+"clippy::disallowed_methods" = 164
 "clippy::disallowed_types" = 177
 "clippy::float_cmp" = 158
 "clippy::fn_params_excessive_bools" = 5

@@ -4,7 +4,6 @@
 mod annotated_text;
 mod ascii_glyphs;
 /// Debug switches read from environment variables, with programmatic overrides.
-pub mod debug_toggles;
 pub mod dev_overlay;
 mod direct_mapped_cache;
 

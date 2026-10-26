@@ -48,7 +48,7 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
 
 #[cfg(all(debug_assertions, not(test)))]
 fn location_key_diagnostics_enabled() -> bool {
-    crate::env_flag!("CRANPOSE_LOCATION_KEY_DIAGNOSTICS")
+    crate::DIAGNOSTICS.location_key_diagnostics.is_set()
 }
 
 #[cfg(test)]

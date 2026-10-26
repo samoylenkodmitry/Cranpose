@@ -249,7 +249,7 @@ impl Pair {
             }
         };
         let reference = support::headless_renderer_beside_locked().expect("second renderer");
-        cranpose_render_wgpu::set_debug_toggle(GPU_STATS, Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle(GPU_STATS, Some("1"));
         Some(Self { cached, reference })
     }
 
@@ -279,13 +279,13 @@ impl Pair {
             scale,
         );
         let cached_stats = self.cached.last_frame_stats().expect("stats");
-        cranpose_render_wgpu::set_debug_toggle(NO_FILL_CACHE, Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle(NO_FILL_CACHE, Some("1"));
         self.reference.scene_mut().graph = Some(graph(spec, phase));
         let reference = self
             .reference
             .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, scale)
             .expect("reference capture");
-        cranpose_render_wgpu::set_debug_toggle(NO_FILL_CACHE, None);
+        cranpose_core::debug_toggles::set_debug_toggle(NO_FILL_CACHE, None);
         let reference_stats = self.reference.last_frame_stats().expect("stats");
         support::assert_bytes_within(
             &format!("{label}, frame {phase}"),
@@ -300,8 +300,8 @@ impl Pair {
 
 impl Drop for Pair {
     fn drop(&mut self) {
-        cranpose_render_wgpu::set_debug_toggle(GPU_STATS, None);
-        cranpose_render_wgpu::set_debug_toggle(NO_FILL_CACHE, None);
+        cranpose_core::debug_toggles::set_debug_toggle(GPU_STATS, None);
+        cranpose_core::debug_toggles::set_debug_toggle(NO_FILL_CACHE, None);
     }
 }
 

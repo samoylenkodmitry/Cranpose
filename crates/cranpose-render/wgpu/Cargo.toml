@@ -144,6 +144,8 @@ cranpose-ui-graphics = { workspace = true, optional = true }
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-app-shell = { path = "../../cranpose-app-shell", features = ["test-support"] }
+# The tests flip the diagnostic and ablation switches.
+cranpose-core = { path = "../../cranpose-core", features = ["diagnostics"] }
 cranpose-liquid = { path = "../../cranpose-liquid" }
 cranpose-macros = { path = "../../cranpose-macros" }
 # Unit tests exercise the embedded fallback font and GL portability validation

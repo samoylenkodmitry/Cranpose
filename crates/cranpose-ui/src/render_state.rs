@@ -1,9 +1,9 @@
 #[cfg(test)]
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use cranpose_core::{
@@ -1151,19 +1151,17 @@ enum LayoutRepassScheduleDiag {
 }
 
 fn layout_repass_schedule_diagnostics_enabled_for(node_id: NodeId) -> bool {
-    static MODE: OnceLock<LayoutRepassScheduleDiag> = OnceLock::new();
-    match *MODE.get_or_init(|| {
-        let Some(value) = std::env::var_os("CRANPOSE_LAYOUT_REPASS_SCHEDULE_DIAG") else {
-            return LayoutRepassScheduleDiag::Disabled;
-        };
-        if value == "all" {
-            return LayoutRepassScheduleDiag::All;
-        }
-        value.to_string_lossy().parse::<NodeId>().map_or(
-            LayoutRepassScheduleDiag::Disabled,
-            LayoutRepassScheduleDiag::Node,
-        )
-    }) {
+    let mode = cranpose_core::DIAGNOSTICS
+        .layout_repass_schedule_diag
+        .with(|value| match value {
+            None => LayoutRepassScheduleDiag::Disabled,
+            Some("all") => LayoutRepassScheduleDiag::All,
+            Some(value) => value.parse::<NodeId>().map_or(
+                LayoutRepassScheduleDiag::Disabled,
+                LayoutRepassScheduleDiag::Node,
+            ),
+        });
+    match mode {
         LayoutRepassScheduleDiag::Disabled => false,
         LayoutRepassScheduleDiag::All => true,
         LayoutRepassScheduleDiag::Node(target) => target == node_id,

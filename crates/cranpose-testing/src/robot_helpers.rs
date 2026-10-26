@@ -304,7 +304,7 @@ fn find_button_in_semantics_by(
 }
 
 fn button_helper_diag(text: &str, message: std::fmt::Arguments<'_>) {
-    if std::env::var_os("CRANPOSE_ROBOT_BUTTON_HELPER_DIAG").is_some() {
+    if cranpose_core::DIAGNOSTICS.robot_button_helper_diag.is_set() {
         eprintln!("button-helper {text:?}: {message}");
     }
 }

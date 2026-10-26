@@ -199,7 +199,7 @@ pub fn update_graph_from_applier_report(
     let report = update_graph_from_applier_report_inner(applier, graph, updates);
     crate::layer_recycling::release();
     if let GraphUpdate::NeedsRebuild(reason) = report.update
-        && cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG")
+        && cranpose_core::DIAGNOSTICS.scene_update_diag.is_set()
     {
         eprintln!(
             "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
@@ -238,7 +238,7 @@ fn update_graph_from_applier_report_inner(
     graph.update += 1;
     let update = graph.update;
 
-    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
+    if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
         eprintln!("[scene-update-diag] dirty={updates:?}");
     }
 
@@ -843,7 +843,7 @@ fn update_dirty_layer(
 
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 fn translate_bail(reason: &str) -> bool {
-    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
+    if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
         eprintln!("[scene-update-diag] translate bail: {reason}");
     }
     false
@@ -1233,7 +1233,7 @@ fn translated_container(
     inherited_motion_context_animated: bool,
     wrapped: bool,
 ) -> Result<TranslatedContainer, &'static str> {
-    if cranpose_core::env_flag!("CRANPOSE_DISABLE_SCROLL_TRANSLATE") {
+    if cranpose_core::DIAGNOSTICS.disable_scroll_translate.is_set() {
         return Err("fast path disabled by ablation switch");
     }
     let Some(node_id) = container.node_id else {
@@ -2619,7 +2619,7 @@ fn write_node_layer(
     } = data;
     let size = layout_state.size();
     let placement = layout_state.position();
-    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
+    if cranpose_core::DIAGNOSTICS.scene_update_diag.is_set() {
         eprintln!(
             "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
             size.width, size.height, placement.x, placement.y,

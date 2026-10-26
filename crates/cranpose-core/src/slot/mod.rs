@@ -74,5 +74,5 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
 
 #[cfg(all(debug_assertions, not(test)))]
 pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
-    crate::env_flag!("CRANPOSE_VALIDATE_SLOTS")
+    crate::DIAGNOSTICS.validate_slots.is_set()
 }

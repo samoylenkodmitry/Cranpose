@@ -665,7 +665,7 @@ where
 
     fn take_structural_change_parents(&mut self) {
         self.pending_dirty_nodes.clear();
-        if cranpose_core::env_flag!("CRANPOSE_DISABLE_STRUCTURAL_DIRT") {
+        if cranpose_core::DIAGNOSTICS.disable_structural_dirt.is_set() {
             return;
         }
         if self.app.composition.root().is_none() {

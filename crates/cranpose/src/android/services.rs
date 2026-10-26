@@ -385,10 +385,9 @@ pub(crate) fn apply_pending_platform_signals(
 const HAPTIC_QUEUE_CAPACITY: usize = 8;
 
 fn async_haptics_enabled() -> bool {
-    match std::env::var("CRANPOSE_ASYNC_HAPTICS") {
-        Ok(value) => !matches!(value.trim(), "0" | "false" | "off" | "no"),
-        Err(_) => true,
-    }
+    cranpose_core::DIAGNOSTICS.async_haptics.with(|value| {
+        !value.is_some_and(|value| matches!(value.trim(), "0" | "false" | "off" | "no"))
+    })
 }
 
 struct AndroidHaptics {

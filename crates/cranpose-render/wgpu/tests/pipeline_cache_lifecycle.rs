@@ -10,11 +10,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use cranpose_core::debug_toggles::{debug_toggle_os, set_debug_toggle_os};
 use cranpose_render_common::{Renderer, graph::RenderGraph};
-use cranpose_render_wgpu::{
-    CapturedFrame, debug_toggle_os, pipelines_created, pipelines_created_off_frame,
-    set_debug_toggle_os,
-};
+use cranpose_render_wgpu::{CapturedFrame, pipelines_created, pipelines_created_off_frame};
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
     Stroke, liquid_glass_effect,

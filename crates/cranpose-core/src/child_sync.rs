@@ -399,14 +399,14 @@ fn settle_kept_children(applier: &mut dyn Applier, parent_id: NodeId) {
 
 #[expect(clippy::print_stderr, reason = "CRANPOSE_STRUCTURAL_DIAG asks for it")]
 fn note_structural(reason: &str, parent_id: NodeId, child_id: NodeId) {
-    if crate::env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
+    if crate::DIAGNOSTICS.structural_diag.is_set() {
         eprintln!("[structural] {reason} parent={parent_id} child={child_id}");
     }
 }
 
 #[expect(clippy::print_stderr, reason = "CRANPOSE_STRUCTURAL_DIAG asks for it")]
 pub(crate) fn note_structural_move(parent_id: NodeId, from_index: usize, to_index: usize) {
-    if crate::env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
+    if crate::DIAGNOSTICS.structural_diag.is_set() {
         eprintln!("[structural] move parent={parent_id} from={from_index} to={to_index}");
     }
 }

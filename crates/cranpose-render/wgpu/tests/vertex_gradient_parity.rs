@@ -194,7 +194,7 @@ fn vertex_and_fragment_frames(
         }
     };
     let mut frame = |toggle: Option<&str>| {
-        cranpose_render_wgpu::set_debug_toggle(TOGGLE, toggle);
+        cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, toggle);
         support::stable_settled_capture(&mut renderer, |renderer| {
             let captured =
                 support::capture_graph_with_scale(renderer, graph.clone(), SIDE, SIDE, scale);
@@ -208,7 +208,7 @@ fn vertex_and_fragment_frames(
     };
     let vertex = frame(None);
     let fragment = frame(Some("0"));
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     Some((vertex, fragment))
 }
 

@@ -23,7 +23,7 @@ use crate::{
 };
 
 fn subcompose_telemetry_enabled() -> bool {
-    cranpose_core::env_flag!("CRANPOSE_SUBCOMPOSE_TELEMETRY")
+    cranpose_core::DIAGNOSTICS.subcompose_telemetry.is_set()
 }
 
 pub(crate) enum RetainedSlotChildren {

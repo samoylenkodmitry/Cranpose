@@ -26,7 +26,7 @@ struct PerfHintSession {
 unsafe impl Send for PerfHintSession {}
 
 fn enabled() -> bool {
-    std::env::var("CRANPOSE_ADPF").as_deref() != Ok("0")
+    !cranpose_core::DIAGNOSTICS.adpf.equals("0")
 }
 
 unsafe fn resolve(name: &std::ffi::CStr) -> *mut c_void {

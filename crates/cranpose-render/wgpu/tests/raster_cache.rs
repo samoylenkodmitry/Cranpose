@@ -197,9 +197,9 @@ fn a_changing_large_backdrop_does_not_starve_the_still_backdrop_after_it() {
             );
         }
         fresh.scene_mut().graph = Some(large_backdrops(radius));
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         let reference = fresh.capture_frame(520, 700).expect("uncached frame");
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
         support::assert_same_bytes("independent glass", 520, &reference.pixels, &frame.pixels);
     }
 }
@@ -322,11 +322,14 @@ fn moving_glass_reuses_only_unchanged_clipped_solid_pixels() {
                     );
                 }
                 fresh.scene_mut().graph = Some(scrolling_fill_graph(y, mode, phase));
-                cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+                cranpose_core::debug_toggles::set_debug_toggle(
+                    "CRANPOSE_NO_BACKDROP_CACHE",
+                    Some("1"),
+                );
                 let expected = fresh
                     .capture_frame_with_scale(width, height, scale)
                     .expect("uncached frame");
-                cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+                cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
                 support::assert_same_bytes(
                     &format!("scale={scale} mode={mode} step={step}"),
                     width,

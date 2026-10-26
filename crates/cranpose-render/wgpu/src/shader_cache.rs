@@ -14,7 +14,6 @@ use naga::ShaderStage;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::pipeline_records::ShaderPipelineRecord;
 use crate::{
-    debug_toggles::DebugToggle,
     lazy_resource::LazyGpuResource,
     pipeline_compiler::{CompileLane, PipelineCompiler},
 };
@@ -61,11 +60,10 @@ impl RuntimeShaderPipelineMode {
     }
 }
 
-static NO_SHADER_SPECIALIZATION: DebugToggle =
-    DebugToggle::new("CRANPOSE_NO_SHADER_SPECIALIZATION");
-
 pub(crate) fn shader_specialization_enabled() -> bool {
-    !NO_SHADER_SPECIALIZATION.equals("1")
+    !cranpose_core::DIAGNOSTICS
+        .no_shader_specialization
+        .equals("1")
 }
 
 /// Which of a shader's draws a pipeline serves: the one draw, or the

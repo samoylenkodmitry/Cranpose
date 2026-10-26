@@ -920,7 +920,7 @@ fn should_check_chain_integrity() -> bool {
 
     #[cfg(not(debug_assertions))]
     {
-        crate::env_flag!("CRANPOSE_ASSERT_STATE_CHAIN")
+        crate::DIAGNOSTICS.assert_state_chain.is_set()
     }
 }
 

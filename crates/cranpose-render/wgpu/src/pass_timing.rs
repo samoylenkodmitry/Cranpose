@@ -6,8 +6,6 @@ use std::{
     },
 };
 
-use crate::debug_toggles::DebugToggle;
-
 const QUERY_CAPACITY: u32 = 512;
 
 const READBACK_SLOTS: usize = 4;
@@ -22,10 +20,8 @@ const SLOT_RESOLVING: u8 = 6;
 
 const PRINT_CADENCE_FRAMES: u64 = 60;
 
-static PASS_TIMING: DebugToggle = DebugToggle::new("CRANPOSE_GPU_PASS_TIMING");
-
 pub(crate) fn pass_timing_requested() -> bool {
-    PASS_TIMING.flag()
+    cranpose_core::DIAGNOSTICS.gpu_pass_timing.flag()
 }
 
 /// One label's aggregate inside the current print window.

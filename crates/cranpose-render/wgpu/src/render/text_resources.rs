@@ -145,7 +145,7 @@ impl TextResources {
             state.write_u64(channel.to_bits());
         }
         state.write_u64(self.glyph_atlas.generation());
-        state.write_u64(cranpose_render_common::debug_toggles::debug_toggle_generation());
+        state.write_u64(cranpose_core::debug_toggles::debug_toggle_generation());
         state.finish()
     }
 

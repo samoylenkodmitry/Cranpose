@@ -132,14 +132,14 @@ fn capture(
         wgpu::TextureFormat::Bgra8UnormSrgb,
         |_| {
             CARDS.store(cards, Ordering::Relaxed);
-            cranpose_render_wgpu::set_debug_toggle(
+            cranpose_core::debug_toggles::set_debug_toggle(
                 NO_INTERIORS_FIRST,
                 (!interiors_first).then_some("1"),
             );
         },
     )?;
     let captured = support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
-    cranpose_render_wgpu::set_debug_toggle(NO_INTERIORS_FIRST, None);
+    cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, None);
     Some(captured)
 }
 
@@ -246,13 +246,13 @@ fn an_image_of_another_blend_mode_draws_after_the_held_image_below_it() {
         let Ok(mut renderer) = support::headless_renderer() else {
             return;
         };
-        cranpose_render_wgpu::set_debug_toggle(
+        cranpose_core::debug_toggles::set_debug_toggle(
             NO_INTERIORS_FIRST,
             (!interiors_first).then_some("1"),
         );
         support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
         let frame = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
-        cranpose_render_wgpu::set_debug_toggle(NO_INTERIORS_FIRST, None);
+        cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, None);
         assert_eq!(
             pixel(&frame, 20, 30),
             [255, 0, 0, 255],

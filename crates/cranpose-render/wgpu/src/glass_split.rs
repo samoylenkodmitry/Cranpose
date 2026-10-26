@@ -4,10 +4,6 @@ use cranpose_ui_graphics::{
     RuntimeShader,
 };
 
-use crate::debug_toggles::DebugToggle;
-
-static NO_GLASS_SPLIT_SCISSORS: DebugToggle = DebugToggle::new("CRANPOSE_NO_GLASS_SPLIT_SCISSORS");
-
 const PLAIN_SDF_FLAGS: [&str; 3] = [
     "GLASS_SCENE_SHAPES_OFF",
     "GLASS_WOBBLE_OFF",
@@ -165,7 +161,9 @@ pub(crate) fn split_scissors(
     layer_pixel_rect: [f32; 4],
     bounds: Scissor,
 ) -> Option<SplitScissors> {
-    if NO_GLASS_SPLIT_SCISSORS.equals("1")
+    if cranpose_core::DIAGNOSTICS
+        .no_glass_split_scissors
+        .equals("1")
         || PLAIN_SDF_FLAGS
             .iter()
             .any(|flag| !raised(specialization, flag))

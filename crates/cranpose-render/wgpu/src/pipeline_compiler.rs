@@ -334,9 +334,7 @@ impl PipelineCompiler {
     ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            static BACKGROUND_PIPELINES: crate::debug_toggles::DebugToggle =
-                crate::debug_toggles::DebugToggle::new("CRANPOSE_BACKGROUND_PIPELINES");
-            if BACKGROUND_PIPELINES.equals("0") {
+            if cranpose_core::DIAGNOSTICS.background_pipelines.equals("0") {
                 return Self::inactive();
             }
             let (finished_tx, finished) = mpsc::channel();

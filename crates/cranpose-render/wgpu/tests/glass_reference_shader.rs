@@ -680,9 +680,9 @@ fn a_forced_dispersion_fold_renders_the_dispersive_card_as_its_dispersion_zero_t
     const SWITCH: &str = "CRANPOSE_ABLATE";
     let dispersive = || variants_with_dispersion(LIQUID_GLASS_WGSL, 1.0);
     let base = capture(&mut renderer, dispersive(), 1.0);
-    cranpose_render_wgpu::set_debug_toggle(SWITCH, Some("glass_dispersion"));
+    cranpose_core::debug_toggles::set_debug_toggle(SWITCH, Some("glass_dispersion"));
     let forced = capture(&mut renderer, dispersive(), 1.0);
-    cranpose_render_wgpu::set_debug_toggle(SWITCH, None);
+    cranpose_core::debug_toggles::set_debug_toggle(SWITCH, None);
     let twin = capture(
         &mut renderer,
         variants_with_dispersion(LIQUID_GLASS_WGSL, 0.0),

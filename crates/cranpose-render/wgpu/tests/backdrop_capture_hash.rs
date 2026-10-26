@@ -386,9 +386,9 @@ fn rounded_clip_motion_past_the_capture_edge_updates_its_backdrop() {
     };
     let warm = warm_cached_backdrop(&mut renderer, || rounded_clip_scene(12.0));
     let moved = capture(&mut renderer, rounded_clip_scene(11.0));
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
     let uncached = capture(&mut renderer, rounded_clip_scene(11.0));
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
 
     let backdrop = Rect {
         x: 16.0,
@@ -416,9 +416,9 @@ fn assert_unanchored_motion_updates_backdrop(alpha: f32) {
     let warm = warm_cached_backdrop(&mut renderer, || subpixel_scene(52.001, alpha));
     let moved = capture(&mut renderer, subpixel_scene(52.030, alpha));
 
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
     let uncached = capture(&mut renderer, subpixel_scene(52.030, alpha));
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
     assert_ne!(
         warm.pixels, uncached.pixels,
         "the sub-bin motion must change the rendered picture"

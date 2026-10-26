@@ -117,7 +117,7 @@ fn background_renderer() -> support::LockedRenderer {
 #[test]
 fn requested_shaders_draw_without_waiting() {
     let mut renderer = background_renderer();
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", Some("0"));
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", Some("0"));
     let page = probe("page target");
     let layer = probe("layer target");
     let masked = override_probe("override target");
@@ -145,7 +145,7 @@ fn requested_shaders_draw_without_waiting() {
     );
     let layer_compiles = frame_waits_for(&mut renderer, layer_draw(layer));
     let masked_compiles = frame_waits_for(&mut renderer, page_draw(masked));
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", None);
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", None);
     assert_eq!(
         layer_compiles, 0,
         "a shader warmed for its layer must find its replace pipeline ready"

@@ -153,8 +153,8 @@ struct CaptureToggles;
 
 impl Drop for CaptureToggles {
     fn drop(&mut self) {
-        cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
     }
 }
 
@@ -172,8 +172,11 @@ fn capture_page_with_cache(
     )?;
 
     let _toggles = CaptureToggles;
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, whole_node.then_some("1"));
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", uncached.then_some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, whole_node.then_some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle(
+        "CRANPOSE_NO_BACKDROP_CACHE",
+        uncached.then_some("1"),
+    );
     Some(support::warm_shell_frame(
         &mut shell,
         FRAME_WIDTH,

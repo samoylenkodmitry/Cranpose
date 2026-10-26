@@ -48,7 +48,7 @@ pub(super) const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
 pub(super) const MAX_TEXT_LINE_INDEX_CACHE_ITEMS: usize = 512;
 
 fn text_atlas_fallback_diag_enabled() -> bool {
-    cranpose_core::env_flag!("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG")
+    cranpose_core::DIAGNOSTICS.text_atlas_fallback_diag.is_set()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

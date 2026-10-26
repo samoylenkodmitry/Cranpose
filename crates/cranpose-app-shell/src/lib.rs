@@ -269,13 +269,9 @@ pub struct PointerEventTime {
 }
 
 fn update_stage_telemetry_threshold_ms() -> Option<f64> {
-    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *THRESHOLD_MS.get_or_init(|| {
-        std::env::var("CRANPOSE_UPDATE_STAGE_TELEMETRY_MS")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0)
-    })
+    cranpose_core::DIAGNOSTICS
+        .update_stage_telemetry_ms
+        .threshold_ms()
 }
 
 /// The stages of an update that its telemetry times: start, frame

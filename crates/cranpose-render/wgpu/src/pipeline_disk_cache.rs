@@ -12,15 +12,12 @@ use cranpose_ui_graphics::FxHasher;
 use web_time::{Duration, Instant};
 
 use crate::{
-    debug_toggles::DebugToggle,
     pipeline_recorder::PipelineRecorder,
     pipeline_records::{self, PipelineRecords, Recorded, ShaderPipelineRecord},
 };
 
-static DISK_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_PIPELINE_DISK_CACHE");
-
 fn disk_cache_enabled() -> bool {
-    !DISK_CACHE.equals("0")
+    !cranpose_core::DIAGNOSTICS.pipeline_disk_cache.equals("0")
 }
 
 static HOST_FILE: OnceLock<PathBuf> = OnceLock::new();
@@ -40,7 +37,7 @@ pub(crate) fn file_path() -> Option<PathBuf> {
     if !disk_cache_enabled() {
         return None;
     }
-    match crate::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE") {
+    match cranpose_core::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE") {
         Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
         _ => HOST_FILE.get().cloned(),
     }

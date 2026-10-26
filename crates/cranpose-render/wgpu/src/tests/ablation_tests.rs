@@ -50,8 +50,8 @@ fn names_switch_their_work_off_and_unknown_names_change_nothing() {
 
 #[test]
 fn the_toggle_reads_the_current_list() {
-    cranpose_render_common::debug_toggles::set_debug_toggle("CRANPOSE_ABLATE", Some("blur"));
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_ABLATE", Some("blur"));
     assert!(Ablation::current().blur);
-    cranpose_render_common::debug_toggles::set_debug_toggle("CRANPOSE_ABLATE", None);
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_ABLATE", None);
     assert_eq!(Ablation::current(), Ablation::default());
 }

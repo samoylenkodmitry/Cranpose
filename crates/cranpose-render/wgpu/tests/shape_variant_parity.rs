@@ -71,13 +71,13 @@ fn assert_variants_match_general_under(
             return;
         }
     };
-    cranpose_render_wgpu::set_debug_toggle(ABLATE, switch);
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(ABLATE, switch);
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     let specialized = support::settled_capture(&mut renderer, &graph);
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, Some("0"));
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, Some("0"));
     let general = support::settled_capture(&mut renderer, &graph);
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
-    cranpose_render_wgpu::set_debug_toggle(ABLATE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(ABLATE, None);
 
     assert_eq!(specialized.len(), general.len());
     let distinct = support::distinct_colors(&specialized);

@@ -1,3 +1,7 @@
+//! Values named by environment variables, cached until a programmatic
+//! override of the same name changes. A platform sets overrides for values it
+//! learns at run time, and a test for the switches it flips.
+
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},

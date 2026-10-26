@@ -11,7 +11,6 @@ use super::{
 };
 use crate::{
     ablation::ShapeAblation,
-    debug_toggles::DebugToggle,
     geometry::SegmentTransform,
     record_columns::record_vertex_layouts,
     run_store::RunBufferMode,
@@ -250,10 +249,8 @@ impl SegmentClip {
     }
 }
 
-static SHAPE_VARIANTS: DebugToggle = DebugToggle::new("CRANPOSE_SHAPE_VARIANTS");
-
 fn shape_variants_enabled() -> bool {
-    !SHAPE_VARIANTS.equals("0")
+    !cranpose_core::DIAGNOSTICS.shape_variants.equals("0")
 }
 
 /// How a pipeline meets its pass's depth buffer.

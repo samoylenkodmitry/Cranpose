@@ -513,7 +513,7 @@ fn measure_lazy_list_children(
         .borrow_mut()
         .insert(item.clone(), context.cross_axis_size);
     let elapsed = measure_start.elapsed();
-    if cranpose_core::env_flag!("CRANPOSE_LAZY_ITEM_TELEMETRY") {
+    if cranpose_core::DIAGNOSTICS.lazy_item_telemetry.is_set() {
         log::warn!(
             "[lazy-item-telemetry] index={} children={} main={:.2} cross={:.2} elapsed_ms={:.2}",
             context.index,
@@ -1289,7 +1289,7 @@ fn log_lazy_cache_telemetry(
     result: &LazyListMeasureResult,
     measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
 ) {
-    if !cranpose_core::env_flag!("CRANPOSE_LAZY_CACHE_TELEMETRY") {
+    if !cranpose_core::DIAGNOSTICS.lazy_cache_telemetry.is_set() {
         return;
     }
 

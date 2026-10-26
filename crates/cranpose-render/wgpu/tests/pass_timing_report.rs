@@ -67,14 +67,14 @@ struct TimingToggle;
 
 impl TimingToggle {
     fn set() -> Self {
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_GPU_PASS_TIMING", Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_GPU_PASS_TIMING", Some("1"));
         Self
     }
 }
 
 impl Drop for TimingToggle {
     fn drop(&mut self) {
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_GPU_PASS_TIMING", None);
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_GPU_PASS_TIMING", None);
     }
 }
 

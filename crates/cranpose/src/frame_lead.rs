@@ -19,13 +19,9 @@ const LEADS_TENTHS: [i64; 3] = [0, 3, 5];
 const FIRST_HOLD_NS: i64 = 2_000_000_000;
 const LONGEST_HOLD_NS: i64 = 32_000_000_000;
 
-/// Pins the lead, in tenths of a period, instead of learning it: for
-/// measuring what each lead does to a workload. Android sets it from
-/// `debug.cranpose.frame_lead`.
-const PINNED_LEAD_ENV: &str = "CRANPOSE_FRAME_LEAD_TENTHS";
-
 pub(crate) struct FrameLead {
-    /// The lead [`PINNED_LEAD_ENV`] pins, in tenths of a period.
+    /// The lead `CRANPOSE_FRAME_LEAD_TENTHS` pins, in tenths of a period,
+    /// for measuring what each lead does to a workload.
     pinned_tenths: Option<i64>,
     /// The lead kept, as an index into [`LEADS_TENTHS`].
     kept: usize,
@@ -43,11 +39,7 @@ pub(crate) struct FrameLead {
 
 impl Default for FrameLead {
     fn default() -> Self {
-        Self::pinned_at(
-            std::env::var(PINNED_LEAD_ENV)
-                .ok()
-                .and_then(|value| value.trim().parse::<i64>().ok()),
-        )
+        Self::pinned_at(cranpose_core::DIAGNOSTICS.frame_lead_tenths.parse::<i64>())
     }
 }
 

@@ -8,7 +8,6 @@ pub(crate) use mapped_pool::{MapRequests, MappedBuffers, MappedPool, take_larges
 use web_time::Instant;
 
 use crate::{
-    debug_toggles::DebugToggle,
     idle_pool::{IdlePool, RecentPeak},
     offscreen::OffscreenTarget,
     pass_timing::{GpuPassTimingReport, PassTimer},
@@ -876,13 +875,10 @@ fn take_render_pass_labels() -> Vec<(String, u32)> {
     crate::thread_state::with(|state| state.render_pass_labels.take())
 }
 
-static RENDER_STAGE_TELEMETRY_MS: DebugToggle =
-    DebugToggle::new("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS");
-
 pub(crate) fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
-    RENDER_STAGE_TELEMETRY_MS
-        .parse::<f64>()
-        .filter(|threshold| *threshold >= 0.0)
+    cranpose_core::DIAGNOSTICS
+        .wgpu_render_stage_telemetry_ms
+        .threshold_ms()
 }
 
 fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass_index: usize) {
@@ -2376,31 +2372,22 @@ pub(crate) mod fence_profile {
     const DEFAULT_REPORT_EVERY_FRAMES: u32 = 60;
 
     fn report_every_frames() -> u32 {
-        static FRAMES: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-        *FRAMES.get_or_init(|| {
-            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE")
-                .and_then(|value| value.parse::<u32>().ok())
-                .filter(|frames| *frames > 0)
-                .unwrap_or(DEFAULT_REPORT_EVERY_FRAMES)
-        })
+        cranpose_core::DIAGNOSTICS
+            .gpu_fence_profile
+            .parse::<u32>()
+            .filter(|frames| *frames > 0)
+            .unwrap_or(DEFAULT_REPORT_EVERY_FRAMES)
     }
 
     pub(crate) fn enabled() -> bool {
-        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE").is_some()
-        })
+        cranpose_core::DIAGNOSTICS.gpu_fence_profile.is_set()
     }
 
     /// `CRANPOSE_GPU_FENCE_PROFILE=frame`: one fence per frame instead of one
     /// per pass, so the report is the frame's whole GPU time with the
     /// pipeline intact.
     fn whole_frame() -> bool {
-        static WHOLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *WHOLE.get_or_init(|| {
-            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE").as_deref()
-                == Some("frame")
-        })
+        cranpose_core::DIAGNOSTICS.gpu_fence_profile.equals("frame")
     }
 
     pub(crate) struct Profile {

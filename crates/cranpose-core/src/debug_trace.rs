@@ -2,7 +2,7 @@ use super::*;
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 fn debug_scope_label_env_enabled() -> bool {
-    crate::env_flag!("CRANPOSE_DEBUG_SCOPE_LABELS")
+    DIAGNOSTICS.debug_scope_labels.is_set()
 }
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]

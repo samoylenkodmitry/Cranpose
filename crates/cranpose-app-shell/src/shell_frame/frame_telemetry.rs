@@ -1,18 +1,16 @@
 const DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
 pub(super) fn frame_stage_telemetry_threshold_ms() -> Option<f64> {
-    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *THRESHOLD_MS.get_or_init(|| {
-        let explicit = std::env::var("CRANPOSE_FRAME_STAGE_TELEMETRY_MS")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0);
-        explicit.or_else(|| {
-            std::env::var_os("CRANPOSE_FRAME_STAGE_TELEMETRY")
-                .is_some()
+    let diagnostics = &cranpose_core::DIAGNOSTICS;
+    diagnostics
+        .frame_stage_telemetry_ms
+        .threshold_ms()
+        .or_else(|| {
+            diagnostics
+                .frame_stage_telemetry
+                .is_set()
                 .then_some(DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS)
         })
-    })
 }
 
 /// The stages of a frame that its telemetry times: start, initial layout,
@@ -51,7 +49,7 @@ pub(super) fn log_frame_stage_telemetry(stages: &FrameStages) {
 }
 
 pub(super) fn render_phase_dirty_diagnostics_enabled() -> bool {
-    cranpose_core::env_flag!("CRANPOSE_RENDER_PHASE_DIRTY_DIAG")
+    cranpose_core::DIAGNOSTICS.render_phase_dirty_diag.is_set()
 }
 
 pub(super) struct RenderPhaseDirtyDiagnostics<'a> {

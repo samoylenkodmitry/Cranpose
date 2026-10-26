@@ -32,7 +32,14 @@ pub(crate) fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
+// Properties that configure the app in every build.
+const CONFIG_PROPERTIES: &[(&str, &str)] =
+    &[("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND")];
+
+// The diagnostic switches' properties, read only where the `diagnostics`
+// feature leaves the switches in.
+#[cfg(feature = "diagnostics")]
+const DIAGNOSTIC_PROPERTIES: &[(&str, &str)] = &[
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -87,7 +94,6 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "debug.cranpose.frame_stage_ms",
         "CRANPOSE_FRAME_STAGE_TELEMETRY_MS",
     ),
-    ("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND"),
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),
     (
         "debug.cranpose.pipeline_disk_cache",
@@ -110,7 +116,11 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
 ];
 
 pub(crate) fn seed_env_from_system_properties() {
-    for &(property, variable) in PROPERTY_BACKED_ENV_VARS {
+    #[cfg(feature = "diagnostics")]
+    let diagnostic = DIAGNOSTIC_PROPERTIES;
+    #[cfg(not(feature = "diagnostics"))]
+    let diagnostic: &[(&str, &str)] = &[];
+    for &(property, variable) in CONFIG_PROPERTIES.iter().chain(diagnostic) {
         if std::env::var_os(variable).is_some() {
             continue;
         }
