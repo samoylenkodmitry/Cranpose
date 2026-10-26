@@ -161,7 +161,7 @@ impl RobotTurn<'_> {
                 self.session(command);
             }
             command @ (RobotCommand::TypeText(..) | RobotCommand::SendKey { .. }) => {
-                self.keys(command)
+                self.keys(command);
             }
             command @ (RobotCommand::WaitForIdle
             | RobotCommand::PumpFrames { .. }

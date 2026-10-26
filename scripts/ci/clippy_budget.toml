@@ -8,11 +8,11 @@
 "clippy::disallowed_methods" = 182
 "clippy::disallowed_types" = 177
 "clippy::float_cmp" = 158
-"clippy::fn_params_excessive_bools" = 6
+"clippy::fn_params_excessive_bools" = 5
 "clippy::inline_always" = 63
 "clippy::iter_over_hash_type" = 32
-"clippy::let_underscore_must_use" = 266
-"clippy::let_underscore_untyped" = 702
+"clippy::let_underscore_must_use" = 265
+"clippy::let_underscore_untyped" = 701
 "clippy::missing_assert_message" = 191
 "clippy::multiple_inherent_impl" = 96
 "clippy::needless_pass_by_value" = 174

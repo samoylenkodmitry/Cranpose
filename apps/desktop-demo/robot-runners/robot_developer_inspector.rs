@@ -56,13 +56,7 @@ pub(crate) fn main() {
             );
             assert!(!robot.inspector_state().expect("collapsed state").open);
             robot
-                .send_key_with_modifiers(
-                    "i",
-                    Modifiers {
-                        shift: true,
-                        ..Modifiers::CTRL
-                    },
-                )
+                .send_key_with_modifiers("i", Modifiers::SHIFT.union(Modifiers::CTRL))
                 .expect("former inspector shortcut belongs to the app");
             robot.wait_for_idle().expect("shortcut settles");
             assert!(

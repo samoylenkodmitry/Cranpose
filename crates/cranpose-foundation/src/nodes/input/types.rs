@@ -247,6 +247,16 @@ impl Modifiers {
         ..Self::NONE
     };
 
+    /// The keys held in `self` or in `other`.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            shift: self.shift || other.shift,
+            ctrl: self.ctrl || other.ctrl,
+            alt: self.alt || other.alt,
+            meta: self.meta || other.meta,
+        }
+    }
+
     /// Returns true if any modifier is pressed.
     pub fn any(&self) -> bool {
         self.shift || self.ctrl || self.alt || self.meta
