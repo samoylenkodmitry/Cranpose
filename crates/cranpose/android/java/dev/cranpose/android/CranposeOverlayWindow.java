@@ -26,6 +26,17 @@ public final class CranposeOverlayWindow {
     public static final int RESULT_CREATE_FAILED = -5;
     public static final int RESULT_NOT_VISIBLE = -6;
 
+    private static final class ActivityLayout {
+        final int width;
+        final int height;
+
+        ActivityLayout(WindowManager.LayoutParams attributes) {
+            width = attributes.width;
+            height = attributes.height;
+        }
+    }
+
+    private static final java.util.WeakHashMap<Activity, ActivityLayout> activityLayouts = new java.util.WeakHashMap<>();
     private static volatile OverlayState currentOverlay;
 
     private CranposeOverlayWindow() {
@@ -35,6 +46,9 @@ public final class CranposeOverlayWindow {
         try {
             activity.runOnUiThread(() -> {
                 try {
+                    if (!activityLayouts.containsKey(activity)) {
+                        activityLayouts.put(activity, new ActivityLayout(activity.getWindow().getAttributes()));
+                    }
                     activity.getWindow().setLayout(widthPx, heightPx);
                 } catch (RuntimeException error) {
                     Log.w(
@@ -42,6 +56,24 @@ public final class CranposeOverlayWindow {
                             "Failed to set Activity window layout",
                             error
                     );
+                }
+            });
+            return RESULT_OK;
+        } catch (RuntimeException error) {
+            return RESULT_CREATE_FAILED;
+        }
+    }
+
+    public static int restoreActivityWindowLayout(Activity activity) {
+        try {
+            activity.runOnUiThread(() -> {
+                ActivityLayout layout = activityLayouts.remove(activity);
+                if (layout != null) {
+                    try {
+                        activity.getWindow().setLayout(layout.width, layout.height);
+                    } catch (RuntimeException error) {
+                        Log.w("CranposeOverlayWindow", "Failed to restore Activity window layout", error);
+                    }
                 }
             });
             return RESULT_OK;

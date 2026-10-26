@@ -38,6 +38,7 @@ cranpose {
 }
 
 android {
+    sourceSets.getByName("androidTest").java.srcDir("../../../../crates/cranpose/tests/android")
     namespace = "com.compose_rs.demo"
     compileSdk = 37
     testBuildType = "release"
