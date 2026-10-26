@@ -6405,7 +6405,7 @@ fn dev_overlay_fits_a_phone_width_viewport() {
 
     let draw_overlay = |shell: &mut AppShell<CountingRenderer>, width: f32| {
         shell.set_viewport(width, 800.0);
-        shell.surfaces[0].dev_overlay_last_refresh = None;
+        shell.surfaces[0].dev_overlay.last_refresh = None;
         shell.reset_fps_stats();
         for index in 0..10u64 {
             let started = index * 20_000_000;
@@ -6492,7 +6492,7 @@ fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
     );
 
     overlay_texts.borrow_mut().clear();
-    shell.surfaces[0].dev_overlay_last_refresh = Some(Instant::now() - Duration::from_millis(300));
+    shell.surfaces[0].dev_overlay.last_refresh = Some(Instant::now() - Duration::from_millis(300));
     shell.debug_enter_app_context(request_render_invalidation);
     shell.update();
     let fast_overlay = overlay_texts

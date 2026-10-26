@@ -22,12 +22,11 @@ use cranpose_ui::{
     pointer_icon_session::PointerIconState,
 };
 use cranpose_ui_graphics::{Point, PointerIcon, Size};
-use web_time::Instant;
 
 use crate::{
-    AppShell, DevOverlayControl, FramePacingMode, FrameRatePreference, FrameSchedule,
-    FrameScheduler, FrameUpdateResult, PlatformFrameDriver, ShellApp, SurfaceRoutingScratch,
-    hit_path_tracker::HitPathTracker,
+    AppShell, FramePacingMode, FrameRatePreference, FrameSchedule, FrameScheduler,
+    FrameUpdateResult, PlatformFrameDriver, ShellApp, SurfaceRoutingScratch,
+    hit_path_tracker::HitPathTracker, shell_frame::DevOverlay,
 };
 
 /// Names a root surface of the app: the primary window, or a window root
@@ -80,11 +79,8 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) hit_path_tracker: HitPathTracker,
     pub(crate) hovered_nodes: Vec<NodeId>,
     pub(crate) on_rotary_scroll: Option<Rc<dyn Fn(RotaryScrollEvent) -> bool>>,
-    pub(crate) dev_overlay_controls: Vec<DevOverlayControl>,
+    pub(crate) dev_overlay: DevOverlay,
     pub(crate) inspector: crate::inspector::DeveloperInspector,
-    pub(crate) dev_overlay_text: String,
-    pub(crate) dev_overlay_last_refresh: Option<Instant>,
-    pub(crate) dev_overlay_viewport: Option<Size>,
     pub(crate) frame_scheduler: FrameScheduler,
     pub(crate) pointer_icon: PointerIconState,
     pub(crate) last_update: FrameUpdateResult,
@@ -126,11 +122,8 @@ impl<R: Renderer> RootSurface<R> {
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
             on_rotary_scroll: None,
-            dev_overlay_controls: Vec::new(),
+            dev_overlay: DevOverlay::default(),
             inspector: crate::inspector::DeveloperInspector::default(),
-            dev_overlay_text: String::new(),
-            dev_overlay_last_refresh: None,
-            dev_overlay_viewport: None,
             frame_scheduler: FrameScheduler::default(),
             pointer_icon: PointerIconState::new(),
             last_update: FrameUpdateResult::default(),
@@ -245,24 +238,6 @@ impl<R: Renderer> RootSurface<R> {
             needs_frame,
             next_deadline: app.next_event_time(),
         }
-    }
-
-    pub(crate) fn invalidate_dev_overlay_text(&mut self) {
-        self.dev_overlay_text.clear();
-        self.dev_overlay_last_refresh = None;
-        self.dev_overlay_viewport = None;
-    }
-
-    pub(crate) fn dev_overlay_control_center(&self, mode: FramePacingMode) -> Option<(f32, f32)> {
-        self.dev_overlay_controls
-            .iter()
-            .find(|control| control.mode == mode)
-            .map(|control| {
-                (
-                    control.bounds.x + control.bounds.width * 0.5,
-                    control.bounds.y + control.bounds.height * 0.5,
-                )
-            })
     }
 
     pub(crate) fn layout_tree_in_context(&mut self, app: &mut ShellApp) -> Option<&LayoutTree> {
@@ -797,20 +772,14 @@ where
     /// Where this surface's dev overlay draws the control for `mode`, in
     /// logical pixels. See [`AppShell::dev_overlay_control_center`].
     pub fn dev_overlay_control_center(&self, mode: FramePacingMode) -> Option<(f32, f32)> {
-        self.surface().dev_overlay_control_center(mode)
+        self.surface().dev_overlay.control_center(mode)
     }
 
     pub(crate) fn dev_overlay_press(&mut self, x: f32, y: f32) -> bool {
         if !self.shell_app_ref().dev_options.frame_pacing_controls {
             return false;
         }
-        let Some(mode) = self
-            .surface()
-            .dev_overlay_controls
-            .iter()
-            .find(|control| control.bounds.contains(x, y))
-            .map(|control| control.mode)
-        else {
+        let Some(mode) = self.surface().dev_overlay.control_at(x, y) else {
             return false;
         };
         self.shell().set_frame_pacing_mode(mode);
