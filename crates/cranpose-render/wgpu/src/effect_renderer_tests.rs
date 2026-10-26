@@ -206,7 +206,7 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
             if reference {
                 for mode in modes {
                     let dynamic = renderer
-                        .blit_pipeline(&device, mode, CompositeVariant::new(false, false))
+                        .blit_pipeline(&device, mode, CompositeVariant::new(false, PassDepth::Off))
                         .expect("an inactive compiler builds the blit where it is drawn")
                         .clone();
                     let resources = match mode {

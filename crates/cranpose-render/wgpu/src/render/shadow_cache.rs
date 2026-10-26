@@ -3,20 +3,21 @@ use std::{
     rc::Rc,
 };
 
+use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_ui_graphics::{BlendMode, FxHasher, Rect};
 
 use super::{expand_rect, hash_run_item_with_clip, mask_rect};
 use crate::{
     debug_toggles::DebugToggle,
     effect_renderer::RoundedCompositeMask,
-    geometry::{DevicePixelBounds, anchored_device_rect},
+    geometry::{DevicePixelBounds, anchored_device_rect, offscreen_byte_size},
     offscreen::OffscreenTarget,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
 };
 
-pub(super) const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
+const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 
-pub(super) const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
+const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
 
 static SKIP_SHADOWS: DebugToggle = DebugToggle::new("CRANPOSE_SKIP_SHADOWS");
 
@@ -32,9 +33,51 @@ pub(super) struct ShadowSurfaceCacheKey {
     blur_radius_bits: u32,
 }
 
-pub(super) struct CachedShadowSurface {
-    pub(super) target: Rc<OffscreenTarget>,
-    pub(super) byte_size: u64,
+struct CachedShadowSurface {
+    target: Rc<OffscreenTarget>,
+    byte_size: u64,
+}
+
+// The blurred shadow surfaces of shapes, kept for the frames that draw them
+// again, bounded by count and by bytes.
+pub(super) struct ShadowSurfaces {
+    cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
+    bytes: u64,
+}
+
+impl ShadowSurfaces {
+    pub(super) fn new() -> Self {
+        Self {
+            cache: BoundedLruCache::with_capacity_at_least_one(MAX_SHADOW_SURFACE_CACHE_ITEMS),
+            bytes: 0,
+        }
+    }
+
+    pub(super) fn get(&mut self, key: &ShadowSurfaceCacheKey) -> Option<&Rc<OffscreenTarget>> {
+        self.cache.get(key).map(|cached| &cached.target)
+    }
+
+    // Keeps `target` for `key`, evicting the least recently drawn surfaces
+    // until the bytes fit.
+    pub(super) fn insert(&mut self, key: ShadowSurfaceCacheKey, target: Rc<OffscreenTarget>) {
+        let byte_size = offscreen_byte_size(target.width, target.height);
+        while self.bytes + byte_size > MAX_SHADOW_SURFACE_CACHE_BYTES {
+            let Some((_, evicted)) = self.cache.pop_lru() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.byte_size);
+        }
+        let cached = CachedShadowSurface { target, byte_size };
+        if let Some((_, replaced)) = self.cache.push(key, cached) {
+            self.bytes = self.bytes.saturating_sub(replaced.byte_size);
+        }
+        self.bytes = self.bytes.saturating_add(byte_size);
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.cache.clear();
+        self.bytes = 0;
+    }
 }
 
 pub(crate) fn shadow_content_hash(shadow: &ShadowDraw, root_scale: f32) -> u64 {

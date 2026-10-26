@@ -10,8 +10,8 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{BlendMode, Color};
 
 use super::{
-    GlyphInstance, GlyphQuads, GpuRenderer, ImageUvRect, TurnedGlyph, blend_state_for_mode,
-    create_render_pipeline_logged, overlay_depth_state,
+    GlyphInstance, GlyphQuads, GpuRenderer, ImageUvRect, PassDepth, TurnedGlyph,
+    blend_state_for_mode, create_render_pipeline_logged,
 };
 use crate::{
     frame_graph::WgpuFrameGraphExecutor,
@@ -35,19 +35,19 @@ pub(super) fn create_glyph_atlas_pipeline(
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     shader: &SharedShader,
-    (depth, quads): (bool, GlyphQuads),
+    (depth, quads): (PassDepth, GlyphQuads),
 ) -> wgpu::RenderPipeline {
     let module = shader.module();
     create_render_pipeline_logged(
         device,
         cache,
         match (depth, quads) {
-            (false, GlyphQuads::Plain) => "glyph-atlas",
-            (true, GlyphQuads::Plain) => "glyph-atlas depth",
-            (false, GlyphQuads::Aligned) => "glyph-atlas aligned",
-            (true, GlyphQuads::Aligned) => "glyph-atlas aligned depth",
-            (false, GlyphQuads::Turned) => "glyph-atlas turned",
-            (true, GlyphQuads::Turned) => "glyph-atlas turned depth",
+            (PassDepth::Off, GlyphQuads::Plain) => "glyph-atlas",
+            (PassDepth::On, GlyphQuads::Plain) => "glyph-atlas depth",
+            (PassDepth::Off, GlyphQuads::Aligned) => "glyph-atlas aligned",
+            (PassDepth::On, GlyphQuads::Aligned) => "glyph-atlas aligned depth",
+            (PassDepth::Off, GlyphQuads::Turned) => "glyph-atlas turned",
+            (PassDepth::On, GlyphQuads::Turned) => "glyph-atlas turned depth",
         },
         wgpu::RenderPipelineDescriptor {
             label: Some("Glyph Atlas Pipeline"),
@@ -87,7 +87,7 @@ pub(super) fn create_glyph_atlas_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: overlay_depth_state(depth),
+            depth_stencil: depth.overlay_state(),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,

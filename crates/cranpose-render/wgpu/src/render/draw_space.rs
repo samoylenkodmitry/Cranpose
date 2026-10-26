@@ -1,4 +1,4 @@
-use super::ViewportUniformParams;
+use super::{PassDepth, ViewportUniformParams};
 
 // The space a draw lands in: the viewport uniforms it draws under and the
 // scale from its scene's logical space to device pixels.
@@ -16,5 +16,5 @@ pub(crate) struct ArenaPlacement {
     pub(crate) space: DrawSpace,
     pub(crate) shift: [f32; 2],
     pub(crate) mixed_turns: bool,
-    pub(crate) depth: bool,
+    pub(crate) depth: PassDepth,
 }

@@ -1,8 +1,9 @@
 use cranpose_ui_graphics::{BlendMode, ColorFilter, ImageBitmap, ImageSampling, Point, Rect};
 
 use super::{
-    DeviceRoundedClip, TargetRect, Vertex, blend_state_for_mode, confined_scissor,
-    create_render_pipeline_logged, overlay_depth_state,
+    DeviceRoundedClip, DrawSpace, FrameCommandRecorder, PassDepth, TargetRect, Vertex,
+    blend_state_for_mode, confined_scissor, create_render_pipeline_logged,
+    image_textures::ImageUploader, scissor_rect_for_layer,
 };
 use crate::{
     frame_graph::{BufferUpload, UploadAllocatorSpec},
@@ -41,7 +42,8 @@ pub(super) fn create_image_pipeline(
         device,
         cache,
         &format!(
-            "image blend={blend_mode:?} depth={depth} alpha_mask={alpha_mask} rounded={rounded}"
+            "image blend={blend_mode:?} depth={} alpha_mask={alpha_mask} rounded={rounded}",
+            depth.is_on()
         ),
         wgpu::RenderPipelineDescriptor {
             label: Some("Image Pipeline"),
@@ -71,7 +73,7 @@ pub(super) fn create_image_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: overlay_depth_state(depth),
+            depth_stencil: depth.overlay_state(),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -87,6 +89,135 @@ pub(crate) struct ImageBatch {
     pub(crate) indices: Vec<u32>,
     pub(crate) clips: Vec<DeviceRoundedClip>,
     pub(crate) cmds: Vec<ImageDrawCmd>,
+}
+
+impl ImageBatch {
+    pub(crate) fn push_image_draw(
+        &mut self,
+        image_draw: &ImageDraw,
+        space: DrawSpace,
+        uploader: &mut ImageUploader<'_>,
+    ) -> Result<(), String> {
+        let (viewport, root_scale) = (space.viewport, space.scale);
+        let snap_delta = image_draw
+            .snap_anchor
+            .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+            .unwrap_or_default();
+        let rect = image_draw.rect.translate(snap_delta.x, snap_delta.y);
+        if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
+            return Ok(());
+        }
+
+        let (mut tint, cpu_filter) =
+            tint_for_image(image_draw.color_filter.as_ref(), image_draw.alpha);
+        if tint[3] <= 0.0 {
+            return Ok(());
+        }
+
+        let filtered_image = cpu_filter
+            .map(|filter| apply_filter_to_bitmap(&image_draw.image, filter))
+            .transpose()?;
+        let prepared_image = filtered_image.as_ref().unwrap_or(&image_draw.image);
+        if let cranpose_ui_graphics::ImagePixelFormat::Alpha8 { color } = prepared_image.format() {
+            for (channel, value) in tint[..3].iter_mut().zip(color) {
+                *channel *= value as f32 / 255.0;
+            }
+        }
+
+        let geometry = resolve_image_geometry_with_delta(image_draw, root_scale, snap_delta);
+        let Some(scissor) =
+            scissor_rect_for_layer(geometry.rect, geometry.clip, root_scale, viewport)
+        else {
+            return Ok(());
+        };
+
+        let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
+            return Ok(());
+        };
+        let device_quad = geometry.device_quad(root_scale);
+        let index_start = push_image_quad(
+            (&mut self.vertices, &mut self.indices),
+            device_quad,
+            tint,
+            &uv_rect,
+        );
+        let clip = DeviceRoundedClip::of(image_draw, root_scale).map(|clip| {
+            self.clips.push(clip);
+            self.clips.len() as u32 - 1
+        });
+        self.cmds.push(ImageDrawCmd {
+            index_start,
+            scissor,
+            image: uploader.binding(prepared_image, geometry.sampling)?,
+            clip,
+        });
+        Ok(())
+    }
+
+    pub(super) fn push_bitmap(
+        &mut self,
+        image: &ImageBitmap,
+        (rect, clip): (Rect, Option<Rect>),
+        sampling: ImageSampling,
+        space: DrawSpace,
+        uploader: &mut ImageUploader<'_>,
+    ) -> Result<(), String> {
+        let (viewport, root_scale) = (space.viewport, space.scale);
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return Ok(());
+        }
+
+        let (device_quad, scissor_rect) =
+            if sampling == ImageSampling::Nearest && root_scale.is_finite() && root_scale > 0.0 {
+                let left_px = (rect.x * root_scale).round();
+                let top_px = (rect.y * root_scale).round();
+                let width_px = (rect.width * root_scale).round().max(1.0);
+                let height_px = (rect.height * root_scale).round().max(1.0);
+                let snapped_rect = Rect {
+                    x: left_px / root_scale,
+                    y: top_px / root_scale,
+                    width: width_px / root_scale,
+                    height: height_px / root_scale,
+                };
+                let right_px = left_px + width_px;
+                let bottom_px = top_px + height_px;
+                (
+                    [
+                        [left_px, top_px],
+                        [right_px, top_px],
+                        [left_px, bottom_px],
+                        [right_px, bottom_px],
+                    ],
+                    snapped_rect,
+                )
+            } else {
+                (
+                    rect_to_quad(rect).map(|[x, y]| [x * root_scale, y * root_scale]),
+                    rect,
+                )
+            };
+
+        let Some(scissor) = scissor_rect_for_layer(scissor_rect, clip, root_scale, viewport) else {
+            return Ok(());
+        };
+        let Some(uv_rect) = image_uv_rect(image, None) else {
+            return Ok(());
+        };
+
+        let index_start = push_image_quad(
+            (&mut self.vertices, &mut self.indices),
+            device_quad,
+            [1.0, 1.0, 1.0, 1.0],
+            &uv_rect,
+        );
+        self.cmds.push(ImageDrawCmd {
+            index_start,
+            scissor,
+            image: uploader.binding(image, sampling)?,
+            clip: None,
+        });
+        Ok(())
+    }
 }
 
 pub(super) struct CachedImageTexture {
@@ -126,7 +257,7 @@ pub(crate) struct ImageBinding {
 /// alpha mask or a color image, and taking a rounded clip in place or not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ImageVariant {
-    pub(super) depth: bool,
+    pub(super) depth: PassDepth,
     pub(super) alpha_mask: bool,
     pub(super) rounded: bool,
 }
@@ -182,6 +313,40 @@ pub(crate) struct ImageSlot {
     pub(super) indices: BufferUpload,
     /// The rounded clips the pass's images take in place, one instance each.
     pub(super) clips: Option<BufferUpload>,
+}
+
+impl ImageSlot {
+    /// Uploads a pass's image and glyph quads into the frame's buffers.
+    pub(crate) fn upload<C: FrameCommandRecorder>(
+        recorder: &mut C,
+        device: &wgpu::Device,
+        vertices: &[Vertex],
+        indices: &[u32],
+        clips: &[DeviceRoundedClip],
+    ) -> Self {
+        Self {
+            vertices: recorder.upload_buffer(
+                image_vertex_spec(),
+                device,
+                bytemuck::cast_slice(vertices),
+            ),
+            indices: recorder.upload_buffer(
+                image_index_spec(),
+                device,
+                bytemuck::cast_slice(indices),
+            ),
+            clips: (!clips.is_empty()).then(|| {
+                recorder.upload_buffer(
+                    UploadAllocatorSpec::vertex(
+                        "Image Clip Buffer",
+                        size_of::<DeviceRoundedClip>() as u64,
+                    ),
+                    device,
+                    bytemuck::cast_slice(clips),
+                )
+            }),
+        }
+    }
 }
 
 pub(super) fn image_vertex_spec() -> UploadAllocatorSpec {

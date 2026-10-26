@@ -20,6 +20,7 @@ use crate::{
     offscreen::{OffscreenPool, OffscreenTarget},
     pipeline_compiler::{CompileLane, PipelineCompiler},
     pipeline_recorder::PipelineRecorder,
+    render::PassDepth,
     scissor::{read_scissor, scaled_scissor, widened_scissor},
     shader_cache::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
@@ -28,6 +29,10 @@ use crate::{
     shaders,
     shared_shader::SharedShader,
 };
+
+mod scratch_targets;
+use scratch_targets::acquire_recorded_effect_scratch_textures_into;
+pub(crate) use scratch_targets::{EffectScratchTargetProvider, RecordedEffectScratchTargets};
 
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
@@ -218,137 +223,6 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_blur_pixels: Cell<u64>,
     debug_shader_fallback_draws: Cell<u32>,
     debug_shader_specialized_draws: Cell<u32>,
-}
-
-pub(crate) trait EffectScratchTargetProvider<'target> {
-    fn next(&mut self) -> Result<&'target OffscreenTarget, String>;
-    fn assert_consumed(&self) -> Result<(), String>;
-}
-
-pub(crate) struct RecordedEffectScratchTargets {
-    targets: Vec<RecordedEffectScratchTarget>,
-}
-
-struct RecordedEffectScratchTarget {
-    descriptor: FrameTextureDescriptor,
-    target: OffscreenTarget,
-}
-
-impl RecordedEffectScratchTargets {
-    fn new() -> Self {
-        Self {
-            targets: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
-        self.targets
-            .push(RecordedEffectScratchTarget { descriptor, target });
-    }
-
-    pub(crate) fn release_into<C: FrameCommandRecorder>(self, recorder: &mut C) {
-        for scratch in self.targets {
-            recorder.release_transient_offscreen(scratch.descriptor, scratch.target);
-        }
-    }
-
-    pub(crate) fn refs(&self) -> RecordedEffectScratchTargetRefs<'_> {
-        RecordedEffectScratchTargetRefs {
-            targets: &self.targets,
-            next: 0,
-        }
-    }
-}
-
-pub(crate) struct RecordedEffectScratchTargetRefs<'a> {
-    targets: &'a [RecordedEffectScratchTarget],
-    next: usize,
-}
-
-impl<'a> EffectScratchTargetProvider<'a> for RecordedEffectScratchTargetRefs<'a> {
-    fn next(&mut self) -> Result<&'a OffscreenTarget, String> {
-        let index = self.next;
-        let target = self
-            .targets
-            .get(index)
-            .map(|scratch| &scratch.target)
-            .ok_or_else(|| format!("render effect scratch target {index} was not acquired"))?;
-        self.next += 1;
-        Ok(target)
-    }
-
-    fn assert_consumed(&self) -> Result<(), String> {
-        if self.next == self.targets.len() {
-            Ok(())
-        } else {
-            Err(format!(
-                "render effect acquired {} scratch targets but consumed {}",
-                self.targets.len(),
-                self.next
-            ))
-        }
-    }
-}
-
-fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
-    recorder: &mut C,
-    device: &wgpu::Device,
-    effect: &RenderEffect,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
-    targets: &mut RecordedEffectScratchTargets,
-) {
-    match effect {
-        RenderEffect::Blur {
-            radius_x, radius_y, ..
-        } => {
-            if *radius_x > 0.0 || *radius_y > 0.0 {
-                let (scratch_width, scratch_height) =
-                    blur_scratch_size(*radius_x, *radius_y, width, height);
-                let descriptor = FrameTextureDescriptor::render_attachment(
-                    "Render Effect Blur Scratch",
-                    scratch_width,
-                    scratch_height,
-                    format,
-                );
-                let target = recorder.acquire_transient_offscreen(device, descriptor);
-                targets.push(descriptor, target);
-            }
-        }
-        RenderEffect::Offset { .. } => {}
-        RenderEffect::Shader { shader } => {
-            if !shader.substrates().is_empty() {
-                let layout = ChainedSubstrates::new(shader, width, height);
-                for _ in 0..2 {
-                    let descriptor = FrameTextureDescriptor::render_attachment(
-                        "Chained Shader Substrates",
-                        layout.width,
-                        layout.height,
-                        format,
-                    );
-                    let target = recorder.acquire_transient_offscreen(device, descriptor);
-                    targets.push(descriptor, target);
-                }
-            }
-        }
-        RenderEffect::Chain { first, second } => {
-            let descriptor = FrameTextureDescriptor::render_attachment(
-                "Render Effect Chain Scratch",
-                width,
-                height,
-                format,
-            );
-            let target = recorder.acquire_transient_offscreen(device, descriptor);
-            targets.push(descriptor, target);
-            acquire_recorded_effect_scratch_textures_into(
-                recorder, device, first, width, height, format, targets,
-            );
-            acquire_recorded_effect_scratch_textures_into(
-                recorder, device, second, width, height, format, targets,
-            );
-        }
-    }
 }
 
 #[repr(C)]
@@ -647,25 +521,25 @@ fn unmasked_nearest(sample_mode: CompositeSampleMode, masked: bool) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CompositeVariant {
     sampling: bool,
-    depth: bool,
+    depth: PassDepth,
 }
 
 impl CompositeVariant {
     const COUNT: usize = 4;
 
     const ALL: [Self; Self::COUNT] = [
-        Self::new(false, false),
-        Self::new(true, false),
-        Self::new(false, true),
-        Self::new(true, true),
+        Self::new(false, PassDepth::Off),
+        Self::new(true, PassDepth::Off),
+        Self::new(false, PassDepth::On),
+        Self::new(true, PassDepth::On),
     ];
 
-    const fn new(sampling: bool, depth: bool) -> Self {
+    const fn new(sampling: bool, depth: PassDepth) -> Self {
         Self { sampling, depth }
     }
 
     const fn index(self) -> usize {
-        self.sampling as usize | (self.depth as usize) << 1
+        self.sampling as usize | self.depth.index() << 1
     }
 }
 
@@ -1190,7 +1064,7 @@ fn projective_pipeline_job(
                     cull_mode: None,
                     ..Default::default()
                 },
-                depth_stencil: crate::render::overlay_depth_state(variant.depth),
+                depth_stencil: variant.depth.overlay_state(),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
@@ -1776,7 +1650,7 @@ impl EffectRenderer {
                 )],
             },
             self.surface_format,
-            (blend, crate::render::overlay_depth_state(variant.depth)),
+            (blend, variant.depth.overlay_state()),
         )
     }
 
@@ -1786,7 +1660,7 @@ impl EffectRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_composites(&self, device: &wgpu::Device) {
         for sampling in [false, true] {
-            let variant = CompositeVariant::new(sampling, false);
+            let variant = CompositeVariant::new(sampling, PassDepth::Off);
             self.blit_pipeline_target(BlendMode::SrcOver, variant)
                 .0
                 .queue(
@@ -1796,7 +1670,7 @@ impl EffectRenderer {
                     self.blit_pipeline_job(device, BlendMode::SrcOver, variant),
                 );
         }
-        let texels = CompositeVariant::new(true, false);
+        let texels = CompositeVariant::new(true, PassDepth::Off);
         self.projective_pipeline_target(BlendMode::SrcOver, texels)
             .0
             .queue(
@@ -3185,7 +3059,7 @@ impl EffectRenderer {
         let Some(pipeline) = self.blit_pipeline(
             device,
             options.blend_mode,
-            CompositeVariant::new(options.unmasked_nearest(), false),
+            CompositeVariant::new(options.unmasked_nearest(), PassDepth::Off),
         ) else {
             return;
         };
@@ -3215,7 +3089,10 @@ impl EffectRenderer {
             source_viewport: item.source_viewport,
             sample_mode: item.sample_mode,
         };
-        let variant = CompositeVariant::new(options.unmasked_nearest(), item.depth.is_some());
+        let variant = CompositeVariant::new(
+            options.unmasked_nearest(),
+            item.depth.map_or(PassDepth::Off, |_| PassDepth::On),
+        );
         self.prefetch_blit(CompileLane::WarmUp, device, item.blend_mode, variant);
         let mut uniforms = Self::composite_pass_uniforms(options);
         uniforms.depth[0] = item.depth.unwrap_or(0.0);
@@ -3255,7 +3132,7 @@ impl EffectRenderer {
             CompileLane::Later,
             device,
             blend_mode,
-            CompositeVariant::new(unmasked_nearest(sample_mode, masked), false),
+            CompositeVariant::new(unmasked_nearest(sample_mode, masked), PassDepth::Off),
         );
     }
 
@@ -3266,7 +3143,7 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         draw: &PreparedCompositeDraw<'_>,
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let variant = CompositeVariant {
@@ -3319,7 +3196,7 @@ impl EffectRenderer {
     ) -> PreparedProjectiveComposite<'a> {
         let variant = CompositeVariant::new(
             item.sample_mode == CompositeSampleMode::Texels,
-            item.depth.is_some(),
+            item.depth.map_or(PassDepth::Off, |_| PassDepth::On),
         );
         self.prefetch_projective(CompileLane::WarmUp, device, item.blend_mode, variant);
         let vertices = item
@@ -3394,7 +3271,7 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         draw: &PreparedProjectiveComposite<'_>,
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let variant = CompositeVariant {

@@ -14,9 +14,10 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        ArenaPlacement, DrawSpace, GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect,
-        ViewportUniformParams, image_draw_bounds, run_draw_bounds, scissor_rect_for_rect,
-        segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
+        ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
+        StoreRunBatch, TargetRect, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
+        scissor_rect_for_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
+        text_draw_geometry_in_rect,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
@@ -27,6 +28,8 @@ use crate::{
 
 mod held_draws;
 use held_draws::{HeldCmds, HeldDraws};
+mod tracked_pass;
+pub(crate) use tracked_pass::TrackedPass;
 
 /// A render target and its size in pixels.
 #[derive(Clone, Copy)]
@@ -223,168 +226,6 @@ enum Batch<'a> {
     Projective(PreparedProjectiveComposite<'a>),
 }
 
-/// A render pass that leaves out the set calls that change nothing: wgpu
-/// records and validates every set call again, and on the web each one
-/// crosses into JavaScript. Consecutive batches often bind the same strip
-/// indices and viewport uniform under the same scissor, and a run batch's
-/// draws often share a pipeline.
-pub(crate) struct TrackedPass<'a, 'p> {
-    pass: &'a mut wgpu::RenderPass<'p>,
-    scissor: Option<TargetRect>,
-    /// The bound index buffer's address, offset, size and index format.
-    index: Option<(
-        usize,
-        wgpu::BufferAddress,
-        wgpu::BufferAddress,
-        wgpu::IndexFormat,
-    )>,
-    pipeline: Option<wgpu::RenderPipeline>,
-    /// Bind groups 0 and 1 with their dynamic offsets.
-    groups: [Option<BoundGroup>; TRACKED_GROUPS],
-    /// Vertex buffer slots 0 and 1: buffer, offset and size.
-    vertices: [Option<(wgpu::Buffer, wgpu::BufferAddress, wgpu::BufferAddress)>; TRACKED_SLOTS],
-}
-
-const TRACKED_GROUPS: usize = 2;
-const TRACKED_SLOTS: usize = 2;
-const TRACKED_OFFSETS: usize = 4;
-
-#[derive(PartialEq)]
-struct BoundGroup {
-    group: wgpu::BindGroup,
-    offsets: [wgpu::DynamicOffset; TRACKED_OFFSETS],
-    offset_count: usize,
-}
-
-impl BoundGroup {
-    /// The binding, when its offsets fit what is tracked.
-    fn new(group: &wgpu::BindGroup, offsets: &[wgpu::DynamicOffset]) -> Option<Self> {
-        let mut tracked = [0; TRACKED_OFFSETS];
-        tracked.get_mut(..offsets.len())?.copy_from_slice(offsets);
-        Some(Self {
-            group: group.clone(),
-            offsets: tracked,
-            offset_count: offsets.len(),
-        })
-    }
-
-    fn is(&self, group: &wgpu::BindGroup, offsets: &[wgpu::DynamicOffset]) -> bool {
-        self.group == *group && self.offsets.get(..self.offset_count) == Some(offsets)
-    }
-}
-
-impl<'a, 'p> TrackedPass<'a, 'p> {
-    pub(crate) fn new(pass: &'a mut wgpu::RenderPass<'p>) -> Self {
-        Self {
-            pass,
-            scissor: None,
-            index: None,
-            pipeline: None,
-            groups: [const { None }; TRACKED_GROUPS],
-            vertices: [const { None }; TRACKED_SLOTS],
-        }
-    }
-
-    pub(crate) fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
-        if self.scissor != Some((x, y, width, height)) {
-            self.pass.set_scissor_rect(x, y, width, height);
-            self.scissor = Some((x, y, width, height));
-        }
-    }
-
-    /// Binds `slice` as `u32` indices.
-    pub(crate) fn set_index_buffer(
-        &mut self,
-        slice: wgpu::BufferSlice<'_>,
-        format: wgpu::IndexFormat,
-    ) {
-        let bound = (
-            std::ptr::from_ref(slice.buffer()).addr(),
-            slice.offset(),
-            slice.size(),
-            format,
-        );
-        if self.index != Some(bound) {
-            self.pass.set_index_buffer(slice, format);
-            self.index = Some(bound);
-        }
-    }
-
-    pub(crate) fn set_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) {
-        if self.pipeline.as_ref() != Some(pipeline) {
-            self.pass.set_pipeline(pipeline);
-            self.pipeline = Some(pipeline.clone());
-        }
-    }
-
-    pub(crate) fn set_bind_group(
-        &mut self,
-        index: u32,
-        bind_group: &wgpu::BindGroup,
-        offsets: &[wgpu::DynamicOffset],
-    ) {
-        let tracked = usize::try_from(index)
-            .ok()
-            .and_then(|index| self.groups.get_mut(index));
-        match tracked {
-            Some(bound) => {
-                if !bound
-                    .as_ref()
-                    .is_some_and(|bound| bound.is(bind_group, offsets))
-                {
-                    self.pass.set_bind_group(index, bind_group, offsets);
-                    *bound = BoundGroup::new(bind_group, offsets);
-                }
-            }
-            None => self.pass.set_bind_group(index, bind_group, offsets),
-        }
-    }
-
-    pub(crate) fn set_vertex_buffer(&mut self, slot: u32, slice: wgpu::BufferSlice<'_>) {
-        let bound = (slice.buffer(), slice.offset(), slice.size());
-        let tracked = usize::try_from(slot)
-            .ok()
-            .and_then(|slot| self.vertices.get_mut(slot));
-        match tracked {
-            Some(tracked) => {
-                if tracked
-                    .as_ref()
-                    .map(|(buffer, offset, size)| (buffer, *offset, *size))
-                    != Some(bound)
-                {
-                    self.pass.set_vertex_buffer(slot, slice);
-                    *tracked = Some((bound.0.clone(), bound.1, bound.2));
-                }
-            }
-            None => self.pass.set_vertex_buffer(slot, slice),
-        }
-    }
-
-    pub(crate) fn draw(&mut self, vertices: std::ops::Range<u32>, instances: std::ops::Range<u32>) {
-        self.pass.draw(vertices, instances);
-    }
-
-    pub(crate) fn draw_indexed(
-        &mut self,
-        indices: std::ops::Range<u32>,
-        base_vertex: i32,
-        instances: std::ops::Range<u32>,
-    ) {
-        self.pass.draw_indexed(indices, base_vertex, instances);
-    }
-
-    /// The pass, for a draw that sets what it needs itself: what it binds
-    /// is then no longer known.
-    pub(crate) fn untracked(&mut self) -> &mut wgpu::RenderPass<'p> {
-        self.scissor = None;
-        self.index = None;
-        self.pipeline = None;
-        self.groups = [const { None }; TRACKED_GROUPS];
-        self.vertices = [const { None }; TRACKED_SLOTS];
-        self.pass
-    }
-}
-
 /// The scissor a shape batch's `stage` draws under: the batch's, and for its
 /// paint only the pixels its unturned clip keeps, `None` when none are left.
 /// The interiors keep the batch's: their pipeline cuts each to its clip.
@@ -472,8 +313,9 @@ impl GpuRenderer {
                 ),
             }),
             images: (!scratch.images.indices.is_empty()).then(|| {
-                self.upload_image_slot(
+                ImageSlot::upload(
                     recorder,
+                    &self.device,
                     &scratch.images.vertices,
                     &scratch.images.indices,
                     &scratch.images.clips,
@@ -502,32 +344,14 @@ impl GpuRenderer {
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
         let device = Arc::clone(&self.device);
-        let takes_depth = self.depth_gate.may() && takes_depth(segments);
-        let depth = takes_depth && self.depth_gate.is_open();
-        let mut prep = PassPrep {
+        let (depth, depth_keys) = self.pass_depth(segments);
+        let mut prep = PassPrep::new(
             recorder,
-            device: &device,
-            target,
-            load_op,
-            batches: Vec::new(),
-            chunk: None,
-            held: std::mem::take(&mut scratch.held),
-            depth,
-            mixed_turns: turns_mixed(segments),
-            overlay_segment: None,
-            overlay_images: None,
-            depth_seq: 0,
-            open: None,
-            arena_draws: std::mem::take(&mut scratch.arena_draws),
-            meshes: std::mem::take(&mut scratch.meshes),
-            pipelines: std::mem::take(&mut scratch.pipelines),
-            depth_keys: (takes_depth && !depth).then(PipelineDemand::default),
-            chunk_start: 0,
-            chunk_base: 0,
-            chunk_slot: None,
-            chunk_clip: None,
-            chunk_scissor: None,
-        };
+            (&device, target, load_op),
+            (depth, depth_keys),
+            turns_mixed(segments),
+            &mut scratch,
+        );
         let prepared = prep.segments(self, (segments, layout), &mut scratch);
         prep.finish(self);
         self.flush_glyph_uploads();
@@ -597,6 +421,18 @@ impl GpuRenderer {
         result
     }
 
+    // The depth a pass over `segments` draws with, and the shape pipelines
+    // it collects for a depth buffer when it could take one but its gate is
+    // still shut.
+    fn pass_depth(&self, segments: &[PassSegment<'_>]) -> (PassDepth, Option<PipelineDemand>) {
+        let takes_depth = self.depth_gate.may() && takes_depth(segments);
+        if takes_depth && self.depth_gate.is_open() {
+            (PassDepth::On, None)
+        } else {
+            (PassDepth::Off, takes_depth.then(PipelineDemand::default))
+        }
+    }
+
     fn take_pass_scratch(&mut self) -> PassScratch {
         let mut scratch = std::mem::take(&mut self.pass_scratch);
         scratch.meshes.clear();
@@ -625,25 +461,27 @@ impl GpuRenderer {
         &self,
         batches: &[Batch<'_>],
         scratch: &PassScratch,
-        depth_lane: (bool, CompileLane),
+        depth_lane: (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         for batch in batches {
             match batch {
                 Batch::Images {
                     cmds, blend_mode, ..
-                } => self.prefetch_image_pipelines(
+                } => self.pipelines.prefetch_image_pipelines(
                     &scratch.images.cmds[cmds.clone()],
                     *blend_mode,
                     depth_lane,
                     awaited,
                 ),
-                Batch::Glyphs { cmds, .. } => self.prefetch_glyph_pipelines(
+                Batch::Glyphs { cmds, .. } => self.pipelines.prefetch_glyph_pipelines(
                     &scratch.glyph_cmds[cmds.clone()],
                     depth_lane,
                     awaited,
                 ),
-                Batch::Shadows { .. } => self.prefetch_shadow_pipeline(depth_lane, awaited),
+                Batch::Shadows { .. } => {
+                    self.pipelines.prefetch_shadow_pipeline(depth_lane, awaited);
+                }
                 Batch::Composite(prepared) => self.effect_renderer.prefetch_composite_pipeline(
                     &self.device,
                     prepared,
@@ -677,7 +515,7 @@ impl GpuRenderer {
         self.prefetch_overlay_pipelines(
             batches,
             scratch,
-            (true, CompileLane::Later),
+            (PassDepth::On, CompileLane::Later),
             &mut |pending| awaited.push(pending),
         );
         self.depth_gate.waited_for(awaited);
@@ -692,7 +530,7 @@ impl GpuRenderer {
         buffers: &PassBuffers,
     ) -> Result<(), String> {
         let target_size = frame.size;
-        if frame.depth {
+        if frame.depth.is_on() {
             for batch in batches.iter().rev() {
                 self.draw_shape_batch(pass, batch, cmds.arena, None, frame, RunStage::Interiors)?;
             }
@@ -788,13 +626,15 @@ impl GpuRenderer {
         label: &'static str,
         target: PassTarget<'_>,
         load_op: wgpu::LoadOp<wgpu::Color>,
-        depth: bool,
+        depth: PassDepth,
     ) -> wgpu::RenderPass<'p> {
-        if depth {
+        if depth.is_on() {
             self.frame_stats
                 .depth_passes
                 .set(self.frame_stats.depth_passes.get() + 1);
-            let depth_view = self.depth_target((target.width, target.height));
+            let depth_view = self
+                .depth_targets
+                .interior(&self.device, (target.width, target.height));
             recorder.begin_depth_pass(label, target.view, load_op, &depth_view)
         } else {
             recorder.begin_color_pass(label, target.view, load_op)
@@ -864,7 +704,7 @@ pub(crate) struct RunCalls<'a> {
     pub(crate) draws: &'a [RunDrawCall],
     pub(crate) scissor: (u32, u32, u32, u32),
     pub(crate) stage: RunStage,
-    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, bool)>,
+    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, PassDepth)>,
 }
 
 /// Changes between flat and turned segments a pass takes before its shapes
@@ -1189,7 +1029,7 @@ fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Op
 #[derive(Default)]
 struct PassBuffers {
     meshes: Option<crate::mesh_fallback::MeshBuffers>,
-    images: Option<crate::render::ImageSlot>,
+    images: Option<ImageSlot>,
     shadows: Option<crate::frame_graph::BufferUpload>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
     turned_glyphs: Option<crate::frame_graph::BufferUpload>,
@@ -1314,7 +1154,7 @@ struct PassPrep<'a, 's, C> {
     chunk: Option<usize>,
     held: HeldDraws,
     /// Whether the pass has a depth buffer its opaque interiors fill first.
-    depth: bool,
+    depth: PassDepth,
     /// Whether the pass's flat and turned segments alternate often enough
     /// that its shapes draw with the pipeline telling them apart per record.
     mixed_turns: bool,
@@ -1357,7 +1197,40 @@ struct PassPrep<'a, 's, C> {
     chunk_scissor: Option<TargetRect>,
 }
 
-impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
+impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
+    fn new(
+        recorder: &'a mut C,
+        (device, target, load_op): (&'a wgpu::Device, PassTarget<'a>, wgpu::LoadOp<wgpu::Color>),
+        (depth, depth_keys): (PassDepth, Option<PipelineDemand>),
+        mixed_turns: bool,
+        scratch: &mut PassScratch,
+    ) -> Self {
+        Self {
+            recorder,
+            device,
+            target,
+            load_op,
+            batches: Vec::new(),
+            chunk: None,
+            held: std::mem::take(&mut scratch.held),
+            depth,
+            mixed_turns,
+            overlay_segment: None,
+            overlay_images: None,
+            depth_seq: 0,
+            open: None,
+            arena_draws: std::mem::take(&mut scratch.arena_draws),
+            meshes: std::mem::take(&mut scratch.meshes),
+            pipelines: std::mem::take(&mut scratch.pipelines),
+            depth_keys,
+            chunk_start: 0,
+            chunk_base: 0,
+            chunk_slot: None,
+            chunk_clip: None,
+            chunk_scissor: None,
+        }
+    }
+
     fn target_size(&self) -> (u32, u32) {
         (self.target.width, self.target.height)
     }
@@ -1577,7 +1450,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         if let Some(slot) = self.chunk_slot {
             return slot;
         }
-        let slot = if self.depth {
+        let slot = if self.depth.is_on() {
             renderer.claim_uniform_slot(ViewportUniformParams {
                 depth_base: self.chunk_base as f32,
                 ..binding.bound
@@ -1604,7 +1477,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             return;
         }
         let uniform_slot = self.chunk_uniform_slot(renderer, binding);
-        if self.depth {
+        if self.depth.is_on() {
             self.depth_seq = self.chunk_base.saturating_add(records);
         }
         self.batches.push(Batch::Arena {
@@ -1693,7 +1566,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         viewport: ViewportUniformParams,
         base: Option<u32>,
     ) -> usize {
-        if self.depth {
+        if self.depth.is_on() {
             let base = base.unwrap_or_else(|| self.next_place());
             renderer.claim_uniform_slot(ViewportUniformParams {
                 depth_base: base as f32,
@@ -1717,6 +1590,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     /// so later opaque interiors hide it and earlier ones do not.
     fn composite_depth(&mut self) -> Option<f32> {
         self.depth
+            .is_on()
             .then(|| crate::render::pass_order_depth(self.next_place()))
     }
 
@@ -1729,7 +1603,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         renderer: &GpuRenderer,
         run: &SegmentRun<'s, '_>,
     ) -> ViewportUniformParams {
-        if !self.depth {
+        if !self.depth.is_on() {
             return run.viewport;
         }
         let open = self.chunk.map_or(0, |_| renderer.open_arena_records());
@@ -1932,7 +1806,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     self.depth,
                     &mut self.meshes,
                 );
-                if self.depth {
+                if self.depth.is_on() {
                     self.take_depth_range(batch.draws.clone());
                 }
                 self.batches.push(Batch::StoreRun {
@@ -2018,7 +1892,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             self.draw_held(renderer, run.binding);
         }
         let mark = scratch.image_mark();
-        renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
+        scratch
+            .images
+            .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
         scratch.place_images(mark, run);
         if let Some(bounds) = scratch
             .images
@@ -2049,7 +1925,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
             let image = &images[index];
-            renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
+            scratch
+                .images
+                .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
         }
         scratch.place_images(mark, run);
         self.push_images(

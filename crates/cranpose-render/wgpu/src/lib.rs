@@ -986,7 +986,7 @@ impl WgpuRenderer {
     /// draw on the calling thread.
     pub fn first_screen_pipelines(&self) -> Option<Vec<u8>> {
         self.sync_gpu_renderer()
-            .and_then(GpuRenderer::first_screen_pipelines)
+            .and_then(|renderer| renderer.pipelines.first_screen_pipelines())
     }
 
     /// Builds now the pipelines one set in `records` names: sets
@@ -1349,7 +1349,7 @@ impl Renderer for WgpuRenderer {
 
     fn awaits_pipelines(&self) -> bool {
         match &self.backend {
-            PresentBackend::Sync(gpu_renderer) => gpu_renderer.awaits_pipelines(),
+            PresentBackend::Sync(gpu_renderer) => gpu_renderer.pipelines.awaits_pipelines(),
             #[cfg(not(target_arch = "wasm32"))]
             PresentBackend::Threaded(handle) => {
                 let status = handle.status();
