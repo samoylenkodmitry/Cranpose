@@ -157,7 +157,7 @@ impl PixelsRenderer {
         if self.update_picture_in_place(picture, width, height, scale) {
             changed.clear();
             changed.extend(picture.changed.iter().copied().map(pixel_rect));
-            picture.measure_reach();
+            picture.measure_repushed_reach();
             return;
         }
         let mut raster = std::mem::take(&mut picture.spare);
@@ -167,13 +167,7 @@ impl PixelsRenderer {
             Some(old)
                 if (picture.width, picture.height, picture.scale) == (width, height, scale) =>
             {
-                let window = draw::ClipBounds {
-                    min_x: 0,
-                    min_y: 0,
-                    max_x: i32::try_from(width).unwrap_or(i32::MAX),
-                    max_y: i32::try_from(height).unwrap_or(i32::MAX),
-                };
-                damage::changed_areas(old, &raster, window, &mut picture.changed);
+                damage::changed_areas(old, &raster, picture.frame(), &mut picture.changed);
                 changed.extend(picture.changed.iter().copied().map(pixel_rect));
             }
             _ if width > 0 && height > 0 => changed.push(PixelRect {
@@ -293,18 +287,49 @@ impl PixelsRenderer {
 }
 
 impl Picture {
-    fn measure_reach(&mut self) {
-        let Some(raster) = self.raster.as_ref() else {
-            self.reach.clear();
-            return;
-        };
-        let frame = draw::ClipBounds {
+    fn frame(&self) -> draw::ClipBounds {
+        draw::ClipBounds {
             min_x: 0,
             min_y: 0,
             max_x: i32::try_from(self.width).unwrap_or(i32::MAX),
             max_y: i32::try_from(self.height).unwrap_or(i32::MAX),
+        }
+    }
+
+    fn measure_reach(&mut self) {
+        let frame = self.frame();
+        match self.raster.as_ref() {
+            Some(raster) => raster.reach_into(frame, &mut self.reach),
+            None => self.reach.clear(),
+        }
+    }
+
+    // An update in place changed only the items of the layers it pushed
+    // again, in the same places of the order: the rest keep their reach.
+    fn measure_repushed_reach(&mut self) {
+        let frame = self.frame();
+        let Self {
+            raster: Some(raster),
+            repushed,
+            reach,
+            ..
+        } = self
+        else {
+            return self.measure_reach();
         };
-        raster.reach_into(frame, &mut self.reach);
+        if reach.len() != raster.order.len() {
+            return self.measure_reach();
+        }
+        for &(record, _) in repushed.iter() {
+            let items = &raster.subtrees[record];
+            let (start, stop) = (items.start.order, items.stop.order);
+            for (bounds, &item) in reach[start..stop]
+                .iter_mut()
+                .zip(&raster.order[start..stop])
+            {
+                *bounds = raster.item_bounds(item, frame);
+            }
+        }
     }
 }
 
