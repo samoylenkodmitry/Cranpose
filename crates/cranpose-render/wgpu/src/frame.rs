@@ -14,7 +14,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
-    RuntimeShader, ShaderPlaceholder, SubstrateSpec, TileMode,
+    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
@@ -975,10 +975,15 @@ impl PendingBackdrop<'_> {
         (self.rounded_mask.is_none() && self.alpha >= 1.0) || shader.batched_source()
     }
 
-    /// Whether the effect's last shader draws composited.
-    fn composites_shader(&self) -> bool {
-        self.batched.is_some()
-            || shader_tail(self.effect).is_some_and(|(_, shader)| self.composites_tail(shader))
+    /// Where the effect's last shader draws: over the page, or into a texture.
+    fn shader_target(&self) -> ShaderTarget {
+        let composites = self.batched.is_some()
+            || shader_tail(self.effect).is_some_and(|(_, shader)| self.composites_tail(shader));
+        if composites {
+            ShaderTarget::Page
+        } else {
+            ShaderTarget::Layer
+        }
     }
 
     fn layer_pixel_rect(&self) -> [f32; 4] {
@@ -1181,10 +1186,15 @@ fn texel_rect_in(rect: DeviceRect, within: DeviceRect) -> TexelRect {
 fn blit_read_rect(
     scissor: DeviceRect,
     capture_rect: DeviceRect,
-    linear: bool,
+    filter: wgpu::FilterMode,
 ) -> Option<DeviceRect> {
+    // A linear filter reads one pixel past the scissor.
+    let reach = match filter {
+        wgpu::FilterMode::Linear => 1.0,
+        wgpu::FilterMode::Nearest => 0.0,
+    };
     scissor
-        .expand(if linear { 1.0 } else { 0.0 })
+        .expand(reach)
         .intersect(capture_rect)
         .map(DeviceRect::snap_out)
 }
@@ -1230,7 +1240,7 @@ fn member_read_texels(
         BatchedEffect::Blur(_) => blit_read_rect(
             item.support.unwrap_or(item.visible),
             item.capture_rect,
-            true,
+            wgpu::FilterMode::Linear,
         )?,
         BatchedEffect::Shader(_) | BatchedEffect::BlurThenShader(..) => {
             domain_read_rect(item.effect, item.layer_rect, item.capture_rect, scale)?
@@ -2569,7 +2579,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         effect: &RenderEffect,
         layer_pixel_rect: [f32; 4],
         source_size: (u32, u32),
-        composited: bool,
+        target: ShaderTarget,
     ) -> bool {
         let renderer = &mut *self.renderer;
         let ready = renderer.effect_renderer.effect_ready(
@@ -2577,7 +2587,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             effect,
             crate::effect_renderer::layer_pixels(layer_pixel_rect),
             source_size,
-            composited,
+            target,
         );
         if !ready {
             renderer.pipelines.note_placeholder(&renderer.frame_stats);
@@ -2590,7 +2600,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             item.effect,
             item.layer_pixel_rect(),
             item.capture_rect.pixel_size(),
-            item.composites_shader(),
+            item.shader_target(),
         )
     }
 
@@ -3792,7 +3802,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let reads = effect_reads(
             item.effect,
-            blit_read_rect(scissor, item.capture_rect, false),
+            blit_read_rect(scissor, item.capture_rect, wgpu::FilterMode::Nearest),
             item.layer_rect,
             item.capture_rect,
             scale,
@@ -4036,7 +4046,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_rect_device.height,
         ];
         let waiting = effect.effect.as_ref().filter(|render_effect| {
-            !self.effect_draws_now(render_effect, layer_pixel_rect, (width, height), false)
+            !self.effect_draws_now(
+                render_effect,
+                layer_pixel_rect,
+                (width, height),
+                ShaderTarget::Layer,
+            )
         });
         let result = match &effect.effect {
             Some(render_effect) if waiting.is_none() => self.apply_effect(
@@ -4280,7 +4295,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source = &surface.source.texture;
         let (width, height) = (source.width, source.height);
-        if !self.effect_draws_now(effect, layer_pixel_rect, (width, height), false) {
+        if !self.effect_draws_now(
+            effect,
+            layer_pixel_rect,
+            (width, height),
+            ShaderTarget::Layer,
+        ) {
             return Ok(None);
         }
         let content = surface.source.content.derived(&effect.render_hash());
@@ -4389,7 +4409,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source_size = (surface.source.texture.width, surface.source.texture.height);
-        if !self.effect_draws_now(effect, layer_pixel_rect, source_size, true) {
+        if !self.effect_draws_now(effect, layer_pixel_rect, source_size, ShaderTarget::Page) {
             return Some(None);
         }
         let slot = CompositeSlot {
@@ -4442,7 +4462,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let layer_pixel_rect = layer_pixel_rect(child, surface_rect, scale);
         let rounded_mask = grid_rounded_mask(child, snap, scale);
-        if !self.effect_draws_now(effect, layer_pixel_rect, (width, height), true) {
+        if !self.effect_draws_now(
+            effect,
+            layer_pixel_rect,
+            (width, height),
+            ShaderTarget::Page,
+        ) {
             let [x, y, width, height] = layer_pixel_rect;
             let layer = DeviceRect {
                 x: dest.x + x,

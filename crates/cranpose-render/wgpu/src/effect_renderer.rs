@@ -4,8 +4,8 @@ use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
 use cranpose_ui::Axis;
 use cranpose_ui_graphics::{
-    BlendMode, DrawSpecialization, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec,
-    TileMode,
+    BlendMode, DrawSpecialization, MAX_SUBSTRATES, RenderEffect, RuntimeShader, ShaderTarget,
+    SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
@@ -1228,8 +1228,8 @@ impl EffectRenderer {
 
     /// Whether `effect` over a `source_size` source draws now without
     /// waiting for a pipeline to compile: its shaders' pipelines (its last
-    /// one `composited` over what is beneath, else drawn in a pass of its
-    /// own), and the blur pipelines its blurs and substrates draw with. What
+    /// one drawn at `target`, the rest each in a pass of its own), and the
+    /// blur pipelines its blurs and substrates draw with. What
     /// is missing is queued, so a later frame finds it.
     pub(crate) fn effect_ready(
         &mut self,
@@ -1237,19 +1237,16 @@ impl EffectRenderer {
         effect: &RenderEffect,
         layer_pixels: u64,
         source_size: (u32, u32),
-        composited: bool,
+        target: ShaderTarget,
     ) -> bool {
         match effect {
             RenderEffect::Shader { shader } => {
                 let specialization = shader.draw_specialization(layer_pixels);
-                let (mode, variants) = if composited {
-                    (
-                        RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                        shader_draw_variants(specialization),
-                    )
-                } else {
-                    (RuntimeShaderPipelineMode::Replace, WHOLE_DRAW)
+                let variants = match target {
+                    ShaderTarget::Page => shader_draw_variants(specialization),
+                    ShaderTarget::Layer => WHOLE_DRAW,
                 };
+                let mode = RuntimeShaderPipelineMode::for_target(target);
                 let mut ready = true;
                 for &variant in variants {
                     ready &= self
@@ -1273,9 +1270,9 @@ impl EffectRenderer {
                     })
             }
             RenderEffect::Chain { first, second } => {
-                let first = self.effect_ready(device, first, layer_pixels, source_size, false);
-                let second =
-                    self.effect_ready(device, second, layer_pixels, source_size, composited);
+                let layer = ShaderTarget::Layer;
+                let first = self.effect_ready(device, first, layer_pixels, source_size, layer);
+                let second = self.effect_ready(device, second, layer_pixels, source_size, target);
                 first & second
             }
         }
