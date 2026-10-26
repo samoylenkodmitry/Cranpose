@@ -87,7 +87,6 @@ limit = 1000
 "crates/cranpose-ui/src/layout/mod.rs" = 4353
 "crates/cranpose-ui/src/modifier/mod.rs" = 1284
 "crates/cranpose-ui/src/modifier/scroll.rs" = 2039
-"crates/cranpose-ui/src/modifier/slices.rs" = 1074
 "crates/cranpose-ui/src/modifier_nodes.rs" = 2901
 "crates/cranpose-ui/src/render_state.rs" = 1659
 "crates/cranpose-ui/src/subcompose_layout.rs" = 1668
