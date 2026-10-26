@@ -100,7 +100,7 @@ fn vertex_shading_requires_an_aligned_placement_and_viewport_without_turns() {
 
     use crate::{
         geometry::SegmentTransform,
-        render::{GpuRenderer, ViewportUniformParams},
+        render::ViewportUniformParams,
         scene::{Placement, SnapAnchor},
     };
 
@@ -121,7 +121,7 @@ fn vertex_shading_requires_an_aligned_placement_and_viewport_without_turns() {
                     origin: [0.0; 2],
                     depth_base: 0.0,
                 };
-                let key = GpuRenderer::run_pipeline_key(
+                let key = ShapePipelineKey::of_run(
                     &segment,
                     &placement,
                     RunTier::Arena,

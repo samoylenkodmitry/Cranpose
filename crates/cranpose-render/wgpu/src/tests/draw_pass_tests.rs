@@ -57,7 +57,7 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
             height: 64.0,
         },
         (64, 64),
-        false,
+        Texts::Drawn,
     )
     .collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
@@ -85,7 +85,7 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
                 height: 16.0,
             },
             (64, 64),
-            false,
+            Texts::Drawn,
         );
         match (visible.next(), expected) {
             (Some(Item::Run(run, None, _)), Some(index)) => assert!(std::ptr::eq(

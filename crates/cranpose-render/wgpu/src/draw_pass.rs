@@ -17,10 +17,9 @@ use crate::{
         ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
         StoreRunBatch, TargetRect, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
         scissor_rect_for_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
-        text_draw_geometry_in_rect,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
-    run_store::{RunDrawCall, run_has_shapes},
+    run_store::RunDrawCall,
     scene::{CompositorScene, DrawOp, DrawOpKind, RRectShadowDraw, RunDraw, TextDraw},
     scissor::{intersect_scissors, scissor_in_target},
     shape_pipelines::PipelineDemand,
@@ -30,6 +29,8 @@ mod held_draws;
 use held_draws::{HeldCmds, HeldDraws};
 mod tracked_pass;
 pub(crate) use tracked_pass::TrackedPass;
+mod op_items;
+use op_items::{OpItems, Texts, merge_items};
 
 /// A render target and its size in pixels.
 #[derive(Clone, Copy)]
@@ -343,18 +344,18 @@ impl GpuRenderer {
         label: &'static str,
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
-        let device = Arc::clone(&self.device);
         let (depth, depth_keys) = self.pass_depth(segments);
         let mut prep = PassPrep::new(
             recorder,
-            (&device, target, load_op),
+            (target, load_op),
             (depth, depth_keys),
             turns_mixed(segments),
             &mut scratch,
         );
         let prepared = prep.segments(self, (segments, layout), &mut scratch);
         prep.finish(self);
-        self.flush_glyph_uploads();
+        let mut parts = self.draw_parts();
+        parts.text.flush_glyph_uploads(&mut parts.upload);
         self.prefetch_overlay_pipelines(
             &prep.batches,
             &scratch,
@@ -862,9 +863,14 @@ fn segment_viewport_rect(target: PassTarget<'_>, segment: &PassSegment<'_>) -> R
 /// applies when it draws.
 pub(crate) fn segment_draws_anything(target: PassTarget<'_>, segment: &PassSegment<'_>) -> bool {
     let viewport_rect = segment_viewport_rect(target, segment);
-    merge_items(segment, viewport_rect, (target.width, target.height), false)
-        .next()
-        .is_some()
+    merge_items(
+        segment,
+        viewport_rect,
+        (target.width, target.height),
+        Texts::Drawn,
+    )
+    .next()
+    .is_some()
 }
 
 /// Re-bases an inverse (target pixel -> source pixel) matrix onto a target
@@ -875,151 +881,6 @@ fn translate_inverse(inverse: [[f32; 3]; 3], offset: [f32; 2]) -> [[f32; 3]; 3] 
         row[2] += row[0] * offset[0] + row[1] * offset[1];
     }
     shifted
-}
-
-fn merge_items<'a>(
-    segment: &PassSegment<'a>,
-    viewport_rect: Rect,
-    target_size: (u32, u32),
-    skip_text: bool,
-) -> impl Iterator<Item = Item<'a>> + use<'a> {
-    let scene = segment.scene;
-    let root_scale = segment.scale;
-    let mut ops = segment.ops.iter().enumerate().peekable();
-    let mut composites = segment.composites.iter().peekable();
-    let mut pending = OpItems::empty(viewport_rect, root_scale);
-    let offset = segment.offset;
-    let scissor = segment.scissor;
-    let first_run_window = segment.first_run_window.clone();
-    std::iter::from_fn(move || {
-        loop {
-            if let Some(item) = pending.next() {
-                return Some(item);
-            }
-            let next_z = ops.peek().map(|(_, op)| op.z_index);
-            if composites
-                .peek()
-                .is_some_and(|composite| next_z.is_none_or(|z| composite.z_index <= z))
-            {
-                let composite = composites.next().expect("peeked composite");
-                if composite_visible(composite, target_size, offset, scissor) {
-                    return Some(Item::Composite(composite));
-                }
-                continue;
-            }
-            let (op_index, op) = ops.next()?;
-            let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
-            pending = OpItems::of(scene, op, window, (viewport_rect, root_scale, skip_text));
-        }
-    })
-}
-
-/// What one op draws into a segment's viewport.
-enum OpItem<'a> {
-    Draw(Item<'a>),
-    /// A shadow's texts, drawn next, and its casters when unblurred.
-    Shadow(std::slice::Iter<'a, TextDraw>, Option<Item<'a>>),
-    Nothing,
-}
-
-/// The items one op draws into a segment's viewport, in order: its own, or
-/// a shadow's casters and then the shadow's texts that reach the viewport.
-struct OpItems<'a> {
-    first: Option<Item<'a>>,
-    texts: std::slice::Iter<'a, TextDraw>,
-    viewport_rect: Rect,
-    root_scale: f32,
-}
-
-impl<'a> OpItems<'a> {
-    fn empty(viewport_rect: Rect, root_scale: f32) -> Self {
-        Self {
-            first: None,
-            texts: [].iter(),
-            viewport_rect,
-            root_scale,
-        }
-    }
-
-    /// See [`op_item`].
-    fn of(
-        scene: &'a CompositorScene,
-        op: &DrawOp,
-        window: Option<std::ops::Range<u32>>,
-        (viewport_rect, root_scale, skip_text): (Rect, f32, bool),
-    ) -> Self {
-        let (first, texts) =
-            match op_item(scene, op, window, (viewport_rect, root_scale, skip_text)) {
-                OpItem::Draw(item) => (Some(item), [].iter()),
-                OpItem::Shadow(texts, casters) => (casters, texts),
-                OpItem::Nothing => (None, [].iter()),
-            };
-        Self {
-            first,
-            texts,
-            viewport_rect,
-            root_scale,
-        }
-    }
-}
-
-impl<'a> Iterator for OpItems<'a> {
-    type Item = Item<'a>;
-
-    fn next(&mut self) -> Option<Item<'a>> {
-        if let Some(item) = self.first.take() {
-            return Some(item);
-        }
-        let (viewport_rect, root_scale) = (self.viewport_rect, self.root_scale);
-        self.texts.find_map(|text| {
-            text_draw_geometry_in_rect(text, viewport_rect, root_scale)
-                .map(|geometry| Item::Text(text, geometry))
-        })
-    }
-}
-
-/// The item `op` draws into `viewport_rect`, its records windowed by
-/// `window`; texts are left out when `skip_text`. A text's and a run's
-/// visibility tests work out their geometry and bounds, which their draws
-/// take on.
-fn op_item<'a>(
-    scene: &'a CompositorScene,
-    op: &DrawOp,
-    window: Option<std::ops::Range<u32>>,
-    (viewport_rect, root_scale, skip_text): (Rect, f32, bool),
-) -> OpItem<'a> {
-    let item = match op.kind {
-        DrawOpKind::Text(index) => {
-            let text = &scene.texts[index];
-            text_draw_geometry_in_rect(text, viewport_rect, root_scale)
-                .filter(|_| !skip_text)
-                .map(|geometry| Item::Text(text, geometry))
-        }
-        DrawOpKind::Run(index) => {
-            let run = &scene.runs[index];
-            visible_run_bounds(run, viewport_rect, root_scale)
-                .filter(|_| run_has_shapes(run))
-                .map(|bounds| Item::Run(run, window, bounds))
-        }
-        _ if !op_is_visible_in_rect(scene, op, viewport_rect, root_scale) => None,
-        DrawOpKind::Shadow(index) => {
-            let shadow = &scene.shadow_draws[index];
-            let casters = shadow.shapes.as_ref().and_then(|run| {
-                visible_run_bounds(run, viewport_rect, root_scale)
-                    .map(|bounds| Item::Run(run, None, bounds))
-            });
-            return OpItem::Shadow(shadow.texts.iter(), casters);
-        }
-        DrawOpKind::Image(index) => Some(Item::Image(index)),
-        DrawOpKind::RRectShadow(index) => Some(Item::RRectShadow(&scene.rrect_shadows[index])),
-    };
-    item.map_or(OpItem::Nothing, OpItem::Draw)
-}
-
-/// The draw bounds of `run` (see [`run_draw_bounds`]) when it draws into
-/// `viewport_rect`.
-fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Option<Rect> {
-    run_draw_bounds(run, root_scale).filter(|bounds| bounds.intersect(viewport_rect).is_some())
 }
 
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
@@ -1145,7 +1006,6 @@ pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
 /// Turns the segments of one pass into batches, one item run at a time.
 struct PassPrep<'a, 's, C> {
     recorder: &'a mut C,
-    device: &'a wgpu::Device,
     target: PassTarget<'a>,
     load_op: wgpu::LoadOp<wgpu::Color>,
     batches: Vec<Batch<'s>>,
@@ -1200,14 +1060,13 @@ struct PassPrep<'a, 's, C> {
 impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     fn new(
         recorder: &'a mut C,
-        (device, target, load_op): (&'a wgpu::Device, PassTarget<'a>, wgpu::LoadOp<wgpu::Color>),
+        (target, load_op): (PassTarget<'a>, wgpu::LoadOp<wgpu::Color>),
         (depth, depth_keys): (PassDepth, Option<PipelineDemand>),
         mixed_turns: bool,
         scratch: &mut PassScratch,
     ) -> Self {
         Self {
             recorder,
-            device,
             target,
             load_op,
             batches: Vec::new(),
@@ -1283,7 +1142,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             _ => {
                 self.finish(renderer);
                 let open = SegmentBinding {
-                    uniform_slot: renderer.claim_uniform_slot(bound),
+                    uniform_slot: renderer
+                        .viewport_uniforms
+                        .claim_viewport(&renderer.pipelines, bound),
                     bound,
                     scissor,
                 };
@@ -1324,7 +1185,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             segment,
             viewport_rect,
             self.target_size(),
-            renderer.ablation.text,
+            Texts::under(&renderer.ablation),
         )
         .peekable();
         self.items(renderer, &mut items, &run, scratch)
@@ -1379,7 +1240,11 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     segment.scene,
                     op,
                     window,
-                    (viewport_rect, segment.scale, renderer.ablation.text),
+                    (
+                        viewport_rect,
+                        segment.scale,
+                        Texts::under(&renderer.ablation),
+                    ),
                 )
                 .peekable();
                 self.items(renderer, &mut items, &run, scratch)?;
@@ -1451,10 +1316,13 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             return slot;
         }
         let slot = if self.depth.is_on() {
-            renderer.claim_uniform_slot(ViewportUniformParams {
-                depth_base: self.chunk_base as f32,
-                ..binding.bound
-            })
+            renderer.viewport_uniforms.claim_viewport(
+                &renderer.pipelines,
+                ViewportUniformParams {
+                    depth_base: self.chunk_base as f32,
+                    ..binding.bound
+                },
+            )
         } else {
             binding.uniform_slot
         };
@@ -1568,14 +1436,19 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     ) -> usize {
         if self.depth.is_on() {
             let base = base.unwrap_or_else(|| self.next_place());
-            renderer.claim_uniform_slot(ViewportUniformParams {
-                depth_base: base as f32,
-                ..viewport
-            })
+            renderer.viewport_uniforms.claim_viewport(
+                &renderer.pipelines,
+                ViewportUniformParams {
+                    depth_base: base as f32,
+                    ..viewport
+                },
+            )
         } else if viewport == binding.bound {
             binding.uniform_slot
         } else {
-            renderer.claim_uniform_slot(viewport)
+            renderer
+                .viewport_uniforms
+                .claim_viewport(&renderer.pipelines, viewport)
         }
     }
 
@@ -1892,9 +1765,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             self.draw_held(renderer, run.binding);
         }
         let mark = scratch.image_mark();
-        scratch
-            .images
-            .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
+        let mut parts = renderer.draw_parts();
+        let images = (parts.images, &mut parts.upload);
+        scratch.images.push_image_draw(image, run.space(), images)?;
         scratch.place_images(mark, run);
         if let Some(bounds) = scratch
             .images
@@ -1925,9 +1798,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
             let image = &images[index];
-            scratch
-                .images
-                .push_image_draw(image, run.space(), &mut renderer.image_uploader())?;
+            let mut parts = renderer.draw_parts();
+            let images = (parts.images, &mut parts.upload);
+            scratch.images.push_image_draw(image, run.space(), images)?;
         }
         scratch.place_images(mark, run);
         self.push_images(
@@ -1978,12 +1851,15 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     ) -> Result<(), String> {
         let glyph_start = scratch.glyph_cmds.len();
         let instance_start = scratch.glyph_instances.plain.len();
-        let drew_glyphs = renderer.append_text_glyph_draws(
+        let viewport = self.text_viewport(renderer, run);
+        let mut parts = renderer.draw_parts();
+        let drew_glyphs = parts.text.append_text_glyph_draws(
             (text, geometry),
-            self.text_viewport(renderer, run),
+            viewport,
             run.segment.scale,
             &mut scratch.glyph_instances,
             &mut scratch.glyph_cmds,
+            &mut parts.upload,
         );
         scratch.place_glyphs((instance_start, glyph_start), run);
         if drew_glyphs {
@@ -2002,7 +1878,11 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         }
         self.flush(renderer, run.binding);
         let mark = scratch.image_mark();
-        renderer.append_text_image_draw_cmds(text, run.space(), &mut scratch.images)?;
+        let mut parts = renderer.draw_parts();
+        let images = (&mut scratch.images, parts.images);
+        parts
+            .text
+            .append_text_image_draw_cmds(text, run.space(), images, &mut parts.upload)?;
         scratch.place_images(mark, run);
         self.push_images(
             renderer,
@@ -2056,7 +1936,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 };
                 let prepared = renderer.effect_renderer.prepare_composite_draw(
                     self.recorder,
-                    self.device,
+                    &renderer.device,
                     self.load_op,
                     &item,
                 );
@@ -2089,7 +1969,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 };
                 let prepared = renderer
                     .effect_renderer
-                    .prepare_shader_draw(self.recorder, self.device, &item)
+                    .prepare_shader_draw(self.recorder, &renderer.device, &item)
                     .ok_or_else(|| "shader composite preparation failed".to_string())?;
                 self.batches.push(Batch::Shader(prepared));
             }
@@ -2116,7 +1996,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 };
                 let prepared = renderer.effect_renderer.prepare_projective_composite_draw(
                     self.recorder,
-                    self.device,
+                    &renderer.device,
                     &item,
                 );
                 self.batches.push(Batch::Projective(prepared));

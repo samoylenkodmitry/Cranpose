@@ -1,9 +1,9 @@
 use cranpose_ui_graphics::{BlendMode, ColorFilter, ImageBitmap, ImageSampling, Point, Rect};
 
 use super::{
-    DeviceRoundedClip, DrawSpace, FrameCommandRecorder, PassDepth, TargetRect, Vertex,
-    blend_state_for_mode, confined_scissor, create_render_pipeline_logged,
-    image_textures::ImageUploader, scissor_rect_for_layer,
+    DeviceRoundedClip, DrawSpace, FrameCommandRecorder, ImageTextures, PassDepth, TargetRect,
+    Vertex, blend_state_for_mode, confined_scissor, create_render_pipeline_logged,
+    frame_uploads::FrameUploads, scissor_rect_for_layer,
 };
 use crate::{
     frame_graph::{BufferUpload, UploadAllocatorSpec},
@@ -96,7 +96,7 @@ impl ImageBatch {
         &mut self,
         image_draw: &ImageDraw,
         space: DrawSpace,
-        uploader: &mut ImageUploader<'_>,
+        (textures, upload): (&mut ImageTextures, &mut FrameUploads<'_>),
     ) -> Result<(), String> {
         let (viewport, root_scale) = (space.viewport, space.scale);
         let snap_delta = image_draw
@@ -148,7 +148,7 @@ impl ImageBatch {
         self.cmds.push(ImageDrawCmd {
             index_start,
             scissor,
-            image: uploader.binding(prepared_image, geometry.sampling)?,
+            image: textures.binding(prepared_image, geometry.sampling, upload)?,
             clip,
         });
         Ok(())
@@ -160,7 +160,7 @@ impl ImageBatch {
         (rect, clip): (Rect, Option<Rect>),
         sampling: ImageSampling,
         space: DrawSpace,
-        uploader: &mut ImageUploader<'_>,
+        (textures, upload): (&mut ImageTextures, &mut FrameUploads<'_>),
     ) -> Result<(), String> {
         let (viewport, root_scale) = (space.viewport, space.scale);
         if rect.width <= 0.0 || rect.height <= 0.0 {
@@ -213,7 +213,7 @@ impl ImageBatch {
         self.cmds.push(ImageDrawCmd {
             index_start,
             scissor,
-            image: uploader.binding(image, sampling)?,
+            image: textures.binding(image, sampling, upload)?,
             clip: None,
         });
         Ok(())

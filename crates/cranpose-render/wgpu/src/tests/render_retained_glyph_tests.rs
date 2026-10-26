@@ -1,11 +1,19 @@
-use cranpose_render_common::software_text_raster::{SoftwareGlyphAtlasKey, SoftwareGlyphAtlasMask};
+use cranpose_render_common::software_text_raster::{
+    SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasMask,
+    SoftwareGlyphAtlasPlacement,
+};
 use cranpose_ui::text::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::Color;
 
 use super::*;
 use crate::{
-    glyph_run::RunGlyphScratch,
-    render::text_glyph_cache::{CachedTextGlyphQuad, CachedTextGlyphRun, cached_text_glyph_quad},
+    glyph_run::{RunGlyphScratch, RunGlyphs},
+    render::{
+        text_glyph_cache::{
+            CachedTextGlyphQuad, CachedTextGlyphRun, TextGlyphRunCacheKey, cached_text_glyph_quad,
+        },
+        text_resources::TextResources,
+    },
     scene::{CompositorScene, DrawnText},
 };
 
@@ -104,25 +112,31 @@ fn queue_run(
 ) {
     let glyphs = run_glyphs(run);
     let quads = run_quads(renderer, &glyphs, run);
-    assert!(renderer.emit_retained_text_glyph_run_if_ready(
+    let DrawParts {
+        text, mut upload, ..
+    } = renderer.draw_parts();
+    assert!(text.emit_retained_text_glyph_run_if_ready(
         TextGlyphRunCacheKey(key),
         quads,
-        ViewportUniformParams {
-            width: 8,
-            height: 8,
-            offset: [0.0, 0.0],
-            transform: SegmentTransform::IDENTITY,
-            origin: [0.0; 2],
-            depth_base: 0.0,
-        },
-        Rect {
-            x,
-            y: 0.0,
-            width: 8.0,
-            height: 8.0
-        },
+        (
+            ViewportUniformParams {
+                width: 8,
+                height: 8,
+                offset: [0.0, 0.0],
+                transform: SegmentTransform::IDENTITY,
+                origin: [0.0; 2],
+                depth_base: 0.0,
+            },
+            Rect {
+                x,
+                y: 0.0,
+                width: 8.0,
+                height: 8.0
+            },
+        ),
         (0, 0, 8, 8),
         commands,
+        &mut upload,
     ));
 }
 
@@ -374,10 +388,10 @@ fn a_retained_glyph_run_under_a_turn_adds_its_raster_origin_before_the_turn() {
         height: 8.0,
     };
     let untransformed =
-        GpuRenderer::retained_glyph_viewport(viewport(SegmentTransform::IDENTITY), raster);
+        TextResources::retained_glyph_viewport(viewport(SegmentTransform::IDENTITY), raster);
     assert_eq!(untransformed.offset, [3.0, 17.0]);
     assert_eq!(untransformed.origin, [0.0, 0.0]);
-    let turned = GpuRenderer::retained_glyph_viewport(viewport(quarter_turn()), raster);
+    let turned = TextResources::retained_glyph_viewport(viewport(quarter_turn()), raster);
     assert_eq!(turned.offset, [10.0, 20.0]);
     assert_eq!(turned.transform, quarter_turn());
     assert_eq!(turned.origin, [7.0, 3.0]);
@@ -905,17 +919,22 @@ fn solid_glyph(id: u32, side: usize) -> SoftwareGlyphAtlasGlyph {
 #[test]
 fn a_glyph_placed_before_the_atlas_fills_reaches_the_atlas_its_draws_bind() {
     let (_lock, mut renderer) = test_renderer();
-    let placed = renderer
-        .glyph_atlas_entry_for(&solid_glyph(1, 2))
+    let DrawParts {
+        text, mut upload, ..
+    } = renderer.draw_parts();
+    let placed = text
+        .glyph_atlas_entry_for(&solid_glyph(1, 2), &mut upload)
         .expect("the glyph fits");
     let mut run = test_run(0);
     run.1 = [placed];
     let mut commands = Vec::new();
     queue_run(&mut renderer, 1, 0.0, &run, &mut commands);
     let side = renderer.text.glyph_atlas.size() as usize;
+    let DrawParts {
+        text, mut upload, ..
+    } = renderer.draw_parts();
     assert!(
-        renderer
-            .glyph_atlas_entry_for(&solid_glyph(2, side))
+        text.glyph_atlas_entry_for(&solid_glyph(2, side), &mut upload)
             .is_err(),
         "a glyph as large as the atlas fills it"
     );
