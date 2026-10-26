@@ -2230,7 +2230,7 @@ pub fn run(
             && let Some(shell) = &mut app_shell
         {
             frame_rate_boost.note_input(Instant::now());
-            dispatch_pending_inputs(shell, &mut pending_inputs);
+            dispatch_pending_inputs(&app, shell, &mut pending_inputs);
         }
 
         sync_ime_session(&ime_session, app_shell.as_mut(), &android_platform);
