@@ -311,7 +311,7 @@ fn push_blurred_shape_samples(
         scene.push_shape(
             shape.rect,
             shape.brush.clone(),
-            shape.shape,
+            shape.outline.rounded(),
             clip,
             blend_mode,
         );
@@ -322,7 +322,7 @@ fn push_blurred_shape_samples(
         scene.push_shape(
             expanded_shape_rect(shape, sample.expansion),
             scale_brush_alpha(shape.brush.clone(), sample.weight),
-            shape.shape,
+            shape.outline.rounded(),
             clip,
             blend_mode,
         );
@@ -1463,14 +1463,14 @@ fn push_shadow_primitive(
                 scene.push_shape(
                     shape_pair.0.rect,
                     shape_pair.0.brush,
-                    shape_pair.0.shape,
+                    shape_pair.0.outline.rounded(),
                     clip,
                     shape_pair.1,
                 );
                 scene.push_shape(
                     cutout_pair.0.rect,
                     cutout_pair.0.brush,
-                    cutout_pair.0.shape,
+                    cutout_pair.0.outline.rounded(),
                     clip,
                     cutout_pair.1,
                 );
@@ -1480,14 +1480,14 @@ fn push_shadow_primitive(
                 scene.push_shape(
                     expanded_shape_rect(&shape_pair.0, sample.expansion),
                     scale_brush_alpha(shape_pair.0.brush.clone(), sample.weight),
-                    shape_pair.0.shape,
+                    shape_pair.0.outline.rounded(),
                     clip,
                     shape_pair.1,
                 );
                 scene.push_shape(
                     expanded_shape_rect(&cutout_pair.0, sample.expansion),
                     scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
-                    cutout_pair.0.shape,
+                    cutout_pair.0.outline.rounded(),
                     clip,
                     cutout_pair.1,
                 );
@@ -1524,14 +1524,14 @@ fn push_shadow_primitive(
                 scene.push_shape(
                     fill_pair.0.rect,
                     fill_pair.0.brush,
-                    fill_pair.0.shape,
+                    fill_pair.0.outline.rounded(),
                     effective_clip,
                     fill_pair.1,
                 );
                 scene.push_shape(
                     cutout_pair.0.rect,
                     cutout_pair.0.brush,
-                    cutout_pair.0.shape,
+                    cutout_pair.0.outline.rounded(),
                     effective_clip,
                     cutout_pair.1,
                 );
@@ -1542,14 +1542,14 @@ fn push_shadow_primitive(
                 scene.push_shape(
                     expanded_shape_rect(&fill_pair.0, sample.expansion),
                     scale_brush_alpha(fill_pair.0.brush.clone(), sample.weight),
-                    fill_pair.0.shape,
+                    fill_pair.0.outline.rounded(),
                     effective_clip,
                     fill_pair.1,
                 );
                 scene.push_shape(
                     expanded_shape_rect(&cutout_pair.0, sample.expansion),
                     scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
-                    cutout_pair.0.shape,
+                    cutout_pair.0.outline.rounded(),
                     effective_clip,
                     cutout_pair.1,
                 );

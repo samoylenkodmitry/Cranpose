@@ -120,11 +120,7 @@ fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
         snap_anchor: Some(Point::new(0.4, 0.4)),
         snap_to_pixel_grid: false,
         brush: Brush::solid(Color::WHITE),
-        shape: None,
-        stroke: None,
-        arc: None,
-        line: None,
-        trapezoid: None,
+        outline: Outline::Fill(None),
         clip: Some(Rect {
             x: 2.0,
             y: 2.0,
@@ -539,11 +535,7 @@ fn shape_template(rect: Rect) -> crate::scene::DrawShape {
         snap_anchor: None,
         snap_to_pixel_grid: false,
         brush: Brush::solid(Color::WHITE),
-        shape: None,
-        stroke: None,
-        arc: None,
-        line: None,
-        trapezoid: None,
+        outline: Outline::Fill(None),
         clip: None,
         blend_mode: BlendMode::SrcOver,
     }
@@ -557,7 +549,7 @@ fn stroked_rect_rasterizes_hollow() {
         width: 36.0,
         height: 36.0,
     });
-    shape.stroke = Some(cranpose_ui_graphics::Stroke::new(4.0));
+    shape.outline = Outline::Stroke(None, cranpose_ui_graphics::Stroke::new(4.0));
     let frame = render_shape(shape);
 
     assert!(is_inked(&frame, 32, 16), "top edge must be stroked");
@@ -582,7 +574,7 @@ fn stroked_rect_differs_from_the_filled_rect_of_the_same_bounds() {
     };
     let filled = render_shape(shape_template(rect));
     let mut stroked_shape = shape_template(rect);
-    stroked_shape.stroke = Some(cranpose_ui_graphics::Stroke::new(4.0));
+    stroked_shape.outline = Outline::Stroke(None, cranpose_ui_graphics::Stroke::new(4.0));
     let stroked = render_shape(stroked_shape);
     assert_ne!(filled, stroked);
 }
@@ -595,7 +587,7 @@ fn arc_band_rasterizes_between_the_two_radii() {
         width: 32.0,
         height: 32.0,
     });
-    shape.arc = Some(ArcGeometry::new(
+    shape.outline = Outline::Arc(ArcGeometry::new(
         Point::new(32.0, 32.0),
         10.0,
         16.0,
@@ -623,7 +615,7 @@ fn annular_sector_has_flat_radial_edges_and_respects_the_sweep() {
         width: 16.0,
         height: 16.0,
     });
-    shape.arc = Some(ArcGeometry::new(
+    shape.outline = Outline::Arc(ArcGeometry::new(
         Point::new(32.0, 32.0),
         8.0,
         16.0,
@@ -676,7 +668,7 @@ fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
             width: 64.0,
             height: 64.0,
         });
-        shape.arc = Some(arc);
+        shape.outline = Outline::Arc(arc);
         let frame = render_shape(shape);
         assert!(
             (0..CANVAS).all(|y| (0..CANVAS).all(|x| is_background(&frame, x, y))),
@@ -690,7 +682,7 @@ fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
         width: 32.0,
         height: 32.0,
     });
-    zero_width.stroke = Some(cranpose_ui_graphics::Stroke::new(0.0));
+    zero_width.outline = Outline::Stroke(None, cranpose_ui_graphics::Stroke::new(0.0));
     let frame = render_shape(zero_width);
     assert!(
         (0..CANVAS).all(|y| (0..CANVAS).all(|x| is_background(&frame, x, y))),
@@ -712,7 +704,7 @@ fn a_line_covers_each_pixel_as_its_geometry_says() {
             },
         );
         let mut shape = shape_template(line.bounds());
-        shape.line = Some(line);
+        shape.outline = Outline::Line(line);
         let frame = render_shape(shape);
         for y in 0..CANVAS {
             for x in 0..CANVAS {
@@ -769,7 +761,7 @@ fn arcs_cover_each_pixel_as_their_geometry_says() {
                     width: outer * 2.0,
                     height: outer * 2.0,
                 });
-                shape.arc = Some(arc);
+                shape.outline = Outline::Arc(arc);
                 let frame = render_shape(shape);
                 assert_frame_matches_coverage(
                     &format!("arc {inner}..{outer} from {start} by {sweep} {cap:?}"),
@@ -805,8 +797,7 @@ fn stroked_rounded_rects_cover_each_pixel_as_their_geometry_says() {
                     join,
                 };
                 let mut shape = shape_template(rect);
-                shape.shape = shape_radii;
-                shape.stroke = Some(stroke);
+                shape.outline = Outline::Stroke(shape_radii, stroke);
                 let frame = render_shape(shape);
                 let radii = shape_radii.map(|corners| {
                     corners.resolve(
@@ -866,7 +857,7 @@ fn filled_rounded_rects_cover_each_pixel_as_their_geometry_says() {
             RoundedCornerShape::uniform(100.0),
         ] {
             let mut shape = shape_template(rect);
-            shape.shape = Some(shape_radii);
+            shape.outline = Outline::Fill(Some(shape_radii));
             let frame = render_shape(shape);
             let radii = shape_radii.resolve(rect.width, rect.height);
             assert_frame_matches_coverage(

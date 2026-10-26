@@ -21,13 +21,58 @@ pub(crate) struct DrawShape {
     pub snap_anchor: Option<Point>,
     pub snap_to_pixel_grid: bool,
     pub brush: Brush,
-    pub shape: Option<RoundedCornerShape>,
-    pub stroke: Option<Stroke>,
-    pub arc: Option<ArcGeometry>,
-    pub line: Option<LineGeometry>,
-    pub trapezoid: Option<Trapezoid>,
+    pub outline: Outline,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
+}
+
+// What a shape draws of its rect. The parameters a shape comes from hold
+// one geometry at a time, so one enum keeps it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Outline {
+    // The rect, or the shape rounded within it, filled.
+    Fill(Option<RoundedCornerShape>),
+    // The edge of the rect, or of the shape rounded within it.
+    Stroke(Option<RoundedCornerShape>, Stroke),
+    Arc(ArcGeometry),
+    Line(LineGeometry),
+    Trapezoid(Trapezoid),
+}
+
+impl Outline {
+    // The rounded shape a fill or a stroke follows.
+    pub(crate) fn rounded(self) -> Option<RoundedCornerShape> {
+        match self {
+            Self::Fill(shape) | Self::Stroke(shape, _) => shape,
+            Self::Arc(_) | Self::Line(_) | Self::Trapezoid(_) => None,
+        }
+    }
+
+    fn translated(self, dx: f32, dy: f32) -> Self {
+        match self {
+            Self::Arc(arc) => Self::Arc(ArcGeometry {
+                center: shifted(arc.center, dx, dy),
+                ..arc
+            }),
+            Self::Line(line) => {
+                Self::Line(line.placed(shifted(line.start, dx, dy), shifted(line.end, dx, dy), 1.0))
+            }
+            Self::Trapezoid(trapezoid) => Self::Trapezoid(trapezoid.translate(dx, dy)),
+            Self::Fill(_) | Self::Stroke(..) => self,
+        }
+    }
+
+    // The geometry of `params`: a line, a slice and an arc each stand for
+    // the whole shape, and a stroke or a fill follows its rounded shape.
+    fn of_params(params: &ShapeDrawParams) -> Self {
+        match (params.line, params.trapezoid, params.arc, params.stroke) {
+            (Some(line), ..) => Self::Line(line),
+            (None, Some(trapezoid), ..) => Self::Trapezoid(trapezoid),
+            (None, None, Some(arc), _) => Self::Arc(arc),
+            (None, None, None, Some(stroke)) => Self::Stroke(params.shape, stroke),
+            (None, None, None, None) => Self::Fill(params.shape),
+        }
+    }
 }
 
 /// A point moved by `dx`, `dy`.
@@ -41,14 +86,7 @@ impl DrawShape {
         Self {
             rect: self.rect.translate(dx, dy),
             snap_anchor: self.snap_anchor.map(|anchor| shifted(anchor, dx, dy)),
-            arc: self.arc.map(|arc| ArcGeometry {
-                center: shifted(arc.center, dx, dy),
-                ..arc
-            }),
-            line: self.line.map(|line| {
-                line.placed(shifted(line.start, dx, dy), shifted(line.end, dx, dy), 1.0)
-            }),
-            trapezoid: self.trapezoid.map(|trapezoid| trapezoid.translate(dx, dy)),
+            outline: self.outline.translated(dx, dy),
             clip: None,
             ..self.clone()
         }
@@ -60,12 +98,8 @@ impl DrawShape {
             rect: params.rect,
             snap_anchor: None,
             snap_to_pixel_grid: false,
+            outline: Outline::of_params(&params),
             brush: params.brush.into_brush(),
-            shape: params.shape,
-            stroke: params.stroke,
-            arc: params.arc,
-            line: params.line,
-            trapezoid: params.trapezoid,
             clip: params.clip,
             blend_mode: params.blend_mode,
         }
@@ -520,11 +554,7 @@ impl RasterScene {
             snap_anchor: None,
             snap_to_pixel_grid: false,
             brush,
-            shape,
-            stroke: None,
-            arc: None,
-            line: None,
-            trapezoid: None,
+            outline: Outline::Fill(shape),
             clip,
             blend_mode,
         });
@@ -553,11 +583,7 @@ impl RasterScene {
             snap_anchor: None,
             snap_to_pixel_grid: true,
             brush,
-            shape,
-            stroke: None,
-            arc: None,
-            line: None,
-            trapezoid: None,
+            outline: Outline::Fill(shape),
             clip,
             blend_mode,
         });

@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{Brush, CornerRadii, Rect};
 
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
-    scene::{DrawShape, ImageDraw, RasterScene, ShadowDraw, TextDraw},
+    scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
 };
 
 const MAX_AREAS: usize = 8;
@@ -15,11 +15,7 @@ fn same_shape(old: &DrawShape, new: &DrawShape) -> bool {
         snap_anchor,
         snap_to_pixel_grid,
         brush,
-        shape,
-        stroke,
-        arc,
-        line,
-        trapezoid,
+        outline,
         clip,
         blend_mode,
     } = old;
@@ -27,11 +23,7 @@ fn same_shape(old: &DrawShape, new: &DrawShape) -> bool {
         && *snap_anchor == new.snap_anchor
         && *snap_to_pixel_grid == new.snap_to_pixel_grid
         && *brush == new.brush
-        && *shape == new.shape
-        && *stroke == new.stroke
-        && *arc == new.arc
-        && *line == new.line
-        && *trapezoid == new.trapezoid
+        && *outline == new.outline
         && *clip == new.clip
         && *blend_mode == new.blend_mode
 }
@@ -39,11 +31,7 @@ fn same_shape(old: &DrawShape, new: &DrawShape) -> bool {
 /// Whether `shape` fills its rect with one colour: no stroke, arc, line or
 /// slice.
 fn solid_fill(shape: &DrawShape) -> bool {
-    matches!(shape.brush, Brush::Solid(_))
-        && shape.stroke.is_none()
-        && shape.arc.is_none()
-        && shape.line.is_none()
-        && shape.trapezoid.is_none()
+    matches!(shape.brush, Brush::Solid(_)) && matches!(shape.outline, Outline::Fill(_))
 }
 
 /// The placed rects of `old` and `new` and their corners when both are one
@@ -54,11 +42,7 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
         snap_anchor: _,
         snap_to_pixel_grid,
         brush,
-        shape,
-        stroke: _,
-        arc: _,
-        line: _,
-        trapezoid: _,
+        outline,
         clip,
         blend_mode,
     } = old;
@@ -66,7 +50,7 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
         && solid_fill(new)
         && *snap_to_pixel_grid == new.snap_to_pixel_grid
         && *brush == new.brush
-        && *shape == new.shape
+        && *outline == new.outline
         && *clip == new.clip
         && *blend_mode == new.blend_mode;
     if !alike {

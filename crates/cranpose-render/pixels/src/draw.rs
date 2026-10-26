@@ -18,7 +18,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     pipeline,
-    scene::{RasterScene, Scene},
+    scene::{Outline, RasterScene, Scene},
 };
 
 mod image;
@@ -829,31 +829,35 @@ impl ShapeCoverage {
     /// `snap_delta` as the rect was; `None` when it covers nothing.
     fn of(draw: &crate::scene::DrawShape, rect: Rect, snap_delta: Point) -> Option<Self> {
         let shift = |point: Point| Point::new(point.x + snap_delta.x, point.y + snap_delta.y);
-        if let Some(line) = draw.line {
-            return (!line.is_degenerate())
-                .then(|| Self::Line(line.placed(shift(line.start), shift(line.end), 1.0)));
-        }
-        if let Some(trapezoid) = draw.trapezoid {
-            return Some(Self::Trapezoid(
-                trapezoid.translate(snap_delta.x, snap_delta.y),
-            ));
-        }
-        if let Some(arc) = draw.arc {
-            return (!arc.is_degenerate()).then(|| {
-                Self::Arc(ArcGeometry {
-                    center: shift(arc.center),
-                    ..arc
-                })
-            });
-        }
-        let outset = draw.stroke.map_or(0.0, |stroke| stroke.half_width());
-        let radii = draw.shape.map(|shape| {
+        let (shape, stroke) = match draw.outline {
+            Outline::Line(line) => {
+                return (!line.is_degenerate())
+                    .then(|| Self::Line(line.placed(shift(line.start), shift(line.end), 1.0)));
+            }
+            Outline::Trapezoid(trapezoid) => {
+                return Some(Self::Trapezoid(
+                    trapezoid.translate(snap_delta.x, snap_delta.y),
+                ));
+            }
+            Outline::Arc(arc) => {
+                return (!arc.is_degenerate()).then(|| {
+                    Self::Arc(ArcGeometry {
+                        center: shift(arc.center),
+                        ..arc
+                    })
+                });
+            }
+            Outline::Stroke(shape, stroke) => (shape, Some(stroke)),
+            Outline::Fill(shape) => (shape, None),
+        };
+        let outset = stroke.map_or(0.0, |stroke| stroke.half_width());
+        let radii = shape.map(|shape| {
             shape.resolve(
                 (rect.width - outset * 2.0).max(0.0),
                 (rect.height - outset * 2.0).max(0.0),
             )
         });
-        match draw.stroke {
+        match stroke {
             Some(stroke) if !stroke.is_visible() => None,
             Some(stroke) => Some(Self::Stroke {
                 rect,
