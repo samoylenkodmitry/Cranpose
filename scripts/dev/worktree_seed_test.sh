@@ -22,8 +22,9 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 (expected '$3', got '$2'
 
 root="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree_seed_test.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$root"' EXIT
-export CARGO_TARGET_DIR= RUSTC_WRAPPER= CARGO_INCREMENTAL=
-unset CARGO_TARGET_DIR RUSTC_WRAPPER CARGO_INCREMENTAL
+unset CARGO_TARGET_DIR RUSTC_WRAPPER CARGO_INCREMENTAL CARGO_TERM_QUIET CARGO_TERM_VERBOSE
+# The checks read cargo's "Compiling" lines; CI asks for colour.
+export CARGO_TERM_COLOR=never
 
 seed="$root/seed"
 mkdir -p "$seed"/{base,paths,watcher,app}/src "$seed/watcher/assets"
