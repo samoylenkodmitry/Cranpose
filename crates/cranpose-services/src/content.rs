@@ -575,9 +575,9 @@ pub use threaded::{
     BlockingSink, copy_content, open_threaded, read_full, run_threaded, threaded_sink,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
 #[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
 pub(crate) mod blob;
+#[cfg(not(target_arch = "wasm32"))]
 mod file;
 #[cfg(not(target_arch = "wasm32"))]
 mod threaded;
