@@ -22,10 +22,10 @@ output section after ESP-IDF's own IRAM code.
 
 | Frame | demo | a drawn line of text changing every frame | a composed one |
 | --- | --- | --- | --- |
-| ES3C35P, without | 3.11 ms | 5.71 ms | 8.24 ms |
-| ES3C35P, with 125 KB | 0.46 ms | 2.18 ms | 4.69 ms |
-| E32R35T, without | 3.39 ms | 7.01 ms | 9.61 ms |
-| E32R35T, with 64 KB | 1.40 ms | 3.96 ms | 6.88 ms |
+| ES3C35P, without (2026-10-25) | 3.11 ms | 5.71 ms | 8.24 ms |
+| ES3C35P, with 125 KB (2026-10-26) | 0.49 ms | 2.29 ms | 4.66 ms |
+| E32R35T, without (2026-10-25) | 3.39 ms | 7.01 ms | 9.61 ms |
+| E32R35T, with 64 KB (2026-10-26) | 1.33 ms | 4.00 ms | 6.89 ms |
 
 The demo's bar reads its animated width while it draws, so its frames
 neither compose nor lay out; so does the drawn line. A composed line runs
@@ -68,6 +68,11 @@ demo frame 0.07 ms and its drawn line 0.19 ms slower, and its composed line
 0.12 ms faster. The E32R35T's 64 KB have no room for it: with its profile
 the busier screen ran no faster there (12.31 ms a frame against 12.23) and
 the demo frame 0.23 ms slower.
+
+The dashboard of the benchmarks (`--features dashboard`) stays out of the
+lists. Its frame runs far more code than 125 KB holds: with its profile as
+a fifth, the ES3C35P ran it 0.5 ms faster (46.8 against 47.3 ms) and the
+drawn line 0.27 ms slower (2.58 against 2.31 ms).
 
 - `esp32s3.ld` comes from QEMU: `just esp32-sim-profile MODE` builds the
   demo for QEMU's ESP32-S3 without this component and counts the misses of
