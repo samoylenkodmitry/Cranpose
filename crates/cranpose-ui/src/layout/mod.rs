@@ -55,7 +55,7 @@ use crate::{
     },
     render_state::AppContext,
     subcompose_layout::{MeasureCallbacks, SubcomposeLayoutNode},
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutParts, LayoutState},
 };
 
 #[derive(Default)]
@@ -1411,7 +1411,7 @@ enum LayoutNodeVisit<'a> {
 /// and writes, so the keep needs no lookup of the node.
 struct KeptNode {
     measured: Rc<MeasuredNode>,
-    runtime_state: Rc<RefCell<LayoutRuntimeState>>,
+    parts: Rc<LayoutParts>,
     cache: LayoutNodeCacheHandles,
     /// Whether a child that measures to another size leaves the node as it
     /// is.
@@ -1476,7 +1476,7 @@ impl ChildView {
 }
 
 struct LayoutNodeMeasure<'a> {
-    runtime_state: Rc<RefCell<LayoutRuntimeState>>,
+    parts: Rc<LayoutParts>,
     chain: ModifierChainInputs,
     pools: VecPools<'a>,
     spare: MeasuredSpare,
@@ -1930,24 +1930,24 @@ impl LayoutBuilderState {
             }
         };
         let LayoutNodeMeasure {
-            runtime_state,
+            parts,
             chain,
             mut pools,
             spare,
         } = measure;
 
         let _frame_binding_cleanup = LayoutRuntimeFrameBindingCleanup {
-            state: &runtime_state,
+            state: parts.runtime_state(),
         };
         self.bind_layout_children(
             &mut applier,
-            (node_id, &runtime_state),
+            (node_id, parts.runtime_state()),
             &pools.child_ids,
             ChildPass::Measure,
         )?;
         drop(applier);
 
-        let runtime_state = runtime_state.borrow();
+        let runtime_state = parts.runtime_state().borrow();
         let measurement = self.measure_through_modifier_chain(
             node_id,
             &runtime_state,
@@ -2029,28 +2029,28 @@ impl LayoutBuilderState {
         };
         let mut pools = VecPools::acquire(&self.frame_arena);
         let bound = applier.with_node::<LayoutNode, _>(node_id, |node| {
-            let runtime_state = node.layout_runtime_state_handle();
-            let chain = runtime_state.borrow_mut().bind_node(node);
+            let parts = Rc::clone(node.layout_parts());
+            let chain = parts.runtime_state().borrow_mut().bind_node(node);
             pools.child_ids.extend_from_slice(&node.children);
-            (runtime_state, chain)
+            (parts, chain)
         });
-        let (runtime_state, chain) = match bound {
+        let (parts, chain) = match bound {
             Ok(bound) => bound,
             Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => return Ok(None),
             Err(err) => return Err(err),
         };
         let _frame_binding_cleanup = LayoutRuntimeFrameBindingCleanup {
-            state: &runtime_state,
+            state: parts.runtime_state(),
         };
         self.bind_layout_children(
             &mut applier,
-            (node_id, &runtime_state),
+            (node_id, parts.runtime_state()),
             &pools.child_ids,
             ChildPass::Intrinsics,
         )?;
         drop(applier);
 
-        let runtime_state = runtime_state.borrow();
+        let runtime_state = parts.runtime_state().borrow();
         let value = if chain.uses_chain {
             let scope = crate::density::DensityMeasureScope::new(chain.density);
             let frame = CoordinatorFrame::new(
@@ -2106,7 +2106,7 @@ impl LayoutBuilderState {
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let KeptNode {
             measured,
-            runtime_state,
+            parts,
             cache,
             ignores_child_sizes,
         } = node;
@@ -2114,7 +2114,7 @@ impl LayoutBuilderState {
         let kept = self.remeasure_changed_children(
             &measured,
             ignores_child_sizes,
-            |child_id| self.layout_child_change(&runtime_state, &mut next_state, child_id),
+            |child_id| self.layout_child_change(parts.runtime_state(), &mut next_state, child_id),
             |_| {},
         )?;
         let Some(KeptChildren {
@@ -2269,7 +2269,7 @@ impl LayoutBuilderState {
             return LayoutNodeVisit::Keep(KeptNode {
                 ignores_child_sizes: cache.ignores_child_sizes_of(&measured),
                 measured,
-                runtime_state: node.layout_runtime_state_handle(),
+                parts: Rc::clone(node.layout_parts()),
                 cache: cache.clone(),
             });
         }
@@ -2284,12 +2284,12 @@ impl LayoutBuilderState {
         }
 
         let spare = MeasuredSpare::take(cache);
-        let runtime_state = node.layout_runtime_state_handle();
-        let chain = runtime_state.borrow_mut().bind_node(node);
+        let parts = Rc::clone(node.layout_parts());
+        let chain = parts.runtime_state().borrow_mut().bind_node(node);
         let mut pools = VecPools::acquire(&self.frame_arena);
         pools.child_ids.extend_from_slice(&node.children);
         LayoutNodeVisit::Measure(LayoutNodeMeasure {
-            runtime_state,
+            parts,
             chain,
             pools,
             spare,
@@ -2326,7 +2326,7 @@ impl LayoutBuilderState {
             runtime_state.child_state_at(position, child_id).bind(
                 LayoutChildBinding {
                     cache: child.cache_handles(),
-                    layout_state: Some(child.layout_state_handle()),
+                    layout_state: Some(child.layout_parts()),
                     parent_data: Some(child.parent_data()),
                     dirty: child.needs_layout() || child.needs_measure(),
                     descendant_dirty: Node::descendant_needs_layout(child),
@@ -3429,7 +3429,7 @@ impl LayoutChildFrame {
 
 struct LayoutChildBinding<'a> {
     cache: &'a LayoutNodeCacheHandles,
-    layout_state: Option<&'a Rc<RefCell<LayoutState>>>,
+    layout_state: Option<&'a Rc<LayoutParts>>,
     parent_data: Option<cranpose_ui_layout::ParentData>,
     /// The child's own layout or measure is dirty.
     dirty: bool,
@@ -3494,7 +3494,7 @@ struct LayoutChildMeasureState {
     read_intrinsics: Cell<bool>,
     measured: Cell<Option<Rc<MeasuredNode>>>,
     last_position: Cell<Option<Point>>,
-    layout_state: Cell<Option<Rc<RefCell<LayoutState>>>>,
+    layout_state: Cell<Option<Rc<LayoutParts>>>,
 }
 
 /// Runs `read` on what `cell` holds and puts it back. `read` must not reach
@@ -3577,7 +3577,7 @@ impl LayoutChildMeasureState {
         };
         read_cell(&self.layout_state, |state| {
             if let Some(state) = state {
-                f(&mut state.borrow_mut(), &builder.context);
+                f(&mut state.layout_state().borrow_mut(), &builder.context);
             }
         });
     }
@@ -3592,7 +3592,7 @@ impl LayoutChildMeasureState {
             layout_state
                 .as_ref()
                 .map(|layout_state| {
-                    layout_state.borrow_mut().place(
+                    layout_state.layout_state().borrow_mut().place(
                         position,
                         self.frame.parent.get(),
                         &builder.context,

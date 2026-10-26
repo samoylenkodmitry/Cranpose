@@ -2428,7 +2428,7 @@ fn placed_child_geometry(applier: &MemoryApplier, node_id: NodeId) -> Option<Pla
         if node.is_window_root() {
             return None;
         }
-        return PlacedGeometry::of_placed(&node.layout_state_handle().borrow());
+        return node.with_layout_state(PlacedGeometry::of_placed);
     }
     PlacedGeometry::of_placed(&node.downcast_ref::<SubcomposeLayoutNode>()?.layout_state())
 }

@@ -480,34 +480,6 @@ fn cloning_cache_handles_from_the_same_cache_keeps_the_handle() {
 }
 
 #[test]
-fn layout_state_handle_lends_the_state_the_node_reports() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let context = crate::render_state::require_current_app_context("a test");
-    let node = fresh_node();
-    let handle = node.layout_state_handle();
-    assert_eq!(
-        Rc::strong_count(handle),
-        1,
-        "lending the state must not share it"
-    );
-    handle.borrow_mut().set_size(
-        Size {
-            width: 12.0,
-            height: 5.0,
-        },
-        &context,
-    );
-    assert_eq!(
-        node.measured_size(),
-        Size {
-            width: 12.0,
-            height: 5.0,
-        }
-    );
-    assert!(Rc::ptr_eq(handle, node.layout_state_handle()));
-}
-
-#[test]
 fn a_new_layout_runtime_state_has_no_children_or_coordinators() {
     let stats = LayoutRuntimeState::new(Rc::new(TestMeasurePolicy)).debug_stats();
     assert!(stats.child_ids.is_empty());

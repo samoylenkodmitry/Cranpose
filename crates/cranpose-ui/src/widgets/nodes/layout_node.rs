@@ -22,6 +22,7 @@ use crate::{
         Size,
     },
     render_state::AppContext,
+    widgets::nodes::LayoutParts,
 };
 
 #[derive(Clone, Copy)]
@@ -659,8 +660,8 @@ impl NodeIdCell {
 #[repr(C)]
 pub struct LayoutNode {
     cache: LayoutNodeCacheHandles,
-    layout_state: Rc<RefCell<LayoutState>>,
-    layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
+    parts: Rc<LayoutParts>,
+    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
 
@@ -669,7 +670,6 @@ pub struct LayoutNode {
     pub measure_policy: Rc<dyn MeasurePolicy>,
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
-    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
     density: crate::density::Density,
     is_virtual: bool,
     needs_semantics: Cell<bool>,
@@ -749,9 +749,10 @@ impl LayoutNode {
         measure_policy: Rc<dyn MeasurePolicy>,
         is_virtual: bool,
     ) -> Self {
-        let layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::new(Rc::clone(
-            &measure_policy,
-        ))));
+        let parts = Rc::new(LayoutParts {
+            layout_state: RefCell::new(LayoutState::default()),
+            runtime_state: RefCell::new(LayoutRuntimeState::new(Rc::clone(&measure_policy))),
+        });
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
@@ -775,8 +776,7 @@ impl LayoutNode {
             is_virtual,
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
-            layout_state: Rc::new(RefCell::new(LayoutState::default())),
-            layout_runtime_state,
+            parts,
             coordinator_geometry: Rc::default(),
         };
         node.sync_modifier_chain(None);
@@ -1148,7 +1148,7 @@ impl LayoutNode {
         {
             unregister_layout_node(owner_context_id, existing);
         }
-        self.layout_state.borrow_mut().set_node_id(id);
+        self.parts.layout_state.borrow_mut().set_node_id(id);
         // The new entry holds the node's parent, capabilities and modifier
         // locals as they are now.
         let owner_context_id = register_layout_node(id, self);
@@ -1306,29 +1306,29 @@ impl LayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        self.layout_state.borrow().clone()
+        self.parts.layout_state.borrow().clone()
     }
 
     /// Returns the measured size of this node.
     pub fn measured_size(&self) -> Size {
-        self.layout_state.borrow().size
+        self.parts.layout_state.borrow().size
     }
 
     /// Returns the position of this node relative to its parent.
     pub fn position(&self) -> Point {
-        self.layout_state.borrow().position
+        self.parts.layout_state.borrow().position
     }
 
     /// Returns true if this node has been placed in the current layout pass.
     pub fn is_placed(&self) -> bool {
-        self.layout_state.borrow().is_placed
+        self.parts.layout_state.borrow().is_placed
     }
 
     /// Updates the measured size of this node. Called during measurement.
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.layout_state.borrow_mut().set_size(size, context);
+        self.parts.layout_state.borrow_mut().set_size(size, context);
     }
 
     /// Notes to the scene phase of `context` that the layout pass changed
@@ -1336,7 +1336,7 @@ impl LayoutNode {
     pub(crate) fn note_geometry_change(&self, node_id: NodeId, context: &AppContext) {
         context.note_geometry_scene_node(
             node_id,
-            &mut self.layout_state.borrow_mut().reshaped_noted_in,
+            &mut self.parts.layout_state.borrow_mut().reshaped_noted_in,
         );
     }
 
@@ -1344,23 +1344,27 @@ impl LayoutNode {
     /// during placement. [`LayoutState::place`] self-reports actual moves to
     /// the scene phase.
     pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
-        self.layout_state
+        self.parts
+            .layout_state
             .borrow_mut()
             .place(position, placer, context);
     }
 
     /// Records the content offset (e.g. from padding).
     pub fn set_content_offset(&self, offset: Point) {
-        self.layout_state.borrow_mut().set_content_offset(offset);
+        self.parts
+            .layout_state
+            .borrow_mut()
+            .set_content_offset(offset);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.layout_state.borrow_mut().clear_placed(context);
+        self.parts.layout_state.borrow_mut().clear_placed(context);
     }
 
     fn note_semantics_layout_change(&self) {
-        if let Ok(mut state) = self.layout_state.try_borrow_mut() {
+        if let Ok(mut state) = self.parts.layout_state.try_borrow_mut() {
             state.note_semantics_change();
         }
     }
@@ -1397,29 +1401,26 @@ impl LayoutNode {
         &self.modifier_chain
     }
 
-    /// Returns the handle to the shared layout state, which layout clones
-    /// to update the state without borrowing the Applier.
-    pub fn layout_state_handle(&self) -> &Rc<RefCell<LayoutState>> {
-        &self.layout_state
+    /// Runs `read` on the node's layout state, without a copy of it.
+    pub fn with_layout_state<R>(&self, read: impl FnOnce(&LayoutState) -> R) -> R {
+        read(&self.parts.layout_state.borrow())
+    }
+
+    pub(crate) fn layout_parts(&self) -> &Rc<LayoutParts> {
+        &self.parts
     }
 
     pub(crate) fn coordinator_geometry(&self) -> &crate::modifier::CoordinatorGeometry {
         &self.coordinator_geometry
     }
 
-    pub(crate) fn layout_runtime_state_handle(&self) -> Rc<RefCell<LayoutRuntimeState>> {
-        Rc::clone(&self.layout_runtime_state)
-    }
-
-    /// The node's layout runtime state, borrowed where
-    /// [`Self::layout_runtime_state_handle`] would share it.
     pub(crate) fn layout_runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
-        &self.layout_runtime_state
+        &self.parts.runtime_state
     }
 
     #[cfg(test)]
     pub(crate) fn layout_runtime_debug_stats(&self) -> LayoutRuntimeDebugStats {
-        self.layout_runtime_state.borrow().debug_stats()
+        self.parts.runtime_state.borrow().debug_stats()
     }
 }
 impl Clone for LayoutNode {
@@ -1449,8 +1450,7 @@ impl Clone for LayoutNode {
             is_virtual: self.is_virtual,
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
-            layout_state: Rc::clone(&self.layout_state),
-            layout_runtime_state: Rc::clone(&self.layout_runtime_state),
+            parts: Rc::clone(&self.parts),
             coordinator_geometry: Rc::clone(&self.coordinator_geometry),
         };
         node.sync_modifier_chain(None);
