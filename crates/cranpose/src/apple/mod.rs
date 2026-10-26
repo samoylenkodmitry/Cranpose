@@ -15,11 +15,12 @@ pub(crate) mod audio_session;
 pub(crate) mod camera;
 #[cfg(any(
     all(
+        feature = "media-backend",
         feature = "desktop-shell",
         feature = "renderer-wgpu",
         target_os = "macos"
     ),
-    all(feature = "ios", target_os = "ios")
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
 pub(crate) mod media_source;
 #[cfg(any(
