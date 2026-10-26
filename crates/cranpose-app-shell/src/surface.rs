@@ -13,7 +13,9 @@
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
-use cranpose_foundation::{PointerButton, PointerButtons, PointerSource, RotaryScrollEvent};
+use cranpose_foundation::{
+    PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
+};
 use cranpose_render_common::{NodeUpdate, Renderer};
 use cranpose_ui::{
     LayoutNode, LayoutTree, MovedSceneNode, PlatformTextInputHandler, SemanticsTree,
@@ -25,7 +27,7 @@ use web_time::Instant;
 use crate::{
     AppShell, DevOverlayControl, FramePacingMode, FrameRatePreference, FrameSchedule,
     FrameScheduler, FrameUpdateResult, PlatformFrameDriver, ShellApp, SurfaceRoutingScratch,
-    hit_path_tracker::{HitPathTracker, PointerId},
+    hit_path_tracker::HitPathTracker,
 };
 
 /// Names a root surface of the app: the primary window, or a window root

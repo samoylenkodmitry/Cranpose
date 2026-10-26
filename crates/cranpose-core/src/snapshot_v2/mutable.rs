@@ -3,7 +3,7 @@ use std::rc::Rc;
 use super::*;
 use crate::{
     collections::map::HashMap,
-    state::{PREEXISTING_SNAPSHOT_ID, StateRecord},
+    state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateRecord},
 };
 
 pub(super) fn find_record_by_id(
@@ -55,18 +55,18 @@ pub(super) fn find_previous_record(
 
 enum ApplyOperation {
     PromoteChild {
-        object_id: StateObjectId,
+        object_id: ObjectId,
         state: Rc<dyn StateObject>,
         writer_id: SnapshotId,
     },
     PromoteExisting {
-        object_id: StateObjectId,
+        object_id: ObjectId,
         state: Rc<dyn StateObject>,
         source_id: SnapshotId,
         applied: Rc<StateRecord>,
     },
     CommitMerged {
-        object_id: StateObjectId,
+        object_id: ObjectId,
         state: Rc<dyn StateObject>,
         merged: Rc<StateRecord>,
         applied: Rc<StateRecord>,
@@ -263,7 +263,7 @@ impl MutableSnapshot {
         }
 
         let this_id = self.state.id.get();
-        let mut modified_objects: Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> =
+        let mut modified_objects: Vec<(ObjectId, Rc<dyn StateObject>, SnapshotId)> =
             Vec::with_capacity(modified.len());
         for (&obj_id, (obj, writer_id)) in modified.iter() {
             modified_objects.push((obj_id, Rc::clone(obj), *writer_id));
@@ -369,7 +369,7 @@ impl MutableSnapshot {
             }
         }
 
-        let mut applied_info: Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> =
+        let mut applied_info: Vec<(ObjectId, Rc<dyn StateObject>, SnapshotId)> =
             Vec::with_capacity(operations.len());
 
         for operation in operations {
@@ -450,7 +450,7 @@ impl MutableSnapshot {
 
     pub(crate) fn merge_child_modifications(
         &self,
-        child_modified: &HashMap<StateObjectId, (Rc<dyn StateObject>, SnapshotId)>,
+        child_modified: &HashMap<ObjectId, (Rc<dyn StateObject>, SnapshotId)>,
     ) -> Result<(), ()> {
         {
             let parent_mod = self.state.modified.borrow();
@@ -483,7 +483,7 @@ impl NestedMutableHost for MutableSnapshot {
 impl MutableSnapshot {
     pub(crate) fn debug_modified_objects(
         &self,
-    ) -> Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> {
+    ) -> Vec<(ObjectId, Rc<dyn StateObject>, SnapshotId)> {
         let modified = self.state.modified.borrow();
         modified
             .iter()

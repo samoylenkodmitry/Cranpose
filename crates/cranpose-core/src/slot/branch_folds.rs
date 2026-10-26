@@ -9,7 +9,7 @@ use crate::Key;
 /// Folds `key` into `fold` (one FNV-1a step).
 #[inline]
 pub(crate) fn mix_fold(fold: Key, key: Key) -> Key {
-    (fold ^ key).wrapping_mul(0x0000_0100_0000_01b3)
+    fold.mixed(key)
 }
 
 struct FoldEntry {

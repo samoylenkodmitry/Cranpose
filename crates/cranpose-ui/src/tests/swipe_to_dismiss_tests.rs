@@ -1,6 +1,6 @@
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons,
+    BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerId,
 };
 use cranpose_ui_graphics::Point;
 
@@ -23,7 +23,7 @@ fn down(x: f32, y: f32) -> PointerEvent {
 }
 
 fn down_with_id(id: u64, x: f32, y: f32) -> PointerEvent {
-    down(x, y).with_id(id)
+    down(x, y).with_id(PointerId(id))
 }
 
 fn move_to(x: f32, y: f32) -> PointerEvent {
@@ -32,7 +32,7 @@ fn move_to(x: f32, y: f32) -> PointerEvent {
 }
 
 fn move_with_id(id: u64, x: f32, y: f32) -> PointerEvent {
-    move_to(x, y).with_id(id)
+    move_to(x, y).with_id(PointerId(id))
 }
 
 fn up(x: f32, y: f32) -> PointerEvent {

@@ -2,16 +2,16 @@ use super::*;
 
 #[test]
 fn keyed_sibling_reorder_preserves_values_and_anchors() {
-    const PARENT_KEY: Key = 400;
-    const STATIC_KEY: Key = 401;
+    const PARENT_KEY: u64 = 400;
+    const STATIC_KEY: u64 = 401;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let (first_slot, first_anchor, second_slot, second_anchor) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let first_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -21,7 +21,7 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let second_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -50,9 +50,9 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
         reordered_first_anchor,
         reordered_first_slot,
     ) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let second_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -62,7 +62,7 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
         assert!(second_result.detached_children.is_empty());
         session.end_group();
 
-        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let first_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -97,17 +97,17 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
 
 #[test]
 fn debug_stats_report_subtree_move_work_spans() {
-    const PARENT_KEY: Key = 402;
-    const STATIC_KEY: Key = 403;
-    const NESTED_KEY: Key = 404;
+    const PARENT_KEY: u64 = 402;
+    const STATIC_KEY: u64 = 403;
+    const NESTED_KEY: u64 = 404;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_keyed(session, STATIC_KEY, 1, None);
+        begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -118,7 +118,7 @@ fn debug_stats_report_subtree_move_work_spans() {
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        begin_keyed(session, STATIC_KEY, 2, None);
+        begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -126,7 +126,7 @@ fn debug_stats_report_subtree_move_work_spans() {
         );
         session.record_node_with_parent(22, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
-        begin_unkeyed(session, NESTED_KEY, None);
+        begin_unkeyed(session, Key(NESTED_KEY), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -151,9 +151,9 @@ fn debug_stats_report_subtree_move_work_spans() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let moved_kind = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let moved = begin_keyed(session, STATIC_KEY, 2, None);
+        let moved = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -161,7 +161,7 @@ fn debug_stats_report_subtree_move_work_spans() {
         );
         session.record_node_with_parent(22, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
-        begin_unkeyed(session, NESTED_KEY, None);
+        begin_unkeyed(session, Key(NESTED_KEY), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -176,7 +176,7 @@ fn debug_stats_report_subtree_move_work_spans() {
         assert!(second_result.detached_children.is_empty());
         session.end_group();
 
-        begin_keyed(session, STATIC_KEY, 1, None);
+        begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -251,21 +251,21 @@ fn debug_stats_report_subtree_move_work_spans() {
 
 #[test]
 fn detaching_unvisited_siblings_batches_group_index_refresh() {
-    const ROOT_KEY: Key = 4041;
-    const PARENT_KEY: Key = 4042;
-    const CHILD_KEY: Key = 4043;
-    const TRAILING_KEY: Key = 4044;
-    const CHILD_COUNT: Key = 3;
+    const ROOT_KEY: u64 = 4041;
+    const PARENT_KEY: u64 = 4042;
+    const CHILD_KEY: u64 = 4043;
+    const TRAILING_KEY: u64 = 4044;
+    const CHILD_COUNT: u64 = 3;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let trailing_anchor = harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
 
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         for explicit_key in 0..CHILD_COUNT {
-            begin_keyed(session, CHILD_KEY, explicit_key, None);
+            begin_keyed(session, Key(CHILD_KEY), Key(explicit_key), None);
             let child_result = session.finish_group_body();
             assert!(child_result.detached_children.is_empty());
             session.end_group();
@@ -274,7 +274,7 @@ fn detaching_unvisited_siblings_batches_group_index_refresh() {
         assert!(parent_result.detached_children.is_empty());
         session.end_group();
 
-        let trailing = begin_unkeyed(session, TRAILING_KEY, None);
+        let trailing = begin_unkeyed(session, Key(TRAILING_KEY), None);
         let trailing_result = session.finish_group_body();
         assert!(trailing_result.detached_children.is_empty());
         session.end_group();
@@ -292,13 +292,13 @@ fn detaching_unvisited_siblings_batches_group_index_refresh() {
     harness.begin_pass(SlotPassMode::Compose);
     let (detached_children, trailing_kind, refreshed_trailing_anchor) =
         harness.session(|session| {
-            begin_unkeyed(session, ROOT_KEY, None);
+            begin_unkeyed(session, Key(ROOT_KEY), None);
 
-            begin_unkeyed(session, PARENT_KEY, None);
+            begin_unkeyed(session, Key(PARENT_KEY), None);
             let parent_result = session.finish_group_body();
             session.end_group();
 
-            let trailing = begin_unkeyed(session, TRAILING_KEY, None);
+            let trailing = begin_unkeyed(session, Key(TRAILING_KEY), None);
             let trailing_result = session.finish_group_body();
             assert!(trailing_result.detached_children.is_empty());
             session.end_group();
@@ -337,9 +337,9 @@ fn detaching_unvisited_siblings_batches_group_index_refresh() {
 
 #[test]
 fn debug_stats_report_payload_location_range_refresh_work_spans() {
-    const GROUP_KEY: Key = 4051;
+    const GROUP_KEY: u64 = 4051;
 
-    let mut table = composed_group_with_value_and_node_table(GROUP_KEY);
+    let mut table = composed_group_with_value_and_node_table(Key(GROUP_KEY));
     let before = table.debug_stats().mutation;
 
     table.refresh_payload_locations_for_group_range(GroupRange::new(
@@ -368,19 +368,19 @@ fn debug_stats_report_payload_location_range_refresh_work_spans() {
 
 #[test]
 fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
-    const PARENT_KEY: Key = 405;
-    const STATIC_KEY: Key = 406;
-    const CHILD_COUNT: Key = 24;
+    const PARENT_KEY: u64 = 405;
+    const STATIC_KEY: u64 = 406;
+    const CHILD_COUNT: u64 = 24;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let original = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let mut children = Vec::new();
 
         for key in 1..=CHILD_COUNT {
-            let child = begin_keyed(session, STATIC_KEY, key, None);
+            let child = begin_keyed(session, Key(STATIC_KEY), Key(key), None);
             let slot = session.value_slot_with_kind(
                 PayloadKind::Internal,
                 crate::slot::BRANCH_PATH_ROOT,
@@ -405,11 +405,11 @@ fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let reordered = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let mut children = Vec::new();
 
         for key in (1..=CHILD_COUNT).rev() {
-            let child = begin_keyed(session, STATIC_KEY, key, None);
+            let child = begin_keyed(session, Key(STATIC_KEY), Key(key), None);
             assert!(
                 matches!(child.kind, GroupStartKind::Reused | GroupStartKind::Moved),
                 "large keyed reorder must reuse or move existing child {key}, got {:?}",
@@ -446,17 +446,17 @@ fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
 
 #[test]
 fn keyed_sibling_search_never_matches_a_grandchild() {
-    const PARENT_KEY: Key = 410;
-    const STATIC_KEY: Key = 411;
+    const PARENT_KEY: u64 = 410;
+    const STATIC_KEY: u64 = 411;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let (direct_anchor, grandchild_anchor) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let _first = begin_keyed(session, STATIC_KEY, 1, None);
-        let grandchild = begin_keyed(session, STATIC_KEY, 2, None);
+        let _first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
+        let grandchild = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -465,7 +465,7 @@ fn keyed_sibling_search_never_matches_a_grandchild() {
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -480,16 +480,16 @@ fn keyed_sibling_search_never_matches_a_grandchild() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (moved_anchor, reused_grandchild_anchor) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let moved = begin_keyed(session, STATIC_KEY, 2, None);
+        let moved = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         assert_eq!(moved.kind, GroupStartKind::Moved);
         let moved_result = session.finish_group_body();
         assert!(moved_result.detached_children.is_empty());
         session.end_group();
 
-        let _first = begin_keyed(session, STATIC_KEY, 1, None);
-        let reused_grandchild = begin_keyed(session, STATIC_KEY, 2, None);
+        let _first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
+        let reused_grandchild = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         assert_eq!(reused_grandchild.kind, GroupStartKind::Reused);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
@@ -513,21 +513,21 @@ fn keyed_sibling_search_never_matches_a_grandchild() {
 
 #[test]
 fn restored_keyed_sibling_can_move_on_a_later_pass() {
-    const PARENT_KEY: Key = 440;
-    const STATIC_KEY: Key = 441;
+    const PARENT_KEY: u64 = 440;
+    const STATIC_KEY: u64 = 441;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let (second_slot, second_anchor) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let second_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -537,7 +537,7 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
         assert!(second_result.detached_children.is_empty());
         session.end_group();
 
-        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third = begin_keyed(session, Key(STATIC_KEY), Key(3), None);
         let third_result = session.finish_group_body();
         assert!(third_result.detached_children.is_empty());
         session.end_group();
@@ -555,14 +555,14 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third = begin_keyed(session, Key(STATIC_KEY), Key(3), None);
         let third_result = session.finish_group_body();
         assert!(third_result.detached_children.is_empty());
         session.end_group();
@@ -579,14 +579,14 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (restored_kind, restored_anchor, restored_slot) = harness.session(move |session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_keyed(session, STATIC_KEY, 2, Some(detached));
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(2), Some(detached));
         let second_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -596,7 +596,7 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
         assert!(second_result.detached_children.is_empty());
         session.end_group();
 
-        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third = begin_keyed(session, Key(STATIC_KEY), Key(3), None);
         let third_result = session.finish_group_body();
         assert!(third_result.detached_children.is_empty());
         session.end_group();
@@ -618,9 +618,9 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (moved_kind, moved_anchor, moved_slot) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(2), None);
         let second_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -630,12 +630,12 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
         assert!(second_result.detached_children.is_empty());
         session.end_group();
 
-        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(1), None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third = begin_keyed(session, Key(STATIC_KEY), Key(3), None);
         let third_result = session.finish_group_body();
         assert!(third_result.detached_children.is_empty());
         session.end_group();
@@ -658,16 +658,16 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
 
 #[test]
 fn unkeyed_siblings_follow_positional_identity() {
-    const PARENT_KEY: Key = 450;
-    const SHARED_KEY: Key = 451;
+    const PARENT_KEY: u64 = 450;
+    const SHARED_KEY: u64 = 451;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let (first_slot, second_slot) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, SHARED_KEY, None);
+        begin_unkeyed(session, Key(SHARED_KEY), None);
         let first_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -677,7 +677,7 @@ fn unkeyed_siblings_follow_positional_identity() {
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        begin_unkeyed(session, SHARED_KEY, None);
+        begin_unkeyed(session, Key(SHARED_KEY), None);
         let second_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -699,9 +699,9 @@ fn unkeyed_siblings_follow_positional_identity() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let remaining_slot = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let remaining = begin_unkeyed(session, SHARED_KEY, None);
+        let remaining = begin_unkeyed(session, Key(SHARED_KEY), None);
         assert_eq!(remaining.kind, GroupStartKind::Reused);
         let slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -728,9 +728,9 @@ fn unkeyed_siblings_follow_positional_identity() {
 
 #[test]
 fn duplicate_explicit_keys_are_rejected_during_writer_traversal() {
-    const PARENT_KEY: Key = 460;
-    const STATIC_KEY: Key = 461;
-    const EXPLICIT_KEY: Key = 77;
+    const PARENT_KEY: u64 = 460;
+    const STATIC_KEY: u64 = 461;
+    const EXPLICIT_KEY: u64 = 77;
 
     let mut table = SlotTable::new();
     let mut lifecycle = SlotLifecycleCoordinator::default();
@@ -738,15 +738,15 @@ fn duplicate_explicit_keys_are_rejected_during_writer_traversal() {
     state.reset_for_pass(SlotPassMode::Compose);
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        begin_unkeyed(&mut session, PARENT_KEY, None);
+        begin_unkeyed(&mut session, Key(PARENT_KEY), None);
 
-        begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
+        begin_keyed(&mut session, Key(STATIC_KEY), Key(EXPLICIT_KEY), None);
         let first = session.finish_group_body();
         assert!(first.detached_children.is_empty());
         session.end_group();
 
         let duplicate = panic::catch_unwind(AssertUnwindSafe(|| {
-            begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
+            begin_keyed(&mut session, Key(STATIC_KEY), Key(EXPLICIT_KEY), None);
         }));
         assert!(
             duplicate.is_err(),
@@ -763,20 +763,20 @@ fn duplicate_explicit_keys_are_rejected_during_writer_traversal() {
 
 #[test]
 fn rows_inserted_before_existing_rows_leave_their_anchors_and_values_resolvable() {
-    const PARENT_KEY: Key = 420;
-    const ROW_KEY: Key = 421;
-    const ROWS: Key = 10;
-    const NEW_ROWS: Key = 1_000;
+    const PARENT_KEY: u64 = 420;
+    const ROW_KEY: u64 = 421;
+    const ROWS: u64 = 10;
+    const NEW_ROWS: u64 = 1_000;
 
     // Below and above the insert count at which stale indexes are rewritten.
     for inserted in [3, 40] {
         let mut harness = SlotHarness::new();
         harness.begin_pass(SlotPassMode::Compose);
         let rows = harness.session(|session| {
-            begin_unkeyed(session, PARENT_KEY, None);
+            begin_unkeyed(session, Key(PARENT_KEY), None);
             let rows = (0..ROWS)
                 .map(|row| {
-                    let started = begin_keyed(session, ROW_KEY, row, None);
+                    let started = begin_keyed(session, Key(ROW_KEY), Key(row), None);
                     let slot = session.value_slot_with_kind(
                         PayloadKind::Internal,
                         crate::slot::BRANCH_PATH_ROOT,
@@ -798,9 +798,9 @@ fn rows_inserted_before_existing_rows_leave_their_anchors_and_values_resolvable(
 
         harness.begin_pass(SlotPassMode::Compose);
         let reused = harness.session(|session| {
-            begin_unkeyed(session, PARENT_KEY, None);
+            begin_unkeyed(session, Key(PARENT_KEY), None);
             for row in 0..inserted {
-                begin_keyed(session, ROW_KEY, NEW_ROWS + row, None);
+                begin_keyed(session, Key(ROW_KEY), Key(NEW_ROWS + row), None);
                 let _ = session.value_slot_with_kind(
                     PayloadKind::Internal,
                     crate::slot::BRANCH_PATH_ROOT,
@@ -811,7 +811,7 @@ fn rows_inserted_before_existing_rows_leave_their_anchors_and_values_resolvable(
             }
             let reused = (0..ROWS)
                 .map(|row| {
-                    let started = begin_keyed(session, ROW_KEY, row, None);
+                    let started = begin_keyed(session, Key(ROW_KEY), Key(row), None);
                     assert_eq!(
                         session.table.current_group_index(started.anchor),
                         (1 + inserted + row) as usize,

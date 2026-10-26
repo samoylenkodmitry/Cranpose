@@ -15,7 +15,7 @@ use cranpose_app_shell::{
 };
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::{DeviceLostHandler, PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui::{Point, PointerButton, Size};
+use cranpose_ui::{Point, PointerButton, PointerId, Size};
 use ndk::native_window::NativeWindow;
 
 use super::{
@@ -71,9 +71,9 @@ enum PendingInput {
     PointerMove(f32, f32, Option<i64>, PointerSource),
     PointerCancel,
     Key(KeyEvent),
-    SecondaryPointerDown(u64, f32, f32, Option<i64>),
-    SecondaryPointerUp(u64, f32, f32, Option<i64>),
-    SecondaryPointerMove(u64, f32, f32, Option<i64>),
+    SecondaryPointerDown(PointerId, f32, f32, Option<i64>),
+    SecondaryPointerUp(PointerId, f32, f32, Option<i64>),
+    SecondaryPointerMove(PointerId, f32, f32, Option<i64>),
     RotaryScroll(f32, u64),
     /// A mouse button other than the primary one went down (`true`) or up,
     /// with the pointer at a position.
@@ -374,11 +374,11 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
     }
 }
 
-fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> u64 {
+fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> PointerId {
     if android_pointer_id == primary_pointer_id {
-        0
+        PointerId::PRIMARY
     } else {
-        android_pointer_id as u64 + 1
+        PointerId(android_pointer_id as u64 + 1)
     }
 }
 

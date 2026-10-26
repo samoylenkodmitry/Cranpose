@@ -37,7 +37,7 @@ impl MockState {
     pub(crate) fn tracked(value: i32) -> Rc<Self> {
         let state = Rc::new(Self {
             value,
-            head: RefCell::new(StateRecord::new(1, value, None)),
+            head: RefCell::new(StateRecord::new(SnapshotId(1), value, None)),
             ..Self::with_id(0)
         });
         state.id.set(ObjectId::new(&state));

@@ -65,10 +65,10 @@ pub(in crate::slot) struct FrameKeyState {
 impl Default for FrameKeyState {
     fn default() -> Self {
         Self {
-            ordinals: InlineList::new((0, 0)),
+            ordinals: InlineList::new((Key(0), 0)),
             ordinal_map: HashMap::default(),
             ordinals_spilled: false,
-            seen: InlineList::new(GroupKey::new(0, None, 0)),
+            seen: InlineList::new(GroupKey::new(Key(0), None, 0)),
             seen_set: HashSet::default(),
             seen_spilled: false,
         }

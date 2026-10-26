@@ -210,7 +210,7 @@ impl TransparentObserverMutableSnapshot {
             merge_write_observers(write_observer, self.state.write_observer.borrow().clone());
 
         let mut invalid = self.state.invalid.borrow().clone();
-        let new_id = self.state.id.get() + 1;
+        let new_id = self.state.id.get().next();
         invalid = invalid.set(new_id);
 
         Self::new(

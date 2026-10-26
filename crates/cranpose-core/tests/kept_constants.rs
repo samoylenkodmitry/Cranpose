@@ -8,14 +8,14 @@ use std::cell::Cell;
 use cranpose_core::{__constant, Key};
 
 /// A key and another that falls in the same slot of the table.
-const KEY: Key = 0x5eed_0000_0000_0001;
-const SAME_SLOT: Key = KEY + (1 << 20);
+const KEY: u64 = 0x5eed_0000_0000_0001;
+const SAME_SLOT: Key = Key(KEY + (1 << 20));
 
 #[test]
 fn a_kept_value_is_made_once() {
     let made = Cell::new(0);
     for _ in 0..3 {
-        let value = __constant(KEY, || {
+        let value = __constant(Key(KEY), || {
             made.set(made.get() + 1);
             String::from("kept")
         });
@@ -32,8 +32,11 @@ fn keys_that_share_a_slot_each_get_their_own_value() {
         value
     };
     for _ in 0..2 {
-        assert_eq!(__constant(KEY ^ 0x10, || make("first")), "first");
-        assert_eq!(__constant(SAME_SLOT ^ 0x10, || make("second")), "second");
+        assert_eq!(__constant(Key(KEY ^ 0x10), || make("first")), "first");
+        assert_eq!(
+            __constant(Key(SAME_SLOT.0 ^ 0x10), || make("second")),
+            "second"
+        );
     }
     assert_eq!(
         made.get(),
@@ -45,15 +48,18 @@ fn keys_that_share_a_slot_each_get_their_own_value() {
 #[test]
 fn one_key_asked_for_two_types_gives_each_its_own() {
     for _ in 0..2 {
-        assert_eq!(__constant(KEY ^ 0x20, || 7u32), 7);
-        assert_eq!(__constant(KEY ^ 0x20, || String::from("seven")), "seven");
+        assert_eq!(__constant(Key(KEY ^ 0x20), || 7u32), 7);
+        assert_eq!(
+            __constant(Key(KEY ^ 0x20), || String::from("seven")),
+            "seven"
+        );
     }
 }
 
 #[test]
 fn another_thread_makes_its_own_value() {
-    assert_eq!(__constant(KEY ^ 0x30, || 1u8), 1);
-    let other = std::thread::spawn(|| __constant(KEY ^ 0x30, || 2u8))
+    assert_eq!(__constant(Key(KEY ^ 0x30), || 1u8), 1);
+    let other = std::thread::spawn(|| __constant(Key(KEY ^ 0x30), || 2u8))
         .join()
         .expect("the other thread runs");
     assert_eq!(other, 2, "each thread keeps its own table");

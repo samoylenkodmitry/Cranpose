@@ -156,7 +156,7 @@ fn recursive_decrease_increase_multiple_cycles() {
         eprintln!("After cycle {cycle}: {groups} groups (initial: {initial_groups})");
         eprintln!("Current keys: {current_keys:?}");
 
-        let mut key_counts: crate::collections::map::HashMap<u64, i32> =
+        let mut key_counts: crate::collections::map::HashMap<crate::Key, i32> =
             crate::collections::map::HashMap::default();
         for k in &current_keys {
             *key_counts.entry(*k).or_insert(0) += 1;

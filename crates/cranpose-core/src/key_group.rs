@@ -36,7 +36,7 @@ pub fn key<K: Hash, R>(keys: K, content: impl FnOnce() -> R) -> R {
 pub(crate) fn hash_key<K: Hash>(key: &K) -> Key {
     let mut hasher = crate::hash::default::new();
     key.hash(&mut hasher);
-    hasher.finish()
+    Key(hasher.finish())
 }
 
 pub(crate) fn explicit_group_key_seed<K: Hash>(

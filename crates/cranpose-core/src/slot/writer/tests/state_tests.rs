@@ -1,5 +1,8 @@
 use super::*;
-use crate::slot::{GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable};
+use crate::{
+    Key,
+    slot::{GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable},
+};
 
 #[test]
 fn removed_payloads_trigger_compaction_hint_at_threshold() {
@@ -50,7 +53,7 @@ fn validate_reports_writer_frame_out_of_bounds() {
 
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        let key = session.reserve_group_key(GroupKeySeed::unkeyed(10));
+        let key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(key, None, None);
     }
 
@@ -78,13 +81,13 @@ fn validate_reports_writer_frame_not_at_direct_child_boundary() {
 
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        let root_key = session.reserve_group_key(GroupKeySeed::unkeyed(10));
+        let root_key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(root_key, None, None);
 
-        let child_key = session.reserve_group_key(GroupKeySeed::unkeyed(11));
+        let child_key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(11)));
         let _ = session.begin_group(child_key, None, None);
 
-        let grandchild_key = session.reserve_group_key(GroupKeySeed::unkeyed(12));
+        let grandchild_key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(12)));
         let _ = session.begin_group(grandchild_key, None, None);
     }
 
@@ -113,7 +116,7 @@ fn validate_allows_growing_payload_and_node_cursors() {
 
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        let key = session.reserve_group_key(GroupKeySeed::unkeyed(10));
+        let key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(key, None, None);
         let _ = session.value_slot_with_kind(
             crate::slot::PayloadKind::Internal,
@@ -142,10 +145,10 @@ fn validate_allows_scoped_recompose_root_depth() {
     state.reset_for_pass(SlotPassMode::Compose);
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        let root_key = session.reserve_group_key(GroupKeySeed::unkeyed(10));
+        let root_key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(root_key, None, None);
 
-        let child_key = session.reserve_group_key(GroupKeySeed::unkeyed(11));
+        let child_key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(11)));
         let child = session.begin_group(child_key, None, None);
         session.set_group_scope(child.group, scope.clone());
         let _ = session.finish_group_body();
@@ -177,7 +180,7 @@ fn validate_allows_finished_frame_after_direct_node_removal() {
     state.reset_for_pass(SlotPassMode::Compose);
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        let key = session.reserve_group_key(GroupKeySeed::unkeyed(10));
+        let key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(key, None, None);
         session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let _ = session.finish_group_body();
@@ -187,7 +190,7 @@ fn validate_allows_finished_frame_after_direct_node_removal() {
     state.reset_for_pass(SlotPassMode::Compose);
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        let key = session.reserve_group_key(GroupKeySeed::unkeyed(10));
+        let key = session.reserve_group_key(GroupKeySeed::unkeyed(Key(10)));
         let _ = session.begin_group(key, None, None);
         let _ = session.finish_group_body();
     }

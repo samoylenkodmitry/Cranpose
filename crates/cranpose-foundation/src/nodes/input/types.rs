@@ -7,8 +7,26 @@ use cranpose_ui_graphics::{Point, space::Ray};
 
 use super::rotary::RotaryScrollEvent;
 
-/// Identifies one pointer of a gesture, such as one finger. `0` is the primary pointer.
-pub type PointerId = u64;
+/// Identifies one pointer of a gesture, such as one finger, as Compose's `PointerId`. The
+/// primary pointer is [`PointerId::PRIMARY`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PointerId(pub u64);
+
+impl PointerId {
+    /// The mouse, or the first finger of a touch.
+    pub const PRIMARY: Self = Self(0);
+
+    /// Whether this is [`PointerId::PRIMARY`].
+    pub const fn is_primary(self) -> bool {
+        self.0 == Self::PRIMARY.0
+    }
+}
+
+impl std::fmt::Display for PointerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 type PostDispatchAction = Box<dyn FnOnce() -> bool>;
 
@@ -302,11 +320,11 @@ pub struct PointerEvent {
 
 impl PointerEvent {
     /// Creates an event of `kind` at `position`, in the coordinates of the receiving node, and at
-    /// `global_position`, in the coordinates of the composition root. The pointer id is `0` and the
-    /// other fields have neutral values.
+    /// `global_position`, in the coordinates of the composition root. The pointer is
+    /// [`PointerId::PRIMARY`] and the other fields have neutral values.
     pub fn new(kind: PointerEventKind, position: Point, global_position: Point) -> Self {
         Self {
-            id: 0,
+            id: PointerId::PRIMARY,
             kind,
             phase: match kind {
                 PointerEventKind::Down => PointerPhase::Start,

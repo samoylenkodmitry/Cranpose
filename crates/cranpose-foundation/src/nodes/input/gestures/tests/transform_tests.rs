@@ -2,7 +2,7 @@ use super::*;
 
 fn event(kind: PointerEventKind, id: u64, x: f32, y: f32) -> PointerEvent {
     let mut event = PointerEvent::new(kind, Point { x, y }, Point { x, y });
-    event.id = id;
+    event.id = PointerId(id);
     event
 }
 

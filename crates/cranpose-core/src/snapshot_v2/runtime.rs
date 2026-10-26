@@ -2,9 +2,9 @@ use std::cell::Cell;
 
 use super::*;
 
-const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
+const PREEXISTING_SNAPSHOT_ID: SnapshotId = SnapshotId(1);
 
-const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
+const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID.next();
 
 struct RuntimeLockGuard<'a>(&'a Cell<usize>);
 
@@ -87,7 +87,7 @@ impl SnapshotRuntime {
         let mut open = SnapshotIdSet::new();
         open = open.set(INITIAL_GLOBAL_SNAPSHOT_ID);
         Self {
-            next_snapshot_id: INITIAL_GLOBAL_SNAPSHOT_ID + 1,
+            next_snapshot_id: INITIAL_GLOBAL_SNAPSHOT_ID.next(),
             open_snapshots: open,
             global_snapshot_id: INITIAL_GLOBAL_SNAPSHOT_ID,
         }
@@ -120,7 +120,7 @@ impl SnapshotRuntime {
     pub(crate) fn allocate_snapshot(&mut self) -> (SnapshotId, SnapshotIdSet) {
         let invalid = self.open_snapshots.clone();
         let id = self.next_snapshot_id;
-        self.next_snapshot_id += 1;
+        self.next_snapshot_id = self.next_snapshot_id.next();
         self.open_snapshots = self.open_snapshots.set(id);
         (id, invalid)
     }
@@ -131,7 +131,7 @@ impl SnapshotRuntime {
 
     pub(crate) fn allocate_record_id(&mut self) -> SnapshotId {
         let id = self.next_snapshot_id;
-        self.next_snapshot_id += 1;
+        self.next_snapshot_id = self.next_snapshot_id.next();
         id
     }
 
@@ -143,11 +143,11 @@ impl SnapshotRuntime {
         let child_invalid = self.open_snapshots.clear(old_global_id);
 
         let child_id = self.next_snapshot_id;
-        self.next_snapshot_id += 1;
+        self.next_snapshot_id = self.next_snapshot_id.next();
         self.open_snapshots = self.open_snapshots.set(child_id);
 
         let new_global_id = self.next_snapshot_id;
-        self.next_snapshot_id += 1;
+        self.next_snapshot_id = self.next_snapshot_id.next();
 
         self.open_snapshots = self.open_snapshots.clear(old_global_id);
 

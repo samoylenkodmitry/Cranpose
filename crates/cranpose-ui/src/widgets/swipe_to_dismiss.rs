@@ -30,7 +30,7 @@ use cranpose_core::{
     NodeId, Owned, OwnedMutableState, RuntimeHandle, internal::FrameCallbackRegistration,
     with_current_composer,
 };
-use cranpose_foundation::DRAG_THRESHOLD;
+use cranpose_foundation::{DRAG_THRESHOLD, PointerId};
 use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement};
 use portable_atomic::AtomicU64;
 
@@ -303,7 +303,7 @@ struct SwipeToDismissController {
     settle_watcher: RefCell<Option<FrameCallbackRegistration>>,
     collapse_watcher: RefCell<Option<FrameCallbackRegistration>>,
     identity: Cell<Option<u64>>,
-    active_pointer: Cell<Option<u64>>,
+    active_pointer: Cell<Option<PointerId>>,
     direction: Cell<SwipeDismissDirection>,
     edge_width: Cell<Option<f32>>,
     collapse_after_dismiss: Cell<bool>,

@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use cranpose_core::Key;
+
 mod support;
 
 use coroflow::{FlowExt, MainScope, MutableSharedFlow};
@@ -25,7 +27,7 @@ fn any_flow_collects_into_state_from_an_initial_value() {
         move |composition: &mut Composition<MemoryApplier>| {
             let (seen, flow) = (Rc::clone(&seen), flow.clone());
             composition
-                .render(1, move || {
+                .render(Key(1), move || {
                     seen.borrow_mut().push(flow.collectAsState(7).get());
                 })
                 .expect("render");
@@ -57,7 +59,7 @@ fn remember_coroutine_scope_is_cancelled_when_its_position_leaves() {
         move |composition: &mut Composition<MemoryApplier>| {
             let (show, remembered) = (Rc::clone(&show), Rc::clone(&remembered));
             composition
-                .render(1, move || {
+                .render(Key(1), move || {
                     if *show.borrow() {
                         *remembered.borrow_mut() = Some(rememberCoroutineScope());
                     }

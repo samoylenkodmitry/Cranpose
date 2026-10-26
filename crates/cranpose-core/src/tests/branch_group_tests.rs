@@ -48,7 +48,7 @@ fn an_if_branch_owns_its_remembered_state() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(1, || if_branch_remember_probe(value))
+        composition.render(Key(1), || if_branch_remember_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -97,7 +97,7 @@ fn match_arms_do_not_share_remembered_state() {
     for (route, marker) in [(0u8, 10), (1, 20), (2, 30), (0, 10), (2, 30)] {
         expected_inits += 1;
         composition
-            .render(2, || match_arm_remember_probe(route))
+            .render(Key(2), || match_arm_remember_probe(route))
             .expect("compose the routed arm");
         assert_eq!(
             (branch_inits(), branch_seen()),
@@ -135,7 +135,7 @@ fn a_guarded_arm_owns_its_remembered_state() {
         (0, 0, 50, 4),
     ] {
         composition
-            .render(4, || guarded_arm_remember_probe(route, limit))
+            .render(Key(4), || guarded_arm_remember_probe(route, limit))
             .expect("compose the guarded arm");
         assert_eq!(
             (branch_inits(), branch_seen()),
@@ -166,7 +166,7 @@ fn the_same_child_in_both_branches_gets_per_branch_state() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(3, || branches_calling_the_same_child(value))
+        composition.render(Key(3), || branches_calling_the_same_child(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -204,7 +204,7 @@ fn each_arm_of_an_else_if_chain_owns_its_slots() {
     for (route, marker) in [(0u8, 11), (1, 22), (2, 33), (1, 22), (0, 11)] {
         expected_inits += 1;
         composition
-            .render(4, || else_if_chain_probe(route))
+            .render(Key(4), || else_if_chain_probe(route))
             .expect("compose the chain arm");
         assert_eq!(
             (branch_inits(), branch_seen()),
@@ -239,7 +239,7 @@ fn a_branch_switch_disposes_the_effects_of_the_departed_branch() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(5, || branch_effect_probe(value))
+        composition.render(Key(5), || branch_effect_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -284,14 +284,14 @@ fn a_value_only_conditional_adds_no_group() {
     reset_branch_probes();
     let mut with_branch = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(6, || value_only_branch_probe(value))
+        composition.render(Key(6), || value_only_branch_probe(value))
     };
     pass(&mut with_branch, true).expect("compose the value-only branch probe");
     let with_branch_groups = with_branch.debug_dump_slot_table_groups().len();
 
     let mut without_branch = test_composition();
     without_branch
-        .render(6, no_branch_probe)
+        .render(Key(6), no_branch_probe)
         .expect("compose the branch-free probe");
     let without_branch_groups = without_branch.debug_dump_slot_table_groups().len();
 
@@ -320,7 +320,7 @@ fn a_composable_call_inside_a_value_macro_still_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(16, || format_arg_probe(value))
+        composition.render(Key(16), || format_arg_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -351,7 +351,7 @@ fn an_early_return_branch_keeps_the_slot_table_balanced() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(7, || early_return_probe(value))
+        composition.render(Key(7), || early_return_probe(value))
     };
 
     pass(&mut composition, true).expect("compose the early-return branch");
@@ -389,13 +389,13 @@ fn the_question_mark_operator_unwinds_branch_groups_cleanly() {
 
     let result = Cell::new(Ok(0));
     composition
-        .render(8, || result.set(try_branch_probe(true)))
+        .render(Key(8), || result.set(try_branch_probe(true)))
         .expect("compose the erroring branch");
     assert_eq!(result.get(), Err(7));
     assert_composition_valid(&composition);
 
     composition
-        .render(8, || result.set(try_branch_probe(false)))
+        .render(Key(8), || result.set(try_branch_probe(false)))
         .expect("compose past the fallible branch");
     assert_eq!(result.get(), Ok(1));
     assert_eq!(branch_seen(), 4);
@@ -432,7 +432,7 @@ fn nested_conditionals_key_every_level() {
     ] {
         expected_inits += 1;
         composition
-            .render(9, || nested_branch_probe(outer, inner))
+            .render(Key(9), || nested_branch_probe(outer, inner))
             .expect("compose the nested branch");
         assert_eq!(
             (branch_inits(), branch_seen()),
@@ -462,7 +462,7 @@ fn state_read_inside_a_branch_recomposes_in_one_pass() {
     let counter = MutableState::with_runtime(5, runtime);
 
     composition
-        .render(10, || branch_reads_state_probe(toggle, counter))
+        .render(Key(10), || branch_reads_state_probe(toggle, counter))
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 5));
 
@@ -507,7 +507,7 @@ fn conditionals_inside_plain_closures_are_left_alone() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(11, || closure_branch_probe(value))
+        composition.render(Key(11), || closure_branch_probe(value))
     };
     pass(&mut composition, true).expect("compose the closure probe");
     assert_eq!(branch_seen(), 1);
@@ -546,7 +546,7 @@ fn content_closure_branches_own_their_slots() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(13, || content_closure_branch_probe(value))
+        composition.render(Key(13), || content_closure_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -586,7 +586,7 @@ fn an_argument_taking_content_closure_gets_branch_groups_too() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(15, || indexed_closure_branch_probe(value))
+        composition.render(Key(15), || indexed_closure_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -619,7 +619,7 @@ fn a_composing_key_argument_keeps_the_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(20, || composing_key_argument_probe(value))
+        composition.render(Key(20), || composing_key_argument_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -653,7 +653,7 @@ fn snake_case_composables_inside_content_closures_get_branch_groups() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(21, || snake_case_closure_branch_probe(value))
+        composition.render(Key(21), || snake_case_closure_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -685,7 +685,7 @@ fn a_user_binding_named_like_the_guard_is_not_shadowed() {
     reset_branch_probes();
     let mut composition = test_composition();
     composition
-        .render(22, || guard_name_collision_probe(true))
+        .render(Key(22), || guard_name_collision_probe(true))
         .expect("compose with the colliding binding");
     assert_eq!(branch_seen(), 41);
     assert_composition_valid(&composition);
@@ -720,7 +720,7 @@ fn a_misclassified_handler_closure_degrades_to_a_no_op() {
     reset_branch_probes();
     let mut composition = test_composition();
     composition
-        .render(14, || handler_storing_probe(true))
+        .render(Key(14), || handler_storing_probe(true))
         .expect("compose the handler host");
 
     let mut handler = STORED_HANDLER
@@ -763,7 +763,7 @@ fn keyed_state_survives_a_front_removal_across_branch_shells() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, rows: Vec<(u64, bool)>| {
-        composition.render(17, || keyed_visibility_probe(rows.clone()))
+        composition.render(Key(17), || keyed_visibility_probe(rows.clone()))
     };
 
     pass(&mut composition, vec![(1, true), (2, true), (3, true)]).expect("initial composition");
@@ -811,7 +811,7 @@ fn keyed_state_survives_a_front_removal_across_branch_brackets() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, rows: Vec<(u64, bool)>| {
-        composition.render(19, || mixed_keyed_visibility_probe(rows.clone()))
+        composition.render(Key(19), || mixed_keyed_visibility_probe(rows.clone()))
     };
 
     pass(&mut composition, vec![(1, true), (2, true), (3, true)]).expect("initial composition");
@@ -841,7 +841,7 @@ fn keyed_state_follows_a_reorder_across_branch_shells() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<(u64, bool)>| {
-        composition.render(18, || keyed_visibility_probe(value.clone()))
+        composition.render(Key(18), || keyed_visibility_probe(value.clone()))
     };
 
     pass(&mut composition, vec![(1, true), (2, true)]).expect("initial composition");
@@ -881,7 +881,7 @@ fn branches_inside_a_loop_key_per_occurrence() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<bool>| {
-        composition.render(12, || loop_branch_probe(value.clone()))
+        composition.render(Key(12), || loop_branch_probe(value.clone()))
     };
 
     pass(&mut composition, vec![true, true]).expect("compose two then-branches");
@@ -919,7 +919,7 @@ fn branches_composing_only_through_composer_methods_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(30, || method_call_branch_probe(value))
+        composition.render(Key(30), || method_call_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -949,7 +949,7 @@ fn match_guards_own_their_composition_slots() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: u8| {
-        composition.render(31, || guard_composition_probe(value))
+        composition.render(Key(31), || guard_composition_probe(value))
     };
 
     pass(&mut composition, 0).expect("compose the first guard");
@@ -1005,7 +1005,7 @@ fn a_lookalike_with_key_of_different_arity_keeps_the_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(32, || fake_arity_with_key::probe(value))
+        composition.render(Key(32), || fake_arity_with_key::probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1039,7 +1039,7 @@ fn conditionals_inside_local_functions_own_their_branches() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(33, || local_fn_branch_probe(value))
+        composition.render(Key(33), || local_fn_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1091,7 +1091,7 @@ fn a_key_argument_composing_through_methods_keeps_the_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(34, || method_keyed_arg_probe(value))
+        composition.render(Key(34), || method_keyed_arg_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1130,7 +1130,7 @@ fn branches_composing_through_method_call_closures_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(35, || closure_through_method_probe(value))
+        composition.render(Key(35), || closure_through_method_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1162,7 +1162,7 @@ fn a_composing_if_condition_owns_its_slots() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(36, || composing_condition_probe(value))
+        composition.render(Key(36), || composing_condition_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1199,7 +1199,7 @@ fn conditionals_inside_local_impl_methods_own_their_branches() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(37, || impl_method_branch_probe(value))
+        composition.render(Key(37), || impl_method_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1231,7 +1231,7 @@ fn a_user_binding_named_like_the_composer_is_not_broken_by_guards() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(38, || composer_shadowing_probe(value))
+        composition.render(Key(38), || composer_shadowing_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1270,7 +1270,7 @@ fn a_lookalike_with_key_of_the_real_shape_still_gets_a_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(39, || fake_shape_with_key::probe(value))
+        composition.render(Key(39), || fake_shape_with_key::probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1306,7 +1306,7 @@ fn an_explicit_key_does_not_carry_state_across_branch_sites() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(40, || keyed_via_helper_probe(value))
+        composition.render(Key(40), || keyed_via_helper_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1341,7 +1341,7 @@ fn a_snake_case_composable_inside_a_value_macro_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(41, || value_macro_snake_probe(value))
+        composition.render(Key(41), || value_macro_snake_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1380,7 +1380,7 @@ fn a_parked_keyed_subtree_stays_within_its_branch_site() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, (arg0, arg1): (i32, bool)| {
-        composition.render(42, || cross_branch_pool_probe(arg0, arg1))
+        composition.render(Key(42), || cross_branch_pool_probe(arg0, arg1))
     };
 
     pass(&mut composition, (1, false)).expect("initial composition");
@@ -1418,7 +1418,7 @@ fn branches_composing_through_use_state_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(43, || method_state_branch_probe(value))
+        composition.render(Key(43), || method_state_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1465,7 +1465,7 @@ fn a_composing_method_inside_a_value_macro_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(44, || value_macro_method_probe(value))
+        composition.render(Key(44), || value_macro_method_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1503,7 +1503,7 @@ fn a_materialized_shell_keeps_group_ordinals_consistent() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(45, || deferred_shell_ordinals::probe(value))
+        composition.render(Key(45), || deferred_shell_ordinals::probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1551,12 +1551,12 @@ fn a_materialized_shell_reuses_its_node_across_passes() {
     let mut composition = test_composition();
 
     composition
-        .render(46, deferred_shell_nodes::probe)
+        .render(Key(46), deferred_shell_nodes::probe)
         .expect("initial composition");
     assert_eq!(deferred_shell_nodes::NODE_BUILDS.with(Cell::get), 1);
 
     composition
-        .render(46, deferred_shell_nodes::probe)
+        .render(Key(46), deferred_shell_nodes::probe)
         .expect("recompose the same shape");
     assert_eq!(
         deferred_shell_nodes::NODE_BUILDS.with(Cell::get),
@@ -1584,7 +1584,7 @@ fn keyed_state_survives_a_front_removal_through_nested_brackets() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<i32>| {
-        composition.render(47, || nested_bracket_rows(value.clone()))
+        composition.render(Key(47), || nested_bracket_rows(value.clone()))
     };
 
     pass(&mut composition, vec![1, 2]).expect("initial composition");
@@ -1614,7 +1614,7 @@ fn a_parenthesized_callee_inside_a_value_macro_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(48, || value_macro_paren_callee_probe(value))
+        composition.render(Key(48), || value_macro_paren_callee_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1634,7 +1634,7 @@ fn a_key_flattened_out_of_a_skipped_inner_bracket_keeps_its_path() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<i32>| {
-        composition.render(50, || nested_bracket_rows(value.clone()))
+        composition.render(Key(50), || nested_bracket_rows(value.clone()))
     };
 
     pass(&mut composition, vec![1, 2]).expect("initial composition");
@@ -1677,7 +1677,7 @@ fn both_branches_retain_the_same_reuse_child_without_colliding() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, (first, second)| {
-        composition.render(51, || dual_retention_probe(first, second))
+        composition.render(Key(51), || dual_retention_probe(first, second))
     };
 
     pass(&mut composition, (true, true)).expect("initial composition");
@@ -1711,7 +1711,7 @@ fn duplicate_explicit_keys_across_brackets_of_one_site_panic_loudly() {
     reset_branch_probes();
     let mut composition = test_composition();
 
-    let _ = composition.render(52, || duplicate_keyed_rows(vec![1, 2]));
+    let _ = composition.render(Key(52), || duplicate_keyed_rows(vec![1, 2]));
 }
 
 fn branch_labels() -> Vec<String> {
@@ -1732,7 +1732,7 @@ fn an_if_let_scrutinee_keeps_its_temporaries_borrowable() {
     let mut composition = test_composition();
 
     composition
-        .render(53, scrutinee_borrow_probe)
+        .render(Key(53), scrutinee_borrow_probe)
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
@@ -1752,7 +1752,7 @@ fn repeated_occurrences_of_one_branch_site_retain_independently() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<bool>| {
-        composition.render(54, || looped_retention_probe(value.clone()))
+        composition.render(Key(54), || looped_retention_probe(value.clone()))
     };
 
     pass(&mut composition, vec![true, true]).expect("initial composition");
@@ -1799,7 +1799,7 @@ fn a_delegating_with_key_lookalike_does_not_merge_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(55, || delegating_with_key::probe(value))
+        composition.render(Key(55), || delegating_with_key::probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1831,12 +1831,12 @@ fn a_composing_if_let_scrutinee_composes_inside_its_own_group() {
     let mut composition = test_composition();
 
     composition
-        .render(56, composing_scrutinee_probe)
+        .render(Key(56), composing_scrutinee_probe)
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 5));
 
     composition
-        .render(56, composing_scrutinee_probe)
+        .render(Key(56), composing_scrutinee_probe)
         .expect("recompose");
     assert_eq!((branch_inits(), branch_seen()), (1, 5));
     assert_composition_valid(&composition);
@@ -1861,7 +1861,7 @@ fn a_place_scrutinee_with_a_ref_binding_still_compiles() {
     let mut composition = test_composition();
 
     composition
-        .render(57, place_scrutinee_probe)
+        .render(Key(57), place_scrutinee_probe)
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
@@ -1886,7 +1886,7 @@ fn a_branch_selected_closure_carries_its_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(58, || closure_select_probe(value))
+        composition.render(Key(58), || closure_select_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1923,7 +1923,7 @@ fn branches_composing_through_arbitrary_methods_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(59, || transitive_method_probe(value))
+        composition.render(Key(59), || transitive_method_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -1960,12 +1960,12 @@ fn a_composing_index_inside_a_place_scrutinee_gets_its_own_group() {
     let mut composition = test_composition();
 
     composition
-        .render(60, place_index_probe)
+        .render(Key(60), place_index_probe)
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
 
     composition
-        .render(60, place_index_probe)
+        .render(Key(60), place_index_probe)
         .expect("recompose");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
@@ -1994,7 +1994,7 @@ fn nested_pending_shells_fold_into_keyed_provenance() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(61, || nested_shell_provenance_probe(value))
+        composition.render(Key(61), || nested_shell_provenance_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2032,7 +2032,7 @@ fn a_branch_tail_closure_through_a_helper_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(62, || boxed_closure_probe(value))
+        composition.render(Key(62), || boxed_closure_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2074,12 +2074,12 @@ fn a_composing_field_base_inside_a_place_scrutinee_gets_its_own_group() {
     let mut composition = test_composition();
 
     composition
-        .render(63, field_base_scrutinee_probe)
+        .render(Key(63), field_base_scrutinee_probe)
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
 
     composition
-        .render(63, field_base_scrutinee_probe)
+        .render(Key(63), field_base_scrutinee_probe)
         .expect("recompose");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
@@ -2106,7 +2106,7 @@ fn a_shadowed_value_macro_still_brackets_its_branch() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(64, || shadowed_format::probe(value))
+        composition.render(Key(64), || shadowed_format::probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2141,7 +2141,7 @@ fn a_helper_branch_called_from_both_arms_keeps_the_outer_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(65, || nested_shell_probe(value))
+        composition.render(Key(65), || nested_shell_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2184,7 +2184,7 @@ fn a_keyed_group_does_not_cross_between_branch_and_tail_occurrences() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(66, || keyed_provenance_probe(value))
+        composition.render(Key(66), || keyed_provenance_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2233,7 +2233,7 @@ fn an_operator_that_composes_still_gets_branch_shells() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(67, || operator_branch_probe(value))
+        composition.render(Key(67), || operator_branch_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2266,7 +2266,7 @@ fn a_keyed_identity_survives_an_unkeyed_neighbor_toggling() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(68, || unkeyed_neighbor_probe(value))
+        composition.render(Key(68), || unkeyed_neighbor_probe(value))
     };
 
     pass(&mut composition, false).expect("initial composition");
@@ -2304,7 +2304,7 @@ fn a_deref_place_scrutinee_keeps_its_binding_usable() {
     let mut composition = test_composition();
 
     composition
-        .render(69, deref_place_probe)
+        .render(Key(69), deref_place_probe)
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
@@ -2331,7 +2331,7 @@ fn a_branch_selected_boxed_closure_keeps_its_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(70, || escaped_closure_probe(value))
+        composition.render(Key(70), || escaped_closure_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2368,7 +2368,7 @@ fn a_macro_rules_conditional_shares_slots_by_construction() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(71, || macro_rules_probe(value))
+        composition.render(Key(71), || macro_rules_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2405,7 +2405,7 @@ fn a_stored_closure_composes_fresh_per_invoking_branch() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(72, || cross_branch_invoked_closure_probe(value))
+        composition.render(Key(72), || cross_branch_invoked_closure_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2438,12 +2438,12 @@ fn a_stored_closure_invoked_twice_owns_two_slots() {
     let mut composition = test_composition();
 
     composition
-        .render(73, twice_invoked_closure_probe)
+        .render(Key(73), twice_invoked_closure_probe)
         .expect("initial composition");
     assert_eq!(branch_inits(), 2);
 
     composition
-        .render(73, twice_invoked_closure_probe)
+        .render(Key(73), twice_invoked_closure_probe)
         .expect("recompose");
     assert_eq!(
         branch_inits(),
@@ -2469,7 +2469,7 @@ fn folded_duplicate_probe() {
 fn duplicate_keys_in_folded_brackets_panic_loudly() {
     reset_branch_probes();
     let mut composition = test_composition();
-    let _ = composition.render(74, folded_duplicate_probe);
+    let _ = composition.render(Key(74), folded_duplicate_probe);
 }
 
 #[composable]
@@ -2493,7 +2493,7 @@ fn keyed_wrapper_retention_behaves_identically_in_both_shell_classes() {
     let mut folded = test_composition();
     for visible in [true, false, true] {
         folded
-            .render(75, || folded_retention_probe(visible))
+            .render(Key(75), || folded_retention_probe(visible))
             .expect("folded pass");
     }
     let folded_inits = branch_inits();
@@ -2503,7 +2503,7 @@ fn keyed_wrapper_retention_behaves_identically_in_both_shell_classes() {
     let mut materialized = test_composition();
     for visible in [true, false, true] {
         materialized
-            .render(77, || materialized_retention_probe(visible))
+            .render(Key(77), || materialized_retention_probe(visible))
             .expect("materialized pass");
     }
     assert_eq!(
@@ -2538,7 +2538,7 @@ fn invalidation_inside_a_folded_keyed_bracket_recomposes_in_place() {
     let mut composition = test_composition();
 
     composition
-        .render(76, || folded_recompose_probe(1))
+        .render(Key(76), || folded_recompose_probe(1))
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
@@ -2572,7 +2572,7 @@ fn a_macro_rules_conditional_collapses_composable_caller_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(79, || located_composable_macro_probe(value))
+        composition.render(Key(79), || located_composable_macro_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2622,7 +2622,7 @@ fn a_composing_deref_slot_is_not_adopted_by_a_following_remember() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
-        composition.render(80, || deref_composing_probe(value))
+        composition.render(Key(80), || deref_composing_probe(value))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2652,7 +2652,7 @@ fn a_loop_body_slot_is_not_adopted_by_the_call_after_the_loop() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, count: usize| {
-        composition.render(82, || loop_boundary_probe(count))
+        composition.render(Key(82), || loop_boundary_probe(count))
     };
 
     pass(&mut composition, 1).expect("initial composition");
@@ -2735,7 +2735,7 @@ fn a_source_match_with_the_wrong_type_still_resyncs_the_node() {
     macro_emitted_nodes::BETA_BUILDS.with(|count| count.set(0));
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, show_alpha: bool| {
-        composition.render(108, || macro_emitted_nodes::probe(show_alpha))
+        composition.render(Key(108), || macro_emitted_nodes::probe(show_alpha))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2757,7 +2757,7 @@ fn raw_nodes_in_arms_do_not_trade_places() {
     raw_node_arms::NODE_LABELS.with(|labels| labels.borrow_mut().clear());
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
-        composition.render(83, || raw_node_arms::probe(first))
+        composition.render(Key(83), || raw_node_arms::probe(first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2797,7 +2797,7 @@ fn an_appearing_branch_inserts_before_the_tail_slot() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(84, || branch_entry_probe(enabled))
+        composition.render(Key(84), || branch_entry_probe(enabled))
     };
 
     pass(&mut composition, false).expect("initial composition");
@@ -2853,7 +2853,7 @@ fn an_appearing_branch_node_does_not_remount_the_tail_node() {
     node_entry::BRANCH_BUILDS.with(|count| count.set(0));
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(85, || node_entry::probe(enabled))
+        composition.render(Key(85), || node_entry::probe(enabled))
     };
 
     pass(&mut composition, false).expect("initial composition");
@@ -2897,7 +2897,7 @@ fn a_branch_selected_fn_item_keeps_its_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
-        composition.render(86, || nested_fn_escape_probe(first))
+        composition.render(Key(86), || nested_fn_escape_probe(first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2948,7 +2948,7 @@ fn a_composing_unary_in_a_condition_stays_inside_its_fold() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(87, || unary_condition_probe(enabled))
+        composition.render(Key(87), || unary_condition_probe(enabled))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -2986,7 +2986,7 @@ fn two_composables_selected_through_one_call_site_stay_distinct() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
-        composition.render(88, || fn_pointer_page_probe(first))
+        composition.render(Key(88), || fn_pointer_page_probe(first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3021,7 +3021,7 @@ fn two_composables_selected_through_one_macro_call_site_stay_distinct() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
-        composition.render(89, || macro_routed_page_probe(first))
+        composition.render(Key(89), || macro_routed_page_probe(first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3086,7 +3086,7 @@ fn a_shrinking_loop_does_not_feed_the_next_loops_iterator() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first_count: usize| {
-        composition.render(95, || adjacent_loops_probe(first_count))
+        composition.render(Key(95), || adjacent_loops_probe(first_count))
     };
 
     pass(&mut composition, 1).expect("initial composition");
@@ -3116,7 +3116,7 @@ fn a_shrinking_while_let_scrutinee_does_not_feed_a_later_helper_call() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, count: usize| {
-        composition.render(94, || while_let_scrutinee_probe(count))
+        composition.render(Key(94), || while_let_scrutinee_probe(count))
     };
 
     pass(&mut composition, 1).expect("initial composition");
@@ -3168,7 +3168,7 @@ fn a_short_circuited_place_deref_does_not_leak_into_a_later_deref() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(92, || short_circuited_place_deref_probe(enabled))
+        composition.render(Key(92), || short_circuited_place_deref_probe(enabled))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3203,7 +3203,7 @@ fn chain_let_bindings_still_reach_the_arm() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(93, || chain_binding_probe(enabled))
+        composition.render(Key(93), || chain_binding_probe(enabled))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3242,7 +3242,7 @@ fn async_closure_probe() {
 fn an_async_closure_future_stays_send() {
     let mut composition = test_composition();
     composition
-        .render(91, || async_closure_probe())
+        .render(Key(91), || async_closure_probe())
         .expect("compose the async closure");
     assert_composition_valid(&composition);
 }
@@ -3300,7 +3300,7 @@ fn a_sync_closure_from_a_suspending_async_body_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(101, || suspending_factory_probe(flag))
+        composition.render(Key(101), || suspending_factory_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3341,7 +3341,7 @@ fn a_harmless_macro_does_not_disable_the_rest_of_an_async_body() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(107, || mixed_async_body_probe(flag))
+        composition.render(Key(107), || mixed_async_body_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3380,7 +3380,7 @@ fn a_sync_closure_from_an_async_fn_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(102, || async_fn_factory_probe(flag))
+        composition.render(Key(102), || async_fn_factory_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3415,7 +3415,7 @@ fn a_static_item_closure_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(103, || static_closure_probe(flag))
+        composition.render(Key(103), || static_closure_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3453,7 +3453,7 @@ fn a_const_fn_returned_callable_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(109, || const_fn_factory_probe(flag))
+        composition.render(Key(109), || const_fn_factory_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3491,7 +3491,7 @@ fn an_inline_const_defined_callable_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(104, || inline_const_closure_probe(flag))
+        composition.render(Key(104), || inline_const_closure_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3529,7 +3529,7 @@ fn an_associated_const_closure_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(105, || assoc_const_closure_probe(flag))
+        composition.render(Key(105), || assoc_const_closure_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3556,7 +3556,9 @@ fn erased_calls_inside_one_statement_are_positional_by_construction() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
-        composition.render(106, || erased_pair_in_one_statement_probe(first, Some(7)))
+        composition.render(Key(106), || {
+            erased_pair_in_one_statement_probe(first, Some(7));
+        })
     };
 
     pass(&mut composition, Some(3)).expect("initial composition");
@@ -3593,7 +3595,7 @@ fn a_macro_statement_does_not_feed_its_neighbor() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(100, || {
+        composition.render(Key(100), || {
             let tail = macro_statement_neighbor_probe(enabled);
             BRANCH_SEEN.with(|seen| seen.set(tail));
         })
@@ -3659,7 +3661,7 @@ fn a_dormant_async_item_does_not_mark_the_block_suspending() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(99, || dormant_item_async_probe(flag))
+        composition.render(Key(99), || dormant_item_async_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3680,7 +3682,7 @@ fn an_await_free_async_block_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(98, || await_free_async_block_probe(flag))
+        composition.render(Key(98), || await_free_async_block_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3708,7 +3710,7 @@ fn one_pointer_called_from_two_sites_keeps_two_identities() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
-        composition.render(96, || same_pointer_two_sites_probe(first))
+        composition.render(Key(96), || same_pointer_two_sites_probe(first))
     };
 
     pass(&mut composition, Some(3)).expect("initial composition");
@@ -3736,7 +3738,7 @@ fn a_let_bound_erased_call_keeps_its_own_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
-        composition.render(97, || two_let_bound_erased_calls_probe(first, Some(7)))
+        composition.render(Key(97), || two_let_bound_erased_calls_probe(first, Some(7)))
     };
 
     pass(&mut composition, Some(3)).expect("initial composition");
@@ -3757,7 +3759,7 @@ fn two_composables_from_one_template_invocation_stay_distinct() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
-        composition.render(90, || template_page_probe(first))
+        composition.render(Key(90), || template_page_probe(first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3792,7 +3794,7 @@ fn an_await_free_async_fn_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(101, || await_free_async_fn_probe(flag))
+        composition.render(Key(101), || await_free_async_fn_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3828,7 +3830,7 @@ fn a_composing_arm_before_an_await_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(102, || suspending_arm_probe(flag))
+        composition.render(Key(102), || suspending_arm_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3864,7 +3866,7 @@ fn a_suspending_arm_future_stays_send() {
     reset_branch_probes();
     let mut composition = test_composition();
     composition
-        .render(103, || suspending_arm_send_probe(true))
+        .render(Key(103), || suspending_arm_send_probe(true))
         .expect("initial composition");
     assert_composition_valid(&composition);
 }
@@ -3889,7 +3891,7 @@ fn an_await_free_operand_of_a_suspending_condition_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(104, || suspending_condition_probe(flag))
+        composition.render(Key(104), || suspending_condition_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3933,7 +3935,7 @@ fn an_expression_bodied_suspending_async_closure_stays_send() {
     reset_branch_probes();
     let mut composition = test_composition();
     composition
-        .render(105, || expression_bodied_async_closure_probe(true))
+        .render(Key(105), || expression_bodied_async_closure_probe(true))
         .expect("initial composition");
     assert_composition_valid(&composition);
 }
@@ -3961,7 +3963,7 @@ fn an_await_free_conditional_beside_an_awaiting_sibling_keeps_branch_identity() 
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(106, || suspending_aggregate_probe(flag))
+        composition.render(Key(106), || suspending_aggregate_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -3999,7 +4001,7 @@ fn a_conditional_assignee_of_a_suspending_assignment_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(107, || suspending_assignee_probe(flag))
+        composition.render(Key(107), || suspending_assignee_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -4035,7 +4037,7 @@ fn a_braced_macro_statement_does_not_feed_the_tail() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
-        composition.render(108, || braced_macro_statement_probe(enabled))
+        composition.render(Key(108), || braced_macro_statement_probe(enabled))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -4068,7 +4070,7 @@ fn erased_calls_beside_an_await_share_position_by_construction() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(109, || erased_call_beside_await_probe(flag))
+        composition.render(Key(109), || erased_call_beside_await_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -4097,7 +4099,7 @@ fn an_extern_abi_composable_still_compiles() {
     reset_branch_probes();
     let mut composition = test_composition();
     composition
-        .render(110, || ExternEntryProbe())
+        .render(Key(110), || ExternEntryProbe())
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 701));
     assert_composition_valid(&composition);
@@ -4120,7 +4122,7 @@ fn an_extern_rust_composable_keeps_caller_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
-        composition.render(111, || extern_rust_pair_probe(with_first))
+        composition.render(Key(111), || extern_rust_pair_probe(with_first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -4155,7 +4157,7 @@ fn an_await_free_tail_of_a_suspending_block_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
-        composition.render(112, || suspending_tail_probe(flag))
+        composition.render(Key(112), || suspending_tail_probe(flag))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -4211,7 +4213,7 @@ fn generated_identifiers_survive_local_shadowing() {
     reset_branch_probes();
     let mut composition = test_composition();
     composition
-        .render(113, || {
+        .render(Key(113), || {
             let _ = hygiene_shadow_probe::ShadowedNames(802);
             hygiene_shadow_probe::ShadowedNoSkip();
         })
@@ -4249,7 +4251,7 @@ fn erased_calls_in_an_uninstrumented_helper_share_position_by_construction() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, include_first: bool| {
-        composition.render(115, || helper_contract_probe(false, include_first))
+        composition.render(Key(115), || helper_contract_probe(false, include_first))
     };
 
     pass(&mut composition, true).expect("initial composition");
@@ -4271,7 +4273,7 @@ fn erased_calls_in_a_composable_helper_keep_their_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, include_first: bool| {
-        composition.render(116, || helper_contract_probe(true, include_first))
+        composition.render(Key(116), || helper_contract_probe(true, include_first))
     };
 
     pass(&mut composition, true).expect("initial composition");

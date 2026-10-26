@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext,
-    ModifierNodeElement, NodeCapabilities, NodeState, PointerEvent, PointerEventKind,
+    ModifierNodeElement, NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerId,
     PointerInputNode,
 };
 
@@ -17,7 +17,7 @@ use crate::modifier::Point;
 enum ClickPress {
     Idle,
     /// A pointer went down here, and the id of that pointer.
-    Pressed(Point, cranpose_foundation::PointerId),
+    Pressed(Point, PointerId),
     /// The press was cancelled, by a long press that took it among others:
     /// its release does not click.
     Cancelled,
@@ -106,7 +106,7 @@ impl ClickableNode {
                         // A release with no press before it clicks for the
                         // primary pointer only: another finger's release after
                         // the first one clicked is not a click of its own.
-                        ClickPress::Idle => event.id == 0,
+                        ClickPress::Idle => event.id.is_primary(),
                         ClickPress::Cancelled => false,
                     };
 

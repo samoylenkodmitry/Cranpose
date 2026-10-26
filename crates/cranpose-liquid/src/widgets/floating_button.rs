@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_animation::{Animatable, AnimationType, spring};
 use cranpose_core::{RuntimeHandle, State, remember, with_current_composer};
-use cranpose_foundation::{SemanticsCustomAction, SemanticsWidgetRole};
+use cranpose_foundation::{PointerId, SemanticsCustomAction, SemanticsWidgetRole};
 use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
@@ -322,7 +322,7 @@ fn floating_gesture(
 fn advance_contact(
     contact: &Contact,
     size: Size,
-    down: &mut Option<(u64, cranpose_ui_graphics::Point)>,
+    down: &mut Option<(PointerId, cranpose_ui_graphics::Point)>,
     event: &PointerEvent,
     margin: f32,
 ) -> bool {

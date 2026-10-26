@@ -333,7 +333,7 @@ impl ActiveSubtreeRoot {
     }
 }
 
-pub(crate) const BRANCH_PATH_ROOT: Key = 0xcbf2_9ce4_8422_2325;
+pub(crate) const BRANCH_PATH_ROOT: Key = Key(0xcbf2_9ce4_8422_2325);
 
 pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,

@@ -14,13 +14,13 @@ enum ModelPayloadValue {
 
 impl ModelPayloadValue {
     fn initial(key: Key) -> Self {
-        Self::I32((key as i32) * 10)
+        Self::I32((key.0 as i32) * 10)
     }
 
     fn replacement(&self, key: Key) -> Self {
         match self {
-            Self::I32(_) => Self::U32((key as u32) * 100),
-            Self::U32(_) => Self::I32((key as i32) * 10),
+            Self::I32(_) => Self::U32((key.0 as u32) * 100),
+            Self::U32(_) => Self::I32((key.0 as i32) * 10),
         }
     }
 
@@ -137,7 +137,7 @@ struct ModelState {
 
 impl ModelState {
     fn scope_id_for(key: Key) -> ScopeId {
-        10_000 + key as ScopeId
+        10_000 + key.0 as ScopeId
     }
 
     fn next_scope_id_after(scope_id: ScopeId) -> ScopeId {
@@ -297,18 +297,18 @@ fn run_model_stress_scenarios_from_env() {
     while remaining_frames > 0 {
         let frame_count = remaining_frames.min(FRAMES_PER_SCENARIO);
         let child_count = 4 + (scenario_index % 9);
-        let child_base = 20_000 + (scenario_index as Key) * 100;
+        let child_base = 20_000 + (scenario_index as u64) * 100;
         let children = (0..child_count)
-            .map(|offset| child_base + offset as Key)
+            .map(|offset| Key(child_base + offset as u64))
             .collect::<Vec<_>>();
-        let parent_key = 30_000 + (scenario_index as Key) * 2;
+        let parent_key = 30_000 + (scenario_index as u64) * 2;
         let child_static_key = parent_key + 1;
 
         ModelScenario {
             seed: model_stress_seed(scenario_index),
             frame_count,
-            parent_key,
-            child_static_key,
+            parent_key: Key(parent_key),
+            child_static_key: Key(child_static_key),
             children: &children,
         }
         .run();
@@ -945,7 +945,7 @@ fn apply_model_operation(
                     }
                     let replacing_node = replace_nodes.contains(&key) && previous_node.is_some();
                     let node = match &previous_node {
-                        Some(node) if replacing_node && key % 2 == 0 => ModelNode {
+                        Some(node) if replacing_node && key.0 % 2 == 0 => ModelNode {
                             node_id: node.node_id,
                             generation: node
                                 .generation
@@ -1171,14 +1171,18 @@ fn run_model_script(parent_key: Key, child_static_key: Key, script: &[ModelOpera
 
 #[test]
 fn model_operation_compact_format_is_deterministic() {
-    let operation = model_compose_frame(&[3, 1, 2], &[8, 4, 6], &[7, 5]);
+    let operation = model_compose_frame(
+        &[Key(3), Key(1), Key(2)],
+        &[Key(8), Key(4), Key(6)],
+        &[Key(7), Key(5)],
+    );
 
     assert_eq!(
         operation.compact(),
         "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], replace=[], nodes=[], scopes=[], compact=false)"
     );
     assert_eq!(
-        ModelOperation::RecomposeSkip { key: 11 }.compact(),
+        ModelOperation::RecomposeSkip { key: Key(11) }.compact(),
         "skip(key=11)"
     );
 }
@@ -1189,23 +1193,32 @@ fn deterministic_model_render_frames_match_slot_table() {
         ModelScenario {
             seed: 0x9E37_79B9_7F4A_7C15,
             frame_count: 96,
-            parent_key: 700,
-            child_static_key: 701,
-            children: &[1, 2, 3, 4],
+            parent_key: Key(700),
+            child_static_key: Key(701),
+            children: &[Key(1), Key(2), Key(3), Key(4)],
         },
         ModelScenario {
             seed: 0xD1B5_4A32_D192_ED03,
             frame_count: 128,
-            parent_key: 710,
-            child_static_key: 711,
-            children: &[11, 12, 13, 14, 15, 16],
+            parent_key: Key(710),
+            child_static_key: Key(711),
+            children: &[Key(11), Key(12), Key(13), Key(14), Key(15), Key(16)],
         },
         ModelScenario {
             seed: 0xA24B_AED4_963E_E407,
             frame_count: 160,
-            parent_key: 720,
-            child_static_key: 721,
-            children: &[21, 22, 23, 24, 25, 26, 27, 28],
+            parent_key: Key(720),
+            child_static_key: Key(721),
+            children: &[
+                Key(21),
+                Key(22),
+                Key(23),
+                Key(24),
+                Key(25),
+                Key(26),
+                Key(27),
+                Key(28),
+            ],
         },
     ];
 
@@ -1218,36 +1231,36 @@ fn deterministic_model_render_frames_match_slot_table() {
 #[test]
 fn scripted_model_render_frames_cover_slot_table_behaviors() {
     let script = [
-        model_compose_frame(&[1, 2, 3], &[], &[1, 2]),
+        model_compose_frame(&[Key(1), Key(2), Key(3)], &[], &[Key(1), Key(2)]),
         model_compose_frame_with_options(ModelComposeFrameSpec {
-            order: &[3, 2, 1],
+            order: &[Key(3), Key(2), Key(1)],
             retain_detached: &[],
             drop_retained: &[],
-            mutate_values: &[3],
-            replace_payload_types: &[2],
-            replace_nodes: &[3],
-            replace_scopes: &[1],
+            mutate_values: &[Key(3)],
+            replace_payload_types: &[Key(2)],
+            replace_nodes: &[Key(3)],
+            replace_scopes: &[Key(1)],
             compact_storage: false,
         }),
-        ModelOperation::RecomposeSkip { key: 2 },
-        model_compose_frame(&[3, 1], &[2], &[]),
-        model_compose_frame(&[2, 3, 1], &[], &[2]),
-        model_compose_frame(&[10], &[2, 3, 1], &[10]),
-        ModelOperation::RecomposeSkip { key: 10 },
-        model_compose_frame(&[1, 2], &[], &[1]),
-        model_compose_frame(&[], &[1, 2], &[]),
+        ModelOperation::RecomposeSkip { key: Key(2) },
+        model_compose_frame(&[Key(3), Key(1)], &[Key(2)], &[]),
+        model_compose_frame(&[Key(2), Key(3), Key(1)], &[], &[Key(2)]),
+        model_compose_frame(&[Key(10)], &[Key(2), Key(3), Key(1)], &[Key(10)]),
+        ModelOperation::RecomposeSkip { key: Key(10) },
+        model_compose_frame(&[Key(1), Key(2)], &[], &[Key(1)]),
+        model_compose_frame(&[], &[Key(1), Key(2)], &[]),
         model_compose_frame_with_options(ModelComposeFrameSpec {
             order: &[],
             retain_detached: &[],
-            drop_retained: &[2],
+            drop_retained: &[Key(2)],
             mutate_values: &[],
             replace_payload_types: &[],
             replace_nodes: &[],
             replace_scopes: &[],
             compact_storage: true,
         }),
-        model_compose_frame(&[2, 1, 4], &[], &[4]),
+        model_compose_frame(&[Key(2), Key(1), Key(4)], &[], &[Key(4)]),
     ];
 
-    run_model_script(730, 731, &script);
+    run_model_script(Key(730), Key(731), &script);
 }

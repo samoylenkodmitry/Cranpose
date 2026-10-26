@@ -3,7 +3,7 @@ use super::super::{
 };
 use crate::{Key, Owned};
 
-const RECOVERY_VALUE_SLOT_STATIC_KEY: Key = Key::MAX;
+const RECOVERY_VALUE_SLOT_STATIC_KEY: Key = Key(u64::MAX);
 
 impl SlotWriteSession<'_> {
     pub(in crate::slot) fn flush_payload_location_refreshes(&mut self) {

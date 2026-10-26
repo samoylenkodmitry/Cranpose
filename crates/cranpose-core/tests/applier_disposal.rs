@@ -211,7 +211,7 @@ struct RetainedHostFixture {
 }
 
 fn retained_host_fixture() -> RetainedHostFixture {
-    const BRANCH_KEY: Key = 0x5ec0;
+    const BRANCH_KEY: u64 = 0x5ec0;
 
     let fail_disposal = Rc::new(Cell::new(false));
     let host = Rc::new(ConcreteApplierHost::new(RetryApplier {
@@ -236,7 +236,7 @@ fn retained_host_fixture() -> RetainedHostFixture {
             .subcompose_slot(&secondary_slots, None, |composer| {
                 if show_branch {
                     composer.cranpose_with_reuse(
-                        BRANCH_KEY,
+                        Key(BRANCH_KEY),
                         RecomposeOptions::default(),
                         |composer| {
                             let _resource = composer

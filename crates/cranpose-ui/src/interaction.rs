@@ -545,7 +545,7 @@ impl<T: InteractionTracker> InteractionNode<T> {
         active: Rc<RefCell<Option<T::Active>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            if event.id == 0 {
+            if event.id.is_primary() {
                 tracker.handle(interaction_source, &active, &event);
             }
         })

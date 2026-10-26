@@ -156,7 +156,7 @@ impl HotOrigin {
         file: "",
         line: 0,
         end: 0,
-        identity: 0,
+        identity: Key(0),
     };
 }
 
@@ -199,11 +199,11 @@ pub(crate) fn hot_call_site_key(file: &str, line: u32, column: u32) -> Option<Ke
         return None;
     }
     let relative = line.wrapping_sub(origin.line);
-    let hash = fnv1a_location_key_bytes(origin.identity, &relative.to_le_bytes());
-    Some(avalanche_location_key(fnv1a_location_key_bytes(
+    let hash = fnv1a_location_key_bytes(origin.identity.0, &relative.to_le_bytes());
+    Some(Key(avalanche_location_key(fnv1a_location_key_bytes(
         hash ^ 0xfc,
         &column.to_le_bytes(),
-    )))
+    ))))
 }
 
 /// Branch group key for the development-only `hot-reload` expansion: the
@@ -211,10 +211,10 @@ pub(crate) fn hot_call_site_key(file: &str, line: u32, column: u32) -> Option<Ke
 #[doc(hidden)]
 pub const fn hot_branch_key(file: &str, path_hash: u64) -> Key {
     let hash = file_location_hash(file);
-    avalanche_location_key(fnv1a_location_key_bytes(
+    Key(avalanche_location_key(fnv1a_location_key_bytes(
         hash ^ 0xfd,
         &path_hash.to_le_bytes(),
-    ))
+    )))
 }
 
 /// Composable definition key for the development-only `hot-reload`
@@ -223,28 +223,35 @@ pub const fn hot_branch_key(file: &str, path_hash: u64) -> Key {
 pub const fn hot_definition_key(file: &str, module: &str, name: &str) -> Key {
     let mut hash = file_location_hash(file);
     hash = fnv1a_location_key_bytes(hash ^ 0xfe, module.as_bytes());
-    avalanche_location_key(fnv1a_location_key_bytes(hash ^ 0xff, name.as_bytes()))
+    Key(avalanche_location_key(fnv1a_location_key_bytes(
+        hash ^ 0xff,
+        name.as_bytes(),
+    )))
 }
 
 #[doc(hidden)]
 #[track_caller]
 pub fn composable_identity_key(definition: Key) -> Key {
-    (definition.wrapping_mul(0x0000_0100_0000_01b3) ^ caller_location_key())
-        .wrapping_mul(0x0000_0100_0000_01b3)
+    Key(
+        (definition.0.wrapping_mul(0x0000_0100_0000_01b3) ^ caller_location_key().0)
+            .wrapping_mul(0x0000_0100_0000_01b3),
+    )
 }
 
 #[doc(hidden)]
 pub fn composable_definition_key(file: &str, line: u32, column: u32, marker: TypeId) -> Key {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     Hash::hash(&marker, &mut hasher);
-    location_key(file, line, column) ^ avalanche_location_key(Hasher::finish(&hasher))
+    Key(location_key(file, line, column).0 ^ avalanche_location_key(Hasher::finish(&hasher)))
 }
 
 /// The key [`caller_location_key`] gives a call site, as a constant the
 /// `#[composable]` macro writes, so the call takes no thread-local lookup.
 #[doc(hidden)]
 pub const fn const_location_key(file: &str, line: u32, column: u32) -> Key {
-    avalanche_location_key(source_location_hash(file, line, column))
+    Key(avalanche_location_key(source_location_hash(
+        file, line, column,
+    )))
 }
 
 /// [`location_key()`] of the place it is written, worked out at build time
@@ -284,7 +291,9 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
 }
 
 fn registered_location_key(file_hash: u64, file: &str, line: u32, column: u32) -> Key {
-    let key = avalanche_location_key(position_location_hash(file_hash, line, column));
+    let key = Key(avalanche_location_key(position_location_hash(
+        file_hash, line, column,
+    )));
     note_location_key(key, file, line, column);
     key
 }
@@ -310,7 +319,7 @@ pub const fn branch_location_key(file: &str, line: u32, column: u32, branch: u32
     let mut hash = source_location_hash(file, line, column);
     hash = fnv1a_location_key_bytes(hash, &[0xfd]);
     hash = fnv1a_location_key_bytes(hash, &branch.to_le_bytes());
-    avalanche_location_key(hash)
+    Key(avalanche_location_key(hash))
 }
 
 /// The key of the `index`th constant value the `#[composable]` macro keeps
@@ -320,7 +329,7 @@ pub const fn constant_value_key(file: &str, line: u32, column: u32, index: u32) 
     let mut hash = source_location_hash(file, line, column);
     hash = fnv1a_location_key_bytes(hash, &[0xfc]);
     hash = fnv1a_location_key_bytes(hash, &index.to_le_bytes());
-    avalanche_location_key(hash)
+    Key(avalanche_location_key(hash))
 }
 
 /// Slots of the per-thread table of constant values, as a power of two.
@@ -335,7 +344,7 @@ const CONSTANT_SLOTS: usize = 128;
 /// in an event handler, an effect or another thread.
 #[doc(hidden)]
 pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
-    let slot = (key as usize) & (CONSTANT_SLOTS - 1);
+    let slot = (key.0 as usize) & (CONSTANT_SLOTS - 1);
     let kept = thread_state::try_runtimes(|state| {
         let constants = state.constants.try_borrow().ok()?;
         let (kept_key, value) = constants.get(slot)?.as_ref()?;

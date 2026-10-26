@@ -13,9 +13,9 @@ use super::{
 };
 use crate::{AnchorId, Key, collections::map::HashMap, slot::PayloadAnchor};
 
-pub(crate) const MOVABLE_STATIC_KEY: Key = 0x6d6f_7661_626c_6521;
+pub(crate) const MOVABLE_STATIC_KEY: Key = Key(0x6d6f_7661_626c_6521);
 
-pub(crate) const MOVABLE_PLACEHOLDER_STATIC_KEY: Key = 0x6d6f_7661_626c_6520;
+pub(crate) const MOVABLE_PLACEHOLDER_STATIC_KEY: Key = Key(0x6d6f_7661_626c_6520);
 
 impl GroupKey {
     pub(crate) fn is_movable(self) -> bool {

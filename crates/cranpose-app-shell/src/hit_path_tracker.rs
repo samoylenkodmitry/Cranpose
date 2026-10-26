@@ -1,11 +1,5 @@
 use cranpose_core::{NodeId, collections::map::HashMap};
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct PointerId(pub u32);
-
-impl PointerId {
-    pub(crate) const PRIMARY: Self = Self(0);
-}
+use cranpose_foundation::PointerId;
 
 pub(crate) struct HitPathTracker {
     paths: HashMap<PointerId, Vec<Vec<NodeId>>>,

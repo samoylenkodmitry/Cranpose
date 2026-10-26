@@ -115,7 +115,7 @@ impl Press {
     }
 
     fn on_event(press: &Rc<Self>, event: &PointerEvent) {
-        if event.id != 0 {
+        if !event.id.is_primary() {
             return;
         }
         match event.kind {

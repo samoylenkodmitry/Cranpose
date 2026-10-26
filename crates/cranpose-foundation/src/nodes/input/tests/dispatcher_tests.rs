@@ -6,7 +6,7 @@ use crate::nodes::input::PointerEventKind;
 fn event(id: u64, x: f32) -> PointerEvent {
     let position = Point { x, y: 0.0 };
     let mut event = PointerEvent::new(PointerEventKind::Move, position, position);
-    event.id = id;
+    event.id = PointerId(id);
     event
 }
 
@@ -19,7 +19,7 @@ fn drain_dispatches_events_in_fifo_order_and_clears_queue() {
     let mut drained = Vec::new();
     dispatcher.drain(|id, event| drained.push((id, event.position.x)));
 
-    assert_eq!(drained, vec![(1, 10.0), (2, 20.0)]);
+    assert_eq!(drained, vec![(PointerId(1), 10.0), (PointerId(2), 20.0)]);
     assert!(dispatcher.is_empty());
 }
 

@@ -10,10 +10,8 @@ use smallvec::SmallVec;
 use crate::{
     collections::map::{HashMap, HashSet},
     hash::default as default_hash,
-    snapshot_v2::{
-        ReadObserver, StateObjectId, TransparentObserverMutableSnapshot, register_apply_observer,
-    },
-    state::StateObject,
+    snapshot_v2::{ReadObserver, TransparentObserverMutableSnapshot, register_apply_observer},
+    state::{ObjectId, StateObject},
 };
 
 type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
@@ -129,7 +127,7 @@ struct SnapshotStateObserverInner {
     executor: Rc<Executor>,
     owned_scopes: RefCell<HashMap<OwnedScopeIndexKey, OwnedScopeBucket>>,
     indexed_scopes: RefCell<HashMap<usize, Rc<RefCell<ScopeEntry>>>>,
-    observed_to_scopes: RefCell<HashMap<StateObjectId, HashSet<usize>>>,
+    observed_to_scopes: RefCell<HashMap<ObjectId, HashSet<usize>>>,
     pause_count: Rc<Cell<usize>>,
     active_read_targets: Rc<RefCell<ReadObservationStack>>,
     read_dispatcher: ReadObserver,
@@ -469,7 +467,7 @@ impl SnapshotStateObserverInner {
             let observed_to_scopes = self.observed_to_scopes.borrow();
             let indexed_scopes = self.indexed_scopes.borrow();
             for state in modified {
-                if let Some(scope_ids) = observed_to_scopes.get(&state.object_id().as_usize()) {
+                if let Some(scope_ids) = observed_to_scopes.get(&state.object_id()) {
                     let mut ordered_scope_ids: SmallVec<[usize; 8]> =
                         scope_ids.iter().copied().collect();
                     ordered_scope_ids.sort_unstable();
@@ -526,7 +524,7 @@ impl SnapshotStateObserverInner {
 
     fn unregister_observed_ids(&self, entry_id: usize, observed: &ObservedIds) {
         let mut observed_to_scopes = self.observed_to_scopes.borrow_mut();
-        let mut emptied = SmallVec::<[StateObjectId; MAX_OBSERVED_STATES]>::new();
+        let mut emptied = SmallVec::<[ObjectId; MAX_OBSERVED_STATES]>::new();
         for state_id in observed.iter() {
             if let Some(scope_ids) = observed_to_scopes.get_mut(&state_id) {
                 scope_ids.remove(&entry_id);
@@ -602,11 +600,11 @@ impl ReadObservationStack {
 )]
 enum ObservedIds {
     Small(SmallVec<[ObservedState; 1]>),
-    Large(Box<HashMap<StateObjectId, Option<Rc<dyn Any>>>>),
+    Large(Box<HashMap<ObjectId, Option<Rc<dyn Any>>>>),
 }
 
 struct ObservedState {
-    id: StateObjectId,
+    id: ObjectId,
     _lease: Option<Rc<dyn Any>>,
 }
 
@@ -616,7 +614,7 @@ impl ObservedIds {
     }
 
     fn insert(&mut self, state: &dyn StateObject) {
-        let id = state.object_id().as_usize();
+        let id = state.object_id();
         match self {
             Self::Small(small) => {
                 if small.iter().any(|observed| observed.id == id) {
@@ -693,7 +691,7 @@ impl ObservedIds {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = StateObjectId> + '_ {
+    fn iter(&self) -> impl Iterator<Item = ObjectId> + '_ {
         let (small, large) = match self {
             Self::Small(small) => (Some(small.as_slice()), None),
             Self::Large(large) => (None, Some(large)),

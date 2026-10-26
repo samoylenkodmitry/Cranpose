@@ -1,5 +1,7 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+use cranpose_core::Key;
+
 mod support;
 
 use coroflow::{FlowExt, MainScope, MutableSharedFlow, MutableStateFlow};
@@ -13,7 +15,7 @@ fn the_main_dispatcher_runs_coroutines_on_the_ui_queue() {
     let scope: Rc<RefCell<Option<MainScope>>> = Rc::default();
     let capture = Rc::clone(&scope);
     composition
-        .render(1, move || {
+        .render(Key(1), move || {
             let dispatcher = main_dispatcher();
             assert!(dispatcher.is_some());
             if let Some(dispatcher) = dispatcher {
@@ -45,7 +47,7 @@ fn collect_as_state_follows_a_state_flow_set_from_another_thread() {
             let seen = Rc::clone(&seen);
             let flow = flow.clone();
             composition
-                .render(1, move || {
+                .render(Key(1), move || {
                     seen.borrow_mut().push(flow.collectAsState().get());
                 })
                 .expect("render");
@@ -69,7 +71,7 @@ fn collect_as_state_follows_a_state_flow_set_from_another_thread() {
         == Some(&7)));
     assert_eq!(source.subscription_count().value(), 1);
 
-    composition.render(1, || {}).expect("remove");
+    composition.render(Key(1), || {}).expect("remove");
     composition.runtime_handle().drain_ui();
     assert_eq!(
         source.subscription_count().value(),
@@ -89,7 +91,7 @@ fn collect_flow_delivers_events_and_restarts_when_its_key_changes() {
         move |composition: &mut Composition<MemoryApplier>| {
             let (events, received, key) = (events.clone(), Rc::clone(&received), *key.borrow());
             composition
-                .render(1, move || {
+                .render(Key(1), move || {
                     let received = Rc::clone(&received);
                     CollectFlow(
                         key,
@@ -145,7 +147,7 @@ impl<S: Copy + 'static> SnapshotHarness<S> {
             Rc::new(move |composition: &mut Composition<MemoryApplier>| {
                 let (source, received) = (Rc::clone(&source), Rc::clone(&received));
                 composition
-                    .render(1, move || {
+                    .render(Key(1), move || {
                         let state = remember(create).with(|state| *state);
                         *source.borrow_mut() = Some(state);
                         let received = Rc::clone(&received);

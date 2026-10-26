@@ -27,7 +27,7 @@ use cranpose_core::{
     run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
-    DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerId, PointerSource, RotaryScrollEvent,
     rotary_scroll_pixels_from_detents,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
@@ -43,7 +43,6 @@ pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
 pub use frame_rate_boost::FrameRateBoost;
-use hit_path_tracker::PointerId;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};

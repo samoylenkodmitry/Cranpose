@@ -1443,11 +1443,11 @@ impl RuntimeHandle {
     pub(crate) fn next_movable_content_id(&self) -> Key {
         let Some(inner) = self.inner.upgrade() else {
             log::error!("movable content asked a runtime that is gone for an identity");
-            return 0;
+            return Key(0);
         };
         let id = inner.next_movable_content_id.get();
         inner.next_movable_content_id.set(id.wrapping_add(1).max(1));
-        id
+        Key(id)
     }
 
     /// Returns `true` if a recompose scope has been invalidated and not yet recomposed.

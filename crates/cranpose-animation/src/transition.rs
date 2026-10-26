@@ -138,7 +138,7 @@ impl<S: Clone + 'static> Transition<S> {
             let identity = animatable_clone.identity();
             let transition_inner = Rc::clone(&self.inner);
             cranpose_core::__disposable_effect_impl(
-                caller ^ cranpose_core::location_key!(),
+                caller.scoped(cranpose_core::location_key!()),
                 identity,
                 move |_scope| {
                     let child: Rc<dyn TransitionChild> = Rc::new(animatable_clone);

@@ -361,13 +361,13 @@ impl Modifier {
                                             gs.travel = 0.0;
                                             gs.tap_down = Some(event.global_position);
                                         }
-                                        if event.id != 0 {
+                                        if !event.id.is_primary() {
                                             event.consume();
                                         }
                                         continue;
                                     }
 
-                                    if event.kind == PointerEventKind::Up && event.id == 0 {
+                                    if event.kind == PointerEventKind::Up && event.id.is_primary() {
                                         let now_ms = gs.timestamp_ms(event.time_ms);
                                         let up_position = event.global_position;
                                         let is_tap = !gs.active
@@ -428,7 +428,7 @@ impl Modifier {
                                             }
                                         }
                                         TransformGestureEvent::None => {
-                                            if event.id != 0
+                                            if !event.id.is_primary()
                                                 || (gs.active
                                                     && matches!(
                                                         event.kind,

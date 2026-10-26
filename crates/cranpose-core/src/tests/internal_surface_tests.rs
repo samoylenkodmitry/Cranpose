@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::{Composition, MemoryApplier, frame_clock::FrameClock};
+use crate::{Composition, MemoryApplier, frame_clock::FrameClock, snapshot_id_set::SnapshotId};
 
 #[test]
 fn a_frame_callback_fires_once_for_the_frame_it_registered_for() {
@@ -62,14 +62,34 @@ fn a_perpetual_frame_keeps_asking_after_every_dispatch() {
 fn a_snapshot_id_range_adds_every_id_in_it_and_nothing_outside() {
     use crate::snapshot_id_set::SnapshotIdSet;
 
-    let set = SnapshotIdSet::EMPTY.add_range(3, 7);
-    assert_eq!(set.to_list(), vec![3, 4, 5, 6], "the range is half-open");
+    let set = SnapshotIdSet::EMPTY.add_range(SnapshotId(3), SnapshotId(7));
+    assert_eq!(
+        set.to_list(),
+        vec![SnapshotId(3), SnapshotId(4), SnapshotId(5), SnapshotId(6)],
+        "the range is half-open"
+    );
 
-    assert_eq!(set.add_range(5, 5).to_list(), set.to_list());
-    assert_eq!(set.add_range(9, 2).to_list(), set.to_list());
+    assert_eq!(
+        set.add_range(SnapshotId(5), SnapshotId(5)).to_list(),
+        set.to_list()
+    );
+    assert_eq!(
+        set.add_range(SnapshotId(9), SnapshotId(2)).to_list(),
+        set.to_list()
+    );
 
-    let widened = set.add_range(5, 9);
-    assert_eq!(widened.to_list(), vec![3, 4, 5, 6, 7, 8]);
+    let widened = set.add_range(SnapshotId(5), SnapshotId(9));
+    assert_eq!(
+        widened.to_list(),
+        vec![
+            SnapshotId(3),
+            SnapshotId(4),
+            SnapshotId(5),
+            SnapshotId(6),
+            SnapshotId(7),
+            SnapshotId(8)
+        ]
+    );
 }
 
 #[test]

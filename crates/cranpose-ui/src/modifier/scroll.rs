@@ -472,7 +472,7 @@ where
                     loop {
                         let event = await_scope.await_pointer_event().await;
 
-                        if event.id != 0 {
+                        if !event.id.is_primary() {
                             continue;
                         }
 

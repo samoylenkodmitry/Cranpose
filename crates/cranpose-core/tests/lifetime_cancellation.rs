@@ -5,13 +5,13 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{Composition, CoroutineScope, MemoryApplier, rememberCoroutineScope};
+use cranpose_core::{Composition, CoroutineScope, Key, MemoryApplier, rememberCoroutineScope};
 
 fn capture_scope(composition: &mut Composition<MemoryApplier>) -> CoroutineScope {
     let held_scope = Rc::new(RefCell::new(None));
     let capture = Rc::clone(&held_scope);
     composition
-        .render(1, move || {
+        .render(Key(1), move || {
             *capture.borrow_mut() = Some(rememberCoroutineScope());
         })
         .expect("initial composition");
@@ -69,7 +69,7 @@ fn a_retained_scope_does_not_keep_removed_composition_work_alive() {
         result.set(true);
     });
     runtime.drain_ui();
-    composition.render(1, || {}).expect("scope removed");
+    composition.render(Key(1), || {}).expect("scope removed");
     runtime.drain_frame_callbacks(1);
     runtime.drain_ui();
     scope.cancel();
@@ -95,7 +95,7 @@ fn a_removed_scope_rejects_new_work_from_a_retained_handle() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let scope = capture_scope(&mut composition);
-    composition.render(1, || {}).expect("scope removed");
+    composition.render(Key(1), || {}).expect("scope removed");
     let ran = Rc::new(Cell::new(false));
     let result = Rc::clone(&ran);
     scope.launch(async move { result.set(true) });

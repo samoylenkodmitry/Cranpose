@@ -1,3 +1,4 @@
+use cranpose_core::Key;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, LayoutBox, LayoutDirection, Modifier, ProvideLayoutDirection,
@@ -141,7 +142,7 @@ fn lazy_lists_update_positions_after_direction_changes_and_scroll() {
     let row_state = std::rc::Rc::new(std::cell::Cell::new(None));
     let captured_state = std::rc::Rc::clone(&row_state);
     composition
-        .render(992, move || {
+        .render(Key(992), move || {
             DirectionalLists(direction, std::rc::Rc::clone(&captured_state));
         })
         .expect("list composition");

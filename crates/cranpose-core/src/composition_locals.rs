@@ -12,7 +12,7 @@ use crate::{
 };
 
 fn provider_entry_source(key: &LocalKey, caller: Key) -> Key {
-    (key.entry_source() ^ caller).wrapping_mul(0x0000_0100_0000_01b3)
+    key.entry_source().mixed(caller)
 }
 
 /// A composition local paired with the value to provide, made by `provides` and passed to
@@ -210,7 +210,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
             key,
             apply: Box::new(move |composer: &Composer, site: Key| {
                 let runtime = composer.runtime_handle();
-                let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
+                let source = entry_source.mixed(site);
                 let entry_ref = composer.remember_internal(source, || {
                     Rc::new(LocalStateEntry::new(
                         value.clone(),
@@ -241,7 +241,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
             key,
             apply: Box::new(move |composer: &Composer, site: Key| {
                 let runtime = composer.runtime_handle();
-                let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
+                let source = entry_source.mixed(site);
                 let entry_ref = composer.remember_internal(source, || {
                     Rc::new(ComputedLocalEntry {
                         compute: OwnedMutableState::with_runtime_and_policy(
@@ -465,7 +465,7 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer, site: Key| {
-                let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
+                let source = entry_source.mixed(site);
                 let entry_ref = composer
                     .remember_internal(source, || Rc::new(StaticLocalEntry::new(value.clone())));
                 let changed = entry_ref.update(|entry| entry.set(value.clone(), &*equivalent));
@@ -575,7 +575,7 @@ impl LocalKey {
     }
 
     pub(crate) fn entry_source(&self) -> Key {
-        avalanche_location_key(Rc::as_ptr(&self.0) as usize as u64)
+        Key(avalanche_location_key(Rc::as_ptr(&self.0) as usize as u64))
     }
 }
 

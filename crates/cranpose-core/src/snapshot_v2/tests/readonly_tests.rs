@@ -5,32 +5,32 @@ use crate::{state::StateObject, tests::state_mock::MockState};
 
 #[test]
 fn test_readonly_snapshot_creation() {
-    let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
-    assert_eq!(snapshot.snapshot_id(), 1);
+    let snapshot = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(1));
     assert!(!snapshot.is_disposed());
 }
 
 #[test]
 fn test_readonly_snapshot_is_valid() {
-    let invalid = SnapshotIdSet::new().set(5);
-    let snapshot = ReadonlySnapshot::new(10, invalid, None);
+    let invalid = SnapshotIdSet::new().set(SnapshotId(5));
+    let snapshot = ReadonlySnapshot::new(SnapshotId(10), invalid, None);
 
     let any_snapshot = AnySnapshot::Readonly(snapshot);
-    assert!(any_snapshot.is_valid(1));
-    assert!(any_snapshot.is_valid(10));
-    assert!(!any_snapshot.is_valid(5));
-    assert!(!any_snapshot.is_valid(11));
+    assert!(any_snapshot.is_valid(SnapshotId(1)));
+    assert!(any_snapshot.is_valid(SnapshotId(10)));
+    assert!(!any_snapshot.is_valid(SnapshotId(5)));
+    assert!(!any_snapshot.is_valid(SnapshotId(11)));
 }
 
 #[test]
 fn test_readonly_snapshot_no_pending_changes() {
-    let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
+    let snapshot = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
     assert!(!snapshot.has_pending_changes());
 }
 
 #[test]
 fn test_readonly_snapshot_enter() {
-    let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
+    let snapshot = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
 
     set_current_snapshot(None);
     assert!(current_snapshot().is_none());
@@ -38,7 +38,7 @@ fn test_readonly_snapshot_enter() {
     snapshot.enter(|| {
         let current = current_snapshot();
         assert!(current.is_some());
-        assert_eq!(current.unwrap().snapshot_id(), 1);
+        assert_eq!(current.unwrap().snapshot_id(), SnapshotId(1));
     });
 
     assert!(current_snapshot().is_none());
@@ -46,26 +46,26 @@ fn test_readonly_snapshot_enter() {
 
 #[test]
 fn test_readonly_snapshot_enter_restores_previous() {
-    let snapshot1 = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
-    let snapshot2 = ReadonlySnapshot::new(2, SnapshotIdSet::new(), None);
+    let snapshot1 = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
+    let snapshot2 = ReadonlySnapshot::new(SnapshotId(2), SnapshotIdSet::new(), None);
 
     snapshot1.enter(|| {
         snapshot2.enter(|| {
             let current = current_snapshot();
-            assert_eq!(current.unwrap().snapshot_id(), 2);
+            assert_eq!(current.unwrap().snapshot_id(), SnapshotId(2));
         });
 
         let current = current_snapshot();
-        assert_eq!(current.unwrap().snapshot_id(), 1);
+        assert_eq!(current.unwrap().snapshot_id(), SnapshotId(1));
     });
 }
 
 #[test]
 fn test_readonly_snapshot_nested() {
-    let parent = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
+    let parent = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
     let nested = parent.take_nested_snapshot(None);
 
-    assert_eq!(nested.snapshot_id(), 1);
+    assert_eq!(nested.snapshot_id(), SnapshotId(1));
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn test_readonly_snapshot_read_observer() {
         *read_count_clone.lock().unwrap() += 1;
     });
 
-    let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(observer));
+    let snapshot = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), Some(observer));
     let mock_state = MockState::with_id(0);
 
     snapshot.record_read(&mock_state);
@@ -104,7 +104,7 @@ fn test_readonly_snapshot_nested_with_observer() {
         *nested_reads_clone.lock().unwrap() += 1;
     });
 
-    let parent = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(parent_observer));
+    let parent = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), Some(parent_observer));
     let nested = parent.take_nested_snapshot(Some(nested_observer));
 
     let mock_state = MockState::with_id(0);
@@ -118,14 +118,14 @@ fn test_readonly_snapshot_nested_with_observer() {
 #[test]
 #[should_panic(expected = "Cannot write to a read-only snapshot")]
 fn test_readonly_snapshot_write_panics() {
-    let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
+    let snapshot = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
     let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
 }
 
 #[test]
 fn test_readonly_snapshot_dispose() {
-    let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
+    let snapshot = ReadonlySnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None);
     assert!(!snapshot.is_disposed());
 
     snapshot.dispose();

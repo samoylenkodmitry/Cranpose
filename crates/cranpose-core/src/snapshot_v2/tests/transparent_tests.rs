@@ -6,10 +6,15 @@ use crate::tests::state_mock::MockState;
 #[test]
 fn test_transparent_observer_mutable_snapshot() {
     let _guard = reset_runtime_for_tests();
-    let snapshot =
-        TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
+    let snapshot = TransparentObserverMutableSnapshot::new(
+        SnapshotId(1),
+        SnapshotIdSet::new(),
+        None,
+        None,
+        None,
+    );
 
-    assert_eq!(snapshot.snapshot_id(), 1);
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(1));
     assert!(!snapshot.read_only());
     assert!(snapshot.can_reuse());
 }
@@ -17,8 +22,13 @@ fn test_transparent_observer_mutable_snapshot() {
 #[test]
 fn test_transparent_observer_mutable_apply() {
     let _guard = reset_runtime_for_tests();
-    let snapshot =
-        TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
+    let snapshot = TransparentObserverMutableSnapshot::new(
+        SnapshotId(1),
+        SnapshotIdSet::new(),
+        None,
+        None,
+        None,
+    );
 
     let result = snapshot.apply();
     assert!(result.is_success());
@@ -27,9 +37,10 @@ fn test_transparent_observer_mutable_apply() {
 #[test]
 fn test_transparent_observer_snapshot() {
     let _guard = reset_runtime_for_tests();
-    let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
+    let snapshot =
+        TransparentObserverSnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None, None);
 
-    assert_eq!(snapshot.snapshot_id(), 1);
+    assert_eq!(snapshot.snapshot_id(), SnapshotId(1));
     assert!(snapshot.read_only());
     assert!(snapshot.can_reuse());
 }
@@ -39,7 +50,8 @@ fn test_transparent_observer_snapshot() {
 fn test_transparent_observer_snapshot_write_panics() {
     let _guard = reset_runtime_for_tests();
 
-    let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
+    let snapshot =
+        TransparentObserverSnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None, None);
 
     let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
@@ -51,7 +63,7 @@ fn transparent_mutable_set_read_observer_replaces_observer() {
     let initial_reads = Rc::new(Cell::new(0));
     let replacement_reads = Rc::new(Cell::new(0));
     let snapshot = TransparentObserverMutableSnapshot::new(
-        1,
+        SnapshotId(1),
         SnapshotIdSet::new(),
         Some(Rc::new({
             let initial_reads = Rc::clone(&initial_reads);
@@ -77,7 +89,7 @@ fn transparent_mutable_set_write_observer_replaces_observer() {
     let initial_writes = Rc::new(Cell::new(0));
     let replacement_writes = Rc::new(Cell::new(0));
     let snapshot = TransparentObserverMutableSnapshot::new(
-        1,
+        SnapshotId(1),
         SnapshotIdSet::new(),
         None,
         Some(Rc::new({
@@ -102,8 +114,13 @@ fn transparent_mutable_nested_snapshot_inherits_replaced_observers() {
     let _guard = reset_runtime_for_tests();
     let parent_reads = Rc::new(Cell::new(0));
     let parent_writes = Rc::new(Cell::new(0));
-    let snapshot =
-        TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
+    let snapshot = TransparentObserverMutableSnapshot::new(
+        SnapshotId(1),
+        SnapshotIdSet::new(),
+        None,
+        None,
+        None,
+    );
     snapshot.set_read_observer(Some(Rc::new({
         let parent_reads = Rc::clone(&parent_reads);
         move |_| parent_reads.set(parent_reads.get() + 1)
@@ -127,7 +144,7 @@ fn transparent_readonly_set_read_observer_replaces_observer() {
     let initial_reads = Rc::new(Cell::new(0));
     let replacement_reads = Rc::new(Cell::new(0));
     let snapshot = TransparentObserverSnapshot::new(
-        1,
+        SnapshotId(1),
         SnapshotIdSet::new(),
         Some(Rc::new({
             let initial_reads = Rc::clone(&initial_reads);
@@ -149,7 +166,13 @@ fn transparent_readonly_set_read_observer_replaces_observer() {
 #[test]
 fn test_transparent_observer_mutable_nested() {
     let _guard = reset_runtime_for_tests();
-    let parent = TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
+    let parent = TransparentObserverMutableSnapshot::new(
+        SnapshotId(1),
+        SnapshotIdSet::new(),
+        None,
+        None,
+        None,
+    );
 
     let nested = parent.take_nested_mutable_snapshot(None, None);
     assert!(nested.snapshot_id() > parent.snapshot_id());
@@ -158,7 +181,7 @@ fn test_transparent_observer_mutable_nested() {
 #[test]
 fn test_transparent_observer_snapshot_nested() {
     let _guard = reset_runtime_for_tests();
-    let parent = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
+    let parent = TransparentObserverSnapshot::new(SnapshotId(1), SnapshotIdSet::new(), None, None);
 
     let nested = parent.take_nested_snapshot(None);
     assert_eq!(nested.snapshot_id(), parent.snapshot_id());
