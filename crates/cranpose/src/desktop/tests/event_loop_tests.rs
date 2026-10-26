@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_core::Runtime;
+use cranpose_core::{NodeId, Runtime};
 use cranpose_runtime_std::StdScheduler;
 
 #[test]
@@ -991,16 +991,16 @@ fn a_new_window_takes_over_a_held_press_when_the_node_that_took_it_moved_there()
 #[test]
 fn a_press_belongs_to_the_window_drawing_the_node_that_took_it() {
     assert_eq!(
-        press_belongs_here(Some(RootId::Window(7)), RootId::Window(7)),
+        press_belongs_here(Some(RootId::Window(NodeId(7))), RootId::Window(NodeId(7))),
         PressBelongsHere::ItsNodeMovedHere
     );
     assert_eq!(
-        press_belongs_here(Some(RootId::Primary), RootId::Window(7)),
+        press_belongs_here(Some(RootId::Primary), RootId::Window(NodeId(7))),
         PressBelongsHere::AskTheRectangle,
         "a gesture whose node stayed behind is still a gesture this window may be taking over"
     );
     assert_eq!(
-        press_belongs_here(None, RootId::Window(7)),
+        press_belongs_here(None, RootId::Window(NodeId(7))),
         PressBelongsHere::AskTheRectangle
     );
 }

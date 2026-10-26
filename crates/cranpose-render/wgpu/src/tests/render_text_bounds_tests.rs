@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::Color;
 
@@ -7,7 +8,7 @@ use crate::{render::glyph_draws::glyph_clip_edges, scene::DrawnText};
 #[test]
 fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() {
     let mut draw = TextDraw {
-        node_id: 1,
+        node_id: NodeId(1),
         rect: Rect {
             x: 10.25,
             y: 20.75,

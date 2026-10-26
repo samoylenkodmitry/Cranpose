@@ -545,7 +545,7 @@ impl HitTestTarget for TestHitTarget {
     fn dispatch(&self, _event: PointerEvent) {}
 
     fn node_id(&self) -> NodeId {
-        0
+        NodeId(0)
     }
 }
 
@@ -1446,7 +1446,7 @@ fn pointer_dispatch_enters_shell_app_context() {
     let densities = Rc::new(RefCell::new(Vec::new()));
     let scene = AppContextProbeScene {
         target: AppContextProbeHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             densities: Rc::clone(&densities),
         },
     };
@@ -3091,16 +3091,16 @@ fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
     let skipped_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hits(vec![
         RecordingHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             consume: true,
             events: Rc::clone(&consumed_events),
-            capture_path: vec![1],
+            capture_path: vec![NodeId(1)],
         },
         RecordingHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             consume: false,
             events: Rc::clone(&skipped_events),
-            capture_path: vec![2],
+            capture_path: vec![NodeId(2)],
         },
     ]);
 
@@ -3130,19 +3130,19 @@ fn pointer_scrolled_dispatches_capture_path_ancestors() {
     let scene = RecordingScene::with_hit_node_ids(
         vec![
             RecordingHitTarget {
-                node_id: 1,
+                node_id: NodeId(1),
                 consume: false,
                 events: Rc::clone(&child_events),
-                capture_path: vec![1, 99],
+                capture_path: vec![NodeId(1), NodeId(99)],
             },
             RecordingHitTarget {
-                node_id: 99,
+                node_id: NodeId(99),
                 consume: true,
                 events: Rc::clone(&ancestor_events),
-                capture_path: vec![99],
+                capture_path: vec![NodeId(99)],
             },
         ],
-        vec![1],
+        vec![NodeId(1)],
     );
 
     let root_key = location_key(file!(), line!(), column!());
@@ -3170,10 +3170,10 @@ fn captured_gesture_cancels_when_original_targets_disappear() {
     let first_target_events = Rc::new(RefCell::new(Vec::new()));
     let rebound_target_events = Rc::new(RefCell::new(Vec::new()));
     let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         consume: false,
         events: Rc::clone(&first_target_events),
-        capture_path: vec![1],
+        capture_path: vec![NodeId(1)],
     }]));
 
     let root_key = location_key(file!(), line!(), column!());
@@ -3201,10 +3201,10 @@ fn captured_gesture_cancels_when_original_targets_disappear() {
     );
 
     *active_hits.borrow_mut() = vec![RecordingHitTarget {
-        node_id: 2,
+        node_id: NodeId(2),
         consume: false,
         events: Rc::clone(&rebound_target_events),
-        capture_path: vec![2],
+        capture_path: vec![NodeId(2)],
     }];
 
     assert!(
@@ -3237,10 +3237,10 @@ fn captured_gesture_continues_on_render_supplied_ancestor_when_child_disappears(
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let unrelated_events = Rc::new(RefCell::new(Vec::new()));
     let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         consume: false,
         events: Rc::clone(&child_events),
-        capture_path: vec![1, 99],
+        capture_path: vec![NodeId(1), NodeId(99)],
     }]));
 
     let root_key = location_key(file!(), line!(), column!());
@@ -3270,16 +3270,16 @@ fn captured_gesture_continues_on_render_supplied_ancestor_when_child_disappears(
 
     *active_hits.borrow_mut() = vec![
         RecordingHitTarget {
-            node_id: 99,
+            node_id: NodeId(99),
             consume: false,
             events: Rc::clone(&ancestor_events),
-            capture_path: vec![99],
+            capture_path: vec![NodeId(99)],
         },
         RecordingHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             consume: false,
             events: Rc::clone(&unrelated_events),
-            capture_path: vec![2],
+            capture_path: vec![NodeId(2)],
         },
     ];
 
@@ -3313,16 +3313,16 @@ fn consumed_pointer_down_only_captures_targets_that_received_the_down_event() {
     let lower_events = Rc::new(RefCell::new(Vec::new()));
     let active_hits = Rc::new(RefCell::new(vec![
         RecordingHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             consume: true,
             events: Rc::clone(&top_events),
-            capture_path: vec![1],
+            capture_path: vec![NodeId(1)],
         },
         RecordingHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             consume: false,
             events: Rc::clone(&lower_events),
-            capture_path: vec![2],
+            capture_path: vec![NodeId(2)],
         },
     ]));
 
@@ -3392,16 +3392,16 @@ fn captured_gesture_preserves_hit_order_when_paths_share_an_ancestor() {
     let shared_ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let active_hits = Rc::new(RefCell::new(vec![
         RecordingHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             consume: false,
             events: Rc::clone(&first_child_events),
-            capture_path: vec![1, 99],
+            capture_path: vec![NodeId(1), NodeId(99)],
         },
         RecordingHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             consume: false,
             events: Rc::clone(&second_child_events),
-            capture_path: vec![2, 99],
+            capture_path: vec![NodeId(2), NodeId(99)],
         },
     ]));
 
@@ -3424,22 +3424,22 @@ fn captured_gesture_preserves_hit_order_when_paths_share_an_ancestor() {
     shared_ancestor_events.borrow_mut().clear();
     *active_hits.borrow_mut() = vec![
         RecordingHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             consume: false,
             events: Rc::clone(&first_child_events),
-            capture_path: vec![1, 99],
+            capture_path: vec![NodeId(1), NodeId(99)],
         },
         RecordingHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             consume: false,
             events: Rc::clone(&second_child_events),
-            capture_path: vec![2, 99],
+            capture_path: vec![NodeId(2), NodeId(99)],
         },
         RecordingHitTarget {
-            node_id: 99,
+            node_id: NodeId(99),
             consume: true,
             events: Rc::clone(&shared_ancestor_events),
-            capture_path: vec![99],
+            capture_path: vec![NodeId(99)],
         },
     ];
 
@@ -3484,10 +3484,10 @@ fn captured_gesture_release_reaches_ancestor_even_when_child_consumes() {
     let child_events = Rc::new(RefCell::new(Vec::new()));
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         consume: true,
         events: Rc::clone(&child_events),
-        capture_path: vec![1, 99],
+        capture_path: vec![NodeId(1), NodeId(99)],
     }]));
 
     let root_key = location_key(file!(), line!(), column!());
@@ -3504,16 +3504,16 @@ fn captured_gesture_release_reaches_ancestor_even_when_child_consumes() {
     child_events.borrow_mut().clear();
     *active_hits.borrow_mut() = vec![
         RecordingHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             consume: true,
             events: Rc::clone(&child_events),
-            capture_path: vec![1, 99],
+            capture_path: vec![NodeId(1), NodeId(99)],
         },
         RecordingHitTarget {
-            node_id: 99,
+            node_id: NodeId(99),
             consume: false,
             events: Rc::clone(&ancestor_events),
-            capture_path: vec![99],
+            capture_path: vec![NodeId(99)],
         },
     ];
 
@@ -4214,13 +4214,15 @@ fn stale_draw_observations_are_pruned_once_per_interval() {
         .expect("width state should be captured");
 
     shell.app.rebuilt_frames_since_observation_prune = 0;
-    shell.surfaces[0].retained_visual_nodes.insert(usize::MAX);
+    shell.surfaces[0]
+        .retained_visual_nodes
+        .insert(NodeId(usize::MAX));
     width_state.set(60.0);
     shell.update();
     assert!(
         shell.surfaces[0]
             .retained_visual_nodes
-            .contains(&usize::MAX),
+            .contains(&NodeId(usize::MAX)),
         "a redrawn frame before the interval does not walk the graph"
     );
 
@@ -4230,7 +4232,7 @@ fn stale_draw_observations_are_pruned_once_per_interval() {
     assert!(
         !shell.surfaces[0]
             .retained_visual_nodes
-            .contains(&usize::MAX),
+            .contains(&NodeId(usize::MAX)),
         "the frame that reaches the interval collects the graph's nodes again"
     );
     assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
@@ -9901,10 +9903,20 @@ fn rotary_scrolled_runs_capture_then_bubble_passes() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, false, Rc::clone(&child_events), vec![1, 99]),
-            rotary_target(99, false, Rc::clone(&ancestor_events), vec![99]),
+            rotary_target(
+                NodeId(1),
+                false,
+                Rc::clone(&child_events),
+                vec![NodeId(1), NodeId(99)],
+            ),
+            rotary_target(
+                NodeId(99),
+                false,
+                Rc::clone(&ancestor_events),
+                vec![NodeId(99)],
+            ),
         ],
-        vec![1],
+        vec![NodeId(1)],
     );
 
     let root_key = location_key(file!(), line!(), column!());
@@ -9941,10 +9953,20 @@ fn rotary_capture_pass_runs_root_to_leaf() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, false, Rc::clone(&child_events), vec![1, 99]),
-            rotary_target(99, false, Rc::clone(&ancestor_events), vec![99]),
+            rotary_target(
+                NodeId(1),
+                false,
+                Rc::clone(&child_events),
+                vec![NodeId(1), NodeId(99)],
+            ),
+            rotary_target(
+                NodeId(99),
+                false,
+                Rc::clone(&ancestor_events),
+                vec![NodeId(99)],
+            ),
         ],
-        vec![1],
+        vec![NodeId(1)],
     );
 
     let root_key = location_key(file!(), line!(), column!());
@@ -9976,10 +9998,20 @@ fn rotary_capture_consumption_stops_the_bubble_pass() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, false, Rc::clone(&child_events), vec![1, 99]),
-            rotary_target(99, true, Rc::clone(&ancestor_events), vec![99]),
+            rotary_target(
+                NodeId(1),
+                false,
+                Rc::clone(&child_events),
+                vec![NodeId(1), NodeId(99)],
+            ),
+            rotary_target(
+                NodeId(99),
+                true,
+                Rc::clone(&ancestor_events),
+                vec![NodeId(99)],
+            ),
         ],
-        vec![1],
+        vec![NodeId(1)],
     );
 
     let root_key = location_key(file!(), line!(), column!());
@@ -10006,10 +10038,20 @@ fn rotary_bubble_consumption_stops_at_the_consuming_node() {
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
     let scene = RecordingScene::with_hit_node_ids(
         vec![
-            rotary_target(1, true, Rc::clone(&child_events), vec![1, 99]),
-            rotary_target(99, false, Rc::clone(&ancestor_events), vec![99]),
+            rotary_target(
+                NodeId(1),
+                true,
+                Rc::clone(&child_events),
+                vec![NodeId(1), NodeId(99)],
+            ),
+            rotary_target(
+                NodeId(99),
+                false,
+                Rc::clone(&ancestor_events),
+                vec![NodeId(99)],
+            ),
         ],
-        vec![1],
+        vec![NodeId(1)],
     );
 
     let root_key = location_key(file!(), line!(), column!());
@@ -10033,7 +10075,12 @@ fn rotary_bubble_consumption_stops_at_the_consuming_node() {
 fn rotary_event_carries_its_payload_to_targets() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, Rc::clone(&events), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(
+        NodeId(1),
+        true,
+        Rc::clone(&events),
+        vec![NodeId(1)],
+    )]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10053,7 +10100,12 @@ fn rotary_event_carries_its_payload_to_targets() {
 fn empty_rotary_events_are_dropped_before_dispatch() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, Rc::clone(&events), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(
+        NodeId(1),
+        true,
+        Rc::clone(&events),
+        vec![NodeId(1)],
+    )]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10069,7 +10121,12 @@ fn empty_rotary_events_are_dropped_before_dispatch() {
 fn window_level_rotary_handler_receives_unconsumed_events() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, false, events, vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(
+        NodeId(1),
+        false,
+        events,
+        vec![NodeId(1)],
+    )]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10110,7 +10167,12 @@ fn window_level_rotary_handler_runs_with_no_hit_targets() {
 fn window_level_rotary_handler_is_skipped_when_a_modifier_consumed() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, events, vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(
+        NodeId(1),
+        true,
+        events,
+        vec![NodeId(1)],
+    )]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -11136,7 +11198,7 @@ fn pointer_icon_shell(
 fn hovering_a_region_requests_its_pointer_icon() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(hits);
@@ -11151,7 +11213,7 @@ fn hovering_a_region_requests_its_pointer_icon() {
 fn coming_back_to_a_window_puts_the_regions_own_cursor_back() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(hits);
@@ -11175,11 +11237,11 @@ fn the_topmost_region_decides_the_pointer_icon() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![
         PointerIconHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             pointer_icon: Some(PointerIcon::TEXT),
         },
         PointerIconHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             pointer_icon: Some(PointerIcon::POINTER),
         },
     ]));
@@ -11195,11 +11257,11 @@ fn a_region_without_an_icon_falls_through_to_the_one_below() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![
         PointerIconHitTarget {
-            node_id: 2,
+            node_id: NodeId(2),
             pointer_icon: None,
         },
         PointerIconHitTarget {
-            node_id: 1,
+            node_id: NodeId(1),
             pointer_icon: Some(PointerIcon::POINTER),
         },
     ]));
@@ -11214,7 +11276,7 @@ fn a_region_without_an_icon_falls_through_to_the_one_below() {
 fn leaving_every_icon_region_restores_the_default_pointer() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(Rc::clone(&hits));
@@ -11232,7 +11294,7 @@ fn leaving_every_icon_region_restores_the_default_pointer() {
 fn cancelling_a_gesture_restores_the_default_pointer() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(hits);
@@ -11249,7 +11311,7 @@ fn cancelling_a_gesture_restores_the_default_pointer() {
 fn a_held_press_outlives_the_pointer_leaving_the_window() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(hits);
@@ -11272,7 +11334,7 @@ fn a_held_press_outlives_the_pointer_leaving_the_window() {
 fn an_idle_pointer_leaving_the_window_ends_the_gesture() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(hits);
@@ -11289,7 +11351,7 @@ fn an_idle_pointer_leaving_the_window_ends_the_gesture() {
 fn moving_inside_one_region_does_not_repeat_the_icon_change() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(hits);
@@ -11306,7 +11368,7 @@ fn moving_inside_one_region_does_not_repeat_the_icon_change() {
 fn a_drag_holds_the_icon_the_press_started_with() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
-        node_id: 1,
+        node_id: NodeId(1),
         pointer_icon: Some(PointerIcon::POINTER),
     }]));
     let mut shell = pointer_icon_shell(Rc::clone(&hits));

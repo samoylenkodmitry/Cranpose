@@ -1,3 +1,5 @@
+use cranpose_core::NodeId;
+
 use super::*;
 
 struct MockHandler;
@@ -20,9 +22,9 @@ fn mock_handler() -> Rc<dyn FocusedTextFieldHandler> {
     Rc::new(MockHandler)
 }
 
-struct NodeBackedHandler(cranpose_core::NodeId);
+struct NodeBackedHandler(NodeId);
 impl FocusedTextFieldHandler for NodeBackedHandler {
-    fn node_id(&self) -> Option<cranpose_core::NodeId> {
+    fn node_id(&self) -> Option<NodeId> {
         Some(self.0)
     }
     fn handle_key(&self, _: &KeyEvent) -> bool {
@@ -45,23 +47,23 @@ fn focus_transitions_schedule_scoped_draw_repasses_on_both_fields() {
     let _ = crate::render_state::take_draw_repass_nodes();
 
     let first = Rc::new(RefCell::new(false));
-    request_focus(first, Rc::new(NodeBackedHandler(7)), 0);
+    request_focus(first, Rc::new(NodeBackedHandler(NodeId(7))), 0);
     assert!(
-        crate::render_state::take_draw_repass_nodes().contains(&7),
+        crate::render_state::take_draw_repass_nodes().contains(&NodeId(7)),
         "gaining focus must re-record the gaining field's draws"
     );
 
     let second = Rc::new(RefCell::new(false));
-    request_focus(second, Rc::new(NodeBackedHandler(9)), 0);
+    request_focus(second, Rc::new(NodeBackedHandler(NodeId(9))), 0);
     let repasses = crate::render_state::take_draw_repass_nodes();
     assert!(
-        repasses.contains(&7) && repasses.contains(&9),
+        repasses.contains(&NodeId(7)) && repasses.contains(&NodeId(9)),
         "a focus hand-off must re-record both fields, got {repasses:?}"
     );
 
     clear_focus();
     assert!(
-        crate::render_state::take_draw_repass_nodes().contains(&9),
+        crate::render_state::take_draw_repass_nodes().contains(&NodeId(9)),
         "losing focus must re-record the field that had the caret"
     );
 }
@@ -70,7 +72,7 @@ fn focus_transitions_schedule_scoped_draw_repasses_on_both_fields() {
 fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
     let _app_context = crate::render_state::app_context_test_scope();
     let focus = Rc::new(RefCell::new(false));
-    request_focus(focus, Rc::new(NodeBackedHandler(21)), 0);
+    request_focus(focus, Rc::new(NodeBackedHandler(NodeId(21))), 0);
     let _ = crate::render_state::take_draw_repass_nodes();
 
     let past_interval = web_time::Instant::now()
@@ -81,7 +83,7 @@ fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
         "the tick past the interval must flip visibility"
     );
     assert!(
-        crate::render_state::take_draw_repass_nodes().contains(&21),
+        crate::render_state::take_draw_repass_nodes().contains(&NodeId(21)),
         "the flip must re-record the focused field's draws"
     );
     clear_focus();
@@ -231,7 +233,7 @@ fn stale_focus_cleanup_after_hidden_blink_does_not_reenter_the_focus_registry_bo
     let _app_context = crate::render_state::app_context_test_scope();
 
     let focus = Rc::new(RefCell::new(false));
-    request_focus(Rc::clone(&focus), Rc::new(NodeBackedHandler(3)), 0);
+    request_focus(Rc::clone(&focus), Rc::new(NodeBackedHandler(NodeId(3))), 0);
 
     let past_interval = web_time::Instant::now()
         + crate::cursor_animation::CursorAnimationState::BLINK_INTERVAL
@@ -258,14 +260,14 @@ fn stale_focus_cleanup_repasses_the_node_that_lost_its_caret() {
     let _ = crate::render_state::take_draw_repass_nodes();
 
     let focus = Rc::new(RefCell::new(false));
-    request_focus(Rc::clone(&focus), Rc::new(NodeBackedHandler(11)), 0);
+    request_focus(Rc::clone(&focus), Rc::new(NodeBackedHandler(NodeId(11))), 0);
     let _ = crate::render_state::take_draw_repass_nodes();
 
     drop(focus);
 
     assert!(!has_focused_field());
     assert!(
-        crate::render_state::take_draw_repass_nodes().contains(&11),
+        crate::render_state::take_draw_repass_nodes().contains(&NodeId(11)),
         "discovering a stale field lazily must repass its node just like \
          an explicit clear_focus does, or its caret is left stale on screen"
     );

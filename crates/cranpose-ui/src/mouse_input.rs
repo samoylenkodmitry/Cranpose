@@ -5,7 +5,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use cranpose_core::{RuntimeHandle, current_runtime_handle};
+use cranpose_core::{NodeId, RuntimeHandle, current_runtime_handle};
 use cranpose_ui_graphics::Point;
 use smallvec::SmallVec;
 
@@ -17,7 +17,7 @@ pub enum MouseInputTarget {
     /// The app's primary window.
     Primary,
     /// The surface identified by `Modifier::window_root`.
-    Window(u64),
+    Window(NodeId),
 }
 
 /// A mouse movement waiting for the host to dispatch it.

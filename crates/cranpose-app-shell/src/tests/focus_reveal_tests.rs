@@ -5,15 +5,15 @@ fn reader_reveal_rejects_hidden_and_disabled_ancestors_or_targets() {
     for blocked_target in [false, true] {
         for hidden in [false, true] {
             let target = SemanticsNode {
-                node_id: 2,
+                node_id: NodeId(2),
                 ..Default::default()
             };
             let mut root = SemanticsNode {
-                node_id: 1,
+                node_id: NodeId(1),
                 children: vec![target],
                 ..Default::default()
             };
-            assert_eq!(scroll_ancestors(&root, 2), Some(Vec::new()));
+            assert_eq!(scroll_ancestors(&root, NodeId(2)), Some(Vec::new()));
             let blocked = if blocked_target {
                 &mut root.children[0]
             } else {
@@ -21,7 +21,7 @@ fn reader_reveal_rejects_hidden_and_disabled_ancestors_or_targets() {
             };
             blocked.hidden = hidden;
             blocked.enabled = hidden;
-            assert_eq!(scroll_ancestors(&root, 2), None);
+            assert_eq!(scroll_ancestors(&root, NodeId(2)), None);
         }
     }
 }

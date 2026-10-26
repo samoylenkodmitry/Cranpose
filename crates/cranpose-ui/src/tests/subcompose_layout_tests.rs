@@ -10,12 +10,12 @@ fn bubbling_preserves_the_subcompose_nodes_existing_owner() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> = Rc::new(|scope, _| scope.layout(0.0, 0.0, Vec::new()));
     let mut node = SubcomposeLayoutNode::new(Modifier::empty(), policy);
-    node.set_parent_for_bubbling(41);
-    node.set_parent_for_bubbling(42);
-    assert_eq!(node.parent(), Some(41));
+    node.set_parent_for_bubbling(NodeId(41));
+    node.set_parent_for_bubbling(NodeId(42));
+    assert_eq!(node.parent(), Some(NodeId(41)));
     node.on_removed_from_parent();
-    node.set_parent_for_bubbling(42);
-    assert_eq!(node.parent(), Some(42));
+    node.set_parent_for_bubbling(NodeId(42));
+    assert_eq!(node.parent(), Some(NodeId(42)));
 }
 
 #[derive(Default)]
@@ -272,7 +272,7 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
     let _app_context = crate::render_state::app_context_test_scope();
     let (handle, _composition) = runtime_handle();
     let mut applier = cranpose_core::MemoryApplier::new();
-    let expected = Rc::new(RefCell::new(None::<Vec<u64>>));
+    let expected = Rc::new(RefCell::new(None::<Vec<NodeId>>));
     let observed = Rc::new(RefCell::new(Vec::new()));
     let expected_for_policy = Rc::clone(&expected);
     let observed_for_policy = Rc::clone(&observed);
@@ -285,7 +285,7 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
                 RetainedSlotChildren::Clean => (
                     expected
                         .iter()
-                        .map(|&id| SubcomposeChild::new(NodeId::try_from(id).expect("node id")))
+                        .map(|&id| SubcomposeChild::new(id))
                         .collect(),
                     true,
                 ),
@@ -308,7 +308,7 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
         observed_for_policy.borrow_mut().push((
             children
                 .iter()
-                .map(|child| child.node_id() as u64)
+                .map(SubcomposeChild::node_id)
                 .collect::<Vec<_>>(),
             matches,
         ));
@@ -428,13 +428,13 @@ fn active_children_follow_last_rendered_placements() {
 
     {
         let mut inner = node.inner.borrow_mut();
-        inner.children = vec![11, 22];
-        inner.last_placements = Rc::new((33..45).collect());
+        inner.children = vec![NodeId(11), NodeId(22)];
+        inner.last_placements = Rc::new((33..45).map(NodeId).collect());
     }
 
-    let expected: Vec<_> = (33..45).collect();
+    let expected: Vec<_> = (33..45).map(NodeId).collect();
     node.with_active_children(|active| assert_eq!(active, expected.as_slice()));
-    let mut active = SmallVec::<[NodeId; 8]>::from_slice(&[99]);
+    let mut active = SmallVec::<[NodeId; 8]>::from_slice(&[NodeId(99)]);
     Node::collect_children_into(&node, &mut active);
     assert_eq!(active.as_slice(), expected.as_slice());
 
@@ -445,7 +445,7 @@ fn active_children_follow_last_rendered_placements() {
 
     let mut owned = SmallVec::<[NodeId; 8]>::new();
     Node::collect_owned_children_into(&node, &mut owned);
-    assert_eq!(owned.as_slice(), &[11, 22]);
+    assert_eq!(owned.as_slice(), &[NodeId(11), NodeId(22)]);
 }
 
 #[test]
@@ -481,23 +481,23 @@ fn active_child_storage_is_shared_only_until_the_reader_returns() {
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let node = SubcomposeLayoutNode::new(Modifier::empty(), policy);
     let handle = node.handle();
-    handle.set_active_children(1..13);
+    handle.set_active_children((1..13).map(NodeId));
     let original = node.with_active_children(<[NodeId]>::as_ptr);
     node.with_active_children(|children| {
         handle.set_active_children(children.iter().copied());
         node.with_active_children(|unchanged| assert_eq!(unchanged.as_ptr(), original));
-        handle.set_active_children([7, 8, 9]);
-        assert_eq!(children, &(1..13).collect::<Vec<_>>());
+        handle.set_active_children([NodeId(7), NodeId(8), NodeId(9)]);
+        assert_eq!(children, &(1..13).map(NodeId).collect::<Vec<_>>());
         node.with_active_children(|changed| {
-            assert_eq!(changed, &[7, 8, 9]);
+            assert_eq!(changed, &[NodeId(7), NodeId(8), NodeId(9)]);
             assert_ne!(changed.as_ptr(), original);
         });
     });
     assert_eq!(Rc::strong_count(&node.inner.borrow().last_placements), 1);
     let exclusive = node.with_active_children(<[NodeId]>::as_ptr);
-    handle.set_active_children([9, 8, 7]);
+    handle.set_active_children([NodeId(9), NodeId(8), NodeId(7)]);
     node.with_active_children(|children| {
-        assert_eq!(children, &[9, 8, 7]);
+        assert_eq!(children, &[NodeId(9), NodeId(8), NodeId(7)]);
         assert_eq!(children.as_ptr(), exclusive);
     });
 }
@@ -512,8 +512,8 @@ fn subcompose_scope_layout_uses_retained_placement_scratch() {
             10.0,
             20.0,
             [
-                Placement::new(101, 1.0, 2.0, 0),
-                Placement::new(102, 3.0, 4.0, 0),
+                Placement::new(NodeId(101), 1.0, 2.0, 0),
+                Placement::new(NodeId(102), 3.0, 4.0, 0),
             ],
         )
     });

@@ -75,7 +75,7 @@ fn first_composition_records_group_value_and_node() {
             crate::slot::BRANCH_PATH_ROOT,
             || 41_i32,
         );
-        session.record_node_with_parent(7, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(7), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         assert!(result.direct_nodes.is_empty());
@@ -171,11 +171,11 @@ fn slot_write_session_exposes_semantic_operations() {
             .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
             .expect("session should resolve the indexed scope");
         assert_eq!(recomposed_group, composed_group);
-        assert_eq!(node_ids_in_current_subtree(session), vec![55]);
+        assert_eq!(node_ids_in_current_subtree(session), vec![NodeId(55)]);
         session.skip_group();
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
-        assert_eq!(result.root_nodes.as_slice(), [55]);
+        assert_eq!(result.root_nodes.as_slice(), [NodeId(55)]);
         assert!(result.was_skipped);
         session.end_recompose();
     });
@@ -273,7 +273,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
             crate::slot::BRANCH_PATH_ROOT,
             || 7_i32,
         );
-        session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));

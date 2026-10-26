@@ -2,6 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use cranpose_core::NodeId;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_common::{
     HitTestTarget, RenderScene,
@@ -132,7 +133,7 @@ fn a_scaling_list_hands_the_scene_the_ramp_it_measured() {
 }
 
 const TAP_ROW: f32 = 52.0;
-fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize>>>) {
+fn tappable_list_scene(count: usize) -> (Scene, Vec<NodeId>, Rc<RefCell<Vec<usize>>>) {
     let tapped: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&tapped);
     let mut composition = cranpose_ui::run_test_composition(move || {

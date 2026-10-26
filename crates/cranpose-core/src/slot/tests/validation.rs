@@ -486,7 +486,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
     const GROUP_COUNT: usize = 1_100;
     const KEPT_EXPLICIT_KEY: u64 = (GROUP_COUNT - 1) as u64;
     const CHILD_SCOPE: ScopeId = 6_070;
-    const CHILD_NODE: NodeId = 6_071;
+    const CHILD_NODE: NodeId = NodeId(6_071);
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -1271,7 +1271,7 @@ fn validate_reports_node_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(Key(487));
     table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
-        id: 999,
+        id: NodeId(999),
         parent_id: None,
         generation: 1,
         source: crate::slot::BRANCH_PATH_ROOT,

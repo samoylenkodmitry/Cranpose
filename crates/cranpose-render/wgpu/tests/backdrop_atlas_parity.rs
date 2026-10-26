@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{ProjectiveTransform, RenderGraph, RenderNode},
@@ -979,7 +980,7 @@ fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
         let RenderNode::Layer(layer) = &mut node else {
             unreachable!();
         };
-        layer.node_id = identified.then_some(100 + index);
+        layer.node_id = identified.then_some(NodeId(100 + index));
         children.push(node);
     }
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
@@ -1025,7 +1026,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
         let RenderNode::Layer(layer) = &mut node else {
             unreachable!()
         };
-        layer.node_id = identified.then_some(900 + index);
+        layer.node_id = identified.then_some(NodeId(900 + index));
         layer.isolation.explicit_offscreen = isolated;
         if isolated {
             layer.graphics_layer.compositing_strategy =
@@ -1182,7 +1183,7 @@ fn independent_cached_glasses(identified: bool) -> RenderGraph {
             },
             vec![inset_content(300.0, 160.0, 12.0)],
         );
-        layer.node_id = identified.then_some(index + 1);
+        layer.node_id = identified.then_some(NodeId(index + 1));
         children.push(RenderNode::Layer(Box::new(layer)));
     }
     support::page_graph(1104, 720, children)
@@ -1208,7 +1209,7 @@ fn identified_glasses_with(
             },
             vec![inset_content(300.0, 160.0, 12.0)],
         );
-        layer.node_id = Some(index + 1);
+        layer.node_id = Some(NodeId(index + 1));
         children.push(RenderNode::Layer(Box::new(layer)));
     }
     support::page_graph(1104, 720, children)
@@ -1427,7 +1428,7 @@ fn two_atlas_stage(marked: bool) -> RenderGraph {
             },
             vec![inset_content(2040.0, 2030.0, 12.0)],
         );
-        layer.node_id = Some(index + 1);
+        layer.node_id = Some(NodeId(index + 1));
         children.push(RenderNode::Layer(Box::new(layer)));
     }
     support::page_graph(4200, 2100, children)

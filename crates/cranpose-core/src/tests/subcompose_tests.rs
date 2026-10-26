@@ -5,14 +5,14 @@ use crate::TestRuntime;
 fn active_slot_for_node_excludes_reusable_and_unknown_nodes() {
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(7);
-    assert_eq!(state.active_slot_for_node(42), None);
-    state.register_active(slot, &[42], &[]);
-    assert_eq!(state.active_slot_for_node(42), Some(slot));
-    assert_eq!(state.active_slot_for_node(43), None);
+    assert_eq!(state.active_slot_for_node(NodeId(42)), None);
+    state.register_active(slot, &[NodeId(42)], &[]);
+    assert_eq!(state.active_slot_for_node(NodeId(42)), Some(slot));
+    assert_eq!(state.active_slot_for_node(NodeId(43)), None);
     state.begin_pass();
-    assert_eq!(state.active_slot_for_node(42), Some(slot));
+    assert_eq!(state.active_slot_for_node(NodeId(42)), Some(slot));
     state.finish_pass();
-    assert_eq!(state.active_slot_for_node(42), None);
+    assert_eq!(state.active_slot_for_node(NodeId(42)), None);
 }
 
 struct RetainEvenPolicy;
@@ -50,13 +50,13 @@ impl SlotReusePolicy for SameTypeRejectsCrossSlotPolicy {
 #[test]
 fn exact_reuse_wins() {
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     state.dispose_or_reuse_starting_from_index(0);
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
     let reused = state.take_node_from_reusables(SlotId::new(1));
     assert_eq!(
         reused,
-        Some((10, false)),
+        Some((NodeId(10), false)),
         "exact-slot reuse is not a rebinding"
     );
 }
@@ -64,13 +64,13 @@ fn exact_reuse_wins() {
 #[test]
 fn policy_based_compatibility() {
     let mut state = SubcomposeState::new(Box::new(ParityPolicy));
-    state.register_active(SlotId::new(2), &[42], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(42)], &[]);
     state.dispose_or_reuse_starting_from_index(0);
-    assert_eq!(state.reusable(), &[42]);
+    assert_eq!(state.reusable(), &[NodeId(42)]);
     let reused = state.take_node_from_reusables(SlotId::new(4));
     assert_eq!(
         reused,
-        Some((42, true)),
+        Some((NodeId(42), true)),
         "cross-slot reuse rebinds the subtree"
     );
 }
@@ -78,23 +78,23 @@ fn policy_based_compatibility() {
 #[test]
 fn dispose_or_reuse_respects_policy() {
     let mut state = SubcomposeState::new(Box::new(RetainEvenPolicy));
-    state.register_active(SlotId::new(1), &[10], &[]);
-    state.register_active(SlotId::new(2), &[11], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(11)], &[]);
     let disposed = state.dispose_or_reuse_starting_from_index(0);
     assert!(disposed.nodes().is_empty());
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
     assert_eq!(state.reusable_count, 1);
 }
 
 #[test]
 fn dispose_from_middle_moves_trailing_slots() {
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[10], &[]);
-    state.register_active(SlotId::new(2), &[20], &[]);
-    state.register_active(SlotId::new(3), &[30], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(20)], &[]);
+    state.register_active(SlotId::new(3), &[NodeId(30)], &[]);
     let disposed = state.dispose_or_reuse_starting_from_index(2);
     assert!(disposed.nodes().is_empty());
-    assert_eq!(state.reusable(), &[30]);
+    assert_eq!(state.reusable(), &[NodeId(30)]);
     assert_eq!(state.reusable_count, 1);
     assert!(
         state
@@ -107,18 +107,18 @@ fn dispose_from_middle_moves_trailing_slots() {
 #[test]
 fn incompatible_reuse_is_rejected() {
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     state.dispose_or_reuse_starting_from_index(0);
     assert_eq!(state.take_node_from_reusables(SlotId::new(2)), None);
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
 }
 
 #[test]
 fn reordering_keyed_children_preserves_nodes() {
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[11], &[]);
-    state.register_active(SlotId::new(2), &[22], &[]);
-    state.register_active(SlotId::new(3), &[33], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(11)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(22)], &[]);
+    state.register_active(SlotId::new(3), &[NodeId(33)], &[]);
 
     let disposed = state.dispose_or_reuse_starting_from_index(0);
     assert!(disposed.nodes().is_empty());
@@ -134,7 +134,7 @@ fn reordering_keyed_children_preserves_nodes() {
         state.register_active(slot, &[node], &[]);
     }
 
-    assert_eq!(reused_nodes, vec![33, 11, 22]);
+    assert_eq!(reused_nodes, vec![NodeId(33), NodeId(11), NodeId(22)]);
     assert!(state.reusable().is_empty());
     assert_eq!(state.reusable_count, 0);
 }
@@ -146,14 +146,22 @@ fn removing_slots_deactivates_scopes() {
     let scope_b = RecomposeScope::new_for_test(runtime.handle());
 
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[10], std::slice::from_ref(&scope_a));
-    state.register_active(SlotId::new(2), &[20], std::slice::from_ref(&scope_b));
+    state.register_active(
+        SlotId::new(1),
+        &[NodeId(10)],
+        std::slice::from_ref(&scope_a),
+    );
+    state.register_active(
+        SlotId::new(2),
+        &[NodeId(20)],
+        std::slice::from_ref(&scope_b),
+    );
 
     let disposed = state.dispose_or_reuse_starting_from_index(1);
     assert!(disposed.nodes().is_empty());
     assert!(scope_a.is_active());
     assert!(!scope_b.is_active());
-    assert_eq!(state.reusable(), &[20]);
+    assert_eq!(state.reusable(), &[NodeId(20)]);
 }
 
 #[test]
@@ -162,7 +170,7 @@ fn exact_activation_rejects_inactive_slot_scopes() {
     let scope = RecomposeScope::new_for_test(runtime.handle());
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.register_active(slot, &[NodeId(10)], std::slice::from_ref(&scope));
     state.dispose_or_reuse_starting_from_index(0);
 
     assert!(!scope.is_active());
@@ -170,7 +178,7 @@ fn exact_activation_rejects_inactive_slot_scopes() {
         state.activate_exact_slot(slot).is_none(),
         "inactive retained slots must run subcomposition when they return"
     );
-    assert_eq!(state.reusable(), vec![10]);
+    assert_eq!(state.reusable(), vec![NodeId(10)]);
 }
 
 #[test]
@@ -179,13 +187,13 @@ fn exact_activation_of_active_slot_keeps_scopes_live() {
     let scope = RecomposeScope::new_for_test(runtime.handle());
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.register_active(slot, &[NodeId(10)], std::slice::from_ref(&scope));
 
     let activation = state
         .activate_exact_slot(slot)
         .expect("active slots should exact-activate without subcomposition");
 
-    assert_eq!(activation.nodes, &[10]);
+    assert_eq!(activation.nodes, &[NodeId(10)]);
     assert!(
         !activation.was_recycled,
         "active slots are already live and must not be treated as recycled"
@@ -197,25 +205,25 @@ fn exact_activation_of_active_slot_keeps_scopes_live() {
 #[test]
 fn sequential_active_slots_activate_through_cursor() {
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[10], &[]);
-    state.register_active(SlotId::new(2), &[20], &[]);
-    state.register_active(SlotId::new(3), &[30], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(20)], &[]);
+    state.register_active(SlotId::new(3), &[NodeId(30)], &[]);
 
     state.begin_pass();
 
     assert_eq!(
         state.activate_current_active_slot(SlotId::new(1)),
-        Some(&[10][..])
+        Some(&[NodeId(10)][..])
     );
     assert_eq!(state.active_slot_cursor(), 1);
     assert_eq!(
         state.activate_current_active_slot(SlotId::new(2)),
-        Some(&[20][..])
+        Some(&[NodeId(20)][..])
     );
     assert_eq!(state.active_slot_cursor(), 2);
     assert_eq!(
         state.activate_current_active_slot(SlotId::new(3)),
-        Some(&[30][..])
+        Some(&[NodeId(30)][..])
     );
     assert_eq!(state.active_slot_cursor(), 3);
 
@@ -226,9 +234,9 @@ fn sequential_active_slots_activate_through_cursor() {
 #[test]
 fn recycling_skipped_slot_restores_cursor_exact_activation() {
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(0), &[10], &[]);
-    state.register_active(SlotId::new(1), &[20], &[]);
-    state.register_active(SlotId::new(2), &[30], &[]);
+    state.register_active(SlotId::new(0), &[NodeId(10)], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(20)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(30)], &[]);
 
     state.begin_pass();
 
@@ -242,7 +250,7 @@ fn recycling_skipped_slot_restores_cursor_exact_activation() {
 
     assert_eq!(
         state.activate_current_active_slot(SlotId::new(1)),
-        Some(&[20][..])
+        Some(&[NodeId(20)][..])
     );
     assert_eq!(state.active_slot_cursor(), 1);
 }
@@ -253,7 +261,7 @@ fn current_active_slot_activation_rejects_invalidated_scopes() {
     let scope = RecomposeScope::new_for_test(runtime.handle());
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.register_active(slot, &[NodeId(10)], std::slice::from_ref(&scope));
 
     state.begin_pass();
     scope.invalidate();
@@ -268,14 +276,14 @@ fn exact_activation_allows_prefetched_recycled_slots() {
     let scope = RecomposeScope::new_for_test(runtime.handle());
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.register_active(slot, &[NodeId(10)], std::slice::from_ref(&scope));
     state.recycle_prefetched_active_slot(slot);
 
     assert!(!scope.is_active());
     let activation = state
         .activate_exact_slot(slot)
         .expect("prefetched slots should be exact-reactivated");
-    assert_eq!(activation.nodes, &[10]);
+    assert_eq!(activation.nodes, &[NodeId(10)]);
     assert!(scope.is_active());
     assert!(
         activation.was_recycled,
@@ -292,7 +300,7 @@ fn compatible_reuse_does_not_steal_prefetched_exact_slot() {
     let exact_slot = SlotId::new(1);
     let requested_slot = SlotId::new(2);
 
-    state.register_active(exact_slot, &[10], std::slice::from_ref(&scope));
+    state.register_active(exact_slot, &[NodeId(10)], std::slice::from_ref(&scope));
     state.recycle_prefetched_active_slot(exact_slot);
 
     assert_eq!(
@@ -304,17 +312,17 @@ fn compatible_reuse_does_not_steal_prefetched_exact_slot() {
     let activation = state
         .activate_exact_slot(exact_slot)
         .expect("prefetched exact slot must still be available");
-    assert_eq!(activation.nodes, &[10]);
+    assert_eq!(activation.nodes, &[NodeId(10)]);
     assert!(scope.is_active());
 }
 
 #[test]
 fn draining_inactive_precomposed_returns_nodes() {
     let mut state = SubcomposeState::default();
-    state.register_precomposed(SlotId::new(7), 77);
-    state.register_active(SlotId::new(8), &[88], &[]);
+    state.register_precomposed(SlotId::new(7), NodeId(77));
+    state.register_active(SlotId::new(8), &[NodeId(88)], &[]);
     let disposed = state.drain_inactive_precomposed();
-    assert_eq!(disposed.nodes(), &[77]);
+    assert_eq!(disposed.nodes(), &[NodeId(77)]);
     assert!(state.precomposed().is_empty());
 }
 
@@ -322,14 +330,14 @@ fn draining_inactive_precomposed_returns_nodes() {
 fn draining_inactive_precomposed_uses_current_pass_activation() {
     let mut state = SubcomposeState::default();
     state.begin_pass();
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     assert!(state.finish_pass().nodes().is_empty());
 
-    state.register_precomposed(SlotId::new(1), 99);
+    state.register_precomposed(SlotId::new(1), NodeId(99));
 
     state.begin_pass();
     let disposed = state.drain_inactive_precomposed();
-    assert_eq!(disposed.nodes(), &[99]);
+    assert_eq!(disposed.nodes(), &[NodeId(99)]);
     assert!(state.precomposed().is_empty());
 }
 
@@ -337,21 +345,21 @@ fn draining_inactive_precomposed_uses_current_pass_activation() {
 fn finish_pass_disposes_inactive_slots() {
     let mut state = SubcomposeState::default();
     state.begin_pass();
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     assert!(state.finish_pass().nodes().is_empty());
 
     state.begin_pass();
     let disposed = state.finish_pass();
     assert!(disposed.nodes().is_empty());
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
 }
 
 #[test]
 fn finish_pass_keeps_active_slots() {
     let mut state = SubcomposeState::default();
     state.begin_pass();
-    state.register_active(SlotId::new(1), &[10], &[]);
-    state.register_active(SlotId::new(2), &[20], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(20)], &[]);
     let disposed = state.finish_pass();
     assert!(disposed.nodes().is_empty());
     assert!(state.reusable().is_empty());
@@ -361,35 +369,35 @@ fn finish_pass_keeps_active_slots() {
 fn restoring_active_slot_cursor_recycles_trailing_prefetch_slots() {
     let mut state = SubcomposeState::default();
     state.begin_pass();
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     let visible_cursor = state.active_slot_cursor();
 
-    state.register_active(SlotId::new(2), &[20], &[]);
-    state.register_active(SlotId::new(3), &[30], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(20)], &[]);
+    state.register_active(SlotId::new(3), &[NodeId(30)], &[]);
     state.restore_active_slot_cursor(visible_cursor);
 
     let disposed = state.finish_pass();
     assert!(disposed.nodes().is_empty());
     assert_eq!(state.active_slots_count(), 1);
-    assert_eq!(state.reusable(), &[30, 20]);
+    assert_eq!(state.reusable(), &[NodeId(30), NodeId(20)]);
 }
 
 #[test]
 fn recycling_active_slot_before_cursor_removes_it_from_rendered_set() {
     let mut state = SubcomposeState::default();
     state.begin_pass();
-    state.register_active(SlotId::new(1), &[10], &[]);
-    state.register_active(SlotId::new(2), &[20], &[]);
-    state.register_active(SlotId::new(3), &[30], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
+    state.register_active(SlotId::new(2), &[NodeId(20)], &[]);
+    state.register_active(SlotId::new(3), &[NodeId(30)], &[]);
 
     let disposed = state.recycle_active_slot(SlotId::new(2));
     assert!(disposed.nodes().is_empty());
     assert_eq!(state.active_slot_cursor(), 2);
     assert_eq!(state.active_slots_count(), 2);
-    assert_eq!(state.reusable(), &[20]);
+    assert_eq!(state.reusable(), &[NodeId(20)]);
 
     assert!(state.finish_pass().nodes().is_empty());
-    assert_eq!(state.reusable(), &[20]);
+    assert_eq!(state.reusable(), &[NodeId(20)]);
 }
 
 fn typed(id: u64, content_type: Option<u64>) -> TypedSlot {
@@ -430,12 +438,12 @@ fn content_type_policy_unregistered_slots_not_compatible() {
 #[test]
 fn content_type_policy_reuses_untyped_slots_in_subcompose_state() {
     let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy));
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     state.dispose_or_reuse_starting_from_index(0);
 
     assert_eq!(
         state.take_node_from_reusables(SlotId::new(2)),
-        Some((10, true)),
+        Some((NodeId(10), true)),
         "an untyped cross-slot reuse rebinds the subtree"
     );
     assert_eq!(state.reusable_count, 0);
@@ -453,10 +461,13 @@ fn cross_slot_reuse_moves_slot_host_and_callback_holder() {
     old_holder.update(move || old_calls.borrow_mut().push("old"));
     let forwarded = old_holder.clone_rc();
 
-    state.register_active(old_slot, &[10], &[]);
+    state.register_active(old_slot, &[NodeId(10)], &[]);
     state.dispose_or_reuse_starting_from_index(0);
 
-    assert_eq!(state.take_node_from_reusables(new_slot), Some((10, true)));
+    assert_eq!(
+        state.take_node_from_reusables(new_slot),
+        Some((NodeId(10), true))
+    );
     let new_host = state.get_or_create_slots(new_slot);
     assert!(Rc::ptr_eq(&old_host, &new_host));
 
@@ -475,15 +486,15 @@ fn content_type_reuse_in_subcompose_state() {
     state.register_content_type(SlotId::new(3), 100);
     state.register_content_type(SlotId::new(2), 200);
 
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
 
     state.dispose_or_reuse_starting_from_index(0);
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
 
     let reused = state.take_node_from_reusables(SlotId::new(3));
     assert_eq!(
         reused,
-        Some((10, true)),
+        Some((NodeId(10), true)),
         "Should reuse node across slots with same content type, as a rebinding"
     );
 }
@@ -494,7 +505,7 @@ fn typed_reusable_pool_respects_policy_compatibility() {
 
     state.register_content_type(SlotId::new(1), 100);
     state.register_content_type(SlotId::new(3), 100);
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
     state.dispose_or_reuse_starting_from_index(0);
 
     let reused = state.take_node_from_reusables(SlotId::new(3));
@@ -505,7 +516,7 @@ fn typed_reusable_pool_respects_policy_compatibility() {
     );
     assert_eq!(
         state.reusable(),
-        vec![10],
+        vec![NodeId(10)],
         "incompatible typed candidates must stay reusable for a later compatible slot"
     );
 }
@@ -515,7 +526,7 @@ fn content_type_none_clears_policy() {
     let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy));
 
     state.register_content_type(SlotId::new(1), 100);
-    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(1), &[NodeId(10)], &[]);
 
     assert_eq!(state.get_content_type(SlotId::new(1)), Some(100));
 
@@ -545,7 +556,7 @@ fn moving_last_reusable_node_transfers_slot_composition() {
     let host = state.get_or_create_slots(slot_a);
     let _callback = state.callback_holder(slot_a);
 
-    state.register_active(slot_a, &[10], &[]);
+    state.register_active(slot_a, &[NodeId(10)], &[]);
     assert!(
         state
             .dispose_or_reuse_starting_from_index(0)
@@ -559,7 +570,7 @@ fn moving_last_reusable_node_transfers_slot_composition() {
     assert_eq!(state.reusable_count, 1);
 
     let reused = state.take_node_from_reusables(slot_b);
-    assert_eq!(reused, Some((10, true)));
+    assert_eq!(reused, Some((NodeId(10), true)));
     let transferred_host = state.get_or_create_slots(slot_b);
     assert!(Rc::ptr_eq(&host, &transferred_host));
     assert!(
@@ -574,10 +585,10 @@ fn moving_last_reusable_node_transfers_slot_composition() {
 fn reusable_pool_removal_tolerates_missing_slot_count() {
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.reusable_nodes_untyped.push_back((slot, 10));
+    state.reusable_nodes_untyped.push_back((slot, NodeId(10)));
     state.reusable_count = 1;
 
-    let removed = state.remove_from_reusable_pools(10);
+    let removed = state.remove_from_reusable_pools(NodeId(10));
 
     assert_eq!(removed, Some(slot));
     assert!(state.reusable_nodes_untyped.is_empty());
@@ -592,10 +603,10 @@ fn typed_reusable_pool_removal_tolerates_missing_slot_count() {
         .reusable_by_type
         .entry(7)
         .or_default()
-        .push_back((slot, 10));
+        .push_back((slot, NodeId(10)));
     state.reusable_count = 1;
 
-    let removed = state.remove_from_reusable_pools(10);
+    let removed = state.remove_from_reusable_pools(NodeId(10));
 
     assert_eq!(removed, Some(slot));
     assert!(state.reusable_by_type.is_empty());
@@ -607,7 +618,7 @@ fn a_slot_is_retained_while_active_or_in_the_reuse_pool() {
     let mut pooled = SubcomposeState::default();
     let slot = SlotId::new(1);
     assert!(!pooled.slot_is_retained(slot));
-    pooled.register_active(slot, &[10], &[]);
+    pooled.register_active(slot, &[NodeId(10)], &[]);
     assert!(pooled.slot_is_retained(slot), "an active slot is retained");
     assert!(
         pooled
@@ -622,10 +633,10 @@ fn a_slot_is_retained_while_active_or_in_the_reuse_pool() {
 
     let mut unpooled = SubcomposeState::default();
     unpooled.set_reusable_pool_limits(0, 0);
-    unpooled.register_active(slot, &[10], &[]);
+    unpooled.register_active(slot, &[NodeId(10)], &[]);
     assert_eq!(
         unpooled.dispose_or_reuse_starting_from_index(0).nodes(),
-        &[10]
+        &[NodeId(10)]
     );
     assert!(
         !unpooled.slot_is_retained(slot),

@@ -37,8 +37,8 @@ use crate::{
 pub enum RootId {
     /// The composition root, drawn in the app's first window.
     Primary,
-    /// The node carrying `Modifier::window_root` with this id.
-    Window(u64),
+    /// The node carrying `Modifier::window_root`.
+    Window(NodeId),
 }
 
 /// The shell's bookkeeping for one root.

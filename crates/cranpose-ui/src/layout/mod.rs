@@ -201,6 +201,7 @@ impl<T> Default for ScratchVecPool<T> {
 pub(crate) struct FrameLayoutArena {
     tmp_child_ids: ScratchVecPool<NodeId>,
     tmp_placements: ScratchVecPool<Placement>,
+    tmp_placement_indices: ScratchVecPool<usize>,
     /// The marks a pass that starts from the dirty nodes cleared.
     cleared_marks: Vec<(NodeId, crate::widgets::nodes::LayoutDirt)>,
 }
@@ -352,7 +353,7 @@ pub struct SemanticsNode {
 impl Default for SemanticsNode {
     fn default() -> Self {
         Self {
-            node_id: 0,
+            node_id: NodeId::default(),
             bounds: GeometryRect::EMPTY,
             placement: SemanticsPlacement::default(),
             node_generation: 0,
@@ -1990,7 +1991,6 @@ impl LayoutBuilderState {
             ChildPass::Measure,
         )?;
         drop(applier);
-        pools.child_ids.clear();
 
         let runtime_state = runtime_state.borrow();
         let measurement = self.measure_through_modifier_chain(
@@ -1999,7 +1999,7 @@ impl LayoutBuilderState {
             chain,
             constraints,
             &mut pools.placements,
-            &mut pools.child_ids,
+            &mut pools.placement_indices,
         );
 
         if let Some(err) = runtime_state.take_child_error() {
@@ -2023,7 +2023,7 @@ impl LayoutBuilderState {
         } = spare;
         runtime_state.measured_children(
             &pools.placements,
-            &pools.child_ids,
+            &pools.placement_indices,
             measurement.content_offset,
             &mut children,
         );
@@ -2094,7 +2094,6 @@ impl LayoutBuilderState {
             ChildPass::Intrinsics,
         )?;
         drop(applier);
-        pools.child_ids.clear();
 
         let runtime_state = runtime_state.borrow();
         let value = if chain.uses_chain {
@@ -2105,7 +2104,7 @@ impl LayoutBuilderState {
                 runtime_state.child_measurables(),
                 runtime_state.child_states(),
                 &mut pools.placements,
-                &mut pools.child_ids,
+                &mut pools.placement_indices,
             );
             runtime_state
                 .coordinator_chain
@@ -2517,6 +2516,7 @@ struct VecPools<'a> {
     arena: &'a RefCell<FrameLayoutArena>,
     child_ids: Vec<NodeId>,
     placements: Vec<Placement>,
+    placement_indices: Vec<usize>,
 }
 
 impl<'a> VecPools<'a> {
@@ -2524,10 +2524,12 @@ impl<'a> VecPools<'a> {
         let mut pools = arena.borrow_mut();
         let child_ids = pools.tmp_child_ids.acquire();
         let placements = pools.tmp_placements.acquire();
+        let placement_indices = pools.tmp_placement_indices.acquire();
         Self {
             arena,
             child_ids,
             placements,
+            placement_indices,
         }
     }
 }
@@ -2541,6 +2543,9 @@ impl Drop for VecPools<'_> {
         pools
             .tmp_placements
             .release(std::mem::take(&mut self.placements));
+        pools
+            .tmp_placement_indices
+            .release(std::mem::take(&mut self.placement_indices));
     }
 }
 

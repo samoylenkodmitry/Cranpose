@@ -83,13 +83,13 @@ fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> Laye
 
 #[test]
 fn collect_hits_uses_graph_transform_to_parent() {
-    let layer = test_layer(7, ProjectiveTransform::translation(12.0, 9.0));
+    let layer = test_layer(NodeId(7), ProjectiveTransform::translation(12.0, 9.0));
     let hits = hits_of(&layer);
 
     assert_eq!(hits.len(), 1);
     let (node_id, capture_path, rect, quad, clip, clip_count) = &hits[0];
-    assert_eq!(*node_id, 7);
-    assert_eq!(capture_path, &vec![7]);
+    assert_eq!(*node_id, NodeId(7));
+    assert_eq!(capture_path, &vec![NodeId(7)]);
     assert_eq!(
         *rect,
         Rect {
@@ -109,8 +109,8 @@ fn collect_hits_uses_graph_transform_to_parent() {
 
 #[test]
 fn a_child_clipped_away_by_its_parent_takes_no_hits() {
-    let mut list = test_layer(1, ProjectiveTransform::translation(0.0, 80.0));
-    let scrolled_out = test_layer(2, ProjectiveTransform::translation(4.0, -40.0));
+    let mut list = test_layer(NodeId(1), ProjectiveTransform::translation(0.0, 80.0));
+    let scrolled_out = test_layer(NodeId(2), ProjectiveTransform::translation(4.0, -40.0));
     list.children
         .push(RenderNode::Layer(Box::new(scrolled_out)));
     let hits = hits_of(&list);
@@ -118,7 +118,7 @@ fn a_child_clipped_away_by_its_parent_takes_no_hits() {
     let hit_ids: Vec<NodeId> = hits.iter().map(|hit| hit.0).collect();
     assert_eq!(
         hit_ids,
-        vec![1],
+        vec![NodeId(1)],
         "a child the list has scrolled past its edge lies outside the list's clip and \
          takes no hits, however far inside the window it sits"
     );
@@ -126,15 +126,15 @@ fn a_child_clipped_away_by_its_parent_takes_no_hits() {
 
 #[test]
 fn collect_hits_composes_nested_graph_transforms() {
-    let child = test_layer(9, ProjectiveTransform::translation(4.0, 3.0));
-    let mut parent = test_layer(7, ProjectiveTransform::translation(10.0, 6.0));
+    let child = test_layer(NodeId(9), ProjectiveTransform::translation(4.0, 3.0));
+    let mut parent = test_layer(NodeId(7), ProjectiveTransform::translation(10.0, 6.0));
     capture_pointer(&mut parent);
     parent.children.push(RenderNode::Layer(Box::new(child)));
     let hits = hits_of(&parent);
 
     assert_eq!(hits.len(), 2);
     let (_, child_capture_path, child_rect, child_quad, child_clip, child_clip_count) = &hits[1];
-    assert_eq!(child_capture_path, &vec![9, 7]);
+    assert_eq!(child_capture_path, &vec![NodeId(9), NodeId(7)]);
     assert_eq!(
         *child_rect,
         Rect {
@@ -163,31 +163,33 @@ fn collect_hits_composes_nested_graph_transforms() {
 #[test]
 fn capture_paths_do_not_leak_between_siblings_or_traversals() {
     let identity = ProjectiveTransform::identity();
-    let mut root = test_layer(12, identity);
+    let mut root = test_layer(NodeId(12), identity);
     for node_id in (1..12).rev() {
-        let mut parent = test_layer(node_id, identity);
+        let mut parent = test_layer(NodeId(node_id), identity);
         capture_pointer(&mut parent);
         parent.children.push(RenderNode::Layer(Box::new(root)));
         root = parent;
     }
-    root.children
-        .push(RenderNode::Layer(Box::new(test_layer(13, identity))));
+    root.children.push(RenderNode::Layer(Box::new(test_layer(
+        NodeId(13),
+        identity,
+    ))));
     let mut sink = TestSink::default();
     collect_hits_from_graph(&root, identity, &mut sink, None);
-    collect_hits_from_graph(&test_layer(14, identity), identity, &mut sink, None);
+    collect_hits_from_graph(&test_layer(NodeId(14), identity), identity, &mut sink, None);
     let mut expected: Vec<Vec<_>> = (1..=12)
-        .map(|node_id| (1..=node_id).rev().collect())
+        .map(|node_id| (1..=node_id).rev().map(NodeId).collect())
         .collect();
-    expected.extend([vec![13, 1], vec![14]]);
+    expected.extend([vec![NodeId(13), NodeId(1)], vec![NodeId(14)]]);
     let paths: Vec<_> = sink.hits.into_iter().map(|hit| hit.1).collect();
     assert_eq!(paths, expected);
 }
 
 #[test]
 fn collect_hits_retains_transformed_clip_chain() {
-    let mut parent = test_layer(1, ProjectiveTransform::translation(20.0, 10.0));
+    let mut parent = test_layer(NodeId(1), ProjectiveTransform::translation(20.0, 10.0));
     let mut child = test_layer(
-        2,
+        NodeId(2),
         ProjectiveTransform::from_rect_to_quad(
             Rect {
                 x: 0.0,
@@ -224,7 +226,7 @@ fn a_node_takes_hits_on_its_own_rect_where_its_layer_is_bounded_elsewhere() {
     let layer = LayerNode {
         local_bounds: clip,
         node_bounds: Some(node),
-        ..test_layer(3, ProjectiveTransform::identity())
+        ..test_layer(NodeId(3), ProjectiveTransform::identity())
     };
     let hits = hits_of(&layer);
 

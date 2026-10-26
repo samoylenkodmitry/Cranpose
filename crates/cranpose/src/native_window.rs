@@ -27,7 +27,7 @@ use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, co
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct WindowId(u64);
+pub(crate) struct WindowId(cranpose_core::NodeId);
 
 #[cfg(all(
     feature = "native-windows",
@@ -40,15 +40,15 @@ impl WindowId {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         id.hash(&mut hasher);
-        Self(hasher.finish())
+        Self(cranpose_core::NodeId(hasher.finish() as usize))
     }
 
-    pub(crate) fn raw(self) -> u64 {
+    pub(crate) fn node(self) -> cranpose_core::NodeId {
         self.0
     }
 
     pub(crate) fn from_node(node: cranpose_core::NodeId) -> Self {
-        Self(node as u64)
+        Self(node)
     }
 }
 

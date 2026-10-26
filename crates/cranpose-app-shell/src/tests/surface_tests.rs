@@ -19,7 +19,7 @@ use super::{
     *,
 };
 
-fn window_root_at<R>(shell: &AppShell<R>, index: usize) -> u64
+fn window_root_at<R>(shell: &AppShell<R>, index: usize) -> NodeId
 where
     R: Renderer,
     R::Error: Debug,
@@ -27,11 +27,11 @@ where
     shell
         .window_roots()
         .get(index)
-        .map(|entry| entry.node as u64)
+        .map(|entry| entry.node)
         .expect("a window root attached")
 }
 
-fn attach_first_window<R>(shell: &mut AppShell<R>, renderer: R) -> u64
+fn attach_first_window<R>(shell: &mut AppShell<R>, renderer: R) -> NodeId
 where
     R: Renderer,
     R::Error: Debug,
@@ -377,7 +377,7 @@ impl TwoWindows {
     }
 }
 
-fn two_window_shell(windows: &TwoWindows) -> (AppShell<HitGraphRenderer>, u64) {
+fn two_window_shell(windows: &TwoWindows) -> (AppShell<HitGraphRenderer>, NodeId) {
     let content = windows.clone();
     let mut shell = AppShell::new(
         HitGraphRenderer::default(),

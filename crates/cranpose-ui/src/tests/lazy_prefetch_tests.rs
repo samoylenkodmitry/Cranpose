@@ -11,11 +11,11 @@ fn drained_requests() -> Vec<NodeId> {
 fn a_request_is_drained_once_and_names_each_list_once() {
     let _scope = app_context_test_scope();
     assert!(!has_lazy_prefetch_requests());
-    request_lazy_prefetch(3);
-    request_lazy_prefetch(3);
-    request_lazy_prefetch(5);
+    request_lazy_prefetch(NodeId(3));
+    request_lazy_prefetch(NodeId(3));
+    request_lazy_prefetch(NodeId(5));
     assert!(has_lazy_prefetch_requests());
-    assert_eq!(drained_requests(), vec![3, 5]);
+    assert_eq!(drained_requests(), vec![NodeId(3), NodeId(5)]);
     assert!(drained_requests().is_empty());
     assert!(!has_lazy_prefetch_requests());
 }
@@ -68,7 +68,7 @@ fn warming_builds_the_slices_of_every_node_under_a_prefetched_item() {
     };
     assert!(dirty(&mut applier, row) && dirty(&mut applier, leaf));
 
-    note_prefetched_item(&[row as u64]);
+    note_prefetched_item(&[row]);
     warm_prefetched_slices(&mut applier);
 
     assert!(!dirty(&mut applier, row), "the item's root is warm");

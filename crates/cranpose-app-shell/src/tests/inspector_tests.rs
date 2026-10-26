@@ -2,7 +2,7 @@ use super::*;
 
 fn node(id: usize, key: Option<u64>, bounds: Rect) -> InspectorNode {
     InspectorNode {
-        node_id: id,
+        node_id: NodeId(id),
         canvas_key: key,
         bounds,
         label: format!("Node {id}"),

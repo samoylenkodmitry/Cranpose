@@ -116,18 +116,18 @@ pub struct MemoryApplierDebugStats {
 
 impl MemoryApplier {
     const EAGER_COMPACT_NODE_LEN: usize = 1_024;
-    pub(crate) const HIGH_ID_THRESHOLD: NodeId = 1_000_000_000;
+    pub(crate) const HIGH_ID_THRESHOLD: NodeId = NodeId(1_000_000_000);
     const INVALID_STABLE_ID: u32 = u32::MAX;
     const INITIAL_DENSE_NODE_CAP: usize = 32;
     const LARGE_DENSE_NODE_GROWTH_THRESHOLD: usize = 32 * 1024;
     const LARGE_DENSE_NODE_GROWTH_DIVISOR: usize = 4;
 
     fn pack_stable_id(stable_id: NodeId) -> u32 {
-        u32::try_from(stable_id).expect("stable id overflow")
+        u32::try_from(stable_id.0).expect("stable id overflow")
     }
 
     fn unpack_stable_id(stable_id: u32) -> NodeId {
-        stable_id as NodeId
+        NodeId(stable_id as usize)
     }
 
     fn next_dense_node_target_len(old_len: usize) -> usize {
@@ -588,7 +588,7 @@ impl MemoryApplier {
 
         self.remember_recycle_pool_limit(key, recycle_pool_limit);
         let stable_id = self.state.next_stable_id;
-        self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
+        self.state.next_stable_id = self.state.next_stable_id.next();
         let pool = self.state.recycle_pools.entry(key).or_default();
         pool.remember_prototype(shell.as_ref());
         pool.push_warm(RecycledNode::from_shell(
@@ -702,7 +702,7 @@ impl MemoryApplier {
             physical_id
         };
 
-        self.state.next_stable_id = self.state.next_stable_id.max(stable_id.saturating_add(1));
+        self.state.next_stable_id = self.state.next_stable_id.max(stable_id.next());
         self.state.physical_stable_ids[physical_id] = Self::pack_stable_id(stable_id);
         self.state.stable_index.set_slot(stable_id, physical_id);
     }

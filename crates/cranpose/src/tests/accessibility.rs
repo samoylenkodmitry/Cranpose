@@ -15,7 +15,7 @@ use super::*;
 
 fn voiceover_content_updates_preserve_navigation_order() {
     let current = AccessibilityElement {
-        node_id: 7,
+        node_id: NodeId(7),
         label: "Receipt".into(),
         value: Some("Preparing".into()),
         role: AccessibilityRole::Button,
@@ -36,8 +36,8 @@ fn voiceover_content_updates_preserve_navigation_order() {
 
 #[test]
 fn voiceover_reorders_only_when_native_elements_change() {
-    let first = element_with(1, None);
-    let second = element_with(2, None);
+    let first = element_with(NodeId(1), None);
+    let second = element_with(NodeId(2), None);
     assert!(!voiceover_same_structure(
         &[first.clone(), second.clone()],
         &[second, first.clone()]
@@ -60,8 +60,8 @@ fn voiceover_reorders_only_when_native_elements_change() {
 
 #[test]
 fn colliding_canvas_ids_survive_reordering_and_removal() {
-    let first = element_with(42, Some(0));
-    let second = element_with(42, Some(1 << 31));
+    let first = element_with(NodeId(42), Some(0));
+    let second = element_with(NodeId(42), Some(1 << 31));
     let mut snapshot = AccessibilitySnapshot::default();
     snapshot
         .update(vec![first.clone(), second.clone()])
@@ -97,11 +97,11 @@ fn a_pane_title_preserves_dialog_and_control_roles_on_the_web() {
 
 #[test]
 fn opening_a_dialog_reports_its_identity_once() {
-    let mut dialog = element_with(7, None);
+    let mut dialog = element_with(NodeId(7), None);
     dialog.role = AccessibilityRole::Dialog;
-    assert_eq!(opened_dialog(&[], &[dialog.clone()]), Some(7));
+    assert_eq!(opened_dialog(&[], &[dialog.clone()]), Some(NodeId(7)));
     assert_eq!(opened_dialog(&[dialog.clone()], &[dialog]), None);
-    assert_eq!(opened_dialog(&[], &[element_with(8, None)]), None);
+    assert_eq!(opened_dialog(&[], &[element_with(NodeId(8), None)]), None);
 }
 
 #[test]
@@ -197,22 +197,22 @@ fn voiceover_passwords_never_read_values_and_radios_read_checked_state() {
 #[test]
 fn reader_focus_rejects_missing_hidden_disabled_and_nonfocusable_targets() {
     let mut root = SemanticsNode {
-        node_id: 1,
+        node_id: NodeId(1),
         ..Default::default()
     };
-    assert!(!focus_node(&root, 2));
-    assert!(!focus_node(&root, 1));
+    assert!(!focus_node(&root, NodeId(2)));
+    assert!(!focus_node(&root, NodeId(1)));
     root.focusable = true;
     root.hidden = true;
-    assert!(!focus_node(&root, 1));
+    assert!(!focus_node(&root, NodeId(1)));
     root.hidden = false;
     root.enabled = false;
-    assert!(!focus_node(&root, 1));
+    assert!(!focus_node(&root, NodeId(1)));
 }
 
 #[test]
 fn inspector_uses_sanitized_projection_and_reports_actions_and_state() {
-    let mut button = element_with(42, Some(7));
+    let mut button = element_with(NodeId(42), Some(7));
     button.role = AccessibilityRole::Button;
     button.label = "Account, Account".into();
     button.enabled = true;
@@ -220,20 +220,20 @@ fn inspector_uses_sanitized_projection_and_reports_actions_and_state() {
     button.clickable = true;
     button.update_details(|details| details.custom_actions = vec!["Archive".into()]);
     let inspected = inspector_node(button);
-    assert_eq!(inspected.node_id, 42);
+    assert_eq!(inspected.node_id, NodeId(42));
     assert_eq!(inspected.canvas_key, Some(7));
     assert!(inspected.focused);
     assert!(!inspected.issue);
     assert!(inspected.label.contains("Account, Account"));
     assert!(inspected.details.contains("Activate, Archive"));
     assert!(inspected.details.contains("Enabled: true  Focused: true"));
-    let mut password = element_with(43, None);
+    let mut password = element_with(NodeId(43), None);
     password.update_details(|details| details.password = true);
     password.value = Some("private password".into());
     let inspected = inspector_node(password);
     assert!(inspected.details.contains("[protected]"));
     assert!(!inspected.details.contains("private password"));
-    let mut unnamed = element_with(44, None);
+    let mut unnamed = element_with(NodeId(44), None);
     unnamed.label.clear();
     unnamed.clickable = true;
     assert!(inspector_node(unnamed).issue);
@@ -279,7 +279,7 @@ fn project_test_tree(root: &SemanticsNode) -> Vec<AccessibilityElement> {
 
 fn merged_test_row(children: Vec<SemanticsNode>) -> SemanticsNode {
     SemanticsNode {
-        node_id: 1,
+        node_id: NodeId(1),
         merge_descendants: true,
         children,
         ..SemanticsNode::default()
@@ -288,15 +288,15 @@ fn merged_test_row(children: Vec<SemanticsNode>) -> SemanticsNode {
 
 #[test]
 fn merged_names_exclude_independent_controls_and_passwords() {
-    let mut button = text_node(3, "Delete");
+    let mut button = text_node(NodeId(3), "Delete");
     button.actions.push(SemanticsAction::Click {
-        handler: SemanticsCallback::new(3),
+        handler: SemanticsCallback::new(NodeId(3)),
     });
-    let mut password = text_node(4, "secret passphrase");
+    let mut password = text_node(NodeId(4), "secret passphrase");
     password.update_details(|details| details.editable_text = true);
     password.update_details(|details| details.password = true);
     password.text = Some("secret passphrase".into());
-    let tree = merged_test_row(vec![text_node(2, "Account"), button, password]);
+    let tree = merged_test_row(vec![text_node(NodeId(2), "Account"), button, password]);
     let projected = project_test_tree(&tree);
     assert_eq!(
         projected
@@ -310,17 +310,17 @@ fn merged_names_exclude_independent_controls_and_passwords() {
 
 #[test]
 fn a_merge_does_not_swallow_slider_or_custom_action_controls() {
-    let mut slider = text_node(3, "Volume");
+    let mut slider = text_node(NodeId(3), "Volume");
     slider.update_details(|details| {
         details.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(|_| true));
     });
-    let mut action = text_node(4, "Attachment");
+    let mut action = text_node(NodeId(4), "Attachment");
     action.update_details(|details| {
         details
             .custom_actions
             .push(SemanticsCustomAction::new("Download", || {}));
     });
-    let tree = merged_test_row(vec![text_node(2, "Player"), slider, action]);
+    let tree = merged_test_row(vec![text_node(NodeId(2), "Player"), slider, action]);
     let projected = project_test_tree(&tree);
     assert_eq!(
         projected
@@ -333,13 +333,13 @@ fn a_merge_does_not_swallow_slider_or_custom_action_controls() {
 
 #[test]
 fn merged_names_follow_traversal_order_and_preserve_repeated_words() {
-    let mut first = text_node(4, "Very");
+    let mut first = text_node(NodeId(4), "Very");
     first.traversal_index = -1.0;
     let tree = merged_test_row(vec![
-        text_node(2, "very"),
-        text_node(3, "good"),
+        text_node(NodeId(2), "very"),
+        text_node(NodeId(3), "good"),
         first,
-        text_node(5, "good"),
+        text_node(NodeId(5), "good"),
     ]);
     let projected = project_test_tree(&tree);
     assert_eq!(projected[0].label, "Very, very, good, good");
@@ -347,7 +347,7 @@ fn merged_names_follow_traversal_order_and_preserve_repeated_words() {
 
 #[test]
 fn a_blank_description_does_not_hide_descendant_text() {
-    let mut tree = merged_test_row(vec![text_node(2, "Save")]);
+    let mut tree = merged_test_row(vec![text_node(NodeId(2), "Save")]);
     tree.description = Some("  ".into());
     assert_eq!(project_test_tree(&tree)[0].label, "Save");
 }
@@ -355,14 +355,14 @@ fn a_blank_description_does_not_hide_descendant_text() {
 #[test]
 fn only_an_editable_field_publishes_an_empty_value() {
     let pane = SemanticsNode {
-        node_id: 1,
+        node_id: NodeId(1),
         text: Some(String::new()),
         details: Some(Box::new(SemanticsDetails {
             pane_title: Some("Settings".into()),
             ..Default::default()
         })),
         children: vec![SemanticsNode {
-            node_id: 2,
+            node_id: NodeId(2),
             text: Some(String::new()),
             details: Some(Box::new(SemanticsDetails {
                 editable_text: true,
@@ -382,13 +382,13 @@ fn only_an_editable_field_publishes_an_empty_value() {
             .map(|element| element.value.clone())
             .expect("projected node")
     };
-    assert_eq!(value(1), None);
-    assert_eq!(value(2), Some(String::new()));
+    assert_eq!(value(NodeId(1)), None);
+    assert_eq!(value(NodeId(2)), Some(String::new()));
 }
 
 fn action_test_node() -> SemanticsNode {
     SemanticsNode {
-        node_id: 2,
+        node_id: NodeId(2),
         text: Some("abc".into()),
         details: Some(Box::new(SemanticsDetails {
             set_progress: Some(cranpose_ui::SemanticsSetProgress::new(|_| true)),
@@ -410,22 +410,22 @@ fn action_test_node() -> SemanticsNode {
 
 fn assert_reader_actions(root: &SemanticsNode, accepts: bool) {
     let results = [
-        set_progress(root, 2, 0.5),
-        set_text(root, 2, "new"),
-        set_text_selection(root, 2, 0, 1),
-        set_text_selection_utf16(root, 2, 0, 1),
-        set_text_selection_chars(root, 2, 0, 1),
-        set_expanded(root, 2, true),
-        set_expanded(root, 2, false),
-        dismiss(root, 2),
-        long_click(root, 2),
-        magic_tap(root, 2),
-        scroll_by(root, 2, 0.0, 10.0),
-        scroll_to_index(root, 2, 1),
-        perform_custom_action(root, 2, None, 0),
-        perform_custom_action(root, 2, None, 1),
-        perform_custom_action(root, 2, None, 2),
-        perform_listed_action(root, 2, None, 3, 3),
+        set_progress(root, NodeId(2), 0.5),
+        set_text(root, NodeId(2), "new"),
+        set_text_selection(root, NodeId(2), 0, 1),
+        set_text_selection_utf16(root, NodeId(2), 0, 1),
+        set_text_selection_chars(root, NodeId(2), 0, 1),
+        set_expanded(root, NodeId(2), true),
+        set_expanded(root, NodeId(2), false),
+        dismiss(root, NodeId(2)),
+        long_click(root, NodeId(2)),
+        magic_tap(root, NodeId(2)),
+        scroll_by(root, NodeId(2), 0.0, 10.0),
+        scroll_to_index(root, NodeId(2), 1),
+        perform_custom_action(root, NodeId(2), None, 0),
+        perform_custom_action(root, NodeId(2), None, 1),
+        perform_custom_action(root, NodeId(2), None, 2),
+        perform_listed_action(root, NodeId(2), None, 3, 3),
     ];
     assert!(
         results.iter().all(|result| *result == accepts),
@@ -464,15 +464,17 @@ fn disabled_canvas_actions_do_not_invoke_the_callback() {
             ),
         );
     });
-    assert!(perform_custom_action(&root, 2, Some(9), 0));
+    assert!(perform_custom_action(&root, NodeId(2), Some(9), 0));
     root.update_details(|details| details.canvas_children[0].enabled = false);
-    assert!(!perform_custom_action(&root, 2, Some(9), 0));
+    assert!(!perform_custom_action(&root, NodeId(2), Some(9), 0));
     assert_eq!(calls.get(), 1);
 }
 
 #[test]
 fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
-    let rows: Vec<_> = (0..24).map(|key| element_with(7, Some(key))).collect();
+    let rows: Vec<_> = (0..24)
+        .map(|key| element_with(NodeId(7), Some(key)))
+        .collect();
     let mut snapshot = AccessibilitySnapshot::default();
     snapshot.update(rows.clone()).expect("unique rows");
     let ids = snapshot.ids.clone();
@@ -486,11 +488,14 @@ fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
     snapshot.update(rows[1..].to_vec()).expect("unique rows");
     assert_eq!(snapshot.ids, ids[1..]);
     snapshot
-        .update(vec![element_with(7, None)])
+        .update(vec![element_with(NodeId(7), None)])
         .expect("layout node");
     assert!(!ids.contains(&snapshot.ids[0]));
     snapshot
-        .update(vec![element_with(7, Some(3)), element_with(8, Some(3))])
+        .update(vec![
+            element_with(NodeId(7), Some(3)),
+            element_with(NodeId(8), Some(3)),
+        ])
         .expect("distinct canvases");
     assert_ne!(snapshot.ids[0], snapshot.ids[1]);
 }
@@ -498,23 +503,29 @@ fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
 #[test]
 fn an_element_id_resolves_back_to_the_element_that_published_it() {
     let elements = vec![
-        element_with(7, None),
-        element_with(7, Some(3)),
-        element_with(9, Some(3)),
+        element_with(NodeId(7), None),
+        element_with(NodeId(7), Some(3)),
+        element_with(NodeId(9), Some(3)),
     ];
     let mut snapshot = AccessibilitySnapshot::default();
     snapshot.update(elements).expect("unique elements");
-    assert_eq!(snapshot.identity(snapshot.ids[1]), Some((7, Some(3))));
-    assert_eq!(snapshot.identity(snapshot.ids[2]), Some((9, Some(3))));
-    assert_eq!(snapshot.identity(snapshot.ids[0]), Some((7, None)));
+    assert_eq!(
+        snapshot.identity(snapshot.ids[1]),
+        Some((NodeId(7), Some(3)))
+    );
+    assert_eq!(
+        snapshot.identity(snapshot.ids[2]),
+        Some((NodeId(9), Some(3)))
+    );
+    assert_eq!(snapshot.identity(snapshot.ids[0]), Some((NodeId(7), None)));
     assert_eq!(snapshot.identity(-12), None);
 }
 
 #[test]
 fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
-    let button_id = 2;
+    let button_id = NodeId(2);
     let root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
@@ -527,7 +538,7 @@ fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
                 }],
                 None,
                 vec![node(
-                    3,
+                    NodeId(3),
                     SemanticsRole::Text {
                         value: "Library".into(),
                     },
@@ -537,7 +548,7 @@ fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
                 )],
             ),
             node(
-                4,
+                NodeId(4),
                 SemanticsRole::Text {
                     value: "Receipts".into(),
                 },
@@ -549,8 +560,8 @@ fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
     );
     let bounds = HashMap::from_iter([
         (button_id, AccessibilityRect::new(8.0, 700.0, 80.0, 64.0)),
-        (3, AccessibilityRect::new(20.0, 712.0, 50.0, 20.0)),
-        (4, AccessibilityRect::new(16.0, 80.0, 100.0, 28.0)),
+        (NodeId(3), AccessibilityRect::new(20.0, 712.0, 50.0, 20.0)),
+        (NodeId(4), AccessibilityRect::new(16.0, 80.0, 100.0, 28.0)),
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -566,7 +577,7 @@ fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
 
 #[test]
 fn drawn_controls_become_elements_positioned_inside_their_canvas() {
-    let canvas_id = 7;
+    let canvas_id = NodeId(7);
     let mut root = canvas_node(
         canvas_id,
         vec![
@@ -642,18 +653,18 @@ fn tab_group(node_id: NodeId, tabs: Vec<SemanticsNode>) -> SemanticsNode {
 #[test]
 fn tabs_in_a_group_know_their_place() {
     let root = tab_group(
-        1,
+        NodeId(1),
         vec![
-            tab(2, "Home", true),
-            tab(3, "Library", false),
-            tab(4, "Settings", false),
+            tab(NodeId(2), "Home", true),
+            tab(NodeId(3), "Library", false),
+            tab(NodeId(4), "Settings", false),
         ],
     );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
-        (3, AccessibilityRect::new(100.0, 0.0, 100.0, 60.0)),
-        (4, AccessibilityRect::new(200.0, 0.0, 100.0, 60.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
+        (NodeId(3), AccessibilityRect::new(100.0, 0.0, 100.0, 60.0)),
+        (NodeId(4), AccessibilityRect::new(200.0, 0.0, 100.0, 60.0)),
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -694,28 +705,32 @@ fn tabs_in_a_group_know_their_place() {
 #[test]
 fn a_tab_pages_the_list_around_its_group() {
     let mut list = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
-        vec![tab_group(2, vec![tab(3, "Home", true)])],
+        vec![tab_group(NodeId(2), vec![tab(NodeId(3), "Home", true)])],
     );
     list.update_details(|details| {
         details.vertical_scroll = Some(ScrollAxisRange::new(0.0, 900.0, false));
     });
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
-        (3, AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
+        (NodeId(3), AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
     ]);
 
     let projected = project_semantics(&placed(&root_of(list), &bounds));
     let tab = projected.last().expect("the tab is published");
 
-    assert_eq!(tab.scroll_parent, Some(2), "the tab sits under its group");
+    assert_eq!(
+        tab.scroll_parent,
+        Some(NodeId(2)),
+        "the tab sits under its group"
+    );
     assert_eq!(
         scroll_container_for(&projected, tab).map(|list| list.node_id),
-        Some(1),
+        Some(NodeId(1)),
         "a page from the tab reaches the list above the group"
     );
 }
@@ -743,10 +758,16 @@ fn text_node(node_id: NodeId, label: &str) -> SemanticsNode {
 }
 
 fn one_row_tree(row: SemanticsNode) -> (SemanticsNode, HashMap<NodeId, AccessibilityRect>) {
-    let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
+    let root = node(
+        NodeId(1),
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![row],
+    );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
     (root, bounds)
 }
@@ -754,12 +775,12 @@ fn one_row_tree(row: SemanticsNode) -> (SemanticsNode, HashMap<NodeId, Accessibi
 #[test]
 fn a_pane_is_published_with_its_title_and_no_label() {
     let mut screen = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![node(
-            2,
+            NodeId(2),
             SemanticsRole::Text {
                 value: "Milk".into(),
             },
@@ -770,8 +791,8 @@ fn a_pane_is_published_with_its_title_and_no_label() {
     );
     screen.update_details(|details| details.pane_title = Some("Library".into()));
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
     let projected = project_semantics(&placed(&screen, &bounds));
@@ -785,7 +806,7 @@ fn a_pane_is_published_with_its_title_and_no_label() {
     assert_eq!(projected[1].label, "Milk");
     assert_eq!(
         projected[1].scroll_parent,
-        Some(1),
+        Some(NodeId(1)),
         "pane content belongs to its landmark"
     );
 }
@@ -793,13 +814,13 @@ fn a_pane_is_published_with_its_title_and_no_label() {
 #[test]
 fn a_merged_row_is_one_stop() {
     let mut row = node(
-        2,
+        NodeId(2),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![
             node(
-                3,
+                NodeId(3),
                 SemanticsRole::Text {
                     value: "Milk".into(),
                 },
@@ -808,14 +829,14 @@ fn a_merged_row_is_one_stop() {
                 Vec::new(),
             ),
             node(
-                4,
+                NodeId(4),
                 SemanticsRole::Text { value: "2".into() },
                 Vec::new(),
                 None,
                 Vec::new(),
             ),
             node(
-                5,
+                NodeId(5),
                 SemanticsRole::Text {
                     value: "3.40".into(),
                 },
@@ -826,9 +847,16 @@ fn a_merged_row_is_one_stop() {
         ],
     );
     row.merge_descendants = true;
-    let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
-    let bounds =
-        HashMap::from_iter((1..=5).map(|id| (id, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0))));
+    let root = node(
+        NodeId(1),
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![row],
+    );
+    let bounds = HashMap::from_iter(
+        (1..=5).map(|id| (NodeId(id), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0))),
+    );
 
     let projected = project_semantics(&placed(&root, &bounds));
 
@@ -841,7 +869,7 @@ fn a_merged_row_is_one_stop() {
 #[test]
 fn a_hidden_node_and_everything_under_it_stay_out() {
     let mut placeholder = node(
-        2,
+        NodeId(2),
         SemanticsRole::Layout,
         Vec::new(),
         Some("Item"),
@@ -849,23 +877,23 @@ fn a_hidden_node_and_everything_under_it_stay_out() {
     );
     placeholder.hidden = true;
     let mut root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![placeholder],
     );
     root.children[0].children.push(node(
-        3,
+        NodeId(3),
         SemanticsRole::Layout,
         Vec::new(),
         Some("Under it"),
         Vec::new(),
     ));
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        (3, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(3), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -877,14 +905,26 @@ fn a_hidden_node_and_everything_under_it_stay_out() {
 }
 
 fn projected_field(name: Option<&str>, text: &str, password: bool) -> Vec<AccessibilityElement> {
-    let mut field = node(2, SemanticsRole::Layout, Vec::new(), name, Vec::new());
+    let mut field = node(
+        NodeId(2),
+        SemanticsRole::Layout,
+        Vec::new(),
+        name,
+        Vec::new(),
+    );
     field.update_details(|details| details.editable_text = true);
     field.update_details(|details| details.password = password);
     field.text = Some(text.to_owned());
-    let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
+    let root = node(
+        NodeId(1),
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![field],
+    );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
     project_semantics(&placed(&root, &bounds))
 }
@@ -913,7 +953,7 @@ fn a_named_text_field_keeps_its_name_and_carries_its_text() {
 
 #[test]
 fn drawn_controls_without_a_label_or_a_size_are_not_published() {
-    let canvas_id = 4;
+    let canvas_id = NodeId(4);
     let root = canvas_node(
         canvas_id,
         vec![
@@ -932,7 +972,7 @@ fn drawn_controls_without_a_label_or_a_size_are_not_published() {
 
 #[test]
 fn a_labelled_canvas_keeps_its_own_element_ahead_of_its_drawn_controls() {
-    let canvas_id = 9;
+    let canvas_id = NodeId(9);
     let mut root = node(
         canvas_id,
         SemanticsRole::Layout,
@@ -979,7 +1019,7 @@ fn a_labelled_canvas_keeps_its_own_element_ahead_of_its_drawn_controls() {
 
 #[test]
 fn custom_action_labels_reach_the_platform_in_publication_order() {
-    let arena_id = 3;
+    let arena_id = NodeId(3);
     let mut root = node(
         arena_id,
         SemanticsRole::Layout,
@@ -1006,8 +1046,8 @@ fn custom_action_labels_reach_the_platform_in_publication_order() {
 
 #[test]
 fn a_custom_action_runs_the_handler_the_tree_currently_holds() {
-    let arena_id = 3;
-    let canvas_id = 5;
+    let arena_id = NodeId(3);
+    let canvas_id = NodeId(5);
     let fired = Rc::new(RefCell::new(Vec::new()));
 
     let mut root = node(
@@ -1038,7 +1078,7 @@ fn a_custom_action_runs_the_handler_the_tree_currently_holds() {
     assert!(perform_custom_action(&root, arena_id, None, 0));
     assert!(perform_custom_action(&root, canvas_id, Some(42), 0));
 
-    assert!(!perform_custom_action(&root, 999, None, 0));
+    assert!(!perform_custom_action(&root, NodeId(999), None, 0));
     assert!(!perform_custom_action(&root, canvas_id, Some(43), 0));
     assert!(!perform_custom_action(&root, arena_id, None, 1));
 
@@ -1047,7 +1087,7 @@ fn a_custom_action_runs_the_handler_the_tree_currently_holds() {
 
 #[test]
 fn rebuilding_a_custom_action_handler_is_not_a_published_change() {
-    let arena_id = 3;
+    let arena_id = NodeId(3);
     let bounds = HashMap::from_iter([(arena_id, AccessibilityRect::new(0.0, 0.0, 200.0, 200.0))]);
     let project = |handler: fn()| {
         let mut root = node(
@@ -1081,8 +1121,8 @@ fn live_text(node_id: NodeId, text: &str) -> AccessibilityElement {
 
 #[test]
 fn a_live_region_with_new_text_is_read_out() {
-    let before = vec![live_text(1, "3 receipts")];
-    let after = vec![live_text(1, "4 receipts")];
+    let before = vec![live_text(NodeId(1), "3 receipts")];
+    let after = vec![live_text(NodeId(1), "4 receipts")];
     let announcements = live_region_announcements(&before, &after);
     assert_eq!(announcements.len(), 1);
     assert_eq!(announcements[0].text, "4 receipts");
@@ -1090,8 +1130,8 @@ fn a_live_region_with_new_text_is_read_out() {
 
 #[test]
 fn a_live_region_that_kept_its_text_stays_quiet() {
-    let before = vec![live_text(1, "3 receipts")];
-    let after = vec![live_text(1, "3 receipts")];
+    let before = vec![live_text(NodeId(1), "3 receipts")];
+    let after = vec![live_text(NodeId(1), "3 receipts")];
     assert!(live_region_announcements(&before, &after).is_empty());
 }
 
@@ -1109,8 +1149,8 @@ fn pane(node_id: NodeId, title: &str) -> AccessibilityElement {
 
 #[test]
 fn a_new_pane_title_is_read_out() {
-    let before = vec![pane(1, "Library")];
-    let after = vec![pane(1, "Receipt")];
+    let before = vec![pane(NodeId(1), "Library")];
+    let after = vec![pane(NodeId(1), "Receipt")];
     let announcements = pane_title_announcements(&before, &after);
     assert_eq!(announcements.len(), 1);
     assert_eq!(announcements[0].text, "Receipt");
@@ -1122,7 +1162,7 @@ fn a_new_pane_title_is_read_out() {
 
 #[test]
 fn the_first_publish_keeps_pane_titles_quiet() {
-    assert!(pane_title_announcements(&[], &[pane(1, "Library")]).is_empty());
+    assert!(pane_title_announcements(&[], &[pane(NodeId(1), "Library")]).is_empty());
 }
 
 /// The spoken changes of `after` published over `before`.
@@ -1135,7 +1175,7 @@ fn spoken(before: &[AccessibilityElement], after: &[AccessibilityElement]) -> Ve
 
 #[test]
 fn a_toggle_that_flipped_is_a_spoken_change() {
-    let mut before = live_text(1, "Dark theme");
+    let mut before = live_text(NodeId(1), "Dark theme");
     before.toggled = Some(ToggleableState::Off);
     let mut after = before.clone();
     after.toggled = Some(ToggleableState::On);
@@ -1144,16 +1184,16 @@ fn a_toggle_that_flipped_is_a_spoken_change() {
 
 #[test]
 fn an_element_that_kept_its_words_is_not_a_spoken_change() {
-    let before = live_text(1, "Dark theme");
-    let after = live_text(1, "Dark theme");
-    let fresh = live_text(2, "Fresh");
+    let before = live_text(NodeId(1), "Dark theme");
+    let after = live_text(NodeId(1), "Dark theme");
+    let fresh = live_text(NodeId(2), "Fresh");
     assert_eq!(spoken(&[before], &[after, fresh]), vec![false, false]);
 }
 
 #[test]
 fn a_new_error_is_a_spoken_change() {
-    let before = live_text(1, "Amount");
-    let mut after = live_text(1, "Amount");
+    let before = live_text(NodeId(1), "Amount");
+    let mut after = live_text(NodeId(1), "Amount");
     after.update_details(|details| details.error = Some("needs a number".into()));
     assert_eq!(spoken(&[before], &[after.clone()]), vec![true]);
     assert_eq!(
@@ -1177,7 +1217,7 @@ fn a_password_field_never_reads_its_text_out() {
 #[test]
 fn a_traversal_index_moves_a_node_in_the_reading_order() {
     let mut search = node(
-        2,
+        NodeId(2),
         SemanticsRole::Text {
             value: "Search".into(),
         },
@@ -1187,7 +1227,7 @@ fn a_traversal_index_moves_a_node_in_the_reading_order() {
     );
     search.traversal_index = -1.0;
     let title = node(
-        3,
+        NodeId(3),
         SemanticsRole::Text {
             value: "Receipts".into(),
         },
@@ -1196,16 +1236,16 @@ fn a_traversal_index_moves_a_node_in_the_reading_order() {
         Vec::new(),
     );
     let root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![title, search],
     );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 60.0, 300.0, 40.0)),
-        (3, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 60.0, 300.0, 40.0)),
+        (NodeId(3), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -1224,7 +1264,7 @@ fn a_traversal_index_moves_a_node_in_the_reading_order() {
 #[test]
 fn a_control_that_opens_reads_as_closed_and_back() {
     let mut row = node(
-        2,
+        NodeId(2),
         SemanticsRole::Text {
             value: "Details".into(),
         },
@@ -1234,15 +1274,15 @@ fn a_control_that_opens_reads_as_closed_and_back() {
     );
     row.update_details(|details| details.expand = Some(cranpose_ui::SemanticsExpand::new(|| true)));
     let root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![row.clone()],
     );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
     let closed = project_semantics(&placed(&root, &bounds));
@@ -1252,25 +1292,37 @@ fn a_control_that_opens_reads_as_closed_and_back() {
         "a control that opens is closed"
     );
     assert_eq!(expansion_word(&closed[0]), Some("collapsed"));
-    assert!(set_expanded(&root, 2, true), "the control takes the ask");
-    assert!(!set_expanded(&root, 2, false), "it has no way to close yet");
+    assert!(
+        set_expanded(&root, NodeId(2), true),
+        "the control takes the ask"
+    );
+    assert!(
+        !set_expanded(&root, NodeId(2), false),
+        "it has no way to close yet"
+    );
 
     let mut open = row;
     open.update_details(|details| details.expand = None);
     open.update_details(|details| {
         details.collapse = Some(cranpose_ui::SemanticsExpand::new(|| true));
     });
-    let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![open]);
+    let root = node(
+        NodeId(1),
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![open],
+    );
     let projected = project_semantics(&placed(&root, &bounds));
     assert_eq!(projected[0].details().expanded, Some(true));
     assert_eq!(expansion_word(&projected[0]), Some("expanded"));
-    assert!(set_expanded(&root, 2, false));
+    assert!(set_expanded(&root, NodeId(2), false));
 }
 
 #[test]
 fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
     let ran = Rc::new(Cell::new(0));
-    let mut row = text_node(2, "Milk");
+    let mut row = text_node(NodeId(2), "Milk");
     row.update_details(|details| {
         details.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
             let ran = Rc::clone(&ran);
@@ -1280,12 +1332,18 @@ fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
             }
         }));
     });
-    let quiet = text_node(3, "Bread");
-    let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row, quiet]);
+    let quiet = text_node(NodeId(3), "Bread");
+    let root = node(
+        NodeId(1),
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![row, quiet],
+    );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        (3, AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(3), AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -1300,15 +1358,15 @@ fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
     assert_eq!(listed_actions(&projected[0]), vec![DISMISS_LABEL]);
     assert!(listed_actions(&projected[1]).is_empty());
 
-    assert!(dismiss(&root, 2), "the row takes the ask");
+    assert!(dismiss(&root, NodeId(2)), "the row takes the ask");
     assert_eq!(ran.get(), 1);
-    assert!(!dismiss(&root, 3), "the other row has no way out");
+    assert!(!dismiss(&root, NodeId(3)), "the other row has no way out");
 }
 
 #[test]
 fn the_way_out_sits_after_the_actions_the_app_named() {
     let ran = Rc::new(Cell::new(String::new()));
-    let mut row = text_node(2, "Milk");
+    let mut row = text_node(NodeId(2), "Milk");
     row.update_details(|details| {
         details.custom_actions = vec![SemanticsCustomAction::new("Pin", {
             let ran = Rc::clone(&ran);
@@ -1329,16 +1387,16 @@ fn the_way_out_sits_after_the_actions_the_app_named() {
     let projected = project_semantics(&placed(&root, &bounds));
     assert_eq!(listed_actions(&projected[0]), vec!["Pin", DISMISS_LABEL]);
 
-    assert!(perform_listed_action(&root, 2, None, 1, 0));
+    assert!(perform_listed_action(&root, NodeId(2), None, 1, 0));
     assert_eq!(ran.take(), "Pin");
-    assert!(perform_listed_action(&root, 2, None, 1, 1));
+    assert!(perform_listed_action(&root, NodeId(2), None, 1, 1));
     assert_eq!(ran.take(), "Dismiss");
 }
 
 #[test]
 fn a_long_press_is_named_and_sits_after_the_custom_actions() {
     let ran = Rc::new(Cell::new(0));
-    let mut row = text_node(2, "Milk");
+    let mut row = text_node(NodeId(2), "Milk");
     row.update_details(|details| {
         details.custom_actions = vec![SemanticsCustomAction::new("Pause", || {})];
     });
@@ -1365,16 +1423,16 @@ fn a_long_press_is_named_and_sits_after_the_custom_actions() {
         "the long press is the last action a reader lists"
     );
 
-    assert!(perform_custom_action(&root, 2, None, 1));
+    assert!(perform_custom_action(&root, NodeId(2), None, 1));
     assert_eq!(ran.get(), 1, "the trailing action is the long press");
-    assert!(long_click(&root, 2));
+    assert!(long_click(&root, NodeId(2)));
     assert_eq!(ran.get(), 2);
-    assert!(!perform_custom_action(&root, 2, None, 2));
+    assert!(!perform_custom_action(&root, NodeId(2), None, 2));
 }
 
 #[test]
 fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
-    let mut plain = text_node(2, "Milk");
+    let mut plain = text_node(NodeId(2), "Milk");
     let (root, bounds) = one_row_tree(plain.clone());
     assert_eq!(
         project_semantics(&placed(&root, &bounds))[0]
@@ -1382,7 +1440,7 @@ fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
             .long_click_label,
         None
     );
-    assert!(!long_click(&root, 2), "there is nothing to run");
+    assert!(!long_click(&root, NodeId(2)), "there is nothing to run");
 
     plain.update_details(|details| {
         details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
@@ -1402,7 +1460,7 @@ fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
 #[test]
 fn a_dropdown_and_a_picker_keep_their_own_roles() {
     let mut dropdown = node(
-        2,
+        NodeId(2),
         SemanticsRole::Text {
             value: "Sort by".into(),
         },
@@ -1412,7 +1470,7 @@ fn a_dropdown_and_a_picker_keep_their_own_roles() {
     );
     dropdown.widget_role = Some(cranpose_ui::SemanticsWidgetRole::DropdownList);
     let mut picker = node(
-        3,
+        NodeId(3),
         SemanticsRole::Text {
             value: "Copies".into(),
         },
@@ -1422,16 +1480,16 @@ fn a_dropdown_and_a_picker_keep_their_own_roles() {
     );
     picker.widget_role = Some(cranpose_ui::SemanticsWidgetRole::ValuePicker);
     let root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![dropdown, picker],
     );
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        (3, AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        (NodeId(3), AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -1442,8 +1500,11 @@ fn a_dropdown_and_a_picker_keep_their_own_roles() {
 
 #[test]
 fn a_live_region_that_just_appeared_is_read_out() {
-    let before = vec![live_text(1, "3 receipts")];
-    let after = vec![live_text(1, "3 receipts"), live_text(2, "Import failed")];
+    let before = vec![live_text(NodeId(1), "3 receipts")];
+    let after = vec![
+        live_text(NodeId(1), "3 receipts"),
+        live_text(NodeId(2), "Import failed"),
+    ];
     let announcements = live_region_announcements(&before, &after);
     assert_eq!(announcements.len(), 1);
     assert_eq!(announcements[0].text, "Import failed");
@@ -1451,13 +1512,13 @@ fn a_live_region_that_just_appeared_is_read_out() {
 
 #[test]
 fn the_first_screen_is_not_read_out_as_a_change() {
-    assert!(live_region_announcements(&[], &[live_text(1, "3 receipts")]).is_empty());
+    assert!(live_region_announcements(&[], &[live_text(NodeId(1), "3 receipts")]).is_empty());
 }
 
 #[test]
 fn a_node_without_a_live_region_is_never_read_out_on_a_change() {
-    let before = vec![element_with(1, None)];
-    let mut after = element_with(1, None);
+    let before = vec![element_with(NodeId(1), None)];
+    let mut after = element_with(NodeId(1), None);
     after.label = "Row 2".into();
     assert!(live_region_announcements(&before, &[after]).is_empty());
 }
@@ -1465,16 +1526,16 @@ fn a_node_without_a_live_region_is_never_read_out_on_a_change() {
 #[test]
 fn a_live_region_reaches_every_control_under_it() {
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 200.0, 50.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 200.0, 50.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 200.0, 50.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 200.0, 50.0)),
     ]);
     let mut root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,
         vec![node(
-            2,
+            NodeId(2),
             SemanticsRole::Text {
                 value: "2 left".into(),
             },
@@ -1498,9 +1559,9 @@ fn a_live_region_reaches_every_control_under_it() {
 fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
-    let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 200.0, 40.0))]);
+    let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 200.0, 40.0))]);
     let mut root = node(
-        7,
+        NodeId(7),
         SemanticsRole::Layout,
         Vec::new(),
         Some("Volume"),
@@ -1526,16 +1587,22 @@ fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
     assert_eq!(published.end, 1.0);
     assert!(elements[0].details().adjustable);
 
-    assert!(set_progress(&root, 7, 0.6));
+    assert!(set_progress(&root, NodeId(7), 0.6));
     assert_eq!(*taken.borrow(), vec![0.6]);
-    assert!(!set_progress(&root, 99, 0.6), "no such control");
+    assert!(!set_progress(&root, NodeId(99), 0.6), "no such control");
 }
 
 #[test]
 fn a_reader_hands_a_field_its_text() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
-    let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+    let mut root = node(
+        NodeId(7),
+        SemanticsRole::Layout,
+        Vec::new(),
+        Some(""),
+        Vec::new(),
+    );
     root.update_details(|details| details.editable_text = true);
     root.update_details(|details| {
         details.set_text = Some(cranpose_ui::SemanticsSetText::new(move |text| {
@@ -1544,9 +1611,9 @@ fn a_reader_hands_a_field_its_text() {
         }));
     });
 
-    assert!(set_text(&root, 7, "Milk"));
+    assert!(set_text(&root, NodeId(7), "Milk"));
     assert_eq!(*taken.borrow(), vec!["Milk".to_owned()]);
-    assert!(!set_text(&root, 99, "Milk"), "no such field");
+    assert!(!set_text(&root, NodeId(99), "Milk"), "no such field");
 }
 
 #[test]
@@ -1597,7 +1664,7 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
     let taps = Rc::new(Cell::new(0));
     let presses = Rc::new(Cell::new(0));
     let mut root = node(
-        7,
+        NodeId(7),
         SemanticsRole::Layout,
         Vec::new(),
         Some("Shutter"),
@@ -1626,18 +1693,18 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
             }
         }));
     });
-    let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
+    let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
     let projected = project_semantics(&placed(&root, &bounds));
 
     assert_eq!(
         reader_actions(&projected[0]),
         vec!["Flash", "Hold to focus", "Take the photo"]
     );
-    assert!(perform_custom_action(&root, 7, None, 1));
-    assert!(perform_custom_action(&root, 7, None, 2));
-    assert!(!perform_custom_action(&root, 7, None, 3));
-    assert!(magic_tap(&root, 7));
-    assert!(!magic_tap(&root, 99));
+    assert!(perform_custom_action(&root, NodeId(7), None, 1));
+    assert!(perform_custom_action(&root, NodeId(7), None, 2));
+    assert!(!perform_custom_action(&root, NodeId(7), None, 3));
+    assert!(magic_tap(&root, NodeId(7)));
+    assert!(!magic_tap(&root, NodeId(99)));
     assert_eq!((presses.get(), taps.get()), (1, 2));
 
     root.update_details(|details| details.on_long_click = None);
@@ -1647,14 +1714,14 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
         reader_actions(&projected[0]),
         vec!["Flash", "Take the photo"]
     );
-    assert!(perform_custom_action(&root, 7, None, 1));
+    assert!(perform_custom_action(&root, NodeId(7), None, 1));
     assert_eq!(taps.get(), 3);
 }
 
 #[test]
 fn voice_control_names_and_a_language_reach_the_element() {
     let mut root = node(
-        7,
+        NodeId(7),
         SemanticsRole::Layout,
         Vec::new(),
         Some("Importieren"),
@@ -1662,7 +1729,7 @@ fn voice_control_names_and_a_language_reach_the_element() {
     );
     root.update_details(|details| details.input_labels = vec!["Import".into()]);
     root.update_details(|details| details.language = Some("de".into()));
-    let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
+    let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
 
     let projected = project_semantics(&placed(&root, &bounds));
 
@@ -1678,7 +1745,13 @@ fn voice_control_names_and_a_language_reach_the_element() {
 fn a_reader_moves_the_caret_of_a_field() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
-    let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+    let mut root = node(
+        NodeId(7),
+        SemanticsRole::Layout,
+        Vec::new(),
+        Some(""),
+        Vec::new(),
+    );
     root.update_details(|details| details.editable_text = true);
     root.text = Some("añb😀c".to_owned());
     root.update_details(|details| {
@@ -1690,11 +1763,14 @@ fn a_reader_moves_the_caret_of_a_field() {
         ));
     });
 
-    assert!(set_text_selection(&root, 7, 1, 3));
-    assert!(set_text_selection_utf16(&root, 7, 2, 5));
-    assert!(set_text_selection_chars(&root, 7, 4, 2));
+    assert!(set_text_selection(&root, NodeId(7), 1, 3));
+    assert!(set_text_selection_utf16(&root, NodeId(7), 2, 5));
+    assert!(set_text_selection_chars(&root, NodeId(7), 4, 2));
     assert_eq!(*taken.borrow(), vec![(1, 3), (3, 8), (8, 3)]);
-    assert!(!set_text_selection(&root, 99, 0, 0), "no such field");
+    assert!(
+        !set_text_selection(&root, NodeId(99), 0, 0),
+        "no such field"
+    );
 }
 
 #[test]
@@ -1727,7 +1803,7 @@ fn text_offsets_convert_between_bytes_utf16_units_and_characters() {
 fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
     for (password, expected) in [(false, Some((1, 3))), (true, None)] {
         let mut field = node(
-            2,
+            NodeId(2),
             SemanticsRole::Layout,
             Vec::new(),
             Some("Name"),
@@ -1740,10 +1816,16 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
         field.update_details(|details| {
             details.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
         });
-        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
+        let root = node(
+            NodeId(1),
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![field],
+        );
         let bounds = HashMap::from_iter([
-            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
         ]);
 
         let projected = project_semantics(&placed(&root, &bounds));
@@ -1791,10 +1873,10 @@ fn row_in(node_id: NodeId, label: &str, scroll_parent: Option<NodeId>) -> Access
 
 #[test]
 fn a_row_pages_the_list_above_it_even_once_it_left_the_screen() {
-    let outer = scroll_box(1, None, 800.0);
-    let inner = scroll_box(2, Some(1), 300.0);
-    let row = row_in(3, "Milk", Some(2));
-    let footer = row_in(4, "Total", Some(1));
+    let outer = scroll_box(NodeId(1), None, 800.0);
+    let inner = scroll_box(NodeId(2), Some(NodeId(1)), 300.0);
+    let row = row_in(NodeId(3), "Milk", Some(NodeId(2)));
+    let footer = row_in(NodeId(4), "Total", Some(NodeId(1)));
     let elements = vec![outer, inner, row.clone(), footer.clone()];
 
     let around_row = scroll_container_for(&elements, &row).expect("the row sits in a list");
@@ -1802,8 +1884,12 @@ fn a_row_pages_the_list_above_it_even_once_it_left_the_screen() {
         scroll_container_for(&elements, &footer).expect("the footer sits in the outer list");
     let page = page_delta(around_row, true);
 
-    assert_eq!(around_row.node_id, 2, "the list right above the row wins");
-    assert_eq!(around_footer.node_id, 1);
+    assert_eq!(
+        around_row.node_id,
+        NodeId(2),
+        "the list right above the row wins"
+    );
+    assert_eq!(around_footer.node_id, NodeId(1));
     assert_eq!(
         page,
         (0.0, 270.0),
@@ -1816,8 +1902,14 @@ fn a_row_pages_the_list_above_it_even_once_it_left_the_screen() {
 fn a_list_publishes_its_rows_and_takes_a_row_number() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
-    let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 400.0, 600.0))]);
-    let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+    let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 400.0, 600.0))]);
+    let mut root = node(
+        NodeId(7),
+        SemanticsRole::Layout,
+        Vec::new(),
+        Some(""),
+        Vec::new(),
+    );
     root.update_details(|details| {
         details.vertical_scroll = Some(ScrollAxisRange::new(0.0, 1.0, false));
     });
@@ -1839,14 +1931,14 @@ fn a_list_publishes_its_rows_and_takes_a_row_number() {
     assert!(elements[0].details().scroll_to_index);
     assert_eq!(row_count(&elements[0]), 500, "the last row is 499");
 
-    assert!(scroll_to_index(&root, 7, 300));
+    assert!(scroll_to_index(&root, NodeId(7), 300));
     assert_eq!(*taken.borrow(), vec![300]);
-    assert!(!scroll_to_index(&root, 99, 300), "no such list");
+    assert!(!scroll_to_index(&root, NodeId(99), 300), "no such list");
 }
 
 #[test]
 fn a_plain_scroll_view_takes_no_row_number() {
-    let list = scroll_box(1, None, 300.0);
+    let list = scroll_box(NodeId(1), None, 300.0);
 
     assert!(!list.details().scroll_to_index);
     assert_eq!(
@@ -1858,8 +1950,8 @@ fn a_plain_scroll_view_takes_no_row_number() {
 
 #[test]
 fn an_element_outside_every_list_pages_nothing() {
-    let list = scroll_box(1, None, 300.0);
-    let button = row_in(2, "Pay", None);
+    let list = scroll_box(NodeId(1), None, 300.0);
+    let button = row_in(NodeId(2), "Pay", None);
 
     assert!(scroll_container_for(&[list], &button).is_none());
 }
@@ -1867,28 +1959,40 @@ fn an_element_outside_every_list_pages_nothing() {
 #[test]
 fn the_projection_names_the_list_above_each_row() {
     let bounds = HashMap::from_iter([
-        (1, AccessibilityRect::new(0.0, 0.0, 400.0, 600.0)),
-        (2, AccessibilityRect::new(0.0, 0.0, 400.0, 40.0)),
-        (3, AccessibilityRect::new(0.0, 700.0, 400.0, 40.0)),
+        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 400.0, 600.0)),
+        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 400.0, 40.0)),
+        (NodeId(3), AccessibilityRect::new(0.0, 700.0, 400.0, 40.0)),
     ]);
     let mut list = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         vec![],
         None,
-        vec![node(2, SemanticsRole::Button, vec![], Some("Milk"), vec![])],
+        vec![node(
+            NodeId(2),
+            SemanticsRole::Button,
+            vec![],
+            Some("Milk"),
+            vec![],
+        )],
     );
     list.update_details(|details| {
         details.vertical_scroll = Some(ScrollAxisRange::new(0.0, 900.0, false));
     });
     let root = node(
-        0,
+        NodeId(0),
         SemanticsRole::Layout,
         vec![],
         None,
         vec![
             list,
-            node(3, SemanticsRole::Button, vec![], Some("Pay"), vec![]),
+            node(
+                NodeId(3),
+                SemanticsRole::Button,
+                vec![],
+                Some("Pay"),
+                vec![],
+            ),
         ],
     );
 
@@ -1901,17 +2005,17 @@ fn the_projection_names_the_list_above_each_row() {
     };
 
     assert_eq!(
-        by_id(1).scroll_parent,
+        by_id(NodeId(1)).scroll_parent,
         None,
         "the list itself sits under no list"
     );
     assert_eq!(
-        by_id(2).scroll_parent,
-        Some(1),
+        by_id(NodeId(2)).scroll_parent,
+        Some(NodeId(1)),
         "the row names the list above it"
     );
     assert_eq!(
-        by_id(3).scroll_parent,
+        by_id(NodeId(3)).scroll_parent,
         None,
         "the button outside names none"
     );
@@ -1919,9 +2023,9 @@ fn the_projection_names_the_list_above_each_row() {
 
 #[test]
 fn a_control_without_a_range_is_never_adjustable() {
-    let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 200.0, 40.0))]);
+    let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 200.0, 40.0))]);
     let root = node(
-        7,
+        NodeId(7),
         SemanticsRole::Layout,
         Vec::new(),
         Some("Volume"),
@@ -1934,14 +2038,14 @@ fn a_control_without_a_range_is_never_adjustable() {
 
 #[test]
 fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
-    let mut flash = element_with(1, None);
+    let mut flash = element_with(NodeId(1), None);
     flash.label = "Flash".to_string();
     flash.role = AccessibilityRole::Switch;
     flash.toggled = Some(ToggleableState::On);
     flash.update_details(|details| details.custom_actions = vec!["Reset".to_string()]);
     assert_eq!(spoken_line(&flash), "Flash, switch, on, actions: Reset");
 
-    let mut loading = element_with(2, None);
+    let mut loading = element_with(NodeId(2), None);
     loading.label = "Loading".to_string();
     loading.role = AccessibilityRole::ProgressBar;
     loading.update_details(|details| {
@@ -1953,12 +2057,12 @@ fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
         "Loading, progress bar, 40 percent, dimmed"
     );
 
-    let mut library = element_with(3, None);
+    let mut library = element_with(NodeId(3), None);
     library.label = String::new();
     library.update_details(|details| details.pane_title = Some("Library".to_string()));
     assert_eq!(spoken_line(&library), "Library, pane");
 
-    let mut plain = element_with(4, None);
+    let mut plain = element_with(NodeId(4), None);
     plain.label = "Milk".to_string();
     plain.focused = true;
     assert_eq!(spoken_line(&plain), "Milk, focused");
@@ -1985,15 +2089,15 @@ fn placed(root: &SemanticsNode, bounds: &HashMap<NodeId, AccessibilityRect>) -> 
 }
 
 fn busy_screen(y: f32) -> SemanticsNode {
-    let mut field = text_node(2, "Name");
+    let mut field = text_node(NodeId(2), "Name");
     field.update_details(|details| details.editable_text = true);
     field.text = Some("Ada".into());
     field
         .update_details(|details| details.text_selection = Some(cranpose_ui::TextRange::new(1, 2)));
     field.update_details(|details| details.language = Some("en".into()));
     field.update_details(|details| details.error = Some("Too short".into()));
-    let mut button = text_node(3, "Archive");
-    button.actions.push(click(3));
+    let mut button = text_node(NodeId(3), "Archive");
+    button.actions.push(click(NodeId(3)));
     button.update_details(|details| details.on_click_label = Some("archive the message".into()));
     button.update_details(|details| details.state_description = Some("Ready".into()));
     button.update_details(|details| details.input_labels = vec!["Archive".into(), "Store".into()]);
@@ -2004,15 +2108,18 @@ fn busy_screen(y: f32) -> SemanticsNode {
         details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
     });
     let canvas = canvas_node(
-        4,
+        NodeId(4),
         vec![
             CanvasSemanticsNode::control(1, rect(0.0, 0.0, 100.0, 40.0), "Play")
                 .with_state_description("Paused"),
         ],
     );
-    let row = merged_test_row(vec![text_node(5, "Inbox"), text_node(6, "3 new")]);
+    let row = merged_test_row(vec![
+        text_node(NodeId(5), "Inbox"),
+        text_node(NodeId(6), "3 new"),
+    ]);
     let mut pane = node(
-        7,
+        NodeId(7),
         SemanticsRole::Layout,
         Vec::new(),
         None,
@@ -2022,7 +2129,7 @@ fn busy_screen(y: f32) -> SemanticsNode {
     let mut bounds = HashMap::default();
     for (index, id) in [7, 1, 5, 6, 2, 3, 4].into_iter().enumerate() {
         bounds.insert(
-            id,
+            NodeId(id),
             AccessibilityRect::new(0.0, y + 48.0 * index as f32, 300.0, 48.0),
         );
     }
@@ -2092,16 +2199,16 @@ fn a_projection_like_the_last_one_reuses_its_strings() {
 #[test]
 fn a_mirror_keeps_a_control_as_written_only_while_just_its_place_changes() {
     let field = AccessibilityElement {
-        node_id: 2,
+        node_id: NodeId(2),
         role: AccessibilityRole::TextField,
         value: Some("a".into()),
         details: Some(Box::new(AccessibilityDetails {
             text_selection: Some((1, 1)),
             ..Default::default()
         })),
-        ..element_with(2, None)
+        ..element_with(NodeId(2), None)
     };
-    let applied = vec![element_with(1, None), field];
+    let applied = vec![element_with(NodeId(1), None), field];
 
     let mut moved = applied.clone();
     moved[0].bounds.x += 40.0;
@@ -2130,17 +2237,23 @@ fn a_mirror_keeps_a_control_as_written_only_while_just_its_place_changes() {
 #[test]
 fn a_test_tag_reaches_no_screen_reader() {
     let mut pay = node(
-        2,
+        NodeId(2),
         SemanticsRole::Button,
         Vec::new(),
         Some("Pay"),
         Vec::new(),
     );
     pay.update_details(|details| details.test_tag = Some("pay-button".into()));
-    let mut tag_only = node(3, SemanticsRole::Layout, Vec::new(), None, Vec::new());
+    let mut tag_only = node(
+        NodeId(3),
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
     tag_only.update_details(|details| details.test_tag = Some("spacer-tag".into()));
     let root = node(
-        1,
+        NodeId(1),
         SemanticsRole::Layout,
         Vec::new(),
         None,

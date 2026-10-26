@@ -492,27 +492,30 @@ fn an_animated_raster_scale_is_never_smaller_and_at_most_one_step_larger() {
 fn layer_motion_keeps_the_raster_for_unchanged_content_across_small_scale_changes() {
     let mut motion = LayerMotion::default();
     assert_eq!(
-        raster_scale(&mut motion, Some(1), 0.9, 7, true),
+        raster_scale(&mut motion, Some(NodeId(1)), 0.9, 7, true),
         0.9,
         "a layer seen for the first time rasterizes at its own scale"
     );
     motion.end_frame();
-    assert_eq!(raster_scale(&mut motion, Some(1), 0.91, 7, true), 0.9);
+    assert_eq!(
+        raster_scale(&mut motion, Some(NodeId(1)), 0.91, 7, true),
+        0.9
+    );
     motion.end_frame();
     assert_eq!(
-        raster_scale(&mut motion, Some(1), 0.91, 7, true),
+        raster_scale(&mut motion, Some(NodeId(1)), 0.91, 7, true),
         0.9,
         "a repeated scale must not reposition the content on a different raster grid"
     );
     motion.end_frame();
     assert_eq!(
-        raster_scale(&mut motion, Some(1), 0.92, 8, true),
+        raster_scale(&mut motion, Some(NodeId(1)), 0.92, 8, true),
         0.92,
         "new content is drawn afresh anyway, so it rasterizes at its own scale"
     );
     motion.end_frame();
     assert_eq!(
-        raster_scale(&mut motion, Some(1), 0.93, 8, false),
+        raster_scale(&mut motion, Some(NodeId(1)), 0.93, 8, false),
         0.93,
         "a layer the cache cannot hold gains nothing from a stepped scale"
     );
@@ -520,7 +523,7 @@ fn layer_motion_keeps_the_raster_for_unchanged_content_across_small_scale_change
     motion.end_frame();
     motion.end_frame();
     assert_eq!(
-        raster_scale(&mut motion, Some(1), 0.95, 8, true),
+        raster_scale(&mut motion, Some(NodeId(1)), 0.95, 8, true),
         0.95,
         "a layer missing from the last frame starts over"
     );
@@ -530,7 +533,7 @@ fn layer_motion_keeps_the_raster_for_unchanged_content_across_small_scale_change
 fn a_scaling_layer_keeps_its_raster_within_the_resolution_range() {
     let mut motion = LayerMotion::default();
     let mut frame = |scale: f32| {
-        let raster = raster_scale(&mut motion, Some(1), scale, 7, true);
+        let raster = raster_scale(&mut motion, Some(NodeId(1)), scale, 7, true);
         motion.end_frame();
         raster
     };
@@ -908,7 +911,7 @@ fn a_row_that_may_draw_past_its_bounds_is_collected_offscreen() {
 fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::TextStyle>) {
     let style = Arc::new(style);
     let text = cranpose_render_common::graph::TextPrimitiveNode {
-        node_id: 5,
+        node_id: NodeId(5),
         rect: rect(0.0, 0.0, 80.0, 20.0),
         text: cranpose_ui::text::shared_plain_annotated_string("shared"),
         render_text: cranpose_ui::text::shared_plain_render_string("shared"),

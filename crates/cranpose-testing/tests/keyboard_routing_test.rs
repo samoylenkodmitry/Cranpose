@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{location_key, remember, rememberMutableStateOf};
+use cranpose_core::{NodeId, location_key, remember, rememberMutableStateOf};
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     BasicTextField, Column, ColumnSpec, FocusRequester, KeyCode, KeyEvent, Modifier, TextFieldState,
@@ -358,14 +358,14 @@ fn empty_secondary_surface_cannot_receive_primary_input() {
         editor(Modifier::empty().focus_requester(&content_focus), "primary");
     });
     shell.add_window_surface(
-        u64::MAX,
+        NodeId(usize::MAX),
         TestRenderer::default(),
         (320, 200),
         (320.0, 200.0),
     );
     focus.request_focus().expect("focus primary editor");
     let mut empty = shell
-        .surface(cranpose_app_shell::RootId::Window(u64::MAX))
+        .surface(cranpose_app_shell::RootId::Window(NodeId(usize::MAX)))
         .expect("empty surface");
     assert!(!empty.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
     assert!(!empty.on_paste("wrong"));
@@ -385,7 +385,7 @@ impl cranpose_ui::WindowRootDescriptor for TestWindow {
     }
 }
 
-fn window_editor() -> (AppShell<TestRenderer>, u64, EventLog) {
+fn window_editor() -> (AppShell<TestRenderer>, NodeId, EventLog) {
     let (mut shell, focus, log) = logged_shell(move |focus, log| {
         Column(
             Modifier::empty().on_preview_key_event(record(&log, "primary", true)),
@@ -404,7 +404,7 @@ fn window_editor() -> (AppShell<TestRenderer>, u64, EventLog) {
             },
         );
     });
-    let window = shell.window_roots().first().expect("composed window").node as u64;
+    let window = shell.window_roots().first().expect("composed window").node;
     shell.add_window_surface(window, TestRenderer::default(), (320, 200), (320.0, 200.0));
     shell.update();
     focus.request_focus().expect("focus secondary editor");

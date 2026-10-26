@@ -9,7 +9,10 @@ fn a_pointer_nobody_touched_has_no_dispatch_order() {
 #[test]
 fn a_dispatch_order_puts_a_shared_ancestor_after_every_child_that_survived() {
     let mut tracker = HitPathTracker::new();
-    tracker.add_hit_path(PointerId::PRIMARY, vec![vec![2, 1], vec![4, 1]]);
+    tracker.add_hit_path(
+        PointerId::PRIMARY,
+        vec![vec![NodeId(2), NodeId(1)], vec![NodeId(4), NodeId(1)]],
+    );
 
     let order = tracker
         .dispatch_order(PointerId::PRIMARY)
@@ -17,12 +20,12 @@ fn a_dispatch_order_puts_a_shared_ancestor_after_every_child_that_survived() {
 
     let ancestor = order
         .iter()
-        .position(|node| *node == 1)
+        .position(|node| *node == NodeId(1))
         .expect("the ancestor is dispatched");
     for child in [2, 4] {
         let at = order
             .iter()
-            .position(|node| *node == child)
+            .position(|node| *node == NodeId(child))
             .unwrap_or_else(|| panic!("child {child} was not dispatched"));
         assert!(
             at < ancestor,
@@ -30,7 +33,7 @@ fn a_dispatch_order_puts_a_shared_ancestor_after_every_child_that_survived() {
         );
     }
     assert_eq!(
-        order.iter().filter(|node| **node == 1).count(),
+        order.iter().filter(|node| **node == NodeId(1)).count(),
         1,
         "the shared ancestor was dispatched twice"
     );
@@ -39,7 +42,10 @@ fn a_dispatch_order_puts_a_shared_ancestor_after_every_child_that_survived() {
 #[test]
 fn test_add_and_get_path() {
     let mut tracker = HitPathTracker::new();
-    let paths: Vec<Vec<NodeId>> = vec![vec![1, 2, 3], vec![4, 5]];
+    let paths: Vec<Vec<NodeId>> = vec![
+        vec![NodeId(1), NodeId(2), NodeId(3)],
+        vec![NodeId(4), NodeId(5)],
+    ];
 
     tracker.add_hit_path(PointerId::PRIMARY, paths.clone());
 
@@ -50,7 +56,7 @@ fn test_add_and_get_path() {
 #[test]
 fn test_remove_path() {
     let mut tracker = HitPathTracker::new();
-    let paths: Vec<Vec<NodeId>> = vec![vec![1]];
+    let paths: Vec<Vec<NodeId>> = vec![vec![NodeId(1)]];
 
     tracker.add_hit_path(PointerId::PRIMARY, paths.clone());
     let removed = tracker.remove_path(PointerId::PRIMARY);
@@ -63,8 +69,8 @@ fn test_remove_path() {
 #[test]
 fn test_clear() {
     let mut tracker = HitPathTracker::new();
-    tracker.add_hit_path(PointerId(0), vec![vec![1]]);
-    tracker.add_hit_path(PointerId(1), vec![vec![2]]);
+    tracker.add_hit_path(PointerId(0), vec![vec![NodeId(1)]]);
+    tracker.add_hit_path(PointerId(1), vec![vec![NodeId(2)]]);
 
     assert!(!tracker.is_empty());
 
@@ -78,8 +84,8 @@ fn test_clear() {
 #[test]
 fn test_multiple_pointers() {
     let mut tracker = HitPathTracker::new();
-    let nodes1: Vec<Vec<NodeId>> = vec![vec![1]];
-    let nodes2: Vec<Vec<NodeId>> = vec![vec![2, 3]];
+    let nodes1: Vec<Vec<NodeId>> = vec![vec![NodeId(1)]];
+    let nodes2: Vec<Vec<NodeId>> = vec![vec![NodeId(2), NodeId(3)]];
 
     tracker.add_hit_path(PointerId(0), nodes1.clone());
     tracker.add_hit_path(PointerId(1), nodes2.clone());
@@ -90,9 +96,12 @@ fn test_multiple_pointers() {
 
 #[test]
 fn test_dispatch_order_keeps_shared_ancestor_after_overlapping_hits() {
-    let paths = vec![vec![1, 99], vec![2, 99]];
+    let paths = vec![vec![NodeId(1), NodeId(99)], vec![NodeId(2), NodeId(99)]];
 
-    assert_eq!(dispatch_order_for_paths(&paths), vec![1, 2, 99]);
+    assert_eq!(
+        dispatch_order_for_paths(&paths),
+        vec![NodeId(1), NodeId(2), NodeId(99)]
+    );
 }
 
 #[test]

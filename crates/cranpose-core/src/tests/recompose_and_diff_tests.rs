@@ -543,12 +543,12 @@ fn removing_subtree_unmounts_descendants() {
 fn memory_applier_compact_packs_live_nodes_without_invalidating_stable_ids() {
     let mut applier = test_applier();
     let root_id = applier.create(Box::new(TestDummyNode));
-    assert_eq!(root_id, 0);
+    assert_eq!(root_id, NodeId(0));
 
     let removed_ids: Vec<_> = (0..9)
         .map(|_| applier.create(Box::new(TestDummyNode)))
         .collect();
-    assert_eq!(removed_ids, (1..=9).collect::<Vec<_>>());
+    assert_eq!(removed_ids, (1..=9).map(NodeId).collect::<Vec<_>>());
 
     for &id in &removed_ids {
         applier.remove(id).expect("remove freed node");

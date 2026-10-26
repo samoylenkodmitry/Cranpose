@@ -510,7 +510,7 @@ impl AccessibilityElement {
 impl Default for AccessibilityElement {
     fn default() -> Self {
         Self {
-            node_id: 0,
+            node_id: NodeId::default(),
             node_generation: 0,
             canvas_key: None,
             label: String::new(),

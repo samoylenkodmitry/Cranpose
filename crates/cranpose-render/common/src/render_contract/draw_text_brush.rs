@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use cranpose_core::NodeId;
 use cranpose_ui::DrawCommand;
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, DrawTextStyle, Size};
 
@@ -24,7 +25,7 @@ fn gradient_text(scope: &mut DrawScopeDefault) {
 
 pub(super) fn gradient_text_fixture() -> RenderFixture {
     let nodes = draw_command_nodes_for_tests(
-        1,
+        NodeId(1),
         &[DrawCommand::Behind(Rc::new(gradient_text))],
         DrawPlacement::Behind,
         Size::new(WIDTH as f32, HEIGHT as f32),

@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
-use cranpose_core::{DefaultScheduler, Runtime};
+use cranpose_core::{DefaultScheduler, NodeId, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
     PointerEventKind,
@@ -1137,7 +1137,7 @@ fn assert_motion_invalidation_owner(replace_state: bool) {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));
     let owner = crate::AppContext::new();
     let other = crate::AppContext::new();
-    let node_id = 123;
+    let node_id = NodeId(123);
     let (mut chain, mut motion) = owner.enter(|| {
         let state = ScrollState::new(0.0);
         let modifier = Modifier::empty().vertical_scroll(state, false);

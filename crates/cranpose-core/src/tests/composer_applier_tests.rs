@@ -15,7 +15,7 @@ fn node_parent_distinguishes_roots_descendants_and_missing_nodes() {
         composer.node_parent(control).expect("control exists"),
         Some(root)
     );
-    assert!(composer.node_parent(NodeId::MAX).is_err());
+    assert!(composer.node_parent(NodeId(usize::MAX)).is_err());
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
@@ -340,18 +340,18 @@ fn memory_applier_dump_tree_reports_stale_physical_mapping() {
     impl Node for Counted {}
 
     let mut applier = MemoryApplier::new();
-    applier.state.stable_index.set_slot(42, 4_096);
+    applier.state.stable_index.set_slot(NodeId(42), 4_096);
 
-    let tree = applier.dump_tree(Some(42));
+    let tree = applier.dump_tree(Some(NodeId(42)));
 
     assert!(tree.contains("[42] (missing physical node"));
     assert!(matches!(
-        applier.get_mut(42),
-        Err(NodeError::Missing { id: 42 })
+        applier.get_mut(NodeId(42)),
+        Err(NodeError::Missing { id: NodeId(42) })
     ));
     assert!(matches!(
-        applier.with_node::<Counted, _>(42, |_| ()),
-        Err(NodeError::Missing { id: 42 })
+        applier.with_node::<Counted, _>(NodeId(42), |_| ()),
+        Err(NodeError::Missing { id: NodeId(42) })
     ));
 }
 
@@ -431,13 +431,15 @@ fn memory_applier_shared_read_rejects_missing_and_removed_nodes() {
         );
     }
     assert!(matches!(
-        applier.get_ref(NodeId::MAX),
-        Err(NodeError::Missing { id: NodeId::MAX })
+        applier.get_ref(NodeId(usize::MAX)),
+        Err(NodeError::Missing {
+            id: NodeId(usize::MAX)
+        })
     ));
-    applier.state.stable_index.set_slot(42, 4_096);
+    applier.state.stable_index.set_slot(NodeId(42), 4_096);
     assert!(matches!(
-        applier.get_ref(42),
-        Err(NodeError::Missing { id: 42 })
+        applier.get_ref(NodeId(42)),
+        Err(NodeError::Missing { id: NodeId(42) })
     ));
 }
 
@@ -571,7 +573,7 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 
-    assert!(child_id > 0, "Child should have been created");
+    assert!(child_id > NodeId(0), "Child should have been created");
 }
 
 #[test]
@@ -876,7 +878,7 @@ fn command_queue_missing_payload_returns_node_error() {
 fn command_queue_invalid_sync_children_range_returns_node_error() {
     let mut commands = CommandQueue::default();
     commands.sync_children.push(SyncChildrenCommand {
-        parent_id: 1,
+        parent_id: NodeId(1),
         children: Some((2, 4)),
     });
     commands.push_tag(CommandTag::SyncChildren);
@@ -1037,7 +1039,7 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
     let recycled = applier
         .take_recycled_node(key)
         .expect("fresh miss should seed a reusable same-frame shell");
-    assert_eq!(recycled.stable_id(), 0);
+    assert_eq!(recycled.stable_id(), NodeId(0));
 }
 
 #[test]
@@ -1065,7 +1067,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         .or_default()
         .warm
         .push(RecycledNode::from_shell(
-            0,
+            NodeId(0),
             Box::new(WrongNode),
             RecycleOrigin::Warm,
         ));
@@ -1225,7 +1227,7 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
     let stats = applier.debug_stats();
     assert_eq!(reused_id, stable_id);
     assert_eq!(stats.next_stable_id, next_stable_id_before_remove);
-    assert_eq!(stats.stable_generations_len, next_stable_id_before_remove);
+    assert_eq!(stats.stable_generations_len, next_stable_id_before_remove.0);
     assert_eq!(applier.node_generation(stable_id), 1);
 }
 
@@ -1242,7 +1244,7 @@ fn a_reinserted_stable_id_survives_compaction_in_a_reused_physical_slot() {
         .expect("remove node to open a dense physical slot");
     assert!(
         applier
-            .insert_recycled_node_or_create(inserted_stable_id, Box::new(TestDummyNode))
+            .insert_recycled_node_or_create(NodeId(inserted_stable_id), Box::new(TestDummyNode))
             .stable_id_reused,
         "insert explicit stable id into freed physical slot"
     );
@@ -1256,7 +1258,7 @@ fn a_reinserted_stable_id_survives_compaction_in_a_reused_physical_slot() {
     applier.compact();
 
     assert!(
-        applier.get_mut(inserted_stable_id).is_ok(),
+        applier.get_mut(NodeId(inserted_stable_id)).is_ok(),
         "compaction must preserve the explicit stable id"
     );
     assert!(
@@ -1619,7 +1621,7 @@ fn compact_prunes_stable_generation_entries_for_removed_nodes() {
     let stats = applier.debug_stats();
     assert_eq!(stats.stable_to_physical_len, 1);
     assert_eq!(stats.nodes_len, 1);
-    assert_eq!(keep, 0);
+    assert_eq!(keep, NodeId(0));
     assert_eq!(
         stats.stable_generations_len, 1,
         "dead node generations should be pruned after compaction instead of retaining a dense arena",
@@ -1804,7 +1806,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
 
     let first_child_id = child_ids.borrow()[0];
     println!("First child ID: {first_child_id}");
-    assert!(first_child_id > 0, "First child should be created");
+    assert!(first_child_id > NodeId(0), "First child should be created");
 
     println!("=== Second render: parent hidden ===");
     toggle.set_value(false);
@@ -1881,7 +1883,7 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
                 }
 
                 let child_id = composer.emit_node(|| TestDummyNode);
-                assert!(child_id > 0, "Child should be emitted successfully");
+                assert!(child_id > NodeId(0), "Child should be emitted successfully");
 
                 composer.pop_parent();
                 child_id
@@ -2279,7 +2281,7 @@ fn a_batch_of_scene_nodes_resolves_like_one_node_at_a_time() {
         root,
         detached,
         leaf,
-        999_999,
+        NodeId(999_999),
     ];
 
     let batch = applier.scene_nodes_attached_to(nodes, root);

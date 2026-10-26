@@ -377,7 +377,7 @@ fn scroll_container_slices() -> (cranpose_ui::TestComposition, Rc<ModifierNodeSl
 
 fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 40.0,
@@ -388,7 +388,7 @@ fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
     };
 
     BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 80.0,
             height: 50.0,
@@ -447,7 +447,7 @@ fn stored_content_hash_ignores_parent_translation() {
 #[test]
 fn parent_content_offset_is_encoded_in_child_transform() {
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 40.0,
@@ -457,7 +457,7 @@ fn parent_content_offset_is_encoded_in_child_transform() {
     };
 
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 80.0,
             height: 50.0,
@@ -480,7 +480,7 @@ fn parent_content_offset_is_encoded_in_child_transform() {
 fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
     fn parent_with_offset(offset: Point, scroll: &Rc<ModifierNodeSlices>) -> BuildNodeSnapshot {
         let child = BuildNodeSnapshot {
-            node_id: 2,
+            node_id: NodeId(2),
             placement: Point { x: 11.0, y: 7.0 },
             size: Size {
                 width: 40.0,
@@ -491,7 +491,7 @@ fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
         };
 
         BuildNodeSnapshot {
-            node_id: 1,
+            node_id: NodeId(1),
             size: Size {
                 width: 80.0,
                 height: 50.0,
@@ -1237,8 +1237,12 @@ fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
     ));
     let applier = MemoryApplier::new();
 
-    let report =
-        update_graph_from_applier_report(&applier, &mut graph, &[(2, NodeUpdate::Content)], 1.0);
+    let report = update_graph_from_applier_report(
+        &applier,
+        &mut graph,
+        &[(NodeId(2), NodeUpdate::Content)],
+        1.0,
+    );
 
     assert_eq!(
         report,
@@ -2410,7 +2414,7 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
     ] {
         append_draw_nodes(
             &mut nodes,
-            42,
+            NodeId(42),
             &commands,
             3,
             DrawPass::Record(placement),
@@ -2442,19 +2446,19 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
             (PrimitivePhase::BeforeChildren, None),
             (
                 PrimitivePhase::BeforeChildren,
-                Some((42, 3, DrawPlacement::Behind))
+                Some((NodeId(42), 3, DrawPlacement::Behind))
             ),
             (
                 PrimitivePhase::BeforeChildren,
-                Some((42, 4, DrawPlacement::Behind))
+                Some((NodeId(42), 4, DrawPlacement::Behind))
             ),
             (
                 PrimitivePhase::AfterChildren,
-                Some((42, 4, DrawPlacement::Overlay))
+                Some((NodeId(42), 4, DrawPlacement::Overlay))
             ),
             (
                 PrimitivePhase::AfterChildren,
-                Some((42, 5, DrawPlacement::Overlay))
+                Some((NodeId(42), 5, DrawPlacement::Overlay))
             ),
         ]
     );
@@ -2463,7 +2467,7 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
 #[test]
 fn overlay_draw_commands_are_tagged_after_children() {
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 4.0, y: 5.0 },
         size: Size {
             width: 20.0,
@@ -2494,7 +2498,7 @@ fn overlay_draw_commands_are_tagged_after_children() {
     }));
 
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 80.0,
             height: 50.0,
@@ -2523,7 +2527,7 @@ fn overlay_draw_commands_are_tagged_after_children() {
 fn command_recordings_reuse_buffers_across_rebuilds() {
     let draws = draws_a_rect();
     let snapshot = || BuildNodeSnapshot {
-        node_id: 7001,
+        node_id: NodeId(7001),
         size: Size {
             width: 40.0,
             height: 20.0,
@@ -2572,7 +2576,7 @@ fn command_recordings_reuse_buffers_across_rebuilds() {
 #[test]
 fn stored_content_hash_changes_when_child_transform_changes() {
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 4.0, y: 5.0 },
         size: Size {
             width: 20.0,
@@ -2584,7 +2588,7 @@ fn stored_content_hash_changes_when_child_transform_changes() {
     moved_child.placement.x += 7.0;
 
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 80.0,
             height: 50.0,
@@ -2610,7 +2614,7 @@ fn stored_content_hash_changes_when_child_transform_changes() {
 #[test]
 fn stored_effect_hash_tracks_local_effect_only() {
     let base = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 80.0,
             height: 50.0,
@@ -2647,7 +2651,7 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
 
     let (_composition, text) = text_slices("rtl", text_style, options, 180.0);
     let snapshot = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 180.0,
             height: 48.0,
@@ -2695,7 +2699,7 @@ fn text_node_alignment_obeys_physical_and_relative_edges() {
                 text_slices("hello", style, TextLayoutOptions::default(), 180.0);
             let graph = build_layer_node_for_test(
                 BuildNodeSnapshot {
-                    node_id: 1,
+                    node_id: NodeId(1),
                     size: Size {
                         width: 180.0,
                         height: 48.0,
@@ -2763,7 +2767,7 @@ fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
     };
     let (_composition, text) = text_slices("short", TextStyle::default(), options, 320.0);
     let snapshot = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 320.0,
             height: 48.0,
@@ -2812,7 +2816,7 @@ fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
         |slices| slices.text_pan_resolver().is_some(),
     );
     let make_snapshot = |slices: Rc<ModifierNodeSlices>| BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: field_width,
             height: 24.0,
@@ -2877,7 +2881,7 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
         120.0,
     );
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 120.0,
@@ -2888,7 +2892,7 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
     };
     let (_scroll_composition, scroll) = scroll_container_slices();
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 160.0,
             height: 64.0,
@@ -2923,7 +2927,7 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
         120.0,
     );
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 120.0,
@@ -2933,7 +2937,7 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
         ..Default::default()
     };
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 160.0,
             height: 64.0,
@@ -2974,7 +2978,7 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
     let (_text_composition, text) =
         text_slices("shadow", shadow_style, TextLayoutOptions::default(), 120.0);
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 120.0,
@@ -2985,7 +2989,7 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
     };
     let (_scroll_composition, scroll) = scroll_container_slices();
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 160.0,
             height: 64.0,
@@ -3019,7 +3023,7 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
         120.0,
     );
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 120.0,
@@ -3029,7 +3033,7 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
         ..Default::default()
     };
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 160.0,
             height: 64.0,
@@ -3290,7 +3294,7 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
     let (_text_composition, text) =
         text_slices("static", static_style, TextLayoutOptions::default(), 120.0);
     let child = BuildNodeSnapshot {
-        node_id: 2,
+        node_id: NodeId(2),
         placement: Point { x: 11.0, y: 7.0 },
         size: Size {
             width: 120.0,
@@ -3301,7 +3305,7 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
     };
     let (_scroll_composition, scroll) = scroll_container_slices();
     let parent = BuildNodeSnapshot {
-        node_id: 1,
+        node_id: NodeId(1),
         size: Size {
             width: 160.0,
             height: 64.0,

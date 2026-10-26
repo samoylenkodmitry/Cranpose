@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{Renderer, graph::RenderGraph};
 use cranpose_ui_graphics::{Color, Rect};
 
@@ -15,7 +16,7 @@ fn frame_graph(index: usize) -> RenderGraph {
         height: HEIGHT as f32,
     };
     RenderGraph::new(support::layer_node(
-        Some(71),
+        Some(NodeId(71)),
         WIDTH as f32,
         HEIGHT as f32,
         vec![

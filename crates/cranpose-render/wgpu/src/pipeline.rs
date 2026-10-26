@@ -1411,7 +1411,7 @@ fn decoration_brush_for_span(
 #[cfg(test)]
 use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
-const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = 0;
+const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = NodeId(0);
 
 /// The primitive with the layer's paint folded into its brushes, for a
 /// shape that joins the layer's loose run; `None` for text, images,

@@ -6,7 +6,7 @@ fn active_focus_target_tracking() {
     set_active_focus_target(None);
     assert_eq!(active_focus_target(), None);
 
-    let node: NodeId = 42;
+    let node: NodeId = NodeId(42);
     set_active_focus_target(Some(node));
     assert_eq!(active_focus_target(), Some(node));
 
@@ -20,14 +20,14 @@ fn active_focus_target_is_scoped_by_app_context() {
     let first = crate::render_state::AppContext::new_with_density(1.0);
     let second = crate::render_state::AppContext::new_with_density(1.0);
 
-    first.enter(|| set_active_focus_target(Some(17)));
+    first.enter(|| set_active_focus_target(Some(NodeId(17))));
     second.enter(|| {
         assert_eq!(active_focus_target(), None);
-        set_active_focus_target(Some(19));
+        set_active_focus_target(Some(NodeId(19)));
     });
 
-    first.enter(|| assert_eq!(active_focus_target(), Some(17)));
-    second.enter(|| assert_eq!(active_focus_target(), Some(19)));
+    first.enter(|| assert_eq!(active_focus_target(), Some(NodeId(17))));
+    second.enter(|| assert_eq!(active_focus_target(), Some(NodeId(19))));
 }
 
 struct RecordingTarget {
@@ -71,17 +71,17 @@ fn request_focus_moves_focus_between_two_registered_targets() {
 
     let a = RecordingTarget::new();
     let b = RecordingTarget::new();
-    register_focus_target(1, as_handle(&a));
-    register_focus_target(2, as_handle(&b));
+    register_focus_target(NodeId(1), as_handle(&a));
+    register_focus_target(NodeId(2), as_handle(&b));
 
-    assert!(request_focus(1));
+    assert!(request_focus(NodeId(1)));
     assert_eq!(a.states(), vec![FocusState::Active]);
-    assert_eq!(active_focus_target(), Some(1));
+    assert_eq!(active_focus_target(), Some(NodeId(1)));
 
-    assert!(request_focus(2));
+    assert!(request_focus(NodeId(2)));
     assert_eq!(a.states(), vec![FocusState::Active, FocusState::Inactive]);
     assert_eq!(b.states(), vec![FocusState::Active]);
-    assert_eq!(active_focus_target(), Some(2));
+    assert_eq!(active_focus_target(), Some(NodeId(2)));
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn request_focus_on_an_unregistered_node_fails_without_changing_anything() {
     clear_focus_invalidations();
     set_active_focus_target(None);
 
-    assert!(!request_focus(99));
+    assert!(!request_focus(NodeId(99)));
     assert_eq!(active_focus_target(), None);
 }
 
@@ -102,13 +102,13 @@ fn unregistering_the_active_targets_last_handle_clears_active_focus() {
 
     let a = RecordingTarget::new();
     let handle = as_handle(&a);
-    register_focus_target(1, Rc::clone(&handle));
-    assert!(request_focus(1));
-    assert_eq!(active_focus_target(), Some(1));
+    register_focus_target(NodeId(1), Rc::clone(&handle));
+    assert!(request_focus(NodeId(1)));
+    assert_eq!(active_focus_target(), Some(NodeId(1)));
 
-    unregister_focus_target(1, &handle);
+    unregister_focus_target(NodeId(1), &handle);
     assert_eq!(active_focus_target(), None);
-    assert!(!request_focus(1));
+    assert!(!request_focus(NodeId(1)));
 }
 
 #[test]
@@ -119,21 +119,21 @@ fn request_focus_from_inside_a_callback_does_not_double_borrow_or_recurse() {
 
     let a = RecordingTarget::new();
     let b = RecordingTarget::new();
-    register_focus_target(1, as_handle(&a));
-    register_focus_target(2, as_handle(&b));
+    register_focus_target(NodeId(1), as_handle(&a));
+    register_focus_target(NodeId(2), as_handle(&b));
 
     *a.on_active.borrow_mut() = Some(Box::new({
         let bounced_back = RefCell::new(false);
         move || {
             if !*bounced_back.borrow() {
                 *bounced_back.borrow_mut() = true;
-                assert!(request_focus(2));
+                assert!(request_focus(NodeId(2)));
             }
         }
     }));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert!(request_focus(1));
+        assert!(request_focus(NodeId(1)));
     }));
     assert!(
         result.is_ok(),
@@ -142,7 +142,7 @@ fn request_focus_from_inside_a_callback_does_not_double_borrow_or_recurse() {
 
     assert_eq!(a.states(), vec![FocusState::Active, FocusState::Inactive]);
     assert_eq!(b.states(), vec![FocusState::Active]);
-    assert_eq!(active_focus_target(), Some(2));
+    assert_eq!(active_focus_target(), Some(NodeId(2)));
 }
 
 #[test]
@@ -161,16 +161,19 @@ fn a_panicking_callback_still_releases_the_dispatch_lock() {
         }
     }
 
-    register_focus_target(1, Rc::new(PanicsOnActivate) as Rc<dyn FocusTargetHandle>);
+    register_focus_target(
+        NodeId(1),
+        Rc::new(PanicsOnActivate) as Rc<dyn FocusTargetHandle>,
+    );
     let b = RecordingTarget::new();
-    register_focus_target(2, as_handle(&b));
+    register_focus_target(NodeId(2), as_handle(&b));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        request_focus(1);
+        request_focus(NodeId(1));
     }));
     assert!(result.is_err());
 
-    assert!(request_focus(2));
+    assert!(request_focus(NodeId(2)));
     assert_eq!(
         b.states(),
         vec![FocusState::Active],

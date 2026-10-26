@@ -6,7 +6,8 @@ fn record_node_without_active_group_reports_insert_without_recording() {
     harness.begin_pass(SlotPassMode::Compose);
 
     let recorded = harness.session(|session| {
-        let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(session.current_node_record(), None);
         recorded
     });
@@ -15,7 +16,7 @@ fn record_node_without_active_group_reports_insert_without_recording() {
     assert_eq!(
         recorded,
         NodeSlotUpdate::Inserted {
-            id: 11,
+            id: NodeId(11),
             generation: 1,
         },
     );
@@ -44,7 +45,7 @@ fn node_operations_with_stale_owner_anchor_do_not_panic_or_record() {
     let update = harness.table.record_node_at_cursor(
         group_anchor,
         0,
-        42,
+        NodeId(42),
         None,
         1,
         crate::slot::BRANCH_PATH_ROOT,
@@ -52,7 +53,7 @@ fn node_operations_with_stale_owner_anchor_do_not_panic_or_record() {
     assert_eq!(
         update,
         NodeSlotUpdate::Inserted {
-            id: 42,
+            id: NodeId(42),
             generation: 1
         }
     );
@@ -75,7 +76,7 @@ fn node_tail_range_with_corrupt_segment_start_is_empty() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, Key(GROUP_KEY), None);
-        session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(42), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -99,7 +100,7 @@ fn node_range_outside_current_group_segment_is_ignored() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, Key(GROUP_KEY), None);
-        session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(42), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -112,7 +113,7 @@ fn node_range_outside_current_group_segment_is_ignored() {
 
     assert!(removed.is_empty());
     assert_eq!(harness.table.total_node_count(), 1);
-    assert_eq!(harness.table.group_node_record_at(0, 0).id, 42);
+    assert_eq!(harness.table.group_node_record_at(0, 0).id, NodeId(42));
     assert_eq!(harness.table.validate(), Ok(()));
 }
 
@@ -125,11 +126,12 @@ fn record_node_reports_explicit_insert_and_reuse() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, Key(GROUP_KEY), None);
-        let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Inserted {
-                id: 11,
+                id: NodeId(11),
                 generation: 1,
             },
         );
@@ -144,13 +146,14 @@ fn record_node_reports_explicit_insert_and_reuse() {
         begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(
             session.current_node_record(),
-            Some((11, 1, crate::slot::BRANCH_PATH_ROOT))
+            Some((NodeId(11), 1, crate::slot::BRANCH_PATH_ROOT))
         );
-        let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Reused {
-                id: 11,
+                id: NodeId(11),
                 generation: 1,
             },
         );
@@ -160,7 +163,7 @@ fn record_node_reports_explicit_insert_and_reuse() {
     });
     harness.finish_pass();
 
-    assert_eq!(harness.table.group_node_record_at(0, 0).id, 11);
+    assert_eq!(harness.table.group_node_record_at(0, 0).id, NodeId(11));
     assert_eq!(harness.table.group_node_record_at(0, 0).generation, 1);
 }
 
@@ -173,11 +176,12 @@ fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, Key(GROUP_KEY), None);
-        let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Inserted {
-                id: 11,
+                id: NodeId(11),
                 generation: 1,
             },
         );
@@ -192,13 +196,14 @@ fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
         begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(
             session.current_node_record(),
-            Some((11, 1, crate::slot::BRANCH_PATH_ROOT))
+            Some((NodeId(11), 1, crate::slot::BRANCH_PATH_ROOT))
         );
-        let recorded = session.record_node_with_parent(12, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(12), 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Inserted {
-                id: 12,
+                id: NodeId(12),
                 generation: 1,
             },
             "a different node id at the cursor inserts; the stale record is trimmed at finish",
@@ -207,14 +212,14 @@ fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
         assert!(result.detached_children.is_empty());
         assert_eq!(
             result.direct_nodes,
-            vec![11],
+            vec![NodeId(11)],
             "the stale node must leave through the finish tail trim",
         );
         session.end_group();
     });
     harness.finish_pass();
 
-    assert_eq!(harness.table.group_node_record_at(0, 0).id, 12);
+    assert_eq!(harness.table.group_node_record_at(0, 0).id, NodeId(12));
     assert_eq!(harness.table.group_node_record_at(0, 0).generation, 1);
     assert_eq!(harness.table.group_node_len_at(0), 1);
 }
@@ -228,11 +233,12 @@ fn record_node_reports_explicit_generation_replacement() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, Key(GROUP_KEY), None);
-        let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(11), 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Inserted {
-                id: 11,
+                id: NodeId(11),
                 generation: 1,
             },
         );
@@ -247,15 +253,16 @@ fn record_node_reports_explicit_generation_replacement() {
         begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(
             session.current_node_record(),
-            Some((11, 1, crate::slot::BRANCH_PATH_ROOT))
+            Some((NodeId(11), 1, crate::slot::BRANCH_PATH_ROOT))
         );
-        let recorded = session.record_node_with_parent(11, 2, None, crate::slot::BRANCH_PATH_ROOT);
+        let recorded =
+            session.record_node_with_parent(NodeId(11), 2, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Replaced {
-                old_id: 11,
+                old_id: NodeId(11),
                 old_generation: 1,
-                new_id: 11,
+                new_id: NodeId(11),
                 new_generation: 2,
             },
             "generation changes at the same node id must report explicit replacement",
@@ -266,7 +273,7 @@ fn record_node_reports_explicit_generation_replacement() {
     });
     harness.finish_pass();
 
-    assert_eq!(harness.table.group_node_record_at(0, 0).id, 11);
+    assert_eq!(harness.table.group_node_record_at(0, 0).id, NodeId(11));
     assert_eq!(harness.table.group_node_record_at(0, 0).generation, 2);
 }
 
@@ -291,13 +298,13 @@ fn root_node_ids_are_the_records_whose_parent_is_outside_them_in_order() {
             .flat_map(|chain| {
                 let root = 100 + chain * 3;
                 [
-                    node_record(root, (chain % 2 == 0).then_some(1)),
-                    node_record(root + 1, Some(root)),
-                    node_record(root + 2, Some(root + 1)),
+                    node_record(NodeId(root), (chain % 2 == 0).then_some(NodeId(1))),
+                    node_record(NodeId(root + 1), Some(NodeId(root))),
+                    node_record(NodeId(root + 2), Some(NodeId(root + 1))),
                 ]
             })
             .collect();
-        let expected: Vec<NodeId> = (0..chains).map(|chain| 100 + chain * 3).collect();
+        let expected: Vec<NodeId> = (0..chains).map(|chain| NodeId(100 + chain * 3)).collect();
         assert_eq!(
             crate::slot::types::root_node_ids(&records).collect::<Vec<_>>(),
             expected,

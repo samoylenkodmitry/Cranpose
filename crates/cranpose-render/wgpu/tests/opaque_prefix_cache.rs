@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -182,7 +183,7 @@ fn graph(spec: Spec, phase: u32) -> RenderGraph {
     let run = DrawRunNode::for_command(
         PrimitivePhase::BeforeChildren,
         Some(DrawCommandId {
-            node_id: 7,
+            node_id: NodeId(7),
             command_index: 0,
             placement: DrawPlacement::Behind,
         }),

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
     RenderNode, TextPrimitiveNode,
@@ -40,7 +41,7 @@ fn hidden_text_at(rect: Rect, clip: Option<Rect>) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-            node_id: 51_001,
+            node_id: NodeId(51_001),
             rect,
             render_text: std::sync::Arc::new(annotated.render_string()),
             text: Rc::new(annotated),

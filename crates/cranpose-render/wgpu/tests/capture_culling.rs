@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
         PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
@@ -79,7 +80,7 @@ fn straddling_page() -> Vec<RenderNode> {
         RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: 7,
+                node_id: NodeId(7),
                 rect: rect(GLASS.x - 40.0, GLASS.y + 20.0, 90.0, 24.0),
                 text: cranpose_ui::text::shared_plain_annotated_string("Straddle"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Straddle"),

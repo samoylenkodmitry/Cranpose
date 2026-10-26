@@ -1,6 +1,6 @@
 #![allow(clippy::print_stdout, reason = "an example prints its results")]
 
-use cranpose_core::{Composition, MemoryApplier, location_key};
+use cranpose_core::{Composition, MemoryApplier, NodeId, location_key};
 use cranpose_ui::{
     Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text, TextStyle,
     composable,
@@ -200,7 +200,7 @@ fn main() {
     println!("All modifier system features working correctly.");
 }
 
-fn count_nodes(applier: &mut MemoryApplier, node_id: usize, _depth: usize) -> usize {
+fn count_nodes(applier: &mut MemoryApplier, node_id: NodeId, _depth: usize) -> usize {
     let mut count = 1;
 
     if let Ok(children) = applier.with_node(node_id, |node: &mut cranpose_ui::LayoutNode| {

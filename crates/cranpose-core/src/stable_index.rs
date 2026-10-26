@@ -68,9 +68,9 @@ impl Directory {
 #[inline]
 fn split(id: NodeId) -> (usize, usize, usize) {
     (
-        id >> (PAGE_BITS + DIRECTORY_BITS),
-        (id >> PAGE_BITS) & (DIRECTORY_LEN - 1),
-        id & (PAGE_LEN - 1),
+        id.0 >> (PAGE_BITS + DIRECTORY_BITS),
+        (id.0 >> PAGE_BITS) & (DIRECTORY_LEN - 1),
+        id.0 & (PAGE_LEN - 1),
     )
 }
 
@@ -142,7 +142,7 @@ impl StableIndex {
                 let base =
                     (directory_index << (PAGE_BITS + DIRECTORY_BITS)) | (page_index << PAGE_BITS);
                 for (offset, entry) in page.entries.iter_mut().enumerate() {
-                    if entry.has_slot() || entry.is_empty() || keep(base | offset) {
+                    if entry.has_slot() || entry.is_empty() || keep(NodeId(base | offset)) {
                         continue;
                     }
                     *entry = Entry::EMPTY;

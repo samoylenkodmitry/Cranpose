@@ -7,12 +7,12 @@ fn a_draw_closure_can_name_its_own_node_for_the_next_frame() {
     let _ = take_draw_repass_nodes();
     let _ = take_render_invalidation();
 
-    observe_draw_reads(DrawObservationScope::new(33, 0, 0), || {
+    observe_draw_reads(DrawObservationScope::new(NodeId(33), 0, 0), || {
         request_current_draw_redraw();
     });
     assert_eq!(
         take_draw_repass_nodes(),
-        vec![33],
+        vec![NodeId(33)],
         "the recording node must be scheduled for re-record"
     );
     assert!(
@@ -115,8 +115,8 @@ fn scoped_repasses_neither_request_nor_cancel_a_global_layout_invalidation() {
     context.enter(|| {
         let _ = take_layout_invalidation();
 
-        schedule_layout_repass(3);
-        schedule_measure_repass(4);
+        schedule_layout_repass(NodeId(3));
+        schedule_measure_repass(NodeId(4));
         assert!(
             !peek_layout_invalidation(),
             "a scoped repass must not re-measure the whole tree"
@@ -125,7 +125,7 @@ fn scoped_repasses_neither_request_nor_cancel_a_global_layout_invalidation() {
         assert!(has_pending_measure_repasses());
 
         set_font_scale(1.5);
-        schedule_layout_repass(5);
+        schedule_layout_repass(NodeId(5));
         assert!(
             take_layout_invalidation(),
             "a scoped repass must not swallow the font scale change"
@@ -167,8 +167,8 @@ fn app_contexts_keep_density_and_invalidations_isolated() {
         set_density(2.0);
         request_render_invalidation();
         request_pointer_invalidation();
-        schedule_layout_repass(11);
-        schedule_draw_repass(12);
+        schedule_layout_repass(NodeId(11));
+        schedule_draw_repass(NodeId(12));
     });
 
     second.enter(|| {
@@ -187,8 +187,8 @@ fn app_contexts_keep_density_and_invalidations_isolated() {
         assert!(peek_layout_invalidation());
         assert!(has_pending_layout_repasses());
         assert!(has_pending_draw_repasses());
-        assert_eq!(take_layout_repass_nodes(), vec![11]);
-        assert_eq!(take_draw_repass_nodes(), vec![12]);
+        assert_eq!(take_layout_repass_nodes(), vec![NodeId(11)]);
+        assert_eq!(take_draw_repass_nodes(), vec![NodeId(12)]);
         assert!(take_render_invalidation());
         assert!(take_pointer_invalidation());
         assert!(take_layout_invalidation());

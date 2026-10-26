@@ -20,7 +20,7 @@ fn node(id: NodeId, modifier: Modifier, children: Vec<LayoutBox>) -> LayoutBox {
     LayoutBox::new(
         id,
         Rect {
-            x: id as f32 * 50.0,
+            x: id.0 as f32 * 50.0,
             y: 0.0,
             width: 48.0,
             height: 48.0,
@@ -53,19 +53,19 @@ fn tab(id: NodeId, selected: bool, enabled: bool) -> LayoutBox {
 fn tabs_keep_selection_when_arrows_wrap_and_leave_in_one_step() {
     let _scope = crate::render_state::app_context_test_scope();
     let tree = LayoutTree::new(node(
-        1,
+        NodeId(1),
         Modifier::empty(),
         vec![
             node(
-                2,
+                NodeId(2),
                 Modifier::empty().selectable_group(),
                 vec![
-                    tab(3, false, true),
-                    tab(4, true, true),
-                    tab(5, false, false),
+                    tab(NodeId(3), false, true),
+                    tab(NodeId(4), true, true),
+                    tab(NodeId(5), false, false),
                 ],
             ),
-            node(6, Modifier::empty(), Vec::new()),
+            node(NodeId(6), Modifier::empty(), Vec::new()),
         ],
     ));
     for (current, key, shift, expected) in [
@@ -78,19 +78,19 @@ fn tabs_keep_selection_when_arrows_wrap_and_leave_in_one_step() {
         (Some(6), KeyCode::Tab, true, 4),
     ] {
         assert_eq!(
-            keyboard_focus_target(&tree, current, key, shift),
+            keyboard_focus_target(&tree, current.map(NodeId), key, shift),
             Some(KeyboardFocusTarget {
-                node_id: expected,
+                node_id: NodeId(expected),
                 activate: false
             })
         );
     }
     assert_eq!(
-        keyboard_focus_target(&tree, Some(4), KeyCode::ArrowDown, false),
+        keyboard_focus_target(&tree, Some(NodeId(4)), KeyCode::ArrowDown, false),
         None
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(6), KeyCode::Home, false),
+        keyboard_focus_target(&tree, Some(NodeId(6)), KeyCode::Home, false),
         None
     );
 }
@@ -99,31 +99,31 @@ fn tabs_keep_selection_when_arrows_wrap_and_leave_in_one_step() {
 fn nested_groups_hidden_content_and_modals_have_separate_focus_scopes() {
     let _scope = crate::render_state::app_context_test_scope();
     let tree = LayoutTree::new(node(
-        1,
+        NodeId(1),
         Modifier::empty(),
         vec![
-            node(2, Modifier::empty(), Vec::new()),
+            node(NodeId(2), Modifier::empty(), Vec::new()),
             node(
-                3,
+                NodeId(3),
                 Modifier::empty().semantics(|config| config.is_modal = true),
                 vec![
                     node(
-                        4,
+                        NodeId(4),
                         Modifier::empty().selectable_group(),
                         vec![
-                            tab(5, false, true),
+                            tab(NodeId(5), false, true),
                             node(
-                                6,
+                                NodeId(6),
                                 Modifier::empty().selectable_group(),
-                                vec![tab(7, true, true), tab(8, false, true)],
+                                vec![tab(NodeId(7), true, true), tab(NodeId(8), false, true)],
                             ),
-                            tab(9, true, true),
+                            tab(NodeId(9), true, true),
                         ],
                     ),
                     node(
-                        10,
+                        NodeId(10),
                         Modifier::empty().hide_from_accessibility(),
-                        vec![node(11, Modifier::empty(), Vec::new())],
+                        vec![node(NodeId(11), Modifier::empty(), Vec::new())],
                     ),
                 ],
             ),
@@ -133,25 +133,25 @@ fn nested_groups_hidden_content_and_modals_have_separate_focus_scopes() {
         keyboard_focus_target(&tree, None, KeyCode::Tab, false)
             .unwrap()
             .node_id,
-        7
+        NodeId(7)
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(7), KeyCode::End, false)
+        keyboard_focus_target(&tree, Some(NodeId(7)), KeyCode::End, false)
             .unwrap()
             .node_id,
-        8
+        NodeId(8)
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(9), KeyCode::ArrowLeft, false)
+        keyboard_focus_target(&tree, Some(NodeId(9)), KeyCode::ArrowLeft, false)
             .unwrap()
             .node_id,
-        5
+        NodeId(5)
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(9), KeyCode::Tab, false)
+        keyboard_focus_target(&tree, Some(NodeId(9)), KeyCode::Tab, false)
             .unwrap()
             .node_id,
-        7
+        NodeId(7)
     );
 }
 
@@ -160,17 +160,17 @@ fn keyboard_navigation_publishes_the_order_for_programmatic_focus() {
     let _scope = crate::render_state::app_context_test_scope();
     crate::set_focus_order(Vec::new());
     let tree = LayoutTree::new(node(
-        1,
+        NodeId(1),
         Modifier::empty(),
         vec![
-            node(2, Modifier::empty(), Vec::new()),
-            node(3, Modifier::empty(), Vec::new()),
+            node(NodeId(2), Modifier::empty(), Vec::new()),
+            node(NodeId(3), Modifier::empty(), Vec::new()),
         ],
     ));
     assert!(keyboard_focus_target(&tree, None, KeyCode::Tab, false).is_some());
     assert_eq!(crate::focus_order_len(), 2);
     assert!(crate::FocusManager.move_focus(crate::FocusDirection::Next));
-    assert_eq!(crate::active_focus_target(), Some(2));
+    assert_eq!(crate::active_focus_target(), Some(NodeId(2)));
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn focus_order_is_owned_by_its_application() {
     let first = crate::render_state::AppContext::new();
     let second = crate::render_state::AppContext::new();
     let entry = FocusEntry {
-        node_id: 1,
+        node_id: NodeId(1),
         rect: Rect::from_size(Size::new(10.0, 10.0)),
     };
     first.enter(|| crate::set_focus_order(vec![entry]));

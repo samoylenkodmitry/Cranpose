@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
     ProjectiveTransform, RenderGraph, RenderNode,
@@ -27,7 +28,7 @@ fn push_text_style_draws_for_test(
     clip: Option<Rect>,
 ) {
     let node = TextPrimitiveNode {
-        node_id: 1,
+        node_id: NodeId(1),
         rect,
         text: Rc::new(cranpose_ui::text::AnnotatedString::from(text)),
         render_text: cranpose_ui::text::shared_plain_render_string(text),
@@ -48,7 +49,7 @@ fn push_text_style_draws_for_test(
 
 fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
     let text_leaf = LayerNode {
-        node_id: Some(77),
+        node_id: Some(NodeId(77)),
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -105,7 +106,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                    node_id: 77,
+                    node_id: NodeId(77),
                     rect: Rect {
                         x: 6.0,
                         y: 4.0,

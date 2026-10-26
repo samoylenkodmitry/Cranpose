@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
     Rect, Size,
     space::{Camera, EyeWorld, LayerSpace, Light, Mat4, MeshSurface, Scene3d, Vec3},
@@ -162,10 +163,9 @@ impl<'a> SpaceTree<'a> {
     pub fn cell_along(&self, path: &[usize]) -> usize {
         let mut cell = 0;
         for &node in path {
-            let next = self
-                .cells
-                .iter()
-                .position(|inner| inner.parent == Some(cell) && inner.layer.node_id == Some(node));
+            let next = self.cells.iter().position(|inner| {
+                inner.parent == Some(cell) && inner.layer.node_id == Some(NodeId(node))
+            });
             match next {
                 Some(next) => cell = next,
                 None => break,
@@ -473,7 +473,7 @@ impl<'a> EyeView<'a> {
     /// surfaces and the doorways between them, in the eye's space.
     pub fn build_world(&self, tree: &SpaceTree<'_>, world: &mut EyeWorld) {
         if let Some(window_scene) = tree.cells[0].layer.node_id {
-            world.set_window_scene(window_scene);
+            world.set_window_scene(window_scene.0);
         }
         let walked = tree.walked_to(self.cell);
         let base = world.add_space(Arc::clone(&walked), Mat4::IDENTITY);
@@ -494,7 +494,7 @@ impl<'a> EyeView<'a> {
             if cell != self.cell {
                 continue;
             }
-            let path: Arc<[usize]> = walked.iter().copied().chain([node]).collect();
+            let path: Arc<[usize]> = walked.iter().copied().chain([node.0]).collect();
             let index = world.add_space(path, space.to_parent);
             world.add_doorway((base, index), space.doorway);
             spaces.push((inner, index, space.to_parent));
@@ -530,7 +530,7 @@ impl SpaceTree<'_> {
         let mut at = cell;
         while let Some(parent) = self.cells[at].parent {
             if let Some(node) = self.cells[at].layer.node_id {
-                path.push(node);
+                path.push(node.0);
             }
             at = parent;
         }

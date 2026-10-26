@@ -31,7 +31,7 @@ fn keys_that_differ_only_in_scale_or_phase_draw_the_same_content() {
     let key = |content: u64, width: f32, scale: f32, phase: f32| {
         let pixels = (width * scale).ceil() as u32;
         LayerRasterCacheKey::source_content(
-            Some(7),
+            Some(NodeId(7)),
             content,
             Rect {
                 x: 0.0,
@@ -61,7 +61,7 @@ fn source_content_keys_at_nearby_scales_are_distinct() {
     };
     let key = |scale: f32| {
         LayerRasterCacheKey::source_content(
-            Some(7),
+            Some(NodeId(7)),
             42,
             bounds,
             (156, 156),
@@ -86,7 +86,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
         height: 40.0,
     };
     let base = LayerRasterCacheKey::source_content(
-        Some(7),
+        Some(NodeId(7)),
         11,
         rect,
         (30, 40),
@@ -94,7 +94,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
         Point::default(),
     );
     let moved = LayerRasterCacheKey::source_content(
-        Some(7),
+        Some(NodeId(7)),
         11,
         Rect { x: 2.0, ..rect },
         (30, 40),
@@ -102,7 +102,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
         Point::default(),
     );
     let resized = LayerRasterCacheKey::source_content(
-        Some(7),
+        Some(NodeId(7)),
         11,
         rect,
         (60, 80),
@@ -112,7 +112,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
 
     assert_ne!(base, moved);
     assert_ne!(base, resized);
-    assert_eq!(base.stable_id(), Some(7));
+    assert_eq!(base.stable_id(), Some(NodeId(7)));
     assert_eq!(base.pixel_size(), (30, 40));
 }
 
@@ -126,7 +126,7 @@ fn layer_raster_cache_key_captures_the_device_phase() {
     };
     let key = |phase: Point| {
         LayerRasterCacheKey::source_content(
-            Some(7),
+            Some(NodeId(7)),
             11,
             rect,
             (30, 40),
@@ -148,10 +148,22 @@ fn source_content_keys_separate_by_content_hash() {
         height: 40.0,
     };
     let scale = RasterScale::from_scale(1.0);
-    let source =
-        LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale, Point::default());
-    let other =
-        LayerRasterCacheKey::source_content(Some(7), 12, rect, (30, 40), scale, Point::default());
+    let source = LayerRasterCacheKey::source_content(
+        Some(NodeId(7)),
+        11,
+        rect,
+        (30, 40),
+        scale,
+        Point::default(),
+    );
+    let other = LayerRasterCacheKey::source_content(
+        Some(NodeId(7)),
+        12,
+        rect,
+        (30, 40),
+        scale,
+        Point::default(),
+    );
 
     assert_ne!(source, other);
     assert_eq!(source.identity(), other.identity());
@@ -166,9 +178,16 @@ fn backdrop_effect_keys_do_not_collide_with_layer_surface_keys() {
         height: 40.0,
     };
     let scale = RasterScale::from_scale(1.0);
-    let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
-    let source =
-        LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale, Point::default());
+    let backdrop =
+        LayerRasterCacheKey::backdrop_effect(Some(NodeId(7)), 11, 13, rect, (30, 40), scale);
+    let source = LayerRasterCacheKey::source_content(
+        Some(NodeId(7)),
+        11,
+        rect,
+        (30, 40),
+        scale,
+        Point::default(),
+    );
 
     assert_ne!(backdrop, source);
     assert_ne!(backdrop.identity(), source.identity());
@@ -183,10 +202,13 @@ fn layer_effect_keys_do_not_collide_with_backdrop_effect_keys() {
         height: 40.0,
     };
     let scale = RasterScale::from_scale(1.0);
-    let effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 13, rect, (30, 40), scale);
-    let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
-    let other_effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 17, rect, (30, 40), scale);
-    let other_input = LayerRasterCacheKey::layer_effect(Some(7), 12, 13, rect, (30, 40), scale);
+    let effect = LayerRasterCacheKey::layer_effect(Some(NodeId(7)), 11, 13, rect, (30, 40), scale);
+    let backdrop =
+        LayerRasterCacheKey::backdrop_effect(Some(NodeId(7)), 11, 13, rect, (30, 40), scale);
+    let other_effect =
+        LayerRasterCacheKey::layer_effect(Some(NodeId(7)), 11, 17, rect, (30, 40), scale);
+    let other_input =
+        LayerRasterCacheKey::layer_effect(Some(NodeId(7)), 12, 13, rect, (30, 40), scale);
 
     assert_ne!(effect, backdrop);
     assert_ne!(effect.identity(), backdrop.identity());

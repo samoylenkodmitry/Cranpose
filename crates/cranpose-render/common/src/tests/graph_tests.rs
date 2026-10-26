@@ -96,17 +96,17 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
         bounds,
         vec![RenderNode::DrawRun(DrawRunNode::for_command(
             PrimitivePhase::BeforeChildren,
-            Some(command(17)),
+            Some(command(NodeId(17))),
             Vec::new(),
         ))],
     );
-    child.node_id = Some(13);
+    child.node_id = Some(NodeId(13));
     let mut root = test_layer(
         bounds,
         vec![
             RenderNode::DrawRun(DrawRunNode::for_command(
                 PrimitivePhase::BeforeChildren,
-                Some(command(9)),
+                Some(command(NodeId(9))),
                 Vec::new(),
             )),
             RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, Vec::new())),
@@ -114,17 +114,20 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
         ],
     );
 
-    root.node_id = Some(5);
+    root.node_id = Some(NodeId(5));
 
     let mut graph = RenderGraph::new(root);
-    let mut nodes = HashSet::from_iter([999]);
+    let mut nodes = HashSet::from_iter([NodeId(999)]);
     graph.collect_retained_visual_observation_nodes(&mut nodes);
-    assert_eq!(nodes, HashSet::from_iter([5, 9, 13, 17]));
+    assert_eq!(
+        nodes,
+        HashSet::from_iter([NodeId(5), NodeId(9), NodeId(13), NodeId(17)])
+    );
     let capacity = nodes.capacity();
     graph.root.children.clear();
-    graph.root.node_id = Some(23);
+    graph.root.node_id = Some(NodeId(23));
     graph.collect_retained_visual_observation_nodes(&mut nodes);
-    assert_eq!(nodes, HashSet::from_iter([23]));
+    assert_eq!(nodes, HashSet::from_iter([NodeId(23)]));
     assert_eq!(nodes.capacity(), capacity);
 }
 

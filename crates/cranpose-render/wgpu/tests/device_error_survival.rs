@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -28,7 +29,7 @@ fn solid_rect(rect: Rect, color: Color) -> RenderNode {
 
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(support::layer_node(
-        Some(9_400),
+        Some(NodeId(9_400)),
         WIDTH as f32,
         HEIGHT as f32,
         vec![solid_rect(

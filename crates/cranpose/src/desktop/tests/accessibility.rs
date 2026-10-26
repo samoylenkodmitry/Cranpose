@@ -28,7 +28,7 @@ fn tree_update(
 fn desktop_tree_scales_logical_bounds_once_for_each_display_density() {
     let bounds = Rect::new(24.0, 40.0, 104.0, 104.0);
     let snapshot = published(&[AccessibilityElement {
-        node_id: 7,
+        node_id: cranpose_core::NodeId(7),
         label: "Take photo".into(),
         role: AccessibilityRole::Button,
         bounds: AccessibilityRect::new(24.0, 40.0, 80.0, 64.0),
@@ -88,7 +88,7 @@ fn pane_titles_preserve_native_dialog_and_control_roles() {
 fn text_selection_cannot_redirect_an_action_to_another_field() {
     let first = field("first", 0, 0);
     let mut second = field("second", 0, 0);
-    second.node_id = 8;
+    second.node_id = cranpose_core::NodeId(8);
     let elements = vec![first, second];
     let ids = published(&elements).ids;
     let selection = TextSelection {
@@ -123,7 +123,11 @@ fn long_multiline_text_keeps_every_run_and_the_end_selection_accessible() {
     );
     assert_eq!(
         selection_chars(&snapshot, NodeId(snapshot.ids[0] as u64), selection),
-        Some((7, value.chars().count(), value.chars().count()))
+        Some((
+            cranpose_core::NodeId(7),
+            value.chars().count(),
+            value.chars().count()
+        ))
     );
 }
 
@@ -253,7 +257,7 @@ fn a_selected_button_reads_as_pressed_so_a_reader_can_still_press_it() {
 fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 7,
+            node_id: cranpose_core::NodeId(7),
             label: "Name".into(),
             bounds: AccessibilityRect::new(0.0, 0.0, 80.0, 44.0),
             role: AccessibilityRole::TextField,
@@ -261,7 +265,7 @@ fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {
             ..AccessibilityElement::default()
         },
         AccessibilityElement {
-            node_id: 8,
+            node_id: cranpose_core::NodeId(8),
             label: "Save".into(),
             bounds: AccessibilityRect::new(0.0, 50.0, 80.0, 44.0),
             role: AccessibilityRole::Button,
@@ -364,7 +368,7 @@ fn disabled_controls_keep_their_state_without_offering_actions() {
 #[test]
 fn a_tree_with_nothing_focused_leaves_focus_on_the_window() {
     let elements = vec![AccessibilityElement {
-        node_id: 7,
+        node_id: cranpose_core::NodeId(7),
         label: "Name".into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 80.0, 44.0),
         role: AccessibilityRole::TextField,
@@ -379,7 +383,7 @@ fn a_tree_with_nothing_focused_leaves_focus_on_the_window() {
 fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 7,
+            node_id: cranpose_core::NodeId(7),
             label: "Items".into(),
             bounds: AccessibilityRect::new(10.0, 20.0, 80.0, 44.0),
             role: AccessibilityRole::Button,
@@ -387,7 +391,7 @@ fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {
             ..AccessibilityElement::default()
         },
         AccessibilityElement {
-            node_id: 8,
+            node_id: cranpose_core::NodeId(8),
             label: "Receipts".into(),
             bounds: AccessibilityRect::new(10.0, 70.0, 120.0, 24.0),
             role: AccessibilityRole::StaticText,
@@ -408,7 +412,7 @@ fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {
 
 fn field(value: &str, anchor: usize, focus: usize) -> AccessibilityElement {
     AccessibilityElement {
-        node_id: 7,
+        node_id: cranpose_core::NodeId(7),
         label: "Note".into(),
         value: Some(value.into()),
         details: Some(Box::new(AccessibilityDetails {
@@ -504,7 +508,7 @@ fn a_password_field_and_a_button_carry_no_text_runs() {
     let elements = vec![
         secret,
         AccessibilityElement {
-            node_id: 8,
+            node_id: cranpose_core::NodeId(8),
             label: "Save".into(),
             bounds: AccessibilityRect::new(0.0, 50.0, 80.0, 44.0),
             role: AccessibilityRole::Button,
@@ -563,7 +567,7 @@ fn a_selection_a_reader_set_on_a_run_comes_back_in_characters_of_the_whole_text(
 
     assert_eq!(
         selection_chars(&published(&elements), NodeId(1), &selection),
-        Some((7, 5, 2))
+        Some((cranpose_core::NodeId(7), 5, 2))
     );
     let stray = TextSelection {
         anchor: TextPosition {
@@ -585,7 +589,7 @@ fn a_selection_a_reader_set_on_a_run_comes_back_in_characters_of_the_whole_text(
 fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
     let elements = vec![
         AccessibilityElement {
-            node_id: 4,
+            node_id: cranpose_core::NodeId(4),
             canvas_key: Some(1),
             label: "Haptics".into(),
             details: Some(Box::new(AccessibilityDetails {
@@ -599,7 +603,7 @@ fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
             ..AccessibilityElement::default()
         },
         AccessibilityElement {
-            node_id: 4,
+            node_id: cranpose_core::NodeId(4),
             canvas_key: Some(2),
             label: "Sound effects".into(),
             bounds: AccessibilityRect::new(0.0, 60.0, 100.0, 50.0),
@@ -631,7 +635,7 @@ fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
 #[test]
 fn an_announcement_rides_along_as_a_live_node_under_the_window() {
     let elements = vec![AccessibilityElement {
-        node_id: 1,
+        node_id: cranpose_core::NodeId(1),
         label: "Import".into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 40.0),
         role: AccessibilityRole::Button,
@@ -658,7 +662,7 @@ fn an_announcement_rides_along_as_a_live_node_under_the_window() {
 #[test]
 fn a_live_control_tells_accesskit_how_urgent_it_is() {
     let elements = vec![AccessibilityElement {
-        node_id: 1,
+        node_id: cranpose_core::NodeId(1),
         label: "3 receipts left".into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 40.0),
         details: Some(Box::new(AccessibilityDetails {
@@ -675,7 +679,7 @@ fn a_live_control_tells_accesskit_how_urgent_it_is() {
 #[test]
 fn an_adjustable_control_reads_as_a_slider_with_a_value_and_a_way_to_move_it() {
     let elements = vec![AccessibilityElement {
-        node_id: 1,
+        node_id: cranpose_core::NodeId(1),
         label: "Volume".into(),
         details: Some(Box::new(AccessibilityDetails {
             state_description: Some("40 %".into()),
@@ -722,7 +726,7 @@ fn several_announcements_in_one_frame_become_one_line() {
 #[test]
 fn rows_sit_under_their_list_in_the_desktop_tree() {
     let list = AccessibilityElement {
-        node_id: 6,
+        node_id: cranpose_core::NodeId(6),
         bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
         details: Some(Box::new(AccessibilityDetails {
             vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
@@ -731,10 +735,10 @@ fn rows_sit_under_their_list_in_the_desktop_tree() {
         ..AccessibilityElement::default()
     };
     let row = AccessibilityElement {
-        node_id: 9,
+        node_id: cranpose_core::NodeId(9),
         label: "Milk".into(),
         bounds: AccessibilityRect::new(0.0, 10.0, 400.0, 40.0),
-        scroll_parent: Some(6),
+        scroll_parent: Some(cranpose_core::NodeId(6)),
         ..AccessibilityElement::default()
     };
 
@@ -782,7 +786,7 @@ fn button(node_id: cranpose_core::NodeId, label: &str) -> AccessibilityElement {
         node_id,
         label: label.into(),
         role: AccessibilityRole::Button,
-        bounds: AccessibilityRect::new(0.0, node_id as f32 * 40.0, 120.0, 40.0),
+        bounds: AccessibilityRect::new(0.0, node_id.0 as f32 * 40.0, 120.0, 40.0),
         ..Default::default()
     }
 }
@@ -797,12 +801,16 @@ fn published_id(snapshot: &AccessibilitySnapshot, index: usize) -> NodeId {
 
 #[test]
 fn a_publish_after_the_whole_tree_sends_only_the_nodes_that_changed() {
-    let mut snapshot = published(&[button(1, "Buy"), button(2, "Sell"), button(3, "Hold")]);
+    let mut snapshot = published(&[
+        button(cranpose_core::NodeId(1), "Buy"),
+        button(cranpose_core::NodeId(2), "Sell"),
+        button(cranpose_core::NodeId(3), "Hold"),
+    ]);
     let replaced = snapshot
         .update(vec![
-            button(1, "Buy"),
-            button(2, "Sell 12"),
-            button(4, "Alert"),
+            button(cranpose_core::NodeId(1), "Buy"),
+            button(cranpose_core::NodeId(2), "Sell 12"),
+            button(cranpose_core::NodeId(4), "Alert"),
         ])
         .expect("unique identities");
     let update = super::tree_update(
@@ -829,18 +837,22 @@ fn a_publish_after_the_whole_tree_sends_only_the_nodes_that_changed() {
 #[test]
 fn a_container_whose_children_changed_is_sent_again() {
     let list = || AccessibilityElement {
-        node_id: 10,
+        node_id: cranpose_core::NodeId(10),
         role: AccessibilityRole::List,
         bounds: AccessibilityRect::new(0.0, 0.0, 120.0, 400.0),
         ..Default::default()
     };
     let row = |node_id, label: &str| AccessibilityElement {
-        scroll_parent: Some(10),
+        scroll_parent: Some(cranpose_core::NodeId(10)),
         ..button(node_id, label)
     };
-    let mut snapshot = published(&[list(), row(11, "AAPL")]);
+    let mut snapshot = published(&[list(), row(cranpose_core::NodeId(11), "AAPL")]);
     let replaced = snapshot
-        .update(vec![list(), row(11, "AAPL"), row(12, "MSFT")])
+        .update(vec![
+            list(),
+            row(cranpose_core::NodeId(11), "AAPL"),
+            row(cranpose_core::NodeId(12), "MSFT"),
+        ])
         .expect("unique identities");
     let update = super::tree_update(
         &snapshot,
@@ -857,7 +869,7 @@ fn a_container_whose_children_changed_is_sent_again() {
 
 #[test]
 fn a_root_publish_sends_the_root_and_the_announcement_only() {
-    let snapshot = published(&[button(1, "Buy")]);
+    let snapshot = published(&[button(cranpose_core::NodeId(1), "Buy")]);
     let announcement = Announcement {
         text: "Order filled".into(),
         mode: LiveRegionMode::Polite,
@@ -880,7 +892,7 @@ fn a_root_publish_sends_the_root_and_the_announcement_only() {
 #[test]
 fn a_partly_checked_box_reads_as_mixed() {
     let elements = vec![AccessibilityElement {
-        node_id: 4,
+        node_id: cranpose_core::NodeId(4),
         label: "Select all".into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 48.0, 48.0),
         role: AccessibilityRole::Checkbox,

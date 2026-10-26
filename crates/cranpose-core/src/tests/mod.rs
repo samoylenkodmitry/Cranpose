@@ -734,19 +734,19 @@ fn exact_subcompose_activation_does_not_take_compatible_cross_slot_nodes() {
     let compatible_slot = SlotId::new(2);
     state.register_content_type(exact_slot, 7);
     state.register_content_type(compatible_slot, 7);
-    state.register_active(exact_slot, &[10], &[]);
+    state.register_active(exact_slot, &[NodeId(10)], &[]);
     state.recycle_prefetched_active_slot(exact_slot);
 
     assert!(
         state.activate_exact_slot(compatible_slot).is_none(),
         "exact activation must not consume a compatible cross-slot reusable node"
     );
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
 
     let activation = state
         .activate_exact_slot(exact_slot)
         .expect("exact retained slot should activate");
-    assert_eq!(activation.nodes, &[10]);
+    assert_eq!(activation.nodes, &[NodeId(10)]);
     assert!(state.reusable().is_empty());
     assert_eq!(state.reusable_count, 0);
 }
@@ -757,7 +757,7 @@ fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
     let scope = RecomposeScope::new_for_test(runtime.handle());
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.register_active(slot, &[NodeId(10)], std::slice::from_ref(&scope));
     state.dispose_or_reuse_starting_from_index(0);
 
     scope.invalidate();
@@ -766,7 +766,7 @@ fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
         state.activate_exact_slot(slot).is_none(),
         "invalidated item scopes must force subcomposition instead of exact activation"
     );
-    assert_eq!(state.reusable(), &[10]);
+    assert_eq!(state.reusable(), &[NodeId(10)]);
 }
 
 mod branch_group_tests;

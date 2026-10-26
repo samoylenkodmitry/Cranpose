@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider};
+use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider, NodeId};
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_services::HttpClientRef;
 use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
@@ -310,7 +310,7 @@ fn semantics_contains_text(node: &SemanticsNode, text: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn find_clickable_node_with_text(node: &SemanticsNode, text: &str) -> Option<usize> {
+fn find_clickable_node_with_text(node: &SemanticsNode, text: &str) -> Option<NodeId> {
     let has_click = node
         .actions
         .iter()
@@ -342,9 +342,9 @@ fn find_story_list_layout_box(layout: &LayoutBox) -> Option<&LayoutBox> {
 #[cfg(not(target_arch = "wasm32"))]
 fn find_parent_node_id(
     layout: &LayoutBox,
-    target_node_id: usize,
-    parent_node_id: Option<usize>,
-) -> Option<usize> {
+    target_node_id: NodeId,
+    parent_node_id: Option<NodeId>,
+) -> Option<NodeId> {
     if layout.node_id == target_node_id {
         return parent_node_id;
     }
@@ -356,7 +356,7 @@ fn find_parent_node_id(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn hacker_news_list_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<usize> {
+fn hacker_news_list_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<NodeId> {
     let stories_pane_node_id = super::LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow())?;
     robot.shell_mut().with_layout_tree(|layout_tree| {
         let layout_tree = layout_tree?;
@@ -372,7 +372,7 @@ fn stories_list_state() -> cranpose_foundation::lazy::LazyListState {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn stories_list_parent_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<usize> {
+fn stories_list_parent_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<NodeId> {
     let list_node_id = hacker_news_list_node_id(robot)?;
     robot.shell_mut().with_layout_tree(|layout_tree| {
         let layout_tree = layout_tree?;
@@ -418,7 +418,7 @@ fn interesting_slot_groups(
 fn find_live_subcompose_node_by_scope_label(
     robot: &mut RobotTestRule<TestRenderer>,
     label: &'static str,
-) -> Option<usize> {
+) -> Option<NodeId> {
     let live = robot.shell_mut().debug_live_subcompose_scope_ids();
     live.iter()
         .find_map(|(node_id, slot_scopes)| {
@@ -440,7 +440,7 @@ fn find_live_subcompose_node_by_scope_label(
 #[cfg(not(target_arch = "wasm32"))]
 fn subcompose_slot_table(
     robot: &mut RobotTestRule<TestRenderer>,
-    node_id: usize,
+    node_id: NodeId,
     slot_id: u64,
 ) -> Vec<cranpose_core::SlotDebugEntry> {
     robot
@@ -452,7 +452,7 @@ fn subcompose_slot_table(
 #[cfg(not(target_arch = "wasm32"))]
 fn subcompose_interesting_groups(
     robot: &mut RobotTestRule<TestRenderer>,
-    node_id: usize,
+    node_id: NodeId,
     slot_id: u64,
 ) -> Vec<(usize, &'static str, usize)> {
     robot
@@ -488,9 +488,9 @@ fn subcompose_interesting_groups(
 #[cfg(not(target_arch = "wasm32"))]
 fn subcompose_slot_window_around_node(
     robot: &mut RobotTestRule<TestRenderer>,
-    node_id: usize,
+    node_id: NodeId,
     slot_id: u64,
-    target_node_id: usize,
+    target_node_id: NodeId,
     radius: usize,
 ) -> Vec<cranpose_core::SlotDebugEntry> {
     let slots = subcompose_slot_table(robot, node_id, slot_id);
@@ -508,7 +508,7 @@ fn subcompose_slot_window_around_node(
 #[cfg(not(target_arch = "wasm32"))]
 fn slot_window_around_node(
     robot: &mut RobotTestRule<TestRenderer>,
-    node_id: usize,
+    node_id: NodeId,
     radius: usize,
 ) -> Vec<cranpose_core::SlotDebugEntry> {
     let slots = robot.shell_mut().debug_slot_entries();
@@ -524,7 +524,7 @@ fn slot_window_around_node(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn find_layout_box_by_node_id(layout: &LayoutBox, node_id: usize) -> Option<&LayoutBox> {
+fn find_layout_box_by_node_id(layout: &LayoutBox, node_id: NodeId) -> Option<&LayoutBox> {
     if layout.node_id == node_id {
         return Some(layout);
     }
@@ -604,7 +604,7 @@ fn pump_robot_until(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn invoke_click(robot: &mut RobotTestRule<TestRenderer>, node_id: usize) {
+fn invoke_click(robot: &mut RobotTestRule<TestRenderer>, node_id: NodeId) {
     let (x, y, width, height) = robot
         .shell_mut()
         .node_layout_bounds(node_id)
@@ -663,7 +663,7 @@ fn raw_drag_story_list(
     robot: &mut RobotTestRule<TestRenderer>,
     list_bounds: (f32, f32, f32, f32),
     steps: usize,
-) -> Vec<usize> {
+) -> Vec<NodeId> {
     let (list_x, list_y, list_w, list_h) = list_bounds;
     let drag_x = list_x + list_w * 0.5;
     let drag_start_y = list_y + list_h * 0.82;
@@ -714,9 +714,9 @@ fn visible_regression_story_numbers(robot: &mut RobotTestRule<TestRenderer>) -> 
 
 #[cfg(not(target_arch = "wasm32"))]
 struct ProgrammaticStoryScrollTrace {
-    list_host_ids: Vec<usize>,
-    stories_pane_ids: Vec<usize>,
-    list_parent_ids: Vec<usize>,
+    list_host_ids: Vec<NodeId>,
+    stories_pane_ids: Vec<NodeId>,
+    list_parent_ids: Vec<NodeId>,
     invalid_scope_tags_per_step: Vec<Vec<(usize, Option<&'static str>)>>,
 }
 

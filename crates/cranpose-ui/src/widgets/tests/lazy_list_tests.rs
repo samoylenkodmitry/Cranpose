@@ -30,7 +30,7 @@ fn test_lazy_row_spec_default() {
 fn placed_item(
     index: usize,
     offset: f32,
-    node_ids: &[u64],
+    node_ids: &[NodeId],
     child_offsets: &[f32],
 ) -> LazyListMeasuredItem {
     let roots = LazyItemRoots {
@@ -47,7 +47,7 @@ fn placed_item(
 
 #[test]
 fn lazy_list_placements_reuse_output_storage() {
-    let item = placed_item(0, 7.0, &[101, 102], &[0.0, 5.0]);
+    let item = placed_item(0, 7.0, &[NodeId(101), NodeId(102)], &[0.0, 5.0]);
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
             is_vertical: true,
@@ -69,17 +69,17 @@ fn lazy_list_placements_reuse_output_storage() {
     push_lazy_list_placements(&mut placements, 1.0, &[item], 1, &frame(), 100.0, &config);
 
     assert_eq!(placements.len(), 2);
-    assert_eq!(placements[0].node_id, 101);
+    assert_eq!(placements[0].node_id, NodeId(101));
     assert_eq!(placements[0].y, 7.0);
-    assert_eq!(placements[1].node_id, 102);
+    assert_eq!(placements[1].node_id, NodeId(102));
     assert_eq!(placements[1].y, 12.0);
     assert_eq!(placements.capacity(), original_capacity);
 }
 
 #[test]
 fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
-    let hidden = placed_item(0, -40.0, &[101], &[0.0]);
-    let partial = placed_item(1, -5.0, &[102], &[0.0]);
+    let hidden = placed_item(0, -40.0, &[NodeId(101)], &[0.0]);
+    let partial = placed_item(1, -5.0, &[NodeId(102)], &[0.0]);
 
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
@@ -109,9 +109,9 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
     );
 
     assert_eq!(placements.len(), 2);
-    assert_eq!(placements[0].node_id, 101);
+    assert_eq!(placements[0].node_id, NodeId(101));
     assert_eq!(placements[0].y, -40.0);
-    assert_eq!(placements[1].node_id, 102);
+    assert_eq!(placements[1].node_id, NodeId(102));
     assert_eq!(placements[1].y, -5.0);
 }
 

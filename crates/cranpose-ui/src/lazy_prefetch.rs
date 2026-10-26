@@ -71,13 +71,8 @@ pub(crate) fn record_lazy_item_cost(cost: Duration) {
 }
 
 /// Notes the root nodes of an item an idle prefetch pass composed.
-pub(crate) fn note_prefetched_item(nodes: &[u64]) {
-    with_state(|state| {
-        state
-            .prefetched
-            .borrow_mut()
-            .extend(nodes.iter().filter_map(|&node| NodeId::try_from(node).ok()));
-    });
+pub(crate) fn note_prefetched_item(nodes: &[NodeId]) {
+    with_state(|state| state.prefetched.borrow_mut().extend_from_slice(nodes));
 }
 
 /// Builds the modifier slices of the items idle prefetch passes composed

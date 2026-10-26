@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{Composition, MemoryApplier, location_key};
+use cranpose_core::{Composition, MemoryApplier, NodeId, location_key};
 
 use super::{
     LazyListItemInfo, LazyListLayoutInfo, LazyListState,
@@ -339,8 +339,8 @@ fn cache_item_sizes_updates_average_only_for_new_entries() {
 fn layout_callback_can_be_registered_again_after_removal() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
-        let first_node: cranpose_core::NodeId = 1;
-        let second_node: cranpose_core::NodeId = 2;
+        let first_node: NodeId = NodeId(1);
+        let second_node: NodeId = NodeId(2);
 
         let first_id = state
             .try_register_layout_callback(first_node, Rc::new(|| {}))
@@ -373,8 +373,8 @@ fn layout_callback_can_be_registered_again_after_removal() {
 fn layout_callback_rebinds_when_node_id_changes() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
-        let first_node: cranpose_core::NodeId = 11;
-        let second_node: cranpose_core::NodeId = 22;
+        let first_node: NodeId = NodeId(11);
+        let second_node: NodeId = NodeId(22);
 
         let first_id = state
             .try_register_layout_callback(first_node, Rc::new(|| {}))
@@ -392,7 +392,7 @@ fn layout_callback_rebinds_when_node_id_changes() {
 fn stale_layout_callback_disposer_cannot_remove_replaced_same_node_callback() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
-        let node_id: cranpose_core::NodeId = 7;
+        let node_id: NodeId = NodeId(7);
         let first_hits = Rc::new(Cell::new(0u32));
         let second_hits = Rc::new(Cell::new(0u32));
 

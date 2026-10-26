@@ -249,7 +249,7 @@ fn measure_uses_attached_node_identity() {
                 Density::new(1.0, 1.0),
             );
             let mut context = BasicModifierNodeContext::new();
-            context.set_node_id(Some(77));
+            context.set_node_id(Some(NodeId(77)));
             node.on_attach(&mut context);
 
             let size = node.measure_text_content(Some(96.0));
@@ -259,7 +259,7 @@ fn measure_uses_attached_node_identity() {
     });
 
     let (recorded, width, height) = rx.recv().expect("receive measurement result");
-    assert_eq!(recorded, vec![Some(77)]);
+    assert_eq!(recorded, vec![Some(NodeId(77))]);
     assert_eq!(width, 12.0);
     assert_eq!(height, 18.0);
 }
@@ -283,7 +283,7 @@ fn prepared_layout_cache_reuses_node_snapshot() {
                 Density::new(1.0, 1.0),
             );
             let mut context = BasicModifierNodeContext::new();
-            context.set_node_id(Some(88));
+            context.set_node_id(Some(NodeId(88)));
             node.on_attach(&mut context);
 
             let (measured, _) = node.layout.measure_layout(Some(120.0));
@@ -304,7 +304,7 @@ fn prepared_layout_cache_reuses_node_snapshot() {
 
     let (recorded, measured_width, measured_height, prepared_width, prepared_height) =
         rx.recv().expect("receive cached layout result");
-    assert_eq!(recorded, vec![Some(88)]);
+    assert_eq!(recorded, vec![Some(NodeId(88))]);
     assert_eq!(measured_width, prepared_width);
     assert_eq!(measured_height, prepared_height);
 }

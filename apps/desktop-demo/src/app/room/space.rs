@@ -218,7 +218,7 @@ impl RoomState {
             && self
                 .scene_node
                 .get()
-                .is_some_and(|scene| self.eye.pose().doorways.contains(&scene))
+                .is_some_and(|scene| self.eye.pose().doorways.contains(&scene.0))
     }
 
     /// Turns the flat screen into the room's north wall and steps into the
@@ -254,7 +254,8 @@ impl RoomState {
         if self.nested {
             let came_from = self.came_from.get();
             self.came_from.set(None);
-            let inside = self.eye.pose().doorways.last().copied() == self.scene_node.get();
+            let inside = self.eye.pose().doorways.last().copied()
+                == self.scene_node.get().map(|node| node.0);
             if let Some(pose) = came_from.filter(|_| inside) {
                 self.eye.place(pose);
             }

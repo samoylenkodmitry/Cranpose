@@ -52,45 +52,45 @@ fn targets(ids: &[NodeId]) -> Vec<Rc<Target>> {
 #[test]
 fn next_takes_the_first_target_when_nothing_holds_focus() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let _targets = targets(&[1, 2, 3]);
+    let _targets = targets(&[NodeId(1), NodeId(2), NodeId(3)]);
     set_focus_order(vec![
-        row(1, 0.0, 0.0),
-        row(2, 0.0, 50.0),
-        row(3, 0.0, 100.0),
+        row(NodeId(1), 0.0, 0.0),
+        row(NodeId(2), 0.0, 50.0),
+        row(NodeId(3), 0.0, 100.0),
     ]);
 
     assert!(FocusManager.move_focus(FocusDirection::Next));
-    assert_eq!(focus_dispatch::active_focus_target(), Some(1));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(1)));
 }
 
 #[test]
 fn next_and_previous_walk_the_order_and_wrap() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let _targets = targets(&[1, 2, 3]);
+    let _targets = targets(&[NodeId(1), NodeId(2), NodeId(3)]);
     set_focus_order(vec![
-        row(1, 0.0, 0.0),
-        row(2, 0.0, 50.0),
-        row(3, 0.0, 100.0),
+        row(NodeId(1), 0.0, 0.0),
+        row(NodeId(2), 0.0, 50.0),
+        row(NodeId(3), 0.0, 100.0),
     ]);
 
     FocusManager.move_focus(FocusDirection::Next);
     FocusManager.move_focus(FocusDirection::Next);
-    assert_eq!(focus_dispatch::active_focus_target(), Some(2));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(2)));
 
     FocusManager.move_focus(FocusDirection::Next);
-    assert_eq!(focus_dispatch::active_focus_target(), Some(3));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(3)));
 
     FocusManager.move_focus(FocusDirection::Next);
     assert_eq!(
         focus_dispatch::active_focus_target(),
-        Some(1),
+        Some(NodeId(1)),
         "Next past the last target comes back to the first"
     );
 
     FocusManager.move_focus(FocusDirection::Previous);
     assert_eq!(
         focus_dispatch::active_focus_target(),
-        Some(3),
+        Some(NodeId(3)),
         "Previous from the first target goes to the last"
     );
 }
@@ -98,34 +98,34 @@ fn next_and_previous_walk_the_order_and_wrap() {
 #[test]
 fn a_direction_takes_the_nearest_target_that_way() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let _targets = targets(&[1, 2, 3, 4]);
+    let _targets = targets(&[NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
     set_focus_order(vec![
-        row(1, 0.0, 0.0),
-        row(2, 200.0, 0.0),
-        row(3, 0.0, 200.0),
-        row(4, 0.0, 600.0),
+        row(NodeId(1), 0.0, 0.0),
+        row(NodeId(2), 200.0, 0.0),
+        row(NodeId(3), 0.0, 200.0),
+        row(NodeId(4), 0.0, 600.0),
     ]);
 
     FocusManager.move_focus(FocusDirection::Next);
-    assert_eq!(focus_dispatch::active_focus_target(), Some(1));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(1)));
 
     assert!(FocusManager.move_focus(FocusDirection::Right));
-    assert_eq!(focus_dispatch::active_focus_target(), Some(2));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(2)));
 
     assert!(FocusManager.move_focus(FocusDirection::Left));
-    assert_eq!(focus_dispatch::active_focus_target(), Some(1));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(1)));
 
     assert!(FocusManager.move_focus(FocusDirection::Down));
     assert_eq!(
         focus_dispatch::active_focus_target(),
-        Some(3),
+        Some(NodeId(3)),
         "Down takes the nearer of the two targets below, not the far one"
     );
 
     assert!(FocusManager.move_focus(FocusDirection::Up));
     assert_eq!(
         focus_dispatch::active_focus_target(),
-        Some(1),
+        Some(NodeId(1)),
         "Up from the lower row takes the target straight above, not the one off to the side"
     );
 }
@@ -133,21 +133,21 @@ fn a_direction_takes_the_nearest_target_that_way() {
 #[test]
 fn a_direction_with_nothing_that_way_leaves_focus_alone() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let _targets = targets(&[1, 2]);
-    set_focus_order(vec![row(1, 0.0, 0.0), row(2, 0.0, 50.0)]);
+    let _targets = targets(&[NodeId(1), NodeId(2)]);
+    set_focus_order(vec![row(NodeId(1), 0.0, 0.0), row(NodeId(2), 0.0, 50.0)]);
 
     FocusManager.move_focus(FocusDirection::Next);
-    assert_eq!(focus_dispatch::active_focus_target(), Some(1));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(1)));
 
     assert!(!FocusManager.move_focus(FocusDirection::Up));
-    assert_eq!(focus_dispatch::active_focus_target(), Some(1));
+    assert_eq!(focus_dispatch::active_focus_target(), Some(NodeId(1)));
 }
 
 #[test]
 fn clear_focus_drops_the_active_target() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let targets = targets(&[1, 2]);
-    set_focus_order(vec![row(1, 0.0, 0.0), row(2, 0.0, 50.0)]);
+    let targets = targets(&[NodeId(1), NodeId(2)]);
+    set_focus_order(vec![row(NodeId(1), 0.0, 0.0), row(NodeId(2), 0.0, 50.0)]);
 
     FocusManager.move_focus(FocusDirection::Next);
     assert!(FocusManager.clear_focus());

@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     CachePolicy, DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
     RenderGraph, RenderNode, TextPrimitiveNode,
@@ -669,7 +670,7 @@ fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> RenderGraph {
         rounded(RADIUS, offscreen_card),
         centered_shadow_children(false, true, 1, true),
     );
-    card.node_id = Some(92_001);
+    card.node_id = Some(NodeId(92_001));
     let mut parent = shared_test_support::layer_node(
         CLIP,
         ProjectiveTransform::uniform_scale(scale).then(ProjectiveTransform::translation(
@@ -683,7 +684,7 @@ fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> RenderGraph {
         },
         vec![RenderNode::Layer(Box::new(card))],
     );
-    parent.node_id = Some(91_001);
+    parent.node_id = Some(NodeId(91_001));
     parent.motion_context_animated = true;
     parent.cache_policy = CachePolicy::Auto;
     page_graph(
@@ -801,7 +802,7 @@ fn text_shadow_node() -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-            node_id: 89_001,
+            node_id: NodeId(89_001),
             rect: Rect {
                 x: 24.0,
                 y: 14.0,
@@ -850,7 +851,7 @@ fn descendant_elevation_shadow_respects_rounded_ancestor_corners() {
         },
         vec![solid_rect(bounds, Color::WHITE)],
     );
-    shadow_layer.node_id = Some(89_002);
+    shadow_layer.node_id = Some(NodeId(89_002));
     assert_corner_matches_rounded_surface(
         RenderNode::Layer(Box::new(shadow_layer)),
         "elevation shadow",
@@ -910,7 +911,7 @@ fn effect_output_padding_respects_rounded_ancestor_corners() {
             }],
         ))],
     );
-    child.node_id = Some(89_003);
+    child.node_id = Some(NodeId(89_003));
     assert_corner_matches_rounded_surface(
         RenderNode::Layer(Box::new(child)),
         "effect output padding",
@@ -1092,7 +1093,7 @@ fn backdrop_over_rounded_fill(radius: f32) -> RenderGraph {
         },
         Vec::new(),
     );
-    backdrop.node_id = Some(901);
+    backdrop.node_id = Some(NodeId(901));
     graph
         .root
         .children

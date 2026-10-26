@@ -15,9 +15,14 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         begin_unkeyed(session, Key(PARENT_KEY), None);
 
         begin_unkeyed(session, Key(CHILD_A_KEY), None);
-        session.record_node_with_parent(10, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(10), 1, None, crate::slot::BRANCH_PATH_ROOT);
         begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
-        session.record_node_with_parent(20, 1, Some(10), crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(
+            NodeId(20),
+            1,
+            Some(NodeId(10)),
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -26,7 +31,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.end_group();
 
         begin_unkeyed(session, Key(CHILD_B_KEY), None);
-        session.record_node_with_parent(30, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(30), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
@@ -43,11 +48,14 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
 
         let child_a = begin_unkeyed(session, Key(CHILD_A_KEY), None);
         assert_eq!(child_a.kind, GroupStartKind::Reused);
-        assert_eq!(node_ids_in_current_subtree(session), vec![10, 20]);
+        assert_eq!(
+            node_ids_in_current_subtree(session),
+            vec![NodeId(10), NodeId(20)]
+        );
         session.skip_group();
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
-        assert_eq!(child_a_result.root_nodes.as_slice(), [10]);
+        assert_eq!(child_a_result.root_nodes.as_slice(), [NodeId(10)]);
         assert!(child_a_result.was_skipped);
         session.end_group();
 
@@ -233,7 +241,7 @@ fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
     let update = harness.table.record_node_at_cursor(
         child_anchor,
         0,
-        42,
+        NodeId(42),
         None,
         1,
         crate::slot::BRANCH_PATH_ROOT,
@@ -242,7 +250,7 @@ fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
     assert_eq!(
         update,
         NodeSlotUpdate::Inserted {
-            id: 42,
+            id: NodeId(42),
             generation: 1
         }
     );
@@ -326,9 +334,14 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
         begin_unkeyed(session, Key(PARENT_KEY), None);
 
         begin_unkeyed(session, Key(CHILD_KEY), None);
-        session.record_node_with_parent(41, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(41), 1, None, crate::slot::BRANCH_PATH_ROOT);
         begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
-        session.record_node_with_parent(42, 1, Some(41), crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(
+            NodeId(42),
+            1,
+            Some(NodeId(41)),
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -352,10 +365,13 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
     });
     harness.finish_pass();
 
-    assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41, 42]);
+    assert_eq!(
+        detached.node_ids_iter().collect::<Vec<_>>(),
+        vec![NodeId(41), NodeId(42)]
+    );
     let mut root_nodes = Vec::new();
     detached.collect_root_nodes_into(&mut root_nodes);
-    assert_eq!(root_nodes, vec![41]);
+    assert_eq!(root_nodes, vec![NodeId(41)]);
 }
 
 #[test]

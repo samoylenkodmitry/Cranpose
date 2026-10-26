@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{CachePolicy, ProjectiveTransform, RenderGraph},
@@ -24,7 +25,7 @@ fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
         height: FRAME_HEIGHT as f32,
     };
     let root = support::contract_layer(
-        Some(4_100),
+        Some(NodeId(4_100)),
         cache_policy,
         bounds,
         ProjectiveTransform::identity(),
@@ -132,7 +133,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
 
     let direct_graph = || {
         RenderGraph::new(support::contract_layer(
-            Some(4_200),
+            Some(NodeId(4_200)),
             CachePolicy::None,
             Rect {
                 x: 0.0,

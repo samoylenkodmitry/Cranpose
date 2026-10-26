@@ -98,7 +98,7 @@ impl RecyclePool {
                 return;
             }
             let stable_id = *next_stable_id;
-            *next_stable_id = next_stable_id.saturating_add(1);
+            *next_stable_id = next_stable_id.next();
             self.push_warm(RecycledNode::from_shell(
                 stable_id,
                 shell,

@@ -1,4 +1,4 @@
-use cranpose_core::{Composition, MemoryApplier, location_key};
+use cranpose_core::{Composition, MemoryApplier, NodeId, location_key};
 use cranpose_foundation::{
     BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain, modifier_element,
 };
@@ -19,7 +19,7 @@ impl Measurable for TestMeasurable {
         Placeable::value(
             constraints.max_width.min(self.width),
             constraints.max_height.min(self.height),
-            0,
+            NodeId(0),
         )
     }
 

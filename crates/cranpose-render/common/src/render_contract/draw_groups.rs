@@ -4,6 +4,7 @@
 
 use std::rc::Rc;
 
+use cranpose_core::NodeId;
 use cranpose_ui::{Box, BoxSpec, DrawCommand, LayoutEngine, Modifier, run_test_composition};
 use cranpose_ui_graphics::{
     Brush, Color, ColorFilter, CompositingStrategy, DrawScope, DrawScopeDefault, DrawTextStyle,
@@ -158,14 +159,14 @@ pub(super) fn draw_groups_fixture() -> RenderFixture {
         DrawCommand::Overlay(Rc::new(grouped_overlay)),
     ];
     let mut nodes: Vec<RenderNode> = draw_command_nodes_for_tests(
-        1,
+        NodeId(1),
         &behind,
         DrawPlacement::Behind,
         size,
         PrimitivePhase::BeforeChildren,
     );
     nodes.extend(draw_command_nodes_for_tests(
-        1,
+        NodeId(1),
         &overlay,
         DrawPlacement::Overlay,
         size,

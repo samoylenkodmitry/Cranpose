@@ -626,7 +626,7 @@ struct NodeIdCell(Cell<NodeId>);
 
 /// The id a [`NodeIdCell`] holds for none: no node gets it, as ids index
 /// the applier's nodes.
-const NO_NODE_ID: NodeId = NodeId::MAX;
+const NO_NODE_ID: NodeId = NodeId(usize::MAX);
 
 impl NodeIdCell {
     fn new(id: Option<NodeId>) -> Self {

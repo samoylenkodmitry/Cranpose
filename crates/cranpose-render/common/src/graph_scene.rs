@@ -286,7 +286,7 @@ struct HitRegionInit<'a> {
 impl Default for HitRegionInit<'_> {
     fn default() -> Self {
         Self {
-            node_id: 0,
+            node_id: NodeId(0),
             capture_path: Vec::new(),
             geometry: HitGeometry {
                 rect: Rect {

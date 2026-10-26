@@ -1,3 +1,5 @@
+use cranpose_core::NodeId;
+
 use super::*;
 use crate::layout::SemanticsDetails;
 
@@ -20,7 +22,7 @@ fn invalid_and_signed_zero_indices_keep_stable_order() {
             .into_iter()
             .enumerate()
             .map(|(node_id, traversal_index)| SemanticsNode {
-                node_id,
+                node_id: NodeId(node_id),
                 traversal_index,
                 ..SemanticsNode::default()
             })
@@ -31,7 +33,7 @@ fn invalid_and_signed_zero_indices_keep_stable_order() {
         node.accessibility_children()
             .map(|child| child.node_id)
             .collect::<Vec<_>>(),
-        [4, 0, 1, 2, 3]
+        [NodeId(4), NodeId(0), NodeId(1), NodeId(2), NodeId(3)]
     );
 }
 
@@ -40,7 +42,7 @@ fn children_without_traversal_indices_come_in_composition_order() {
     let node = SemanticsNode {
         children: (0..3)
             .map(|node_id| SemanticsNode {
-                node_id,
+                node_id: NodeId(node_id),
                 ..SemanticsNode::default()
             })
             .collect(),
@@ -50,7 +52,7 @@ fn children_without_traversal_indices_come_in_composition_order() {
     assert_eq!(children.size_hint(), (3, Some(3)));
     assert_eq!(
         children.map(|child| child.node_id).collect::<Vec<_>>(),
-        [0, 1, 2]
+        [NodeId(0), NodeId(1), NodeId(2)]
     );
 }
 
@@ -64,21 +66,21 @@ fn a_written_label_is_the_label() {
         ..SemanticsNode::default()
     };
     let group = SemanticsNode {
-        children: vec![text(2, "  "), text(3, "Inner")],
+        children: vec![text(NodeId(2), "  "), text(NodeId(3), "Inner")],
         ..SemanticsNode::default()
     };
     let button = SemanticsNode {
         merge_descendants: true,
         children: vec![
-            text(1, "Save"),
+            text(NodeId(1), "Save"),
             group,
             SemanticsNode {
                 hidden: true,
-                ..text(4, "Hidden")
+                ..text(NodeId(4), "Hidden")
             },
             SemanticsNode {
                 focusable: true,
-                ..text(5, "Separate")
+                ..text(NodeId(5), "Separate")
             },
         ],
         ..SemanticsNode::default()
@@ -95,7 +97,7 @@ fn a_written_label_is_the_label() {
         description: Some("Gone".into()),
         ..SemanticsNode::default()
     };
-    for node in [&button, &field, &hidden, &text(6, "Plain")] {
+    for node in [&button, &field, &hidden, &text(NodeId(6), "Plain")] {
         let mut written = String::from("kept: ");
         let named = node.write_accessibility_label(&mut written);
         let label = node.accessibility_label();

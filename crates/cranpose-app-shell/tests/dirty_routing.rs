@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::{AppShell, RootId};
-use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
+use cranpose_core::{MutableState, NodeId, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_render_common::{
     RenderScene, Renderer, graph, graph_scene::Scene, hit_graph::collect_hits_from_graph,
@@ -69,7 +69,7 @@ impl Renderer for HitRenderer {
     fn rebuild_scene_from_applier(
         &mut self,
         applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
@@ -109,8 +109,8 @@ fn Screen(show_window: Rc<RefCell<Option<MutableState<bool>>>>, window: Rc<TestW
     Box(modifier, BoxSpec::default(), || Pane());
 }
 
-fn first_window(entries: Vec<WindowRootEntry>) -> u64 {
-    entries.first().expect("the window root is attached").node as u64
+fn first_window(entries: Vec<WindowRootEntry>) -> NodeId {
+    entries.first().expect("the window root is attached").node
 }
 
 #[test]

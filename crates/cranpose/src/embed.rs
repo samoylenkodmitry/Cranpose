@@ -497,13 +497,13 @@ impl EmbeddedHost {
             .windows
             .keys()
             .copied()
-            .filter(|key| !requests.iter().any(|request| request.key.raw() == *key))
+            .filter(|key| !requests.iter().any(|request| request.key.node() == *key))
             .collect();
         for key in closed {
             self.close_window(key);
         }
         for request in &requests {
-            match self.windows.get(&request.key.raw()).copied() {
+            match self.windows.get(&request.key.node()).copied() {
                 Some(surface) => self.refresh_window(surface, request),
                 None => self.open_window(request),
             }
@@ -523,7 +523,7 @@ impl EmbeddedHost {
         );
         let kind = SurfaceKind::Window(window);
         let renderer = renderer_for(&self.text_system, &self.gpu, scale, kind.transparent());
-        let key = request.key.raw();
+        let key = request.key.node();
         if let SurfaceKind::Window(window) = &kind {
             window.set_content_size(content);
         }

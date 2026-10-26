@@ -16,8 +16,8 @@ pub enum DesktopWindowId {
     /// The app's primary window.
     Primary,
     /// A window that [`WindowModifierExt::window`](crate::WindowModifierExt::window)
-    /// opens, by the raw value of its key.
-    Native(u64),
+    /// opens, by the node that carries the modifier.
+    Native(cranpose_core::NodeId),
 }
 
 /// A window of a desktop app, as a [`DesktopIntegration`] call sees it. Its

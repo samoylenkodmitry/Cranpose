@@ -400,7 +400,7 @@ fn composed_group_with_value_and_node_table(group_key: Key) -> SlotTable {
             crate::slot::BRANCH_PATH_ROOT,
             || 17_i32,
         );
-        session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(NodeId(31), 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -463,15 +463,16 @@ fn exercise_slot_write_session_surface(
             7_i32
         });
 
-    let recorded = slots.record_node_with_parent(55, 1, None, crate::slot::BRANCH_PATH_ROOT);
+    let recorded =
+        slots.record_node_with_parent(NodeId(55), 1, None, crate::slot::BRANCH_PATH_ROOT);
     assert_eq!(
         recorded,
         NodeSlotUpdate::Inserted {
-            id: 55,
+            id: NodeId(55),
             generation: 1,
         },
     );
-    assert_eq!(node_ids_in_current_subtree(slots), vec![55]);
+    assert_eq!(node_ids_in_current_subtree(slots), vec![NodeId(55)]);
 
     let result = slots.finish_group_body();
     assert!(result.detached_children.is_empty());

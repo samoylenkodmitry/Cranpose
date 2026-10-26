@@ -889,8 +889,8 @@ fn removed_payload_tail_invalidates_value_slot_handle() {
 #[test]
 fn recomposition_removes_tail_payloads_and_nodes_together() {
     const GROUP_KEY: u64 = 59;
-    const FIRST_NODE: NodeId = 590;
-    const SECOND_NODE: NodeId = 591;
+    const FIRST_NODE: NodeId = NodeId(590);
+    const SECOND_NODE: NodeId = NodeId(591);
 
     let mut harness = SlotHarness::new();
 

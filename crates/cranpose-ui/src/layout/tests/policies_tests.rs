@@ -1,3 +1,4 @@
+use cranpose_core::NodeId;
 use cranpose_ui_layout::{Constraints, MeasurePolicy, ParentData, Placement};
 
 use super::{flex_measure_policy::WeightShares, *};
@@ -36,7 +37,7 @@ impl Measurable for MockMeasurable {
     /// Its size coerced into `constraints`, as every Compose placeable is.
     fn measure(&self, constraints: Constraints) -> Placeable {
         let (width, height) = constraints.constrain(self.width, self.height);
-        Placeable::value(width, height, self.node_id)
+        Placeable::value(width, height, NodeId(self.node_id))
     }
 
     fn min_intrinsic_width(&self, _height: f32) -> f32 {
@@ -69,7 +70,7 @@ struct FillWidthMeasurable {
 impl Measurable for FillWidthMeasurable {
     fn measure(&self, constraints: Constraints) -> Placeable {
         self.offered.set(constraints.max_width);
-        Placeable::value(constraints.max_width, 10.0, 2)
+        Placeable::value(constraints.max_width, 10.0, NodeId(2))
     }
 
     fn min_intrinsic_width(&self, _height: f32) -> f32 {
@@ -319,7 +320,7 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
         Box::new(MockMeasurable::new(60.0, 30.0, 2)),
     ];
     let mut placements = Vec::with_capacity(8);
-    placements.push(Placement::new(999, 1.0, 1.0, 0));
+    placements.push(Placement::new(NodeId(999), 1.0, 1.0, 0));
     let original_capacity = placements.capacity();
 
     let policy =
@@ -331,8 +332,8 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     assert_eq!(size.width, 60.0);
     assert_eq!(size.height, 50.0);
     assert_eq!(placements.len(), 2);
-    assert_eq!(placements[0].node_id, 1);
-    assert_eq!(placements[1].node_id, 2);
+    assert_eq!(placements[0].node_id, NodeId(1));
+    assert_eq!(placements[1].node_id, NodeId(2));
     assert_eq!(placements.capacity(), original_capacity);
 
     let box_policy = BoxMeasurePolicy::new(Alignment::CENTER, false);

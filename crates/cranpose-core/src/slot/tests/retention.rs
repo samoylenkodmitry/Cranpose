@@ -1054,7 +1054,7 @@ fn finalize_pass_disposes_removed_child_nodes() {
 #[test]
 fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
     const ROOT_KEY: u64 = 358;
-    const ROOT_NODE: NodeId = 359;
+    const ROOT_NODE: NodeId = NodeId(359);
 
     let mut harness = SlotHarness::new();
 
