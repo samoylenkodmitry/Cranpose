@@ -1,7 +1,5 @@
 use std::{fs::File, sync::Arc};
 
-use crate::{media::path_from_uri, registry::ServiceRegistry};
-
 /// A media stream the platform opened, and what it knows about it.
 #[derive(Debug)]
 pub struct MediaSourceHandle {
@@ -20,7 +18,7 @@ pub struct MediaSourceHandle {
 /// Opens a media URI the decoder cannot open for itself.
 ///
 /// A `file:` URI is a path and needs nobody, which is why
-/// [`open_media_source`] answers those without asking. A `content://` document
+/// [`crate::media::open_media_source`] answers those without asking. A `content://` document
 /// belongs to an Android provider and only the platform layer can ask that
 /// provider for a descriptor, so the platform layer registers this and the
 /// decode thread calls it.
@@ -35,36 +33,3 @@ pub trait MediaSourceOpener: Send + Sync {
 
 /// Shared handle to the platform media source opener.
 pub type MediaSourceOpenerRef = Arc<dyn MediaSourceOpener>;
-
-static PLATFORM_MEDIA_SOURCE: ServiceRegistry<dyn MediaSourceOpener> = ServiceRegistry::new();
-
-/// Installs the platform media source opener, replacing any previous one.
-pub fn set_platform_media_source_opener(opener: MediaSourceOpenerRef) {
-    PLATFORM_MEDIA_SOURCE.set(opener);
-}
-
-/// Removes the platform media source opener.
-pub fn clear_platform_media_source_opener() {
-    PLATFORM_MEDIA_SOURCE.clear();
-}
-
-/// Opens `uri` for decoding.
-///
-/// `file:` URIs and bare paths are opened here. Anything else is the platform's
-/// to answer, and a platform that registered no opener gets
-/// [`ErrorKind::Unsupported`](std::io::ErrorKind::Unsupported) rather than a
-/// guess.
-pub fn open_media_source(uri: &str) -> std::io::Result<MediaSourceHandle> {
-    if let Some(path) = path_from_uri(uri) {
-        let stream = File::open(path)?;
-        let len = stream.metadata().ok().map(|metadata| metadata.len());
-        return Ok(MediaSourceHandle { stream, len });
-    }
-    match PLATFORM_MEDIA_SOURCE.get() {
-        Some(opener) => opener.open(uri),
-        None => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            format!("no platform opener for {uri}"),
-        )),
-    }
-}
