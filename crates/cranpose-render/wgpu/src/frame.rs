@@ -3992,11 +3992,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .map_or(0.0, RenderEffect::output_padding);
         // The effect writes over its rect and the output padding around it.
         let written = expand_rect(rect, output_padding);
-        let visible = match effect.clip {
-            Some(clip) => written.intersect(clip.translate(snap.x, snap.y)),
-            None => Some(written),
-        };
-        let Some(visible) = visible else {
+        let clip = effect.clip.map(|clip| clip.translate(snap.x, snap.y));
+        let Some(visible) = clip.map_or(Some(written), |clip| written.intersect(clip)) else {
             return Ok(None);
         };
         let padding = effect
@@ -4045,13 +4042,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_rect_device.width,
             layer_rect_device.height,
         ];
-        let waiting = effect.effect.as_ref().filter(|render_effect| {
-            !self.effect_draws_now(
-                render_effect,
-                layer_pixel_rect,
-                (width, height),
-                ShaderTarget::Layer,
-            )
+        let size = (width, height);
+        let waiting = effect.effect.as_ref().filter(|pending| {
+            !self.effect_draws_now(pending, layer_pixel_rect, size, ShaderTarget::Layer)
         });
         let result = match &effect.effect {
             Some(render_effect) if waiting.is_none() => self.apply_effect(
