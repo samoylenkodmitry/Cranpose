@@ -277,11 +277,7 @@ fn draws_that_change_with_a_layout_show_as_a_new_screen_shows_them() {
     let mut fresh = stepping_framebuffer(1);
     let picture = picture_in_strips(&mut fresh, 40);
     assert!(
-        picture
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .any(|pixel| *pixel == [0, 255, 0, 255]),
+        picture.as_chunks::<4>().0.contains(&[0, 255, 0, 255]),
         "the boxes draw"
     );
     assert!(picture_in_strips(&mut stepped, 40) == picture);
