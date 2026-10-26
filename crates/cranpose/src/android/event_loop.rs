@@ -13,10 +13,9 @@ use std::{
 use cranpose_app_shell::{
     AppShell, KeyEvent, PlatformFrameDriver, PointerSource, default_root_key,
 };
-use cranpose_foundation::PointerId;
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::{DeviceLostHandler, PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui::{Point, PointerButton, Size};
+use cranpose_ui::{Point, PointerButton, PointerId, Size};
 use ndk::native_window::NativeWindow;
 
 use super::{

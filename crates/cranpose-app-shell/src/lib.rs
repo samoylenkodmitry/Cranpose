@@ -27,12 +27,10 @@ use cranpose_core::{
     run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
-    DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerId, PointerSource, RotaryScrollEvent,
     rotary_scroll_pixels_from_detents,
 };
-use cranpose_foundation::{
-    PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
-};
+use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, NodeUpdate, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{

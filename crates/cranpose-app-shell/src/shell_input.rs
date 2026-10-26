@@ -710,8 +710,7 @@ where
         }
         log::trace!(
             target: "cranpose::input",
-            "secondary_pointer {kind:?} id={} ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
-            pointer_id.0,
+            "secondary_pointer {kind:?} id={pointer_id} ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
             event_time.platform_time_ms,
             event_time.animation_time_nanos,
         );

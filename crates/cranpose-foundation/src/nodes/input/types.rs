@@ -17,6 +17,12 @@ impl PointerId {
     pub const PRIMARY: Self = Self(0);
 }
 
+impl std::fmt::Display for PointerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 type PostDispatchAction = Box<dyn FnOnce() -> bool>;
 
 #[derive(Clone)]
