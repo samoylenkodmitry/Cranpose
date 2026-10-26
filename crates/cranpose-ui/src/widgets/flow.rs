@@ -1,13 +1,10 @@
 //! `FlowRow` and `FlowColumn`: children that wrap onto the next line.
 
 use cranpose_core::NodeId;
+use cranpose_ui_layout::Axis;
 
 use super::layout::{LayoutEnvironment, compose_layout};
-use crate::{
-    composable,
-    layout::policies::{FlowAxis, FlowMeasurePolicy},
-    modifier::Modifier,
-};
+use crate::{composable, layout::policies::FlowMeasurePolicy, modifier::Modifier};
 
 /// The gaps of a [`FlowRow`] or a [`FlowColumn`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -71,7 +68,7 @@ pub fn FlowRow<F>(modifier: Modifier, spec: FlowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    flow_layout(modifier, FlowAxis::Horizontal, spec, content)
+    flow_layout(modifier, Axis::Horizontal, spec, content)
 }
 
 /// Places children down a column and starts a new column when the
@@ -83,10 +80,10 @@ pub fn FlowColumn<F>(modifier: Modifier, spec: FlowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    flow_layout(modifier, FlowAxis::Vertical, spec, content)
+    flow_layout(modifier, Axis::Vertical, spec, content)
 }
 
-fn flow_layout<F>(modifier: Modifier, axis: FlowAxis, spec: FlowSpec, content: F) -> NodeId
+fn flow_layout<F>(modifier: Modifier, axis: Axis, spec: FlowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
