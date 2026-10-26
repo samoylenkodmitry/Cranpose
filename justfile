@@ -1212,16 +1212,7 @@ disk:
 worktree-done path="." *flags:
     {{quote(justfile_directory() / "scripts/dev/worktree_done.sh")}} {{flags}} {{quote(path)}}
 
-# Make the seed every new worktree starts from (cargo-seed): a locked worktree
-# at origin/main built with the commands in scripts/dev/seed_setup.sh; the
-# previous seed goes. The first run sets up the machine. After that the
-# post-checkout hook clones the seed into each new worktree and refreshes it
-# in the background once origin/main moves.
-seed-refresh:
-    scripts/dev/seed_setup.sh
-    cargo seed refresh .
-
-# Clone the seed's target into a worktree that has none.
+# Copy the target of the closest worktree into a worktree that has none.
 [no-cd]
 seed path=".":
     cargo seed clone {{quote(path)}}

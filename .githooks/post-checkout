@@ -1,8 +1,8 @@
 #!/bin/sh
-# A new worktree starts with the seed's warm cargo target (cargo-seed; `just
-# seed-refresh` sets a machine up). Git runs this hook after `git worktree add`
-# with the null commit as the previous HEAD; branch switches and machines
-# without a seed return at once. Seeding never fails the checkout.
+# A new worktree starts with a copy of the cargo target of the closest
+# worktree (cargo-seed). Git runs this hook after `git worktree add` with the
+# null commit as the previous HEAD; branch switches and machines without
+# cargo-seed return at once. The copy never fails the checkout.
 [ "$1" = 0000000000000000000000000000000000000000 ] || exit 0
 command -v cargo-seed >/dev/null 2>&1 || exit 0
 cargo-seed seed clone --hook || true
