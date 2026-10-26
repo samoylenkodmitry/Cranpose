@@ -1734,11 +1734,19 @@ impl UploadMode {
 /// copies into it queue behind the draws that read it. A mapped ring's
 /// buffers cycle through a [`MappedPool`]: the CPU writes the next frame
 /// while the GPU may still read the last.
+// Whether a ring gathers the frame's uploads and writes them in one copy per
+// buffer, or writes each one as it comes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RingWrites {
+    Staged,
+    Direct,
+}
+
 struct UploadRing {
     usage: wgpu::BufferUsages,
     label: &'static str,
     alignment: u64,
-    staged: bool,
+    writes: RingWrites,
     generations: Vec<UploadGeneration>,
     /// A staged ring's uploads of the frame, each buffer's from its
     /// `staged_at`, padded to the copy alignment when the buffer fills.
@@ -1763,7 +1771,7 @@ impl UploadRing {
         usage: wgpu::BufferUsages,
         label: &'static str,
         alignment: u64,
-        staged: bool,
+        writes: RingWrites,
         mode: UploadMode,
     ) -> Self {
         let (usage, alignment, chunks) = match mode {
@@ -1778,7 +1786,7 @@ impl UploadRing {
             usage,
             label,
             alignment,
-            staged,
+            writes,
             generations: Vec::new(),
             staging: Vec::new(),
             chunks,
@@ -1804,7 +1812,7 @@ impl UploadRing {
         let offset = match placement {
             UploadPlacement::At(offset) => offset,
             UploadPlacement::Grow(capacity) => {
-                if self.staged {
+                if self.writes == RingWrites::Staged {
                     self.close_staging();
                 }
                 let generation = self.open(device, upload_span(len, binding), capacity);
@@ -1820,7 +1828,10 @@ impl UploadRing {
     /// Places `bytes` in a staged ring, which writes them when the frame is
     /// staged.
     fn stage(&mut self, device: &wgpu::Device, binding: u64, bytes: &[u8]) -> (usize, u64) {
-        debug_assert!(self.staged, "only a staged ring holds uploads back");
+        debug_assert!(
+            self.writes == RingWrites::Staged,
+            "only a staged ring holds uploads back"
+        );
         let (slot, offset) = self.place(device, binding, bytes.len() as u64);
         self.staging
             .resize(self.generations[slot].staged_at + offset as usize, 0);
@@ -1838,7 +1849,7 @@ impl UploadRing {
         write: &mut impl FnMut(&wgpu::Buffer, u64, &[u8]) -> u64,
     ) -> (usize, u64) {
         debug_assert!(
-            !self.staged,
+            self.writes == RingWrites::Direct,
             "a staged ring writes when the frame is staged"
         );
         let (slot, offset) = self.place(device, binding, bytes.len() as u64);
@@ -1917,13 +1928,13 @@ impl UploadRing {
         &mut self,
         write: &mut impl FnMut(&wgpu::Buffer, u64, &[u8]) -> FrameCommandStats,
     ) -> FrameCommandStats {
-        if self.staged {
+        if self.writes == RingWrites::Staged {
             self.close_staging();
         }
         let mut stats = std::mem::take(&mut self.written);
         if self.chunks.is_some() {
             self.finish_frame();
-        } else if self.staged {
+        } else if self.writes == RingWrites::Staged {
             let mut generations = self.generations.iter().peekable();
             while let Some(generation) = generations.next() {
                 let end = generations
@@ -2124,21 +2135,21 @@ fn frame_rings(device: &wgpu::Device, mode: UploadMode) -> [UploadRing; 3] {
             wgpu::BufferUsages::UNIFORM,
             "Frame Uniform Uploads",
             uniform_alignment,
-            true,
+            RingWrites::Staged,
             mode,
         ),
         UploadRing::new(
             wgpu::BufferUsages::VERTEX,
             "Frame Vertex Uploads",
             wgpu::COPY_BUFFER_ALIGNMENT,
-            false,
+            RingWrites::Direct,
             mode,
         ),
         UploadRing::new(
             wgpu::BufferUsages::INDEX,
             "Frame Index Uploads",
             wgpu::COPY_BUFFER_ALIGNMENT,
-            false,
+            RingWrites::Direct,
             mode,
         ),
     ]

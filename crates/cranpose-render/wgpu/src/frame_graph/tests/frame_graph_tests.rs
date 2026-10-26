@@ -255,7 +255,7 @@ fn check_staged_uploads(
         wgpu::BufferUsages::COPY_SRC,
         "Upload Growth Test",
         256,
-        true,
+        super::RingWrites::Staged,
         mode,
     );
     let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
@@ -327,19 +327,19 @@ fn check_written_uploads(
     let readable = wgpu::BufferUsages::COPY_SRC;
     let mut allocators = super::FrameUploadAllocators {
         rings: Some([
-            super::UploadRing::new(readable, "Uniforms", 256, true, mode),
+            super::UploadRing::new(readable, "Uniforms", 256, super::RingWrites::Staged, mode),
             super::UploadRing::new(
                 readable,
                 "Vertices",
                 wgpu::COPY_BUFFER_ALIGNMENT,
-                false,
+                super::RingWrites::Direct,
                 mode,
             ),
             super::UploadRing::new(
                 readable,
                 "Indices",
                 wgpu::COPY_BUFFER_ALIGNMENT,
-                false,
+                super::RingWrites::Direct,
                 mode,
             ),
         ]),
