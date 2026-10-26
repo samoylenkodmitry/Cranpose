@@ -10,25 +10,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_app_shell::{
-    AppShell, KeyEvent, PlatformFrameDriver, PointerSource, default_root_key,
-};
+use cranpose_app_shell::{AppShell, PlatformFrameDriver, PointerSource};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::{DeviceLostHandler, PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui::{Point, PointerButton, PointerId, Size};
+use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 
 use super::{
     display_timing::{DisplayTimingObserver, DisplayedFrame},
+    host_window_requests::{
+        PendingHostWindowSizeRequest, confirm_android_host_window_request,
+        dispatch_android_surface_size_request, dispatch_registered_android_surface_size_request,
+    },
+    input::{PendingInput, dispatch_pending_inputs, drain_android_input_events},
     jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    keyboard::{self, AndroidKeyTranslator, AndroidSoftKeyboard, is_system_key},
+    keyboard::{self, AndroidKeyTranslator, AndroidSoftKeyboard},
     overlay_window,
     surface::{AndroidSurfaceError, create_android_wgpu_surface},
     text_input::{self, AndroidImeEvent},
 };
 use crate::{
     android_host_window,
-    app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppSettings},
+    app_launcher::{AndroidGpuBackend, AppSettings},
     frame_pacer::FramePacer,
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
@@ -63,72 +66,6 @@ impl GpuResources {
             adapter_downlevel: self.adapter.get_downlevel_capabilities().flags,
         }
     }
-}
-
-enum PendingInput {
-    PointerDown(f32, f32, Option<i64>, PointerSource),
-    PointerUp(f32, f32, Option<i64>, PointerSource),
-    PointerMove(f32, f32, Option<i64>, PointerSource),
-    PointerCancel,
-    Key(KeyEvent),
-    SecondaryPointerDown(PointerId, f32, f32, Option<i64>),
-    SecondaryPointerUp(PointerId, f32, f32, Option<i64>),
-    SecondaryPointerMove(PointerId, f32, f32, Option<i64>),
-    RotaryScroll(f32, u64),
-    /// A mouse button other than the primary one went down (`true`) or up,
-    /// with the pointer at a position.
-    MouseButton(PointerButton, bool, f32, f32),
-}
-
-fn android_event_time_ms(event_time_ns: i64) -> i64 {
-    event_time_ns / 1_000_000
-}
-
-fn android_pointer_source(
-    pointer: &android_activity::input::Pointer<'_>,
-    event_source: android_activity::input::Source,
-) -> PointerSource {
-    use android_activity::input::{Source, ToolType};
-
-    use crate::android_input::{AndroidSourceKind, AndroidToolKind, resolve_pointer_source};
-
-    let tool = match pointer.tool_type() {
-        ToolType::Finger => AndroidToolKind::Finger,
-        ToolType::Mouse => AndroidToolKind::Mouse,
-        ToolType::Stylus | ToolType::Eraser => AndroidToolKind::Stylus,
-        _ => AndroidToolKind::Indeterminate,
-    };
-    let source = match event_source {
-        Source::Touchscreen => AndroidSourceKind::Touchscreen,
-        Source::Stylus | Source::BluetoothStylus => AndroidSourceKind::Stylus,
-        Source::Mouse | Source::MouseRelative => AndroidSourceKind::Mouse,
-        _ => AndroidSourceKind::Other,
-    };
-    resolve_pointer_source(tool, source)
-}
-
-fn push_pending_input_from_android_key_event(
-    key_event: &android_activity::input::KeyEvent<'_>,
-    key_translator: &mut AndroidKeyTranslator,
-    pending_inputs: &mut Vec<PendingInput>,
-) -> bool {
-    if key_event.key_code() == android_activity::input::Keycode::Back {
-        if cranpose_services::back_interception_enabled() {
-            if key_event.action() == android_activity::input::KeyAction::Up {
-                cranpose_services::push_back_request();
-            }
-            return true;
-        }
-        return false;
-    }
-    if is_system_key(key_event.key_code()) {
-        return false;
-    }
-    let Some(event) = key_translator.translate(key_event) else {
-        return false;
-    };
-    pending_inputs.push(PendingInput::Key(event));
-    true
 }
 
 pub(crate) fn android_platform_env() -> Rc<crate::platform_env::PlatformEnvironment> {
@@ -372,403 +309,6 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             }
         }
     }
-}
-
-fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> PointerId {
-    if android_pointer_id == primary_pointer_id {
-        PointerId::PRIMARY
-    } else {
-        PointerId(android_pointer_id as u64 + 1)
-    }
-}
-
-fn push_pending_inputs_from_android_event(
-    event: &android_activity::input::InputEvent<'_>,
-    android_platform: &AndroidPlatform,
-    key_translator: &mut AndroidKeyTranslator,
-    pending_inputs: &mut Vec<PendingInput>,
-    primary_pointer_id: &mut Option<i32>,
-) -> bool {
-    let motion_event = match event {
-        android_activity::input::InputEvent::MotionEvent(motion_event) => motion_event,
-        android_activity::input::InputEvent::KeyEvent(key_event) => {
-            return push_pending_input_from_android_key_event(
-                key_event,
-                key_translator,
-                pending_inputs,
-            );
-        }
-        _ => return false,
-    };
-
-    let time_ms = Some(android_event_time_ms(motion_event.event_time()));
-    let event_source = motion_event.source();
-    let logical_of = |x: f32, y: f32| {
-        let logical = android_platform.pointer_position(x as f64, y as f64);
-        (logical.x, logical.y)
-    };
-
-    match motion_event.action() {
-        android_activity::input::MotionAction::Down => {
-            let pointer = motion_event.pointer_at_index(0);
-            *primary_pointer_id = Some(pointer.pointer_id());
-            let (x, y) = logical_of(pointer.x(), pointer.y());
-            pending_inputs.push(PendingInput::PointerDown(
-                x,
-                y,
-                time_ms,
-                android_pointer_source(&pointer, event_source),
-            ));
-            true
-        }
-        android_activity::input::MotionAction::PointerDown => {
-            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
-            let Some(primary) = *primary_pointer_id else {
-                return true;
-            };
-            let (x, y) = logical_of(pointer.x(), pointer.y());
-            pending_inputs.push(PendingInput::SecondaryPointerDown(
-                shell_pointer_id(pointer.pointer_id(), primary),
-                x,
-                y,
-                time_ms,
-            ));
-            true
-        }
-        android_activity::input::MotionAction::Up => {
-            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
-            let (x, y) = logical_of(pointer.x(), pointer.y());
-            match *primary_pointer_id {
-                Some(primary) if pointer.pointer_id() != primary => {
-                    pending_inputs.push(PendingInput::SecondaryPointerUp(
-                        shell_pointer_id(pointer.pointer_id(), primary),
-                        x,
-                        y,
-                        time_ms,
-                    ));
-                }
-                _ => {}
-            }
-            pending_inputs.push(PendingInput::PointerUp(
-                x,
-                y,
-                time_ms,
-                android_pointer_source(&pointer, event_source),
-            ));
-            *primary_pointer_id = None;
-            true
-        }
-        android_activity::input::MotionAction::PointerUp => {
-            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
-            let Some(primary) = *primary_pointer_id else {
-                return true;
-            };
-            let (x, y) = logical_of(pointer.x(), pointer.y());
-            if pointer.pointer_id() == primary {
-                for other in motion_event.pointers() {
-                    if other.pointer_id() == primary {
-                        continue;
-                    }
-                    let (ox, oy) = logical_of(other.x(), other.y());
-                    pending_inputs.push(PendingInput::SecondaryPointerUp(
-                        shell_pointer_id(other.pointer_id(), primary),
-                        ox,
-                        oy,
-                        time_ms,
-                    ));
-                }
-                pending_inputs.push(PendingInput::PointerUp(
-                    x,
-                    y,
-                    time_ms,
-                    android_pointer_source(&pointer, event_source),
-                ));
-                *primary_pointer_id = None;
-            } else {
-                pending_inputs.push(PendingInput::SecondaryPointerUp(
-                    shell_pointer_id(pointer.pointer_id(), primary),
-                    x,
-                    y,
-                    time_ms,
-                ));
-            }
-            true
-        }
-        android_activity::input::MotionAction::Move => {
-            let primary = *primary_pointer_id;
-            for pointer in motion_event.pointers() {
-                let is_primary = primary == Some(pointer.pointer_id());
-                let source = android_pointer_source(&pointer, event_source);
-                if is_primary {
-                    for historical in pointer.history() {
-                        let (hx, hy) = logical_of(historical.x(), historical.y());
-                        pending_inputs.push(PendingInput::PointerMove(
-                            hx,
-                            hy,
-                            Some(android_event_time_ms(historical.event_time())),
-                            source,
-                        ));
-                    }
-                }
-                let (x, y) = logical_of(pointer.x(), pointer.y());
-                match (is_primary, primary) {
-                    (true, _) => {
-                        pending_inputs.push(PendingInput::PointerMove(x, y, time_ms, source));
-                    }
-                    (false, Some(primary)) => {
-                        pending_inputs.push(PendingInput::SecondaryPointerMove(
-                            shell_pointer_id(pointer.pointer_id(), primary),
-                            x,
-                            y,
-                            time_ms,
-                        ));
-                    }
-                    (false, None) => {}
-                }
-            }
-            true
-        }
-        android_activity::input::MotionAction::Cancel => {
-            pending_inputs.push(PendingInput::PointerCancel);
-            *primary_pointer_id = None;
-            true
-        }
-        android_activity::input::MotionAction::Scroll => {
-            push_rotary_pending_input(motion_event, event_source, time_ms, pending_inputs)
-        }
-        _ => false,
-    }
-}
-
-fn push_rotary_pending_input(
-    motion_event: &android_activity::input::MotionEvent<'_>,
-    event_source: android_activity::input::Source,
-    time_ms: Option<i64>,
-    pending_inputs: &mut Vec<PendingInput>,
-) -> bool {
-    use crate::android_input::is_rotary_encoder_source;
-
-    if !is_rotary_encoder_source(u32::from(event_source)) {
-        return false;
-    }
-
-    let Some(pointer) = motion_event.pointers().next() else {
-        return true;
-    };
-    let detents = pointer.axis_value(android_activity::input::Axis::Scroll);
-    if !detents.is_finite() || detents == 0.0 {
-        return true;
-    }
-
-    pending_inputs.push(PendingInput::RotaryScroll(
-        detents,
-        time_ms.unwrap_or(0).max(0) as u64,
-    ));
-    true
-}
-
-fn drain_android_input_events(
-    app: &android_activity::AndroidApp,
-    android_platform: &AndroidPlatform,
-    key_translator: &mut AndroidKeyTranslator,
-    pending_inputs: &mut Vec<PendingInput>,
-    primary_pointer_id: &mut Option<i32>,
-    mouse_buttons: &mut android_activity::input::ButtonState,
-) {
-    let Ok(mut iter) = app.input_events_iter() else {
-        return;
-    };
-
-    for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
-        let event_available = iter.next(|event| {
-            if push_mouse_button_inputs(
-                event,
-                android_platform,
-                pending_inputs,
-                primary_pointer_id,
-                mouse_buttons,
-            ) || push_pending_inputs_from_android_event(
-                event,
-                android_platform,
-                key_translator,
-                pending_inputs,
-                primary_pointer_id,
-            ) {
-                android_activity::InputStatus::Handled
-            } else {
-                android_activity::InputStatus::Unhandled
-            }
-        });
-        if !event_available {
-            break;
-        }
-    }
-}
-
-const MAX_ANDROID_INPUT_EVENTS_PER_POLL: usize = 10;
-
-/// Takes a mouse's events that the path for fingers would read wrongly.
-/// Android sends a press of the right or middle button alone as `Down`, the
-/// moves of a drag with no primary button as `Move`, and every button's
-/// change as `ButtonPress` or `ButtonRelease`. The primary button presses at
-/// `Down`, or at its `ButtonPress` after another button; it releases at its
-/// `ButtonRelease`, or at `Up` on a device that sends none. The other buttons
-/// press and release as the shell's other mouse buttons. Returns whether it
-/// took the event.
-///
-/// The button a press or release changed is the one `mouse_buttons`, the
-/// buttons the last mouse event held, gains or loses: Android's
-/// `AMotionEvent_getActionButton` arrived in API 33, and a library that
-/// calls it does not load on an older device.
-fn push_mouse_button_inputs(
-    event: &android_activity::input::InputEvent<'_>,
-    android_platform: &AndroidPlatform,
-    pending_inputs: &mut Vec<PendingInput>,
-    primary_pointer_id: &mut Option<i32>,
-    mouse_buttons: &mut android_activity::input::ButtonState,
-) -> bool {
-    use android_activity::input::{Button, InputEvent, MotionAction, ToolType};
-
-    let InputEvent::MotionEvent(motion_event) = event else {
-        return false;
-    };
-    let Some(pointer) = motion_event.pointers().next() else {
-        return false;
-    };
-    if pointer.tool_type() != ToolType::Mouse {
-        return false;
-    }
-    let at = android_platform.pointer_position(f64::from(pointer.x()), f64::from(pointer.y()));
-    let time_ms = Some(android_event_time_ms(motion_event.event_time()));
-    let held = motion_event.button_state();
-    let before = std::mem::replace(mouse_buttons, held);
-    match motion_event.action() {
-        MotionAction::Down => held.0 != 0 && !held.primary(),
-        MotionAction::Move if primary_pointer_id.is_none() => {
-            pending_inputs.push(PendingInput::PointerMove(
-                at.x,
-                at.y,
-                time_ms,
-                PointerSource::Mouse,
-            ));
-            true
-        }
-        MotionAction::Up => primary_pointer_id.is_none(),
-        action @ (MotionAction::ButtonPress | MotionAction::ButtonRelease) => {
-            let pressed = action == MotionAction::ButtonPress;
-            let mut changed = if pressed {
-                held.0 & !before.0
-            } else {
-                before.0 & !held.0
-            };
-            while changed != 0 {
-                let bit = 1 << changed.trailing_zeros();
-                changed &= !bit;
-                match shell_mouse_button(Button::from(bit)) {
-                    Some(PointerButton::Primary) => match (pressed, *primary_pointer_id) {
-                        (true, None) => {
-                            *primary_pointer_id = Some(pointer.pointer_id());
-                            pending_inputs.push(PendingInput::PointerDown(
-                                at.x,
-                                at.y,
-                                time_ms,
-                                PointerSource::Mouse,
-                            ));
-                        }
-                        (false, Some(_)) => {
-                            *primary_pointer_id = None;
-                            pending_inputs.push(PendingInput::PointerUp(
-                                at.x,
-                                at.y,
-                                time_ms,
-                                PointerSource::Mouse,
-                            ));
-                        }
-                        _ => {}
-                    },
-                    Some(button) => {
-                        pending_inputs.push(PendingInput::MouseButton(button, pressed, at.x, at.y));
-                    }
-                    None => {}
-                }
-            }
-            true
-        }
-        _ => false,
-    }
-}
-
-fn shell_mouse_button(button: android_activity::input::Button) -> Option<PointerButton> {
-    use android_activity::input::Button;
-
-    match button {
-        Button::Primary => Some(PointerButton::Primary),
-        Button::Secondary => Some(PointerButton::Secondary),
-        Button::Tertiary => Some(PointerButton::Middle),
-        Button::Back => Some(PointerButton::Back),
-        Button::Forward => Some(PointerButton::Forward),
-        _ => None,
-    }
-}
-
-/// Sends one input taken from Android's queue to `shell`.
-fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInput) {
-    match input {
-        PendingInput::PointerDown(x, y, time_ms, source) => {
-            shell.set_pointer_source(source);
-            let event_time = shell.realtime_pointer_event_time(time_ms);
-            shell.set_cursor_at_event_time(x, y, event_time);
-            shell.pointer_pressed_at_event_time(event_time);
-        }
-        PendingInput::PointerUp(x, y, time_ms, source) => {
-            shell.set_pointer_source(source);
-            let event_time = shell.realtime_pointer_event_time(time_ms);
-            shell.pointer_released_at_position_event_time(x, y, event_time);
-        }
-        PendingInput::PointerMove(x, y, time_ms, source) => {
-            shell.set_pointer_source(source);
-            let event_time = shell.realtime_pointer_event_time(time_ms);
-            shell.set_cursor_at_event_time(x, y, event_time);
-        }
-        PendingInput::PointerCancel => {
-            shell.cancel_gesture();
-        }
-        PendingInput::Key(event) => {
-            shell.on_key_event(&event);
-        }
-        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
-            shell.set_pointer_source(PointerSource::Touch);
-            shell.secondary_pointer_pressed(id, x, y, time_ms);
-        }
-        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
-            shell.set_pointer_source(PointerSource::Touch);
-            shell.secondary_pointer_released(id, x, y, time_ms);
-        }
-        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
-            shell.set_pointer_source(PointerSource::Touch);
-            shell.secondary_pointer_moved(id, x, y, time_ms);
-        }
-        PendingInput::RotaryScroll(detents, uptime_ms) => {
-            shell.rotary_scrolled_by_detents(detents, uptime_ms);
-        }
-        PendingInput::MouseButton(button, pressed, x, y) => {
-            shell.set_pointer_source(PointerSource::Mouse);
-            shell.set_cursor(x, y);
-            let mut surface = shell.primary();
-            if pressed {
-                surface.mouse_button_pressed(button);
-            } else {
-                surface.mouse_button_released(button);
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PendingHostWindowSizeRequest {
-    state: Option<android_host_window::AndroidHostWindowState>,
-    requested: Size,
-    requested_at: Instant,
 }
 
 struct AndroidFrameDriver {
@@ -1524,9 +1064,9 @@ fn init_gpu_threaded_for_android(
 // What an app shell on Android is built from: its content, the app's
 // settings, the frame driver, the registry of host windows and whether
 // frames present on their own thread.
-struct ShellInputs<'a, F> {
-    content: &'a Rc<RefCell<F>>,
-    settings: &'a AppSettings,
+pub(super) struct ShellInputs<'a, F> {
+    pub(super) content: &'a Rc<RefCell<F>>,
+    pub(super) settings: &'a AppSettings,
     frame_driver: &'a AndroidFrameDriver,
     host_window_registry: &'a android_host_window::AndroidHostWindowRegistry,
     present_thread: bool,
@@ -1673,26 +1213,7 @@ where
             renderer.init_gpu(setup.resources.gpu_target());
         }
 
-        let content_clone = Rc::clone(inputs.content);
-        let density = density.max(f32::EPSILON);
-        let platform_env = android_platform_env();
-        // The frame loop runs idle prefetch passes while it waits for a frame
-        // (`prefetch_while_waiting`): a lazy list leaves them the items
-        // beyond its viewport that its scroll does not soon reach.
-        cranpose_ui::set_idle_prefetch_passes(true);
-        let mut shell = AppShell::new_with_size_and_density(
-            renderer,
-            default_root_key(),
-            move || {
-                platform_env.compose_root(|| content_clone.borrow_mut()());
-            },
-            (width, height),
-            (width as f32 / density, height as f32 / density),
-            density,
-        );
-        shell.set_semantics_enabled(true);
-        crate::accessibility::install_inspector(&mut shell, inputs.settings.developer_inspector);
-        shell.set_safe_area(android_platform_env().safe_area());
+        let shell = super::shell_creation::create(renderer, inputs, width, height, density);
 
         *app_shell = Some(shell);
 
@@ -1996,131 +1517,6 @@ fn create_android_surface_config(
     })
 }
 
-fn dispatch_android_surface_size_request(
-    app: &android_activity::AndroidApp,
-    requested: Size,
-    position: Point,
-    density: f32,
-    overlay_options: Option<AndroidOverlayWindowOptions>,
-) -> Result<(), String> {
-    let requested =
-        android_host_window::validate_logical_size(requested).map_err(|error| error.to_string())?;
-    if overlay_options.is_some() {
-        return overlay_window::update_android_overlay_window_bounds(
-            app, position, requested, density,
-        );
-    }
-
-    let (width_px, height_px) =
-        android_host_window::logical_to_physical_window_size(requested, density);
-    set_android_window_layout_px(app, width_px, height_px)
-}
-
-fn dispatch_registered_android_surface_size_request(
-    app: &android_activity::AndroidApp,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
-    density: f32,
-    overlay_options: Option<AndroidOverlayWindowOptions>,
-    last_dispatched: &mut Option<(android_host_window::AndroidHostWindowState, u64, u64)>,
-    pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
-) {
-    let Some(request) =
-        android_host_window::latest_android_host_window_request(host_window_registry)
-    else {
-        return;
-    };
-    let dispatch_key = (
-        request.state,
-        request.size_revision,
-        if overlay_options.is_some() {
-            request.position_revision
-        } else {
-            0
-        },
-    );
-    if *last_dispatched == Some(dispatch_key) {
-        return;
-    }
-
-    let position = overlay_options
-        .filter(|_| request.position_revision == 0)
-        .map_or(request.position, |options| {
-            Point::new(options.x as f32, options.y as f32)
-        });
-    request.state.mark_pending(request.size);
-    match dispatch_android_surface_size_request(
-        app,
-        request.size,
-        position,
-        density,
-        overlay_options,
-    ) {
-        Ok(()) => {
-            *last_dispatched = Some(dispatch_key);
-            *pending_confirmation = Some(PendingHostWindowSizeRequest {
-                state: Some(request.state),
-                requested: request.size,
-                requested_at: Instant::now(),
-            });
-            let target = if overlay_options.is_some() {
-                "Android overlay surface"
-            } else {
-                "Android host-window"
-            };
-            if overlay_options.is_some() {
-                log::info!(
-                    "Requested {target} bounds {:.1}x{:.1} dp at {:.1},{:.1} dp",
-                    request.size.width,
-                    request.size.height,
-                    position.x,
-                    position.y
-                );
-            } else {
-                log::info!(
-                    "Requested {target} size {:.1}x{:.1} dp",
-                    request.size.width,
-                    request.size.height
-                );
-            }
-        }
-        Err(message) => {
-            *last_dispatched = Some(dispatch_key);
-            request.state.mark_dispatch_failed(request.size, message);
-        }
-    }
-}
-
-fn confirm_android_host_window_request(
-    pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
-    actual_size: Size,
-) {
-    let Some(pending) = *pending_confirmation else {
-        return;
-    };
-
-    if android_host_window::sizes_match(pending.requested, actual_size) {
-        if let Some(state) = pending.state {
-            state.mark_applied(pending.requested, actual_size);
-        }
-        *pending_confirmation = None;
-        return;
-    }
-
-    if pending.requested_at.elapsed() >= android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT {
-        if let Some(state) = pending.state {
-            state.mark_unsupported(pending.requested, actual_size);
-        }
-        log::info!(
-            "Android surface size request {:.1}x{:.1} dp was not honored; actual is {:.1}x{:.1} dp",
-            pending.requested.width,
-            pending.requested.height,
-            actual_size.width,
-            actual_size.height
-        );
-        *pending_confirmation = None;
-    }
-}
-
 fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> bool {
     use jni::{jni_sig, jni_str};
 
@@ -2140,41 +1536,6 @@ fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> 
     .unwrap_or_else(|error| {
         log::warn!("{error}");
         false
-    })
-}
-
-fn set_android_window_layout_px(
-    app: &android_activity::AndroidApp,
-    width_px: i32,
-    height_px: i32,
-) -> Result<(), String> {
-    use jni::{jni_sig, jni_str, objects::JValue};
-
-    with_android_activity_env(app, |env, activity| {
-        let class = overlay_window::find_android_overlay_class(env, &activity)?;
-        let result = env
-            .call_static_method(
-                class,
-                jni_str!("setActivityWindowLayout"),
-                jni_sig!("(Landroid/app/Activity;II)I"),
-                &[
-                    JValue::Object(&activity),
-                    JValue::Int(width_px),
-                    JValue::Int(height_px),
-                ],
-            )
-            .and_then(jni::JValueOwned::i)
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                format!("failed to request Android window layout: {error}")
-            })?;
-
-        match result {
-            0 => Ok(()),
-            code => Err(format!(
-                "Android window layout request failed with code {code}"
-            )),
-        }
     })
 }
 
@@ -2869,9 +2230,7 @@ pub fn run(
             && let Some(shell) = &mut app_shell
         {
             frame_rate_boost.note_input(Instant::now());
-            for input in pending_inputs.drain(..) {
-                dispatch_pending_input(shell, input);
-            }
+            dispatch_pending_inputs(shell, &mut pending_inputs);
         }
 
         sync_ime_session(&ime_session, app_shell.as_mut(), &android_platform);
