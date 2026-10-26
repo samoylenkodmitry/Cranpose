@@ -47,6 +47,11 @@ component_dirs = ["components/cranpose_fast_time"]
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["components/cranpose_fast_fdiv"]
 
+# f32 square roots with the FPU's square root steps: see
+# components/cranpose_fast_fsqrt/fsqrt.S.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_fast_fsqrt"]
+
 # Small blocks from per-task lists: see
 # components/cranpose_small_alloc/small_alloc.c.
 [[package.metadata.esp-idf-sys.extra_components]]
