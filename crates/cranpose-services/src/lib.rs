@@ -38,6 +38,7 @@ pub mod incoming_share;
 pub mod launch_args;
 pub mod launcher;
 pub mod media;
+mod media_source;
 pub mod memory_pressure;
 pub mod microphone_permission;
 pub mod microphone_standby;
