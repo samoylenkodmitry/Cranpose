@@ -20,7 +20,7 @@ use cranpose_foundation::{
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
 };
 use cranpose_ui_graphics::Size;
-use cranpose_ui_layout::LayoutModifierMeasureResult;
+use cranpose_ui_layout::{Axis, LayoutModifierMeasureResult};
 
 type InvalidationCallbackMap = HashMap<u64, Rc<dyn Fn()>>;
 
@@ -479,17 +479,17 @@ pub(crate) struct ScrollMotionContext {
 pub(crate) enum ScrollMotionContextKey {
     ScrollState {
         state_id: u64,
-        is_vertical: bool,
+        axis: Axis,
         reverse_scrolling: bool,
     },
     LazyList {
         state_identity: usize,
-        is_vertical: bool,
+        axis: Axis,
         reverse_scrolling: bool,
     },
     Draggable {
         state_identity: usize,
-        is_vertical: bool,
+        axis: Axis,
     },
 }
 
@@ -656,7 +656,7 @@ impl ScrollMotionContext {
 pub struct ScrollElement {
     state: ScrollState,
     overscroll: OverscrollEffect,
-    is_vertical: bool,
+    axis: Axis,
     reverse_scrolling: bool,
 }
 
@@ -664,13 +664,13 @@ impl ScrollElement {
     pub(crate) fn new(
         state: ScrollState,
         overscroll: OverscrollEffect,
-        is_vertical: bool,
+        axis: Axis,
         reverse_scrolling: bool,
     ) -> Self {
         Self {
             state,
             overscroll,
-            is_vertical,
+            axis,
             reverse_scrolling,
         }
     }
@@ -679,7 +679,7 @@ impl ScrollElement {
 impl std::fmt::Debug for ScrollElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScrollElement")
-            .field("is_vertical", &self.is_vertical)
+            .field("axis", &self.axis)
             .field("reverse_scrolling", &self.reverse_scrolling)
             .finish()
     }
@@ -688,7 +688,7 @@ impl std::fmt::Debug for ScrollElement {
 impl PartialEq for ScrollElement {
     fn eq(&self, other: &Self) -> bool {
         self.state == other.state
-            && self.is_vertical == other.is_vertical
+            && self.axis == other.axis
             && self.reverse_scrolling == other.reverse_scrolling
     }
 }
@@ -698,7 +698,7 @@ impl Eq for ScrollElement {}
 impl Hash for ScrollElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.state.inner.hash(state);
-        self.is_vertical.hash(state);
+        self.axis.hash(state);
         self.reverse_scrolling.hash(state);
     }
 }
@@ -710,7 +710,7 @@ impl ModifierNodeElement for ScrollElement {
         ScrollNode::new(
             self.state,
             self.overscroll.clone(),
-            self.is_vertical,
+            self.axis,
             self.reverse_scrolling,
         )
     }
@@ -719,19 +719,19 @@ impl ModifierNodeElement for ScrollElement {
         let mut hasher = cranpose_core::hash::default::new();
         self.state.id().hash(&mut hasher);
         self.reverse_scrolling.hash(&mut hasher);
-        self.is_vertical.hash(&mut hasher);
+        self.axis.hash(&mut hasher);
         Some(hasher.finish())
     }
 
     fn update(&self, node: &mut Self::Node) {
         let needs_invalidation = node.state != self.state
-            || node.is_vertical != self.is_vertical
+            || node.axis != self.axis
             || node.reverse_scrolling != self.reverse_scrolling
             || !node.overscroll.ptr_eq(&self.overscroll);
 
         if needs_invalidation {
             node.state = self.state;
-            node.is_vertical = self.is_vertical;
+            node.axis = self.axis;
             node.reverse_scrolling = self.reverse_scrolling;
             node.overscroll = self.overscroll.clone();
         }
@@ -747,7 +747,7 @@ impl ModifierNodeElement for ScrollElement {
 pub struct ScrollNode {
     state: ScrollState,
     overscroll: OverscrollEffect,
-    is_vertical: bool,
+    axis: Axis,
     reverse_scrolling: bool,
     node_state: NodeState,
     invalidation_callback_id: Option<u64>,
@@ -759,13 +759,13 @@ impl ScrollNode {
     pub(crate) fn new(
         state: ScrollState,
         overscroll: OverscrollEffect,
-        is_vertical: bool,
+        axis: Axis,
         reverse_scrolling: bool,
     ) -> Self {
         Self {
             state,
             overscroll,
-            is_vertical,
+            axis,
             reverse_scrolling,
             node_state: NodeState::default(),
             invalidation_callback_id: None,
@@ -838,7 +838,7 @@ impl LayoutModifierNode for ScrollNode {
         // along the scroll, as Compose's `ScrollingLayoutNode` measures it
         // with `constraints.copy(maxHeight = Infinity)`: under
         // `fill_max_size()` it is at least as tall as the viewport.
-        let scroll_constraints = if self.is_vertical {
+        let scroll_constraints = if self.axis.is_vertical() {
             Constraints {
                 max_height: f32::INFINITY,
                 ..constraints
@@ -855,20 +855,26 @@ impl LayoutModifierNode for ScrollNode {
         let width = placeable.width().min(constraints.max_width);
         let height = placeable.height().min(constraints.max_height);
 
-        let max_scroll = if self.is_vertical {
+        let max_scroll = if self.axis.is_vertical() {
             (placeable.height() - height).max(0.0)
         } else {
             (placeable.width() - width).max(0.0)
         };
 
-        if (self.is_vertical && constraints.max_height.is_finite())
-            || (!self.is_vertical && constraints.max_width.is_finite())
+        if (self.axis.is_vertical() && constraints.max_height.is_finite())
+            || (!self.axis.is_vertical() && constraints.max_width.is_finite())
         {
             self.state.set_max_value(max_scroll);
-            self.state
-                .set_viewport_extent(if self.is_vertical { height } else { width });
-            self.overscroll
-                .set_dimension(if self.is_vertical { height } else { width });
+            self.state.set_viewport_extent(if self.axis.is_vertical() {
+                height
+            } else {
+                width
+            });
+            self.overscroll.set_dimension(if self.axis.is_vertical() {
+                height
+            } else {
+                width
+            });
         }
 
         let scroll = self.state.value_non_reactive().clamp(0.0, max_scroll);
@@ -880,7 +886,7 @@ impl LayoutModifierNode for ScrollNode {
         };
         let abs_scroll = abs_scroll + self.overscroll.offset();
 
-        let (x_offset, y_offset) = if self.is_vertical {
+        let (x_offset, y_offset) = if self.axis.is_vertical() {
             (0.0, abs_scroll)
         } else {
             (abs_scroll, 0.0)

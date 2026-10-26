@@ -3,7 +3,8 @@
 //! each line, and align along and across it.
 
 use cranpose_ui_layout::{
-    Constraints, MeasurePolicy, MeasureResult, MeasureScope, Placeable, Placement, round_to_px,
+    Axis, Constraints, IntrinsicSize, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
+    Placement, round_to_px,
 };
 use smallvec::SmallVec;
 
@@ -38,8 +39,8 @@ struct AxisConstraints {
 }
 
 impl AxisConstraints {
-    fn of(constraints: Constraints, horizontal: bool) -> Self {
-        if horizontal {
+    fn of(constraints: Constraints, main_axis: Axis) -> Self {
+        if main_axis.is_horizontal() {
             Self {
                 main_min: constraints.min_width,
                 main_max: constraints.max_width,
@@ -107,8 +108,8 @@ struct Breaking {
 }
 
 impl FlexBoxMeasurePolicy {
-    fn horizontal(&self) -> bool {
-        self.config.direction.is_horizontal()
+    fn main_axis(&self) -> Axis {
+        self.config.direction.main_axis()
     }
 
     fn px(&self, value: f32) -> f32 {
@@ -127,28 +128,28 @@ impl FlexBoxMeasurePolicy {
             self.px(self.config.row_gap),
             self.px(self.config.column_gap),
         );
-        if self.horizontal() {
+        if self.main_axis().is_horizontal() {
             (column, row)
         } else {
             (row, column)
         }
     }
 
-    fn main_intrinsic(&self, measurable: &dyn Measurable, cross: f32, min: bool) -> f32 {
-        match (self.horizontal(), min) {
-            (true, true) => measurable.min_intrinsic_width(cross),
-            (true, false) => measurable.max_intrinsic_width(cross),
-            (false, true) => measurable.min_intrinsic_height(cross),
-            (false, false) => measurable.max_intrinsic_height(cross),
+    fn main_intrinsic(&self, measurable: &dyn Measurable, cross: f32, size: IntrinsicSize) -> f32 {
+        match (self.main_axis(), size) {
+            (Axis::Horizontal, IntrinsicSize::Min) => measurable.min_intrinsic_width(cross),
+            (Axis::Horizontal, IntrinsicSize::Max) => measurable.max_intrinsic_width(cross),
+            (Axis::Vertical, IntrinsicSize::Min) => measurable.min_intrinsic_height(cross),
+            (Axis::Vertical, IntrinsicSize::Max) => measurable.max_intrinsic_height(cross),
         }
     }
 
-    fn cross_intrinsic(&self, measurable: &dyn Measurable, main: f32, min: bool) -> f32 {
-        match (self.horizontal(), min) {
-            (true, true) => measurable.min_intrinsic_height(main),
-            (true, false) => measurable.max_intrinsic_height(main),
-            (false, true) => measurable.min_intrinsic_width(main),
-            (false, false) => measurable.max_intrinsic_width(main),
+    fn cross_intrinsic(&self, measurable: &dyn Measurable, main: f32, size: IntrinsicSize) -> f32 {
+        match (self.main_axis(), size) {
+            (Axis::Horizontal, IntrinsicSize::Min) => measurable.min_intrinsic_height(main),
+            (Axis::Horizontal, IntrinsicSize::Max) => measurable.max_intrinsic_height(main),
+            (Axis::Vertical, IntrinsicSize::Min) => measurable.min_intrinsic_width(main),
+            (Axis::Vertical, IntrinsicSize::Max) => measurable.max_intrinsic_width(main),
         }
     }
 
@@ -173,20 +174,20 @@ impl FlexBoxMeasurePolicy {
             .layout_data::<FlexConfig>()
             .copied()
             .unwrap_or_default();
-        let fill = if self.horizontal() {
+        let fill = if self.main_axis().is_horizontal() {
             data.fill_width_fraction
         } else {
             data.fill_height_fraction
         };
         let grow = config.grow.unwrap_or_else(|| fill.max(0.0));
-        let min_main = self.main_intrinsic(measurable, axes.cross_max, true);
+        let min_main = self.main_intrinsic(measurable, axes.cross_max, IntrinsicSize::Min);
         let flex_base = match config.basis {
             FlexBasis::Dp(size) => self.px(size.max(0.0)),
             FlexBasis::Percent(fraction) if axes.main_max.is_finite() && !fraction.is_nan() => {
                 self.truncate_px(axes.main_max * fraction)
             }
             FlexBasis::Percent(_) | FlexBasis::Auto => {
-                self.main_intrinsic(measurable, axes.cross_max, false)
+                self.main_intrinsic(measurable, axes.cross_max, IntrinsicSize::Max)
             }
         };
         let hypothetical = flex_base.max(min_main);
@@ -401,7 +402,7 @@ impl FlexBoxMeasurePolicy {
                 below = below.max(item.cross_size - baseline);
                 above + below
             } else {
-                item.cross_size = self.cross_intrinsic(measurable, item.target, false);
+                item.cross_size = self.cross_intrinsic(measurable, item.target, IntrinsicSize::Max);
                 item.cross_size
             };
             size = size.max(contribution);
@@ -426,7 +427,7 @@ impl FlexBoxMeasurePolicy {
             }
             None => (0.0, remaining_cross),
         };
-        let constraints = if self.horizontal() {
+        let constraints = if self.main_axis().is_horizontal() {
             Constraints {
                 min_width: item.target,
                 max_width: item.target,
@@ -442,7 +443,7 @@ impl FlexBoxMeasurePolicy {
             }
         };
         let placeable = measurable.measure(constraints);
-        item.cross_size = if self.horizontal() {
+        item.cross_size = if self.main_axis().is_horizontal() {
             placeable.height()
         } else {
             placeable.width()
@@ -637,14 +638,14 @@ impl FlexBoxMeasurePolicy {
         &self,
         measurables: &[Box<dyn Measurable>],
         available: f32,
-        min: bool,
+        size: IntrinsicSize,
     ) -> f32 {
         let (main_gap, cross_gap) = self.gaps();
         let wraps = self.config.wrap.wraps();
         let (mut line_main, mut line_cross, mut total, mut in_line) = (0.0_f32, 0.0_f32, 0.0, 0);
         for measurable in measurables {
-            let main = self.main_intrinsic(measurable.as_ref(), f32::INFINITY, min);
-            let cross = self.cross_intrinsic(measurable.as_ref(), main, min);
+            let main = self.main_intrinsic(measurable.as_ref(), f32::INFINITY, size);
+            let cross = self.cross_intrinsic(measurable.as_ref(), main, size);
             let projected = if in_line == 0 {
                 main
             } else {
@@ -671,7 +672,7 @@ impl FlexBoxMeasurePolicy {
     fn min_intrinsic_main(&self, measurables: &[Box<dyn Measurable>], cross: f32) -> f32 {
         let sizes = measurables
             .iter()
-            .map(|measurable| self.main_intrinsic(measurable.as_ref(), cross, true));
+            .map(|measurable| self.main_intrinsic(measurable.as_ref(), cross, IntrinsicSize::Min));
         if self.config.wrap.wraps() {
             sizes.fold(0.0, f32::max)
         } else {
@@ -691,7 +692,7 @@ impl FlexBoxMeasurePolicy {
         };
         let (mut longest, mut line, mut in_line) = (0.0_f32, 0.0_f32, 0);
         for measurable in measurables {
-            let size = self.main_intrinsic(measurable.as_ref(), cross, false);
+            let size = self.main_intrinsic(measurable.as_ref(), cross, IntrinsicSize::Max);
             line += if in_line == 0 { size } else { gap + size };
             in_line += 1;
             if in_line == per_line {
@@ -702,22 +703,22 @@ impl FlexBoxMeasurePolicy {
         longest.max(line)
     }
 
-    /// An intrinsic size along `width` (true) or height; `other` is the
-    /// size given on the other axis.
+    // An intrinsic size along `axis`; `other` is the size given on the other
+    // axis.
     fn intrinsic(
         &self,
         measurables: &[Box<dyn Measurable>],
-        width: bool,
+        axis: Axis,
         other: f32,
-        min: bool,
+        size: IntrinsicSize,
     ) -> f32 {
         if measurables.is_empty() {
             return 0.0;
         }
-        match (width == self.horizontal(), min) {
-            (true, true) => self.min_intrinsic_main(measurables, other),
-            (true, false) => self.max_intrinsic_main(measurables, other),
-            (false, _) => self.intrinsic_cross(measurables, other, min),
+        match (axis == self.main_axis(), size) {
+            (true, IntrinsicSize::Min) => self.min_intrinsic_main(measurables, other),
+            (true, IntrinsicSize::Max) => self.max_intrinsic_main(measurables, other),
+            (false, _) => self.intrinsic_cross(measurables, other, size),
         }
     }
 }
@@ -749,8 +750,8 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
             }
             .into();
         }
-        let horizontal = self.horizontal();
-        let axes = AxisConstraints::of(constraints, horizontal);
+        let main_axis = self.main_axis();
+        let axes = AxisConstraints::of(constraints, main_axis);
         let mut upfront = matches!(
             self.config.align_items,
             FlexAlignItems::Stretch | FlexAlignItems::Baseline
@@ -816,7 +817,7 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
             .max(axes.main_min)
             .clamp(axes.main_min, axes.main_max);
         let cross = lines_cross.clamp(axes.cross_min, axes.cross_max);
-        let (width, height) = if horizontal {
+        let (width, height) = if main_axis.is_horizontal() {
             (main, cross)
         } else {
             (cross, main)
@@ -830,7 +831,7 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
                 let Some(placeable) = item.placeable.take() else {
                     return;
                 };
-                let (x, y) = if horizontal {
+                let (x, y) = if main_axis.is_horizontal() {
                     (item.main_position, item.cross_position)
                 } else {
                     (item.cross_position, item.main_position)
@@ -855,18 +856,18 @@ impl MeasurePolicy for FlexBoxMeasurePolicy {
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        self.intrinsic(measurables, true, height, true)
+        self.intrinsic(measurables, Axis::Horizontal, height, IntrinsicSize::Min)
     }
 
     fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        self.intrinsic(measurables, true, height, false)
+        self.intrinsic(measurables, Axis::Horizontal, height, IntrinsicSize::Max)
     }
 
     fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        self.intrinsic(measurables, false, width, true)
+        self.intrinsic(measurables, Axis::Vertical, width, IntrinsicSize::Min)
     }
 
     fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        self.intrinsic(measurables, false, width, false)
+        self.intrinsic(measurables, Axis::Vertical, width, IntrinsicSize::Max)
     }
 }

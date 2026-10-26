@@ -25,7 +25,7 @@ impl NestedReadonlySnapshot {
         parent: Weak<Self>,
     ) -> Rc<Self> {
         Rc::new(Self {
-            state: SnapshotState::new(id, invalid, read_observer, None, false),
+            state: SnapshotState::new(id, invalid, read_observer, None, RuntimeTracking::Untracked),
             parent,
         })
     }
@@ -138,7 +138,13 @@ impl NestedMutableSnapshot {
         base_parent_id: SnapshotId,
     ) -> Rc<Self> {
         Rc::new(Self {
-            state: SnapshotState::new(id, invalid, read_observer, write_observer, true),
+            state: SnapshotState::new(
+                id,
+                invalid,
+                read_observer,
+                write_observer,
+                RuntimeTracking::Tracked,
+            ),
             parent,
             nested_count: Cell::new(0),
             applied: Cell::new(false),

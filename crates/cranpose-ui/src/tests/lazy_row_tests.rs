@@ -364,7 +364,7 @@ fn a_reader_reaches_a_row_of_a_lazy_row_by_number() {
     let list_state = (*captured_state.borrow()).expect("state captured");
 
     let mut config = SemanticsConfiguration::default();
-    modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
+    modifier::lazy_scroll_semantics(list_state, Axis::Horizontal, false, (0.0, 0.0))(&mut config);
     let jump = config
         .scroll_to_index
         .expect("a lazy row takes a row number from a reader");
@@ -393,7 +393,7 @@ fn a_reader_page_moves_a_lazy_row_forward() {
     let list_state = (*captured_state.borrow()).expect("state captured");
 
     let mut config = SemanticsConfiguration::default();
-    modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
+    modifier::lazy_scroll_semantics(list_state, Axis::Horizontal, false, (0.0, 0.0))(&mut config);
     let scroll_by = config
         .scroll_by
         .expect("a lazy row takes a page from a reader");
@@ -421,7 +421,7 @@ fn a_reader_hears_how_many_items_a_lazy_row_holds() {
     let list_state = (*captured_state.borrow()).expect("state captured");
 
     let mut config = SemanticsConfiguration::default();
-    modifier::lazy_scroll_semantics(list_state, false, false, (0.0, 0.0))(&mut config);
+    modifier::lazy_scroll_semantics(list_state, Axis::Horizontal, false, (0.0, 0.0))(&mut config);
     let collection = config
         .collection
         .expect("a lazy row says how many items it holds");

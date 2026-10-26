@@ -289,7 +289,7 @@ pub(super) fn measure_staggered_viewport(
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, frame.is_vertical, available);
+        .begin_pass(scope, frame.axis, available);
     let count = content.item_count();
     let near = state.nearest_range();
     if count > 0 {
@@ -298,7 +298,7 @@ pub(super) fn measure_staggered_viewport(
         });
     }
     let inputs = LazyListItemMeasureInputs {
-        is_vertical: frame.is_vertical,
+        axis: frame.axis,
         cross_axis_size: available,
         content,
         state,

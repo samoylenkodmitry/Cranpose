@@ -7,6 +7,7 @@ use cranpose_foundation::{
     lazy::{LazyListScope, rememberLazyListState},
 };
 use cranpose_ui_graphics::Point;
+use cranpose_ui_layout::Axis;
 
 use crate::{
     Column, ColumnSpec, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, ScrollState, Size,
@@ -201,7 +202,7 @@ fn lazy_edge_drag_updates_shared_effect() {
             pointer_handler_for(Modifier::empty().lazy_vertical_scroll(state, false));
         let context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
             state_identity: state.inner_ptr() as usize,
-            is_vertical: true,
+            axis: Axis::Vertical,
             reverse_scrolling: false,
         });
         let callback_count = Rc::new(Cell::new(0_u32));
@@ -227,7 +228,7 @@ fn scroll_motion_context_keeps_effect_identity_for_layout_and_gesture_owners() {
     let _app_context = crate::render_state::app_context_test_scope();
     let key = ScrollMotionContextKey::LazyList {
         state_identity: 91,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
     let owner = scroll_motion_context_for_key(key);
@@ -242,12 +243,12 @@ fn scroll_motion_context_store_reclaims_disposed_contexts() {
     let store = crate::scroll::ScrollMotionContextStore::new();
     let first_key = ScrollMotionContextKey::LazyList {
         state_identity: 92,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
     let second_key = ScrollMotionContextKey::LazyList {
         state_identity: 93,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
     let first_effect = store.context_for_key(first_key).overscroll();
@@ -408,7 +409,7 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
         assert_eq!(
             scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
                 state_id: inner.id(),
-                is_vertical: true,
+                axis: Axis::Vertical,
                 reverse_scrolling: false,
             })
             .overscroll()
@@ -699,7 +700,7 @@ fn scroll_motion_invalidation_callback_can_register_follow_up_callback() {
     let _app_context = crate::render_state::app_context_test_scope();
     let key = ScrollMotionContextKey::ScrollState {
         state_id: 7,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
     let context = scroll_motion_context_for_key(key);
@@ -732,7 +733,7 @@ fn wheel_scroll_motion_context_clear_invalidates_modifier_slices() {
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let key = ScrollMotionContextKey::ScrollState {
         state_id: 7,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
     let context = scroll_motion_context_for_key(key);
@@ -767,7 +768,7 @@ fn scroll_motion_frame_clear_preserves_persistent_gesture_motion() {
     let _app_context = crate::render_state::app_context_test_scope();
     let key = ScrollMotionContextKey::ScrollState {
         state_id: 8,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
     let context = scroll_motion_context_for_key(key);
@@ -792,7 +793,7 @@ fn scroll_motion_contexts_are_scoped_by_app_context() {
     let second = crate::render_state::AppContext::new_with_density(1.0);
     let key = ScrollMotionContextKey::ScrollState {
         state_id: 42,
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     };
 
@@ -980,20 +981,24 @@ enum DetachedScrollMotion {
 fn start_detached_scroll_motion(
     handler: &dyn Fn(PointerEvent),
     motion: DetachedScrollMotion,
-    vertical: bool,
+    axis: Axis,
 ) {
     if matches!(
         motion,
         DetachedScrollMotion::WheelWait | DetachedScrollMotion::Bounce
     ) {
-        let (dx, dy) = if vertical { (0.0, 200.0) } else { (200.0, 0.0) };
+        let (dx, dy) = if axis.is_vertical() {
+            (0.0, 200.0)
+        } else {
+            (200.0, 0.0)
+        };
         let event = scroll_wheel_event(dx, dy);
         handler(event.clone());
         event.finish_post_dispatch();
         return;
     }
     let event = |kind, position, time| {
-        let (x, y) = if vertical {
+        let (x, y) = if axis.is_vertical() {
             (0.0, position)
         } else {
             (position, 0.0)
@@ -1014,7 +1019,7 @@ fn start_detached_scroll_motion(
 #[test]
 fn detaching_scroll_cancels_pending_motion_on_both_axes() {
     let _app_context = crate::render_state::app_context_test_scope();
-    for vertical in [true, false] {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
         for motion in [
             DetachedScrollMotion::WheelWait,
             DetachedScrollMotion::Fling,
@@ -1027,7 +1032,7 @@ fn detaching_scroll_cancels_pending_motion_on_both_axes() {
             if matches!(motion, DetachedScrollMotion::Settle) {
                 state.set_settle_policy(Some(Rc::new(|_, _| 1000.0)));
             }
-            let modifier = if vertical {
+            let modifier = if axis.is_vertical() {
                 Modifier::empty().vertical_scroll(state, false)
             } else {
                 Modifier::empty().horizontal_scroll(state, false)
@@ -1035,10 +1040,10 @@ fn detaching_scroll_cancels_pending_motion_on_both_axes() {
             let (handler, mut chain) = pointer_handler_for(modifier);
             let context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
                 state_id: state.id(),
-                is_vertical: vertical,
+                axis,
                 reverse_scrolling: false,
             });
-            start_detached_scroll_motion(&*handler, motion, vertical);
+            start_detached_scroll_motion(&*handler, motion, axis);
             if matches!(motion, DetachedScrollMotion::Bounce) {
                 for frame in 1..=14 {
                     runtime.handle().drain_frame_callbacks(frame * 16_000_000);
@@ -1051,7 +1056,7 @@ fn detaching_scroll_cancels_pending_motion_on_both_axes() {
             chain.detach_all();
             assert!(
                 !runtime.handle().has_frame_callbacks(),
-                "{motion:?} survived detach on vertical={vertical}"
+                "{motion:?} survived detach on {axis:?}"
             );
             assert!(!context.is_active());
             let offset = state.value_non_reactive();
@@ -1091,7 +1096,7 @@ fn assert_deferred_scroll_stops_on_detach(kind: PointerEventKind) {
     assert!(!runtime.handle().has_frame_callbacks());
     let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: state.id(),
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     });
     assert_eq!(motion.overscroll().offset(), 0.0);
@@ -1108,10 +1113,10 @@ fn an_idle_modifier_clone_cannot_cancel_another_instances_fling() {
     let (_, mut idle_chain) = pointer_handler_for(modifier);
     let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: state.id(),
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     });
-    start_detached_scroll_motion(&*handler, DetachedScrollMotion::Fling, true);
+    start_detached_scroll_motion(&*handler, DetachedScrollMotion::Fling, Axis::Vertical);
     assert!(runtime.handle().has_frame_callbacks());
     assert!(motion.is_active());
 
@@ -1143,7 +1148,7 @@ fn assert_motion_invalidation_owner(replace_state: bool) {
         let modifier = Modifier::empty().vertical_scroll(state, false);
         let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
             state_id: state.id(),
-            is_vertical: true,
+            axis: Axis::Vertical,
             reverse_scrolling: false,
         });
         let mut chain = ModifierNodeChain::new();
@@ -1170,7 +1175,7 @@ fn assert_motion_invalidation_owner(replace_state: bool) {
             assert!(crate::render_state::take_layout_repass_nodes().is_empty());
             scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
                 state_id: state.id(),
-                is_vertical: true,
+                axis: Axis::Vertical,
                 reverse_scrolling: false,
             })
         });
@@ -1789,7 +1794,7 @@ fn wheel_edge_overscroll_settles_without_custom_policy() {
 
     let context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: scroll_state.id(),
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     });
     assert!(context.overscroll().offset().abs() > 0.001);
@@ -1823,7 +1828,7 @@ fn wheel_overscroll_rearms_after_interrupted_settle() {
 
     let context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: scroll_state.id(),
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: false,
     });
     assert!(context.overscroll().offset().abs() > 0.001);

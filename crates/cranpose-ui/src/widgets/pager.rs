@@ -9,7 +9,7 @@ use cranpose_core::{MutableState, mutableStateOf, remember};
 use cranpose_foundation::lazy::{
     LazyItems, LazyListIntervalContent, LazyListScope, LazyListState, LazySettlePolicy,
 };
-use cranpose_ui_layout::LinearArrangement;
+use cranpose_ui_layout::{Axis, LinearArrangement};
 
 use crate::{
     AnimateScroll, composable,
@@ -362,7 +362,7 @@ pub fn HorizontalPager<F>(
         state,
         spec,
         page_count,
-        true,
+        Axis::Horizontal,
         Rc::new(page_content),
     );
 }
@@ -383,7 +383,7 @@ pub fn VerticalPager<F>(
         state,
         spec,
         page_count,
-        false,
+        Axis::Vertical,
         Rc::new(page_content),
     );
 }
@@ -394,7 +394,7 @@ fn Pager(
     state: PagerState,
     spec: PagerSpec,
     page_count: usize,
-    horizontal: bool,
+    axis: Axis,
     page_content: Rc<dyn Fn(usize)>,
 ) {
     cranpose_core::DisposableEffect((state, spec.fling), move |scope| {
@@ -408,28 +408,28 @@ fn Pager(
         let mut padding = spec.content_padding;
         let width = constraints.max_width - padding.start - padding.end;
         let height = constraints.max_height - padding.top - padding.bottom;
-        let (page_width, page_height) = match (spec.page_size, horizontal) {
+        let (page_width, page_height) = match (spec.page_size, axis) {
             (PageSize::Fill, _) => (width, height),
-            (PageSize::Fixed(length), true) => (length, height),
-            (PageSize::Fixed(length), false) => (width, length),
+            (PageSize::Fixed(length), Axis::Horizontal) => (length, height),
+            (PageSize::Fixed(length), Axis::Vertical) => (width, length),
         };
         // A resting page sits at the scroll offset of its index, as at the
         // start; padding moves where that is along the axis.
-        let room = if horizontal {
+        let room = if axis.is_horizontal() {
             width - page_width
         } else {
             height - page_height
         }
         .max(0.0);
         let before = room * spec.snap_position.fraction();
-        if horizontal {
+        if axis.is_horizontal() {
             padding.start += before;
             padding.end += room - before;
         } else {
             padding.top += before;
             padding.bottom += room - before;
         }
-        let leading = if horizontal {
+        let leading = if axis.is_horizontal() {
             padding.start
         } else {
             padding.top
@@ -452,7 +452,7 @@ fn Pager(
         };
         let fill = Modifier::empty().fill_max_size();
         let spacing = LinearArrangement::SpacedBy(spec.page_spacing);
-        if horizontal {
+        if axis.is_horizontal() {
             let row = LazyRowSpec {
                 horizontal_arrangement: spacing,
                 content_padding: padding,

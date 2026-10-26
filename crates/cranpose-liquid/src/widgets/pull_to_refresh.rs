@@ -13,8 +13,8 @@ use cranpose_core::{RuntimeHandle, remember, with_current_composer};
 use cranpose_foundation::SemanticsCustomAction;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Alignment, Modifier, NestedScroll, NestedScrollConnection, NestedScrollSource, Point,
-    ScrollAxis, Size,
+    Alignment, Axis, Modifier, NestedScroll, NestedScrollConnection, NestedScrollSource, Point,
+    Size,
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{Brush, Stroke, StrokeCap};
@@ -78,10 +78,10 @@ impl Pull {
 struct PullConnection(Rc<Pull>);
 
 impl NestedScrollConnection for PullConnection {
-    fn on_pre_scroll(&self, axis: ScrollAxis, available: f32, source: NestedScrollSource) -> f32 {
+    fn on_pre_scroll(&self, axis: Axis, available: f32, source: NestedScrollSource) -> f32 {
         let pull = &self.0;
         let pulled = pull.pulled.get();
-        if axis != ScrollAxis::Vertical || source != NestedScrollSource::Drag || pulled <= 0.0 {
+        if axis != Axis::Vertical || source != NestedScrollSource::Drag || pulled <= 0.0 {
             return 0.0;
         }
         if available >= 0.0 {
@@ -94,13 +94,13 @@ impl NestedScrollConnection for PullConnection {
 
     fn on_post_scroll(
         &self,
-        axis: ScrollAxis,
+        axis: Axis,
         _consumed: f32,
         available: f32,
         source: NestedScrollSource,
     ) -> f32 {
         let pull = &self.0;
-        if axis != ScrollAxis::Vertical
+        if axis != Axis::Vertical
             || source != NestedScrollSource::Drag
             || available <= 0.0
             || pull.refreshing.get()
@@ -111,10 +111,10 @@ impl NestedScrollConnection for PullConnection {
         available
     }
 
-    fn on_pre_fling(&self, axis: ScrollAxis, velocity: f32) -> f32 {
+    fn on_pre_fling(&self, axis: Axis, velocity: f32) -> f32 {
         let pull = &self.0;
         let pulled = pull.pulled.get();
-        if axis != ScrollAxis::Vertical || pulled <= 0.0 {
+        if axis != Axis::Vertical || pulled <= 0.0 {
             return 0.0;
         }
         pull.pulled.set(0.0);

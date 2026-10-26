@@ -1,18 +1,12 @@
-/// Represents the primary axis of flex layout (Row or Column).
-///
-/// This enum is used by FlexMeasurePolicy to determine which direction
-/// is the main axis (where children are laid out) and which is the cross axis
-/// (where children are aligned).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A direction of layout or motion: the main axis of a row or a column, the
+/// axis along which a scroller, a lazy list or a pager moves, and the axis a
+/// nested scroll reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Axis {
-    /// Horizontal main axis (Row).
-    /// Main axis: left to right
-    /// Cross axis: top to bottom
+    /// Left to right: a row's main axis, or content that moves left and right.
     Horizontal,
 
-    /// Vertical main axis (Column).
-    /// Main axis: top to bottom
-    /// Cross axis: left to right
+    /// Top to bottom: a column's main axis, or content that moves up and down.
     Vertical,
 }
 

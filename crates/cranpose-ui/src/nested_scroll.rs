@@ -14,6 +14,7 @@ use std::rc::Rc;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
+use cranpose_ui_layout::Axis;
 
 /// What moved a scroll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,15 +27,6 @@ pub enum NestedScrollSource {
     Wheel,
 }
 
-/// The axis a scroller moves along.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollAxis {
-    /// Content moves up and down.
-    Vertical,
-    /// Content moves left and right.
-    Horizontal,
-}
-
 /// A container's part in the scrolls inside it.
 ///
 /// Amounts follow the content: a positive amount moves the content toward
@@ -43,12 +35,7 @@ pub enum ScrollAxis {
 /// Each method returns the part it consumed, of the same sign.
 pub trait NestedScrollConnection {
     /// Takes part of `available` before the scroller moves.
-    fn on_pre_scroll(
-        &self,
-        _axis: ScrollAxis,
-        _available: f32,
-        _source: NestedScrollSource,
-    ) -> f32 {
+    fn on_pre_scroll(&self, _axis: Axis, _available: f32, _source: NestedScrollSource) -> f32 {
         0.0
     }
 
@@ -56,7 +43,7 @@ pub trait NestedScrollConnection {
     /// `consumed`.
     fn on_post_scroll(
         &self,
-        _axis: ScrollAxis,
+        _axis: Axis,
         _consumed: f32,
         _available: f32,
         _source: NestedScrollSource,
@@ -66,7 +53,7 @@ pub trait NestedScrollConnection {
 
     /// Takes part of the `velocity` a drag ended with, in content units per
     /// second, before the scroller flings with the rest.
-    fn on_pre_fling(&self, _axis: ScrollAxis, _velocity: f32) -> f32 {
+    fn on_pre_fling(&self, _axis: Axis, _velocity: f32) -> f32 {
         0.0
     }
 }
@@ -94,12 +81,7 @@ impl NestedScrollParent {
     }
 
     /// The outer containers first, then this one.
-    pub(crate) fn pre_scroll(
-        &self,
-        axis: ScrollAxis,
-        available: f32,
-        source: NestedScrollSource,
-    ) -> f32 {
+    pub(crate) fn pre_scroll(&self, axis: Axis, available: f32, source: NestedScrollSource) -> f32 {
         let outer = self
             .outer
             .as_ref()
@@ -113,7 +95,7 @@ impl NestedScrollParent {
     /// This container first, then the outer ones.
     pub(crate) fn post_scroll(
         &self,
-        axis: ScrollAxis,
+        axis: Axis,
         consumed: f32,
         available: f32,
         source: NestedScrollSource,
@@ -127,7 +109,7 @@ impl NestedScrollParent {
     }
 
     /// The outer containers first, then this one.
-    pub(crate) fn pre_fling(&self, axis: ScrollAxis, velocity: f32) -> f32 {
+    pub(crate) fn pre_fling(&self, axis: Axis, velocity: f32) -> f32 {
         let outer = self
             .outer
             .as_ref()
@@ -140,7 +122,7 @@ impl NestedScrollParent {
     /// the scroller consumed together.
     pub(crate) fn dispatch(
         &self,
-        axis: ScrollAxis,
+        axis: Axis,
         available: f32,
         source: NestedScrollSource,
         apply: impl FnOnce(f32) -> f32,

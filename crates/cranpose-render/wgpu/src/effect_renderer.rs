@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
+use cranpose_ui::Axis;
 use cranpose_ui_graphics::{
     BlendMode, DrawSpecialization, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec,
     TileMode,
@@ -12,7 +13,7 @@ use crate::{
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
+        TextureRegionCopy, UniformUpload, UploadAllocatorId, copy_compatible,
     },
     glass_split::split_scissors,
     gpu_stats::FrameStats,
@@ -31,8 +32,13 @@ use crate::{
 };
 
 mod scratch_targets;
+mod upload_specs;
 use scratch_targets::acquire_recorded_effect_scratch_textures_into;
 pub(crate) use scratch_targets::{EffectScratchTargetProvider, RecordedEffectScratchTargets};
+use upload_specs::{
+    blit_uniform_spec, blur_uniform_spec, effect_uniform_spec, offset_uniform_spec,
+    projective_blit_uniform_spec, projective_blit_vertex_spec,
+};
 
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
@@ -316,24 +322,6 @@ fn blur_block(source: (u32, u32, u32, u32), scratch: (u32, u32, u32, u32)) -> u3
     (source.2 as f32 / scratch.2.max(1) as f32).round().max(1.0) as u32
 }
 
-fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
-    let (buffer, bind_group) = match pass {
-        UploadAllocatorId::BlurDownsample => (
-            "Blur Downsample Uniform Buffer",
-            "Blur Downsample Uniform Bind Group",
-        ),
-        UploadAllocatorId::BlurHorizontal => (
-            "Blur Horizontal Uniform Buffer",
-            "Blur Horizontal Uniform Bind Group",
-        ),
-        _ => (
-            "Blur Vertical Uniform Buffer",
-            "Blur Vertical Uniform Bind Group",
-        ),
-    };
-    UploadAllocatorSpec::uniform(buffer, bind_group, size_of::<BlurUniforms>() as u64)
-}
-
 #[derive(Clone, Copy)]
 struct BlurDraw {
     source: BlurSource,
@@ -378,7 +366,7 @@ struct PreparedBlurDraw {
 
 #[derive(Clone, Copy)]
 struct BlurUniformSpec {
-    horizontal: bool,
+    axis: Axis,
     sampled: (u32, u32),
     source: [f32; 4],
     dest: [f32; 4],
@@ -424,7 +412,7 @@ impl BlurDraw {
     fn uniforms(&self, renderer: &EffectRenderer) -> BlurUniforms {
         let spec = self.uniforms;
         renderer.blur_uniforms(
-            spec.horizontal,
+            spec.axis,
             spec.sampled,
             spec.source,
             spec.dest,
@@ -441,45 +429,6 @@ impl BlurDraw {
             BlurFilter::Mean => BlurPipeline::Mean,
         }
     }
-}
-
-fn offset_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Offset Uniform Buffer",
-        "Offset Uniform Bind Group",
-        size_of::<OffsetUniforms>() as u64,
-    )
-}
-
-fn blit_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Blit Uniform Buffer",
-        "Blit Uniform Bind Group",
-        size_of::<BlitUniforms>() as u64,
-    )
-}
-
-fn projective_blit_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Projective Blit Uniform Buffer",
-        "Projective Blit Uniform Bind Group",
-        size_of::<ProjectiveBlitUniforms>() as u64,
-    )
-}
-
-fn projective_blit_vertex_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::vertex(
-        "Projective Blit Vertex Buffer",
-        (size_of::<ProjectiveBlitVertex>() * 5) as u64,
-    )
-}
-
-fn effect_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Effect Uniform Buffer",
-        "Effect Uniform Bind Group",
-        (RuntimeShader::MAX_UNIFORMS * size_of::<f32>()) as u64,
-    )
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1962,15 +1911,17 @@ impl EffectRenderer {
     /// destination pixel.
     fn blur_uniforms(
         &self,
-        horizontal: bool,
+        axis: Axis,
         sampled: (u32, u32),
         source: [f32; 4],
         dest: [f32; 4],
         radius: (f32, f32),
         tile_mode: TileMode,
     ) -> BlurUniforms {
-        let direction = if horizontal { [1.0, 0.0] } else { [0.0, 1.0] };
-        let kernel_radius = if horizontal { radius.0 } else { radius.1 };
+        let (direction, kernel_radius) = match axis {
+            Axis::Horizontal => ([1.0, 0.0], radius.0),
+            Axis::Vertical => ([0.0, 1.0], radius.1),
+        };
         let key = kernel_radius.to_bits();
         let kernel = {
             let mut kernels = self.blur_kernels.borrow_mut();
@@ -2061,7 +2012,7 @@ impl EffectRenderer {
                 std::iter::once(BlurDraw {
                     source: BlurSource::Primary,
                     uniforms: BlurUniformSpec {
-                        horizontal: true,
+                        axis: Axis::Horizontal,
                         sampled: (source.width, source.height),
                         source: region_uniform(whole_source),
                         dest: region_uniform(whole_scratch),
@@ -2089,7 +2040,7 @@ impl EffectRenderer {
             std::iter::once(BlurDraw {
                 source: BlurSource::Primary,
                 uniforms: BlurUniformSpec {
-                    horizontal: true,
+                    axis: Axis::Horizontal,
                     sampled: (horizontal_source.width, horizontal_source.height),
                     source: region_uniform(horizontal_region),
                     dest: region_uniform(whole_scratch),
@@ -2112,7 +2063,7 @@ impl EffectRenderer {
             std::iter::once(BlurDraw {
                 source: BlurSource::Primary,
                 uniforms: BlurUniformSpec {
-                    horizontal: false,
+                    axis: Axis::Vertical,
                     sampled: (scratch.width, scratch.height),
                     source: region_uniform(whole_scratch),
                     dest: region_uniform(dest_region),
@@ -2139,12 +2090,12 @@ impl EffectRenderer {
         sampled: (u32, u32),
         source_region: (u32, u32, u32, u32),
         dest: (u32, u32, u32, u32),
-        horizontal: bool,
+        axis: Axis,
     ) -> BlurDraw {
         BlurDraw {
             source,
             uniforms: BlurUniformSpec {
-                horizontal,
+                axis,
                 sampled,
                 source: region_uniform(source_region),
                 dest: region_uniform(dest),
@@ -2190,7 +2141,7 @@ impl EffectRenderer {
                         (atlas.width, atlas.height),
                         mean.source,
                         mean.scratch,
-                        true,
+                        Axis::Horizontal,
                     )
                 }),
         );
@@ -2214,7 +2165,7 @@ impl EffectRenderer {
                         (scratch.width, scratch.height),
                         mean.scratch,
                         mean.dest,
-                        false,
+                        Axis::Vertical,
                     )
                 }),
         );
@@ -2237,7 +2188,7 @@ impl EffectRenderer {
                                     scissor| BlurDraw {
             source: BlurSource::Primary,
             uniforms: BlurUniformSpec {
-                horizontal: true,
+                axis: Axis::Horizontal,
                 sampled,
                 source: region_uniform(source),
                 dest: region_uniform(scratch),
@@ -2282,7 +2233,7 @@ impl EffectRenderer {
                     sampled,
                     mean.source,
                     mean.scratch,
-                    true,
+                    Axis::Horizontal,
                 )
             });
         blur_draws.chain(block_draws).chain(mean_draws)
@@ -2310,7 +2261,7 @@ impl EffectRenderer {
             BlurDraw {
                 source,
                 uniforms: BlurUniformSpec {
-                    horizontal: true,
+                    axis: Axis::Horizontal,
                     sampled,
                     source: region_uniform(source_region),
                     dest: region_uniform(region.scratch),
@@ -2332,7 +2283,7 @@ impl EffectRenderer {
                     result_size,
                     mean.scratch,
                     (mean.scratch.0, mean.scratch.1, 1, 1),
-                    false,
+                    Axis::Vertical,
                 )
             });
         blur_draws.chain(mean_draws)
@@ -2350,7 +2301,7 @@ impl EffectRenderer {
         let blur_draws = regions.iter().map(move |region| BlurDraw {
             source: BlurSource::Primary,
             uniforms: BlurUniformSpec {
-                horizontal: false,
+                axis: Axis::Vertical,
                 sampled: (scratch.width, scratch.height),
                 source: region_uniform(region.scratch),
                 dest: region_uniform(region.dest),
@@ -2379,7 +2330,7 @@ impl EffectRenderer {
                     (scratch.width, scratch.height),
                     (mean.scratch.0, mean.scratch.1, 1, 1),
                     mean.dest,
-                    false,
+                    Axis::Vertical,
                 )
             });
         blur_draws.chain(mean_draws)
