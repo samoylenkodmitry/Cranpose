@@ -35,46 +35,10 @@ pub(in crate::slot) struct GroupFrameStack {
     depth: usize,
 }
 
-// The frames of a stack between passes, which the hosts on a thread share: a
-// frame takes about 100 bytes on 32-bit targets, and a storage per host would
-// hold as many frames for each item of a lazy list as for the root.
-pub(crate) struct GroupFrameStorage(Vec<GroupFrame>);
-
-// Passes of more hosts at once are rare; they take new storage.
-const SPARE_GROUP_FRAME_STORAGES: usize = 2;
-
-// A host whose passes need more frames is deep, such as an app's root, and
-// keeps its own.
-const SPARE_GROUP_FRAME_CAPACITY: usize = 64;
-
 impl GroupFrameStack {
-    // A stack that kept its frames, a deep host's or one of a pass that ended
-    // early, keeps them.
-    pub(in crate::slot) fn adopt_spare(&mut self) {
-        if self.frames.capacity() > 0 {
-            return;
-        }
-        if let Some(GroupFrameStorage(frames)) =
-            crate::thread_state::try_runtimes(|state| state.spare_group_frames.borrow_mut().pop())
-                .flatten()
-        {
-            self.frames = frames;
-        }
-    }
-
-    pub(in crate::slot) fn recycle(&mut self) {
-        self.depth = 0;
-        let capacity = self.frames.capacity();
-        if capacity == 0 || capacity > SPARE_GROUP_FRAME_CAPACITY {
-            return;
-        }
-        let frames = std::mem::take(&mut self.frames);
-        crate::thread_state::try_runtimes(|state| {
-            let mut spare = state.spare_group_frames.borrow_mut();
-            if spare.len() < SPARE_GROUP_FRAME_STORAGES {
-                spare.push(GroupFrameStorage(frames));
-            }
-        });
+    // The frames its passes have needed at most.
+    pub(in crate::slot) fn capacity(&self) -> usize {
+        self.frames.capacity()
     }
 
     pub(in crate::slot) fn push(&mut self) -> &mut GroupFrame {

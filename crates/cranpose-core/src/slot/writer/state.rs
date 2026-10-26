@@ -23,6 +23,10 @@ pub(crate) struct SlotWriteSessionState {
     pub(crate) request_payload_storage_compaction: bool,
 }
 
+// The frames of a host whose state goes back to the spare states: a frame
+// takes about 100 bytes on 32-bit targets.
+const SHARED_STATE_FRAMES: usize = 64;
+
 #[cfg(test)]
 impl Default for SlotWriteSessionState {
     fn default() -> Self {
@@ -48,6 +52,13 @@ impl SlotWriteSessionState {
         }
     }
 
+    // Whether a host gives the state back to its thread's spare states
+    // after a pass: the state of a deep host, such as an app's root, holds
+    // the frames of its depth and stays with that host.
+    pub(crate) fn is_shared(&self) -> bool {
+        self.group_stack.capacity() <= SHARED_STATE_FRAMES
+    }
+
     /// Binds the composer's branch guards for the next pass, which
     /// [`Self::reset_for_pass`] then starts.
     pub(crate) fn set_folds(&mut self, folds: Rc<BranchFolds>) {
@@ -61,7 +72,6 @@ impl SlotWriteSessionState {
     pub(crate) fn reset_for_pass(&mut self, mode: SlotPassMode) {
         self.root.reset(matches!(mode, SlotPassMode::Compose));
         self.group_stack.clear();
-        self.group_stack.adopt_spare();
         self.payload_location_refreshes.clear();
         if !self.rejected_restore_subtrees.is_empty() {
             log::error!(

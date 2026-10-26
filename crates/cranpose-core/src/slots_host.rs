@@ -37,10 +37,36 @@ pub(crate) struct SlotsHostInner {
     /// The table's storage capacity when the active pass began; `None`
     /// while no pass is active.
     pub(crate) active_pass: Option<usize>,
-    /// The passes' writer state, `None` before the first pass. It stays in
-    /// place between passes, each reusing its storage: moved, its hundreds
-    /// of bytes cost a copy at each pass's start and end.
-    pub(crate) pass_state: Option<slot::SlotWriteSessionState>,
+    /// The writer state of the active pass. Between passes a deep host,
+    /// such as an app's root, keeps its own; a shallow one's goes back to
+    /// the thread's spare states when its pass finishes.
+    pub(crate) pass_state: Option<Box<slot::SlotWriteSessionState>>,
+}
+
+// Passes of more hosts at once are rare; they take new states.
+const SPARE_WRITE_STATES: usize = 2;
+
+// A writer state for a pass under `folds`: one of the thread's spare states
+// when it has one.
+fn spare_write_state(folds: &Rc<slot::BranchFolds>) -> Box<slot::SlotWriteSessionState> {
+    match crate::thread_state::try_runtimes(|state| state.spare_write_states.borrow_mut().pop())
+        .flatten()
+    {
+        Some(mut state) => {
+            state.set_folds(Rc::clone(folds));
+            state
+        }
+        None => Box::new(slot::SlotWriteSessionState::new(Rc::clone(folds))),
+    }
+}
+
+fn recycle_write_state(state: Box<slot::SlotWriteSessionState>) {
+    crate::thread_state::try_runtimes(|threads| {
+        let mut spare = threads.spare_write_states.borrow_mut();
+        if spare.len() < SPARE_WRITE_STATES {
+            spare.push(state);
+        }
+    });
 }
 
 impl Drop for SlotsHost {
@@ -350,7 +376,7 @@ impl SlotsHost {
                 state.set_folds(Rc::clone(folds));
                 state
             }
-            None => pass_state.insert(slot::SlotWriteSessionState::new(Rc::clone(folds))),
+            None => pass_state.insert(spare_write_state(folds)),
         };
         state.reset_for_pass(mode);
         *active_pass = Some(table.storage_capacity());
@@ -435,6 +461,11 @@ impl SlotsHost {
             trim_growth_slack: state.removed_nothing()
                 && table.storage_capacity() > storage_capacity,
         };
+        if state.is_shared()
+            && let Some(state) = pass_state.take()
+        {
+            recycle_write_state(state);
+        }
         Ok(FinishedSlotPass {
             outcome,
             detached_root_children,
