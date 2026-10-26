@@ -1343,7 +1343,7 @@ pub fn open_media_source(uri: &str) -> std::io::Result<MediaSourceHandle> {
     if let Some(path) = path_from_uri(uri) {
         let stream = File::open(path)?;
         let len = stream.metadata().ok().map(|metadata| metadata.len());
-        return Ok(MediaSourceHandle { stream, len });
+        return Ok(MediaSourceHandle::new(stream, len));
     }
     match PLATFORM_MEDIA_SOURCE.get() {
         Some(opener) => opener.open(uri),

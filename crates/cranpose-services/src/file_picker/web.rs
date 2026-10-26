@@ -4,8 +4,7 @@ use wasm_bindgen::JsCast;
 
 use super::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest};
 use crate::content::{
-    BytesContent, ContentError, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata,
-    ContentSink, ContentSinkRef,
+    ContentError, ContentFolderRef, ContentFuture, ContentHandle, ContentSink, ContentSinkRef,
 };
 
 fn dialog(options: &FilePickerOptions) -> rfd::AsyncFileDialog {
@@ -20,10 +19,8 @@ fn dialog(options: &FilePickerOptions) -> rfd::AsyncFileDialog {
     dialog
 }
 
-async fn content_of(handle: rfd::FileHandle) -> ContentHandle {
-    let name = handle.file_name();
-    let bytes = handle.read().await;
-    BytesContent::new(ContentMetadata::named(name), bytes).handle()
+fn content_of(handle: rfd::FileHandle) -> ContentHandle {
+    crate::content::blob::BlobContent::handle(handle.inner().clone())
 }
 
 pub(super) fn pick_file(
@@ -32,7 +29,7 @@ pub(super) fn pick_file(
     Box::pin(async move {
         match dialog(&options).pick_file().await {
             None => Ok(None),
-            Some(handle) => Ok(Some(content_of(handle).await)),
+            Some(handle) => Ok(Some(content_of(handle))),
         }
     })
 }
@@ -44,7 +41,7 @@ pub(super) fn pick_files(
         let handles = dialog(&options).pick_files().await.unwrap_or_default();
         let mut picked = Vec::with_capacity(handles.len());
         for handle in handles {
-            picked.push(content_of(handle).await);
+            picked.push(content_of(handle));
         }
         Ok(picked)
     })

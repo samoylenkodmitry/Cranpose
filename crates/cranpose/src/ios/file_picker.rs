@@ -334,6 +334,10 @@ impl Content for IosFile {
         metadata_for(&self.scope, &self.path)
     }
 
+    fn media_uri(&self) -> Result<String, ContentError> {
+        crate::apple::media_source::reference(&self.scope.url, &self.path).map_err(map_io)
+    }
+
     /// The file opens inside its security scope, which stays open while the
     /// reader lives; the reads run on a thread of their own.
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {

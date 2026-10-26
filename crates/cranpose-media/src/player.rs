@@ -24,6 +24,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 struct Active {
     sink: Sink,
     duration: Option<Duration>,
+    seekable: bool,
 }
 
 struct Shared {
@@ -92,6 +93,7 @@ impl Shared {
     fn open(self: &Arc<Self>, item: &MediaItem) -> Result<Option<Duration>, MediaError> {
         let (decoder, cancel) = Decoder::open(&item.uri)?;
         let duration = decoder.total_duration().or(item.metadata.duration);
+        let seekable = decoder.is_seekable();
         let source: Box<dyn SampleSource> =
             Box::new(self.analysis.wrap(self.equalizer.wrap(decoder)));
 
@@ -104,7 +106,11 @@ impl Shared {
             &*self.output,
         )?;
 
-        *self.active.lock() = Some(Active { sink, duration });
+        *self.active.lock() = Some(Active {
+            sink,
+            duration,
+            seekable,
+        });
         self.start_progress_thread();
         Ok(duration)
     }
@@ -213,13 +219,18 @@ fn progress_at(position: Duration, duration: Option<Duration>) -> PlaybackProgre
 
 const SOFTWARE_AUDIO_EXTENSIONS: &[&str] = &[
     "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "mka", "mkv", "mp1", "mp2", "mp3", "mp4",
-    "oga", "ogg", "wav", "wave", "webm",
+    "oga", "ogg", "opus", "wav", "wave", "webm",
 ];
 
 impl MediaPlayer for SoftwareMediaPlayer {
     fn capabilities(&self) -> MediaCapabilities {
         MediaCapabilities {
-            seeking: true,
+            seeking: self
+                .shared
+                .active
+                .lock()
+                .as_ref()
+                .is_none_or(|active| active.seekable),
             speed: true,
             looping: true,
             analysis: true,

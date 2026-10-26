@@ -124,6 +124,15 @@ pub trait Content {
     /// What the provider states about this content without reading it.
     fn metadata(&self) -> ContentMetadata;
 
+    /// Returns a playback reference without reading or copying the audio.
+    /// Providers retain any platform grant required to reopen this reference.
+    /// Browser references remain valid until the page is closed.
+    fn media_uri(&self) -> Result<String, ContentError> {
+        Err(ContentError::Unsupported(
+            "media references from this provider",
+        ))
+    }
+
     /// Opens a chunked reader over the bytes.
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>>;
 
@@ -567,6 +576,8 @@ pub use threaded::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
+pub(crate) mod blob;
 mod file;
 #[cfg(not(target_arch = "wasm32"))]
 mod threaded;

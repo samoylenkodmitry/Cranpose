@@ -459,21 +459,7 @@ accesskit_macos = "0.27.1"
 # The collection types below that are the camera's (`camera-desktop`): this
 # entry is not optional, so the classes it names are listed here rather than
 # added by the feature.
-objc2-foundation = { version = "0.3", default-features = false, features = [
-    "std",
-    "NSArray",
-    "NSBundle",
-    "NSDictionary",
-    "NSEnumerator",
-    "NSError",
-    "NSObject",
-    "NSGeometry",
-    "NSProcessInfo",
-    "NSString",
-    "NSURL",
-    "NSUserDefaults",
-    "NSValue",
-] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSEnumerator", "NSError", "NSObject", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSUserDefaults", "NSValue", "NSData"] }
 # The Mac's battery from IOKit's power sources (`macos_power`).
 objc2-io-kit = { version = "0.3", default-features = false, optional = true, features = [
     "std",
