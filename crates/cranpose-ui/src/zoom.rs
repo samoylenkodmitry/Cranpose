@@ -49,7 +49,7 @@ use std::{
 
 use cranpose_core::{OwnedMutableState, RuntimeCell};
 use cranpose_foundation::{
-    DRAG_THRESHOLD,
+    DRAG_THRESHOLD, PointerId,
     nodes::input::gestures::{TransformGesture, TransformGestureEvent},
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
@@ -361,13 +361,15 @@ impl Modifier {
                                             gs.travel = 0.0;
                                             gs.tap_down = Some(event.global_position);
                                         }
-                                        if event.id != 0 {
+                                        if event.id != PointerId::PRIMARY {
                                             event.consume();
                                         }
                                         continue;
                                     }
 
-                                    if event.kind == PointerEventKind::Up && event.id == 0 {
+                                    if event.kind == PointerEventKind::Up
+                                        && event.id == PointerId::PRIMARY
+                                    {
                                         let now_ms = gs.timestamp_ms(event.time_ms);
                                         let up_position = event.global_position;
                                         let is_tap = !gs.active
@@ -428,7 +430,7 @@ impl Modifier {
                                             }
                                         }
                                         TransformGestureEvent::None => {
-                                            if event.id != 0
+                                            if event.id != PointerId::PRIMARY
                                                 || (gs.active
                                                     && matches!(
                                                         event.kind,

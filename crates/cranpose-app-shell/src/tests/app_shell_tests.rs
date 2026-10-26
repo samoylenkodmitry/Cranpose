@@ -3775,17 +3775,22 @@ fn two_finger_pinch_reaches_zoomable_state_through_shell() {
 
     event_ms += 16;
     assert!(
-        shell.secondary_pointer_pressed(2, 220.0, 300.0, Some(event_ms)),
+        shell.secondary_pointer_pressed(PointerId(2), 220.0, 300.0, Some(event_ms)),
         "secondary pointer must reach the primary gesture's hit path"
     );
 
     for step in 1..=5i64 {
         event_ms += 8;
-        shell.secondary_pointer_moved(2, 220.0 + step as f32 * 16.0, 300.0, Some(event_ms));
+        shell.secondary_pointer_moved(
+            PointerId(2),
+            220.0 + step as f32 * 16.0,
+            300.0,
+            Some(event_ms),
+        );
     }
 
     event_ms += 8;
-    shell.secondary_pointer_released(2, 300.0, 300.0, Some(event_ms));
+    shell.secondary_pointer_released(PointerId(2), 300.0, 300.0, Some(event_ms));
     shell.pointer_released_at_position_time(140.0, 300.0, Some(event_ms));
     shell.update();
 

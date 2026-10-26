@@ -2,7 +2,7 @@ use cranpose_foundation::PointerEventKind::{Cancel, Down, Move, Up};
 
 use super::*;
 
-type Log = Rc<RefCell<Vec<(u64, PointerEventKind)>>>;
+type Log = Rc<RefCell<Vec<(PointerId, PointerEventKind)>>>;
 
 /// A shell whose whole surface records the id and kind of each press,
 /// release, cancel and pressed move it gets (no hover), and the router
@@ -51,8 +51,12 @@ fn recording_shell() -> (AppShell<HitGraphRenderer>, TouchRouter<u32>, Log) {
     (shell, TouchRouter::default(), log)
 }
 
+// The pointers' raw ids and kinds the log took since the last call.
 fn taken(log: &Log) -> Vec<(u64, PointerEventKind)> {
     std::mem::take(&mut *log.borrow_mut())
+        .into_iter()
+        .map(|(id, kind)| (id.0, kind))
+        .collect()
 }
 
 #[test]

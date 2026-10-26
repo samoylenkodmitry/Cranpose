@@ -3,7 +3,7 @@ use std::{rc::Rc, sync::Arc};
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
-    PointerEventKind,
+    PointerEventKind, PointerId,
 };
 use cranpose_ui_graphics::Point;
 
@@ -31,7 +31,7 @@ fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, Modifie
 fn touch(kind: PointerEventKind, id: u64, x: f32, y: f32) -> PointerEvent {
     PointerEvent::new(kind, Point { x, y }, Point { x, y })
         .with_buttons(PointerButtons::new().with(PointerButton::Primary))
-        .with_id(id)
+        .with_id(PointerId(id))
 }
 
 #[test]

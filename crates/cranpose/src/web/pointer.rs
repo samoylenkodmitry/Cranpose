@@ -11,6 +11,7 @@ use std::{
 };
 
 use cranpose_app_shell::{AppShell, PointerSource};
+use cranpose_foundation::PointerId;
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::PointerButton;
@@ -29,7 +30,7 @@ struct Pointers {
     request_frame: Rc<dyn Fn()>,
     // The secondary fingers that are down. Lifting the first finger releases
     // them before it ends the gesture.
-    secondaries: Rc<RefCell<Vec<u64>>>,
+    secondaries: Rc<RefCell<Vec<PointerId>>>,
     // The mouse buttons last reported held, as `MouseEvent.buttons` bits.
     mouse_buttons: Rc<Cell<u16>>,
 }
@@ -88,8 +89,8 @@ pub(crate) fn web_pointer_source(event: &PointerEvent) -> PointerSource {
 
 // The shell's id of a finger after the first one. The shell keeps id 0 for
 // the primary pointer.
-fn secondary_id(event: &PointerEvent) -> Option<u64> {
-    (!event.is_primary()).then(|| u64::from(event.pointer_id().unsigned_abs()) + 1)
+fn secondary_id(event: &PointerEvent) -> Option<PointerId> {
+    (!event.is_primary()).then(|| PointerId(u64::from(event.pointer_id().unsigned_abs()) + 1))
 }
 
 impl Pointers {
@@ -212,7 +213,7 @@ impl Pointers {
         let _ = self.canvas.release_pointer_capture(event.pointer_id());
     }
 
-    fn release_secondary(&self, app: &mut AppShell<WgpuRenderer>, id: u64, at: Point) {
+    fn release_secondary(&self, app: &mut AppShell<WgpuRenderer>, id: PointerId, at: Point) {
         self.secondaries.borrow_mut().retain(|&finger| finger != id);
         app.secondary_pointer_released(id, at.x, at.y, None);
     }

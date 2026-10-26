@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 
+use cranpose_foundation::PointerId;
 use cranpose_render_common::Renderer;
 
 use crate::{AppShell, PointerSource};
@@ -12,7 +13,7 @@ use crate::{AppShell, PointerSource};
 /// Which shell pointer a finger drives.
 enum Route {
     Primary,
-    Secondary(u64),
+    Secondary(PointerId),
     Untracked,
 }
 
@@ -26,8 +27,8 @@ pub struct TouchRouter<F> {
     primary: Option<F>,
     /// The fingers that joined the primary one, in the order they came,
     /// with the secondary pointer each drives.
-    secondaries: Vec<(F, u64)>,
-    next_secondary_id: u64,
+    secondaries: Vec<(F, PointerId)>,
+    next_secondary_id: PointerId,
 }
 
 impl<F> Default for TouchRouter<F> {
@@ -35,7 +36,7 @@ impl<F> Default for TouchRouter<F> {
         Self {
             primary: None,
             secondaries: Vec::new(),
-            next_secondary_id: 0,
+            next_secondary_id: PointerId::PRIMARY,
         }
     }
 }
@@ -140,7 +141,7 @@ impl<F: Copy + Eq> TouchRouter<F> {
             }
             Some(primary) if primary == finger => Route::Primary,
             Some(_) => Route::Secondary(self.secondary_id(finger).unwrap_or_else(|| {
-                self.next_secondary_id += 1;
+                self.next_secondary_id = PointerId(self.next_secondary_id.0 + 1);
                 self.secondaries.push((finger, self.next_secondary_id));
                 self.next_secondary_id
             })),
@@ -157,14 +158,14 @@ impl<F: Copy + Eq> TouchRouter<F> {
         }
     }
 
-    fn secondary_id(&self, finger: F) -> Option<u64> {
+    fn secondary_id(&self, finger: F) -> Option<PointerId> {
         self.secondaries
             .iter()
             .find(|(tracked, _)| *tracked == finger)
             .map(|(_, id)| *id)
     }
 
-    fn take_secondary(&mut self, finger: F) -> Option<u64> {
+    fn take_secondary(&mut self, finger: F) -> Option<PointerId> {
         let index = self
             .secondaries
             .iter()
@@ -179,7 +180,7 @@ impl<F: Copy + Eq> TouchRouter<F> {
     fn end_gesture(&mut self) {
         self.primary = None;
         self.secondaries.clear();
-        self.next_secondary_id = 0;
+        self.next_secondary_id = PointerId::PRIMARY;
     }
 }
 

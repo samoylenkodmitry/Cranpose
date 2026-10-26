@@ -634,7 +634,7 @@ where
     /// Returns `true` when the event was dispatched to at least one target.
     pub fn secondary_pointer_pressed(
         &mut self,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         time_ms: Option<i64>,
@@ -646,7 +646,7 @@ where
     /// Move counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
     pub fn secondary_pointer_moved(
         &mut self,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         time_ms: Option<i64>,
@@ -658,7 +658,7 @@ where
     /// Release counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
     pub fn secondary_pointer_released(
         &mut self,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         time_ms: Option<i64>,
@@ -670,12 +670,12 @@ where
     fn dispatch_secondary_pointer(
         &mut self,
         kind: PointerEventKind,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         event_time: PointerEventTime,
     ) -> bool {
-        if pointer_id == 0 {
+        if pointer_id == PointerId::PRIMARY {
             log::warn!(
                 target: "cranpose::input",
                 "secondary pointer dispatch called with the primary pointer id"
@@ -710,7 +710,8 @@ where
         }
         log::trace!(
             target: "cranpose::input",
-            "secondary_pointer {kind:?} id={pointer_id} ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
+            "secondary_pointer {kind:?} id={} ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
+            pointer_id.0,
             event_time.platform_time_ms,
             event_time.animation_time_nanos,
         );
@@ -727,11 +728,11 @@ where
     /// target received the event.
     pub fn ray_pointer(
         &mut self,
-        (pointer_id, scene): (u32, NodeId),
+        (pointer_id, scene): (PointerId, NodeId),
         ray: cranpose_ui_graphics::space::Ray,
         kind: PointerEventKind,
     ) -> bool {
-        if pointer_id == 0 {
+        if pointer_id == PointerId::PRIMARY {
             log::warn!(
                 target: "cranpose::input",
                 "ray pointer dispatch called with the primary pointer id"
@@ -743,10 +744,10 @@ where
         let result = {
             let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| {
-                let pointer = PointerId(pointer_id);
+                let pointer = pointer_id;
                 let event = self
                     .pointer_event(kind, Point::default(), Point::default(), event_time)
-                    .with_id(u64::from(pointer_id))
+                    .with_id(pointer)
                     .with_ray(ray);
                 if kind == PointerEventKind::Down {
                     let hits = self.surface().renderer.scene().hit_test_ray(scene, ray);
@@ -2052,7 +2053,7 @@ where
     /// Primary-surface form of [`SurfaceMut::secondary_pointer_pressed`].
     pub fn secondary_pointer_pressed(
         &mut self,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         time_ms: Option<i64>,
@@ -2064,7 +2065,7 @@ where
     /// Primary-surface form of [`SurfaceMut::ray_pointer`].
     pub fn ray_pointer(
         &mut self,
-        (pointer_id, scene): (u32, NodeId),
+        (pointer_id, scene): (PointerId, NodeId),
         ray: cranpose_ui_graphics::space::Ray,
         kind: PointerEventKind,
     ) -> bool {
@@ -2074,7 +2075,7 @@ where
     /// Primary-surface form of [`SurfaceMut::secondary_pointer_moved`].
     pub fn secondary_pointer_moved(
         &mut self,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         time_ms: Option<i64>,
@@ -2086,7 +2087,7 @@ where
     /// Primary-surface form of [`SurfaceMut::secondary_pointer_released`].
     pub fn secondary_pointer_released(
         &mut self,
-        pointer_id: u64,
+        pointer_id: PointerId,
         x: f32,
         y: f32,
         time_ms: Option<i64>,

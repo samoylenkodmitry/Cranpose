@@ -1,5 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
+use cranpose_foundation::PointerId;
 use cranpose_liquid::prelude::*;
 use cranpose_testing::{
     RobotTestRule, TestRenderer, create_headless_robot_test, placed_semantics_from_shell,
@@ -54,10 +55,10 @@ fn another_finger_cannot_release_the_active_floating_button() {
     robot.mouse_down();
     robot
         .shell_mut()
-        .secondary_pointer_pressed(7, 150.0, 122.0, None);
+        .secondary_pointer_pressed(PointerId(7), 150.0, 122.0, None);
     robot
         .shell_mut()
-        .secondary_pointer_released(7, 150.0, 122.0, None);
+        .secondary_pointer_released(PointerId(7), 150.0, 122.0, None);
     robot.wait_for_idle();
     assert_eq!(clicks.get(), 0);
     robot.mouse_up();

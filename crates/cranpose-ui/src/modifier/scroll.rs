@@ -6,7 +6,7 @@ use std::{
 use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, MAX_FLING_VELOCITY, ModifierNode, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D,
+    NodeCapabilities, NodeState, PointerButton, PointerButtons, PointerId, VelocityTracker1D,
     velocity_tracker::ASSUME_STOPPED_MS,
 };
 use cranpose_ui_layout::Axis;
@@ -472,7 +472,7 @@ where
                     loop {
                         let event = await_scope.await_pointer_event().await;
 
-                        if event.id != 0 {
+                        if event.id != PointerId::PRIMARY {
                             continue;
                         }
 
