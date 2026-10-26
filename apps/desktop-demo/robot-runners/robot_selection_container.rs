@@ -1,3 +1,4 @@
+use cranpose_ui::Modifiers;
 use crate::{robot_exit, robot_shot};
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
@@ -76,9 +77,8 @@ fn check(robot: &Robot, passed: bool, message: &str) {
 }
 
 fn command_key(robot: &Robot, key: &str) {
-    let macos = cfg!(target_os = "macos");
     robot
-        .send_key_with_modifiers(key, false, !macos, false, macos)
+        .send_key_with_modifiers(key, Modifiers::COMMAND)
         .expect("send a command shortcut");
     let _ = robot.wait_for_idle();
 }

@@ -1,3 +1,4 @@
+use cranpose_ui::Modifiers;
 use crate::robot_launch;
 
 use cranpose::{InspectorAction, InspectorMode, Robot};
@@ -55,7 +56,13 @@ pub(crate) fn main() {
             );
             assert!(!robot.inspector_state().expect("collapsed state").open);
             robot
-                .send_key_with_modifiers("i", true, true, false, false)
+                .send_key_with_modifiers(
+                    "i",
+                    Modifiers {
+                        shift: true,
+                        ..Modifiers::CTRL
+                    },
+                )
                 .expect("former inspector shortcut belongs to the app");
             robot.wait_for_idle().expect("shortcut settles");
             assert!(

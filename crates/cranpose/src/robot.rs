@@ -4,7 +4,9 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
+use cranpose_app_shell::{
+    AppShell, KeyCode, KeyEventType, Modifiers, PointerSource, RuntimeLeakDebugStats,
+};
 use cranpose_render_common::{
     RenderScene, Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
 };
@@ -204,14 +206,8 @@ pub(crate) enum RobotCommand {
     TypeText(String),
     SendKey {
         key: String,
-        released: bool,
-    },
-    SendKeyWithModifiers {
-        key: String,
-        shift: bool,
-        ctrl: bool,
-        alt: bool,
-        meta: bool,
+        modifiers: Modifiers,
+        event_type: KeyEventType,
     },
     WaitForIdle,
     PumpFrames {
@@ -720,7 +716,8 @@ impl Robot {
         self.tx
             .send(RobotCommand::SendKey {
                 key: key.to_string(),
-                released: false,
+                modifiers: Modifiers::NONE,
+                event_type: KeyEventType::KeyDown,
             })
             .map_err(|e| format!("Failed to send send_key command: {e}"))?;
         self.recv_ack()
@@ -733,7 +730,8 @@ impl Robot {
         self.tx
             .send(RobotCommand::SendKey {
                 key: key.to_string(),
-                released: true,
+                modifiers: Modifiers::NONE,
+                event_type: KeyEventType::KeyUp,
             })
             .map_err(|e| format!("Failed to send release_key command: {e}"))?;
         self.recv_ack()
@@ -746,25 +744,16 @@ impl Robot {
     ///
     /// # Example
     /// ```text
-    /// robot.send_key_with_modifiers("Left", true, false, false, false)?; // Shift+Left (select)
-    /// robot.send_key_with_modifiers("c", false, true, false, false)?; // Ctrl+C (copy)
-    /// robot.send_key_with_modifiers("v", false, true, false, false)?; // Ctrl+V (paste)
+    /// robot.send_key_with_modifiers("Left", Modifiers::SHIFT)?; // Shift+Left (select)
+    /// robot.send_key_with_modifiers("c", Modifiers::COMMAND)?; // copy
+    /// robot.send_key_with_modifiers("v", Modifiers::COMMAND)?; // paste
     /// ```
-    pub fn send_key_with_modifiers(
-        &self,
-        key: &str,
-        shift: bool,
-        ctrl: bool,
-        alt: bool,
-        meta: bool,
-    ) -> Result<(), String> {
+    pub fn send_key_with_modifiers(&self, key: &str, modifiers: Modifiers) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::SendKeyWithModifiers {
+            .send(RobotCommand::SendKey {
                 key: key.to_string(),
-                shift,
-                ctrl,
-                alt,
-                meta,
+                modifiers,
+                event_type: KeyEventType::KeyDown,
             })
             .map_err(|e| format!("Failed to send send_key_with_modifiers command: {e}"))?;
         self.recv_ack()
@@ -1486,19 +1475,16 @@ const NAMED_KEYS: [(&str, KeyCode, &str); 12] = [
 ];
 
 /// The key event a robot sends for `key`: its press, or its release.
-pub(crate) fn robot_key_event(key: &str, released: bool) -> cranpose_app_shell::KeyEvent {
-    use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
-
+pub(crate) fn robot_key_event(
+    key: &str,
+    modifiers: Modifiers,
+    event_type: KeyEventType,
+) -> cranpose_app_shell::KeyEvent {
     let (key_code, text) = robot_key_code_and_text(key);
-    let event_type = if released {
-        KeyEventType::KeyUp
-    } else {
-        KeyEventType::KeyDown
-    };
-    KeyEvent::new(key_code, text, Modifiers::NONE, event_type)
+    cranpose_app_shell::KeyEvent::new(key_code, text, modifiers, event_type)
 }
 
-pub(crate) fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
+fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
     if let Some((_, code, text)) = NAMED_KEYS.iter().find(|(name, ..)| *name == key) {
         return (*code, (*text).to_owned());
     }

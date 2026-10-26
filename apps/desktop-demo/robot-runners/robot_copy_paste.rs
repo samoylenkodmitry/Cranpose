@@ -1,3 +1,4 @@
+use cranpose_ui::Modifiers;
 use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
@@ -23,12 +24,6 @@ pub(crate) fn main() {
             }
 
             let mut all_passed = true;
-            let (command_ctrl, command_meta) = if cfg!(target_os = "macos") {
-                (false, true)
-            } else {
-                (true, false)
-            };
-
             println!("--- Test 1: Switch to Text Input Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
@@ -71,7 +66,7 @@ pub(crate) fn main() {
                 std::thread::sleep(Duration::from_millis(200));
 
                 let _ =
-                    robot.send_key_with_modifiers("a", false, command_ctrl, false, command_meta);
+                    robot.send_key_with_modifiers("a", Modifiers::COMMAND);
                 std::thread::sleep(Duration::from_millis(100));
 
                 match robot.type_text("abcdef") {
@@ -112,7 +107,7 @@ pub(crate) fn main() {
             println!("--- Test 3: Select Last 3 Characters (Shift+Left) ---");
 
             for i in 1..=3 {
-                match robot.send_key_with_modifiers("Left", true, false, false, false) {
+                match robot.send_key_with_modifiers("Left", Modifiers::SHIFT) {
                     Ok(()) => println!("  Shift+Left ({i}/3)"),
                     Err(e) => {
                         println!("  ✗ FAIL: Could not send Shift+Left: {e}");
@@ -126,7 +121,7 @@ pub(crate) fn main() {
 
             println!("--- Test 4: Copy Selected Text (Ctrl+C) ---");
 
-            match robot.send_key_with_modifiers("c", false, command_ctrl, false, command_meta) {
+            match robot.send_key_with_modifiers("c", Modifiers::COMMAND) {
                 Ok(()) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
@@ -143,7 +138,7 @@ pub(crate) fn main() {
             let _ = robot.send_key("End");
             std::thread::sleep(Duration::from_millis(100));
 
-            match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
+            match robot.send_key_with_modifiers("v", Modifiers::COMMAND) {
                 Ok(()) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
@@ -155,7 +150,7 @@ pub(crate) fn main() {
                 }
             }
 
-            match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
+            match robot.send_key_with_modifiers("v", Modifiers::COMMAND) {
                 Ok(()) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
