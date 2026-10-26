@@ -70,7 +70,7 @@ pub(super) fn draw_image<P: Pixel>(
             };
             let sample = sampler.sample(u, v);
             if sample[3] > 0.0 {
-                dst.blend_unit(sample, draw.blend_mode, diagnostics);
+                dst.blend_paint(P::paint(sample, draw.blend_mode), 1.0, diagnostics);
             }
         }
     }
@@ -180,7 +180,7 @@ pub(super) fn blit_image_between_pixels<P: Pixel>(
             if src[3] <= 0.0 {
                 continue;
             }
-            dst.blend_unit(src, BlendMode::SrcOver, diagnostics);
+            dst.blend_paint(P::paint(src, BlendMode::SrcOver), 1.0, diagnostics);
         }
     }
 }
