@@ -1305,13 +1305,13 @@ impl NeighbourHarness {
         let frame = support::capture_graph(&mut self.cached, (self.graph)(present), 1104, 720);
         let stats = self.cached.last_frame_stats().expect("frame stats");
         let misses = stats.layer_cache_misses;
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         self.reference.scene_mut().graph = Some((self.graph)(present));
         let reference = self
             .reference
             .capture_frame_with_scale(1104, 720, 1.0)
             .expect("reference capture");
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
         assert_eq!(
             support::max_channel_delta(&frame.pixels, &reference.pixels),
             0,
@@ -1463,12 +1463,12 @@ fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
         cold.transient_texture_bytes,
         partial.transient_texture_bytes
     );
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
     reference.scene_mut().graph = Some(two_atlas_stage(true));
     let expected = reference
         .capture_frame_with_scale(4200, 2100, 1.0)
         .expect("reference capture");
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+    cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
     assert_eq!(
         support::max_channel_delta(&frame.pixels, &expected.pixels),
         0,

@@ -884,9 +884,9 @@ fn record_presented_frame(
 /// Keeps the driver's compiled pipelines in the app's data directory,
 /// `data_path`, unless a directory is named already.
 pub(crate) fn keep_pipeline_cache_in(data_path: &std::path::Path) {
-    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
+    if cranpose_core::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
         let cache_dir = data_path.join("cranpose_gpu");
-        cranpose_render_wgpu::set_debug_toggle_os(
+        cranpose_core::debug_toggles::set_debug_toggle_os(
             "CRANPOSE_PIPELINE_CACHE_DIR",
             Some(cache_dir.as_os_str()),
         );
@@ -923,7 +923,7 @@ fn keep_pipeline_cache(app: &android_activity::AndroidApp) {
 fn seed_pipeline_cache() {
     let (Some(assets), Some(path)) = (
         APP_ASSETS.get(),
-        cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE"),
+        cranpose_core::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE"),
     ) else {
         return;
     };
@@ -963,10 +963,11 @@ fn seed_pipeline_cache() {
 /// describes in the cache directory, unless a file is named already: a
 /// driver update leaves the old driver's pipelines behind.
 pub(crate) fn name_pipeline_cache_file(adapter_info: &wgpu::AdapterInfo) {
-    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_some() {
+    if cranpose_core::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_some() {
         return;
     }
-    let Some(cache_dir) = cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
+    let Some(cache_dir) =
+        cranpose_core::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
     else {
         return;
     };
@@ -984,7 +985,7 @@ pub(crate) fn name_pipeline_cache_file(adapter_info: &wgpu::AdapterInfo) {
         adapter_info.vendor, adapter_info.device,
     );
     let file_path = std::path::Path::new(&cache_dir).join(file_name);
-    cranpose_render_wgpu::set_debug_toggle_os(
+    cranpose_core::debug_toggles::set_debug_toggle_os(
         "CRANPOSE_PIPELINE_CACHE_FILE",
         Some(file_path.as_os_str()),
     );
@@ -1595,10 +1596,7 @@ pub fn run(
 
     keep_pipeline_cache(&app);
 
-    let present_thread = super::present_thread::android_uses_present_thread(
-        std::env::var("CRANPOSE_PRESENT_THREAD").ok().as_deref(),
-        machine_parallelism,
-    );
+    let present_thread = super::present_thread::android_present_thread(machine_parallelism);
     if present_thread {
         log::info!("[present-runtime] threaded present enabled");
     }

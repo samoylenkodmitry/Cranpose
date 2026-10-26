@@ -125,14 +125,14 @@ fn capture_glass_under(
 ) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let (_lock, renderer) = support::headless_renderer_parts()?;
     if let Some(toggle) = toggle {
-        cranpose_render_wgpu::set_debug_toggle(toggle, Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle(toggle, Some("1"));
     }
     let captured = settle(
         &mut card_shell(renderer, button),
         (FRAME_WIDTH, FRAME_HEIGHT),
     );
     if let Some(toggle) = toggle {
-        cranpose_render_wgpu::set_debug_toggle(toggle, None);
+        cranpose_core::debug_toggles::set_debug_toggle(toggle, None);
     }
     captured
 }

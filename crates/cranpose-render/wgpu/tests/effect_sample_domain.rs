@@ -222,9 +222,9 @@ fn capture(
     glass: impl Fn() -> RenderNode,
     whole: bool,
 ) -> (CapturedFrame, u64) {
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, whole.then_some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, whole.then_some("1"));
     let frame = support::capture_graph(renderer, page(glass()), FRAME_WIDTH, FRAME_HEIGHT);
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     let blur_pixels = renderer
         .last_frame_stats()
         .map_or(0, |stats| stats.blur_pixels);

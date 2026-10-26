@@ -30,10 +30,8 @@ const TEXT_SERVICE_CACHE_CAPACITY: usize = 8192;
 /// holds a whole visual style, and a screen laid out again at a new width
 /// every frame fills every entry with widths it never asks for again.
 const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
-const TEXT_LAYOUT_TELEMETRY_ENV: &str = "CRANPOSE_TEXT_LAYOUT_TELEMETRY";
-
 fn text_layout_telemetry_enabled() -> bool {
-    cranpose_core::env_flag!(TEXT_LAYOUT_TELEMETRY_ENV)
+    cranpose_core::DIAGNOSTICS.text_layout_telemetry.is_set()
 }
 
 /// Size of a laid-out text. Distances are in logical pixels.

@@ -733,16 +733,13 @@ pub(crate) fn lays_interiors_first(backend: wgpu::Backend) -> bool {
     !matches!(backend, wgpu::Backend::Gl | wgpu::Backend::BrowserWebGpu)
 }
 
-static NO_INTERIORS_FIRST: crate::debug_toggles::DebugToggle =
-    crate::debug_toggles::DebugToggle::new("CRANPOSE_NO_INTERIORS_FIRST");
-
 /// Whether a pass of `segments` lays its opaque interiors down in a depth
 /// pre-pass: one with an opaque fill worth laying down, unless it composites
 /// through a runtime shader, whose pipelines draw into passes without a
 /// depth buffer alone. A blit takes its place in the pass's order as glyphs
 /// and images do.
 fn takes_depth(segments: &[PassSegment<'_>]) -> bool {
-    !NO_INTERIORS_FIRST.equals("1")
+    !cranpose_core::DIAGNOSTICS.no_interiors_first.equals("1")
         && segments.iter().all(|segment| {
             segment
                 .composites

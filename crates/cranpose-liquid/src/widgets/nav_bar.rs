@@ -67,7 +67,7 @@ pub fn LiquidNavBar(
     let trailing = Rc::new(RefCell::new(trailing));
 
     let collapse_range = spec.collapse_range;
-    if !cranpose_core::env_flag!("CRANPOSE_DISABLE_NAV_SNAP") {
+    if !cranpose_core::DIAGNOSTICS.disable_nav_snap.is_set() {
         scroll.set_settle_policy(Some(large_title_settle_policy(collapse_range)));
     }
     let scroll_offset = scroll.value();

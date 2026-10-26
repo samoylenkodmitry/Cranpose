@@ -146,9 +146,9 @@ fn capture_both_ways(graph: impl Fn() -> RenderGraph) -> Option<(Capture, Captur
         }
     };
     let first = capture(&mut renderer);
-    cranpose_render_wgpu::set_debug_toggle(NO_INTERIORS_FIRST, Some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, Some("1"));
     let without = capture(&mut renderer);
-    cranpose_render_wgpu::set_debug_toggle(NO_INTERIORS_FIRST, None);
+    cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, None);
     Some((first, without))
 }
 

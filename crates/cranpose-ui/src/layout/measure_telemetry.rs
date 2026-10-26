@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Constraints;
 use web_time::Instant;
@@ -7,18 +5,11 @@ use web_time::Instant;
 use super::MeasuredNode;
 
 pub(super) fn layout_measure_telemetry_threshold_ms() -> Option<f64> {
-    static THRESHOLD_MS: OnceLock<Option<f64>> = OnceLock::new();
-    *THRESHOLD_MS.get_or_init(|| {
-        std::env::var("CRANPOSE_LAYOUT_MEASURE_TELEMETRY_MS")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .or_else(|| {
-                std::env::var_os("CRANPOSE_LAYOUT_MEASURE_TELEMETRY")
-                    .is_some()
-                    .then_some(4.0)
-            })
-    })
+    let diagnostics = &cranpose_core::DIAGNOSTICS;
+    diagnostics
+        .layout_measure_telemetry_ms
+        .threshold_ms()
+        .or_else(|| diagnostics.layout_measure_telemetry.is_set().then_some(4.0))
 }
 
 /// The stages of a layout pass that its telemetry times: start, repasses,

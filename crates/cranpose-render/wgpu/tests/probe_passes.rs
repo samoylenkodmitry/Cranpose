@@ -19,13 +19,13 @@ fn probed_against_plain(
     );
     record_mixed_scene(&mut scope);
     let graph = support::draw_run_graph(SIZE, scope);
-    cranpose_render_wgpu::set_debug_toggle(toggle, None);
+    cranpose_core::debug_toggles::set_debug_toggle(toggle, None);
     let plain = support::settled_capture(&mut renderer, &graph);
     let plain_stats = renderer.last_frame_stats().expect("stats");
-    cranpose_render_wgpu::set_debug_toggle(toggle, Some(count));
+    cranpose_core::debug_toggles::set_debug_toggle(toggle, Some(count));
     let probed = support::settled_capture(&mut renderer, &graph);
     let probed_stats = renderer.last_frame_stats().expect("stats");
-    cranpose_render_wgpu::set_debug_toggle(toggle, None);
+    cranpose_core::debug_toggles::set_debug_toggle(toggle, None);
     assert_eq!(
         probed_stats.pass_count,
         plain_stats.pass_count + extra_passes,

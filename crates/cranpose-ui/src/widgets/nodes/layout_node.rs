@@ -33,19 +33,16 @@ enum LayoutInvalidationDispatchDiag {
 }
 
 fn layout_invalidation_dispatch_diag() -> LayoutInvalidationDispatchDiag {
-    static MODE: std::sync::OnceLock<LayoutInvalidationDispatchDiag> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| {
-        let Some(value) = std::env::var_os("CRANPOSE_LAYOUT_INVALIDATION_DISPATCH_DIAG") else {
-            return LayoutInvalidationDispatchDiag::Disabled;
-        };
-        if value == "all" {
-            return LayoutInvalidationDispatchDiag::All;
-        }
-        value.to_string_lossy().parse::<NodeId>().map_or(
-            LayoutInvalidationDispatchDiag::Disabled,
-            LayoutInvalidationDispatchDiag::Node,
-        )
-    })
+    cranpose_core::DIAGNOSTICS
+        .layout_invalidation_dispatch_diag
+        .with(|value| match value {
+            None => LayoutInvalidationDispatchDiag::Disabled,
+            Some("all") => LayoutInvalidationDispatchDiag::All,
+            Some(value) => value.parse::<NodeId>().map_or(
+                LayoutInvalidationDispatchDiag::Disabled,
+                LayoutInvalidationDispatchDiag::Node,
+            ),
+        })
 }
 
 fn log_layout_invalidation_dispatch(

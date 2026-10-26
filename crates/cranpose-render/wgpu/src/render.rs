@@ -22,7 +22,6 @@ use crate::{
     ablation::Ablation,
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
-    debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, RunCalls, SegmentLayout,
         SourceContent, TrackedPass,
@@ -72,18 +71,16 @@ const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
 fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
-    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *THRESHOLD_MS.get_or_init(|| {
-        let explicit =
-            crate::debug_toggles::debug_toggle("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
-                .and_then(|value| value.parse::<f64>().ok())
-                .filter(|value| value.is_finite() && *value >= 0.0);
-        explicit.or_else(|| {
-            std::env::var_os("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY")
-                .is_some()
+    let diagnostics = &cranpose_core::DIAGNOSTICS;
+    diagnostics
+        .wgpu_render_stage_telemetry_ms
+        .threshold_ms()
+        .or_else(|| {
+            diagnostics
+                .wgpu_render_stage_telemetry
+                .is_set()
                 .then_some(DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS)
         })
-    })
 }
 
 pub(crate) fn instant_ms(start: Instant, end: Instant) -> f64 {
@@ -775,10 +772,8 @@ impl Uniforms {
     }
 }
 
-static SURVIVE_GPU_ERRORS: DebugToggle = DebugToggle::new("CRANPOSE_SURVIVE_GPU_ERRORS");
-
 fn survive_gpu_errors_enabled() -> bool {
-    !SURVIVE_GPU_ERRORS.equals("0")
+    !cranpose_core::DIAGNOSTICS.survive_gpu_errors.equals("0")
 }
 
 #[derive(Default)]
@@ -1305,11 +1300,9 @@ impl GpuRenderer {
         );
         let viewport_uniforms = ViewportUniforms::default();
 
-        static GLASS_MATERIAL_FOLDS: DebugToggle =
-            DebugToggle::new("CRANPOSE_GLASS_MATERIAL_FOLDS");
-        if GLASS_MATERIAL_FOLDS.equals("1") {
+        if cranpose_core::DIAGNOSTICS.glass_material_folds.equals("1") {
             cranpose_ui_graphics::set_glass_material_folds(true);
-        } else if GLASS_MATERIAL_FOLDS.equals("0") {
+        } else if cranpose_core::DIAGNOSTICS.glass_material_folds.equals("0") {
             cranpose_ui_graphics::set_glass_material_folds(false);
         }
         log::info!(

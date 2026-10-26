@@ -487,12 +487,12 @@ fn a_backdrop_that_moves_on_after_a_replay_takes_its_pin_with_it() {
 }
 
 fn never_cached_frame(harness: &mut GlassHarness, input: SceneInput) -> CapturedFrame {
-    cranpose_render_wgpu::set_debug_toggle(NO_BACKDROP_CACHE, Some("1"));
+    cranpose_core::debug_toggles::set_debug_toggle(NO_BACKDROP_CACHE, Some("1"));
     for _ in 0..warmup_frames() {
         harness.stats(input);
     }
     let (stats, frame) = harness.frame(input);
-    cranpose_render_wgpu::set_debug_toggle(NO_BACKDROP_CACHE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(NO_BACKDROP_CACHE, None);
     assert_eq!(
         stats.admissions, 0,
         "the reference must not cache backdrops: {stats:?}"

@@ -39,6 +39,9 @@ hot-reload = []
 std-hash = []
 internal = []
 inspection = []
+# The diagnostic and ablation switches of `diagnostics::DIAGNOSTICS`; without
+# it every switch reads as unset and the code behind it compiles out.
+diagnostics = []
 # The workspace's one answer to where a test writes real files.
 test-helpers = []
 

@@ -10,10 +10,6 @@ use std::{
     time::Duration,
 };
 
-use crate::debug_toggles::DebugToggle;
-
-static ENCODE_DELAY_MS: DebugToggle = DebugToggle::new("CRANPOSE_ENCODE_DELAY_MS");
-
 use crate::{
     frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
     render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
@@ -316,7 +312,7 @@ impl PresentState {
             return;
         };
         let after_acquire_ns = self.now();
-        if let Some(delay) = ENCODE_DELAY_MS.parse::<u64>() {
+        if let Some(delay) = cranpose_core::DIAGNOSTICS.encode_delay_ms.parse::<u64>() {
             std::thread::sleep(Duration::from_millis(delay));
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {

@@ -8,7 +8,6 @@ use cranpose_ui_graphics::{BlendMode, FxHasher, Rect};
 
 use super::{expand_rect, hash_run_item_with_clip, mask_rect};
 use crate::{
-    debug_toggles::DebugToggle,
     effect_renderer::RoundedCompositeMask,
     geometry::{DevicePixelBounds, anchored_device_rect, offscreen_byte_size},
     offscreen::OffscreenTarget,
@@ -19,10 +18,8 @@ const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
 
-static SKIP_SHADOWS: DebugToggle = DebugToggle::new("CRANPOSE_SKIP_SHADOWS");
-
 pub(super) fn skip_shadow_draws() -> bool {
-    SKIP_SHADOWS.flag()
+    cranpose_core::DIAGNOSTICS.skip_shadows.flag()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

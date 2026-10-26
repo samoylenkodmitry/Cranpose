@@ -441,9 +441,9 @@ fn cached_backdrop_uses_the_current_modulated_opacity() {
                 .layer_cache_hits
                 > 0
         );
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         let uncached = capture(&mut renderer, page(0.75));
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        cranpose_core::debug_toggles::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
         assert!(warm.pixels != changed.pixels, "opacity changes the picture");
         support::assert_same_bytes(
             "cached backdrop after opacity changes",

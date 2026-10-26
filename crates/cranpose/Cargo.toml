@@ -211,7 +211,11 @@ renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster", "dep:ash"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
 # ~0.7 MiB). On by default; drop via `default-features = false` if the app
 # uses only framework effects.
-robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cranpose-ui now always included)
+robot = ["cranpose-app-shell/test-support", "diagnostics"] # Enable robot testing support (cranpose-ui now always included)
+# The diagnostic and ablation switches (`cranpose_core::DIAGNOSTICS`): read
+# from `CRANPOSE_*` variables and, on Android, `debug.cranpose.*` properties.
+# Without it the switches read as unset and their code compiles out.
+diagnostics = ["cranpose-core/diagnostics"]
 # In-app purchases through StoreKit 2 on iOS/macOS, registered into
 # `cranpose_services::purchases`. Off by default: it links the StoreKit
 # framework and compiles a Swift shim, which an app that sells nothing should
@@ -796,7 +800,7 @@ muda = { version = "0.21.2", default-features = false, features = ["snapshot"], 
 cranpose-animation.workspace = true
 # Path-only dev-dep: stripped from the published manifest. Turns on the
 # workspace's shared test scratch directory for this crate's own tests.
-cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
+cranpose-core = { path = "../cranpose-core", features = ["test-helpers", "diagnostics"] }
 cranpose-runtime-std = { path = "../cranpose-runtime-std" }
 stats_alloc = "0.1.10"
 

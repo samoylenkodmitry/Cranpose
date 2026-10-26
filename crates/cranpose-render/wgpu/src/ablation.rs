@@ -1,7 +1,4 @@
-use cranpose_render_common::debug_toggles::DebugToggle;
 use cranpose_ui_graphics::{GLASS_DISPERSION_OFF_FLAG, GLASS_PHYSICAL_REFRACTION_OFF_FLAG};
-
-static ABLATE: DebugToggle = DebugToggle::new("CRANPOSE_ABLATE");
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct ShapeAblation {
@@ -39,7 +36,9 @@ pub(crate) struct Ablation {
 
 impl Ablation {
     pub(crate) fn current() -> Self {
-        ABLATE.with(|value| value.map_or_else(Self::default, Self::parse))
+        cranpose_core::DIAGNOSTICS
+            .ablate
+            .with(|value| value.map_or_else(Self::default, Self::parse))
     }
 
     fn parse(list: &str) -> Self {

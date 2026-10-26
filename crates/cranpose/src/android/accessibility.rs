@@ -58,12 +58,13 @@ fn system_options() -> cranpose_services::AccessibilityOptions {
 }
 
 fn accessibility_sync_override() -> Option<bool> {
-    static OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
-    *OVERRIDE.get_or_init(|| match std::env::var("CRANPOSE_A11Y_SYNC").as_deref() {
-        Ok("0" | "false" | "off") => Some(false),
-        Ok("1" | "true" | "on") => Some(true),
-        _ => None,
-    })
+    cranpose_core::DIAGNOSTICS
+        .a11y_sync
+        .with(|value| match value {
+            Some("0" | "false" | "off") => Some(false),
+            Some("1" | "true" | "on") => Some(true),
+            _ => None,
+        })
 }
 
 fn accessibility_bridge_enabled() -> bool {

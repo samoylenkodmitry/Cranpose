@@ -97,18 +97,16 @@ fn defer_window_redraw(
 }
 
 fn desktop_frame_telemetry_threshold_ms() -> Option<f64> {
-    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *THRESHOLD_MS.get_or_init(|| {
-        let explicit = std::env::var("CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0);
-        explicit.or_else(|| {
-            std::env::var_os("CRANPOSE_DESKTOP_FRAME_TELEMETRY")
-                .is_some()
+    let diagnostics = &cranpose_core::DIAGNOSTICS;
+    diagnostics
+        .desktop_frame_telemetry_ms
+        .threshold_ms()
+        .or_else(|| {
+            diagnostics
+                .desktop_frame_telemetry
+                .is_set()
                 .then_some(DEFAULT_DESKTOP_FRAME_TELEMETRY_THRESHOLD_MS)
         })
-    })
 }
 
 fn log_desktop_frame_telemetry(
@@ -3369,8 +3367,7 @@ pub(crate) struct PacingDiag {
 }
 
 fn pacing_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_PACING_DIAG").is_some())
+    cranpose_core::DIAGNOSTICS.pacing_diag.is_set()
 }
 
 fn record_pacing_event(counter: fn(&mut PacingDiag) -> &mut u32) {
@@ -4428,8 +4425,7 @@ fn native_window_position_poll_needed(
 }
 
 fn native_window_timing_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_WINDOW_TIMING").is_some())
+    cranpose_core::DIAGNOSTICS.native_window_timing.is_set()
 }
 
 #[expect(clippy::print_stdout, reason = "native window timing on request")]
@@ -4446,8 +4442,7 @@ fn timing_trace_clock() -> Instant {
 }
 
 fn native_window_trace_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some())
+    cranpose_core::DIAGNOSTICS.native_trace.is_set()
 }
 
 #[expect(clippy::print_stdout, reason = "CRANPOSE_NATIVE_TRACE asks for it")]

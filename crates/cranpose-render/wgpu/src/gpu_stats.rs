@@ -4,7 +4,7 @@ use cranpose_render_common::raster_cache::{
 };
 use cranpose_ui_graphics::Rect;
 
-use crate::{debug_toggles::DebugToggle, frame_graph::FrameCommandStats, run_geometry::ShapeFill};
+use crate::{frame_graph::FrameCommandStats, run_geometry::ShapeFill};
 
 /// A diagnostics line: logcat on Android, where nothing reads stderr, and
 /// stderr elsewhere.
@@ -473,10 +473,8 @@ impl FrameStatsSnapshot {
     }
 }
 
-static GPU_STATS: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STATS");
-
 pub(crate) fn gpu_stats_enabled() -> bool {
-    GPU_STATS.flag()
+    cranpose_core::DIAGNOSTICS.gpu_stats.flag()
 }
 
 pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
@@ -505,10 +503,8 @@ pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
     );
 }
 
-static SHADOW_CACHE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_SHADOW_CACHE_DIAG");
-
 fn shadow_cache_diagnostics_enabled() -> bool {
-    SHADOW_CACHE_DIAG.flag()
+    cranpose_core::DIAGNOSTICS.gpu_shadow_cache_diag.flag()
 }
 
 fn by_kind_display<T: Copy + Default + PartialEq>(

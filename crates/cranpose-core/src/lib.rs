@@ -42,6 +42,7 @@ mod computed_state;
 pub mod concurrency;
 mod debug_trace;
 mod disposable_effect;
+pub use diagnostics::{DIAGNOSTICS, Diagnostic, Diagnostics};
 #[cfg(test)]
 pub(crate) use disposable_effect::DisposableEffectState;
 pub use disposable_effect::{
@@ -55,7 +56,8 @@ pub use event_dispatch::{
     EventHandlerScopeGuard, dispatch_ui_event, enter_event_handler_scope, in_applied_snapshot,
     in_event_handler, run_in_mutable_snapshot,
 };
-pub mod env_flags;
+pub mod debug_toggles;
+pub mod diagnostics;
 #[cfg(any(feature = "internal", test))]
 mod frame_clock;
 mod hooks;

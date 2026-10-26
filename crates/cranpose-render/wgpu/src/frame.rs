@@ -24,7 +24,6 @@ use crate::{
     collect::{
         ChildLayer, LayerScene, in_place_content_scale, similarity_scale, uniform_scale_translation,
     },
-    debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
         SourceContent, op_draw_bounds, segment_draws_anything,
@@ -622,7 +621,7 @@ fn composite_z(composite: &ResolvedComposite) -> usize {
 }
 
 fn backdrop_cache_keys_use_pending(pass: &LayerPass<'_>) -> bool {
-    !NO_BACKDROP_CACHE.flag()
+    !cranpose_core::DIAGNOSTICS.no_backdrop_cache.flag()
         && matches!(pass.beneath.base, wgpu::LoadOp::Clear(_))
         && pass
             .beneath
@@ -996,23 +995,17 @@ impl PendingBackdrop<'_> {
     }
 }
 
-static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
-static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
-static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
 const ABLATION_LOG_PERIOD: u32 = 600;
-static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
-static PROBE_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_PASSES");
-static PROBE_DRAW_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_DRAW_PASSES");
 
 fn declared_support(support: Option<Rect>) -> Option<Rect> {
-    if NO_EFFECT_DOMAINS.flag() {
+    if cranpose_core::DIAGNOSTICS.no_effect_domains.flag() {
         return None;
     }
     support
 }
 
 fn declared_domain(domain: Option<Rect>) -> Option<Rect> {
-    if NO_EFFECT_DOMAINS.flag() {
+    if cranpose_core::DIAGNOSTICS.no_effect_domains.flag() {
         return None;
     }
     domain
@@ -1041,7 +1034,7 @@ fn child_composite_support(
 }
 
 fn stage_diagnostics_enabled() -> bool {
-    STAGE_DIAG.flag()
+    cranpose_core::DIAGNOSTICS.gpu_stage_diag.flag()
 }
 
 fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
@@ -2521,7 +2514,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 &beneath,
             )?;
         }
-        for _ in 0..PROBE_PASSES.parse::<u32>().unwrap_or(0) {
+        for _ in 0..cranpose_core::DIAGNOSTICS
+            .probe_passes
+            .parse::<u32>()
+            .unwrap_or(0)
+        {
             self.renderer.empty_pass(
                 self.recorder,
                 "Probe Pass",
@@ -2535,7 +2532,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     }
 
     fn probe_draw_passes(&mut self, page: &Page, root_scale: f32) -> Result<(), String> {
-        let count = PROBE_DRAW_PASSES.parse::<u32>().unwrap_or(0);
+        let count = cranpose_core::DIAGNOSTICS
+            .probe_draw_passes
+            .parse::<u32>()
+            .unwrap_or(0);
         if count == 0 {
             return Ok(());
         }
@@ -3055,7 +3055,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
         first_in_place_z: usize,
     ) -> Result<Option<Range<u32>>, String> {
-        if NO_FILL_CACHE.flag() {
+        if cranpose_core::DIAGNOSTICS.no_fill_cache.flag() {
             return Ok(None);
         }
         let page_size = (pass.page.texture.width, pass.page.texture.height);

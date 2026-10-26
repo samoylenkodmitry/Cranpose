@@ -1,5 +1,5 @@
 pub(super) fn telemetry_enabled() -> bool {
-    cranpose_core::env_flag!("CRANPOSE_LAZY_MEASURE_TELEMETRY")
+    cranpose_core::DIAGNOSTICS.lazy_measure_telemetry.is_set()
 }
 
 #[cfg(test)]

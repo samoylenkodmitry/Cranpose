@@ -5,14 +5,6 @@ use std::sync::{Arc, OnceLock};
 use crate::lazy_resource::LazyGpuResource;
 
 #[cfg(not(target_arch = "wasm32"))]
-static NO_SHADER_FOLD: crate::debug_toggles::DebugToggle =
-    crate::debug_toggles::DebugToggle::new("CRANPOSE_NO_SHADER_FOLD");
-
-#[cfg(not(target_arch = "wasm32"))]
-static NO_SHADER_FLATTEN: crate::debug_toggles::DebugToggle =
-    crate::debug_toggles::DebugToggle::new("CRANPOSE_NO_SHADER_FLATTEN");
-
-#[cfg(not(target_arch = "wasm32"))]
 static STAGES_FOLDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -209,7 +201,7 @@ impl SharedShader {
     ) -> Stages<'c> {
         #[cfg(not(target_arch = "wasm32"))]
         if !constants.is_empty()
-            && !NO_SHADER_FOLD.equals("1")
+            && !cranpose_core::DIAGNOSTICS.no_shader_fold.equals("1")
             && let Some((vertex, fragment)) = self
                 .folded(naga::ShaderStage::Vertex, vertex, constants)
                 .zip(self.folded(naga::ShaderStage::Fragment, fragment, constants))
@@ -264,7 +256,7 @@ impl SharedShader {
         constants: &[(&str, f64)],
     ) -> Option<wgpu::ShaderModule> {
         let mut module = self.specialized(stage, entry, constants)?;
-        if !NO_SHADER_FLATTEN.equals("1") {
+        if !cranpose_core::DIAGNOSTICS.no_shader_flatten.equals("1") {
             match crate::shader_flatten::flatten(&mut module) {
                 Ok(()) => {
                     naga::compact::compact(&mut module, naga::compact::KeepUnused::No);

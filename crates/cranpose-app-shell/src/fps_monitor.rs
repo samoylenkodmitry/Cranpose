@@ -6,8 +6,7 @@ const FRAME_HISTORY_SIZE: usize = 60;
 const EVENT_DRIVEN_IDLE_GAP_MS: f32 = 50.0;
 
 fn recomposition_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_RECOMP_DIAG").is_some())
+    cranpose_core::DIAGNOSTICS.recomp_diag.is_set()
 }
 
 fn recomposition_diagnostic_line(rate: u64, frames_per_second: f32, total: u64) -> String {

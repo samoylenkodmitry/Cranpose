@@ -18,9 +18,9 @@ fn capture_under(
     graph: &RenderGraph,
     switch: Option<&str>,
 ) -> Vec<u8> {
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, switch);
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, switch);
     let pixels = support::settled_capture(renderer, graph);
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
+    cranpose_core::debug_toggles::set_debug_toggle(TOGGLE, None);
     pixels
 }
 

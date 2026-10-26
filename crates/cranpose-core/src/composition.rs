@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
-    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, ConcreteApplierHost,
+    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, ConcreteApplierHost, DIAGNOSTICS,
     DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, RetentionPolicy, Runtime,
     RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
     collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
@@ -99,7 +99,7 @@ impl<A: Applier + 'static> Composition<A> {
 
     #[expect(clippy::print_stderr, reason = "COMPOSE_DEBUG_SLOT_TABLE asks for it")]
     fn maybe_dump_slot_table(&self, label: &str) {
-        if !crate::env_flag!("COMPOSE_DEBUG_SLOT_TABLE") {
+        if !DIAGNOSTICS.compose_debug_slot_table.is_set() {
             return;
         }
         eprintln!(
@@ -504,7 +504,7 @@ impl<A: Applier + 'static> Composition<A> {
             while host_group_index < scope_groups.len() {
                 let (host, scopes) = &scope_groups[host_group_index];
                 let scope_telemetry_threshold_ms =
-                    crate::env_threshold_ms!("CRANPOSE_RECOMPOSE_SCOPE_TELEMETRY_MS");
+                    DIAGNOSTICS.recompose_scope_telemetry_ms.threshold_ms();
                 let shared_state = host
                     .runtime_state()
                     .or_else(|| scopes.first().and_then(RecomposeScope::slots_runtime_state))

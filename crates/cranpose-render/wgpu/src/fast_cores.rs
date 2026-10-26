@@ -17,7 +17,7 @@ mod imp {
     use std::path::Path;
 
     pub(super) fn pin(role: &str) {
-        if std::env::var("CRANPOSE_CORE_PIN").is_ok_and(|value| value.trim() == "0") {
+        if cranpose_core::DIAGNOSTICS.core_pin.parse::<u8>() == Some(0) {
             log::info!("[core-pin] {role}: disabled by CRANPOSE_CORE_PIN=0");
             return;
         }
