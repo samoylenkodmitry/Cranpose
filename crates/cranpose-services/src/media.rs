@@ -1320,7 +1320,8 @@ fn non_empty_path(text: &str) -> Option<PathBuf> {
 
 pub use crate::media_source::{MediaSourceHandle, MediaSourceOpener, MediaSourceOpenerRef};
 
-static PLATFORM_MEDIA_SOURCE: ServiceRegistry<dyn MediaSourceOpener> = ServiceRegistry::new();
+pub(crate) static PLATFORM_MEDIA_SOURCE: ServiceRegistry<dyn MediaSourceOpener> =
+    ServiceRegistry::new();
 
 /// Installs the platform media source opener, replacing any previous one.
 pub fn set_platform_media_source_opener(opener: MediaSourceOpenerRef) {
