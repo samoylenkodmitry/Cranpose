@@ -43,6 +43,7 @@ pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
 pub use frame_rate_boost::FrameRateBoost;
+use shell_frame::Composed;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
@@ -1421,9 +1422,7 @@ where
             self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
             stages.reached();
             let should_render = self.app.composition.should_recompose();
-            let mut reconcile_attempted = false;
-            let mut reconcile_changed = false;
-            if should_render {
+            let composed = if should_render {
                 log::trace!(
                     target: "cranpose::input",
                     "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
@@ -1431,19 +1430,19 @@ where
                     self.surfaces[0].scene_dirty,
                     self.surfaces[0].is_dirty
                 );
-                (reconcile_attempted, reconcile_changed) = self.reconcile_in_context();
-            }
+                self.compose_phase()
+            } else {
+                Composed::SKIPPED
+            };
             stages.reached();
-            let result = self.process_frame_in_context(reconcile_changed);
+            let outcome = UpdateOutcome {
+                should_render,
+                reconcile_attempted: composed.attempted(),
+                reconcile_changed: composed.recomposed(),
+            };
+            let result = self.process_frame_in_context(composed);
             stages.reached();
-            log_update_stage_telemetry(
-                &stages,
-                UpdateOutcome {
-                    should_render,
-                    reconcile_attempted,
-                    reconcile_changed,
-                },
-            );
+            log_update_stage_telemetry(&stages, outcome);
             self.clear_surface_dirt();
             result
         })
@@ -1493,44 +1492,6 @@ where
                     platform_time_ms: Some((frame_time / 1_000_000).min(i64::MAX as u64) as i64),
                     animation_time_nanos: frame_time,
                 });
-            }
-        }
-    }
-
-    fn reconcile_in_context(&mut self) -> (bool, bool) {
-        let Some(root_key) = self.app.composition.root_key() else {
-            return (false, false);
-        };
-        match self
-            .app
-            .composition
-            .reconcile(root_key, &mut *self.app.content)
-        {
-            Ok(changed) => {
-                log::trace!(
-                    target: "cranpose::input",
-                    "reconcile changed={changed}"
-                );
-                if changed {
-                    self.app.fps_monitor.record_recomposition();
-                    if self.app.composition_tree_needs_layout() {
-                        self.app.request_layout_pass();
-                    }
-                    request_render_invalidation();
-                }
-                (true, changed)
-            }
-            Err(NodeError::Missing { id }) => {
-                log::debug!("Recomposition skipped: node {id} no longer exists");
-                self.app.request_layout_pass();
-                request_render_invalidation();
-                (true, false)
-            }
-            Err(err) => {
-                log::error!("recomposition failed: {err}");
-                self.app.request_layout_pass();
-                request_render_invalidation();
-                (true, false)
             }
         }
     }

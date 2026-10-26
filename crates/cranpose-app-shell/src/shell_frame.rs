@@ -1,117 +1,52 @@
 use super::*;
 
 mod dev_overlay;
+mod frame_telemetry;
 use dev_overlay::draw_dev_overlay;
+use frame_telemetry::{
+    FrameStages, RenderPhaseDirtyDiagnostics, frame_stage_telemetry_threshold_ms,
+    log_frame_stage_telemetry, log_render_phase_dirty_diagnostics,
+    render_phase_dirty_diagnostics_enabled,
+};
 
-const DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
+// A frame runs its phases in order: composition, layout, render. Each phase
+// takes the token of the phase before it, and only that phase makes its
+// token, so a frame that renders before it lays out does not compile.
+
+// What composition left for the frame.
+pub(crate) struct Composed {
+    attempted: bool,
+    recomposed: bool,
+}
+
+impl Composed {
+    // A frame that starts without composition.
+    pub(crate) const SKIPPED: Self = Self {
+        attempted: false,
+        recomposed: false,
+    };
+
+    // Whether composition reconciled the tree.
+    pub(crate) fn attempted(&self) -> bool {
+        self.attempted
+    }
+
+    // Whether the reconcile changed anything.
+    pub(crate) fn recomposed(&self) -> bool {
+        self.recomposed
+    }
+}
+
+// The tree laid out after composition, and whether the frame recomposed
+// before or during layout.
+struct LaidOut {
+    recomposed: bool,
+}
 
 #[derive(Copy, Clone, Debug)]
 enum DispatchInvalidationKind {
     Pointer,
     Focus,
-}
-
-fn frame_stage_telemetry_threshold_ms() -> Option<f64> {
-    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *THRESHOLD_MS.get_or_init(|| {
-        let explicit = std::env::var("CRANPOSE_FRAME_STAGE_TELEMETRY_MS")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0);
-        explicit.or_else(|| {
-            std::env::var_os("CRANPOSE_FRAME_STAGE_TELEMETRY")
-                .is_some()
-                .then_some(DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS)
-        })
-    })
-}
-
-/// The stages of a frame that its telemetry times: start, initial layout,
-/// post-layout recomposition, dispatch and render.
-type FrameStages = cranpose_core::StageTimes<5>;
-
-fn log_frame_stage_telemetry(stages: &FrameStages) {
-    let Some(threshold_ms) = frame_stage_telemetry_threshold_ms() else {
-        return;
-    };
-    let Some(
-        [
-            frame_start,
-            after_initial_layout,
-            after_layout,
-            after_dispatch,
-            after_render,
-        ],
-    ) = stages.times()
-    else {
-        return;
-    };
-    let ms = cranpose_core::stage_ms;
-    let total_ms = ms(frame_start, after_render);
-    if total_ms < threshold_ms {
-        return;
-    }
-    log::warn!(
-        "[frame-stage-telemetry] total_ms={total_ms:.2} layout_ms={:.2} initial_layout_ms={:.2} post_layout_ms={:.2} dispatch_ms={:.2} scene_ms={:.2}",
-        ms(frame_start, after_layout),
-        ms(frame_start, after_initial_layout),
-        ms(after_initial_layout, after_layout),
-        ms(after_layout, after_dispatch),
-        ms(after_dispatch, after_render),
-    );
-}
-
-fn render_phase_dirty_diagnostics_enabled() -> bool {
-    cranpose_core::env_flag!("CRANPOSE_RENDER_PHASE_DIRTY_DIAG")
-}
-
-struct RenderPhaseDirtyDiagnostics<'a> {
-    render_dirty: bool,
-    pointer_dirty: bool,
-    scene_dirty: bool,
-    draw_repass_pending: bool,
-    draw_dirty_nodes: usize,
-    layer_property_nodes: usize,
-    layout_dirty_nodes: usize,
-    moved_nodes: usize,
-    structural_dirty_nodes: usize,
-    scene_updates: usize,
-    dirty_node_ids: Option<String>,
-    render_only_dirty: bool,
-    recomposed_this_frame: bool,
-    path: &'a str,
-}
-
-fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'_>) {
-    if !render_phase_dirty_diagnostics_enabled() {
-        return;
-    }
-
-    let RenderPhaseDirtyDiagnostics {
-        render_dirty,
-        pointer_dirty,
-        scene_dirty,
-        draw_repass_pending,
-        draw_dirty_nodes,
-        layer_property_nodes,
-        layout_dirty_nodes,
-        moved_nodes,
-        structural_dirty_nodes,
-        scene_updates,
-        dirty_node_ids,
-        render_only_dirty,
-        recomposed_this_frame,
-        path,
-    } = diagnostics;
-    if let Some(dirty_node_ids) = dirty_node_ids {
-        log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} scene_updates={scene_updates} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
-        );
-    } else {
-        log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} moved_nodes={moved_nodes} structural_dirty_nodes={structural_dirty_nodes} scene_updates={scene_updates} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
-        );
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -386,25 +321,60 @@ where
 
     pub(crate) fn process_frame(&mut self) -> FrameUpdateResult {
         let _app_context = self.app.app_context.enter_scope();
-        self.process_frame_in_context(false)
+        self.process_frame_in_context(Composed::SKIPPED)
     }
 
-    pub(crate) fn process_frame_in_context(
-        &mut self,
-        recomposed_before_frame: bool,
-    ) -> FrameUpdateResult {
+    // Composition, the first phase of a frame: recomposes the invalid scopes.
+    pub(crate) fn compose_phase(&mut self) -> Composed {
+        let Some(root_key) = self.app.composition.root_key() else {
+            return Composed::SKIPPED;
+        };
+        let recomposed = match self
+            .app
+            .composition
+            .reconcile(root_key, &mut *self.app.content)
+        {
+            Ok(changed) => {
+                log::trace!(
+                    target: "cranpose::input",
+                    "reconcile changed={changed}"
+                );
+                if changed {
+                    self.app.fps_monitor.record_recomposition();
+                    if self.app.composition_tree_needs_layout() {
+                        self.app.request_layout_pass();
+                    }
+                    request_render_invalidation();
+                }
+                changed
+            }
+            Err(NodeError::Missing { id }) => {
+                log::debug!("Recomposition skipped: node {id} no longer exists");
+                self.app.request_layout_pass();
+                request_render_invalidation();
+                false
+            }
+            Err(err) => {
+                log::error!("recomposition failed: {err}");
+                self.app.request_layout_pass();
+                request_render_invalidation();
+                false
+            }
+        };
+        Composed {
+            attempted: true,
+            recomposed,
+        }
+    }
+
+    pub(crate) fn process_frame_in_context(&mut self, composed: Composed) -> FrameUpdateResult {
         let mut stages = FrameStages::start(frame_stage_telemetry_threshold_ms().is_some());
 
         self.app.app_context.start_text_frame();
         #[cfg(feature = "installed-fonts")]
         self.apply_installed_fonts();
         self.sync_window_roots_in_context();
-        self.run_layout_phase_in_context();
-        stages.reached();
-
-        let recomposed_this_frame = recomposed_before_frame || self.run_post_layout_recomposition();
-
-        stages.reached();
+        let laid_out = self.lay_out(composed, &mut stages);
 
         self.run_dispatch_queues();
         self.update_modal_focus();
@@ -416,7 +386,7 @@ where
             .app_context
             .clear_transient_scroll_motion_contexts();
 
-        let result = self.run_render_phase_in_context(recomposed_this_frame);
+        let result = self.run_render_phase_in_context(laid_out);
         stages.reached();
         log_frame_stage_telemetry(&stages);
         result
@@ -604,6 +574,20 @@ where
         );
     }
 
+    // Layout, the second phase: lays out what composition left, then
+    // recomposes the scopes the layout pass invalidated and lays those out.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a phase takes the token of the phase before it, which only that phase makes"
+    )]
+    fn lay_out(&mut self, composed: Composed, stages: &mut FrameStages) -> LaidOut {
+        self.run_layout_phase_in_context();
+        stages.reached();
+        let recomposed = composed.recomposed || self.run_post_layout_recomposition();
+        stages.reached();
+        LaidOut { recomposed }
+    }
+
     fn run_post_layout_recomposition(&mut self) -> bool {
         self.app.composition.should_recompose() && self.recompose_after_layout()
     }
@@ -718,10 +702,16 @@ where
     #[cfg(test)]
     pub(crate) fn run_render_phase(&mut self) -> FrameUpdateResult {
         let _app_context = self.app.app_context.enter_scope();
-        self.run_render_phase_in_context(false)
+        let laid_out = self.lay_out(Composed::SKIPPED, &mut FrameStages::start(false));
+        self.run_render_phase_in_context(laid_out)
     }
 
-    fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {
+    // Render, the last phase: draws what layout placed.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a phase takes the token of the phase before it, which only that phase makes"
+    )]
+    fn run_render_phase_in_context(&mut self, laid_out: LaidOut) -> FrameUpdateResult {
         let inspector_revision = if self.app.inspector_projector.is_some()
             && self
                 .surfaces
@@ -790,7 +780,7 @@ where
             pointer_dirty,
             attributed,
             layer_properties_pending,
-            recomposed_this_frame,
+            recomposed_this_frame: laid_out.recomposed,
         };
 
         let mut result = FrameUpdateResult::default();

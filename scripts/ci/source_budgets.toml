@@ -11,7 +11,7 @@ source_text_checks = 341
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 291
+"bool-parameter" = 290
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 11
 "get-prefix" = 133
@@ -43,8 +43,8 @@ limit = 1000
 "apps/desktop-demo/src/app/wsz/mod.rs" = 1966
 "apps/desktop-demo/src/test_screens/compose_twin_matrix.rs" = 5083
 "crates/cranpose-animation/src/animation.rs" = 1200
-"crates/cranpose-app-shell/src/lib.rs" = 1570
-"crates/cranpose-app-shell/src/shell_frame.rs" = 1229
+"crates/cranpose-app-shell/src/lib.rs" = 1531
+"crates/cranpose-app-shell/src/shell_frame.rs" = 1219
 "crates/cranpose-app-shell/src/shell_input.rs" = 2342
 "crates/cranpose-capabilities/src/lib.rs" = 1069
 "crates/cranpose-core/src/composer.rs" = 2740
