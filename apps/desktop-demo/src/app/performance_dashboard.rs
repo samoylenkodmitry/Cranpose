@@ -8,6 +8,7 @@ use cranpose_core::{self, MutableState};
 use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
+    text::FontWeight,
     widgets::{FlowRow, FlowSpec},
     Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Canvas, Color, Column, ColumnSpec,
     DrawScope, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec, ScrollState,
@@ -555,7 +556,7 @@ fn Message(palette: Palette, text: String) {
             Text(
                 text.clone(),
                 Modifier::empty(),
-                text_style(15.0, palette.muted, false),
+                text_style(15.0, palette.muted, None),
             );
         },
     );
@@ -592,7 +593,7 @@ pub fn PerformanceDashboard(
                     Text(
                         "No nightly run has been published yet.",
                         Modifier::empty(),
-                        text_style(14.0, palette.muted, false),
+                        text_style(14.0, palette.muted, None),
                     );
                 }
             }
@@ -621,14 +622,14 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                     Text(
                         "Performance",
                         Modifier::empty(),
-                        text_style(22.0, palette.text, true),
+                        text_style(22.0, palette.text, Some(FontWeight::BOLD)),
                     );
                     Text(
                         "Measured from outside each app, from its launch, over the same span \
                          for every framework. First start: the first launch after install. \
                          Second start: the launch after it.",
                         Modifier::empty(),
-                        text_style(13.0, palette.muted, false),
+                        text_style(13.0, palette.muted, None),
                     );
                     Text(
                         format!(
@@ -638,7 +639,7 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                              highest. Bars: medians over the run, best first."
                         ),
                         Modifier::empty(),
-                        text_style(12.0, palette.muted, false),
+                        text_style(12.0, palette.muted, None),
                     );
                 },
             );
@@ -654,7 +655,7 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                         Text(
                             "Refresh",
                             Modifier::empty(),
-                            text_style(13.0, Color::WHITE, true),
+                            text_style(13.0, Color::WHITE, Some(FontWeight::BOLD)),
                         );
                     },
                 );
@@ -676,7 +677,7 @@ fn Card(palette: Palette, title: String, content: impl Fn() + 'static) {
             Text(
                 title.clone(),
                 Modifier::empty(),
-                text_style(16.0, palette.text, true),
+                text_style(16.0, palette.text, Some(FontWeight::BOLD)),
             );
             content();
         },
@@ -719,7 +720,7 @@ fn LatestNightly(
             "Main's median over the release's. Green: main is better; red: worse; amber: not \
              settled within four pairs of legs; ⚠: a second run confirmed it.",
             Modifier::empty(),
-            text_style(12.0, palette.muted, false),
+            text_style(12.0, palette.muted, None),
         );
         RunView(
             palette,
@@ -787,7 +788,7 @@ fn Trend(palette: Palette, nightly: Rc<Vec<PerfRun>>, scenario: MutableState<Str
         Text(
             measured.about(),
             Modifier::empty(),
-            text_style(12.0, palette.muted, false),
+            text_style(12.0, palette.muted, None),
         );
     });
 }
@@ -805,7 +806,7 @@ fn Swatch(palette: Palette, label: &'static str, color: Color) {
             Text(
                 label,
                 Modifier::empty(),
-                text_style(12.0, palette.muted, false),
+                text_style(12.0, palette.muted, None),
             );
         },
     );
@@ -904,7 +905,7 @@ fn Chips(
                                     } else {
                                         palette.text
                                     },
-                                    highlighted,
+                                    highlighted.then_some(FontWeight::BOLD),
                                 ),
                             );
                         }
@@ -987,7 +988,7 @@ fn LineChart(
                 Text(
                     date.clone(),
                     Modifier::empty(),
-                    text_style(11.0, palette.muted, false),
+                    text_style(11.0, palette.muted, None),
                 );
             }
         },
@@ -1356,13 +1357,13 @@ fn LaunchChart(
         Text(
             why,
             Modifier::empty(),
-            text_style(12.0, palette.muted, false),
+            text_style(12.0, palette.muted, None),
         );
         return;
     }
     if let Some((note, failed)) = frames_note(&frames) {
         let color = if failed { palette.worse } else { palette.muted };
-        Text(note, Modifier::empty(), text_style(12.0, color, false));
+        Text(note, Modifier::empty(), text_style(12.0, color, None));
         return;
     }
     let curves = match &frames {
@@ -1379,7 +1380,7 @@ fn LaunchChart(
                 "No launch of this start kept samples of it: runs before the sampler have none."
             },
             Modifier::empty(),
-            text_style(12.0, palette.muted, false),
+            text_style(12.0, palette.muted, None),
         );
         return;
     }
@@ -1410,7 +1411,7 @@ fn LaunchChart(
                         format!("{ms:.0}")
                     },
                     Modifier::empty(),
-                    text_style(11.0, palette.muted, false),
+                    text_style(11.0, palette.muted, None),
                 );
             }
         },
@@ -1494,7 +1495,7 @@ fn Plot(palette: Palette, top: f64, step: f64, draw: impl Fn(&mut dyn DrawScope)
                         format!("{value:.0}")
                     },
                     Modifier::empty().offset(2.0, y.max(0.0)),
-                    text_style(10.0, palette.muted, false),
+                    text_style(10.0, palette.muted, None),
                 );
             }
         },
@@ -1582,7 +1583,7 @@ fn SubjectBar(
         move || {
             Dot(color);
             let name = Modifier::empty().weight(0.44);
-            let style = text_style(12.0, palette.text, emphasized);
+            let style = text_style(12.0, palette.text, emphasized.then_some(FontWeight::BOLD));
             match url.clone() {
                 Some(url) => {
                     let uri_handler = Rc::clone(&uri_handler);
@@ -1609,7 +1610,7 @@ fn SubjectBar(
                         TextWithOptions(
                             value.clone(),
                             Modifier::empty().fill_max_width().padding_horizontal(4.0),
-                            text_style(11.0, palette.muted, false),
+                            text_style(11.0, palette.muted, None),
                             TextOptions {
                                 overflow: TextOverflow::Ellipsis,
                                 max_lines: Some(1),
@@ -1650,7 +1651,7 @@ fn SubjectBar(
                     Text(
                         value.clone(),
                         Modifier::empty().padding_horizontal(9.0),
-                        text_style(11.5, palette.text, true),
+                        text_style(11.5, palette.text, Some(FontWeight::BOLD)),
                     );
                 },
             );
@@ -1696,7 +1697,7 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
         Text(
             metric.get().about(),
             Modifier::empty(),
-            text_style(12.0, palette.muted, false),
+            text_style(12.0, palette.muted, None),
         );
     });
 }

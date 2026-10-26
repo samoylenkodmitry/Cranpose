@@ -33,11 +33,11 @@ fn PulseModel(period_ms: u64, label: &'static str) -> PulseSample {
     PulseSample { value: pulse }
 }
 
-fn text_color(color: Color, bold: bool) -> TextStyle {
+fn text_color(color: Color, font_weight: Option<FontWeight>) -> TextStyle {
     TextStyle {
         span_style: SpanStyle {
             color: Some(color),
-            font_weight: bold.then_some(FontWeight::BOLD),
+            font_weight,
             ..Default::default()
         },
         ..Default::default()
@@ -59,7 +59,7 @@ pub(crate) fn AnimationsTab() {
     let scale = PulseModel(700, "scale_bounce");
 
     let palette = DemoPalette::current();
-    let section_style = text_color(palette.text, true);
+    let section_style = text_color(palette.text, Some(FontWeight::BOLD));
 
     ThemedPage(palette, 16.0, 16.0, move || {
         let pulse_value = pulse.value;
@@ -90,7 +90,7 @@ pub(crate) fn AnimationsTab() {
                             Text(
                                 format!("Alpha {alpha:.2}"),
                                 Modifier::empty(),
-                                text_color(palette.text, false),
+                                text_color(palette.text, None),
                             );
                         },
                     );
@@ -128,7 +128,7 @@ pub(crate) fn AnimationsTab() {
                             Text(
                                 format!("Offset {offset_x:.1}"),
                                 Modifier::empty(),
-                                text_color(palette.text, false),
+                                text_color(palette.text, None),
                             );
                         },
                     );
@@ -177,7 +177,7 @@ pub(crate) fn AnimationsTab() {
                             Text(
                                 "Animation sampled inside graphics_layer",
                                 Modifier::empty(),
-                                text_color(palette.text, false),
+                                text_color(palette.text, None),
                             );
                         },
                     );
@@ -213,7 +213,7 @@ pub(crate) fn AnimationsTab() {
                                 Text(
                                     "Static item: ready",
                                     Modifier::empty(),
-                                    text_color(palette.muted, false),
+                                    text_color(palette.muted, None),
                                 );
                             });
 
@@ -223,7 +223,7 @@ pub(crate) fn AnimationsTab() {
                                 Text(
                                     format!("Lazy Pulse: {display}"),
                                     Modifier::empty(),
-                                    text_color(palette.text, true),
+                                    text_color(palette.text, Some(FontWeight::BOLD)),
                                 );
                             });
 
@@ -231,7 +231,7 @@ pub(crate) fn AnimationsTab() {
                                 Text(
                                     "Static item: complete",
                                     Modifier::empty(),
-                                    text_color(palette.muted, false),
+                                    text_color(palette.muted, None),
                                 );
                             });
                         },

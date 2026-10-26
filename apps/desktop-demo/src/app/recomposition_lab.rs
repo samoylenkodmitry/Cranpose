@@ -2,8 +2,8 @@ use std::cell::Cell;
 
 use cranpose_core::{self, MutableState};
 use cranpose_ui::{
-    composable, BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec, Column,
-    ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
+    composable, text::FontWeight, BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec,
+    Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
 };
 
 use super::{
@@ -23,15 +23,15 @@ fn next_instance() -> u32 {
 }
 
 fn title_style() -> TextStyle {
-    text_style(22.0, DemoPalette::current().text, true)
+    text_style(22.0, DemoPalette::current().text, Some(FontWeight::BOLD))
 }
 
 fn label_style() -> TextStyle {
-    text_style(14.0, DemoPalette::current().text, false)
+    text_style(14.0, DemoPalette::current().text, None)
 }
 
 fn counter_style() -> TextStyle {
-    text_style(12.0, DemoPalette::current().positive, false)
+    text_style(12.0, DemoPalette::current().positive, None)
 }
 
 #[composable]

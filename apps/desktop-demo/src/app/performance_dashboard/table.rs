@@ -1,9 +1,10 @@
-//! The nightly table of the Performance tab.
+// The nightly table of the Performance tab.
 
 use std::rc::Rc;
 
 use cranpose_ui::{
-    composable, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text,
+    composable, text::FontWeight, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row,
+    RowSpec, Text,
 };
 
 use super::{figure, text_style, Palette, PerfRun};
@@ -81,13 +82,17 @@ fn TableRow(palette: Palette, cells: Vec<TableCell>, header: bool) {
                         Text(
                             cell.text.clone(),
                             Modifier::empty(),
-                            text_style(13.0, cell.color, header || index == 0),
+                            text_style(
+                                13.0,
+                                cell.color,
+                                (header || index == 0).then_some(FontWeight::BOLD),
+                            ),
                         );
                         if let Some(under) = cell.under.clone() {
                             Text(
                                 under,
                                 Modifier::empty(),
-                                text_style(11.0, palette.muted, false),
+                                text_style(11.0, palette.muted, None),
                             );
                         }
                     },
