@@ -5,14 +5,9 @@ use cranpose::{
     Color, Modifier, Size,
 };
 
-/// The striped ground a glass runner puts its control on.
-///
-/// Vertical bars of alternating luminance: glass that refracts or blurs its
-/// backdrop moves the edges between them, so a screenshot shows what a flat
-/// fill would hide.
-pub const STRIPE_WIDTH: f32 = 8.0;
-pub const DARK_STRIPE: Color = Color(0.05, 0.05, 0.08, 1.0);
-pub const LIGHT_STRIPE: Color = Color(0.92, 0.94, 0.99, 1.0);
+pub(crate) const STRIPE_WIDTH: f32 = 8.0;
+pub(crate) const DARK_STRIPE: Color = Color(0.05, 0.05, 0.08, 1.0);
+pub(crate) const LIGHT_STRIPE: Color = Color(0.92, 0.94, 0.99, 1.0);
 
 /// A themed window-sized page holding `content` over striped ground.
 #[composable]

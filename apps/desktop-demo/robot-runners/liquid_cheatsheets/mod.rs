@@ -50,7 +50,7 @@ impl<T> RobotResultContext<T> for std::result::Result<T, String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Case {
+pub(crate) enum Case {
     TogglePress,
     MenuOpen,
     TabSwipe,
@@ -138,7 +138,7 @@ impl Case {
     }
 }
 
-pub fn run(case: Case) -> Result<()> {
+pub(crate) fn run(case: Case) -> Result<()> {
     let output = std::env::var_os("ROBOT_SHOT_DIR").map_or_else(
         || {
             Path::new(env!("CARGO_MANIFEST_DIR"))

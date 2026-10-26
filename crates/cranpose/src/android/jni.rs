@@ -256,7 +256,7 @@ fn push_overlay_event_for_handle(handle: jlong, event: AndroidOverlayWindowEvent
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayCreateFailed<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayCreateFailed<
     'local,
 >(
     mut env: EnvUnowned<'local>,
@@ -279,7 +279,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceChanged<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceChanged<
     'local,
 >(
     mut env: EnvUnowned<'local>,
@@ -333,7 +333,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceDestroyed(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceDestroyed(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -343,7 +343,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayPointer(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayPointer(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -366,7 +366,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayReleaseQueue(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayReleaseQueue(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,

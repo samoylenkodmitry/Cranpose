@@ -76,10 +76,9 @@ impl MicrophoneStandby for AndroidMicrophoneStandby {
     }
 }
 
-/// The person ended the standby with its notification's Stop action.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeMicrophoneStandby_nativeOnStandbyStop(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeMicrophoneStandby_nativeOnStandbyStop(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) {

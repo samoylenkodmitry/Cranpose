@@ -106,7 +106,7 @@ impl AppUpdater for AndroidAppUpdater {
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeAppUpdate_nativeOnAppUpdateStatus<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeAppUpdate_nativeOnAppUpdateStatus<
     'local,
 >(
     mut env: EnvUnowned<'local>,

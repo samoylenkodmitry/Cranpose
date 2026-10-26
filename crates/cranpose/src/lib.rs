@@ -71,6 +71,13 @@ mod android_entry;
     not(all(feature = "android", target_os = "android")),
     expect(dead_code, reason = "only the Android backend hosts windows")
 )]
+#[cfg_attr(
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
+    expect(
+        unreachable_pub,
+        reason = "only an Android build with the wgpu renderer exports the host window"
+    )
+)]
 mod android_host_window;
 mod android_input;
 #[cfg(target_os = "android")]

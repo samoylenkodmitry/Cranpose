@@ -87,11 +87,9 @@ impl HeartRateMonitor for AndroidHeartRate {
     }
 }
 
-/// A reading or a change of state from the sensor: `status` is
-/// `CranposeHeartRate`'s ACQUIRING, LIVE or OFF_BODY.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeHeartRate_nativeOnHeartRate(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeHeartRate_nativeOnHeartRate(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     bpm: jfloat,

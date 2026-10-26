@@ -957,7 +957,7 @@ fn cleanup_capture_paths(capture_paths: &[PathBuf]) {
     }
 }
 
-pub fn save_robot_screenshot(path: &Path, screenshot: &cranpose::RobotScreenshot) {
+pub(crate) fn save_robot_screenshot(path: &Path, screenshot: &cranpose::RobotScreenshot) {
     let image: RgbaImage = ImageBuffer::from_raw(
         screenshot.width,
         screenshot.height,

@@ -4,11 +4,11 @@ use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, print_semantics_with_bounds,
 };
 
-pub fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
+pub(crate) fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
     (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
 }
 
-pub fn wait_for_text_bounds(
+pub(crate) fn wait_for_text_bounds(
     robot: &cranpose::Robot,
     text: &str,
     timeout_ms: u64,
@@ -24,7 +24,7 @@ pub fn wait_for_text_bounds(
     None
 }
 
-pub fn fail_and_exit(robot: &cranpose::Robot, message: &str) -> ! {
+pub(crate) fn fail_and_exit(robot: &cranpose::Robot, message: &str) -> ! {
     eprintln!("FATAL: {message}");
     if let Ok(semantics) = robot.get_semantics() {
         print_semantics_with_bounds(&semantics, 0);
@@ -33,7 +33,7 @@ pub fn fail_and_exit(robot: &cranpose::Robot, message: &str) -> ! {
     std::process::exit(1);
 }
 
-pub fn click_button(robot: &cranpose::Robot, label: &str, settle_ms: u64) {
+pub(crate) fn click_button(robot: &cranpose::Robot, label: &str, settle_ms: u64) {
     let Some(bounds) = find_button_in_semantics(robot, label) else {
         fail_and_exit(robot, &format!("button '{label}' not found"));
     };
@@ -45,7 +45,7 @@ pub fn click_button(robot: &cranpose::Robot, label: &str, settle_ms: u64) {
     let _ = robot.wait_for_idle();
 }
 
-pub fn drag_scrollbar(
+pub(crate) fn drag_scrollbar(
     robot: &cranpose::Robot,
     rail_bounds: (f32, f32, f32, f32),
     from_frac: f32,
@@ -73,7 +73,7 @@ pub fn drag_scrollbar(
     }
 }
 
-pub struct DragViewportConfig {
+pub(crate) struct DragViewportConfig {
     pub from_frac: f32,
     pub to_frac: f32,
     pub steps: u32,
@@ -82,7 +82,7 @@ pub struct DragViewportConfig {
     pub wait_for_idle: bool,
 }
 
-pub fn drag_viewport(
+pub(crate) fn drag_viewport(
     robot: &cranpose::Robot,
     viewport_bounds: (f32, f32, f32, f32),
     config: DragViewportConfig,

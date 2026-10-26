@@ -47,21 +47,22 @@ mod window_root;
 mod wrap_content;
 mod z_index;
 
-pub(crate) use chain::{InPlaceReach, InPlaceUpdate, ModifierLocalsHandle};
-pub use chain::{ModifierChainHandle, ModifierChainInspectorNode};
-pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
-pub use cranpose_foundation::{
-    AnyModifierElement, DynModifierElement, FocusState, PointerButton, PointerButtons,
-    PointerEvent, PointerEventKind, PointerSource, RotaryScrollEvent, SemanticsConfiguration,
-    modifier_element,
+pub(crate) use chain::{
+    InPlaceReach, InPlaceUpdate, ModifierChainHandle, ModifierChainInspectorNode,
+    ModifierLocalsHandle,
 };
-use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
-#[expect(unused_imports, reason = "re-exported for applications")]
+pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
+use cranpose_foundation::{
+    DynModifierElement, FocusState, ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo,
+    SemanticsConfiguration, modifier_element,
+};
+pub use cranpose_foundation::{
+    PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerSource, RotaryScrollEvent,
+};
 pub use cranpose_ui_graphics::{
-    BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
-    CursorIcon, CustomPointerIcon, CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec,
-    GradientFadeMaskSpec, GraphicsLayer, LayerShape, Point, PointerIcon, PointerIconError, Rect,
-    RenderEffect, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
+    BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets, GraphicsLayer,
+    LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope,
+    Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
 pub use drag_and_drop::{
@@ -80,9 +81,8 @@ pub(crate) use local::{
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 pub use pointer_input::PointerInputScope;
-pub use resolved_modifiers::{
-    DimensionConstraint, LayoutProperties, LayoutWeight, ResolvedBackground, ResolvedModifiers,
-};
+pub(crate) use resolved_modifiers::{DimensionConstraint, LayoutProperties, LayoutWeight};
+pub use resolved_modifiers::{ResolvedBackground, ResolvedModifiers};
 pub use rotary_input::RotaryInputModifierNode;
 #[cfg(test)]
 pub(crate) use scroll::lazy_scroll_semantics;
@@ -105,7 +105,7 @@ pub use window_root::{
 };
 pub use z_index::z_index_in_use;
 
-pub use crate::draw::{DrawCacheBuilder, DrawCommand};
+pub(crate) use crate::draw::{DrawCacheBuilder, DrawCommand};
 use crate::modifier_nodes::ClipToBoundsElement;
 
 #[derive(Clone, Debug, Default)]

@@ -118,6 +118,7 @@ web-time = "1.1"
 # attribute overrides a lint level Cargo sets on the command line.
 [workspace.lints.rust]
 unsafe_code = "deny"
+unreachable_pub = "warn"
 unused_qualifications = "warn"
 
 # The one warning class `-D warnings` structurally cannot reach: `clippy`

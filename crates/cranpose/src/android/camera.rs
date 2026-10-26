@@ -155,7 +155,9 @@ fn parse_lenses(text: &str) -> Vec<CameraLens> {
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrame<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrame<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     nv12: JByteArray<'local>,
@@ -185,7 +187,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrameDropped(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrameDropped(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) {
@@ -194,7 +196,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraState<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraState<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     kind: jint,
@@ -225,7 +229,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraStill<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraStill<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     jpeg: JByteArray<'local>,
@@ -254,7 +260,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraLenses<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraLenses<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     list: JString<'local>,
