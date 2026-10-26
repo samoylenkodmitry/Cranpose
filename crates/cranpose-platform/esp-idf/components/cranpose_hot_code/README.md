@@ -77,7 +77,7 @@ drawn line 0.27 ms slower (2.58 against 2.31 ms).
 - `esp32s3.ld` comes from QEMU: `just esp32-sim-profile MODE` builds the
   demo for QEMU's ESP32-S3 without this component and counts the misses of
   the chip's 32 KB instruction cache with a QEMU plugin
-  (`scripts/esp32/icache/`), and `scripts/esp32/sim_profile.py` writes them
+  (`scripts/esp32/cache/`), and `scripts/esp32/sim_profile.py` writes them
   as a profile. A list by misses per byte holds the code that waits for flash
   the most; a list by sampled time also holds loops that the cache serves.
   On the same three screens the list by misses ran the ES3C35P's drawn line
@@ -91,7 +91,7 @@ To write the scripts again, after changes that move the framework's
 per-frame work:
 
 ```sh
-scripts/esp32/icache/setup.sh   # once: QEMU with plugins, and the cache plugin
+scripts/esp32/cache/setup.sh    # once: QEMU with plugins, and the cache plugin
 for mode in demo drawn composed workload; do just esp32-sim-profile $mode; done
 python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
   --board "apps/esp32-demo in QEMU's ESP32-S3, by cache misses" \
