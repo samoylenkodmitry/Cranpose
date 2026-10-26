@@ -87,7 +87,7 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"],
 js-sys = { version = "0.3.106", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4.79", optional = true }
-rfd = { version = "0.17.2", default-features = false, optional = true }
+rfd = { version = "0.17.2", default-features = false, optional = true, features = ["file-handle-inner"] }
 web-sys = { version = "0.3", features = [
     "Blob",
     "BlobPropertyBag",
@@ -116,13 +116,13 @@ pollster = "0.4.0"
 serde_json = "1.0.154"
 tempfile = "3.27.0"
 
-# Desktop and Android use rustls. iOS uses native-tls (Security.framework): the
-# rustls default crypto provider (aws-lc-sys) does not link for the device
-# `aarch64-apple-ios` target, and native-tls uses the system trust store.
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
+# iOS and macOS use native-tls (Security.framework) and the system trust store.
+# This also avoids bundling a separate cryptographic implementation in store apps.
+# Other native platforms use rustls.
+[target.'cfg(all(not(target_arch = "wasm32"), not(any(target_os = "ios", target_os = "macos"))))'.dependencies]
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"], optional = true }
 
-[target.'cfg(target_os = "ios")'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]

@@ -46,8 +46,15 @@ members = [
 # forks/README.md. They build as path dependencies, outside the workspace.
 # The benchmark apps are workspaces of their own: the desktop demo reaches
 # the gauntlet through a path dependency without making them members.
-exclude = ["forks", "benchmarks"]
+# The dylint libraries in lints/ build on the pinned nightly as workspaces of
+# their own.
+exclude = ["forks", "benchmarks", "lints"]
 resolver = "2"
+
+# Type-aware lints that clippy and ast-grep cannot express, run by
+# `just dylint` with cargo-dylint.
+[workspace.metadata.dylint]
+libraries = [{ path = "lints/guard_across_callback" }]
 
 [workspace.package]
 version = "0.17.2"

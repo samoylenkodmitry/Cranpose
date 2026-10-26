@@ -66,6 +66,7 @@ static SPEED: Mutex<f32> = Mutex::new(1.0);
 static LOOPING: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn register() {
+    crate::apple::media_source::register();
     configure_audio_session();
     install_interruption_observer();
     install_remote_commands();

@@ -1,0 +1,29 @@
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:6:5
+   |
+LL |     on_change();
+   |     ^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:5:5
+   |
+LL |     let items = cell.borrow();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+   = note: `#[warn(guard_across_callback)]` on by default
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:12:5
+   |
+LL |     callback(0);
+   |     ^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:11:5
+   |
+LL |     let value = lock.lock().unwrap();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: 2 warnings emitted
+

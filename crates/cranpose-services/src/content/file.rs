@@ -69,6 +69,11 @@ impl Content for FileContent {
         metadata_for(&self.path)
     }
 
+    fn media_uri(&self) -> Result<String, ContentError> {
+        crate::media_source::media_reference(&self.path)
+            .map_err(|error| io_error(&self.path, error))
+    }
+
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
         let opened = self.path.clone();
         let path = self.path.clone();

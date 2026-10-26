@@ -94,6 +94,19 @@ clippy: _disk-guard
 clippy-budget-lower:
     python3 scripts/ci/clippy_budget.py --lower
 
+# The type-aware lints of lints/ (cargo-dylint, on the pinned nightly): each
+# lint's sites against scripts/ci/dylint_budget.toml. Nightly CI runs it.
+dylint: _dylint-tools
+    python3 scripts/ci/dylint_budget.py
+
+# Write the dylint counts that fell below their budget.
+dylint-lower: _dylint-tools
+    python3 scripts/ci/dylint_budget.py --lower
+
+_dylint-tools:
+    @command -v cargo-dylint >/dev/null && command -v dylint-link >/dev/null || cargo install --locked cargo-dylint dylint-link
+    @rustup toolchain install {{nightly}} --profile minimal --component rustc-dev,llvm-tools-preview >/dev/null 2>&1
+
 # A plain build does not catch `Arc<dyn Trait>` values that pay for
 # synchronisation the single-threaded wasm target cannot use; only clippy does.
 
