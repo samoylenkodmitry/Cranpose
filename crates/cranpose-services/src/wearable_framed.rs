@@ -50,16 +50,24 @@ const END: u8 = 3;
 /// The kind byte and the stream's number.
 const STREAM_HEADER: usize = 5;
 
+/// When [`WearableTransport::send`] returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// Once the application on the peer has the frame.
+    Confirmed,
+    /// Once the platform took the frame; the call reports the failure of an
+    /// earlier frame sent this way.
+    Queued,
+}
+
 /// What the platform's message link does for a [`FramedWearableLink`].
 pub trait WearableTransport: Send + Sync + 'static {
     /// The connected devices.
     fn peers(&self) -> Result<Vec<WearablePeer>, WearableError>;
 
     /// Delivers one frame to `peer`; frames arrive in the order they were
-    /// sent. With `confirm` the call returns once the application on `peer`
-    /// has the frame. Without it the call returns once the platform took the
-    /// frame, and reports the failure of an earlier frame sent this way.
-    fn send(&self, peer: &str, frame: &[u8], confirm: bool) -> Result<(), WearableError>;
+    /// sent. `delivery` says when the call returns.
+    fn send(&self, peer: &str, frame: &[u8], delivery: Delivery) -> Result<(), WearableError>;
 
     /// Opens `url` on `peer`'s screen.
     fn open_url(&self, peer: &str, url: &str) -> Result<(), WearableError>;
@@ -182,7 +190,7 @@ impl<T: WearableTransport> WearableLink for FramedWearableLink<T> {
         frame.extend_from_slice(&length.to_le_bytes());
         frame.extend_from_slice(path.as_bytes());
         frame.extend_from_slice(data);
-        self.transport.send(peer, &frame, true)
+        self.transport.send(peer, &frame, Delivery::Confirmed)
     }
 
     fn open_stream(&self, peer: &str, path: &str) -> Result<Box<dyn Write + Send>, WearableError> {
@@ -191,7 +199,7 @@ impl<T: WearableTransport> WearableLink for FramedWearableLink<T> {
         frame.push(OPEN);
         frame.extend_from_slice(&id.to_le_bytes());
         frame.extend_from_slice(path.as_bytes());
-        self.transport.send(peer, &frame, true)?;
+        self.transport.send(peer, &frame, Delivery::Confirmed)?;
         frame[0] = CHUNK;
         frame.truncate(STREAM_HEADER);
         Ok(Box::new(ChunkWriter {
@@ -230,7 +238,9 @@ impl<T: WearableTransport> ChunkWriter<T> {
         if self.frame.len() == STREAM_HEADER {
             return Ok(());
         }
-        let sent = self.transport.send(&self.peer, &self.frame, false);
+        let sent = self
+            .transport
+            .send(&self.peer, &self.frame, Delivery::Queued);
         self.frame.truncate(STREAM_HEADER);
         sent.map_err(io::Error::other)
     }
@@ -261,7 +271,10 @@ impl<T: WearableTransport> Drop for ChunkWriter<T> {
             );
         }
         self.frame[0] = END;
-        if let Err(error) = self.transport.send(&self.peer, &self.frame, false) {
+        if let Err(error) = self
+            .transport
+            .send(&self.peer, &self.frame, Delivery::Queued)
+        {
             log::warn!("wearable: the end of a stream to {}: {error}", self.peer);
         }
     }

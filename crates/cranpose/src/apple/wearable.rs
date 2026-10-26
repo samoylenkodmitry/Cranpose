@@ -15,7 +15,8 @@ use std::{
 
 use block2::{DynBlock, RcBlock};
 use cranpose_services::{
-    FramedWearableLink, WearableError, WearablePeer, WearableTransport, set_platform_wearable_link,
+    Delivery, FramedWearableLink, WearableError, WearablePeer, WearableTransport,
+    set_platform_wearable_link,
 };
 use objc2::{AnyThread, define_class, msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSData, NSError, NSObject, NSObjectProtocol};
@@ -127,12 +128,12 @@ impl WearableTransport for WatchConnectivity {
             .collect())
     }
 
-    fn send(&self, _peer: &str, frame: &[u8], confirm: bool) -> Result<(), WearableError> {
+    fn send(&self, _peer: &str, frame: &[u8], delivery: Delivery) -> Result<(), WearableError> {
         let session = session_when(in_reach).ok_or_else(|| {
             WearableError::Failed("the app on the paired device is out of reach".into())
         })?;
         let data = NSData::with_bytes(frame);
-        if confirm {
+        if delivery == Delivery::Confirmed {
             let (answer, answered) = sync_channel::<Result<(), String>>(1);
             let failed = answer.clone();
             let reply = RcBlock::new(move |_: NonNull<NSData>| {

@@ -304,7 +304,7 @@ pub use wearable::{
     open_on_wearable_peer, open_wearable_stream, publish_wearable_event, send_wearable_message,
     set_platform_wearable_link, set_wearable_receiver, wearable_peers,
 };
-pub use wearable_framed::{FramedWearableLink, WearableTransport};
+pub use wearable_framed::{Delivery, FramedWearableLink, WearableTransport};
 pub use writable_folder::{
     FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
     WritableFolderStoreRef, open_writable_folder, set_writable_folder_store_factory,
