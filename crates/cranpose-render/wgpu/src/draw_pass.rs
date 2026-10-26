@@ -30,7 +30,7 @@ use held_draws::{HeldCmds, HeldDraws};
 mod tracked_pass;
 pub(crate) use tracked_pass::TrackedPass;
 mod op_items;
-use op_items::{OpItems, merge_items};
+use op_items::{OpItems, Texts, merge_items};
 
 /// A render target and its size in pixels.
 #[derive(Clone, Copy)]
@@ -863,9 +863,14 @@ fn segment_viewport_rect(target: PassTarget<'_>, segment: &PassSegment<'_>) -> R
 /// applies when it draws.
 pub(crate) fn segment_draws_anything(target: PassTarget<'_>, segment: &PassSegment<'_>) -> bool {
     let viewport_rect = segment_viewport_rect(target, segment);
-    merge_items(segment, viewport_rect, (target.width, target.height), false)
-        .next()
-        .is_some()
+    merge_items(
+        segment,
+        viewport_rect,
+        (target.width, target.height),
+        Texts::Drawn,
+    )
+    .next()
+    .is_some()
 }
 
 /// Re-bases an inverse (target pixel -> source pixel) matrix onto a target
@@ -1180,7 +1185,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             segment,
             viewport_rect,
             self.target_size(),
-            renderer.ablation.text,
+            Texts::under(&renderer.ablation),
         )
         .peekable();
         self.items(renderer, &mut items, &run, scratch)
@@ -1235,7 +1240,11 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     segment.scene,
                     op,
                     window,
-                    (viewport_rect, segment.scale, renderer.ablation.text),
+                    (
+                        viewport_rect,
+                        segment.scale,
+                        Texts::under(&renderer.ablation),
+                    ),
                 )
                 .peekable();
                 self.items(renderer, &mut items, &run, scratch)?;

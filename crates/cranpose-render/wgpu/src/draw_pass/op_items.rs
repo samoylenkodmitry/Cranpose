@@ -2,16 +2,34 @@ use cranpose_ui_graphics::Rect;
 
 use super::{Item, PassSegment, composite_visible, op_is_visible_in_rect};
 use crate::{
+    ablation::Ablation,
     render::{run_draw_bounds, text_draw_geometry_in_rect},
     run_store::run_has_shapes,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
 };
 
+// Whether a segment's texts draw, or the text ablation leaves them out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Texts {
+    Drawn,
+    Skipped,
+}
+
+impl Texts {
+    pub(super) fn under(ablation: &Ablation) -> Self {
+        if ablation.text {
+            Self::Skipped
+        } else {
+            Self::Drawn
+        }
+    }
+}
+
 pub(super) fn merge_items<'a>(
     segment: &PassSegment<'a>,
     viewport_rect: Rect,
     target_size: (u32, u32),
-    skip_text: bool,
+    texts: Texts,
 ) -> impl Iterator<Item = Item<'a>> + use<'a> {
     let scene = segment.scene;
     let root_scale = segment.scale;
@@ -39,7 +57,7 @@ pub(super) fn merge_items<'a>(
             }
             let (op_index, op) = ops.next()?;
             let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
-            pending = OpItems::of(scene, op, window, (viewport_rect, root_scale, skip_text));
+            pending = OpItems::of(scene, op, window, (viewport_rect, root_scale, texts));
         }
     })
 }
@@ -76,14 +94,13 @@ impl<'a> OpItems<'a> {
         scene: &'a CompositorScene,
         op: &DrawOp,
         window: Option<std::ops::Range<u32>>,
-        (viewport_rect, root_scale, skip_text): (Rect, f32, bool),
+        (viewport_rect, root_scale, texts): (Rect, f32, Texts),
     ) -> Self {
-        let (first, texts) =
-            match op_item(scene, op, window, (viewport_rect, root_scale, skip_text)) {
-                OpItem::Draw(item) => (Some(item), [].iter()),
-                OpItem::Shadow(texts, casters) => (casters, texts),
-                OpItem::Nothing => (None, [].iter()),
-            };
+        let (first, texts) = match op_item(scene, op, window, (viewport_rect, root_scale, texts)) {
+            OpItem::Draw(item) => (Some(item), [].iter()),
+            OpItem::Shadow(texts, casters) => (casters, texts),
+            OpItem::Nothing => (None, [].iter()),
+        };
         Self {
             first,
             texts,
@@ -109,20 +126,20 @@ impl<'a> Iterator for OpItems<'a> {
 }
 
 /// The item `op` draws into `viewport_rect`, its records windowed by
-/// `window`; texts are left out when `skip_text`. A text's and a run's
+/// `window`; texts are left out when `texts` skips them. A text's and a run's
 /// visibility tests work out their geometry and bounds, which their draws
 /// take on.
 fn op_item<'a>(
     scene: &'a CompositorScene,
     op: &DrawOp,
     window: Option<std::ops::Range<u32>>,
-    (viewport_rect, root_scale, skip_text): (Rect, f32, bool),
+    (viewport_rect, root_scale, texts): (Rect, f32, Texts),
 ) -> OpItem<'a> {
     let item = match op.kind {
         DrawOpKind::Text(index) => {
             let text = &scene.texts[index];
             text_draw_geometry_in_rect(text, viewport_rect, root_scale)
-                .filter(|_| !skip_text)
+                .filter(|_| texts == Texts::Drawn)
                 .map(|geometry| Item::Text(text, geometry))
         }
         DrawOpKind::Run(index) => {
