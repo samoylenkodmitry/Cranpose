@@ -1182,6 +1182,14 @@ perf-heap *args:
 projects_dir := `cd "$(git rev-parse --path-format=absolute --git-common-dir)/../.." && pwd -P`
 gc_roots := "--root " + quote(projects_dir) + " --root \"${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks\""
 
+# Scores what the code rules of AGENTS.md change in an agent's code: each case
+# in scripts/rule-evals/evals runs with and without the rules as a skill, and
+# LLM graders score both runs. Every case is a full agent run on your
+# credential; pass `--case <name>` to run one, `--max-cost-usd N` to cap it.
+rule-evals *args:
+    python3 scripts/rule-evals/make_skill.py
+    claude plugin eval scripts/rule-evals --trust-plugin --ablation with-without --allow-tools Bash Write Edit {{args}}
+
 # The sweep covers cargo target dirs and Gradle build dirs of the worktrees
 # here and beside this checkout.
 # Report what the sweep would reclaim. Removes nothing.

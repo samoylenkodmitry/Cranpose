@@ -1,0 +1,5 @@
+{
+  "name": "cranpose-rules",
+  "version": "0.1.0",
+  "description": "The code rules of Cranpose's AGENTS.md as a skill, with eval cases that check whether the rule text changes what an agent writes."
+}

@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: public-entry-tests
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  Tests in a tests/ directory that drive the cache through its public API
+  (new, get, insert, len, is_empty) and check its behavior at the corner
+  cases that can break it: capacity zero, capacity one, which value goes when
+  the cache is full after a get refreshed one, and replacing a key's value
+  without evicting another. No test reads the private fields, calls
+  evict_oldest, or asserts the order of internal calls. cargo test passes.
