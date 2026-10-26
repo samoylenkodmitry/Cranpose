@@ -77,5 +77,5 @@ where
         environment.density.density(),
     );
     policy.layout_direction = environment.direction;
-    compose_layout(modifier, policy, environment, content)
+    compose_layout(modifier, &policy, environment, content)
 }

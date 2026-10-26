@@ -347,5 +347,5 @@ where
         layout_direction: environment.direction,
         density: environment.density.density(),
     };
-    compose_layout(modifier, policy, environment, content)
+    compose_layout(modifier, &policy, environment, content)
 }
