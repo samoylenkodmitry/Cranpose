@@ -7,6 +7,8 @@ use std::{
 
 use smallvec::SmallVec;
 
+#[cfg(feature = "inspection")]
+use crate::source_trace;
 use crate::{
     AnchorId, Composer, LocalStackSnapshot, NodeId, RetentionMode, RuntimeHandle, ScopeId,
     SlotsHost, StateId, collections::map::HashSet, composer, runtime, thread_state,
@@ -105,7 +107,7 @@ pub(crate) struct RecomposeScopeInner {
     #[cfg(feature = "inspection")]
     source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
     #[cfg(all(feature = "inspection", debug_assertions))]
-    recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
+    pub(crate) recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: Cell<Option<Weak<composer::ComposerRuntimeState>>>,
     /// The states the scope is subscribed to: what its last body read, in

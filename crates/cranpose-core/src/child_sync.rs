@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-
 use smallvec::SmallVec;
 
 use crate::{
     Applier, ChildList, Command, DeferredChildCleanup, DeferredChildCleanupQueue, DirtyBubble,
     NodeError, NodeId, SMALL_CHILD_SYNC_LINEAR_THRESHOLD, build_child_positions,
-    insert_child_into_diff_state, move_child_in_diff_state,
+    collections::map::HashMap, insert_child_into_diff_state, move_child_in_diff_state,
 };
+
 pub(crate) fn attach_child_at(
     applier: &mut dyn Applier,
     parent_id: NodeId,

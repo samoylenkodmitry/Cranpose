@@ -142,6 +142,7 @@ pub fn try_with_composer<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
     current_composer().map(|composer| f(&composer))
 }
 
+// forwards on purpose: Compose's name for with_current_composer
 /// Runs `f` with the composer that is current on this thread. Panics if there is none. Same as
 /// `with_current_composer`.
 #[expect(non_snake_case, reason = "names follow Compose's casing")]

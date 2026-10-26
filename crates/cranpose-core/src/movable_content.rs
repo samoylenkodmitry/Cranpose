@@ -4,6 +4,7 @@ use crate::{
     Composer, Key, composer_context, current_runtime_handle, hash_key, remember,
     with_current_composer,
 };
+
 /// Composes `content` under an identity that is `key` alone, the same at
 /// every call site, so the subtree can be emitted from any parent and keep
 /// its remembered values, its running effects and its nodes.

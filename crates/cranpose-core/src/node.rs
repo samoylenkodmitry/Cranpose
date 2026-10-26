@@ -218,6 +218,7 @@ pub trait Node: Any {
     }
 }
 
+// forwards on purpose: DirtyBubble is crate-private, and this is the public entry
 /// Unified API for bubbling layout dirty flags from a node to the root (Applier context).
 ///
 /// This is the canonical function for dirty bubbling during the apply phase (structural changes).
@@ -239,6 +240,7 @@ pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
     DirtyBubble::LAYOUT.apply(applier, node_id);
 }
 
+// forwards on purpose: DirtyBubble is crate-private, and this is the public entry
 /// Unified API for bubbling measure dirty flags from a node to the root (Applier context).
 ///
 /// Call this when a node's size may have changed (children added/removed, modifier changed).
@@ -252,6 +254,7 @@ pub fn bubble_measure_dirty(applier: &mut dyn Applier, node_id: NodeId) {
     DirtyBubble::MEASURE.apply(applier, node_id);
 }
 
+// forwards on purpose: DirtyBubble is crate-private, and this is the public entry
 /// Unified API for bubbling semantics dirty flags from a node to the root (Applier context).
 ///
 /// This mirrors [`bubble_layout_dirty`] but toggles semantics-specific dirty

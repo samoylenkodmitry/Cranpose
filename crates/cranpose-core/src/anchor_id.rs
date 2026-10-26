@@ -1,4 +1,5 @@
 use crate::slot;
+
 /// Stable identifier for a slot in the slot table.
 ///
 /// Anchors provide positional stability: they maintain their identity even when

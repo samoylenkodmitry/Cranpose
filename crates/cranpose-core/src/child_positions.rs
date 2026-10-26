@@ -1,6 +1,5 @@
-use std::collections::HashMap;
+use crate::{ChildList, NodeId, collections::map::HashMap};
 
-use crate::{ChildList, NodeId};
 pub(crate) fn build_child_positions(children: &[NodeId]) -> HashMap<NodeId, usize> {
     let mut positions = HashMap::default();
     positions.reserve(children.len());

@@ -4,6 +4,7 @@ use crate::{
     Applier, Command, CommandCallback, DeferredChildCleanupQueue, DirtyBubble, NodeError, NodeId,
     sync_or_settle_children,
 };
+
 pub(crate) const COMMAND_FLUSH_THRESHOLD: usize = 4096;
 pub(crate) type ChildList = SmallVec<[NodeId; 4]>;
 pub(crate) const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;

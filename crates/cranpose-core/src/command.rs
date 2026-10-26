@@ -244,16 +244,7 @@ impl Command {
                     Err(err) => Err(err),
                 }
             }
-            Self::MountNode { id } => {
-                let node = match applier.get_mut(id) {
-                    Ok(node) => node,
-                    Err(NodeError::Missing { .. }) => return Ok(()),
-                    Err(err) => return Err(err),
-                };
-                node.set_node_id(id);
-                node.mount();
-                Ok(())
-            }
+            Self::MountNode { id } => mount_node(applier, id),
             Self::AttachChild {
                 parent_id,
                 child_id,
@@ -318,4 +309,16 @@ impl Command {
             Self::Callback(callback) => callback(applier),
         }
     }
+}
+
+// Mounts node `id` under its id; a node already gone is no error.
+fn mount_node(applier: &mut dyn Applier, id: NodeId) -> Result<(), NodeError> {
+    let node = match applier.get_mut(id) {
+        Ok(node) => node,
+        Err(NodeError::Missing { .. }) => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    node.set_node_id(id);
+    node.mount();
+    Ok(())
 }

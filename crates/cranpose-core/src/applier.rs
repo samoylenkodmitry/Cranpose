@@ -3,7 +3,7 @@ use std::any::{Any, TypeId};
 use crate::{Node, NodeError, NodeId, RecycleOrigin, RecycledNode, RecycledNodeInsertion};
 
 /// Stores the nodes that a composition builds and applies changes to them. The UI layer supplies an
-/// applier; [`MemoryApplier`] is the stock one.
+/// applier; [`MemoryApplier`](crate::MemoryApplier) is the stock one.
 pub trait Applier: Any {
     /// Stores `node` and returns its new id.
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;

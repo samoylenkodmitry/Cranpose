@@ -45,6 +45,7 @@ pub struct DisposableEffectResult {
 }
 
 impl DisposableEffectScope {
+    // forwards on purpose: the scope's onDispose, as Compose names it
     /// Returns a result that runs `cleanup` when the effect leaves the composition or its keys
     /// change.
     pub fn on_dispose(&self, cleanup: impl FnOnce() + 'static) -> DisposableEffectResult {
