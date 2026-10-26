@@ -835,8 +835,23 @@ pub(crate) struct SnapshotState {
     #[expect(clippy::type_complexity, reason = "modified states by id")]
     pub(crate) modified: RefCell<HashMap<ObjectId, (Rc<dyn StateObject>, SnapshotId)>>,
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
-    runtime_tracked: bool,
+    runtime_tracking: RuntimeTracking,
     pending_children: RefCell<HashSet<SnapshotId>>,
+}
+
+// Whether the runtime counts a snapshot as open, so that disposing it closes
+// it there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeTracking {
+    Tracked,
+    Untracked,
+}
+
+// Whether a snapshot pins the records it reads until it is disposed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pinning {
+    Pinned,
+    Unpinned,
 }
 
 impl SnapshotState {
@@ -845,15 +860,15 @@ impl SnapshotState {
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-        runtime_tracked: bool,
+        runtime_tracking: RuntimeTracking,
     ) -> Self {
         Self::new_with_pinning(
             id,
             invalid,
             read_observer,
             write_observer,
-            runtime_tracked,
-            true,
+            runtime_tracking,
+            Pinning::Pinned,
         )
     }
 
@@ -862,10 +877,10 @@ impl SnapshotState {
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-        runtime_tracked: bool,
-        should_pin: bool,
+        runtime_tracking: RuntimeTracking,
+        pinning: Pinning,
     ) -> Self {
-        let pin_handle = if should_pin {
+        let pin_handle = if pinning == Pinning::Pinned {
             snapshot_pinning::track_pinning(id, &invalid)
         } else {
             PinHandle::INVALID
@@ -879,7 +894,7 @@ impl SnapshotState {
             write_observer: RefCell::new(write_observer),
             modified: RefCell::new(HashMap::default()),
             on_dispose: RefCell::new(None),
-            runtime_tracked,
+            runtime_tracking,
             pending_children: RefCell::new(HashSet::default()),
         }
     }
@@ -915,7 +930,7 @@ impl SnapshotState {
             if let Some(cb) = self.on_dispose.borrow_mut().take() {
                 cb();
             }
-            if self.runtime_tracked {
+            if self.runtime_tracking == RuntimeTracking::Tracked {
                 close_snapshot(self.id.get());
             }
         }

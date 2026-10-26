@@ -21,7 +21,14 @@ impl GlobalSnapshot {
     /// and reads the latest records. Pinning would prevent garbage collection.
     pub fn new(id: SnapshotId, invalid: SnapshotIdSet) -> Rc<Self> {
         Rc::new(Self {
-            state: SnapshotState::new_with_pinning(id, invalid, None, None, false, false),
+            state: SnapshotState::new_with_pinning(
+                id,
+                invalid,
+                None,
+                None,
+                RuntimeTracking::Untracked,
+                Pinning::Unpinned,
+            ),
             nested_count: Cell::new(0),
         })
     }
@@ -166,7 +173,7 @@ impl GlobalSnapshot {
             read_observer,
             write_observer,
             base_parent_id,
-            true,
+            RuntimeTracking::Tracked,
         );
 
         self.nested_count.set(self.nested_count.get() + 1);

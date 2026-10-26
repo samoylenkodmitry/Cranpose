@@ -399,7 +399,13 @@ fn test_observer_ids_are_unique() {
 
 #[test]
 fn test_state_object_storage_in_modified_set() {
-    let state = SnapshotState::new(SnapshotId(1), SnapshotIdSet::new(), None, None, false);
+    let state = SnapshotState::new(
+        SnapshotId(1),
+        SnapshotIdSet::new(),
+        None,
+        None,
+        RuntimeTracking::Untracked,
+    );
 
     let state_obj = TestStateObject::new(12345) as Rc<dyn StateObject>;
 
@@ -416,7 +422,13 @@ fn test_state_object_storage_in_modified_set() {
 
 #[test]
 fn test_multiple_writes_to_same_state_object() {
-    let state = SnapshotState::new(SnapshotId(1), SnapshotIdSet::new(), None, None, false);
+    let state = SnapshotState::new(
+        SnapshotId(1),
+        SnapshotIdSet::new(),
+        None,
+        None,
+        RuntimeTracking::Untracked,
+    );
     let state_obj = TestStateObject::new(99999) as Rc<dyn StateObject>;
 
     state.record_write(Rc::clone(&state_obj), SnapshotId(1));

@@ -45,8 +45,8 @@ impl TransparentObserverMutableSnapshot {
                 invalid,
                 read_observer,
                 write_observer,
-                false,
-                false,
+                RuntimeTracking::Untracked,
+                Pinning::Unpinned,
             ),
             parent,
             nested_count: Cell::new(0),
@@ -248,7 +248,14 @@ impl TransparentObserverSnapshot {
         parent: Option<Weak<Self>>,
     ) -> Rc<Self> {
         Rc::new(Self {
-            state: SnapshotState::new_with_pinning(id, invalid, read_observer, None, false, false),
+            state: SnapshotState::new_with_pinning(
+                id,
+                invalid,
+                read_observer,
+                None,
+                RuntimeTracking::Untracked,
+                Pinning::Unpinned,
+            ),
             parent,
             reusable: Cell::new(true),
         })

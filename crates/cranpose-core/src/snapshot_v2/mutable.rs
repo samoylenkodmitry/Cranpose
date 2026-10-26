@@ -97,10 +97,10 @@ impl MutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
         base_parent_id: SnapshotId,
-        runtime_tracked: bool,
+        runtime_tracking: RuntimeTracking,
     ) -> Rc<Self> {
         Rc::new(Self {
-            state: SnapshotState::new(id, invalid, read_observer, write_observer, runtime_tracked),
+            state: SnapshotState::new(id, invalid, read_observer, write_observer, runtime_tracking),
             base_parent_id,
             nested_count: Cell::new(0),
             applied: Cell::new(false),
@@ -121,7 +121,7 @@ impl MutableSnapshot {
             read_observer,
             write_observer,
             base_parent_id,
-            false,
+            RuntimeTracking::Untracked,
         )
     }
 

@@ -21,7 +21,7 @@ impl ReadonlySnapshot {
         read_observer: Option<ReadObserver>,
     ) -> Rc<Self> {
         Rc::new(Self {
-            state: SnapshotState::new(id, invalid, read_observer, None, false),
+            state: SnapshotState::new(id, invalid, read_observer, None, RuntimeTracking::Untracked),
         })
     }
 
