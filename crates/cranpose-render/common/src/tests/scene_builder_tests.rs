@@ -12,6 +12,7 @@ use cranpose_ui_graphics::{
 };
 
 use super::*;
+use crate::graph::DrawRunNode;
 
 // Each of `ids` with the update that records it again.
 fn content(ids: &[NodeId]) -> Vec<(NodeId, NodeUpdate)> {
