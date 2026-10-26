@@ -90,5 +90,5 @@ where
     let environment = LayoutEnvironment::current();
     let mut policy = FlowMeasurePolicy::new(axis, spec.main_axis_spacing, spec.cross_axis_spacing);
     policy.layout_direction = environment.direction;
-    compose_layout(modifier, policy, environment, content)
+    compose_layout(modifier, &policy, environment, content)
 }
