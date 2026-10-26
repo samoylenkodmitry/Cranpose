@@ -1,8 +1,9 @@
 use crate::{
     Applier, ChildList, Node, NodeError, NodeId, apply_remove_child, attach_child_at,
-    cleanup_detached_child, detach_child_from_parent, insert_child_with_reparenting,
-    note_structural_move, sync_or_settle_children,
+    child_sync::note_structural_move, cleanup_detached_child, detach_child_from_parent,
+    insert_child_with_reparenting, sync_or_settle_children,
 };
+
 pub(crate) type CommandCallback =
     Box<dyn FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static>;
 

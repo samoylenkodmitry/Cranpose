@@ -407,7 +407,7 @@ impl RetentionManager {
 
     #[cfg(any(test, debug_assertions))]
     pub(crate) fn debug_verify(&self, table: &SlotTable) {
-        if crate::slot_validation_diagnostics_enabled()
+        if crate::slot::slot_validation_diagnostics_enabled()
             && let Err(err) = self.validate(table)
         {
             panic!("retention invariant violation: {err:?}");

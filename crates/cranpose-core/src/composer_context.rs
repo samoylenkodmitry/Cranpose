@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{Composer, ComposerCore, thread_state};
+use crate::{Composer, ComposerCore, StateId, thread_state};
 
 /// How many threads have a composer installed. Code outside any
 /// composition, as a draw closure's branch guards are, reads this instead of
@@ -140,4 +140,39 @@ pub fn note_nested_slots_host(host: &Rc<crate::SlotsHost>) {
 /// Returns None if there is no active composer.
 pub fn try_with_composer<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
     current_composer().map(|composer| f(&composer))
+}
+
+/// Runs `f` with the composer that is current on this thread. Panics if there is none. Same as
+/// `with_current_composer`.
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
+pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {
+    with_composer(f)
+}
+
+pub(crate) fn with_current_composer_opt<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
+    try_with_composer(f)
+}
+
+#[doc(hidden)]
+pub fn current_recompose_scope_invalidated_only_by(
+    allowed_sources: impl IntoIterator<Item = StateId>,
+) -> Option<bool> {
+    with_current_composer_opt(|composer| {
+        let allowed_sources = allowed_sources.into_iter().collect();
+        let mut scope = composer.current_recompose_scope();
+        let mut saw_unknown_source = false;
+        while let Some(current) = scope {
+            if current.has_unknown_invalidation_source() {
+                saw_unknown_source = true;
+                scope = current.parent_scope();
+                continue;
+            }
+            if let Some(matches) = current.invalidated_only_by(&allowed_sources) {
+                return Some(matches);
+            }
+            scope = current.parent_scope();
+        }
+        saw_unknown_source.then_some(false)
+    })
+    .flatten()
 }

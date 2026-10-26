@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use crate::{
     Applier, ChildList, Command, DeferredChildCleanup, DeferredChildCleanupQueue, DirtyBubble,
     NodeError, NodeId, SMALL_CHILD_SYNC_LINEAR_THRESHOLD, build_child_positions,
-    insert_child_into_diff_state, move_child_in_diff_state, note_structural, note_structural_move,
+    insert_child_into_diff_state, move_child_in_diff_state,
 };
 pub(crate) fn attach_child_at(
     applier: &mut dyn Applier,
@@ -395,5 +395,19 @@ fn settle_kept_children(applier: &mut dyn Applier, parent_id: NodeId) {
         .is_ok_and(|node| node.layout_dirty())
     {
         DirtyBubble::LAYOUT.apply_to_ancestors(applier, parent_id);
+    }
+}
+
+#[expect(clippy::print_stderr, reason = "CRANPOSE_STRUCTURAL_DIAG asks for it")]
+fn note_structural(reason: &str, parent_id: NodeId, child_id: NodeId) {
+    if crate::env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
+        eprintln!("[structural] {reason} parent={parent_id} child={child_id}");
+    }
+}
+
+#[expect(clippy::print_stderr, reason = "CRANPOSE_STRUCTURAL_DIAG asks for it")]
+pub(crate) fn note_structural_move(parent_id: NodeId, from_index: usize, to_index: usize) {
+    if crate::env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
+        eprintln!("[structural] move parent={parent_id} from={from_index} to={to_index}");
     }
 }

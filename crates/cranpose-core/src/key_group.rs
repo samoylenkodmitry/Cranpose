@@ -1,6 +1,6 @@
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 
-use crate::{explicit_group_key_seed, with_current_composer};
+use crate::{Key, location_key, slot, with_current_composer};
 
 fn key_scoped<K: Hash, R>(
     key: &K,
@@ -31,4 +31,19 @@ pub fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
 #[track_caller]
 pub fn key<K: Hash, R>(keys: K, content: impl FnOnce() -> R) -> R {
     key_scoped(&keys, std::panic::Location::caller(), content)
+}
+
+pub(crate) fn hash_key<K: Hash>(key: &K) -> Key {
+    let mut hasher = crate::hash::default::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(crate) fn explicit_group_key_seed<K: Hash>(
+    key: &K,
+    caller: &'static std::panic::Location<'static>,
+) -> slot::GroupKeySeed {
+    let source_key = location_key(caller.file(), caller.line(), caller.column());
+    let explicit_key = hash_key(key);
+    slot::GroupKeySeed::keyed(source_key, explicit_key)
 }
