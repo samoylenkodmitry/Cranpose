@@ -5,7 +5,10 @@ use cranpose_ui_graphics::{
     FRAGMENT_KIND_TRAPEZOID, RecordSegment,
 };
 
-use super::{DEPTH_FORMAT, blend_state_for_mode, create_render_pipeline_logged};
+use super::{
+    DEPTH_FORMAT, PassDepth, ViewportUniformParams, blend_state_for_mode,
+    create_render_pipeline_logged, supported_blend_mode,
+};
 use crate::{
     ablation::ShapeAblation,
     debug_toggles::DebugToggle,
@@ -593,6 +596,49 @@ impl ShapePipelineKey {
             vertex_entry,
             fragment_entry,
             constants,
+        }
+    }
+
+    /// The pipeline `segment` of a run at `placement` draws with. `clipped`
+    /// says the variant tests the run's clip: a turned run's, since an
+    /// unturned one's clip is its paint's scissor (see [`super::clip_scissor`]).
+    pub(crate) fn of_run(
+        segment: &RecordSegment,
+        placement: &crate::scene::Placement,
+        tier: RunTier,
+        ablation: ShapeAblation,
+        turns: ShapeTurns,
+        (depth, clip): (PassDepth, SegmentClip),
+        viewport: ViewportUniformParams,
+    ) -> Self {
+        let blend_mode = supported_blend_mode(segment.blend);
+        let laid = depth.is_on()
+            && blend_mode == BlendMode::SrcOver
+            && !placement.paints()
+            && clip != SegmentClip::Rounded
+            && !ablation.material
+            && !ablation.fill;
+        Self {
+            blend_mode,
+            tier,
+            variant: ShapeVariant::of_segment(
+                segment,
+                clip,
+                ablation,
+                laid,
+                (
+                    turns == ShapeTurns::None,
+                    turns == ShapeTurns::None
+                        && placement.snap_anchor.is_some()
+                        && viewport.offset.iter().all(|value| value.fract() == 0.0),
+                ),
+            ),
+            turns,
+            depth: if depth.is_on() {
+                ShapeDepth::Tested
+            } else {
+                ShapeDepth::Off
+            },
         }
     }
 }

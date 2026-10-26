@@ -12,15 +12,14 @@ use cranpose_render_common::{
     geometry::blur_reach, graph::quad_bounds, software_text_raster::SoftwareTextFontSet,
 };
 use cranpose_ui_graphics::{
-    BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, RecordSegment, Rect,
-    RenderHash, TileMode,
+    BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
     DebugCpuAllocationStats,
-    ablation::{Ablation, ShapeAblation},
+    ablation::Ablation,
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
     debug_toggles::DebugToggle,
@@ -3185,49 +3184,6 @@ impl GpuRenderer {
         self.run_store.is_stored(run)
     }
 
-    /// The pipeline `segment` of a run at `placement` draws with. `clipped`
-    /// says the variant tests the run's clip: a turned run's, since an
-    /// unturned one's clip is its paint's scissor (see [`clip_scissor`]).
-    fn run_pipeline_key(
-        segment: &RecordSegment,
-        placement: &crate::scene::Placement,
-        tier: RunTier,
-        ablation: ShapeAblation,
-        turns: ShapeTurns,
-        (depth, clip): (PassDepth, SegmentClip),
-        viewport: ViewportUniformParams,
-    ) -> ShapePipelineKey {
-        let blend_mode = supported_blend_mode(segment.blend);
-        let laid = depth.is_on()
-            && blend_mode == BlendMode::SrcOver
-            && !placement.paints()
-            && clip != SegmentClip::Rounded
-            && !ablation.material
-            && !ablation.fill;
-        ShapePipelineKey {
-            blend_mode,
-            tier,
-            variant: ShapeVariant::of_segment(
-                segment,
-                clip,
-                ablation,
-                laid,
-                (
-                    turns == ShapeTurns::None,
-                    turns == ShapeTurns::None
-                        && placement.snap_anchor.is_some()
-                        && viewport.offset.iter().all(|value| value.fract() == 0.0),
-                ),
-            ),
-            turns,
-            depth: if depth.is_on() {
-                ShapeDepth::Tested
-            } else {
-                ShapeDepth::Off
-            },
-        }
-    }
-
     /// Brings a stored run's tables up to date and appends its draws, under
     /// a placement uniform of its own, to the pass's run draws `draws`, and
     /// the pipelines they draw with to `pipelines`.
@@ -3252,7 +3208,7 @@ impl GpuRenderer {
             run,
             &mut |segment| {
                 let key = |depth| {
-                    Self::run_pipeline_key(
+                    ShapePipelineKey::of_run(
                         segment,
                         placement,
                         RunTier::Store,
@@ -3353,7 +3309,7 @@ impl GpuRenderer {
             (at.space.scale, turn, at.shift),
             &mut |segment| {
                 let key = |depth| {
-                    Self::run_pipeline_key(
+                    ShapePipelineKey::of_run(
                         segment,
                         placement,
                         RunTier::Arena,
@@ -4001,9 +3957,10 @@ pub(crate) use frame_uploads::{DrawParts, FrameUploads};
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
 mod shape_pipeline;
+#[cfg(test)]
+pub(crate) use shape_pipeline::ShapeVariant;
 pub(crate) use shape_pipeline::{
-    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, ShapeVariant,
-    create_shape_pipeline,
+    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
 };
 mod text_raster_source;
 
