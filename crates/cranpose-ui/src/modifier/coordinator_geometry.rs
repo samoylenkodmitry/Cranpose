@@ -1,7 +1,10 @@
 //! Where each layout modifier of a node's chain put its content, which is
 //! where the draw modifiers and the text after it draw.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use cranpose_ui_graphics::{EdgeInsets, Point, Rect, Size};
 use smallvec::SmallVec;
@@ -61,9 +64,10 @@ impl CoordinatorGeometry {
 /// it, which is also all a node laid out without coordinators knows.
 #[derive(Clone, Default)]
 pub(crate) struct CoordinatorRect {
-    // The parts of the node whose layout writes the coordinators: `None` for
-    // a chain no layout places.
-    parts: Option<Rc<LayoutParts>>,
+    // The parts of the node whose layout writes the coordinators, held weak:
+    // slices a renderer or a dispatcher keeps after the node left must not
+    // keep its layout alive. Empty for a chain no layout places.
+    parts: Weak<LayoutParts>,
     ordinal: usize,
     padding: EdgeInsets,
 }
@@ -75,7 +79,7 @@ impl CoordinatorRect {
         padding: EdgeInsets,
     ) -> Self {
         Self {
-            parts: parts.map(Rc::clone),
+            parts: parts.map_or_else(Weak::new, Rc::downgrade),
             ordinal,
             padding,
         }
@@ -83,7 +87,7 @@ impl CoordinatorRect {
 
     fn placed_rect(&self) -> Option<Rect> {
         self.parts
-            .as_ref()?
+            .upgrade()?
             .coordinator_geometry()
             .rect(self.ordinal)
     }
