@@ -1,3 +1,5 @@
+use cranpose_render_common::raster_cache::LayerRasterCacheKey;
+
 use super::*;
 
 fn test_layer_cache_key() -> LayerRasterCacheKey {
@@ -123,7 +125,7 @@ fn layer_cache_counters_accumulate_and_reset() {
     assert_eq!(stats.text_image_raster_bytes.get(), 0);
     assert_eq!(stats.isolated_layer_renders.get(), 0);
     assert_eq!(stats.isolated_layer_pixels.get(), 0);
-    assert_eq!(stats.top_isolated_layer_count.get(), 0);
+    assert_eq!(stats.snapshot().top_isolated_layer_count, 0);
 }
 
 #[test]

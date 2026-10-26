@@ -35,7 +35,7 @@ impl CursorAnimationState {
     }
 
     #[cfg(test)]
-    pub fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         self.next_blink_time.get().is_some()
     }
 

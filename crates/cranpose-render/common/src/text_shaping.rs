@@ -7,7 +7,7 @@ use std::{
 use ab_glyph::GlyphId;
 use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default};
 use cranpose_ui::text::{ResolvedTextDirection, TextShaping, TextStyle};
-use rustybuzz::{Direction, Face, Feature, UnicodeBuffer, Variation};
+use rustybuzz::{Direction, Face, Feature, GlyphBuffer, UnicodeBuffer, Variation};
 use smallvec::SmallVec;
 
 use crate::font_features::font_feature_settings;
@@ -43,109 +43,9 @@ pub(crate) struct ShapedRun {
 }
 
 impl ShapedRun {
-    pub fn horizontal_scale(&self, natural: f32, synthesized: f32) -> f32 {
-        if self.cursive { natural } else { synthesized }
-    }
-
-    pub fn width(&self, scale: f32, spacing: f32) -> f32 {
-        (self.advance * scale + self.clusters.len() as f32 * self.spacing(spacing)).max(0.0)
-    }
-
-    pub fn spacing(&self, requested: f32) -> f32 {
-        if self.cursive { 0.0 } else { requested }
-    }
-
-    pub fn visit(
-        &self,
-        scale_x: f32,
-        scale_y: f32,
-        spacing: f32,
-        mut visit: impl FnMut(GlyphId, f32, f32),
-    ) {
-        let spacing = self.spacing(spacing);
-        for glyph in &self.glyphs {
-            visit(
-                glyph.id,
-                glyph.x * scale_x + (glyph.cluster as f32 + 0.5) * spacing,
-                -glyph.y * scale_y,
-            );
-        }
-    }
-}
-
-pub(crate) struct ShapingCache {
-    entries: BoundedLruCache<u64, Arc<ShapedRun>>,
-    buffer: Option<UnicodeBuffer>,
-    variations: Vec<Variation>,
-}
-
-impl ShapingCache {
-    pub fn new(variations: &[([u8; 4], f32)]) -> Self {
-        Self {
-            entries: BoundedLruCache::with_capacity_at_least_one(256),
-            buffer: None,
-            variations: variations
-                .iter()
-                .map(|(tag, value)| Variation {
-                    tag: ttf_parser::Tag::from_bytes(tag),
-                    value: *value,
-                })
-                .collect(),
-        }
-    }
-
-    pub fn shape(&mut self, bytes: &[u8], text: &str, style: &TextStyle) -> Option<Arc<ShapedRun>> {
-        let style_hash = style.measurement_hash();
-        let mut hash = default::new();
-        text.hash(&mut hash);
-        style_hash.hash(&mut hash);
-        let key = hash.finish();
-        if let Some(run) = self.entries.get(&key)
-            && run.text.as_ref() == text
-            && run.style_hash == style_hash
-        {
-            return Some(Arc::clone(run));
-        }
-        let mut face = Face::from_slice(bytes, 0)?;
-        face.set_variations(&self.variations);
-        let rtl = style.paragraph_style.text_direction.resolve(text) == ResolvedTextDirection::Rtl;
-        let mut buffer = self.buffer.take().unwrap_or_default();
-        buffer.push_str(text);
-        buffer.set_direction(if rtl {
-            Direction::RightToLeft
-        } else {
-            Direction::LeftToRight
-        });
-        if let Some(language) = style
-            .span_style
-            .locale_list
-            .as_ref()
-            .and_then(|locales| locales.locales().first())
-            .and_then(|tag| tag.parse().ok())
-        {
-            buffer.set_language(language);
-        }
-        buffer.guess_segment_properties();
-        let cursive = matches!(
-            buffer.script(),
-            rustybuzz::script::ARABIC
-                | rustybuzz::script::SYRIAC
-                | rustybuzz::script::MONGOLIAN
-                | rustybuzz::script::NKO
-                | rustybuzz::script::MANDAIC
-                | rustybuzz::script::ADLAM
-        );
-        let features: SmallVec<[Feature; 4]> = style
-            .span_style
-            .font_feature_settings
-            .as_deref()
-            .into_iter()
-            .flat_map(font_feature_settings)
-            .map(|feature| {
-                Feature::new(ttf_parser::Tag::from_bytes(&feature.tag), feature.value, ..)
-            })
-            .collect();
-        let shaped = rustybuzz::shape(&face, &features, buffer);
+    // The run of `text` as `shaped` lays out its glyphs, each cluster
+    // spanning the bytes up to the next cluster's start.
+    fn new(text: &str, style_hash: u64, cursive: bool, shaped: &GlyphBuffer) -> Self {
         let mut boundaries: Vec<usize> = shaped
             .glyph_infos()
             .iter()
@@ -154,7 +54,7 @@ impl ShapingCache {
         boundaries.push(text.len());
         boundaries.sort_unstable();
         boundaries.dedup();
-        let mut run = ShapedRun {
+        let mut run = Self {
             text: text.into(),
             style_hash,
             glyphs: Vec::with_capacity(shaped.len()),
@@ -188,9 +88,127 @@ impl ShapingCache {
             run.advance += position.x_advance as f32;
             y += position.y_advance as f32;
         }
+        run
+    }
+
+    pub(crate) fn horizontal_scale(&self, natural: f32, synthesized: f32) -> f32 {
+        if self.cursive { natural } else { synthesized }
+    }
+
+    pub(crate) fn width(&self, scale: f32, spacing: f32) -> f32 {
+        (self.advance * scale + self.clusters.len() as f32 * self.spacing(spacing)).max(0.0)
+    }
+
+    pub(crate) fn spacing(&self, requested: f32) -> f32 {
+        if self.cursive { 0.0 } else { requested }
+    }
+
+    pub(crate) fn visit(
+        &self,
+        scale_x: f32,
+        scale_y: f32,
+        spacing: f32,
+        mut visit: impl FnMut(GlyphId, f32, f32),
+    ) {
+        let spacing = self.spacing(spacing);
+        for glyph in &self.glyphs {
+            visit(
+                glyph.id,
+                glyph.x * scale_x + (glyph.cluster as f32 + 0.5) * spacing,
+                -glyph.y * scale_y,
+            );
+        }
+    }
+}
+
+pub(crate) struct ShapingCache {
+    entries: BoundedLruCache<u64, Arc<ShapedRun>>,
+    buffer: Option<UnicodeBuffer>,
+    variations: Vec<Variation>,
+}
+
+impl ShapingCache {
+    pub(crate) fn new(variations: &[([u8; 4], f32)]) -> Self {
+        Self {
+            entries: BoundedLruCache::with_capacity_at_least_one(256),
+            buffer: None,
+            variations: variations
+                .iter()
+                .map(|(tag, value)| Variation {
+                    tag: ttf_parser::Tag::from_bytes(tag),
+                    value: *value,
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn shape(
+        &mut self,
+        bytes: &[u8],
+        text: &str,
+        style: &TextStyle,
+    ) -> Option<Arc<ShapedRun>> {
+        let style_hash = style.measurement_hash();
+        let mut hash = default::new();
+        text.hash(&mut hash);
+        style_hash.hash(&mut hash);
+        let key = hash.finish();
+        if let Some(run) = self.entries.get(&key)
+            && run.text.as_ref() == text
+            && run.style_hash == style_hash
+        {
+            return Some(Arc::clone(run));
+        }
+        let mut face = Face::from_slice(bytes, 0)?;
+        face.set_variations(&self.variations);
+        let buffer = self.segmented(text, style);
+        let cursive = matches!(
+            buffer.script(),
+            rustybuzz::script::ARABIC
+                | rustybuzz::script::SYRIAC
+                | rustybuzz::script::MONGOLIAN
+                | rustybuzz::script::NKO
+                | rustybuzz::script::MANDAIC
+                | rustybuzz::script::ADLAM
+        );
+        let features: SmallVec<[Feature; 4]> = style
+            .span_style
+            .font_feature_settings
+            .as_deref()
+            .into_iter()
+            .flat_map(font_feature_settings)
+            .map(|feature| {
+                Feature::new(ttf_parser::Tag::from_bytes(&feature.tag), feature.value, ..)
+            })
+            .collect();
+        let shaped = rustybuzz::shape(&face, &features, buffer);
+        let run = Arc::new(ShapedRun::new(text, style_hash, cursive, &shaped));
         self.buffer = Some(shaped.clear());
-        let run = Arc::new(run);
         self.entries.push(key, Arc::clone(&run));
         Some(run)
+    }
+
+    // The scratch buffer holding `text`, with the direction and language
+    // `style` asks for and the script the text is in.
+    fn segmented(&mut self, text: &str, style: &TextStyle) -> UnicodeBuffer {
+        let rtl = style.paragraph_style.text_direction.resolve(text) == ResolvedTextDirection::Rtl;
+        let mut buffer = self.buffer.take().unwrap_or_default();
+        buffer.push_str(text);
+        buffer.set_direction(if rtl {
+            Direction::RightToLeft
+        } else {
+            Direction::LeftToRight
+        });
+        if let Some(language) = style
+            .span_style
+            .locale_list
+            .as_ref()
+            .and_then(|locales| locales.locales().first())
+            .and_then(|tag| tag.parse().ok())
+        {
+            buffer.set_language(language);
+        }
+        buffer.guess_segment_properties();
+        buffer
     }
 }

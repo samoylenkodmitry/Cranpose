@@ -60,7 +60,7 @@ impl WindowId {
 pub(crate) type NativeWindowKey = WindowId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NativeWindowPositionOrigin {
+pub(crate) enum NativeWindowPositionOrigin {
     Screen,
     HostWindow,
 }
@@ -84,7 +84,7 @@ pub enum WindowFocus {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeWindowOptions {
+pub(crate) struct NativeWindowOptions {
     pub title: String,
     pub width: f32,
     pub height: f32,
@@ -118,7 +118,7 @@ pub(crate) struct NativeWindowParts {
 }
 
 impl NativeWindowOptions {
-    pub fn new(title: impl Into<String>, width: f32, height: f32) -> Self {
+    pub(crate) fn new(title: impl Into<String>, width: f32, height: f32) -> Self {
         Self {
             title: title.into(),
             width,
@@ -140,7 +140,7 @@ impl NativeWindowOptions {
         }
     }
 
-    pub fn borderless(title: impl Into<String>, width: f32, height: f32) -> Self {
+    pub(crate) fn borderless(title: impl Into<String>, width: f32, height: f32) -> Self {
         Self {
             decorations: false,
             resizable: false,
@@ -148,64 +148,57 @@ impl NativeWindowOptions {
         }
     }
 
-    pub fn with_position(mut self, x: f32, y: f32) -> Self {
+    pub(crate) fn with_position(mut self, x: f32, y: f32) -> Self {
         self.x = Some(x);
         self.y = Some(y);
         self.position_origin = NativeWindowPositionOrigin::Screen;
         self
     }
 
-    pub fn with_host_window_position(mut self, x: f32, y: f32) -> Self {
+    pub(crate) fn with_host_window_position(mut self, x: f32, y: f32) -> Self {
         self.x = Some(x);
         self.y = Some(y);
         self.position_origin = NativeWindowPositionOrigin::HostWindow;
         self
     }
 
-    pub fn with_transparent(mut self, transparent: bool) -> Self {
+    pub(crate) fn with_transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
         self
     }
 
-    /// Whether the desktop draws its own drop shadow behind the window.
-    ///
-    /// The desktop takes the shadow's shape from the window's alpha, which
-    /// suits a window whose edges are hard. A window that fades out, a glow
-    /// or a blur, gets a contour drawn where the desktop's threshold falls,
-    /// and turns the shadow off to draw its own.
-    pub fn with_shadow(mut self, shadow: bool) -> Self {
+    pub(crate) fn with_shadow(mut self, shadow: bool) -> Self {
         self.shadow = shadow;
         self
     }
 
-    pub fn with_resizable(mut self, resizable: bool) -> Self {
+    pub(crate) fn with_resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self
     }
 
-    pub fn with_visible(mut self, visible: bool) -> Self {
+    pub(crate) fn with_visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    pub fn with_always_on_top(mut self, always_on_top: bool) -> Self {
+    pub(crate) fn with_always_on_top(mut self, always_on_top: bool) -> Self {
         self.always_on_top = always_on_top;
         self
     }
 
-    /// Sets whether the window takes focus when it is created.
-    pub fn with_focus(mut self, focus: WindowFocus) -> Self {
+    pub(crate) fn with_focus(mut self, focus: WindowFocus) -> Self {
         self.focus = focus;
         self
     }
 
-    pub fn with_min_size(mut self, width: f32, height: f32) -> Self {
+    pub(crate) fn with_min_size(mut self, width: f32, height: f32) -> Self {
         self.min_width = Some(width);
         self.min_height = Some(height);
         self
     }
 
-    pub fn with_max_size(mut self, width: f32, height: f32) -> Self {
+    pub(crate) fn with_max_size(mut self, width: f32, height: f32) -> Self {
         self.max_width = Some(width);
         self.max_height = Some(height);
         self
