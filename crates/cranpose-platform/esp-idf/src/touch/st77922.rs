@@ -15,6 +15,11 @@ const I2C_TIMEOUT_MS: u64 = 20;
 /// How long the reset line stays low, and how long the controller then takes
 /// to start its firmware, as in the vendor's driver.
 const RESET: Duration = Duration::from_millis(100);
+// The controller sometimes starts its firmware later than that and answers
+// no read yet: the setup reads it again this often, this far apart, before
+// it gives up.
+const SETUP_READS: u8 = 5;
+const SETUP_RETRY: Duration = Duration::from_millis(50);
 const FIRMWARE_VERSION_REGISTER: u16 = 0x0000;
 /// The registers from the largest X to the touch count, five bytes.
 const LIMITS_REGISTER: u16 = 0x0005;
@@ -58,8 +63,11 @@ pub struct St77922Touch<'d> {
 enum Setup {
     /// The reset line stays low until then.
     Resetting(Instant),
-    /// The controller starts its firmware until then.
-    Starting(Instant),
+    /// The controller starts its firmware until then; `reads` counts its missed reads.
+    Starting {
+        until: Instant,
+        reads: u8,
+    },
     Ready,
 }
 
@@ -174,18 +182,31 @@ impl Touch for St77922Touch<'_> {
 
     fn set_up(&mut self, now: Instant) -> Result<Option<Instant>, EspError> {
         match self.setup {
-            Setup::Resetting(until) | Setup::Starting(until) if now < until => Ok(Some(until)),
+            Setup::Resetting(until) | Setup::Starting { until, .. } if now < until => {
+                Ok(Some(until))
+            }
             Setup::Resetting(_) => {
                 self.reset.set_high()?;
                 let until = now + RESET;
-                self.setup = Setup::Starting(until);
+                self.setup = Setup::Starting { until, reads: 0 };
                 Ok(Some(until))
             }
-            Setup::Starting(_) => {
-                self.read_limits()?;
-                self.setup = Setup::Ready;
-                Ok(None)
-            }
+            Setup::Starting { reads, .. } => match self.read_limits() {
+                Ok(()) => {
+                    self.setup = Setup::Ready;
+                    Ok(None)
+                }
+                Err(error) if reads + 1 < SETUP_READS => {
+                    log::warn!("the touch panel did not answer yet ({error}); reading it again");
+                    let until = now + SETUP_RETRY;
+                    self.setup = Setup::Starting {
+                        until,
+                        reads: reads + 1,
+                    };
+                    Ok(Some(until))
+                }
+                Err(error) => Err(error),
+            },
             Setup::Ready => Ok(None),
         }
     }
