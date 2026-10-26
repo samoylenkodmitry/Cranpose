@@ -344,11 +344,10 @@ impl GpuRenderer {
         label: &'static str,
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
-        let device = Arc::clone(&self.device);
         let (depth, depth_keys) = self.pass_depth(segments);
         let mut prep = PassPrep::new(
             recorder,
-            (&device, target, load_op),
+            (target, load_op),
             (depth, depth_keys),
             turns_mixed(segments),
             &mut scratch,
@@ -1002,7 +1001,6 @@ pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
 /// Turns the segments of one pass into batches, one item run at a time.
 struct PassPrep<'a, 's, C> {
     recorder: &'a mut C,
-    device: &'a wgpu::Device,
     target: PassTarget<'a>,
     load_op: wgpu::LoadOp<wgpu::Color>,
     batches: Vec<Batch<'s>>,
@@ -1057,14 +1055,13 @@ struct PassPrep<'a, 's, C> {
 impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     fn new(
         recorder: &'a mut C,
-        (device, target, load_op): (&'a wgpu::Device, PassTarget<'a>, wgpu::LoadOp<wgpu::Color>),
+        (target, load_op): (PassTarget<'a>, wgpu::LoadOp<wgpu::Color>),
         (depth, depth_keys): (PassDepth, Option<PipelineDemand>),
         mixed_turns: bool,
         scratch: &mut PassScratch,
     ) -> Self {
         Self {
             recorder,
-            device,
             target,
             load_op,
             batches: Vec::new(),
@@ -1930,7 +1927,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 };
                 let prepared = renderer.effect_renderer.prepare_composite_draw(
                     self.recorder,
-                    self.device,
+                    &renderer.device,
                     self.load_op,
                     &item,
                 );
@@ -1963,7 +1960,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 };
                 let prepared = renderer
                     .effect_renderer
-                    .prepare_shader_draw(self.recorder, self.device, &item)
+                    .prepare_shader_draw(self.recorder, &renderer.device, &item)
                     .ok_or_else(|| "shader composite preparation failed".to_string())?;
                 self.batches.push(Batch::Shader(prepared));
             }
@@ -1990,7 +1987,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 };
                 let prepared = renderer.effect_renderer.prepare_projective_composite_draw(
                     self.recorder,
-                    self.device,
+                    &renderer.device,
                     &item,
                 );
                 self.batches.push(Batch::Projective(prepared));
