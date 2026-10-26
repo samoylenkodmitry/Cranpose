@@ -12,14 +12,14 @@ use crate::{MemoryApplier, NodeId, collections::map::HashMap};
 /// is may keep them: a node stored again in another place loses its mark.
 ///
 /// ```
-/// use cranpose_core::{MemoryApplier, NodeMarks};
+/// use cranpose_core::{MemoryApplier, NodeId, NodeMarks};
 ///
 /// let applier = MemoryApplier::new();
 /// let mut marks = NodeMarks::default();
 /// marks.reset(&applier);
-/// assert_eq!(marks.get(&applier, 7), 0);
-/// marks.set(&applier, 7, 2);
-/// assert_eq!(marks.get(&applier, 7), 2);
+/// assert_eq!(marks.get(&applier, NodeId(7)), 0);
+/// marks.set(&applier, NodeId(7), 2);
+/// assert_eq!(marks.get(&applier, NodeId(7)), 2);
 /// ```
 #[derive(Default)]
 pub struct NodeMarks {
@@ -48,14 +48,14 @@ impl NodeMarks {
     /// and returns the mark it had.
     ///
     /// ```
-    /// use cranpose_core::{MemoryApplier, NodeMarks};
+    /// use cranpose_core::{MemoryApplier, NodeId, NodeMarks};
     ///
     /// let applier = MemoryApplier::new();
     /// let mut marks = NodeMarks::default();
     /// marks.reset(&applier);
-    /// assert_eq!(marks.add(&applier, 7, 1), 0);
-    /// assert_eq!(marks.add(&applier, 7, 2), 1);
-    /// assert_eq!(marks.get(&applier, 7), 3);
+    /// assert_eq!(marks.add(&applier, NodeId(7), 1), 0);
+    /// assert_eq!(marks.add(&applier, NodeId(7), 2), 1);
+    /// assert_eq!(marks.get(&applier, NodeId(7)), 3);
     /// ```
     #[inline]
     pub fn add(&mut self, applier: &MemoryApplier, id: NodeId, mark: u8) -> u8 {
