@@ -29,7 +29,9 @@ mod text;
 
 use image::{blit_image_between_pixels, draw_image, image_rect};
 use reach::text_bounds;
-use row_runs::{INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
+use row_runs::{
+    INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, line_row_runs, stroke_row_runs,
+};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
 
@@ -487,9 +489,10 @@ fn draw_shape<P: Pixel>(
     match &coverage {
         ShapeCoverage::Line(line) => {
             let frame = line.frame();
-            paint.paint(whole_rows, |point| {
-                Coverage::of(line.coverage_in(&frame, point))
-            });
+            paint.paint(
+                |y, min_x, max_x| line_row_runs(line, &frame, y, min_x, max_x),
+                |point| Coverage::of(line.coverage_in(&frame, point)),
+            );
         }
         ShapeCoverage::Trapezoid(trapezoid) => {
             paint.paint(whole_rows, |point| Coverage::of(trapezoid.coverage(point)));
