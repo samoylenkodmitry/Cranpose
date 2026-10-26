@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_ui_graphics::Size as GeometrySize;
-use cranpose_ui_layout::{Measurable, MeasureResult, MeasureScope};
+use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
 
 use super::*;
 use crate::MovedSceneNode;
@@ -462,21 +462,6 @@ fn a_new_child_list_is_reported_to_the_semantics_tree() {
         vec![NodeId(4)],
         "the children changed"
     );
-}
-
-#[test]
-fn cloning_cache_handles_from_the_same_cache_keeps_the_handle() {
-    let cache = LayoutNodeCacheHandles::default();
-    let mut shared = cache.clone();
-    cache.activate(7);
-    shared.clone_from(&cache);
-    assert_eq!(Rc::strong_count(&cache.state), 2);
-
-    let mut other = LayoutNodeCacheHandles::default();
-    other.clone_from(&cache);
-    assert!(Rc::ptr_eq(&other.state, &cache.state));
-    assert_eq!(other.epoch(), 7);
-    assert_eq!(Rc::strong_count(&cache.state), 3);
 }
 
 #[test]

@@ -55,7 +55,7 @@ use crate::{
     },
     render_state::AppContext,
     subcompose_layout::{MeasureCallbacks, SubcomposeLayoutNode},
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutParts, LayoutState},
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
 #[derive(Default)]
@@ -1237,7 +1237,7 @@ pub fn measure_layout_with_options(
             (
                 node.needs_measure() || Node::descendant_needs_measure(node),
                 node.needs_semantics(),
-                node.cache_handles().epoch(),
+                node.cache().epoch(),
             )
         }) {
         Ok(tuple) => tuple,
@@ -1412,7 +1412,6 @@ enum LayoutNodeVisit<'a> {
 struct KeptNode {
     measured: Rc<MeasuredNode>,
     parts: Rc<LayoutParts>,
-    cache: LayoutNodeCacheHandles,
     /// Whether a child that measures to another size leaves the node as it
     /// is.
     ignores_child_sizes: bool,
@@ -1457,7 +1456,7 @@ impl ChildView {
     /// The child, when it or a node below it changed.
     fn of(
         node: &dyn Node,
-        cache: &LayoutNodeCacheHandles,
+        cache: &NodeCache,
         parent_data: &dyn Fn() -> cranpose_ui_layout::ParentData,
         placed: bool,
     ) -> Option<Self> {
@@ -1557,7 +1556,7 @@ impl LayoutBuilderState {
                 if node.needs_measure() || Node::needs_layout(node) {
                     return None;
                 }
-                let cache = node.cache_handles();
+                let cache = node.cache();
                 if cache.epoch() < self.cache_floor {
                     return None;
                 }
@@ -1589,7 +1588,7 @@ impl LayoutBuilderState {
         };
         self.with_applier_result(|applier| {
             applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.cache_handles()
+                node.cache()
                     .store_measurement(constraints, Rc::clone(&kept));
                 node.clear_needs_layout();
             })
@@ -1712,7 +1711,7 @@ impl LayoutBuilderState {
                 let resolved_modifiers = handle
                     .resolved_modifiers()
                     .on_device_grid(subcompose.density().density());
-                let spare = MeasuredSpare::take(subcompose.cache_handles());
+                let spare = MeasuredSpare::take(subcompose.cache());
                 (handle, resolved_modifiers, spare)
             } else {
                 return Ok(None);
@@ -1995,7 +1994,7 @@ impl LayoutBuilderState {
 
         self.with_applier_result(|applier| {
             applier.with_node::<LayoutNode, _>(node_id, |node| {
-                node.cache_handles().store_held_measurement(
+                node.cache().store_held_measurement(
                     constraints,
                     Rc::clone(&measured),
                     measurement.hold,
@@ -2087,7 +2086,7 @@ impl LayoutBuilderState {
         if node.needs_measure() || node.needs_layout() || node.is_virtual() {
             return None;
         }
-        let cache = node.cache_handles();
+        let cache = node.cache();
         if cache.epoch() < self.cache_floor {
             return None;
         }
@@ -2107,7 +2106,6 @@ impl LayoutBuilderState {
         let KeptNode {
             measured,
             parts,
-            cache,
             ignores_child_sizes,
         } = node;
         let mut next_state = 0;
@@ -2124,6 +2122,7 @@ impl LayoutBuilderState {
         else {
             return Ok(None);
         };
+        let cache = parts.cache();
         if resized {
             cache.store_resized_measurement(constraints, Rc::clone(&kept));
         } else {
@@ -2195,8 +2194,10 @@ impl LayoutBuilderState {
         };
         *next_state += offset + 1;
         // A clean child's flags sit in the cache its record shares with it.
-        if read_cell(&state.cache, |cache| {
-            cache.as_ref().is_some_and(|cache| !cache.dirt().any())
+        if read_cell(&state.parts, |parts| {
+            parts
+                .as_ref()
+                .is_some_and(|parts| !parts.cache().dirt().any())
         }) {
             return Ok(ChildChange::Unchanged);
         }
@@ -2234,7 +2235,7 @@ impl LayoutBuilderState {
             return;
         };
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            node.cache_handles()
+            node.cache()
                 .store_measurement(constraints, Rc::clone(measured));
         });
     }
@@ -2265,15 +2266,13 @@ impl LayoutBuilderState {
     ) -> LayoutNodeVisit<'_> {
         node.clear_placed(&self.context);
         if keep && let Some(measured) = self.measurement_to_keep(node, constraints) {
-            let cache = node.cache_handles();
             return LayoutNodeVisit::Keep(KeptNode {
-                ignores_child_sizes: cache.ignores_child_sizes_of(&measured),
+                ignores_child_sizes: node.cache().ignores_child_sizes_of(&measured),
                 measured,
                 parts: Rc::clone(node.layout_parts()),
-                cache: cache.clone(),
             });
         }
-        let cache = node.cache_handles();
+        let cache = node.cache();
         cache.activate(self.cache_epoch);
         if !Node::layout_dirty(node)
             && let Some(cached) = cache.get_measurement(constraints)
@@ -2325,8 +2324,8 @@ impl LayoutBuilderState {
         let bound = applier.with_node::<LayoutNode, _>(child_id, |child| {
             runtime_state.child_state_at(position, child_id).bind(
                 LayoutChildBinding {
-                    cache: child.cache_handles(),
-                    layout_state: Some(child.layout_parts()),
+                    parts: child.layout_parts(),
+                    layout_node: true,
                     parent_data: Some(child.parent_data()),
                     dirty: child.needs_layout() || child.needs_measure(),
                     descendant_dirty: Node::descendant_needs_layout(child),
@@ -2340,8 +2339,8 @@ impl LayoutBuilderState {
                 match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
                     runtime_state.child_state_at(position, child_id).bind(
                         LayoutChildBinding {
-                            cache: child.cache_handles(),
-                            layout_state: None,
+                            parts: child.layout_parts(),
+                            layout_node: false,
                             parent_data: Some(child.parent_data()),
                             dirty: child.needs_layout() || child.needs_measure(),
                             descendant_dirty: Node::descendant_needs_layout(child),
@@ -2589,7 +2588,7 @@ struct MeasuredSpare {
 }
 
 impl MeasuredSpare {
-    fn take(cache: &LayoutNodeCacheHandles) -> Self {
+    fn take(cache: &NodeCache) -> Self {
         let Some(mut node) = cache.take_previous_measurement() else {
             return Self::default();
         };
@@ -3428,8 +3427,10 @@ impl LayoutChildFrame {
 }
 
 struct LayoutChildBinding<'a> {
-    cache: &'a LayoutNodeCacheHandles,
-    layout_state: Option<&'a Rc<LayoutParts>>,
+    parts: &'a Rc<LayoutParts>,
+    // Whether the child is a layout node, whose size and placed flag its
+    // parent's measure writes: a subcompose node writes its own.
+    layout_node: bool,
     parent_data: Option<cranpose_ui_layout::ParentData>,
     /// The child's own layout or measure is dirty.
     dirty: bool,
@@ -3442,17 +3443,12 @@ struct LayoutChildBinding<'a> {
 fn read_layout_child<R>(
     applier: &mut MemoryApplier,
     child_id: NodeId,
-    read: impl Fn(
-        &dyn Node,
-        &LayoutNodeCacheHandles,
-        &dyn Fn() -> cranpose_ui_layout::ParentData,
-        bool,
-    ) -> R,
+    read: impl Fn(&dyn Node, &NodeCache, &dyn Fn() -> cranpose_ui_layout::ParentData, bool) -> R,
 ) -> Result<Option<R>, NodeError> {
     match applier.with_node::<LayoutNode, _>(child_id, |child| {
         read(
             &*child,
-            child.cache_handles(),
+            child.cache(),
             &|| child.parent_data(),
             child.is_placed(),
         )
@@ -3462,7 +3458,7 @@ fn read_layout_child<R>(
             match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
                 read(
                     &*child,
-                    child.cache_handles(),
+                    child.cache(),
                     &|| child.parent_data(),
                     child.layout_state().is_placed(),
                 )
@@ -3483,8 +3479,11 @@ fn read_layout_child<R>(
 struct LayoutChildMeasureState {
     node_id: NodeId,
     frame: Rc<LayoutChildFrame>,
-    /// The child's cache, `None` until the record is first bound.
-    cache: Cell<Option<LayoutNodeCacheHandles>>,
+    // The child's shared parts, `None` until the record is first bound.
+    parts: Cell<Option<Rc<LayoutParts>>>,
+    // Whether the record writes the child's size and placed flag: see
+    // `LayoutChildBinding::layout_node`.
+    layout_node: Cell<bool>,
     cache_epoch: Cell<u64>,
     force_remeasure: Cell<bool>,
     parent_data: Cell<Option<cranpose_ui_layout::ParentData>>,
@@ -3494,7 +3493,6 @@ struct LayoutChildMeasureState {
     read_intrinsics: Cell<bool>,
     measured: Cell<Option<Rc<MeasuredNode>>>,
     last_position: Cell<Option<Point>>,
-    layout_state: Cell<Option<Rc<LayoutParts>>>,
 }
 
 /// Runs `read` on what `cell` holds and puts it back. `read` must not reach
@@ -3521,7 +3519,8 @@ impl LayoutChildMeasureState {
         Rc::new(Self {
             node_id,
             frame,
-            cache: Cell::new(None),
+            parts: Cell::new(None),
+            layout_node: Cell::new(false),
             cache_epoch: Cell::new(0),
             force_remeasure: Cell::new(true),
             parent_data: Cell::new(None),
@@ -3529,7 +3528,6 @@ impl LayoutChildMeasureState {
             read_intrinsics: Cell::new(false),
             measured: Cell::new(None),
             last_position: Cell::new(None),
-            layout_state: Cell::new(None),
         })
     }
 
@@ -3537,16 +3535,21 @@ impl LayoutChildMeasureState {
     /// nodes below it keeps its cache: it measures again, but may keep its
     /// measurement.
     fn bind(&self, binding: LayoutChildBinding<'_>, pass: &LayoutBuilderState) {
-        let child_epoch = binding.cache.epoch();
+        let cache = binding.parts.cache();
+        let child_epoch = cache.epoch();
         let stale = binding.dirty || child_epoch < pass.cache_floor;
         let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
-        binding.cache.activate(cache_epoch);
-        let mut cache = self.cache.take();
-        match &mut cache {
-            Some(cache) => cache.clone_from(binding.cache),
-            None => cache = Some(binding.cache.clone()),
-        }
-        self.cache.set(cache);
+        cache.activate(cache_epoch);
+        let parts = self.parts.take();
+        let shared = parts
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, binding.parts));
+        self.parts.set(if shared {
+            parts
+        } else {
+            Some(Rc::clone(binding.parts))
+        });
+        self.layout_node.set(binding.layout_node);
         self.cache_epoch.set(cache_epoch);
         self.force_remeasure.set(stale || binding.descendant_dirty);
         self.parent_data.set(binding.parent_data);
@@ -3556,28 +3559,21 @@ impl LayoutChildMeasureState {
             self.measured_constraints.set(None);
             self.read_intrinsics.set(false);
         }
-        let layout_state = self.layout_state.take();
-        let shared = layout_state
-            .as_ref()
-            .zip(binding.layout_state)
-            .is_some_and(|(current, bound)| Rc::ptr_eq(current, bound));
-        self.layout_state.set(if shared {
-            layout_state
-        } else {
-            binding.layout_state.cloned()
-        });
     }
 
     /// Runs `f` on the child's layout state with the context of the pass it
     /// measures in; nothing while it is bound to no pass.
     fn with_pass_layout_state(&self, f: impl FnOnce(&mut LayoutState, &AppContext)) {
+        if !self.layout_node.get() {
+            return;
+        }
         let builder = self.frame.builder.borrow();
         let Some(builder) = builder.as_ref() else {
             return;
         };
-        read_cell(&self.layout_state, |state| {
-            if let Some(state) = state {
-                f(&mut state.layout_state().borrow_mut(), &builder.context);
+        read_cell(&self.parts, |parts| {
+            if let Some(parts) = parts {
+                f(&mut parts.layout_state().borrow_mut(), &builder.context);
             }
         });
     }
@@ -3588,26 +3584,14 @@ impl LayoutChildMeasureState {
         let Some(builder) = builder.as_ref() else {
             return;
         };
-        let placed = read_cell(&self.layout_state, |layout_state| {
-            layout_state
-                .as_ref()
-                .map(|layout_state| {
-                    layout_state.layout_state().borrow_mut().place(
-                        position,
-                        self.frame.parent.get(),
-                        &builder.context,
-                    );
-                })
-                .is_some()
-        });
-        if placed {
-            return;
-        }
-        let Ok(mut applier) = builder.applier.try_borrow_typed() else {
-            return;
-        };
-        let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
-            node.set_position(position, self.frame.parent.get(), &builder.context);
+        read_cell(&self.parts, |parts| {
+            if let Some(parts) = parts {
+                parts.layout_state().borrow_mut().place(
+                    position,
+                    self.frame.parent.get(),
+                    &builder.context,
+                );
+            }
         });
     }
 
@@ -3639,14 +3623,13 @@ impl LayoutChildMeasureState {
         if self.frame.measures() {
             self.measured_constraints.set(Some(constraints));
         }
-        let cache = read_cell(&self.cache, Clone::clone);
-        if let Some(cache) = &cache {
+        let parts = read_cell(&self.parts, Clone::clone);
+        let cache = parts.as_deref().map(LayoutParts::cache);
+        if let Some(cache) = cache {
             cache.activate(self.cache_epoch.get());
         }
         if !self.force_remeasure.get()
-            && let Some(cached) = cache
-                .as_ref()
-                .and_then(|cache| cache.get_measurement(constraints))
+            && let Some(cached) = cache.and_then(|cache| cache.get_measurement(constraints))
         {
             // A measure clears the placed flag the parent's placement sets
             // again; a child it no longer places then leaves the scene.
@@ -3659,7 +3642,7 @@ impl LayoutChildMeasureState {
         match self.perform_measure(constraints) {
             Ok(measured) => {
                 self.force_remeasure.set(false);
-                if let Some(cache) = &cache {
+                if let Some(cache) = cache {
                     cache.store_measurement(constraints, Rc::clone(&measured));
                 }
                 Some(measured)
@@ -3698,12 +3681,13 @@ impl LayoutChildMeasurable {
         if state.frame.measures() {
             state.read_intrinsics.set(true);
         }
-        let cache = read_cell(&state.cache, Clone::clone);
-        if let Some(cache) = &cache {
+        let parts = read_cell(&state.parts, Clone::clone);
+        let cache = parts.as_deref().map(LayoutParts::cache);
+        if let Some(cache) = cache {
             cache.activate(state.cache_epoch.get());
         }
         if !state.force_remeasure.get()
-            && let Some(value) = cache.as_ref().and_then(|cache| cache.get_intrinsic(&kind))
+            && let Some(value) = cache.and_then(|cache| cache.get_intrinsic(&kind))
         {
             return value;
         }
@@ -3713,7 +3697,7 @@ impl LayoutChildMeasurable {
                 .measure_cached(constraints)
                 .map_or(0.0, |node| extent(node.size_for_parent())),
         };
-        if let Some(cache) = &cache {
+        if let Some(cache) = cache {
             cache.store_intrinsic(kind, value);
         }
         value
@@ -3739,7 +3723,9 @@ impl Measurable for LayoutChildMeasurable {
     fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
         read_cell(&self.state.measured, |measured| {
             let measured = measured.as_ref()?;
-            let hold = read_cell(&self.state.cache, |cache| cache.as_ref()?.hold_of(measured))?;
+            let hold = read_cell(&self.state.parts, |parts| {
+                parts.as_ref()?.cache().hold_of(measured)
+            })?;
             Some((measured.size_for_parent(), hold))
         })
     }
@@ -3933,10 +3919,10 @@ fn visit_child<R>(
     let held = applier.get_mut(child.node_id).ok().and_then(|node| {
         let any = node.as_any_mut();
         if let Some(layout) = any.downcast_ref::<LayoutNode>() {
-            return layout.cache_handles().held_measurement();
+            return layout.cache().held_measurement();
         }
         any.downcast_ref::<SubcomposeLayoutNode>()
-            .and_then(|subcompose| subcompose.cache_handles().held_measurement())
+            .and_then(|subcompose| subcompose.cache().held_measurement())
     });
     match held {
         Some(held) => visit(applier, &held),

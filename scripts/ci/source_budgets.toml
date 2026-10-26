@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 11
-private_docs = 13815
+private_docs = 13809
 for_test_fns = 40
 cranpose_env_names = 78
 source_text_checks = 341
@@ -84,10 +84,10 @@ limit = 1000
 "crates/cranpose-ui-graphics/src/liquid_glass.rs" = 1065
 "crates/cranpose-ui-graphics/src/record.rs" = 2779
 "crates/cranpose-ui-graphics/src/render_effect.rs" = 1287
-"crates/cranpose-ui/src/layout/mod.rs" = 4367
+"crates/cranpose-ui/src/layout/mod.rs" = 4353
 "crates/cranpose-ui/src/modifier/mod.rs" = 1284
 "crates/cranpose-ui/src/modifier/scroll.rs" = 2039
-"crates/cranpose-ui/src/modifier/slices.rs" = 1075
+"crates/cranpose-ui/src/modifier/slices.rs" = 1074
 "crates/cranpose-ui/src/modifier_nodes.rs" = 2901
 "crates/cranpose-ui/src/render_state.rs" = 1659
 "crates/cranpose-ui/src/subcompose_layout.rs" = 1668
@@ -95,7 +95,7 @@ limit = 1000
 "crates/cranpose-ui/src/text_field_modifier_node.rs" = 1703
 "crates/cranpose-ui/src/widgets/image.rs" = 1057
 "crates/cranpose-ui/src/widgets/lazy_list.rs" = 1910
-"crates/cranpose-ui/src/widgets/nodes/layout_node.rs" = 1782
+"crates/cranpose-ui/src/widgets/nodes/layout_node.rs" = 1446
 "crates/cranpose-ui/src/widgets/wear/scaling_list.rs" = 1648
 "crates/cranpose/src/accessibility.rs" = 2281
 "crates/cranpose/src/android/event_loop.rs" = 2390

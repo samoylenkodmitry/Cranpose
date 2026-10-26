@@ -7,10 +7,7 @@ use cranpose_ui_graphics::{
 };
 use smallvec::SmallVec;
 
-use super::{
-    ModifierChainHandle, Point,
-    coordinator_geometry::{CoordinatorGeometry, CoordinatorRect},
-};
+use super::{ModifierChainHandle, Point, coordinator_geometry::CoordinatorRect};
 use crate::{
     draw::DrawCommand,
     modifier::{
@@ -24,6 +21,7 @@ use crate::{
     text::{TextLayoutOptions, TextStyle},
     text_field_modifier_node::{TextFieldLayoutHandle, TextFieldModifierNode, TextPanResolver},
     text_modifier_node::{TextModifierNode, TextPreparedLayoutHandle},
+    widgets::nodes::LayoutParts,
 };
 
 /// Snapshot of modifier node slices that impact draw and pointer subsystems.
@@ -700,7 +698,7 @@ fn collect_pointer_icon(node: &dyn std::any::Any, slices: &mut ModifierNodeSlice
 /// that no layout places: its draws sit inside the padding before them.
 pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
     let mut slices = ModifierNodeSlices::default();
-    collect_modifier_slices_into(chain, &mut slices, &Rc::default(), 1.0);
+    collect_modifier_slices_into(chain, &mut slices, None, 1.0);
     slices
 }
 
@@ -725,13 +723,14 @@ impl SlicesSnapshot {
     /// Collects `chain`'s slices into the snapshot. Its storage is reused
     /// when nothing else holds it; one the render graph still shares is left
     /// to the graph and replaced, not cloned only to be cleared. The draws
-    /// and text read their place from `geometry`, which the node's layout
-    /// writes, and until then sit inside the padding before them on the
-    /// device pixel grid of `density`.
+    /// and text read their place from the coordinator rects of `parts`,
+    /// which the node's layout writes, and until then, or without `parts`,
+    /// sit inside the padding before them on the device pixel grid of
+    /// `density`.
     pub(crate) fn collect(
         &self,
         chain: &ModifierNodeChain,
-        geometry: &Rc<CoordinatorGeometry>,
+        parts: Option<&Rc<LayoutParts>>,
         density: f32,
     ) {
         if !chain.capabilities().intersects(
@@ -748,7 +747,7 @@ impl SlicesSnapshot {
             snapshot = Some(Rc::default());
         }
         if let Some(slices) = snapshot.as_mut().and_then(Rc::get_mut) {
-            collect_modifier_slices_into(chain, slices, geometry, density);
+            collect_modifier_slices_into(chain, slices, parts, density);
         }
         self.0.set(snapshot);
     }
@@ -757,7 +756,7 @@ impl SlicesSnapshot {
 fn collect_modifier_slices_into(
     chain: &ModifierNodeChain,
     slices: &mut ModifierNodeSlices,
-    geometry: &Rc<CoordinatorGeometry>,
+    parts: Option<&Rc<LayoutParts>>,
     density: f32,
 ) {
     slices.clear();
@@ -799,7 +798,7 @@ fn collect_modifier_slices_into(
 
             if has_draw && node_caps.intersects(NodeCapabilities::DRAW) {
                 let draw = DrawSite {
-                    coordinator: CoordinatorRect::new(geometry, layout_ordinal, padding),
+                    coordinator: CoordinatorRect::new(parts, layout_ordinal, padding),
                     displaceable: has_layout,
                     modifier_index,
                 };
@@ -821,7 +820,7 @@ fn collect_modifier_slices_into(
                 collect_window_geometry_sink(
                     any,
                     // The text a selectable wraps is the layout node after it.
-                    CoordinatorRect::new(geometry, layout_ordinal + 1, padding),
+                    CoordinatorRect::new(parts, layout_ordinal + 1, padding),
                     slices,
                 );
 
@@ -838,7 +837,7 @@ fn collect_modifier_slices_into(
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
                     slices.text_coordinator =
-                        Some(CoordinatorRect::new(geometry, layout_ordinal, padding));
+                        Some(CoordinatorRect::new(parts, layout_ordinal, padding));
                     slices.text = Some(SliceText::Text(text_node.prepared_layout_handle()));
                 }
 
@@ -851,7 +850,7 @@ fn collect_modifier_slices_into(
                     })));
                     slices.rare_mut().text_window = Some(text_field_node.window_sink());
 
-                    let coordinator = CoordinatorRect::new(geometry, layout_ordinal, padding);
+                    let coordinator = CoordinatorRect::new(parts, layout_ordinal, padding);
                     text_field_node.set_content_origin(coordinator.clone());
                     slices.text_coordinator = Some(coordinator);
                 }

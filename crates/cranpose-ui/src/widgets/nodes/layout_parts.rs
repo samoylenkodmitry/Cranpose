@@ -1,25 +1,52 @@
-//! The layout state and the runtime state of a layout node, in one
-//! allocation.
+//! What a node's layout shares: its layout state, measurement cache, runtime
+//! state and coordinator rects, in one allocation.
 
 use std::cell::RefCell;
 
-use super::LayoutState;
-use crate::layout::LayoutRuntimeState;
+use super::{LayoutState, NodeCache};
+use crate::{layout::LayoutRuntimeState, modifier::CoordinatorGeometry};
 
-// The layout state and the runtime state of a node, which layout reaches
-// without the applier and the node's clones share: one allocation, so the
-// measure path that reads them fetches them together.
+// What layout reaches of a node without the applier, and what its parent's
+// record of it, its kept measurement and its draws' coordinator rects share:
+// one allocation, so the measure path that reads them fetches them together.
 pub(crate) struct LayoutParts {
-    pub(super) layout_state: RefCell<LayoutState>,
-    pub(super) runtime_state: RefCell<LayoutRuntimeState>,
+    cache: NodeCache,
+    layout_state: RefCell<LayoutState>,
+    runtime_state: RefCell<LayoutRuntimeState>,
+    coordinator_geometry: CoordinatorGeometry,
 }
 
 impl LayoutParts {
+    pub(crate) fn new(runtime_state: LayoutRuntimeState) -> Self {
+        Self {
+            cache: NodeCache::default(),
+            layout_state: RefCell::default(),
+            runtime_state: RefCell::new(runtime_state),
+            coordinator_geometry: CoordinatorGeometry::default(),
+        }
+    }
+
+    // Parts with the empty measure policy, whose runtime state stays empty:
+    // a subcompose node measures its children through a policy of its own.
+    pub(crate) fn empty() -> Self {
+        Self::new(LayoutRuntimeState::new(
+            super::layout_node::empty_measure_policy(),
+        ))
+    }
+
+    pub(crate) fn cache(&self) -> &NodeCache {
+        &self.cache
+    }
+
     pub(crate) fn layout_state(&self) -> &RefCell<LayoutState> {
         &self.layout_state
     }
 
     pub(crate) fn runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
         &self.runtime_state
+    }
+
+    pub(crate) fn coordinator_geometry(&self) -> &CoordinatorGeometry {
+        &self.coordinator_geometry
     }
 }

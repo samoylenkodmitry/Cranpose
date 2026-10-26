@@ -1,10 +1,15 @@
 //! Where each layout modifier of a node's chain put its content, which is
 //! where the draw modifiers and the text after it draw.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use cranpose_ui_graphics::{EdgeInsets, Point, Rect, Size};
 use smallvec::SmallVec;
+
+use crate::widgets::nodes::LayoutParts;
 
 /// A layout node's coordinators, as Compose has them: for the k-th layout
 /// modifier of its chain, the rect relative to the node that modifier was
@@ -59,28 +64,37 @@ impl CoordinatorGeometry {
 /// it, which is also all a node laid out without coordinators knows.
 #[derive(Clone, Default)]
 pub(crate) struct CoordinatorRect {
-    geometry: Rc<CoordinatorGeometry>,
+    // The parts of the node whose layout writes the coordinators, held weak:
+    // slices a renderer or a dispatcher keeps after the node left must not
+    // keep its layout alive. Empty for a chain no layout places.
+    parts: Weak<LayoutParts>,
     ordinal: usize,
     padding: EdgeInsets,
 }
 
 impl CoordinatorRect {
     pub(crate) fn new(
-        geometry: &Rc<CoordinatorGeometry>,
+        parts: Option<&Rc<LayoutParts>>,
         ordinal: usize,
         padding: EdgeInsets,
     ) -> Self {
         Self {
-            geometry: Rc::clone(geometry),
+            parts: parts.map_or_else(Weak::new, Rc::downgrade),
             ordinal,
             padding,
         }
     }
 
+    fn placed_rect(&self) -> Option<Rect> {
+        self.parts
+            .upgrade()?
+            .coordinator_geometry()
+            .rect(self.ordinal)
+    }
+
     /// The rect in a node of `node_size`.
     pub(crate) fn rect(&self, node_size: Size) -> Rect {
-        self.geometry
-            .rect(self.ordinal)
+        self.placed_rect()
             .unwrap_or_else(|| self.padding.inset_rect(node_size))
     }
 
@@ -97,7 +111,7 @@ impl CoordinatorRect {
 
     /// The rect's top-left corner in its node.
     pub(crate) fn origin(&self) -> Point {
-        self.geometry.rect(self.ordinal).map_or(
+        self.placed_rect().map_or(
             Point {
                 x: self.padding.left,
                 y: self.padding.top,
