@@ -19,15 +19,20 @@ pub(super) fn create<F: FnMut() + 'static>(
     // (`prefetch_while_waiting`): a lazy list leaves them the items
     // beyond its viewport that its scroll does not soon reach.
     cranpose_ui::set_idle_prefetch_passes(true);
-    let mut shell = AppShell::new_with_size_and_density(
-        renderer,
-        default_root_key(),
-        move || {
-            platform_env.compose_root(|| content_clone.borrow_mut()());
+    let mut shell = crate::android_host_window::with_android_host_window_registry(
+        inputs.host_window_registry,
+        || {
+            AppShell::new_with_size_and_density(
+                renderer,
+                default_root_key(),
+                move || {
+                    platform_env.compose_root(|| content_clone.borrow_mut()());
+                },
+                (width, height),
+                (width as f32 / density, height as f32 / density),
+                density,
+            )
         },
-        (width, height),
-        (width as f32 / density, height as f32 / density),
-        density,
     );
     shell.set_semantics_enabled(true);
     crate::accessibility::install_inspector(&mut shell, inputs.settings.developer_inspector);

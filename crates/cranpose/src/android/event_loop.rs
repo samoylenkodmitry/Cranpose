@@ -1068,7 +1068,7 @@ pub(super) struct ShellInputs<'a, F> {
     pub(super) content: &'a Rc<RefCell<F>>,
     pub(super) settings: &'a AppSettings,
     frame_driver: &'a AndroidFrameDriver,
-    host_window_registry: &'a android_host_window::AndroidHostWindowRegistry,
+    pub(super) host_window_registry: &'a Rc<android_host_window::AndroidHostWindowRegistry>,
     present_thread: bool,
 }
 
@@ -2230,7 +2230,7 @@ pub fn run(
             && let Some(shell) = &mut app_shell
         {
             frame_rate_boost.note_input(Instant::now());
-            dispatch_pending_inputs(shell, &mut pending_inputs);
+            dispatch_pending_inputs(&app, shell, &mut pending_inputs);
         }
 
         sync_ime_session(&ime_session, app_shell.as_mut(), &android_platform);

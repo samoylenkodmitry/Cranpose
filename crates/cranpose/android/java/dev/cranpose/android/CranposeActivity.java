@@ -80,6 +80,14 @@ import java.util.Locale;
  * tracks appear and can be played while the rest keep streaming in.
  */
 public class CranposeActivity extends NativeActivity {
+    private final CranposePointerIcons cranposePointerIcons = new CranposePointerIcons();
+
+    /** Applies the shared UI cursor to mouse and stylus hover targets. */
+    public void cranposeSetPointerIcon(int type, long identity, byte[] rgba, int width,
+            int height, float hotspotX, float hotspotY) {
+        cranposePointerIcons.apply(this, type, identity, rgba, width, height, hotspotX, hotspotY);
+    }
+
     private static native boolean nativeOnBackInvoked();
 
     private static final int BACK_GESTURE_STARTED = 0;

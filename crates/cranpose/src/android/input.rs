@@ -10,6 +10,7 @@ pub(super) enum PendingInput {
     PointerUp(f32, f32, Option<i64>, PointerSource),
     PointerMove(f32, f32, Option<i64>, PointerSource),
     PointerCancel,
+    HoverExit,
     Key(KeyEvent),
     SecondaryPointerDown(PointerId, f32, f32, Option<i64>),
     SecondaryPointerUp(PointerId, f32, f32, Option<i64>),
@@ -161,9 +162,36 @@ fn push_pending_inputs_from_android_event(
             *primary_pointer_id = None;
             true
         }
-        android_activity::input::MotionAction::Scroll => {
-            push_rotary_pending_input(motion_event, event_source, time_ms, pending_inputs)
+        _ => push_hover_or_scroll(motion_event, android_platform, time_ms, pending_inputs),
+    }
+}
+
+fn push_hover_or_scroll(
+    event: &android_activity::input::MotionEvent<'_>,
+    platform: &AndroidPlatform,
+    time_ms: Option<i64>,
+    pending: &mut Vec<PendingInput>,
+) -> bool {
+    use android_activity::input::MotionAction;
+    match event.action() {
+        MotionAction::HoverEnter | MotionAction::HoverMove => {
+            if let Some(pointer) = event.pointers().next() {
+                let position =
+                    platform.pointer_position(f64::from(pointer.x()), f64::from(pointer.y()));
+                pending.push(PendingInput::PointerMove(
+                    position.x,
+                    position.y,
+                    time_ms,
+                    android_pointer_source(&pointer, event.source()),
+                ));
+            }
+            true
         }
+        MotionAction::HoverExit => {
+            pending.push(PendingInput::HoverExit);
+            true
+        }
+        MotionAction::Scroll => push_rotary_pending_input(event, event.source(), time_ms, pending),
         _ => false,
     }
 }
@@ -478,6 +506,9 @@ fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInpu
         PendingInput::PointerCancel => {
             shell.cancel_gesture();
         }
+        PendingInput::HoverExit => {
+            shell.cancel_gesture_unless_pressed();
+        }
         PendingInput::Key(event) => {
             shell.on_key_event(&event);
         }
@@ -510,10 +541,14 @@ fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInpu
 }
 
 pub(super) fn dispatch_pending_inputs(
+    app: &android_activity::AndroidApp,
     shell: &mut AppShell<WgpuRenderer>,
     pending: &mut Vec<PendingInput>,
 ) {
     for input in pending.drain(..) {
         dispatch_pending_input(shell, input);
+    }
+    if let Some(icon) = shell.take_pointer_icon_change() {
+        super::pointer_icon::apply(app, &icon);
     }
 }

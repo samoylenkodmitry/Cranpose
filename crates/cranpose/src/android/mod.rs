@@ -60,6 +60,8 @@ pub(crate) mod perf_hint;
 pub(crate) mod permissions;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod pipeline_update;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod pointer_icon;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod poll;
 #[cfg(any(test, feature = "renderer-wgpu"))]

@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use cranpose_ui::{Point, Size};
 
-use super::overlay_window;
+use super::{
+    activity_window_layout::{self, ActivityWindowLayout},
+    overlay_window,
+};
 use crate::{android_host_window, app_launcher::AndroidOverlayWindowOptions};
 
 #[derive(Clone, Copy)]
@@ -29,7 +32,7 @@ pub(super) fn dispatch_android_surface_size_request(
 
     let (width_px, height_px) =
         android_host_window::logical_to_physical_window_size(requested, density);
-    super::activity_window_layout::set(app, width_px, height_px)
+    activity_window_layout::set(app, ActivityWindowLayout::Exact(width_px, height_px))
 }
 
 pub(super) fn dispatch_registered_android_surface_size_request(
@@ -43,6 +46,12 @@ pub(super) fn dispatch_registered_android_surface_size_request(
     let Some(request) =
         android_host_window::latest_android_host_window_request(host_window_registry)
     else {
+        if overlay_options.is_none() && last_dispatched.take().is_some() {
+            *pending_confirmation = None;
+            if let Err(message) = activity_window_layout::set(app, ActivityWindowLayout::System) {
+                log::warn!("Failed to restore Android window layout: {message}");
+            }
+        }
         return;
     };
     let dispatch_key = (
