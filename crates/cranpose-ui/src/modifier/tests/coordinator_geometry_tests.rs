@@ -5,14 +5,19 @@ const NODE: Size = Size {
     height: 40.0,
 };
 
-fn padded(ordinal: usize, geometry: &Rc<CoordinatorGeometry>) -> CoordinatorRect {
-    CoordinatorRect::new(geometry, ordinal, EdgeInsets::uniform(3.0))
+fn parts() -> Rc<LayoutParts> {
+    Rc::new(LayoutParts::new(crate::layout::LayoutRuntimeState::new(
+        crate::widgets::nodes::layout_node::empty_measure_policy(),
+    )))
+}
+
+fn padded(ordinal: usize, parts: &Rc<LayoutParts>) -> CoordinatorRect {
+    CoordinatorRect::new(Some(parts), ordinal, EdgeInsets::uniform(3.0))
 }
 
 #[test]
 fn an_unplaced_coordinator_draws_inside_the_padding_before_it() {
-    let geometry = Rc::new(CoordinatorGeometry::default());
-    let coordinator = padded(1, &geometry);
+    let coordinator = padded(1, &parts());
     assert_eq!(
         coordinator.rect(NODE),
         Rect {
@@ -28,7 +33,8 @@ fn an_unplaced_coordinator_draws_inside_the_padding_before_it() {
 
 #[test]
 fn a_placed_coordinator_draws_where_layout_put_it() {
-    let geometry = Rc::new(CoordinatorGeometry::default());
+    let parts = parts();
+    let geometry = parts.coordinator_geometry();
     let placed = Rect {
         x: 20.0,
         y: 15.0,
@@ -44,7 +50,7 @@ fn a_placed_coordinator_draws_where_layout_put_it() {
         },
         placed,
     ]);
-    let coordinator = padded(1, &geometry);
+    let coordinator = padded(1, &parts);
     assert_eq!(coordinator.rect(NODE), placed);
     assert_eq!(
         coordinator.insets(NODE),
@@ -57,14 +63,15 @@ fn a_placed_coordinator_draws_where_layout_put_it() {
     );
     assert_eq!(coordinator.origin(), Point { x: 20.0, y: 15.0 });
     assert_eq!(
-        padded(2, &geometry).rect(NODE),
+        padded(2, &parts).rect(NODE),
         EdgeInsets::uniform(3.0).inset_rect(NODE)
     );
 }
 
 #[test]
 fn a_new_measure_replaces_every_rect() {
-    let geometry = Rc::new(CoordinatorGeometry::default());
+    let parts = parts();
+    let geometry = parts.coordinator_geometry();
     let empty = Rect {
         x: 0.0,
         y: 0.0,
@@ -78,8 +85,8 @@ fn a_new_measure_replaces_every_rect() {
         width: 3.0,
         height: 4.0,
     }]);
-    assert_eq!(padded(0, &geometry).origin(), Point { x: 1.0, y: 2.0 });
-    assert_eq!(padded(1, &geometry).origin(), Point { x: 3.0, y: 3.0 });
+    assert_eq!(padded(0, &parts).origin(), Point { x: 1.0, y: 2.0 });
+    assert_eq!(padded(1, &parts).origin(), Point { x: 3.0, y: 3.0 });
 }
 
 #[test]

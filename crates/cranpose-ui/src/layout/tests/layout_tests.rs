@@ -827,8 +827,7 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
         node.clear_needs_layout();
     })?;
 
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(node_id, |node| node.cache().epoch())?;
 
     measure_layout(
         &mut applier,
@@ -839,8 +838,7 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(node_id, |node| node.cache().epoch())?;
 
     assert_eq!(
         epoch_before, epoch_after,
@@ -865,8 +863,7 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(node_id, |node| node.cache().epoch())?;
 
     applier.with_node::<LayoutNode, _>(node_id, |node| {
         node.mark_needs_measure();
@@ -881,8 +878,7 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(node_id, |node| node.cache().epoch())?;
 
     assert!(
         epoch_after > epoch_before,
@@ -913,8 +909,8 @@ fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
         )?;
         Ok::<_, NodeError>(node_id)
     })?;
-    let first_epoch = first_applier
-        .with_node::<LayoutNode, _>(first_node, |node| node.cache_handles().epoch())?;
+    let first_epoch =
+        first_applier.with_node::<LayoutNode, _>(first_node, |node| node.cache().epoch())?;
 
     second_context.enter(|| {
         let second_node = second_applier.create(Box::new(LayoutNode::new(
@@ -950,8 +946,8 @@ fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
             },
         )
     })?;
-    let next_first_epoch = first_applier
-        .with_node::<LayoutNode, _>(first_node, |node| node.cache_handles().epoch())?;
+    let next_first_epoch =
+        first_applier.with_node::<LayoutNode, _>(first_node, |node| node.cache().epoch())?;
 
     assert_eq!(
         next_first_epoch,
@@ -1049,8 +1045,7 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
         node.clear_needs_layout();
     })?;
 
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     measure_layout(
         &mut applier,
@@ -1061,8 +1056,7 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     assert_eq!(
         epoch_before, epoch_after,
@@ -1131,8 +1125,7 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
         })?;
     }
 
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     dirty_size.set(Size::new(10.0, 20.0));
     applier.with_node::<LayoutNode, _>(dirty_child, |node| {
@@ -1158,8 +1151,7 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
     );
 
     let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     assert_eq!(
         second.root_size().height,
@@ -1251,8 +1243,7 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
         "subcompose child should clear dirty flags after a successful measure pass"
     );
 
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     child_size.set(Size::new(10.0, 20.0));
     applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
@@ -1278,8 +1269,7 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
     );
 
     let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     assert_eq!(
         second.root_size().height,
@@ -1317,8 +1307,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_dirty_child() -> Result<(),
         ..
     } = measured_dirty_clean_leaves()?;
 
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     dirty_size.set(Size::new(10.0, 20.0));
     applier.with_node::<LayoutNode, _>(dirty_child, |node| {
@@ -1327,8 +1316,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_dirty_child() -> Result<(),
     crate::schedule_layout_repass(dirty_child);
 
     let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     assert_eq!(
         second.root_size().height,
@@ -1400,8 +1388,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Resul
 
     let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
     assert_eq!(first.root_size().height, 10.0);
-    let epoch_before =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_before = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     child_size.set(Size::new(10.0, 20.0));
     applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
@@ -1410,8 +1397,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Resul
     crate::schedule_layout_repass(child_id);
 
     let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+    let epoch_after = applier.with_node::<LayoutNode, _>(root_id, |node| node.cache().epoch())?;
 
     assert_eq!(
         second.root_size().height,
@@ -2191,8 +2177,8 @@ fn parent_data_uses_resolved_layout_properties() {
         .with_node::<LayoutNode, _>(node_id, |node| {
             state.bind(
                 LayoutChildBinding {
-                    cache: node.cache_handles(),
-                    layout_state: Some(node.layout_parts()),
+                    parts: node.layout_parts(),
+                    layout_node: true,
                     parent_data: Some(node.parent_data()),
                     dirty: false,
                     descendant_dirty: false,

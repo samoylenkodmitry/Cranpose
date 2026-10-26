@@ -19,7 +19,7 @@ use crate::{
     layout::MeasuredNode,
     modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
     render_state::AppContext,
-    widgets::nodes::{DescendantDirt, LayoutNode, LayoutNodeCacheHandles, LayoutState},
+    widgets::nodes::{DescendantDirt, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
 fn subcompose_telemetry_enabled() -> bool {
@@ -714,14 +714,17 @@ pub struct SubcomposeLayoutNode {
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
     needs_focus_sync: Cell<bool>,
-    layout_state: RefCell<LayoutState>,
-    cache_handles: LayoutNodeCacheHandles,
+    parts: Rc<LayoutParts>,
     modifier_slices_snapshot: crate::modifier::SlicesSnapshot,
-    /// Never written: this node lays its chain out from padding, size and
-    /// offset without coordinators, so its draws sit inside the padding
-    /// before them.
-    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
     modifier_slices_dirty: Cell<bool>,
+}
+
+// A subcompose node measures its children through its own policy, so the
+// runtime state of its parts stays empty.
+fn new_layout_parts() -> Rc<LayoutParts> {
+    Rc::new(LayoutParts::new(crate::layout::LayoutRuntimeState::new(
+        crate::widgets::nodes::layout_node::empty_measure_policy(),
+    )))
 }
 
 impl SubcomposeLayoutNode {
@@ -739,10 +742,8 @@ impl SubcomposeLayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            layout_state: RefCell::new(LayoutState::default()),
-            cache_handles: LayoutNodeCacheHandles::default(),
+            parts: new_layout_parts(),
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
-            coordinator_geometry: Rc::default(),
             modifier_slices_dirty: Cell::new(true),
         };
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
@@ -778,10 +779,8 @@ impl SubcomposeLayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            layout_state: RefCell::new(LayoutState::default()),
-            cache_handles: LayoutNodeCacheHandles::default(),
+            parts: new_layout_parts(),
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
-            coordinator_geometry: Rc::default(),
             modifier_slices_dirty: Cell::new(true),
         };
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
@@ -894,9 +893,11 @@ impl SubcomposeLayoutNode {
 
     fn update_modifier_slices_cache(&self) {
         let inner = self.inner.borrow();
+        // This node lays its chain out from padding, size and offset without
+        // coordinators, so its draws sit inside the padding before them.
         self.modifier_slices_snapshot.collect(
             inner.modifier_chain.chain(),
-            &self.coordinator_geometry,
+            None,
             inner.density.density(),
         );
         self.modifier_slices_dirty.set(false);
@@ -928,18 +929,23 @@ impl SubcomposeLayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        self.layout_state.borrow().clone()
+        self.parts.layout_state().borrow().clone()
     }
 
-    pub(crate) fn cache_handles(&self) -> &LayoutNodeCacheHandles {
-        &self.cache_handles
+    pub(crate) fn cache(&self) -> &NodeCache {
+        self.parts.cache()
+    }
+
+    pub(crate) fn layout_parts(&self) -> &Rc<LayoutParts> {
+        &self.parts
     }
 
     /// Updates the position of this node, which `placer` placed. Called
     /// during placement. [`LayoutState::place`] self-reports actual moves to
     /// the scene phase.
     pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
-        self.layout_state
+        self.parts
+            .layout_state()
             .borrow_mut()
             .place(position, placer, context);
     }
@@ -948,12 +954,15 @@ impl SubcomposeLayoutNode {
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.layout_state.borrow_mut().set_size(size, context);
+        self.parts
+            .layout_state()
+            .borrow_mut()
+            .set_size(size, context);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.layout_state.borrow_mut().clear_placed(context);
+        self.parts.layout_state().borrow_mut().clear_placed(context);
     }
 
     /// Semantics reported by this node's live modifier chain.
@@ -1290,7 +1299,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
             crate::render_state::note_retained_redraw(id);
         }
         self.id.set(Some(id));
-        self.layout_state.borrow_mut().set_node_id(id);
+        self.parts.layout_state().borrow_mut().set_node_id(id);
         {
             let mut inner = self.inner.borrow_mut();
             let previous = inner.node_id.replace(id);
@@ -1334,7 +1343,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         self.descendant_dirt
             .set(self.descendant_dirt.get().marked(measure));
         if measure {
-            self.cache_handles.forget_intrinsics();
+            self.parts.cache().forget_intrinsics();
         }
     }
 

@@ -176,11 +176,11 @@ impl LayoutBuilderState {
             .with_node::<LayoutNode, _>(root, |node| {
                 if needs_layout_itself(node)
                     || Node::is_virtual(node)
-                    || node.cache_handles().epoch() < self.cache_floor
+                    || node.cache().epoch() < self.cache_floor
                 {
                     return None;
                 }
-                node.cache_handles().get_measurement(constraints)
+                node.cache().get_measurement(constraints)
             })
             .ok()
             .flatten()
@@ -222,7 +222,7 @@ impl LayoutBuilderState {
                         .find(|state| state.node_id == node)
                         .and_then(|state| state.measured_constraints.get());
                 }
-                cleared.push((id, ancestor.cache_handles().take_layout_dirt()));
+                cleared.push((id, ancestor.cache().take_layout_dirt()));
                 Some(Node::parent(ancestor))
             });
             let Ok(Some(parent)) = step else {
@@ -252,7 +252,7 @@ impl LayoutBuilderState {
         };
         for &(id, dirt) in cleared.iter().rev() {
             let _ = applier.with_node::<LayoutNode, _>(id, |node| {
-                node.cache_handles().restore_dirt(dirt);
+                node.cache().restore_dirt(dirt);
             });
         }
     }
@@ -395,7 +395,7 @@ impl LayoutBuilderState {
             return false;
         }
         let now = ForParent::of(measured);
-        let cache = parent.cache_handles();
+        let cache = parent.cache();
         let resized = cache.read_measurement(|held, ignores_child_sizes| {
             let previous = held.children.iter().find(|entry| entry.node_id == child)?;
             if previous.for_parent.same_as(&now) {

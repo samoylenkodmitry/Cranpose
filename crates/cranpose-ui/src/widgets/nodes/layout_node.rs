@@ -1,7 +1,6 @@
 use std::{
     any::TypeId,
     cell::{Cell, RefCell},
-    hash::{Hash, Hasher},
     rc::Rc,
 };
 
@@ -10,19 +9,19 @@ use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
 };
-use cranpose_ui_layout::{Constraints, MeasurePolicy};
+use cranpose_ui_layout::MeasurePolicy;
 
 #[cfg(test)]
 use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
-    layout::{LayoutRuntimeState, MeasuredNode},
+    layout::LayoutRuntimeState,
     modifier::{
         InPlaceUpdate, Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
         ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifierLocal, ResolvedModifiers,
         Size,
     },
     render_state::AppContext,
-    widgets::nodes::LayoutParts,
+    widgets::nodes::{LayoutParts, NodeCache},
 };
 
 #[derive(Clone, Copy)]
@@ -284,339 +283,6 @@ impl LayoutState {
     }
 }
 
-#[derive(Clone)]
-struct MeasurementCacheEntry {
-    constraints: Constraints,
-    measured: Rc<MeasuredNode>,
-    /// The other incoming constraints the measurement holds for.
-    hold: Option<cranpose_ui_layout::ConstraintsHold>,
-    /// Whether no child's size entered the measurement: see
-    /// [`cranpose_ui_layout::MeasurePolicy::ignores_child_sizes`].
-    ignores_child_sizes: bool,
-}
-
-/// Selects which intrinsic size of a node to query, together with the size on the other axis.
-#[derive(Clone, Copy, Debug)]
-pub enum IntrinsicKind {
-    /// Minimum intrinsic width for the given height, in logical pixels.
-    MinWidth(f32),
-    /// Maximum intrinsic width for the given height, in logical pixels.
-    MaxWidth(f32),
-    /// Minimum intrinsic height for the given width, in logical pixels.
-    MinHeight(f32),
-    /// Maximum intrinsic height for the given width, in logical pixels.
-    MaxHeight(f32),
-}
-
-impl IntrinsicKind {
-    fn discriminant(&self) -> u8 {
-        match self {
-            Self::MinWidth(_) => 0,
-            Self::MaxWidth(_) => 1,
-            Self::MinHeight(_) => 2,
-            Self::MaxHeight(_) => 3,
-        }
-    }
-
-    fn value_bits(&self) -> u32 {
-        match self {
-            Self::MinWidth(value)
-            | Self::MaxWidth(value)
-            | Self::MinHeight(value)
-            | Self::MaxHeight(value) => value.to_bits(),
-        }
-    }
-}
-
-impl PartialEq for IntrinsicKind {
-    fn eq(&self, other: &Self) -> bool {
-        self.discriminant() == other.discriminant() && self.value_bits() == other.value_bits()
-    }
-}
-
-impl Eq for IntrinsicKind {}
-
-impl Hash for IntrinsicKind {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.discriminant().hash(state);
-        self.value_bits().hash(state);
-    }
-}
-
-#[derive(Default)]
-struct NodeCacheState {
-    epoch: u64,
-    measurement: Option<MeasurementCacheEntry>,
-    /// The measurement the cache last let go of. It is never served: the
-    /// node's next measure takes it to fill its memory in place of new
-    /// allocations.
-    spare: Option<Rc<MeasuredNode>>,
-    intrinsics: Vec<(IntrinsicKind, f32)>,
-    /// Whether a parent read intrinsic sizes since the cache was cleared.
-    intrinsics_read: bool,
-}
-
-impl NodeCacheState {
-    fn retire_measurement(&mut self) {
-        if let Some(entry) = self.measurement.take() {
-            self.spare = Some(entry.measured);
-        }
-    }
-}
-
-/// What a node's cache shares with its parent's record of the node: the
-/// cache and the node's dirty flags, which the parent's keep walk reads
-/// there without looking the node up.
-#[derive(Default)]
-struct CacheShared {
-    cache: RefCell<NodeCacheState>,
-    dirt: Cell<LayoutDirt>,
-}
-
-#[derive(Default)]
-pub(crate) struct LayoutNodeCacheHandles {
-    state: Rc<CacheShared>,
-}
-
-impl Clone for LayoutNodeCacheHandles {
-    fn clone(&self) -> Self {
-        Self {
-            state: Rc::clone(&self.state),
-        }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        if !Rc::ptr_eq(&self.state, &source.state) {
-            self.state = Rc::clone(&source.state);
-        }
-    }
-}
-
-impl LayoutNodeCacheHandles {
-    /// The flags of the node whose cache this is: dirty for a node that
-    /// keeps its flags elsewhere.
-    pub(crate) fn dirt(&self) -> LayoutDirt {
-        self.state.dirt.get()
-    }
-
-    fn set_dirt(&self, dirt: LayoutDirt) {
-        self.state.dirt.set(dirt);
-    }
-
-    /// Clears the node's layout flag and its descendants' flags, and returns
-    /// the flags as they were, which [`Self::restore_dirt`] puts back.
-    pub(crate) fn take_layout_dirt(&self) -> LayoutDirt {
-        let dirt = self.dirt();
-        self.clear_layout_dirt();
-        dirt
-    }
-
-    /// Puts back flags [`Self::take_layout_dirt`] took.
-    pub(crate) fn restore_dirt(&self, dirt: LayoutDirt) {
-        self.set_dirt(dirt);
-    }
-
-    /// Clears the node's layout flag and its descendants' flags: the pass
-    /// laid it out.
-    pub(crate) fn clear_layout_dirt(&self) {
-        self.set_dirt(LayoutDirt {
-            layout: false,
-            descendant: DescendantDirt::default(),
-            ..self.dirt()
-        });
-    }
-
-    pub(crate) fn clear(&self) {
-        let mut state = self.state.cache.borrow_mut();
-        state.retire_measurement();
-        state.intrinsics.clear();
-        state.intrinsics_read = false;
-        state.epoch = 0;
-    }
-
-    pub(crate) fn activate(&self, epoch: u64) {
-        let mut state = self.state.cache.borrow_mut();
-        if state.epoch != epoch {
-            state.retire_measurement();
-            state.intrinsics.clear();
-            state.intrinsics_read = false;
-            state.epoch = epoch;
-        }
-    }
-
-    /// The node's last measurement, whatever constraints it was made under:
-    /// the one the cache holds, or else the one it last let go of.
-    pub(crate) fn held_measurement(&self) -> Option<Rc<MeasuredNode>> {
-        let state = self.state.cache.borrow();
-        state
-            .measurement
-            .as_ref()
-            .map(|entry| &entry.measured)
-            .or(state.spare.as_ref())
-            .cloned()
-    }
-
-    /// Takes the measurement the cache last let go of, or else the one it
-    /// holds, for a measure of the node that replaces it.
-    pub(crate) fn take_previous_measurement(&self) -> Option<Rc<MeasuredNode>> {
-        let mut state = self.state.cache.borrow_mut();
-        state
-            .spare
-            .take()
-            .or_else(|| state.measurement.take().map(|entry| entry.measured))
-    }
-
-    /// Drops the intrinsic sizes, which depend on every node below: one of
-    /// them changed. A parent's earlier read still counts for
-    /// [`Self::has_intrinsics`].
-    pub(crate) fn forget_intrinsics(&self) {
-        self.state.cache.borrow_mut().intrinsics.clear();
-    }
-
-    pub(crate) fn epoch(&self) -> u64 {
-        self.state.cache.borrow().epoch
-    }
-
-    /// The measurement the cache holds for `constraints`: one made under
-    /// them, or one whose hold contains them. A caller asks only while the
-    /// node and everything below it are clean.
-    pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
-        let state = self.state.cache.borrow();
-        state
-            .measurement
-            .as_ref()
-            .filter(|entry| {
-                entry.constraints == constraints
-                    || entry.hold.is_some_and(|hold| hold.contains(constraints))
-            })
-            .map(|entry| Rc::clone(&entry.measured))
-    }
-
-    /// The constraints of the measurement the cache holds.
-    pub(crate) fn measured_constraints(&self) -> Option<Constraints> {
-        self.state
-            .cache
-            .borrow()
-            .measurement
-            .as_ref()
-            .map(|entry| entry.constraints)
-    }
-
-    /// Whether a parent read intrinsic sizes from this cache.
-    pub(crate) fn has_intrinsics(&self) -> bool {
-        self.state.cache.borrow().intrinsics_read
-    }
-
-    /// The hold of the measurement the cache has, when it is `measured`.
-    pub(crate) fn hold_of(
-        &self,
-        measured: &Rc<MeasuredNode>,
-    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
-        self.state
-            .cache
-            .borrow()
-            .measurement
-            .as_ref()
-            .filter(|entry| Rc::ptr_eq(&entry.measured, measured))
-            .and_then(|entry| entry.hold)
-    }
-
-    /// Stores `measured` for `constraints`. The hold of a measurement the
-    /// cache already has stays with it, as does whether it ignores its
-    /// children's sizes.
-    pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
-        let mut state = self.state.cache.borrow_mut();
-        let (hold, ignores_child_sizes) = state
-            .measurement
-            .as_ref()
-            .filter(|entry| Rc::ptr_eq(&entry.measured, &measured))
-            .map_or((None, false), |entry| {
-                (entry.hold, entry.ignores_child_sizes)
-            });
-        state.measurement = Some(MeasurementCacheEntry {
-            constraints,
-            measured,
-            hold,
-            ignores_child_sizes,
-        });
-    }
-
-    /// Stores `measured` for `constraints` and the other constraints `hold`
-    /// says it holds for.
-    pub(crate) fn store_held_measurement(
-        &self,
-        constraints: Constraints,
-        measured: Rc<MeasuredNode>,
-        hold: Option<cranpose_ui_layout::ConstraintsHold>,
-        ignores_child_sizes: bool,
-    ) {
-        self.state.cache.borrow_mut().measurement = Some(MeasurementCacheEntry {
-            constraints,
-            measured,
-            hold,
-            ignores_child_sizes,
-        });
-    }
-
-    /// Stores `measured`, a measurement the cache has, for `constraints`
-    /// alone: a child of it measured to another size, which the other
-    /// constraints its hold names may not take.
-    pub(crate) fn store_resized_measurement(
-        &self,
-        constraints: Constraints,
-        measured: Rc<MeasuredNode>,
-    ) {
-        self.store_held_measurement(constraints, measured, None, true);
-    }
-
-    /// Runs `read` on the measurement the cache holds, with whether it
-    /// ignores its children's sizes; `None` while it holds none.
-    pub(crate) fn read_measurement<R>(
-        &self,
-        read: impl FnOnce(&MeasuredNode, bool) -> R,
-    ) -> Option<R> {
-        let state = self.state.cache.borrow();
-        state
-            .measurement
-            .as_ref()
-            .map(|entry| read(&entry.measured, entry.ignores_child_sizes))
-    }
-
-    /// Whether `measured`, the measurement the cache has, ignores its
-    /// children's sizes.
-    pub(crate) fn ignores_child_sizes_of(&self, measured: &Rc<MeasuredNode>) -> bool {
-        self.state
-            .cache
-            .borrow()
-            .measurement
-            .as_ref()
-            .is_some_and(|entry| entry.ignores_child_sizes && Rc::ptr_eq(&entry.measured, measured))
-    }
-
-    pub(crate) fn get_intrinsic(&self, kind: &IntrinsicKind) -> Option<f32> {
-        let state = self.state.cache.borrow();
-        state
-            .intrinsics
-            .iter()
-            .find(|(stored_kind, _)| stored_kind == kind)
-            .map(|(_, value)| *value)
-    }
-
-    pub(crate) fn store_intrinsic(&self, kind: IntrinsicKind, value: f32) {
-        let mut state = self.state.cache.borrow_mut();
-        state.intrinsics_read = true;
-        if let Some((_, existing)) = state
-            .intrinsics
-            .iter_mut()
-            .find(|(stored_kind, _)| stored_kind == &kind)
-        {
-            *existing = value;
-        } else {
-            state.intrinsics.push((kind, value));
-        }
-    }
-}
-
 /// A node id or none in one word, where `Cell<Option<NodeId>>` takes two: a
 /// layout node keeps three, and the 24 bytes kept it out of jemalloc's
 /// 640-byte size class.
@@ -656,9 +322,7 @@ impl NodeIdCell {
 /// thousands of nodes a frame, and on a phone its cost is the lines it loads.
 #[repr(C)]
 pub struct LayoutNode {
-    cache: LayoutNodeCacheHandles,
     parts: Rc<LayoutParts>,
-    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
 
@@ -726,7 +390,7 @@ impl LayoutNode {
     fn new_recycled_shell(is_virtual: bool) -> Self {
         let mut shell =
             Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), is_virtual);
-        shell.cache.set_dirt(LayoutDirt::CLEAN);
+        shell.parts.cache().set_dirt(LayoutDirt::CLEAN);
         shell.needs_semantics.set(false);
         shell.descendant_needs_semantics.set(false);
         shell.needs_redraw.set(false);
@@ -746,10 +410,9 @@ impl LayoutNode {
         measure_policy: Rc<dyn MeasurePolicy>,
         is_virtual: bool,
     ) -> Self {
-        let parts = Rc::new(LayoutParts {
-            layout_state: RefCell::new(LayoutState::default()),
-            runtime_state: RefCell::new(LayoutRuntimeState::new(Rc::clone(&measure_policy))),
-        });
+        let parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(Rc::clone(
+            &measure_policy,
+        ))));
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
@@ -758,7 +421,6 @@ impl LayoutNode {
             measure_policy,
             density: crate::density::Density::default(),
             children: Vec::new(),
-            cache: LayoutNodeCacheHandles::default(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),
@@ -774,7 +436,6 @@ impl LayoutNode {
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
             parts,
-            coordinator_geometry: Rc::default(),
         };
         node.sync_modifier_chain(None);
         node
@@ -807,7 +468,7 @@ impl LayoutNode {
         self.modifier = modifier;
         self.sync_modifier_chain(update);
         if modifier_changed {
-            self.cache.clear();
+            self.parts.cache().clear();
             self.request_semantics_update();
         }
     }
@@ -865,7 +526,7 @@ impl LayoutNode {
     fn update_modifier_slices_cache(&self) {
         self.modifier_slices_snapshot.collect(
             self.modifier_chain.chain(),
-            &self.coordinator_geometry,
+            Some(&self.parts),
             self.density.density(),
         );
         self.modifier_slices_dirty.set(false);
@@ -969,7 +630,7 @@ impl LayoutNode {
     pub fn set_density(&mut self, density: crate::density::Density) {
         if self.density != density {
             self.density = density;
-            self.cache.clear();
+            self.parts.cache().clear();
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
@@ -978,7 +639,7 @@ impl LayoutNode {
     /// Updates relative modifier placement for this node's composition scope.
     pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
         if self.modifier_chain.set_layout_direction(direction) {
-            self.cache.clear();
+            self.parts.cache().clear();
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
@@ -997,7 +658,7 @@ impl LayoutNode {
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
         if !Rc::ptr_eq(&self.measure_policy, &policy) {
             self.measure_policy = policy;
-            self.cache.clear();
+            self.parts.cache().clear();
             self.mark_needs_measure();
             if let Some(id) = self.id.get() {
                 cranpose_core::bubble_measure_dirty_in_composer(id);
@@ -1023,7 +684,9 @@ impl LayoutNode {
     }
 
     fn update_dirt(&self, update: impl FnOnce(LayoutDirt) -> LayoutDirt) {
-        self.cache.set_dirt(update(self.cache.dirt()));
+        self.parts
+            .cache()
+            .set_dirt(update(self.parts.cache().dirt()));
     }
 
     /// Mark this node as needing redraw without forcing measure/layout.
@@ -1037,12 +700,12 @@ impl LayoutNode {
 
     /// Check if this node needs measure.
     pub fn needs_measure(&self) -> bool {
-        self.cache.dirt().measure
+        self.parts.cache().dirt().measure
     }
 
     /// Check if this node needs layout.
     pub fn needs_layout(&self) -> bool {
-        self.cache.dirt().layout
+        self.parts.cache().dirt().layout
     }
 
     /// Mark this node as needing semantics recomputation.
@@ -1099,7 +762,7 @@ impl LayoutNode {
     /// Clears the node's layout flag and its descendants': a layout pass
     /// visited them.
     pub(crate) fn clear_needs_layout(&self) {
-        self.cache.clear_layout_dirt();
+        self.parts.cache().clear_layout_dirt();
     }
 
     /// Marks this node as needing a fresh pointer-input pass.
@@ -1145,7 +808,7 @@ impl LayoutNode {
         {
             unregister_layout_node(owner_context_id, existing);
         }
-        self.parts.layout_state.borrow_mut().set_node_id(id);
+        self.parts.layout_state().borrow_mut().set_node_id(id);
         // The new entry holds the node's parent, capabilities and modifier
         // locals as they are now.
         let owner_context_id = register_layout_node(id, self);
@@ -1198,8 +861,8 @@ impl LayoutNode {
         self.folded_parent.get()
     }
 
-    pub(crate) fn cache_handles(&self) -> &LayoutNodeCacheHandles {
-        &self.cache
+    pub(crate) fn cache(&self) -> &NodeCache {
+        self.parts.cache()
     }
 
     /// Returns the padding, layout properties and offset that the modifier chain resolved to.
@@ -1303,29 +966,32 @@ impl LayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        self.parts.layout_state.borrow().clone()
+        self.parts.layout_state().borrow().clone()
     }
 
     /// Returns the measured size of this node.
     pub fn measured_size(&self) -> Size {
-        self.parts.layout_state.borrow().size
+        self.parts.layout_state().borrow().size
     }
 
     /// Returns the position of this node relative to its parent.
     pub fn position(&self) -> Point {
-        self.parts.layout_state.borrow().position
+        self.parts.layout_state().borrow().position
     }
 
     /// Returns true if this node has been placed in the current layout pass.
     pub fn is_placed(&self) -> bool {
-        self.parts.layout_state.borrow().is_placed
+        self.parts.layout_state().borrow().is_placed
     }
 
     /// Updates the measured size of this node. Called during measurement.
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
-        self.parts.layout_state.borrow_mut().set_size(size, context);
+        self.parts
+            .layout_state()
+            .borrow_mut()
+            .set_size(size, context);
     }
 
     /// Notes to the scene phase of `context` that the layout pass changed
@@ -1333,7 +999,7 @@ impl LayoutNode {
     pub(crate) fn note_geometry_change(&self, node_id: NodeId, context: &AppContext) {
         context.note_geometry_scene_node(
             node_id,
-            &mut self.parts.layout_state.borrow_mut().reshaped_noted_in,
+            &mut self.parts.layout_state().borrow_mut().reshaped_noted_in,
         );
     }
 
@@ -1342,7 +1008,7 @@ impl LayoutNode {
     /// the scene phase.
     pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
         self.parts
-            .layout_state
+            .layout_state()
             .borrow_mut()
             .place(position, placer, context);
     }
@@ -1350,18 +1016,18 @@ impl LayoutNode {
     /// Records the content offset (e.g. from padding).
     pub fn set_content_offset(&self, offset: Point) {
         self.parts
-            .layout_state
+            .layout_state()
             .borrow_mut()
             .set_content_offset(offset);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self, context: &AppContext) {
-        self.parts.layout_state.borrow_mut().clear_placed(context);
+        self.parts.layout_state().borrow_mut().clear_placed(context);
     }
 
     fn note_semantics_layout_change(&self) {
-        if let Ok(mut state) = self.parts.layout_state.try_borrow_mut() {
+        if let Ok(mut state) = self.parts.layout_state().try_borrow_mut() {
             state.note_semantics_change();
         }
     }
@@ -1400,7 +1066,7 @@ impl LayoutNode {
 
     /// Runs `read` on the node's layout state, without a copy of it.
     pub fn with_layout_state<R>(&self, read: impl FnOnce(&LayoutState) -> R) -> R {
-        read(&self.parts.layout_state.borrow())
+        read(&self.parts.layout_state().borrow())
     }
 
     pub(crate) fn layout_parts(&self) -> &Rc<LayoutParts> {
@@ -1408,16 +1074,16 @@ impl LayoutNode {
     }
 
     pub(crate) fn coordinator_geometry(&self) -> &crate::modifier::CoordinatorGeometry {
-        &self.coordinator_geometry
+        self.parts.coordinator_geometry()
     }
 
     pub(crate) fn layout_runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
-        &self.parts.runtime_state
+        self.parts.runtime_state()
     }
 
     #[cfg(test)]
     pub(crate) fn layout_runtime_debug_stats(&self) -> LayoutRuntimeDebugStats {
-        self.parts.runtime_state.borrow().debug_stats()
+        self.parts.runtime_state().borrow().debug_stats()
     }
 }
 impl Clone for LayoutNode {
@@ -1432,7 +1098,6 @@ impl Clone for LayoutNode {
             measure_policy: Rc::clone(&self.measure_policy),
             density: self.density,
             children: self.children.clone(),
-            cache: self.cache.clone(),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),
@@ -1448,7 +1113,6 @@ impl Clone for LayoutNode {
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
             parts: Rc::clone(&self.parts),
-            coordinator_geometry: Rc::clone(&self.coordinator_geometry),
         };
         node.sync_modifier_chain(None);
         node
@@ -1474,7 +1138,7 @@ impl Node for LayoutNode {
             return false;
         }
         self.children.push(child);
-        self.cache.clear();
+        self.parts.cache().clear();
         self.mark_needs_measure();
         self.note_semantics_layout_change();
         true
@@ -1485,7 +1149,7 @@ impl Node for LayoutNode {
         self.children.retain(|&id| id != child);
         let removed = self.children.len() < before;
         if removed {
-            self.cache.clear();
+            self.parts.cache().clear();
             self.mark_needs_measure();
             self.note_semantics_layout_change();
         }
@@ -1499,7 +1163,7 @@ impl Node for LayoutNode {
         let child = self.children.remove(from);
         let target = to.min(self.children.len());
         self.children.insert(target, child);
-        self.cache.clear();
+        self.parts.cache().clear();
         self.mark_needs_measure();
         self.note_semantics_layout_change();
     }
@@ -1507,7 +1171,7 @@ impl Node for LayoutNode {
     fn update_children(&mut self, children: &[NodeId]) {
         self.children.clear();
         self.children.extend_from_slice(children);
-        self.cache.clear();
+        self.parts.cache().clear();
         self.mark_needs_measure();
         self.note_semantics_layout_change();
     }
@@ -1561,12 +1225,12 @@ impl Node for LayoutNode {
             ..dirt
         });
         if measure {
-            self.cache.forget_intrinsics();
+            self.parts.cache().forget_intrinsics();
         }
     }
 
     fn descendant_needs_layout(&self) -> bool {
-        self.cache.dirt().descendant.layout
+        self.parts.cache().dirt().descendant.layout
     }
 
     fn is_virtual(&self) -> bool {
@@ -1574,7 +1238,7 @@ impl Node for LayoutNode {
     }
 
     fn descendant_needs_measure(&self) -> bool {
-        self.cache.dirt().descendant.measure
+        self.parts.cache().dirt().descendant.measure
     }
 
     fn mark_needs_semantics(&self) {
