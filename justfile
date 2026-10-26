@@ -617,7 +617,6 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
     scripts/dev/worktree_done_test.sh
-    scripts/dev/worktree_seed_test.sh
     python3 scripts/dev/move_inline_tests_test.py
     scripts/ci/commit_msg_hook_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
@@ -1213,18 +1212,19 @@ disk:
 worktree-done path="." *flags:
     {{quote(justfile_directory() / "scripts/dev/worktree_done.sh")}} {{flags}} {{quote(path)}}
 
-# Make the seed whose warm target every new worktree starts from: a locked
-# worktree at origin/main, built with what agents build, then named in
-# `git config cranpose.seed`; the previous seed goes. The first run sets up the
-# machine. After that the post-checkout hook clones the seed into each new
-# worktree and starts this in the background once origin/main moves.
+# Make the seed every new worktree starts from (cargo-seed): a locked worktree
+# at origin/main built with the commands in scripts/dev/seed_setup.sh; the
+# previous seed goes. The first run sets up the machine. After that the
+# post-checkout hook clones the seed into each new worktree and refreshes it
+# in the background once origin/main moves.
 seed-refresh:
-    python3 scripts/dev/worktree_seed.py refresh .
+    scripts/dev/seed_setup.sh
+    cargo seed refresh .
 
 # Clone the seed's target into a worktree that has none.
 [no-cd]
 seed path=".":
-    python3 {{quote(justfile_directory() / "scripts/dev/worktree_seed.py")}} clone {{quote(path)}}
+    cargo seed clone {{quote(path)}}
 
 # Refuse to start a heavy recipe the disk cannot finish. Sweeps first.
 _disk-guard:
