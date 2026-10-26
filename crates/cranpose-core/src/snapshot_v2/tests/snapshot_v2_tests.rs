@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use super::*;
+use crate::collections::map::HashSet;
 
 #[test]
 fn apply_observer_ids_do_not_use_process_global_counter() {

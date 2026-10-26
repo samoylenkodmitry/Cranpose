@@ -21,14 +21,13 @@
 //! runtime instead of sharing snapshots across threads.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     rc::{Rc, Weak},
 };
 
 use crate::{
-    collections::map::{HashMap, HashSet},
+    collections::map::HashMap,
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
-    snapshot_pinning::{self, PinHandle},
     snapshot_weak_set::SnapshotWeakSetDebugStats,
     state::{ObjectId, StateObject, StateRecord},
 };

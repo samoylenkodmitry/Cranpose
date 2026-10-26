@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use super::*;
 use crate::{
+    snapshot_pinning,
     snapshot_v2::runtime::TestRuntimeGuard,
     state::{MutationPolicy, NeverEqual, SnapshotMutableState, StateRecord},
 };
