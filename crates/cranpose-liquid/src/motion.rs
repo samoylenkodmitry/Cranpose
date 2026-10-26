@@ -274,6 +274,19 @@ fn remember_liquid_axis(initial: f32, follow: Option<AnimationType>) -> Rc<Liqui
     })
 }
 
+// Whether a pointer went down on a control or came up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Press {
+    Down,
+    Up,
+}
+
+impl Press {
+    pub(crate) fn is_down(self) -> bool {
+        self == Self::Down
+    }
+}
+
 pub(crate) struct LiquidLensGesture {
     pub axis: Rc<LiquidDragAxis>,
     pub cell_width: f32,
@@ -283,7 +296,7 @@ pub(crate) struct LiquidLensGesture {
     pub drag_left: Rc<dyn Fn(f32) -> f32>,
     pub rest_left: Rc<dyn Fn(usize) -> f32>,
     pub selected: usize,
-    pub on_pressed: Rc<dyn Fn(bool, Option<u64>)>,
+    pub on_pressed: Rc<dyn Fn(Press, Option<u64>)>,
     pub on_touch: Rc<dyn Fn(f32, f32)>,
     pub on_select: Rc<dyn Fn(usize)>,
 }
@@ -319,7 +332,7 @@ pub(crate) async fn liquid_lens_gesture(
                             LiquidMotion::glide(),
                             event.animation_time_nanos,
                         );
-                        (gesture.on_pressed)(true, event.animation_time_nanos);
+                        (gesture.on_pressed)(Press::Down, event.animation_time_nanos);
                         (gesture.on_touch)(event.position.x, event.position.y);
                         default_haptics().perform(HapticFeedback::Selection);
                         event.consume();
@@ -356,7 +369,7 @@ pub(crate) async fn liquid_lens_gesture(
                     }
                     PointerEventKind::Up if active_pointer == Some(event.id) => {
                         active_pointer = None;
-                        (gesture.on_pressed)(false, event.animation_time_nanos);
+                        (gesture.on_pressed)(Press::Up, event.animation_time_nanos);
                         let commit_x = if moved { event.position.x } else { down_x };
                         let index = gesture.commit_index(commit_x);
                         gesture.axis.release_to_at(
@@ -371,7 +384,7 @@ pub(crate) async fn liquid_lens_gesture(
                     }
                     PointerEventKind::Cancel if active_pointer == Some(event.id) => {
                         active_pointer = None;
-                        (gesture.on_pressed)(false, event.animation_time_nanos);
+                        (gesture.on_pressed)(Press::Up, event.animation_time_nanos);
                         gesture.axis.release_to_at(
                             (gesture.rest_left)(gesture.selected),
                             event.time_ms,

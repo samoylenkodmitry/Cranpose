@@ -264,9 +264,9 @@ pub fn LiquidSegmentedControl(
                                 }),
                                 rest_left: Rc::new(move |index| segment_width * index as f32),
                                 selected,
-                                on_pressed: Rc::new(move |down, time| {
-                                    pressed.set(down);
-                                    contact.pressed(down, time);
+                                on_pressed: Rc::new(move |press, time| {
+                                    pressed.set(press.is_down());
+                                    contact.pressed(press, time);
                                 }),
                                 on_touch: Rc::new(|_, _| {}),
                                 on_select,

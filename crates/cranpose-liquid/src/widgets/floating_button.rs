@@ -19,7 +19,10 @@ use cranpose_ui_graphics::{
 };
 use cranpose_ui_layout::Alignment;
 
-use crate::material::{Glass, GlassDynamics, LiquidModifierExt};
+use crate::{
+    material::{Glass, GlassDynamics, LiquidModifierExt},
+    motion::Press,
+};
 
 pub(super) fn floating_button_content(
     modifier: Modifier,
@@ -118,7 +121,8 @@ impl Contact {
         }
     }
 
-    fn pressed(&self, down: bool, time: Option<u64>) {
+    fn pressed(&self, press: Press, time: Option<u64>) {
+        let down = press.is_down();
         let geometry = if down {
             spring(0.65, 625.0).with_delay(28)
         } else {
@@ -298,7 +302,7 @@ fn floating_gesture(
                             });
                             if down.is_some() && (claimed || event.is_consumed()) {
                                 down = None;
-                                contact.pressed(false, event.animation_time_nanos);
+                                contact.pressed(Press::Up, event.animation_time_nanos);
                                 continue;
                             }
                             if advance_contact(
@@ -333,7 +337,7 @@ fn advance_contact(
                 event.position.x - size.width * 0.5,
                 event.position.y - size.height * 0.5,
             ));
-            contact.pressed(true, event.animation_time_nanos);
+            contact.pressed(Press::Down, event.animation_time_nanos);
         }
         PointerEventKind::Move => {
             if let Some((_, origin)) = *down {
@@ -346,7 +350,7 @@ fn advance_contact(
         }
         PointerEventKind::Up if down.is_some() => {
             *down = None;
-            contact.pressed(false, event.animation_time_nanos);
+            contact.pressed(Press::Up, event.animation_time_nanos);
             event.consume();
             return event.position.x > -margin
                 && event.position.x < size.width + margin
@@ -355,7 +359,7 @@ fn advance_contact(
         }
         PointerEventKind::Cancel if down.is_some() => {
             *down = None;
-            contact.pressed(false, event.animation_time_nanos);
+            contact.pressed(Press::Up, event.animation_time_nanos);
         }
         _ => {}
     }

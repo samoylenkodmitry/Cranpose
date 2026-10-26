@@ -22,18 +22,18 @@ fn contact_frames_track_native_size_and_white_fill_independently() {
             (120.0, 44.0),
         ),
     ] {
-        for down in [true, false] {
+        for press in [Press::Down, Press::Up] {
             let runtime =
                 cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
             let motion = ControlContactMotion::new(runtime.handle(), kind);
-            if !down {
+            if press == Press::Up {
                 for channel in motion.channels.borrow_mut().iter_mut() {
                     channel.snapTo(1.0);
                 }
             }
             let origin = 1_000_000_000;
             runtime.handle().drain_frame_callbacks(origin);
-            motion.pressed(down, Some(origin));
+            motion.pressed(press, Some(origin));
             let (geometry, material) = motion.states();
             let mut size_error = 0.0;
             let mut fill_error = 0.0;
@@ -43,7 +43,7 @@ fn contact_frames_track_native_size_and_white_fill_independently() {
                 .skip(1)
             {
                 let fields = row.split(',').collect::<Vec<_>>();
-                if fields[0] != name || (fields[1] == "press") != down {
+                if fields[0] != name || (fields[1] == "press") != press.is_down() {
                     continue;
                 }
                 let values = fields[2..]
@@ -70,11 +70,11 @@ fn contact_frames_track_native_size_and_white_fill_independently() {
             let fill_rms = (fill_error / f64::from(count)).sqrt();
             assert!(
                 size_rms < 1.1,
-                "{name} down={down} native size RMS: {size_rms}"
+                "{name} {press:?} native size RMS: {size_rms}"
             );
             assert!(
                 fill_rms < 0.06,
-                "{name} down={down} native fill RMS: {fill_rms}"
+                "{name} {press:?} native fill RMS: {fill_rms}"
             );
         }
     }
@@ -84,10 +84,10 @@ fn contact_frames_track_native_size_and_white_fill_independently() {
 fn releasing_during_inflation_preserves_motion_then_settles_without_a_linger() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
     let motion = ControlContactMotion::new(runtime.handle(), ControlContactKind::Thumb);
-    motion.pressed(true, Some(1_000_000_000));
+    motion.pressed(Press::Down, Some(1_000_000_000));
     runtime.handle().drain_frame_callbacks(1_080_000_000);
     let velocity = motion.channels.borrow()[0].velocity();
-    motion.pressed(false, Some(1_080_000_000));
+    motion.pressed(Press::Up, Some(1_080_000_000));
     assert_eq!(motion.channels.borrow()[0].velocity(), velocity);
     for frame in 1..=120 {
         runtime

@@ -7,7 +7,7 @@ use super::{
     control_motion::ControlContactMotion,
     slider_motion::{SliderDrag, SliderFling},
 };
-use crate::motion::{LiquidDragAxis, LiquidMotion};
+use crate::motion::{LiquidDragAxis, LiquidMotion, Press};
 
 #[derive(Clone)]
 pub(super) struct SliderGesture {
@@ -50,7 +50,8 @@ impl SliderGesture {
                     input_time,
                 )));
                 self.axis.begin(usable * self.value, event.time_ms);
-                self.contact.pressed(true, event.animation_time_nanos);
+                self.contact
+                    .pressed(Press::Down, event.animation_time_nanos);
                 event.consume();
             }
             return;
@@ -96,6 +97,6 @@ impl SliderGesture {
 
     fn finish(&self, event: &PointerEvent) {
         self.active.set(None);
-        self.contact.pressed(false, event.animation_time_nanos);
+        self.contact.pressed(Press::Up, event.animation_time_nanos);
     }
 }
