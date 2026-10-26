@@ -2,6 +2,10 @@ id: bool-parameter
 language: rust
 severity: warning
 message: An argument that selects behavior is an enum, so the call site says which.
+note: |
+  Counts the bool parameters of a crate-visible function that takes at least
+  two parameters. A setter's lone bool states the value it sets, and a
+  composable keeps the bool parameters of its Jetpack Compose original.
 rule:
   kind: parameter
   has:
@@ -10,7 +14,17 @@ rule:
     regex: ^bool$
   inside:
     kind: parameters
+    has:
+      kind: parameter
+      nthChild:
+        position: 2
+        ofRule:
+          kind: parameter
     inside:
       kind: function_item
       has:
         kind: visibility_modifier
+      not:
+        has:
+          field: name
+          regex: ^[A-Z]
