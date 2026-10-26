@@ -73,7 +73,7 @@ impl RobotTurn<'_> {
         let Some(window) = app.window.clone() else {
             return std::ops::ControlFlow::Continue(());
         };
-        let (Some(shell), Some(controller)) = (&mut app.app, &mut app.robot_controller) else {
+        let (Some(shell), Some(controller)) = (&mut app.app, &mut app.robot.controller) else {
             return std::ops::ControlFlow::Continue(());
         };
         let mut turn = RobotTurn {
@@ -82,16 +82,16 @@ impl RobotTurn<'_> {
             registry: &registry,
             controller,
             recorder: &mut app.recorder,
-            app_hook: &mut app.robot_app_hook,
+            app_hook: &mut app.robot.app_hook,
             device_loss: &mut app.device_loss,
             event_proxy: &app.event_proxy,
             surface_config: &app.surface_config,
             surface_caps: &app.surface_caps,
             last_frame_start_time: &mut app.last_frame_start_time,
             primary_redraw_pending: &mut app.primary_redraw_pending,
-            visible_surface_dirty: &mut app.robot_visible_surface_dirty,
-            presented_frame_generation: app.presented_frame_generation,
-            unpresentable_frames: app.unpresentable_frames_since_present,
+            visible_surface_dirty: &mut app.robot.visible_surface_dirty,
+            presented_frame_generation: app.robot.presented_frame_generation,
+            unpresentable_frames: app.robot.unpresentable_frames,
             vsync_interval: app.vsync_interval,
             primary_visible,
             headless: app.settings.headless,
