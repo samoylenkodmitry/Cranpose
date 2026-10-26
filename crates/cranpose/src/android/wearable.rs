@@ -242,10 +242,11 @@ impl Drop for JavaInputStream {
     }
 }
 
-/// A message from the paired device.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeWearableService_nativeOnMessage<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeWearableService_nativeOnMessage<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     peer: JString<'local>,
@@ -264,10 +265,11 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeWearableService_nativeO
     }
 }
 
-/// A stream the paired device opened; Rust reads it until it ends.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeWearableService_nativeOnStream<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeWearableService_nativeOnStream<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     peer: JString<'local>,

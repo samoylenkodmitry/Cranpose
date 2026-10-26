@@ -1,6 +1,6 @@
 use std::{ffi::OsStr, path::PathBuf};
 
-pub fn diagnostic_path(name: &str) -> PathBuf {
+pub(crate) fn diagnostic_path(name: &str) -> PathBuf {
     let root = temp_root();
     std::fs::create_dir_all(&root)
         .unwrap_or_else(|err| panic!("failed to create {}: {err}", root.display()));

@@ -241,7 +241,7 @@ impl MediaPlayer for AndroidMediaPlayer {
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaAudioFocus(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaAudioFocus(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     focus: jint,
@@ -257,7 +257,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaA
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaCommand(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaCommand(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     command: jint,

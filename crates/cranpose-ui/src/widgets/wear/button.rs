@@ -18,6 +18,7 @@
 //!   motion the platform does not have.
 
 use cranpose_core::NodeId;
+use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui_graphics::{DrawScope, Size};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
@@ -26,7 +27,7 @@ use cranpose_ui_layout::{
 use crate::{
     SemanticsWidgetRole, composable,
     density::Density,
-    modifier::{Brush, Color, CornerRadii, Modifier, SemanticsConfiguration},
+    modifier::{Brush, Color, CornerRadii, Modifier},
     widgets::{
         Layout, Text,
         wear::theme::{WearColors, WearTextStyle},

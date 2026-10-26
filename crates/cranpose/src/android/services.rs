@@ -853,7 +853,7 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for AndroidClipboard {
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkStatus(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkStatus(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     online: jboolean,
@@ -869,7 +869,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetwor
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkRegistration(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkRegistration(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     registered: jboolean,
@@ -879,7 +879,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetwor
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnInsetsChanged(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnInsetsChanged(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     left: jint,
@@ -897,7 +897,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnInsets
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnOpenedLink<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnOpenedLink<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     link: JString<'local>,
@@ -913,7 +915,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnOpened
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomingContent<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomingContent<
     'local,
 >(
     mut env: EnvUnowned<'local>,
@@ -948,7 +950,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomi
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnTrimMemory(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnTrimMemory(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     level: jint,
@@ -959,7 +961,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnTrimMe
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<
     'local,
 >(
     mut env: EnvUnowned<'local>,

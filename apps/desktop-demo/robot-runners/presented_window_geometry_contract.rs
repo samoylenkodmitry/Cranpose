@@ -234,7 +234,7 @@ fn PresentedWindowGeometryApp() {
     );
 }
 
-pub fn run(window_title: &'static str) {
+pub(crate) fn run(window_title: &'static str) {
     env_logger::init();
     println!("=== {window_title} ===");
 

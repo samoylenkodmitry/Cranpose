@@ -122,10 +122,9 @@ fn share_with_ndk(context: &AndroidContext) -> Result<(), String> {
     Ok(())
 }
 
-/// Hands back the context a process start set, before an activity sets it.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeProcess_nativeYieldContext(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeProcess_nativeYieldContext(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) {

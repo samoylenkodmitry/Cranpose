@@ -428,7 +428,9 @@ fn non_negative(value: jint) -> usize {
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeCommitText<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeCommitText<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     queue_handle: jlong,
@@ -449,7 +451,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeComm
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetComposingText<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetComposingText<
     'local,
 >(
     mut env: EnvUnowned<'local>,
@@ -472,7 +474,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetC
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetComposingRegion(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetComposingRegion(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -490,7 +492,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetC
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetSelection(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetSelection(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -508,7 +510,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetS
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeFinishComposing(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeFinishComposing(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -518,7 +520,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeFini
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeDeleteSurrounding(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeDeleteSurrounding(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -536,7 +538,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeDele
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSendKeyEvent(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSendKeyEvent(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -558,7 +560,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSend
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImePerformEditorAction(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImePerformEditorAction(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -569,7 +571,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImePerf
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeInsetsChanged(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeInsetsChanged(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,
@@ -583,7 +585,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeInse
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeReleaseQueue(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeReleaseQueue(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     queue_handle: jlong,

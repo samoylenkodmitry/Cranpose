@@ -390,11 +390,9 @@ fn write_message(
     buffer.set_region(env, at, &chunk[..filled])
 }
 
-/// The host met a control it holds no record of, so it asks for every
-/// record again.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityTreeLost(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityTreeLost(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) {
@@ -404,7 +402,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityActivate(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityActivate(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -416,11 +414,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// The host reports that a reader read the tree it holds, once a tree, or
-/// acted on it.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityRead(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityRead(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) {
@@ -431,7 +427,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityStateChanged(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityStateChanged(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     enabled: jboolean,
@@ -444,7 +440,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnScreenReaderStateChanged(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnScreenReaderStateChanged(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     running: jboolean,
@@ -455,11 +451,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnScreen
     }
 }
 
-/// The activity reports what the person set under Settings, Accessibility:
-/// animations off, high contrast text, bold text.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityOptions(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityOptions(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     reduce_motion: jboolean,
@@ -474,11 +468,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     }
 }
 
-/// TalkBack landed its cursor on a virtual view; the frame loop moves app
-/// focus to match, so the reader and the app agree on what holds focus.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityFocus(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityFocus(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -492,7 +484,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityCustomAction(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityCustomAction(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -508,12 +500,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack moved the value of an adjustable control. Only the identity and
-/// the value cross back; the frame loop resolves the control against the live
-/// semantics tree, as a custom action does.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetProgress(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetProgress(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -526,11 +515,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack or a voice tool handed a text field new text. The frame loop
-/// resolves the field against the live semantics tree.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetText(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetText(
     mut env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -549,14 +536,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack moved the caret of a text field, or picked a stretch of its text,
-/// through Android's set-selection action or a move by character, word or
-/// line. The ends count UTF-16 units, the anchor first; a negative end means
-/// the end of the text. The frame loop resolves the field against the live
-/// semantics tree.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetSelection(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetSelection(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -573,11 +555,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack asked a container for its next or previous page. The frame loop
-/// resolves the container against the live semantics tree and pages it.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScroll(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScroll(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -590,12 +570,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack asked a list for the row at a number, through Android's
-/// scroll-to-position action. The frame loop resolves the list against the
-/// live semantics tree and puts that row in view.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScrollToIndex(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScrollToIndex(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -611,11 +588,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack asked a control to open or to close. The frame loop resolves the
-/// control against the live semantics tree, as a custom action does.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityExpand(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityExpand(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -628,11 +603,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack asked a control for its long press. The frame loop resolves the
-/// control against the live semantics tree, as a custom action does.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityLongClick(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityLongClick(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,
@@ -644,11 +617,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// TalkBack asked a control to go away. The frame loop resolves the control
-/// against the live semantics tree, as a custom action does.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityDismiss(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityDismiss(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     virtual_id: jint,

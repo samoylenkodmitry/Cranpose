@@ -2,11 +2,11 @@ use std::ops::Range;
 
 use cranpose::RobotScreenshot;
 
-pub fn is_blue_handle(r: u8, g: u8, b: u8) -> bool {
+pub(crate) fn is_blue_handle(r: u8, g: u8, b: u8) -> bool {
     b > 170 && b.saturating_sub(r) > 55 && b.saturating_sub(g) > 25
 }
 
-pub fn lower_band_center(
+pub(crate) fn lower_band_center(
     shot: &RobotScreenshot,
     sx: f32,
     sy: f32,
@@ -44,7 +44,7 @@ pub fn lower_band_center(
     })
 }
 
-pub fn count_upper_lower_bands(
+pub(crate) fn count_upper_lower_bands(
     shot: &RobotScreenshot,
     xs: Range<usize>,
     ys: Range<usize>,

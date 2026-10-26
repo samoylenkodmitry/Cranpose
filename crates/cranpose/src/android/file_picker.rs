@@ -713,7 +713,7 @@ impl Future for FolderNext {
 }
 
 #[cfg(feature = "media-backend")]
-pub fn content_uri_length(uri: &str) -> Option<u64> {
+pub(crate) fn content_uri_length(uri: &str) -> Option<u64> {
     let length = call_activity(|env, activity| {
         let argument = env.new_string(uri).map_err(|error| error.to_string())?;
         let argument: &JObject = argument.as_ref();
@@ -775,7 +775,7 @@ fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
     'local,
 >(
     mut env: EnvUnowned<'local>,
@@ -794,7 +794,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordRe
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
@@ -816,20 +818,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePi
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
-    env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    token: jlong,
-    uri: JString<'local>,
-    cancelled: jboolean,
-    error: JString<'local>,
-) {
-    deliver_tree_pick(tree_picks(), env, token, uri, cancelled, error);
-}
-
-#[doc(hidden)]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<
     'local,
 >(
     env: EnvUnowned<'local>,
@@ -844,7 +833,22 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritab
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnDocumentCreated<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
+    'local,
+>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    uri: JString<'local>,
+    cancelled: jboolean,
+    error: JString<'local>,
+) {
+    deliver_tree_pick(tree_picks(), env, token, uri, cancelled, error);
+}
+
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnDocumentCreated<
     'local,
 >(
     env: EnvUnowned<'local>,
@@ -891,7 +895,9 @@ fn tree_result(
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
@@ -917,7 +923,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolder
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<'local>(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,

@@ -425,7 +425,7 @@ fn create_headless_renderer_configured(
 }
 
 pub(crate) mod page {
-    pub use cranpose_ui::{
+    pub(crate) use cranpose_ui::{
         Color, Modifier, RenderEffect, TextStyle, composable,
         widgets::{Box, BoxSpec, Text},
     };
@@ -435,11 +435,11 @@ pub(crate) mod page {
 
 #[expect(unused_imports, reason = "each test binary uses a part of the support")]
 pub(crate) mod graph {
-    pub use cranpose_render_common::{
+    pub(crate) use cranpose_render_common::{
         Renderer,
         graph::{RenderGraph, RenderNode},
     };
-    pub use cranpose_ui_graphics::{
+    pub(crate) use cranpose_ui_graphics::{
         Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, Point, Rect, Stroke, TileMode,
     };
 

@@ -256,10 +256,8 @@ pub(crate) fn install_activity(app: android_activity::AndroidApp) {
     crate::pipeline_cache_file::publish();
 }
 
-/// A step of a predictive back gesture (API 34+), for the app while it
-/// intercepts back; otherwise the platform's own back takes it.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackGesture(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackGesture(
     _env: EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     kind: jni::sys::jint,
@@ -290,7 +288,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackGe
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackInvoked(
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackInvoked(
     _env: EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {

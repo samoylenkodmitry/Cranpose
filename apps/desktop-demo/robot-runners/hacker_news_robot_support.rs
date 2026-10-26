@@ -8,11 +8,12 @@ use cranpose_testing::{
 };
 use serde_json::json;
 
-pub const MOCK_STORY_COUNT: usize = 60;
-pub const MOCK_COMMENT_COUNT: usize = 40;
-pub const LONG_COMMENT_SUFFIX: usize = 3;
-pub const INITIAL_COMMENTS_STATUS: &str = "24 comments shown. Scroll near the end to load more.";
-pub type Bounds = (f32, f32, f32, f32);
+pub(crate) const MOCK_STORY_COUNT: usize = 60;
+pub(crate) const MOCK_COMMENT_COUNT: usize = 40;
+pub(crate) const LONG_COMMENT_SUFFIX: usize = 3;
+pub(crate) const INITIAL_COMMENTS_STATUS: &str =
+    "24 comments shown. Scroll near the end to load more.";
+pub(crate) type Bounds = (f32, f32, f32, f32);
 const ROBOT_VIEWPORT_WIDTH: f32 = 390.0;
 
 struct MockHackerNewsClient {
@@ -164,11 +165,11 @@ fn find_comment_number(elem: &SemanticElement) -> Option<usize> {
     None
 }
 
-pub fn create_mock_client() -> HttpClientRef {
+pub(crate) fn create_mock_client() -> HttpClientRef {
     MockHackerNewsClient::new().into_client()
 }
 
-pub fn long_comment_body_text() -> String {
+pub(crate) fn long_comment_body_text() -> String {
     comment_body_text(LONG_COMMENT_SUFFIX)
 }
 
@@ -219,7 +220,7 @@ fn drag_between(
     let _ = robot.mouse_up();
 }
 
-pub fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
+pub(crate) fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
     for _ in 0..60 {
         if let Ok(Some((x, y, w, h))) = robot.find_text_bounds(name) {
             let bounds = (x, y, w, h);
@@ -253,7 +254,10 @@ pub fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
     false
 }
 
-pub fn click_first_visible_comments_button(robot: &cranpose::Robot, list_bounds: Bounds) -> bool {
+pub(crate) fn click_first_visible_comments_button(
+    robot: &cranpose::Robot,
+    list_bounds: Bounds,
+) -> bool {
     let Ok(elements) = robot.get_semantics() else {
         return false;
     };
@@ -298,7 +302,7 @@ pub fn click_first_visible_comments_button(robot: &cranpose::Robot, list_bounds:
     false
 }
 
-pub fn wait_for_text(robot: &cranpose::Robot, text: &str) -> bool {
+pub(crate) fn wait_for_text(robot: &cranpose::Robot, text: &str) -> bool {
     for _ in 0..60 {
         if find_in_semantics(robot, |elem| find_text_exact(elem, text)).is_some() {
             return true;
@@ -308,7 +312,7 @@ pub fn wait_for_text(robot: &cranpose::Robot, text: &str) -> bool {
     false
 }
 
-pub fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
+pub(crate) fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
     for _ in 0..60 {
         if find_in_semantics(robot, |elem| find_text_exact(elem, text)).is_none() {
             return true;
@@ -318,11 +322,11 @@ pub fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
     false
 }
 
-pub fn wait_for_comments_data(robot: &cranpose::Robot) -> bool {
+pub(crate) fn wait_for_comments_data(robot: &cranpose::Robot) -> bool {
     wait_for_text(robot, INITIAL_COMMENTS_STATUS)
 }
 
-pub fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> {
+pub(crate) fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> {
     let elements = robot.get_semantics().ok()?;
     find_element_by_text_exact(&elements, label).map(|elem| {
         (
@@ -334,7 +338,7 @@ pub fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> 
     })
 }
 
-pub fn scroll_until_text_visible_in_bounds(
+pub(crate) fn scroll_until_text_visible_in_bounds(
     robot: &cranpose::Robot,
     viewport: Bounds,
     text: &str,
@@ -367,7 +371,7 @@ fn bounds_intersect(a: Bounds, b: Bounds) -> bool {
     ax + aw > bx && ax < bx + bw && ay + ah > by && ay < by + bh
 }
 
-pub fn visible_comment_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> Vec<usize> {
+pub(crate) fn visible_comment_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> Vec<usize> {
     let Ok(elements) = robot.get_semantics() else {
         return Vec::new();
     };
@@ -382,7 +386,7 @@ pub fn visible_comment_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> 
     numbers
 }
 
-pub fn scroll_until_comment_visible(
+pub(crate) fn scroll_until_comment_visible(
     robot: &cranpose::Robot,
     viewport: Bounds,
     max_drags: usize,
@@ -433,7 +437,10 @@ fn collect_visible_comment_numbers(
     }
 }
 
-pub fn visible_mock_story_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> Vec<usize> {
+pub(crate) fn visible_mock_story_numbers(
+    robot: &cranpose::Robot,
+    list_bounds: Bounds,
+) -> Vec<usize> {
     let Ok(elements) = robot.get_semantics() else {
         return Vec::new();
     };
@@ -467,7 +474,7 @@ pub fn visible_mock_story_numbers(robot: &cranpose::Robot, list_bounds: Bounds) 
     numbers
 }
 
-pub fn settle_visible_mock_story_numbers(
+pub(crate) fn settle_visible_mock_story_numbers(
     robot: &cranpose::Robot,
     list_bounds: Bounds,
     max_attempts: usize,
@@ -493,7 +500,7 @@ pub fn settle_visible_mock_story_numbers(
     previous
 }
 
-pub fn raw_drag(
+pub(crate) fn raw_drag(
     robot: &cranpose::Robot,
     x: f32,
     start_y: f32,
@@ -511,9 +518,7 @@ pub fn raw_drag(
     );
 }
 
-/// Drags from `start_y` to `end_y` and holds still before letting go: the
-/// list moves by the drag alone, with no fling after it.
-pub fn nudge(robot: &cranpose::Robot, x: f32, start_y: f32, end_y: f32) {
+pub(crate) fn nudge(robot: &cranpose::Robot, x: f32, start_y: f32, end_y: f32) {
     drag_between(
         robot,
         (x, start_y),
@@ -525,7 +530,7 @@ pub fn nudge(robot: &cranpose::Robot, x: f32, start_y: f32, end_y: f32) {
     let _ = robot.wait_for_idle();
 }
 
-pub fn fail(robot: &cranpose::Robot, message: impl Into<String>) -> ! {
+pub(crate) fn fail(robot: &cranpose::Robot, message: impl Into<String>) -> ! {
     let message = message.into();
     println!("  ✗ FAIL: {message}");
     if let Ok(elements) = robot.get_semantics() {

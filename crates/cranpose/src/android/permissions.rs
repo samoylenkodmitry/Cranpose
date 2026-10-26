@@ -15,7 +15,7 @@ use super::{heart_rate::HEART_RATE_PERMISSIONS, microphone::MICROPHONE_PERMISSIO
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnPermissionsResult<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnPermissionsResult<
     'local,
 >(
     mut env: EnvUnowned<'local>,

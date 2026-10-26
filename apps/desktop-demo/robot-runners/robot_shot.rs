@@ -2,11 +2,11 @@ use std::{path::Path, time::Duration};
 
 use cranpose::{Color, Robot, RobotScreenshot};
 
-pub fn save(shot: &RobotScreenshot, directory: &Path, name: &str) {
+pub(crate) fn save(shot: &RobotScreenshot, directory: &Path, name: &str) {
     let _ = save_checked(&directory.join(name), shot);
 }
 
-pub fn save_checked(path: &Path, shot: &RobotScreenshot) -> Result<(), String> {
+pub(crate) fn save_checked(path: &Path, shot: &RobotScreenshot) -> Result<(), String> {
     let image = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
         shot.width,
         shot.height,
@@ -18,20 +18,20 @@ pub fn save_checked(path: &Path, shot: &RobotScreenshot) -> Result<(), String> {
         .map_err(|err| format!("failed to save {}: {}", path.display(), err))
 }
 
-pub fn settle(robot: &Robot, millis: u64) {
+pub(crate) fn settle(robot: &Robot, millis: u64) {
     let _ = robot.wait_for_idle();
     std::thread::sleep(Duration::from_millis(millis));
     let _ = robot.wait_for_idle();
 }
 
-pub fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
+pub(crate) fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
     let dr = a.0 as f32 - b.0 as f32;
     let dg = a.1 as f32 - b.1 as f32;
     let db = a.2 as f32 - b.2 as f32;
     (dr * dr + dg * dg + db * db).sqrt()
 }
 
-pub fn to_rgb8(color: Color) -> (u8, u8, u8) {
+pub(crate) fn to_rgb8(color: Color) -> (u8, u8, u8) {
     (
         (color.r() * 255.0) as u8,
         (color.g() * 255.0) as u8,
@@ -39,7 +39,7 @@ pub fn to_rgb8(color: Color) -> (u8, u8, u8) {
     )
 }
 
-pub fn logical_sampler(shot: &RobotScreenshot) -> impl Fn(f32, f32) -> (u8, u8, u8) + '_ {
+pub(crate) fn logical_sampler(shot: &RobotScreenshot) -> impl Fn(f32, f32) -> (u8, u8, u8) + '_ {
     let scale = shot.width as f32 / shot.logical_width;
     move |lx: f32, ly: f32| -> (u8, u8, u8) {
         let px = (lx * scale).round().clamp(0.0, shot.width as f32 - 1.0) as u32;

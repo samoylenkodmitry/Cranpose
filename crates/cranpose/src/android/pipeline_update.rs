@@ -36,7 +36,7 @@ pub(crate) fn note_app_launched() {
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposePipelines_nativePrepareAfterUpdate<
+pub(crate) extern "system" fn Java_dev_cranpose_android_CranposePipelines_nativePrepareAfterUpdate<
     'local,
 >(
     mut env: EnvUnowned<'local>,

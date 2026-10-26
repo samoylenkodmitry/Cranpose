@@ -3,7 +3,7 @@ use cranpose::{
     rememberMutableStateOf, Modifier,
 };
 
-pub fn tabs(
+pub(crate) fn tabs(
     entries: &'static [(&'static str, &'static str)],
 ) -> impl Fn(&LiquidTabBarScope) + 'static {
     move |scope: &LiquidTabBarScope| {
@@ -13,7 +13,7 @@ pub fn tabs(
     }
 }
 
-pub fn bar(
+pub(crate) fn bar(
     modifier: Modifier,
     spec: LiquidTabBarSpec,
     initial_selection: usize,
