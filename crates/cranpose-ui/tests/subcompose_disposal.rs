@@ -4,8 +4,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, MemoryApplier, MutableState, Node, NodeId, SlotId, location_key, movable,
-    with_current_composer,
+    Applier, Composition, Key, MemoryApplier, MutableState, Node, NodeId, SlotId, location_key,
+    movable, with_current_composer,
 };
 use cranpose_ui::{
     AppContext, LayoutEngine, MeasureResult, Modifier, Placement, Size, SubcomposeMeasureScope,
@@ -30,7 +30,7 @@ struct OrdinarySlotLifecycle {
     unmount_saw_state_dropped: Cell<bool>,
 }
 
-fn nested_layout_key() -> u64 {
+fn nested_layout_key() -> Key {
     location_key(file!(), line!(), column!())
 }
 

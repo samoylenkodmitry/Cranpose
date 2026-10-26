@@ -3,20 +3,20 @@ use crate::slot::DirectChildRange;
 
 #[test]
 fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
-    const PARENT_KEY: Key = 500;
-    const CHILD_A_KEY: Key = 501;
-    const GRANDCHILD_KEY: Key = 502;
-    const CHILD_B_KEY: Key = 503;
+    const PARENT_KEY: u64 = 500;
+    const CHILD_A_KEY: u64 = 501;
+    const GRANDCHILD_KEY: u64 = 502;
+    const CHILD_B_KEY: u64 = 503;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_A_KEY, None);
+        begin_unkeyed(session, Key(CHILD_A_KEY), None);
         session.record_node_with_parent(10, 1, None, crate::slot::BRANCH_PATH_ROOT);
-        begin_unkeyed(session, GRANDCHILD_KEY, None);
+        begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         session.record_node_with_parent(20, 1, Some(10), crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
@@ -25,7 +25,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         assert!(child_a_result.detached_children.is_empty());
         session.end_group();
 
-        begin_unkeyed(session, CHILD_B_KEY, None);
+        begin_unkeyed(session, Key(CHILD_B_KEY), None);
         session.record_node_with_parent(30, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
@@ -39,9 +39,9 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let child_b_kind = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child_a = begin_unkeyed(session, CHILD_A_KEY, None);
+        let child_a = begin_unkeyed(session, Key(CHILD_A_KEY), None);
         assert_eq!(child_a.kind, GroupStartKind::Reused);
         assert_eq!(node_ids_in_current_subtree(session), vec![10, 20]);
         session.skip_group();
@@ -51,7 +51,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         assert!(child_a_result.was_skipped);
         session.end_group();
 
-        let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
+        let child_b = begin_unkeyed(session, Key(CHILD_B_KEY), None);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
@@ -69,14 +69,14 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
 
 #[test]
 fn scope_index_resolves_active_groups_and_omits_detached_ones() {
-    const GROUP_KEY: Key = 600;
+    const GROUP_KEY: u64 = 600;
     const SCOPE_ID: ScopeId = 55;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let group_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         session.set_group_scope(started.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -126,14 +126,14 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
 
 #[test]
 fn scope_lookup_ignores_anchor_with_corrupt_active_group_index() {
-    const GROUP_KEY: Key = 601;
+    const GROUP_KEY: u64 = 601;
     const SCOPE_ID: ScopeId = 66;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let group_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         session.set_group_scope(started.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -155,13 +155,13 @@ fn scope_lookup_ignores_anchor_with_corrupt_active_group_index() {
 
 #[test]
 fn active_group_index_rejects_corrupt_anchor_index() {
-    const GROUP_KEY: Key = 602;
+    const GROUP_KEY: u64 = 602;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let group_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -185,7 +185,7 @@ fn active_group_index_rejects_corrupt_anchor_index() {
 
 #[test]
 fn skip_and_end_group_with_stale_frame_anchor_do_not_panic() {
-    const GROUP_KEY: Key = 603;
+    const GROUP_KEY: u64 = 603;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -194,7 +194,7 @@ fn skip_and_end_group_with_stale_frame_anchor_do_not_panic() {
         let mut session = harness
             .table
             .write_session(&mut harness.lifecycle, &mut harness.state);
-        let started = begin_unkeyed(&mut session, GROUP_KEY, None);
+        let started = begin_unkeyed(&mut session, Key(GROUP_KEY), None);
         session.table.anchors.mark_detached(started.anchor);
 
         session.skip_group();
@@ -209,15 +209,15 @@ fn skip_and_end_group_with_stale_frame_anchor_do_not_panic() {
 
 #[test]
 fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
-    const PARENT_KEY: Key = 606;
-    const CHILD_KEY: Key = 607;
+    const PARENT_KEY: u64 = 606;
+    const CHILD_KEY: u64 = 607;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let child_anchor = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -252,16 +252,16 @@ fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
 
 #[test]
 fn group_span_adjustment_stops_at_corrupt_parent_anchor() {
-    const PARENT_KEY: Key = 608;
-    const CHILD_KEY: Key = 609;
-    const GRANDCHILD_KEY: Key = 610;
+    const PARENT_KEY: u64 = 608;
+    const CHILD_KEY: u64 = 609;
+    const GRANDCHILD_KEY: u64 = 610;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let child_anchor = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -277,7 +277,7 @@ fn group_span_adjustment_stops_at_corrupt_parent_anchor() {
 
     let grandchild_anchor = harness
         .table
-        .insert_new_group(cursor, GroupKey::new(GRANDCHILD_KEY, None, 0));
+        .insert_new_group(cursor, GroupKey::new(Key(GRANDCHILD_KEY), None, 0));
 
     assert!(grandchild_anchor.is_valid());
     assert_eq!(harness.table.groups.len(), 3);
@@ -287,7 +287,7 @@ fn group_span_adjustment_stops_at_corrupt_parent_anchor() {
 
 #[test]
 fn value_slot_with_stale_group_frame_uses_recovery_group() {
-    const GROUP_KEY: Key = 605;
+    const GROUP_KEY: u64 = 605;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -296,7 +296,7 @@ fn value_slot_with_stale_group_frame_uses_recovery_group() {
         let mut session = harness
             .table
             .write_session(&mut harness.lifecycle, &mut harness.state);
-        let started = begin_unkeyed(&mut session, GROUP_KEY, None);
+        let started = begin_unkeyed(&mut session, Key(GROUP_KEY), None);
         session.table.anchors.set_active(started.anchor, 99);
         session
             .state
@@ -315,19 +315,19 @@ fn value_slot_with_stale_group_frame_uses_recovery_group() {
 
 #[test]
 fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
-    const PARENT_KEY: Key = 611;
-    const CHILD_KEY: Key = 612;
-    const GRANDCHILD_KEY: Key = 613;
+    const PARENT_KEY: u64 = 611;
+    const CHILD_KEY: u64 = 612;
+    const GRANDCHILD_KEY: u64 = 613;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(CHILD_KEY), None);
         session.record_node_with_parent(41, 1, None, crate::slot::BRANCH_PATH_ROOT);
-        begin_unkeyed(session, GRANDCHILD_KEY, None);
+        begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         session.record_node_with_parent(42, 1, Some(41), crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
@@ -344,7 +344,7 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -360,7 +360,7 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
 
 #[test]
 fn set_group_scope_replaces_previous_scope_lookup() {
-    const GROUP_KEY: Key = 610;
+    const GROUP_KEY: u64 = 610;
     const OLD_SCOPE_ID: ScopeId = 56;
     const NEW_SCOPE_ID: ScopeId = 57;
 
@@ -368,7 +368,7 @@ fn set_group_scope_replaces_previous_scope_lookup() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         session.set_group_scope(started.group, labeled_scope(OLD_SCOPE_ID));
         session.set_group_scope(started.group, labeled_scope(NEW_SCOPE_ID));
         let result = session.finish_group_body();
@@ -399,25 +399,25 @@ fn set_group_scope_replaces_previous_scope_lookup() {
 
 #[test]
 fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
-    const PARENT_KEY: Key = 620;
-    const STATIC_KEY: Key = 621;
-    const FIRST_KEY: Key = 622;
-    const SCOPED_KEY: Key = 623;
+    const PARENT_KEY: u64 = 620;
+    const STATIC_KEY: u64 = 621;
+    const FIRST_KEY: u64 = 622;
+    const SCOPED_KEY: u64 = 623;
     const SCOPE_ID: ScopeId = 624;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let scoped_anchor = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(FIRST_KEY), None);
         assert_eq!(first.kind, GroupStartKind::Inserted);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
+        let scoped = begin_keyed(session, Key(STATIC_KEY), Key(SCOPED_KEY), None);
         assert_eq!(scoped.kind, GroupStartKind::Inserted);
         session.set_group_scope(scoped.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
@@ -437,15 +437,15 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(FIRST_KEY), None);
         assert_eq!(first.kind, GroupStartKind::Reused);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
+        let scoped = begin_keyed(session, Key(STATIC_KEY), Key(SCOPED_KEY), None);
         assert_eq!(scoped.kind, GroupStartKind::Reused);
         assert_eq!(scoped.anchor, scoped_anchor);
         session.set_group_scope(scoped.group, labeled_scope(SCOPE_ID));
@@ -465,9 +465,9 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
+        let scoped = begin_keyed(session, Key(STATIC_KEY), Key(SCOPED_KEY), None);
         assert_eq!(scoped.kind, GroupStartKind::Moved);
         assert_eq!(scoped.anchor, scoped_anchor);
         session.set_group_scope(scoped.group, labeled_scope(SCOPE_ID));
@@ -475,7 +475,7 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(FIRST_KEY), None);
         assert_eq!(first.kind, GroupStartKind::Reused);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -507,20 +507,20 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
 
 #[test]
 fn assigning_same_scope_to_different_active_group_is_rejected() {
-    const FIRST_KEY: Key = 625;
-    const SECOND_KEY: Key = 626;
+    const FIRST_KEY: u64 = 625;
+    const SECOND_KEY: u64 = 626;
     const SCOPE_ID: ScopeId = 627;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let first = begin_unkeyed(session, FIRST_KEY, None);
+        let first = begin_unkeyed(session, Key(FIRST_KEY), None);
         session.set_group_scope(first.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_unkeyed(session, SECOND_KEY, None);
+        let second = begin_unkeyed(session, Key(SECOND_KEY), None);
         assert!(
             !session.set_group_scope(second.group, labeled_scope(SCOPE_ID)),
             "one scope id must not be assigned to two active groups"
@@ -546,7 +546,7 @@ fn released_anchors_are_reused_without_sparse_growth() {
     let first_anchor = harness.session(|session| {
         let mut first_anchor = None;
         for key in 0..GROUP_COUNT {
-            let started = begin_unkeyed(session, key as Key + 10_000, None);
+            let started = begin_unkeyed(session, Key(key as u64 + 10_000), None);
             first_anchor.get_or_insert(started.anchor);
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
@@ -574,7 +574,7 @@ fn released_anchors_are_reused_without_sparse_growth() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let reused_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, 90_000, None);
+        let started = begin_unkeyed(session, Key(90_000), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -601,15 +601,15 @@ fn released_anchors_are_reused_without_sparse_growth() {
 
 #[test]
 fn stale_group_handle_does_not_alias_recreated_group() {
-    const OLD_KEY: Key = 611;
-    const NEW_KEY: Key = 612;
+    const OLD_KEY: u64 = 611;
+    const NEW_KEY: u64 = 612;
     const SCOPE_ID: ScopeId = 58;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let stale_group = harness.session(|session| {
-        let started = begin_unkeyed(session, OLD_KEY, None);
+        let started = begin_unkeyed(session, Key(OLD_KEY), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -623,7 +623,7 @@ fn stale_group_handle_does_not_alias_recreated_group() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let recreated_group = harness.session(|session| {
-        let started = begin_unkeyed(session, NEW_KEY, None);
+        let started = begin_unkeyed(session, Key(NEW_KEY), None);
         assert_eq!(started.group.index(), stale_group.index());
         assert_ne!(started.group.generation(), stale_group.generation());
 
@@ -657,21 +657,21 @@ fn stale_group_handle_does_not_alias_recreated_group() {
 
 #[test]
 fn moved_group_invalidates_previous_active_group_id() {
-    const STATIC_KEY: Key = 613;
-    const FIRST_KEY: Key = 614;
-    const SECOND_KEY: Key = 615;
+    const STATIC_KEY: u64 = 613;
+    const FIRST_KEY: u64 = 614;
+    const SECOND_KEY: u64 = 615;
     const SCOPE_ID: ScopeId = 616;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let (first_anchor, second_anchor, stale_second_group) = harness.session(|session| {
-        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        let first = begin_keyed(session, Key(STATIC_KEY), Key(FIRST_KEY), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_keyed(session, STATIC_KEY, SECOND_KEY, None);
+        let second = begin_keyed(session, Key(STATIC_KEY), Key(SECOND_KEY), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -682,7 +682,7 @@ fn moved_group_invalidates_previous_active_group_id() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let moved_second = begin_keyed(session, STATIC_KEY, SECOND_KEY, None);
+        let moved_second = begin_keyed(session, Key(STATIC_KEY), Key(SECOND_KEY), None);
         assert_eq!(moved_second.kind, GroupStartKind::Moved);
         assert_eq!(moved_second.anchor, second_anchor);
         assert_ne!(moved_second.group, stale_second_group);
@@ -697,7 +697,7 @@ fn moved_group_invalidates_previous_active_group_id() {
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let shifted_first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        let shifted_first = begin_keyed(session, Key(STATIC_KEY), Key(FIRST_KEY), None);
         assert_eq!(shifted_first.kind, GroupStartKind::Reused);
         assert_eq!(shifted_first.anchor, first_anchor);
         let result = session.finish_group_body();
@@ -726,13 +726,13 @@ fn moved_group_invalidates_previous_active_group_id() {
 fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
     let folds = crate::slot::BranchFolds::default();
 
-    let first = folds.push(0x1111);
+    let first = folds.push(Key(0x1111));
     let _ = folds.fold(0);
-    let second = folds.push(0x2222);
+    let second = folds.push(Key(0x2222));
     let _ = folds.fold(0);
-    let third = folds.push(0x3333);
+    let third = folds.push(Key(0x3333));
     let _ = folds.fold(0);
-    let fourth = folds.push(0x4444);
+    let fourth = folds.push(Key(0x4444));
     let _ = folds.fold(0);
 
     folds.close(second);
@@ -741,8 +741,7 @@ fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
     let observed = folds.fold(0);
     let mut expected = crate::slot::BRANCH_PATH_ROOT;
     for key in [0x1111_u64, 0x3333] {
-        expected ^= key;
-        expected = expected.wrapping_mul(0x0000_0100_0000_01b3);
+        expected = expected.mixed(Key(key));
     }
     assert_eq!(
         observed, expected,
@@ -757,15 +756,14 @@ fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
 fn advancing_a_fold_under_another_closes_it_and_opens_the_next_on_top() {
     let folds = crate::slot::BranchFolds::default();
 
-    let mut first = folds.push(0x1111);
-    let second = folds.push(0x2222);
+    let mut first = folds.push(Key(0x1111));
+    let second = folds.push(Key(0x2222));
     let _ = folds.fold(0);
-    folds.advance(&mut first, 0x3333);
+    folds.advance(&mut first, Key(0x3333));
 
     let mut expected = crate::slot::BRANCH_PATH_ROOT;
     for key in [0x2222_u64, 0x3333] {
-        expected ^= key;
-        expected = expected.wrapping_mul(0x0000_0100_0000_01b3);
+        expected = expected.mixed(Key(key));
     }
     assert_eq!(
         folds.fold(0),

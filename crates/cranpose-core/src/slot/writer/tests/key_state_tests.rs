@@ -8,9 +8,9 @@ fn group_key(key: Key) -> GroupKey {
 fn inline_ordinals_track_repeated_unkeyed_calls() {
     let mut state = FrameKeyState::default();
 
-    assert_eq!(state.next_ordinal(10), 0);
-    assert_eq!(state.next_ordinal(10), 1);
-    assert_eq!(state.next_ordinal(10), 2);
+    assert_eq!(state.next_ordinal(Key(10)), 0);
+    assert_eq!(state.next_ordinal(Key(10)), 1);
+    assert_eq!(state.next_ordinal(Key(10)), 2);
     assert!(!state.ordinals_are_promoted());
 }
 
@@ -18,21 +18,21 @@ fn inline_ordinals_track_repeated_unkeyed_calls() {
 fn ordinals_promote_after_inline_capacity() {
     let mut state = FrameKeyState::default();
 
-    for key in 0..INLINE_KEY_STATE_CAPACITY as Key {
-        assert_eq!(state.next_ordinal(key), 0);
+    for key in 0..INLINE_KEY_STATE_CAPACITY as u64 {
+        assert_eq!(state.next_ordinal(Key(key)), 0);
     }
     assert!(!state.ordinals_are_promoted());
 
-    assert_eq!(state.next_ordinal(100), 0);
+    assert_eq!(state.next_ordinal(Key(100)), 0);
     assert!(state.ordinals_are_promoted());
-    assert_eq!(state.next_ordinal(3), 1);
-    assert_eq!(state.next_ordinal(3), 2);
+    assert_eq!(state.next_ordinal(Key(3)), 1);
+    assert_eq!(state.next_ordinal(Key(3)), 2);
 }
 
 #[test]
 fn inline_seen_keys_reject_duplicates() {
     let mut state = FrameKeyState::default();
-    let key = group_key(21);
+    let key = group_key(Key(21));
 
     assert!(state.insert_seen(key));
     assert!(!state.insert_seen(key));
@@ -43,37 +43,37 @@ fn inline_seen_keys_reject_duplicates() {
 fn seen_keys_promote_after_inline_capacity() {
     let mut state = FrameKeyState::default();
 
-    for key in 0..INLINE_KEY_STATE_CAPACITY as Key {
-        assert!(state.insert_seen(group_key(key)));
+    for key in 0..INLINE_KEY_STATE_CAPACITY as u64 {
+        assert!(state.insert_seen(group_key(Key(key))));
     }
     assert!(!state.seen_is_promoted());
 
-    assert!(state.insert_seen(group_key(100)));
+    assert!(state.insert_seen(group_key(Key(100))));
     assert!(state.seen_is_promoted());
-    assert!(!state.insert_seen(group_key(3)));
+    assert!(!state.insert_seen(group_key(Key(3))));
 }
 
 #[test]
 fn a_cleared_frame_forgets_spilled_keys() {
     let mut state = FrameKeyState::default();
-    for key in 0..=INLINE_KEY_STATE_CAPACITY as Key {
-        let _ = state.next_ordinal(key);
-        let _ = state.insert_seen(group_key(key));
+    for key in 0..=INLINE_KEY_STATE_CAPACITY as u64 {
+        let _ = state.next_ordinal(Key(key));
+        let _ = state.insert_seen(group_key(Key(key)));
     }
     assert!(state.ordinals_are_promoted());
     assert!(state.seen_is_promoted());
 
     state.clear();
 
-    assert_eq!(state.next_ordinal(1), 0);
-    assert!(state.insert_seen(group_key(1)));
-    assert!(!state.insert_seen(group_key(1)));
-    for key in 0..=INLINE_KEY_STATE_CAPACITY as Key {
-        let _ = state.next_ordinal(key + 100);
+    assert_eq!(state.next_ordinal(Key(1)), 0);
+    assert!(state.insert_seen(group_key(Key(1))));
+    assert!(!state.insert_seen(group_key(Key(1))));
+    for key in 0..=INLINE_KEY_STATE_CAPACITY as u64 {
+        let _ = state.next_ordinal(Key(key + 100));
     }
-    assert_eq!(state.next_ordinal(1), 1);
+    assert_eq!(state.next_ordinal(Key(1)), 1);
     assert_eq!(
-        state.next_ordinal(INLINE_KEY_STATE_CAPACITY as Key + 100),
+        state.next_ordinal(Key(INLINE_KEY_STATE_CAPACITY as u64 + 100)),
         1
     );
 }

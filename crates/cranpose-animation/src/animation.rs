@@ -580,7 +580,7 @@ impl InfiniteTransition {
         let run_key = self.inner.run_token.get();
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
         cranpose_core::__launched_effect_async_impl(
-            cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
+            cranpose_core::caller_location_key().scoped(cranpose_core::location_key!()),
             std::panic::Location::caller().into(),
             run_key,
             move |scope| {
@@ -670,7 +670,7 @@ impl InfiniteTransition {
         let transition_inner = Rc::clone(&self.inner);
         let animation_id = Rc::as_ptr(&animation_state) as usize;
         cranpose_core::__disposable_effect_impl(
-            caller ^ cranpose_core::location_key!(),
+            caller.scoped(cranpose_core::location_key!()),
             animation_id,
             move |_scope| {
                 transition_inner.add_animation(Rc::clone(&animation_any));

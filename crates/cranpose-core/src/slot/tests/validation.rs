@@ -6,7 +6,7 @@ fn fast_integrity_rejects_active_anchor_count_mismatch() {
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, 461, None);
+        begin_unkeyed(session, Key(461), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -56,8 +56,8 @@ fn slots_host_finish_pass_reports_writer_invariant_violation() {
 
 #[test]
 fn validate_reports_duplicate_sibling_key_structurally() {
-    const PARENT_KEY: Key = 462;
-    const STATIC_KEY: Key = 463;
+    const PARENT_KEY: u64 = 462;
+    const STATIC_KEY: u64 = 463;
 
     let mut table = SlotTable::new();
     let mut lifecycle = SlotLifecycleCoordinator::default();
@@ -65,14 +65,14 @@ fn validate_reports_duplicate_sibling_key_structurally() {
     state.reset_for_pass(SlotPassMode::Compose);
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
-        begin_unkeyed(&mut session, PARENT_KEY, None);
+        begin_unkeyed(&mut session, Key(PARENT_KEY), None);
 
-        begin_keyed(&mut session, STATIC_KEY, 1, None);
+        begin_keyed(&mut session, Key(STATIC_KEY), Key(1), None);
         let first = session.finish_group_body();
         assert!(first.detached_children.is_empty());
         session.end_group();
 
-        begin_keyed(&mut session, STATIC_KEY, 2, None);
+        begin_keyed(&mut session, Key(STATIC_KEY), Key(2), None);
         let second = session.finish_group_body();
         assert!(second.detached_children.is_empty());
         session.end_group();
@@ -95,7 +95,7 @@ fn validate_reports_duplicate_sibling_key_structurally() {
 
 #[test]
 fn validate_reports_invalid_parent_structurally() {
-    let mut table = composed_parent_child_table(470, 471, None);
+    let mut table = composed_parent_child_table(Key(470), Key(471), None);
     table.groups[1].parent_anchor = AnchorId::INVALID;
 
     assert_eq!(
@@ -111,7 +111,7 @@ fn validate_reports_invalid_parent_structurally() {
 
 #[test]
 fn validate_reports_bad_subtree_len_structurally() {
-    let mut table = composed_parent_child_table(472, 473, None);
+    let mut table = composed_parent_child_table(Key(472), Key(473), None);
     table.groups[1].subtree_len = 0;
 
     assert_eq!(
@@ -130,7 +130,7 @@ fn validate_reports_scope_of_another_group_structurally() {
     const SCOPE_ID: ScopeId = 64;
     const STALE_SCOPE_ID: ScopeId = 65;
 
-    let mut table = composed_parent_child_table(474, 475, Some(labeled_scope(SCOPE_ID)));
+    let mut table = composed_parent_child_table(Key(474), Key(475), Some(labeled_scope(SCOPE_ID)));
     table.groups[1].scope = Some(labeled_scope(STALE_SCOPE_ID));
 
     assert_eq!(
@@ -145,7 +145,7 @@ fn validate_reports_scope_of_another_group_structurally() {
 
 #[test]
 fn validate_reports_anchor_mismatch_for_wrong_active_index_structurally() {
-    let mut table = composed_parent_child_table(476, 477, None);
+    let mut table = composed_parent_child_table(Key(476), Key(477), None);
     let root_anchor = table.groups[0].anchor;
     table.anchors.set_active(root_anchor, 1);
 
@@ -161,7 +161,7 @@ fn validate_reports_anchor_mismatch_for_wrong_active_index_structurally() {
 
 #[test]
 fn validate_reports_anchor_mismatch_for_detached_anchor_structurally() {
-    let mut table = composed_parent_child_table(487, 488, None);
+    let mut table = composed_parent_child_table(Key(487), Key(488), None);
     let root_anchor = table.groups[0].anchor;
     table.anchors.mark_detached(root_anchor);
 
@@ -177,7 +177,7 @@ fn validate_reports_anchor_mismatch_for_detached_anchor_structurally() {
 
 #[test]
 fn validate_reports_group_anchor_count_mismatch_structurally() {
-    let mut table = composed_parent_child_table(480, 481, None);
+    let mut table = composed_parent_child_table(Key(480), Key(481), None);
     let extra_anchor = table.anchors.allocate();
     table.anchors.set_active(extra_anchor, 9);
 
@@ -192,7 +192,7 @@ fn validate_reports_group_anchor_count_mismatch_structurally() {
 
 #[test]
 fn validate_reports_anchor_mismatch_for_missing_anchor_structurally() {
-    let mut table = composed_parent_child_table(494, 495, None);
+    let mut table = composed_parent_child_table(Key(494), Key(495), None);
     let root_anchor = table.groups[0].anchor;
     table.anchors.clear();
 
@@ -208,7 +208,7 @@ fn validate_reports_anchor_mismatch_for_missing_anchor_structurally() {
 
 #[test]
 fn validate_reports_bad_depth_structurally() {
-    let mut table = composed_parent_child_table(489, 490, None);
+    let mut table = composed_parent_child_table(Key(489), Key(490), None);
     table.groups[1].depth = 0;
 
     assert_eq!(
@@ -228,7 +228,7 @@ fn validate_reports_duplicate_payload_anchor_structurally() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, 492, None);
+        begin_unkeyed(session, Key(492), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -267,7 +267,7 @@ fn validate_reports_duplicate_payload_anchor_structurally() {
 
 #[test]
 fn validate_reports_payload_start_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(481);
+    let mut table = composed_group_with_value_and_node_table(Key(481));
     table.groups[0].payload_start = 1;
 
     assert_eq!(
@@ -283,7 +283,7 @@ fn validate_reports_payload_start_mismatch_structurally() {
 
 #[test]
 fn validate_reports_payload_out_of_range_structurally() {
-    let mut table = composed_group_with_value_and_node_table(484);
+    let mut table = composed_group_with_value_and_node_table(Key(484));
     table.groups[0].payload_len = 2;
 
     assert_eq!(
@@ -300,7 +300,7 @@ fn validate_reports_payload_out_of_range_structurally() {
 
 #[test]
 fn validate_reports_payload_count_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(488);
+    let mut table = composed_group_with_value_and_node_table(Key(488));
     let owner = table.groups[0].anchor;
     let extra_anchor = table.payload_anchors.allocate();
 
@@ -328,7 +328,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
 
 #[test]
 fn validate_reports_payload_anchor_registry_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(482);
+    let mut table = composed_group_with_value_and_node_table(Key(482));
     let stale_payload_anchor = table
         .group_payload_record_at(0, 0)
         .expect("test payload should resolve")
@@ -354,7 +354,7 @@ fn validate_reports_payload_anchor_registry_mismatch_structurally() {
 
 #[test]
 fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
-    let mut table = composed_group_with_value_and_node_table(491);
+    let mut table = composed_group_with_value_and_node_table(Key(491));
     let old_anchor = table.groups[0].anchor;
     let new_anchor = table.anchors.allocate();
     let payload_anchor = table
@@ -378,7 +378,7 @@ fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
 
 #[test]
 fn validate_reports_payload_anchor_registry_count_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(483);
+    let mut table = composed_group_with_value_and_node_table(Key(483));
     let extra_anchor = table.payload_anchors.allocate();
     table
         .payload_anchors
@@ -395,7 +395,7 @@ fn validate_reports_payload_anchor_registry_count_mismatch_structurally() {
 
 #[test]
 fn compact_storage_preserves_removed_payload_anchor_registry_integrity() {
-    let mut table = composed_group_with_value_and_node_table(601);
+    let mut table = composed_group_with_value_and_node_table(Key(601));
     let owner = table.groups[0].anchor;
     let payload_anchor = table
         .group_payload_record_at(0, 0)
@@ -415,15 +415,15 @@ fn compact_storage_preserves_removed_payload_anchor_registry_integrity() {
 
 #[test]
 fn compact_anchor_registry_storage_preserves_active_group_anchors() {
-    const STATIC_KEY: Key = 603;
+    const STATIC_KEY: u64 = 603;
     const GROUP_COUNT: usize = 1_100;
-    const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+    const RETAINED_EXPLICIT_KEY: u64 = (GROUP_COUNT - 1) as u64;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        for explicit_key in 0..GROUP_COUNT as Key {
-            let group = begin_keyed(session, STATIC_KEY, explicit_key, None);
+        for explicit_key in 0..GROUP_COUNT as u64 {
+            let group = begin_keyed(session, Key(STATIC_KEY), Key(explicit_key), None);
             assert_eq!(group.kind, GroupStartKind::Inserted);
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
@@ -434,7 +434,7 @@ fn compact_anchor_registry_storage_preserves_active_group_anchors() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let retained_anchor = harness.session(|session| {
-        let group = begin_keyed(session, STATIC_KEY, RETAINED_EXPLICIT_KEY, None);
+        let group = begin_keyed(session, Key(STATIC_KEY), Key(RETAINED_EXPLICIT_KEY), None);
         assert_eq!(group.kind, GroupStartKind::Moved);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -481,19 +481,19 @@ fn compact_anchor_registry_storage_preserves_active_group_anchors() {
 
 #[test]
 fn compact_anchor_registry_storage_preserves_active_cross_references() {
-    const PARENT_KEY: Key = 606;
-    const CHILD_STATIC_KEY: Key = 607;
+    const PARENT_KEY: u64 = 606;
+    const CHILD_STATIC_KEY: u64 = 607;
     const GROUP_COUNT: usize = 1_100;
-    const KEPT_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+    const KEPT_EXPLICIT_KEY: u64 = (GROUP_COUNT - 1) as u64;
     const CHILD_SCOPE: ScopeId = 6_070;
     const CHILD_NODE: NodeId = 6_071;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
-        for explicit_key in 0..GROUP_COUNT as Key {
-            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
+        for explicit_key in 0..GROUP_COUNT as u64 {
+            let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(explicit_key), None);
             if explicit_key == KEPT_EXPLICIT_KEY {
                 session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
                 let _ = session.value_slot_with_kind(
@@ -516,9 +516,9 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (child_anchor, detached_children) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
-        let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
+        let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(KEPT_EXPLICIT_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -570,17 +570,17 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
 
 #[test]
 fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
-    const PARENT_KEY: Key = 604;
-    const CHILD_STATIC_KEY: Key = 605;
+    const PARENT_KEY: u64 = 604;
+    const CHILD_STATIC_KEY: u64 = 605;
     const GROUP_COUNT: usize = 1_100;
-    const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+    const RETAINED_EXPLICIT_KEY: u64 = (GROUP_COUNT - 1) as u64;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
-        for explicit_key in 0..GROUP_COUNT as Key {
-            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
+        for explicit_key in 0..GROUP_COUNT as u64 {
+            let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(explicit_key), None);
             assert_eq!(child.kind, GroupStartKind::Inserted);
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
@@ -595,7 +595,7 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached_children = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let result = session.finish_group_body();
         session.end_group();
@@ -605,7 +605,7 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
 
     let mut retained = None;
     for subtree in detached_children {
-        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+        if subtree.root_key().explicit_key == Some(Key(RETAINED_EXPLICIT_KEY)) {
             retained = Some(subtree);
         } else {
             harness.table.invalidate_detached_subtree_anchors(&subtree);
@@ -665,7 +665,7 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
 
 #[test]
 fn node_tail_range_past_group_end_removes_nothing() {
-    let mut table = composed_group_with_value_and_node_table(602);
+    let mut table = composed_group_with_value_and_node_table(Key(602));
     let node_count = table.group_node_len_at(0);
     let range = table.group_node_tail_range_at(0, node_count + 3);
 
@@ -679,18 +679,18 @@ fn node_tail_range_past_group_end_removes_nothing() {
 
 #[test]
 fn compact_payload_storage_preserves_active_value_slots() {
-    const PARENT_KEY: Key = 606;
-    const CHILD_STATIC_KEY: Key = 607;
+    const PARENT_KEY: u64 = 606;
+    const CHILD_STATIC_KEY: u64 = 607;
     const GROUP_COUNT: usize = 1_100;
-    const KEPT_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+    const KEPT_EXPLICIT_KEY: u64 = (GROUP_COUNT - 1) as u64;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, retained_slot) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         let mut retained_slot = None;
-        for explicit_key in 0..GROUP_COUNT as Key {
-            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+        for explicit_key in 0..GROUP_COUNT as u64 {
+            let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(explicit_key), None);
             assert_eq!(child.kind, GroupStartKind::Inserted);
             let slot = session.value_slot_with_kind(
                 PayloadKind::Internal,
@@ -720,10 +720,10 @@ fn compact_payload_storage_preserves_active_value_slots() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let moved_slot = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
+        let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(KEPT_EXPLICIT_KEY), None);
         assert_eq!(child.kind, GroupStartKind::Moved);
         let slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -763,18 +763,18 @@ fn compact_payload_storage_preserves_active_value_slots() {
 
 #[test]
 fn compact_payload_storage_preserves_retained_value_slots() {
-    const PARENT_KEY: Key = 608;
-    const CHILD_STATIC_KEY: Key = 609;
+    const PARENT_KEY: u64 = 608;
+    const CHILD_STATIC_KEY: u64 = 609;
     const GROUP_COUNT: usize = 1_100;
-    const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+    const RETAINED_EXPLICIT_KEY: u64 = (GROUP_COUNT - 1) as u64;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, retained_slot) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         let mut retained_slot = None;
-        for explicit_key in 0..GROUP_COUNT as Key {
-            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+        for explicit_key in 0..GROUP_COUNT as u64 {
+            let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(explicit_key), None);
             assert_eq!(child.kind, GroupStartKind::Inserted);
             let slot = session.value_slot_with_kind(
                 PayloadKind::Internal,
@@ -804,7 +804,7 @@ fn compact_payload_storage_preserves_retained_value_slots() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached_children = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let result = session.finish_group_body();
         session.end_group();
@@ -814,7 +814,7 @@ fn compact_payload_storage_preserves_retained_value_slots() {
 
     let mut retained = None;
     for subtree in detached_children {
-        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+        if subtree.root_key().explicit_key == Some(Key(RETAINED_EXPLICIT_KEY)) {
             retained = Some(subtree);
         } else {
             harness.table.invalidate_detached_subtree_anchors(&subtree);
@@ -876,21 +876,21 @@ fn compact_payload_storage_preserves_retained_value_slots() {
 
 #[test]
 fn compact_payload_storage_preserves_retained_payload_uniqueness() {
-    const PARENT_KEY: Key = 610;
-    const CHILD_KEY: Key = 611;
+    const PARENT_KEY: u64 = 610;
+    const CHILD_KEY: u64 = 611;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
             || 10_i32,
         );
 
-        begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(CHILD_KEY), None);
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -910,7 +910,7 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -963,12 +963,12 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
 
 #[test]
 fn disposed_identities_reuse_only_after_generation_bump() {
-    const PARENT_KEY: Key = 612;
-    const CHILD_STATIC_KEY: Key = 613;
-    const ACTIVE_KEY: Key = 1;
-    const RETAINED_KEY: Key = 2;
-    const DISPOSED_KEY: Key = 3;
-    const NEW_KEY: Key = 4;
+    const PARENT_KEY: u64 = 612;
+    const CHILD_STATIC_KEY: u64 = 613;
+    const ACTIVE_KEY: u64 = 1;
+    const RETAINED_KEY: u64 = 2;
+    const DISPOSED_KEY: u64 = 3;
+    const NEW_KEY: u64 = 4;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -981,9 +981,9 @@ fn disposed_identities_reuse_only_after_generation_bump() {
         disposed_anchor,
         disposed_slot,
     ) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
+        let active = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(ACTIVE_KEY), None);
         let active_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -993,7 +993,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let retained = begin_keyed(session, CHILD_STATIC_KEY, RETAINED_KEY, None);
+        let retained = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(RETAINED_KEY), None);
         let retained_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -1003,7 +1003,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let disposed = begin_keyed(session, CHILD_STATIC_KEY, DISPOSED_KEY, None);
+        let disposed = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(DISPOSED_KEY), None);
         let disposed_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -1030,10 +1030,10 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached_children = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
+        let active = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(ACTIVE_KEY), None);
         assert_eq!(active.anchor, active_anchor);
         let slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -1054,8 +1054,8 @@ fn disposed_identities_reuse_only_after_generation_bump() {
     let mut retained = None;
     for subtree in detached_children {
         match subtree.root_key().explicit_key {
-            Some(RETAINED_KEY) => retained = Some(subtree),
-            Some(DISPOSED_KEY) => {
+            Some(Key(RETAINED_KEY)) => retained = Some(subtree),
+            Some(Key(DISPOSED_KEY)) => {
                 harness.table.invalidate_detached_subtree_anchors(&subtree);
                 harness.lifecycle.queue_subtree_disposal(subtree);
             }
@@ -1089,10 +1089,10 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (new_anchor, new_slot) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
+        let active = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(ACTIVE_KEY), None);
         assert_eq!(active.anchor, active_anchor);
         let active_slot_after = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -1104,7 +1104,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let new_child = begin_keyed(session, CHILD_STATIC_KEY, NEW_KEY, None);
+        let new_child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(NEW_KEY), None);
         assert_eq!(new_child.kind, GroupStartKind::Inserted);
         let new_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -1148,7 +1148,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let reused_payload_slot = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY + 1, None);
+        begin_unkeyed(session, Key(PARENT_KEY + 1), None);
         let slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -1177,7 +1177,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
 #[test]
 fn validate_reports_node_owner_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(479);
+    let mut table = composed_group_with_value_and_node_table(Key(479));
     let node_id = table.group_node_record_at(0, 0).id;
     table.group_node_record_at_mut(0, 0).owner = AnchorId::INVALID;
 
@@ -1194,7 +1194,7 @@ fn validate_reports_node_owner_mismatch_structurally() {
 
 #[test]
 fn validate_reports_duplicate_node_id_structurally() {
-    let mut table = composed_group_with_value_and_node_table(480);
+    let mut table = composed_group_with_value_and_node_table(Key(480));
     let node = table.group_node_record_at(0, 0).id;
     table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
@@ -1219,7 +1219,7 @@ fn validate_reports_duplicate_node_id_structurally() {
 
 #[test]
 fn validate_reports_node_lifecycle_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(484);
+    let mut table = composed_group_with_value_and_node_table(Key(484));
     let node_id = table.group_node_record_at(0, 0).id;
     table.group_node_record_at_mut(0, 0).lifecycle = NodeLifecycle::RetainedDetached;
 
@@ -1235,7 +1235,7 @@ fn validate_reports_node_lifecycle_mismatch_structurally() {
 
 #[test]
 fn validate_reports_node_start_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(485);
+    let mut table = composed_group_with_value_and_node_table(Key(485));
     table.groups[0].node_start = 1;
 
     assert_eq!(
@@ -1251,7 +1251,7 @@ fn validate_reports_node_start_mismatch_structurally() {
 
 #[test]
 fn validate_reports_node_out_of_range_structurally() {
-    let mut table = composed_group_with_value_and_node_table(486);
+    let mut table = composed_group_with_value_and_node_table(Key(486));
     table.groups[0].node_len = 2;
 
     assert_eq!(
@@ -1268,7 +1268,7 @@ fn validate_reports_node_out_of_range_structurally() {
 
 #[test]
 fn validate_reports_node_count_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(487);
+    let mut table = composed_group_with_value_and_node_table(Key(487));
     table.nodes.push(NodeRecord {
         owner: table.groups[0].anchor,
         id: 999,
@@ -1293,7 +1293,7 @@ fn validate_reports_node_count_mismatch_structurally() {
 fn validate_reports_scope_stale_anchor_structurally() {
     const SCOPE_ID: ScopeId = 67;
 
-    let mut table = composed_parent_child_table(492, 493, Some(labeled_scope(SCOPE_ID)));
+    let mut table = composed_parent_child_table(Key(492), Key(493), Some(labeled_scope(SCOPE_ID)));
     let old_anchor = table.groups[1].anchor;
     let new_anchor = table.anchors.allocate();
 
@@ -1313,7 +1313,7 @@ fn validate_reports_scope_stale_anchor_structurally() {
 
 #[test]
 fn validate_reports_bad_subtree_node_count_structurally() {
-    let mut table = composed_group_with_value_and_node_table(486);
+    let mut table = composed_group_with_value_and_node_table(Key(486));
     table.groups[0].subtree_node_count = 0;
 
     assert_eq!(

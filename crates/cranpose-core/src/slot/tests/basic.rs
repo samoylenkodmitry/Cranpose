@@ -16,12 +16,12 @@ fn group_generation_counter_wraps_without_aborting() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let generations = harness.session(|session| {
-        let first = begin_unkeyed(session, 9_001, None);
+        let first = begin_unkeyed(session, Key(9_001), None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
-        let second = begin_unkeyed(session, 9_002, None);
+        let second = begin_unkeyed(session, Key(9_002), None);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -55,7 +55,7 @@ fn group_insertion_rejects_exhausted_anchor_ids_without_mutating() {
 
     let anchor = table.insert_new_group(
         ChildCursor::new(AnchorId::INVALID, 0),
-        GroupKey::new(9_003, None, 0),
+        GroupKey::new(Key(9_003), None, 0),
     );
 
     assert_eq!(anchor, AnchorId::INVALID);
@@ -68,7 +68,7 @@ fn first_composition_records_group_value_and_node() {
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let slot = harness.session(|session| {
-        let started = begin_unkeyed(session, 1, None);
+        let started = begin_unkeyed(session, Key(1), None);
         assert_eq!(started.kind, GroupStartKind::Inserted);
         let slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -105,13 +105,13 @@ fn first_composition_records_group_value_and_node() {
 
 #[test]
 fn removing_many_payloads_requests_compaction() {
-    const GROUP_KEY: Key = 78;
+    const GROUP_KEY: u64 = 78;
     const PAYLOAD_COUNT: usize = SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(started.kind, GroupStartKind::Inserted);
         for index in 0..PAYLOAD_COUNT {
             let _ = session.value_slot_with_kind(
@@ -131,7 +131,7 @@ fn removing_many_payloads_requests_compaction() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(started.kind, GroupStartKind::Reused);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -145,13 +145,17 @@ fn removing_many_payloads_requests_compaction() {
 
 #[test]
 fn slot_write_session_exposes_semantic_operations() {
-    const GROUP_KEY: Key = 77;
+    const GROUP_KEY: u64 = 77;
     const SCOPE_ID: ScopeId = 901;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let (composed_group, slot) = harness.session(|session| {
-        exercise_slot_write_session_surface(session, GroupKey::new(GROUP_KEY, None, 0), SCOPE_ID)
+        exercise_slot_write_session_surface(
+            session,
+            GroupKey::new(Key(GROUP_KEY), None, 0),
+            SCOPE_ID,
+        )
     });
     harness.finish_pass();
     assert_eq!(*harness.table.read_value::<i32>(slot), 7);
@@ -253,8 +257,8 @@ fn value_slots_without_active_group_record_recovery_groups() {
 
 #[test]
 fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
-    const ROOT_KEY: Key = 41;
-    const CHILD_KEY: Key = 42;
+    const ROOT_KEY: u64 = 41;
+    const CHILD_KEY: u64 = 42;
     const ROOT_SCOPE: ScopeId = 101;
     const CHILD_SCOPE: ScopeId = 202;
 
@@ -262,7 +266,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let root = begin_unkeyed(session, ROOT_KEY, None);
+        let root = begin_unkeyed(session, Key(ROOT_KEY), None);
         session.set_group_scope(root.group, labeled_scope(ROOT_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -271,7 +275,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
         );
         session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -300,7 +304,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
     let root = snapshot
         .active_groups
         .iter()
-        .find(|group| group.static_key == ROOT_KEY)
+        .find(|group| group.static_key == Key(ROOT_KEY))
         .expect("root group snapshot");
     assert_eq!(root.scope_id, Some(labeled_scope(ROOT_SCOPE).id()));
     assert_eq!(root.subtree_len, 2);
@@ -310,7 +314,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
     let child = snapshot
         .active_groups
         .iter()
-        .find(|group| group.static_key == CHILD_KEY)
+        .find(|group| group.static_key == Key(CHILD_KEY))
         .expect("child group snapshot");
     assert_eq!(child.parent_anchor, root.anchor);
     assert_eq!(child.scope_id, Some(labeled_scope(CHILD_SCOPE).id()));
@@ -320,9 +324,9 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
 
 #[test]
 fn debug_dump_slot_entries_use_v2_native_labels() {
-    const GROUP_KEY: Key = 51;
+    const GROUP_KEY: u64 = 51;
 
-    let table = composed_group_with_value_and_node_table(GROUP_KEY);
+    let table = composed_group_with_value_and_node_table(Key(GROUP_KEY));
     let rows = table.debug_dump_slot_entries();
 
     assert!(
@@ -345,7 +349,7 @@ fn debug_dump_slot_entries_use_v2_native_labels() {
 
 #[test]
 fn take_all_drops_reserves_only_payload_count() {
-    let mut table = composed_group_with_value_and_node_table(23);
+    let mut table = composed_group_with_value_and_node_table(Key(23));
     let drops = table.take_all_drops();
 
     assert_eq!(drops.len(), 1);
@@ -357,9 +361,9 @@ fn take_all_drops_reserves_only_payload_count() {
 
 #[test]
 fn debug_stats_report_explicit_v2_table_local_counts() {
-    const GROUP_KEY: Key = 34;
+    const GROUP_KEY: u64 = 34;
 
-    let table = composed_group_with_value_and_node_table(GROUP_KEY);
+    let table = composed_group_with_value_and_node_table(Key(GROUP_KEY));
     let stats = table.debug_stats();
 
     assert_eq!(stats.group_count, 1);

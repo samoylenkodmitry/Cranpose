@@ -2,17 +2,17 @@ use super::*;
 
 #[test]
 fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
-    const PARENT_KEY: Key = 8_000;
-    const CHILD_KEY: Key = 8_001;
-    const CHILD_COUNT: Key = 64;
+    const PARENT_KEY: u64 = 8_000;
+    const CHILD_KEY: u64 = 8_001;
+    const CHILD_COUNT: u64 = 64;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         for explicit_key in 0..CHILD_COUNT {
-            begin_keyed(session, CHILD_KEY, explicit_key, None);
+            begin_keyed(session, Key(CHILD_KEY), Key(explicit_key), None);
             let _ = session.value_slot_with_kind(
                 PayloadKind::Internal,
                 crate::slot::BRANCH_PATH_ROOT,
@@ -32,9 +32,9 @@ fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         for explicit_key in (0..CHILD_COUNT).rev() {
-            let child = begin_keyed(session, CHILD_KEY, explicit_key, None);
+            let child = begin_keyed(session, Key(CHILD_KEY), Key(explicit_key), None);
             assert!(matches!(
                 child.kind,
                 GroupStartKind::Moved | GroupStartKind::Reused
@@ -71,15 +71,15 @@ fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
 
 #[test]
 fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
-    const ROOT_KEY: Key = 8_010;
-    const CHILD_KEY_BASE: Key = 8_100;
+    const ROOT_KEY: u64 = 8_010;
+    const CHILD_KEY_BASE: u64 = 8_100;
     const DEPTH: usize = 48;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -90,9 +90,9 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
         for depth in 0..DEPTH {
-            begin_unkeyed(session, CHILD_KEY_BASE + depth as Key, None);
+            begin_unkeyed(session, Key(CHILD_KEY_BASE + depth as u64), None);
         }
         for _ in 0..DEPTH {
             let result = session.finish_group_body();
@@ -116,7 +116,7 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
         let result = session.finish_group_body();
         session.end_group();
         result.detached_children
@@ -138,12 +138,17 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
 
 #[test]
 fn perf_retained_restore_refreshes_only_restored_payload_range() {
-    const PARENT_KEY: Key = 8_020;
-    const CHILD_KEY: Key = 8_021;
+    const PARENT_KEY: u64 = 8_020;
+    const CHILD_KEY: u64 = 8_021;
     const CHILD_SCOPE: ScopeId = 8_022;
 
-    let (mut harness, detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), true, true);
+    let (mut harness, detached, _) = detached_single_child_with_options(
+        Key(PARENT_KEY),
+        Key(CHILD_KEY),
+        Some(CHILD_SCOPE),
+        true,
+        true,
+    );
     let retain_key = RetainKey {
         parent_scope: None,
         key: detached.root_key(),
@@ -158,8 +163,8 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-        let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
+        begin_unkeyed(session, Key(PARENT_KEY), None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), Some(restored));
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(scope_label(child.scope.as_ref()), Some(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
@@ -190,9 +195,9 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
 
 #[test]
 fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
-    const PARENT_KEY: Key = 8_050;
-    const CHILD_KEY: Key = 8_051;
-    const GRANDCHILD_KEY: Key = 8_052;
+    const PARENT_KEY: u64 = 8_050;
+    const CHILD_KEY: u64 = 8_051;
+    const GRANDCHILD_KEY: u64 = 8_052;
     const CHILD_SCOPE: ScopeId = 8_053;
     const GRANDCHILD_SCOPE_BASE: ScopeId = 8_100;
     const CHILD_NODE: NodeId = 80_500;
@@ -204,8 +209,8 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, child_anchor, child_slot) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let child_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -214,7 +219,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
         );
         session.record_node_with_parent(CHILD_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         for index in 0..GRANDCHILD_COUNT {
-            let grandchild = begin_keyed(session, GRANDCHILD_KEY, index as Key, None);
+            let grandchild = begin_keyed(session, Key(GRANDCHILD_KEY), Key(index as u64), None);
             session.set_group_scope(
                 grandchild.group,
                 labeled_scope(GRANDCHILD_SCOPE_BASE + index as ScopeId),
@@ -246,7 +251,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let result = session.finish_group_body();
         session.end_group();
@@ -280,9 +285,9 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
     let before = harness.table.debug_stats().mutation;
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
-        let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
+        let child = begin_unkeyed(session, Key(CHILD_KEY), Some(restored));
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(child.anchor, child_anchor);
         assert_eq!(scope_label(child.scope.as_ref()), Some(CHILD_SCOPE));
@@ -300,7 +305,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
             }
         );
         for index in 0..GRANDCHILD_COUNT {
-            let grandchild = begin_keyed(session, GRANDCHILD_KEY, index as Key, None);
+            let grandchild = begin_keyed(session, Key(GRANDCHILD_KEY), Key(index as u64), None);
             assert_eq!(grandchild.kind, GroupStartKind::Reused);
             assert_eq!(
                 scope_label(grandchild.scope.as_ref()),
@@ -377,20 +382,20 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
 
 #[test]
 fn perf_mass_conditional_removal_batches_anchor_refresh() {
-    const ROOT_KEY: Key = 8_030;
-    const PARENT_KEY: Key = 8_031;
-    const CHILD_KEY: Key = 8_032;
-    const TRAILING_KEY: Key = 8_033;
-    const CHILD_COUNT: Key = 64;
+    const ROOT_KEY: u64 = 8_030;
+    const PARENT_KEY: u64 = 8_031;
+    const CHILD_KEY: u64 = 8_032;
+    const TRAILING_KEY: u64 = 8_033;
+    const CHILD_COUNT: u64 = 64;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         for explicit_key in 0..CHILD_COUNT {
-            begin_keyed(session, CHILD_KEY, explicit_key, None);
+            begin_keyed(session, Key(CHILD_KEY), Key(explicit_key), None);
             let _ = session.value_slot_with_kind(
                 PayloadKind::Internal,
                 crate::slot::BRANCH_PATH_ROOT,
@@ -403,7 +408,7 @@ fn perf_mass_conditional_removal_batches_anchor_refresh() {
         let parent_result = session.finish_group_body();
         assert!(parent_result.detached_children.is_empty());
         session.end_group();
-        begin_unkeyed(session, TRAILING_KEY, None);
+        begin_unkeyed(session, Key(TRAILING_KEY), None);
         let trailing_result = session.finish_group_body();
         assert!(trailing_result.detached_children.is_empty());
         session.end_group();
@@ -417,11 +422,11 @@ fn perf_mass_conditional_removal_batches_anchor_refresh() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
-        begin_unkeyed(session, TRAILING_KEY, None);
+        begin_unkeyed(session, Key(TRAILING_KEY), None);
         let trailing_result = session.finish_group_body();
         assert!(trailing_result.detached_children.is_empty());
         session.end_group();
@@ -446,9 +451,9 @@ fn perf_mass_conditional_removal_batches_anchor_refresh() {
 
 #[test]
 fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payloads() {
-    const PARENT_KEY: Key = 8_060;
-    const RETAINED_KEY: Key = 8_061;
-    const TAIL_KEY: Key = 8_062;
+    const PARENT_KEY: u64 = 8_060;
+    const RETAINED_KEY: u64 = 8_061;
+    const TAIL_KEY: u64 = 8_062;
     const RETAINED_SCOPE: ScopeId = 8_063;
     const TAIL_PAYLOAD_COUNT: usize = SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD + 16;
     const MID_TAIL_PAYLOAD_COUNT: usize = SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD + 8;
@@ -462,9 +467,9 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
 
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, retained_slot) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let retained = begin_unkeyed(session, RETAINED_KEY, None);
+        let retained = begin_unkeyed(session, Key(RETAINED_KEY), None);
         session.set_group_scope(retained.group, labeled_scope(RETAINED_SCOPE));
         let retained_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -475,7 +480,7 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        begin_unkeyed(session, TAIL_KEY, None);
+        begin_unkeyed(session, Key(TAIL_KEY), None);
         for index in 0..TAIL_PAYLOAD_COUNT {
             let _ = session.value_slot_with_kind(
                 PayloadKind::Internal,
@@ -504,10 +509,10 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached_retained = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let tail = begin_unkeyed(session, TAIL_KEY, None);
+        let tail = begin_unkeyed(session, Key(TAIL_KEY), None);
         assert_eq!(tail.kind, GroupStartKind::Moved);
         for index in 0..MID_TAIL_PAYLOAD_COUNT {
             let _ = session.value_slot_with_kind(
@@ -575,10 +580,10 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let tail = begin_unkeyed(session, TAIL_KEY, None);
+        let tail = begin_unkeyed(session, Key(TAIL_KEY), None);
         assert_eq!(tail.kind, GroupStartKind::Reused);
         for index in 0..KEPT_TAIL_PAYLOAD_COUNT {
             let _ = session.value_slot_with_kind(
@@ -647,10 +652,10 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         .expect("retained payload must survive compaction");
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let retained = begin_unkeyed(session, RETAINED_KEY, Some(restored));
+        let retained = begin_unkeyed(session, Key(RETAINED_KEY), Some(restored));
         assert_eq!(retained.kind, GroupStartKind::Restored);
         assert_eq!(scope_label(retained.scope.as_ref()), Some(RETAINED_SCOPE));
         let restored_slot = session.value_slot_with_kind(
@@ -663,7 +668,7 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         assert!(result.detached_children.is_empty());
         session.end_group();
 
-        let tail = begin_unkeyed(session, TAIL_KEY, None);
+        let tail = begin_unkeyed(session, Key(TAIL_KEY), None);
         assert_eq!(tail.kind, GroupStartKind::Reused);
         for index in 0..KEPT_TAIL_PAYLOAD_COUNT {
             let _ = session.value_slot_with_kind(
@@ -702,19 +707,19 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
 
 #[test]
 fn perf_storage_compaction_does_not_rebuild_scope_index() {
-    const PARENT_KEY: Key = 8_040;
-    const CHILD_KEY: Key = 8_041;
+    const PARENT_KEY: u64 = 8_040;
+    const CHILD_KEY: u64 = 8_041;
     const CHILD_COUNT: usize = 1_100;
-    const KEPT_EXPLICIT_KEY: Key = (CHILD_COUNT - 1) as Key;
+    const KEPT_EXPLICIT_KEY: u64 = (CHILD_COUNT - 1) as u64;
     const CHILD_SCOPE: ScopeId = 8_042;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
-        for explicit_key in 0..CHILD_COUNT as Key {
-            let child = begin_keyed(session, CHILD_KEY, explicit_key, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
+        for explicit_key in 0..CHILD_COUNT as u64 {
+            let child = begin_keyed(session, Key(CHILD_KEY), Key(explicit_key), None);
             if explicit_key == KEPT_EXPLICIT_KEY {
                 session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
                 let _ = session.value_slot_with_kind(
@@ -736,9 +741,9 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (kept_anchor, detached) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
-        let child = begin_keyed(session, CHILD_KEY, KEPT_EXPLICIT_KEY, None);
+        let child = begin_keyed(session, Key(CHILD_KEY), Key(KEPT_EXPLICIT_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -776,10 +781,10 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
     assert_eq!(harness.table.validate(), Ok(()));
 }
 
-const SHIFT_PARENT_KEY: Key = 8_300;
-const SHIFT_SECTION_KEY: Key = 8_310;
-const SHIFT_ROW_KEY: Key = 8_320;
-const SHIFT_ROW_COUNT: Key = 1_000;
+const SHIFT_PARENT_KEY: u64 = 8_300;
+const SHIFT_SECTION_KEY: u64 = 8_310;
+const SHIFT_ROW_KEY: u64 = 8_320;
+const SHIFT_ROW_COUNT: u64 = 1_000;
 const SHIFT_PAYLOADS_PER_ROW: usize = 3;
 const SHIFT_LATER_PAYLOADS: usize = SHIFT_ROW_COUNT as usize * SHIFT_PAYLOADS_PER_ROW;
 
@@ -787,15 +792,17 @@ fn compose_shift_sections(harness: &mut SlotHarness, sections: &[&[Key]]) -> Vec
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
         let mut detached = Vec::new();
-        begin_unkeyed(session, SHIFT_PARENT_KEY, None);
+        begin_unkeyed(session, Key(SHIFT_PARENT_KEY), None);
         for (section_index, row_keys) in sections.iter().enumerate() {
-            begin_unkeyed(session, SHIFT_SECTION_KEY + section_index as Key, None);
+            begin_unkeyed(session, Key(SHIFT_SECTION_KEY + section_index as u64), None);
             for &row_key in *row_keys {
-                begin_keyed(session, SHIFT_ROW_KEY, row_key, None);
+                begin_keyed(session, Key(SHIFT_ROW_KEY), row_key, None);
                 for source in 0..SHIFT_PAYLOADS_PER_ROW {
-                    let _ =
-                        session
-                            .value_slot_with_kind(PayloadKind::Remember, source as Key, || row_key);
+                    let _ = session.value_slot_with_kind(
+                        PayloadKind::Remember,
+                        Key(source as u64),
+                        || row_key,
+                    );
                 }
                 let result = session.finish_group_body();
                 assert!(result.detached_children.is_empty());
@@ -818,9 +825,10 @@ fn payload_shift_bytes(harness: &SlotHarness) -> usize {
 
 #[test]
 fn perf_keyed_insert_near_top_shifts_only_order_entries() {
-    let rows = (0..SHIFT_ROW_COUNT).collect::<Vec<_>>();
+    let rows = (0..SHIFT_ROW_COUNT).map(Key).collect::<Vec<_>>();
     let rows_with_new_top = std::iter::once(SHIFT_ROW_COUNT)
         .chain(0..SHIFT_ROW_COUNT)
+        .map(Key)
         .collect::<Vec<_>>();
     let mut harness = SlotHarness::new();
     assert!(compose_shift_sections(&mut harness, &[&rows]).is_empty());
@@ -842,9 +850,9 @@ fn perf_keyed_insert_near_top_shifts_only_order_entries() {
 
 #[test]
 fn perf_removal_near_top_shifts_only_order_entries() {
-    let rows = (0..SHIFT_ROW_COUNT).collect::<Vec<_>>();
+    let rows = (0..SHIFT_ROW_COUNT).map(Key).collect::<Vec<_>>();
     let mut harness = SlotHarness::new();
-    assert!(compose_shift_sections(&mut harness, &[&[SHIFT_ROW_COUNT], &rows]).is_empty());
+    assert!(compose_shift_sections(&mut harness, &[&[Key(SHIFT_ROW_COUNT)], &rows]).is_empty());
     let before = payload_shift_bytes(&harness);
 
     let detached = compose_shift_sections(&mut harness, &[&[], &rows]);

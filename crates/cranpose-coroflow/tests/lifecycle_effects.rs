@@ -3,6 +3,8 @@ use std::{
     rc::Rc,
 };
 
+use cranpose_core::Key;
+
 mod support;
 
 use cranpose_core::{Composition, MemoryApplier};
@@ -30,7 +32,7 @@ fn lifecycle_effects_follow_the_host_and_their_keys() {
         move |composition: &mut Composition<MemoryApplier>| {
             let (log, key, show) = (Rc::clone(&log), key.get(), show.get());
             composition
-                .render(1, move || {
+                .render(Key(1), move || {
                     if !show {
                         return;
                     }

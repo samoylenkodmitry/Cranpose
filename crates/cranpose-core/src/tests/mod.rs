@@ -228,7 +228,7 @@ fn recompose_scope_id_is_retained_scope_identity() {
 
 #[test]
 fn location_key_debug_registry_reports_collisions_without_panicking() {
-    let forced_key = Key::MAX - 17;
+    let forced_key = Key(u64::MAX - 17);
     let collision_count_before = location_key_debug_collision_count_for_test();
     register_location_key_debug_info_for_test(forced_key, "forced-collision-first.rs", 10, 20);
 

@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn failed_retention_restore_validation_keeps_subtree_available() {
-    let (_, detached, _) = detached_single_child_with_options(340, 341, None, false, true);
+    let (_, detached, _) =
+        detached_single_child_with_options(Key(340), Key(341), None, false, true);
     let key = RetainKey {
         parent_scope: None,
         key: detached.root_key(),
@@ -28,7 +29,8 @@ fn failed_retention_restore_validation_keeps_subtree_available() {
 
 #[test]
 fn retention_validate_reports_empty_subtree_without_panicking() {
-    let (harness, detached, _) = detached_single_child_with_options(342, 343, None, false, false);
+    let (harness, detached, _) =
+        detached_single_child_with_options(Key(342), Key(343), None, false, false);
     let key = RetainKey {
         parent_scope: None,
         key: detached.root_key(),
@@ -47,8 +49,8 @@ fn retention_validate_reports_empty_subtree_without_panicking() {
 
 #[test]
 fn identity_snapshot_captures_active_and_retained_identities() {
-    const PARENT_KEY: Key = 362;
-    const CHILD_KEY: Key = 363;
+    const PARENT_KEY: u64 = 362;
+    const CHILD_KEY: u64 = 363;
     const CHILD_SCOPE: ScopeId = 21;
 
     let mut harness = SlotHarness::new();
@@ -56,9 +58,9 @@ fn identity_snapshot_captures_active_and_retained_identities() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         child_slot = Some(session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -91,7 +93,7 @@ fn identity_snapshot_captures_active_and_retained_identities() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -138,8 +140,8 @@ fn identity_snapshot_captures_active_and_retained_identities() {
 
 #[test]
 fn retention_take_preserves_retained_node_lifecycle_until_restore() {
-    const PARENT_KEY: Key = 364;
-    const CHILD_KEY: Key = 365;
+    const PARENT_KEY: u64 = 364;
+    const CHILD_KEY: u64 = 365;
 
     let mut harness = SlotHarness::new();
     let child_id = harness
@@ -149,9 +151,9 @@ fn retention_take_preserves_retained_node_lifecycle_until_restore() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(CHILD_KEY), None);
         session.record_node_with_parent(
             child_id,
             child_generation,
@@ -170,7 +172,7 @@ fn retention_take_preserves_retained_node_lifecycle_until_restore() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -195,11 +197,11 @@ fn retention_take_preserves_retained_node_lifecycle_until_restore() {
 
 #[test]
 fn retention_take_after_restore_preflight_keeps_subtree_when_preflight_panics() {
-    const PARENT_KEY: Key = 122;
-    const CHILD_KEY: Key = 123;
+    const PARENT_KEY: u64 = 122;
+    const CHILD_KEY: u64 = 123;
 
     let (harness, detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, false, true);
     let child_node = child_node.expect("test helper must record a child node");
     let key = RetainKey {
         parent_scope: None,
@@ -226,9 +228,9 @@ fn retention_take_after_restore_preflight_keeps_subtree_when_preflight_panics() 
 
 #[test]
 fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
-    const PARENT_KEY: Key = 382;
-    const CHILD_KEY: Key = 383;
-    const GRANDCHILD_KEY: Key = 384;
+    const PARENT_KEY: u64 = 382;
+    const CHILD_KEY: u64 = 383;
+    const GRANDCHILD_KEY: u64 = 384;
     const CHILD_SCOPE: ScopeId = 385;
     const GRANDCHILD_SCOPE: ScopeId = 386;
 
@@ -236,12 +238,12 @@ fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, child_anchor, grandchild_anchor) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
 
-        let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+        let grandchild = begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         session.set_group_scope(grandchild.group, labeled_scope(GRANDCHILD_SCOPE));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -261,7 +263,7 @@ fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let result = session.finish_group_body();
         session.end_group();
@@ -288,13 +290,13 @@ fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
         .expect("retained subtree must restore");
     harness.begin_pass(SlotPassMode::Compose);
     let (child_kind, child_scope, grandchild_kind, grandchild_scope) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
+        let child = begin_unkeyed(session, Key(CHILD_KEY), Some(restored));
         assert_eq!(child.anchor, child_anchor);
 
-        let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+        let grandchild = begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         assert_eq!(grandchild.anchor, grandchild_anchor);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -336,20 +338,20 @@ fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
 
 #[test]
 fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
-    const PARENT_KEY: Key = 390;
-    const CHILD_STATIC_KEY: Key = 391;
+    const PARENT_KEY: u64 = 390;
+    const CHILD_STATIC_KEY: u64 = 391;
     const CHILD_COUNT: usize = 1_100;
-    const RETAINED_EXPLICIT_KEY: Key = (CHILD_COUNT - 1) as Key;
+    const RETAINED_EXPLICIT_KEY: u64 = (CHILD_COUNT - 1) as u64;
     const CHILD_SCOPE: ScopeId = 392;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, retained_anchor) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         let mut retained_anchor = None;
-        for explicit_key in 0..CHILD_COUNT as Key {
-            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+        for explicit_key in 0..CHILD_COUNT as u64 {
+            let child = begin_keyed(session, Key(CHILD_STATIC_KEY), Key(explicit_key), None);
             if explicit_key == RETAINED_EXPLICIT_KEY {
                 session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
                 retained_anchor = Some(child.anchor);
@@ -380,7 +382,7 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached_children = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let result = session.finish_group_body();
         session.end_group();
@@ -396,7 +398,7 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
 
     let mut retained = None;
     for subtree in detached_children {
-        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+        if subtree.root_key().explicit_key == Some(Key(RETAINED_EXPLICIT_KEY)) {
             retained = Some(subtree);
         } else {
             harness.table.invalidate_detached_subtree_anchors(&subtree);
@@ -443,12 +445,12 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
         .expect("retained subtree must restore");
     harness.begin_pass(SlotPassMode::Compose);
     let (restored_kind, restored_anchor, restored_scope) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let child = begin_keyed(
             session,
-            CHILD_STATIC_KEY,
-            RETAINED_EXPLICIT_KEY,
+            Key(CHILD_STATIC_KEY),
+            Key(RETAINED_EXPLICIT_KEY),
             Some(restored),
         );
         let result = session.finish_group_body();
@@ -485,7 +487,7 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let disposed = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
         let result = session.finish_group_body();
         session.end_group();
@@ -513,11 +515,11 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
 
 #[test]
 fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
-    const PARENT_KEY: Key = 366;
-    const CHILD_KEY: Key = 367;
+    const PARENT_KEY: u64 = 366;
+    const CHILD_KEY: u64 = 367;
 
-    let (harness, first_detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
-    let (_, duplicate_detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (harness, first_detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
+    let (_, duplicate_detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
     let retain_key = RetainKey {
         parent_scope: None,
         key: first_detached.root_key(),
@@ -544,13 +546,13 @@ fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
 
 #[test]
 fn retention_insert_rejects_root_key_mismatch() {
-    const PARENT_KEY: Key = 370;
-    const CHILD_KEY: Key = 371;
+    const PARENT_KEY: u64 = 370;
+    const CHILD_KEY: u64 = 371;
 
-    let (_, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (_, detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
     let retain_key = RetainKey {
         parent_scope: None,
-        key: GroupKey::new(CHILD_KEY + 10, None, 0),
+        key: GroupKey::new(Key(CHILD_KEY + 10), None, 0),
     };
 
     let mut retention = RetentionManager::default();
@@ -562,10 +564,10 @@ fn retention_insert_rejects_root_key_mismatch() {
 
 #[test]
 fn retention_validate_rejects_active_retained_anchor() {
-    const PARENT_KEY: Key = 372;
-    const CHILD_KEY: Key = 373;
+    const PARENT_KEY: u64 = 372;
+    const CHILD_KEY: u64 = 373;
 
-    let (mut harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (mut harness, detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
     let retained_anchor = detached
         .group_anchors()
         .next()
@@ -591,10 +593,10 @@ fn retention_validate_rejects_active_retained_anchor() {
 
 #[test]
 fn retention_validate_rejects_non_detached_retained_anchor() {
-    const PARENT_KEY: Key = 374;
-    const CHILD_KEY: Key = 375;
+    const PARENT_KEY: u64 = 374;
+    const CHILD_KEY: u64 = 375;
 
-    let (mut harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (mut harness, detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
     let retained_anchor = detached
         .group_anchors()
         .next()
@@ -620,11 +622,11 @@ fn retention_validate_rejects_non_detached_retained_anchor() {
 
 #[test]
 fn retention_validate_rejects_active_retained_payload_anchor() {
-    const PARENT_KEY: Key = 378;
-    const CHILD_KEY: Key = 379;
+    const PARENT_KEY: u64 = 378;
+    const CHILD_KEY: u64 = 379;
 
     let (mut harness, detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true, false);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, true, false);
     let payload = detached
         .payloads
         .first()
@@ -656,11 +658,11 @@ fn retention_validate_rejects_active_retained_payload_anchor() {
 
 #[test]
 fn retention_validate_rejects_non_detached_retained_payload_anchor() {
-    const PARENT_KEY: Key = 380;
-    const CHILD_KEY: Key = 381;
+    const PARENT_KEY: u64 = 380;
+    const CHILD_KEY: u64 = 381;
 
     let (mut harness, detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true, false);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, true, false);
     let retained_payload_anchor = detached
         .payloads
         .first()
@@ -687,12 +689,17 @@ fn retention_validate_rejects_non_detached_retained_payload_anchor() {
 
 #[test]
 fn retention_validate_rejects_retained_scope_in_active_scope_index() {
-    const PARENT_KEY: Key = 376;
-    const CHILD_KEY: Key = 377;
+    const PARENT_KEY: u64 = 376;
+    const CHILD_KEY: u64 = 377;
     const CHILD_SCOPE: ScopeId = 23;
 
-    let (mut harness, detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false, false);
+    let (mut harness, detached, _) = detached_single_child_with_options(
+        Key(PARENT_KEY),
+        Key(CHILD_KEY),
+        Some(CHILD_SCOPE),
+        false,
+        false,
+    );
     let retain_key = RetainKey {
         parent_scope: None,
         key: detached.root_key(),
@@ -723,11 +730,11 @@ fn retention_validate_rejects_retained_scope_in_active_scope_index() {
 
 #[test]
 fn retention_validate_rejects_active_retained_node() {
-    const PARENT_KEY: Key = 378;
-    const CHILD_KEY: Key = 379;
+    const PARENT_KEY: u64 = 378;
+    const CHILD_KEY: u64 = 379;
 
     let (harness, detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, false, true);
     let child_node = child_node.expect("test helper must record a child node");
     let retain_key = RetainKey {
         parent_scope: None,
@@ -754,11 +761,11 @@ fn retention_validate_rejects_active_retained_node() {
 
 #[test]
 fn retention_take_rejects_active_retained_node_before_restore() {
-    const PARENT_KEY: Key = 3780;
-    const CHILD_KEY: Key = 3790;
+    const PARENT_KEY: u64 = 3780;
+    const CHILD_KEY: u64 = 3790;
 
     let (_, detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, false, true);
     child_node.expect("test helper must record a child node");
     let retain_key = RetainKey {
         parent_scope: None,
@@ -788,10 +795,10 @@ fn retention_take_rejects_active_retained_node_before_restore() {
 
 #[test]
 fn retention_insert_rejects_retained_root_with_active_parent() {
-    const PARENT_KEY: Key = 380;
-    const CHILD_KEY: Key = 381;
+    const PARENT_KEY: u64 = 380;
+    const CHILD_KEY: u64 = 381;
 
-    let (harness, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (harness, mut detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
     let parent_anchor = harness.table.groups[0].anchor;
     let retain_key = RetainKey {
         parent_scope: None,
@@ -808,11 +815,12 @@ fn retention_insert_rejects_retained_root_with_active_parent() {
 
 #[test]
 fn detached_validate_rejects_non_preorder_parent() {
-    const PARENT_KEY: Key = 386;
-    const CHILD_KEY: Key = 387;
-    const GRANDCHILD_KEY: Key = 388;
+    const PARENT_KEY: u64 = 386;
+    const CHILD_KEY: u64 = 387;
+    const GRANDCHILD_KEY: u64 = 388;
 
-    let (_, mut detached) = detached_child_with_grandchild(PARENT_KEY, CHILD_KEY, GRANDCHILD_KEY);
+    let (_, mut detached) =
+        detached_child_with_grandchild(Key(PARENT_KEY), Key(CHILD_KEY), Key(GRANDCHILD_KEY));
     let root_key = detached.root_key();
     let expected_parent = detached.groups[0].anchor;
     detached.groups[1].parent_anchor = AnchorId::INVALID;
@@ -830,11 +838,12 @@ fn detached_validate_rejects_non_preorder_parent() {
 
 #[test]
 fn detached_validate_rejects_bad_depth() {
-    const PARENT_KEY: Key = 389;
-    const CHILD_KEY: Key = 390;
-    const GRANDCHILD_KEY: Key = 391;
+    const PARENT_KEY: u64 = 389;
+    const CHILD_KEY: u64 = 390;
+    const GRANDCHILD_KEY: u64 = 391;
 
-    let (_, mut detached) = detached_child_with_grandchild(PARENT_KEY, CHILD_KEY, GRANDCHILD_KEY);
+    let (_, mut detached) =
+        detached_child_with_grandchild(Key(PARENT_KEY), Key(CHILD_KEY), Key(GRANDCHILD_KEY));
     let root_key = detached.root_key();
     detached.groups[1].depth = 2;
 
@@ -851,11 +860,12 @@ fn detached_validate_rejects_bad_depth() {
 
 #[test]
 fn detached_validate_rejects_subtree_len_out_of_range() {
-    const PARENT_KEY: Key = 392;
-    const CHILD_KEY: Key = 393;
-    const GRANDCHILD_KEY: Key = 394;
+    const PARENT_KEY: u64 = 392;
+    const CHILD_KEY: u64 = 393;
+    const GRANDCHILD_KEY: u64 = 394;
 
-    let (_, mut detached) = detached_child_with_grandchild(PARENT_KEY, CHILD_KEY, GRANDCHILD_KEY);
+    let (_, mut detached) =
+        detached_child_with_grandchild(Key(PARENT_KEY), Key(CHILD_KEY), Key(GRANDCHILD_KEY));
     let root_key = detached.root_key();
     detached.groups[0].subtree_len = 3;
 
@@ -872,11 +882,11 @@ fn detached_validate_rejects_subtree_len_out_of_range() {
 
 #[test]
 fn detached_validate_rejects_node_owner_outside_subtree() {
-    const PARENT_KEY: Key = 397;
-    const CHILD_KEY: Key = 398;
+    const PARENT_KEY: u64 = 397;
+    const CHILD_KEY: u64 = 398;
 
     let (harness, mut detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, false, true);
     let root_key = detached.root_key();
     let expected_owner = detached.groups[0].anchor;
     let outside_anchor = harness.table.groups[0].anchor;
@@ -896,11 +906,11 @@ fn detached_validate_rejects_node_owner_outside_subtree() {
 
 #[test]
 fn detached_validate_rejects_duplicate_node_id() {
-    const PARENT_KEY: Key = 399;
-    const CHILD_KEY: Key = 400;
+    const PARENT_KEY: u64 = 399;
+    const CHILD_KEY: u64 = 400;
 
     let (_, mut detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+        detached_single_child_with_options(Key(PARENT_KEY), Key(CHILD_KEY), None, false, true);
     let root_key = detached.root_key();
     let child_node = child_node.expect("test helper must record a child node");
     detached.nodes.push(detached.nodes[0]);
@@ -918,8 +928,8 @@ fn detached_validate_rejects_duplicate_node_id() {
 
 #[test]
 fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
-    const PARENT_KEY: Key = 368;
-    const CHILD_KEY: Key = 369;
+    const PARENT_KEY: u64 = 368;
+    const CHILD_KEY: u64 = 369;
     const CHILD_SCOPE: ScopeId = 22;
 
     let mut harness = SlotHarness::new();
@@ -930,9 +940,9 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _remembered = session.remember(crate::slot::BRANCH_PATH_ROOT, || 91_i32);
         session.record_node_with_parent(
@@ -953,7 +963,7 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -981,8 +991,8 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
 
 #[test]
 fn finalize_pass_disposes_removed_child_nodes() {
-    const PARENT_KEY: Key = 360;
-    const CHILD_KEY: Key = 361;
+    const PARENT_KEY: u64 = 360;
+    const CHILD_KEY: u64 = 361;
 
     let mut harness = SlotHarness::new();
     let child_unmounts = Rc::new(Cell::new(0));
@@ -995,9 +1005,9 @@ fn finalize_pass_disposes_removed_child_nodes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(CHILD_KEY), None);
         session.record_node_with_parent(
             child_id,
             child_generation,
@@ -1026,7 +1036,7 @@ fn finalize_pass_disposes_removed_child_nodes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
     });
     harness.finish_pass();
 
@@ -1043,14 +1053,14 @@ fn finalize_pass_disposes_removed_child_nodes() {
 
 #[test]
 fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
-    const ROOT_KEY: Key = 358;
+    const ROOT_KEY: u64 = 358;
     const ROOT_NODE: NodeId = 359;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let root_slot = harness.session(|session| {
-        begin_unkeyed(session, ROOT_KEY, None);
+        begin_unkeyed(session, Key(ROOT_KEY), None);
         let slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -1076,7 +1086,7 @@ fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
 
     assert_eq!(detached_root_children.len(), 1);
     let subtree = detached_root_children.into_iter().next().unwrap();
-    assert_eq!(subtree.root_key().static_key, ROOT_KEY);
+    assert_eq!(subtree.root_key().static_key, Key(ROOT_KEY));
     assert_eq!(subtree.payload_count(), 1);
     assert_eq!(subtree.node_ids_iter().collect::<Vec<_>>(), vec![ROOT_NODE]);
     assert!(harness.table.groups.is_empty());
@@ -1096,8 +1106,8 @@ fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
 
 #[test]
 fn retained_detached_child_nodes_stay_live_across_restore() {
-    const PARENT_KEY: Key = 362;
-    const CHILD_KEY: Key = 363;
+    const PARENT_KEY: u64 = 362;
+    const CHILD_KEY: u64 = 363;
 
     let mut harness = SlotHarness::new();
     let child_unmounts = Rc::new(Cell::new(0));
@@ -1110,9 +1120,9 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, Key(CHILD_KEY), None);
         session.record_node_with_parent(
             child_id,
             child_generation,
@@ -1131,7 +1141,7 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -1152,9 +1162,9 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(move |session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, Some(detached));
+        let child = begin_unkeyed(session, Key(CHILD_KEY), Some(detached));
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(
             session.current_node_record(),

@@ -214,7 +214,26 @@ pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Identifies a composition group: the hash of its call site, or of an explicit key together with
 /// its call site.
-pub type Key = u64;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Key(pub u64);
+
+impl Key {
+    /// This key scoped to `site`, for a group that both identify: the bitwise xor of the two.
+    pub const fn scoped(self, site: Self) -> Self {
+        Self(self.0 ^ site.0)
+    }
+
+    // One FNV-1a step folding `other` into this key.
+    pub(crate) const fn mixed(self, other: Self) -> Self {
+        Self((self.0 ^ other.0).wrapping_mul(0x0000_0100_0000_01b3))
+    }
+}
+
+impl std::fmt::Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 /// Identifies a node in an applier.
 pub type NodeId = usize;
 

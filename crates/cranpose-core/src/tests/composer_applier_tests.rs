@@ -914,7 +914,7 @@ fn large_mid_composition_flush_returns_command_error() {
 
 #[test]
 fn emitted_node_replacement_removes_displaced_node() {
-    const GROUP_KEY: Key = 58_001;
+    const GROUP_KEY: u64 = 58_001;
 
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
@@ -928,7 +928,7 @@ fn emitted_node_replacement_removes_displaced_node() {
             Rc::clone(&slots_host),
             slot::SlotPassMode::Compose,
             |composer| {
-                composer.with_group(GROUP_KEY, |composer| {
+                composer.with_group(Key(GROUP_KEY), |composer| {
                     composer.emit_node(|| UnmountTrackingNode::new(Rc::clone(&unmounts)))
                 })
             },
@@ -950,7 +950,7 @@ fn emitted_node_replacement_removes_displaced_node() {
             Rc::clone(&slots_host),
             slot::SlotPassMode::Compose,
             |composer| {
-                composer.with_group(GROUP_KEY, |composer| {
+                composer.with_group(Key(GROUP_KEY), |composer| {
                     composer.emit_node(TestDummyNode::default)
                 })
             },

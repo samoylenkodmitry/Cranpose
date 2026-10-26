@@ -5,6 +5,8 @@ use std::{
     thread::{self, ThreadId},
 };
 
+use cranpose_core::Key;
+
 mod support;
 
 use coroflow::{Dispatchers, coroutine_scope, with_context};
@@ -16,7 +18,7 @@ use support::{composition, pump_until};
 fn coroflow_finds_the_main_dispatcher_inside_cranpose_tasks_and_from_the_background() {
     let mut composition = composition();
     composition
-        .render(1, || {
+        .render(Key(1), || {
             assert!(main_dispatcher().is_some());
         })
         .expect("render");

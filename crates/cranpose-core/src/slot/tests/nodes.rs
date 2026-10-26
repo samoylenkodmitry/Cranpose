@@ -25,13 +25,13 @@ fn record_node_without_active_group_reports_insert_without_recording() {
 
 #[test]
 fn node_operations_with_stale_owner_anchor_do_not_panic_or_record() {
-    const GROUP_KEY: Key = 364;
+    const GROUP_KEY: u64 = 364;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     let group_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
+        let started = begin_unkeyed(session, Key(GROUP_KEY), None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -68,13 +68,13 @@ fn node_operations_with_stale_owner_anchor_do_not_panic_or_record() {
 
 #[test]
 fn node_tail_range_with_corrupt_segment_start_is_empty() {
-    const GROUP_KEY: Key = 364_005;
+    const GROUP_KEY: u64 = 364_005;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -92,13 +92,13 @@ fn node_tail_range_with_corrupt_segment_start_is_empty() {
 
 #[test]
 fn node_range_outside_current_group_segment_is_ignored() {
-    const GROUP_KEY: Key = 364_006;
+    const GROUP_KEY: u64 = 364_006;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -118,13 +118,13 @@ fn node_range_outside_current_group_segment_is_ignored() {
 
 #[test]
 fn record_node_reports_explicit_insert_and_reuse() {
-    const GROUP_KEY: Key = 365;
+    const GROUP_KEY: u64 = 365;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
@@ -141,7 +141,7 @@ fn record_node_reports_explicit_insert_and_reuse() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(
             session.current_node_record(),
             Some((11, 1, crate::slot::BRANCH_PATH_ROOT))
@@ -166,13 +166,13 @@ fn record_node_reports_explicit_insert_and_reuse() {
 
 #[test]
 fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
-    const GROUP_KEY: Key = 366;
+    const GROUP_KEY: u64 = 366;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
@@ -189,7 +189,7 @@ fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(
             session.current_node_record(),
             Some((11, 1, crate::slot::BRANCH_PATH_ROOT))
@@ -221,13 +221,13 @@ fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
 
 #[test]
 fn record_node_reports_explicit_generation_replacement() {
-    const GROUP_KEY: Key = 367;
+    const GROUP_KEY: u64 = 367;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         let recorded = session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
@@ -244,7 +244,7 @@ fn record_node_reports_explicit_generation_replacement() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
+        begin_unkeyed(session, Key(GROUP_KEY), None);
         assert_eq!(
             session.current_node_record(),
             Some((11, 1, crate::slot::BRANCH_PATH_ROOT))

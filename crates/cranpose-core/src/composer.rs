@@ -2244,7 +2244,7 @@ impl Composer {
         source_salt: Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
-        let source = crate::caller_location_key() ^ source_salt;
+        let source = crate::caller_location_key().scoped(source_salt);
         self.with_slot_session_mut(|slots| {
             slots.remember_with_kind(PayloadKind::Internal, source, init)
         })
@@ -2489,7 +2489,7 @@ impl Composer {
 
         let slot_host = state.get_or_create_slots(slot_id);
         let (result, _) = self.with_slot_override(slot_host, |composer| {
-            composer.with_group(slot_id.raw(), |composer| content(composer))
+            composer.with_group(Key(slot_id.raw()), |composer| content(composer))
         });
 
         let frame = {

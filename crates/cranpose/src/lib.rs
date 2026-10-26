@@ -241,7 +241,7 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 #[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
     cranpose_core::__disposable_effect_impl(
-        caller_location_key() ^ cranpose_core::location_key!(),
+        caller_location_key().scoped(cranpose_core::location_key!()),
         enabled,
         move |scope| {
             if !enabled {
@@ -270,7 +270,7 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     on_result: impl FnOnce(Result<BundledAssetInstallOutcome, BundledAssetError>) + 'static,
 ) {
     cranpose_core::__launched_effect_impl(
-        caller_location_key() ^ cranpose_core::location_key!(),
+        caller_location_key().scoped(cranpose_core::location_key!()),
         keys,
         move |scope| {
             scope.launch_background(
@@ -324,7 +324,7 @@ pub fn FrameEffect<K: PartialEq + 'static>(
         std::rc::Rc::new(std::cell::RefCell::new(on_frame));
     let on_frame = rememberUpdatedState(on_frame);
     cranpose_core::__launched_effect_async_impl(
-        caller_location_key() ^ cranpose_core::location_key!(),
+        caller_location_key().scoped(cranpose_core::location_key!()),
         std::panic::Location::caller().into(),
         (keys, running),
         move |scope| {

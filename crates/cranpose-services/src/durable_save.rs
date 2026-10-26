@@ -123,7 +123,7 @@ pub fn DurableSaveEffect<K: PartialEq + 'static>(
     save: impl Fn() -> Result<(), DurableSaveError> + Send + Sync + 'static,
 ) {
     cranpose_core::__disposable_effect_impl(
-        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
+        cranpose_core::caller_location_key().scoped(cranpose_core::location_key!()),
         keys,
         move |scope| {
             let registration = register_durable_save(save);

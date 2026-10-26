@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    AnchorId,
+    AnchorId, Key,
     slot::{GroupKey, PayloadAnchor, PayloadKind, PayloadType, segments::SegmentItems},
 };
 
@@ -9,7 +9,7 @@ fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
     let owner = table.anchors.allocate();
     let payload_anchor = table.payload_anchors.allocate();
     table.groups.push(GroupRecord {
-        key: GroupKey::new(9_000, None, 0),
+        key: GroupKey::new(Key(9_000), None, 0),
         parent_anchor: AnchorId::INVALID,
         depth: 0,
         subtree_len: 1,

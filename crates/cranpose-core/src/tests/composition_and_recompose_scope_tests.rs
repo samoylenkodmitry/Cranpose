@@ -66,7 +66,7 @@ fn composition_local_provider_scopes_values() {
     }
 
     composition
-        .render(1, || parent(local_counter.clone(), provided_state))
+        .render(Key(1), || parent(local_counter.clone(), provided_state))
         .expect("initial composition");
 
     assert_eq!(CHILD_RECOMPOSITIONS.with(Cell::get), 1);
@@ -97,7 +97,7 @@ fn composition_local_default_value_used_outside_provider() {
     }
 
     composition
-        .render(2, || reader(local_counter.clone()))
+        .render(Key(2), || reader(local_counter.clone()))
         .expect("compose reader");
 
     assert_eq!(READ_VALUE.with(Cell::get), 7);
@@ -120,7 +120,7 @@ fn nested_providers_shadow_and_restore_the_locals_around_them() {
     }
 
     composition
-        .render(3, || {
+        .render(Key(3), || {
             CompositionLocalProvider(
                 [first.provides(1), second.provides(2), first.provides(3)],
                 || {
@@ -150,11 +150,11 @@ fn a_provider_restores_the_very_locals_it_was_given() {
     let restored = Cell::new(false);
 
     composition
-        .render(4, || {
+        .render(Key(4), || {
             CompositionLocalProvider([local.provides(1)], || {
                 with_current_composer(|composer| {
                     let around = composer.current_local_stack();
-                    composer.with_composition_locals([local.provides(2)], 0, |composer| {
+                    composer.with_composition_locals([local.provides(2)], Key(0), |composer| {
                         assert_eq!(local.current(), 2);
                         assert!(!same_locals(&composer.current_local_stack(), &around));
                     });
@@ -193,7 +193,7 @@ fn malformed_composition_local_entry_falls_back_to_default() {
     }
 
     composition
-        .render(2_031, || {
+        .render(Key(2_031), || {
             let malformed = composition_locals::malformed_composition_local_for_test(
                 &local_counter,
                 Rc::new(String::from("wrong")) as Rc<dyn Any>,
@@ -234,7 +234,7 @@ fn composition_local_simple_subscription_test() {
     }
 
     composition
-        .render(1, || root(local_value.clone(), trigger))
+        .render(Key(1), || root(local_value.clone(), trigger))
         .expect("initial composition");
 
     println!(
@@ -294,7 +294,7 @@ fn composition_local_unchanged_value_does_not_reinvalidate_reader() {
     }
 
     composition
-        .render(1, || root(local_value.clone(), trigger))
+        .render(Key(1), || root(local_value.clone(), trigger))
         .expect("initial composition");
 
     assert_eq!(ROOT_RECOMPOSITIONS.with(Cell::get), 1);
@@ -353,7 +353,7 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
     }
 
     composition
-        .render(1, || root(local_value.clone(), provided_state))
+        .render(Key(1), || root(local_value.clone(), provided_state))
         .expect("initial composition");
 
     assert_eq!(ROOT_RECOMPOSITIONS.with(Cell::get), 1);
@@ -463,7 +463,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     }
 
     composition
-        .render(1, || outside(local_count.clone(), trigger))
+        .render(Key(1), || outside(local_count.clone(), trigger))
         .expect("initial composition");
 
     assert_eq!(OUTSIDE_RECOMPOSITIONS.with(Cell::get), 1);
@@ -520,7 +520,7 @@ fn static_composition_local_provides_values() {
     }
 
     composition
-        .render(1, || {
+        .render(Key(1), || {
             CompositionLocalProvider([local_counter.provides(5)], || {
                 reader(local_counter.clone());
             });
@@ -546,7 +546,7 @@ fn static_composition_local_default_value_used_outside_provider() {
     }
 
     composition
-        .render(2, || reader(local_counter.clone()))
+        .render(Key(2), || reader(local_counter.clone()))
         .expect("compose reader");
 
     assert_eq!(READ_VALUE.with(Cell::get), 7);
@@ -567,7 +567,7 @@ fn malformed_static_composition_local_entry_falls_back_to_default() {
     }
 
     composition
-        .render(2_037, || {
+        .render(Key(2_037), || {
             let malformed = composition_locals::malformed_static_composition_local_for_test(
                 &local_counter,
                 Rc::new(String::from("wrong")) as Rc<dyn Any>,
@@ -1659,7 +1659,7 @@ fn restored_retained_scope_processes_forced_recompose() {
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
-    const BRANCH_KEY: Key = 0x5C0_9E1;
+    const BRANCH_KEY: u64 = 0x5C0_9E1;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -1672,13 +1672,17 @@ fn restored_retained_scope_processes_forced_recompose() {
     fn root(show_branch: MutableState<bool>) {
         if show_branch.value() {
             with_current_composer(|composer| {
-                composer.cranpose_with_reuse(BRANCH_KEY, RecomposeOptions::default(), |composer| {
-                    INVOCATIONS.with(|count| count.set(count.get() + 1));
-                    let scope = composer
-                        .current_recompose_scope()
-                        .expect("retained branch scope available");
-                    CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
-                });
+                composer.cranpose_with_reuse(
+                    Key(BRANCH_KEY),
+                    RecomposeOptions::default(),
+                    |composer| {
+                        INVOCATIONS.with(|count| count.set(count.get() + 1));
+                        let scope = composer
+                            .current_recompose_scope()
+                            .expect("retained branch scope available");
+                        CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
+                    },
+                );
             });
         }
     }
@@ -1736,21 +1740,27 @@ fn changing_root_key_does_not_leak_root_scopes() {
     let mut composition = test_composition();
 
     let live_before = debug_live_recompose_scope_count();
-    composition.render(11, || {}).expect("initial root render");
+    composition
+        .render(Key(11), || {})
+        .expect("initial root render");
     assert_eq!(
         debug_live_recompose_scope_count(),
         live_before + 1,
         "initial render should create exactly one root scope"
     );
 
-    composition.render(22, || {}).expect("second root render");
+    composition
+        .render(Key(22), || {})
+        .expect("second root render");
     assert_eq!(
         debug_live_recompose_scope_count(),
         live_before + 1,
         "changing the root key must drop the previous root scope instead of leaking it",
     );
 
-    composition.render(33, || {}).expect("third root render");
+    composition
+        .render(Key(33), || {})
+        .expect("third root render");
     assert_eq!(
         debug_live_recompose_scope_count(),
         live_before + 1,
@@ -1955,7 +1965,7 @@ fn retained_conditional_branch_restores_remembered_state() {
 
 #[test]
 fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
-    const BRANCH_KEY: Key = 0xCA1;
+    const BRANCH_KEY: u64 = 0xCA1;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -1980,7 +1990,7 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
                 if show_branch.value() {
                     with_current_composer(|composer| {
                         composer.cranpose_with_reuse(
-                            BRANCH_KEY,
+                            Key(BRANCH_KEY),
                             RecomposeOptions::default(),
                             |composer| {
                                 branch_invocations.set(branch_invocations.get() + 1);
@@ -2156,8 +2166,8 @@ fn retention_budget_evicts_least_recently_detached_subtree() {
 
 #[test]
 fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
-    const FIRST_KEY: Key = 0xE71;
-    const SECOND_KEY: Key = 0xE72;
+    const FIRST_KEY: u64 = 0xE71;
+    const SECOND_KEY: u64 = 0xE72;
 
     let mut composition = test_composition_retaining_at_most(1);
     let runtime = composition.runtime_handle();
@@ -2191,7 +2201,7 @@ fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
                 with_current_composer(|composer| {
                     if show_first.value() {
                         composer.cranpose_with_reuse(
-                            FIRST_KEY,
+                            Key(FIRST_KEY),
                             RecomposeOptions::default(),
                             |composer| {
                                 first_slot.replace(Some(composer.remember(|| 10_i32)));
@@ -2210,7 +2220,7 @@ fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
                     }
                     if show_second.value() {
                         composer.cranpose_with_reuse(
-                            SECOND_KEY,
+                            Key(SECOND_KEY),
                             RecomposeOptions::default(),
                             |composer| {
                                 second_slot.replace(Some(composer.remember(|| 20_i32)));
@@ -2304,7 +2314,7 @@ fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
 
 #[test]
 fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
-    const BRANCH_KEY: Key = 0x5EC0;
+    const BRANCH_KEY: u64 = 0x5EC0;
 
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
@@ -2328,7 +2338,7 @@ fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
                 emitted_node.set(None);
                 if show_branch {
                     composer.cranpose_with_reuse(
-                        BRANCH_KEY,
+                        Key(BRANCH_KEY),
                         RecomposeOptions::default(),
                         |composer| {
                             let _payload = composer.remember(|| {
@@ -2556,7 +2566,7 @@ fn assert_slot_memory_plateau(
 
 #[test]
 fn retained_tab_cycles_plateau_memory_and_anchors() {
-    const TAB_KEYS: [Key; 4] = [0x7101, 0x7102, 0x7103, 0x7104];
+    const TAB_KEYS: [Key; 4] = [Key(0x7101), Key(0x7102), Key(0x7103), Key(0x7104)];
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -2630,8 +2640,18 @@ fn retained_keyed_list_window_plateaus_memory_and_anchors() {
     const ITEM_COUNT: usize = 12;
     const WINDOW_SIZE: usize = 4;
     const ITEM_KEYS: [Key; ITEM_COUNT] = [
-        0x7150, 0x7151, 0x7152, 0x7153, 0x7154, 0x7155, 0x7156, 0x7157, 0x7158, 0x7159, 0x715A,
-        0x715B,
+        Key(0x7150),
+        Key(0x7151),
+        Key(0x7152),
+        Key(0x7153),
+        Key(0x7154),
+        Key(0x7155),
+        Key(0x7156),
+        Key(0x7157),
+        Key(0x7158),
+        Key(0x7159),
+        Key(0x715A),
+        Key(0x715B),
     ];
 
     let mut composition = test_composition();
@@ -2715,7 +2735,7 @@ fn retained_keyed_list_window_plateaus_memory_and_anchors() {
 
 #[test]
 fn subcompose_retained_root_slots_plateau_memory_and_anchors() {
-    const SLOT_KEYS: [Key; 4] = [0x7201, 0x7202, 0x7203, 0x7204];
+    const SLOT_KEYS: [Key; 4] = [Key(0x7201), Key(0x7202), Key(0x7203), Key(0x7204)];
 
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
@@ -2888,7 +2908,7 @@ fn conditional_branch_without_retention_runs_disposable_effect_cleanup() {
 
 #[test]
 fn retained_branch_restores_the_same_node_id() {
-    const BRANCH_KEY: Key = 0xD01;
+    const BRANCH_KEY: u64 = 0xD01;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -2904,7 +2924,7 @@ fn retained_branch_restores_the_same_node_id() {
                     with_current_composer(|composer| {
                         let captured = Rc::clone(&captured);
                         composer.cranpose_with_reuse(
-                            BRANCH_KEY,
+                            Key(BRANCH_KEY),
                             RecomposeOptions::default(),
                             move |_composer| {
                                 let node_id = cranpose_test_node(TestTextNode::default);
@@ -2936,7 +2956,7 @@ fn retained_branch_restores_the_same_node_id() {
 
 #[test]
 fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_node_id() {
-    const BRANCH_KEY: Key = 0xD04;
+    const BRANCH_KEY: u64 = 0xD04;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -2961,7 +2981,7 @@ fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_nod
                     with_current_composer(|composer| {
                         let captured = Rc::clone(&captured);
                         composer.cranpose_with_reuse(
-                            BRANCH_KEY,
+                            Key(BRANCH_KEY),
                             RecomposeOptions::default(),
                             move |_composer| {
                                 let node_id = cranpose_test_node(TrackingChild::default);
@@ -3043,7 +3063,7 @@ fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_nod
 
 #[test]
 fn disposed_branch_recreates_node_id_without_explicit_reuse() {
-    const BRANCH_KEY: Key = 0xD02;
+    const BRANCH_KEY: u64 = 0xD02;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -3058,7 +3078,7 @@ fn disposed_branch_recreates_node_id_without_explicit_reuse() {
                 if show_branch.value() {
                     with_current_composer(|composer| {
                         let captured = Rc::clone(&captured);
-                        composer.with_group(BRANCH_KEY, |_composer| {
+                        composer.with_group(Key(BRANCH_KEY), |_composer| {
                             let node_id = cranpose_test_node(TestTextNode::default);
                             captured.borrow_mut().push(node_id);
                         });
@@ -3093,7 +3113,7 @@ fn disposed_branch_recreates_node_id_without_explicit_reuse() {
 
 #[test]
 fn conditional_branch_without_retention_disposes_removed_node() {
-    const BRANCH_KEY: Key = 0xD03;
+    const BRANCH_KEY: u64 = 0xD03;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -3108,7 +3128,7 @@ fn conditional_branch_without_retention_disposes_removed_node() {
                 if show_branch.value() {
                     with_current_composer(|composer| {
                         let captured = Rc::clone(&captured);
-                        composer.with_group(BRANCH_KEY, |_composer| {
+                        composer.with_group(Key(BRANCH_KEY), |_composer| {
                             let node_id = cranpose_test_node(TestTextNode::default);
                             captured.borrow_mut().push(node_id);
                         });
@@ -3136,8 +3156,8 @@ fn conditional_branch_without_retention_disposes_removed_node() {
 
 #[test]
 fn switching_tabs_with_retention_preserves_each_tab_state() {
-    const TAB_A_KEY: Key = 0xA11;
-    const TAB_B_KEY: Key = 0xB22;
+    const TAB_A_KEY: u64 = 0xA11;
+    const TAB_B_KEY: u64 = 0xB22;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -3155,7 +3175,7 @@ fn switching_tabs_with_retention_preserves_each_tab_state() {
                 tab_b.replace(None);
                 with_current_composer(|composer| match active_tab.value() {
                     0 => composer.cranpose_with_reuse(
-                        TAB_A_KEY,
+                        Key(TAB_A_KEY),
                         RecomposeOptions::default(),
                         |composer| {
                             let slot = composer.remember(|| 10_i32);
@@ -3163,7 +3183,7 @@ fn switching_tabs_with_retention_preserves_each_tab_state() {
                         },
                     ),
                     1 => composer.cranpose_with_reuse(
-                        TAB_B_KEY,
+                        Key(TAB_B_KEY),
                         RecomposeOptions::default(),
                         |composer| {
                             let slot = composer.remember(|| 20_i32);
@@ -3213,8 +3233,8 @@ fn switching_tabs_with_retention_preserves_each_tab_state() {
 
 #[test]
 fn switching_tabs_without_retention_resets_inactive_tab_state() {
-    const TAB_A_KEY: Key = 0xA33;
-    const TAB_B_KEY: Key = 0xB44;
+    const TAB_A_KEY: u64 = 0xA33;
+    const TAB_B_KEY: u64 = 0xB44;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -3231,11 +3251,11 @@ fn switching_tabs_without_retention_resets_inactive_tab_state() {
                 tab_a.replace(None);
                 tab_b.replace(None);
                 with_current_composer(|composer| match active_tab.value() {
-                    0 => composer.with_group(TAB_A_KEY, |composer| {
+                    0 => composer.with_group(Key(TAB_A_KEY), |composer| {
                         let slot = composer.remember(|| 10_i32);
                         tab_a.replace(Some(slot));
                     }),
-                    1 => composer.with_group(TAB_B_KEY, |composer| {
+                    1 => composer.with_group(Key(TAB_B_KEY), |composer| {
                         let slot = composer.remember(|| 20_i32);
                         tab_b.replace(Some(slot));
                     }),
@@ -3339,7 +3359,7 @@ fn list_item_reorder_with_explicit_keys_preserves_item_state() {
 
 #[test]
 fn list_item_reorder_without_explicit_keys_follows_positional_identity() {
-    const ITEM_GROUP_KEY: Key = 0x51A7;
+    const ITEM_GROUP_KEY: u64 = 0x51A7;
 
     let mut composition = test_composition();
     let root_key = location_key(file!(), line!(), column!());
@@ -3355,7 +3375,7 @@ fn list_item_reorder_without_explicit_keys_follows_positional_identity() {
                 let current_order = order.borrow().clone();
                 with_current_composer(|composer| {
                     for item in current_order {
-                        composer.with_group(ITEM_GROUP_KEY, |composer| {
+                        composer.with_group(Key(ITEM_GROUP_KEY), |composer| {
                             let slot = composer.remember(|| item * 10);
                             captured.borrow_mut().push((item, slot));
                         });
@@ -3710,7 +3730,7 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
         static CAPTURED: RefCell<Vec<Owned<i32>>> = const { RefCell::new(Vec::new()) };
     }
 
-    const SHARED_KEY: Key = 0xCAFE_BABE;
+    const SHARED_KEY: u64 = 0xCAFE_BABE;
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
@@ -3726,10 +3746,14 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
 
         with_current_composer(|composer| {
             for initial in [10, 20] {
-                composer.cranpose_with_reuse(SHARED_KEY, RecomposeOptions::default(), |composer| {
-                    let slot = composer.remember(|| initial);
-                    CAPTURED.with(|slots| slots.borrow_mut().push(slot));
-                });
+                composer.cranpose_with_reuse(
+                    Key(SHARED_KEY),
+                    RecomposeOptions::default(),
+                    |composer| {
+                        let slot = composer.remember(|| initial);
+                        CAPTURED.with(|slots| slots.borrow_mut().push(slot));
+                    },
+                );
             }
         });
     }
@@ -4191,7 +4215,7 @@ fn a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leav
 
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
-        composition.render(861, || keyed_pair(with_first))
+        composition.render(Key(861), || keyed_pair(with_first))
     };
     pass(&mut composition, true).expect("initial composition");
     assert_eq!(KEYED_INITS.with(Cell::get), 2);
@@ -4227,7 +4251,7 @@ fn a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves() {
 
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
-        composition.render(862, || scope_pair(with_first))
+        composition.render(Key(862), || scope_pair(with_first))
     };
     pass(&mut composition, true).expect("initial composition");
     let original = SECOND_SCOPE.with(Cell::get);
@@ -4276,7 +4300,7 @@ fn a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves() {
     }
 
     composition
-        .render(863, || {
+        .render(Key(863), || {
             tree(first.clone(), second.clone(), with_first, second_value);
         })
         .expect("initial composition");
@@ -4334,7 +4358,9 @@ fn a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves() {
     }
 
     composition
-        .render(864, || tree(local.clone(), with_leading, survivor_value))
+        .render(Key(864), || {
+            tree(local.clone(), with_leading, survivor_value)
+        })
         .expect("initial composition");
     assert_eq!(SAME_LOCAL_READ.with(Cell::get), 10);
 
@@ -4378,7 +4404,7 @@ fn a_provider_built_inside_a_slot_initializer_does_not_reenter_the_writer() {
     }
 
     composition
-        .render(865, || build_in_initializer(local.clone()))
+        .render(Key(865), || build_in_initializer(local.clone()))
         .expect("a provider constructed inside a remember initializer");
     assert!(INIT_BUILT.with(Cell::get));
 }
@@ -4429,7 +4455,7 @@ fn same_site_provider_rows(keyed: bool) {
     }
 
     composition
-        .render(866, || {
+        .render(Key(866), || {
             tree(local.clone(), with_leading, survivor_value, keyed);
         })
         .expect("initial composition");
@@ -4501,7 +4527,9 @@ fn sibling_provider_scopes_from_one_construction_site_stay_distinct() {
     }
 
     composition
-        .render(867, || tree(local.clone(), with_leading, survivor_value))
+        .render(Key(867), || {
+            tree(local.clone(), with_leading, survivor_value)
+        })
         .expect("initial composition");
     assert_eq!(SIBLING_READ.with(Cell::get), 10);
 

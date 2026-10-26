@@ -278,7 +278,7 @@ pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWin
     {
         let owner = Rc::clone(&owner);
         cranpose_core::__disposable_effect_impl(
-            caller ^ cranpose_core::location_key!(),
+            caller.scoped(cranpose_core::location_key!()),
             (),
             move |scope| {
                 scope.on_dispose(move || unregister_android_host_window_state(state, owner))

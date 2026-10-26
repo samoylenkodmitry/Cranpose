@@ -192,7 +192,7 @@ fn recompose_handles_removed_scopes_gracefully() {
     ) {
         if toggle_group.value() {
             let state_clone = *state_a;
-            composer.with_group(21, |composer| {
+            composer.with_group(Key(21), |composer| {
                 let state_capture = state_clone;
                 composer.set_recompose_callback({
                     move |composer| {

@@ -16,7 +16,7 @@ use std::{
 };
 
 use cranpose_core::{
-    BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, Composition,
+    BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, Composition, Key,
     MemoryApplier, launchBlocking, withBlocking,
 };
 
@@ -238,7 +238,7 @@ fn cancelling_a_callback_suppresses_delivery_while_running_work_finishes() {
     let (finished, done) = mpsc::channel();
     let mut inputs = Some((started, released, finished, seen));
     composition
-        .render(1, move || {
+        .render(Key(1), move || {
             let (started, released, finished, seen) = inputs.take().expect("initial render");
             *capture.borrow_mut() = Some(
                 launchBlocking(
@@ -465,7 +465,7 @@ fn launch_blocking_waits_for_capacity_without_rejecting_callbacks_or_blocking_ui
     let gate = Arc::new(std::sync::Mutex::new(released));
     let ui_thread = std::thread::current().id();
     composition
-        .render(1, move || {
+        .render(Key(1), move || {
             for value in 0..jobs {
                 let gate = Arc::clone(&gate);
                 let callbacks = Rc::clone(&callbacks);

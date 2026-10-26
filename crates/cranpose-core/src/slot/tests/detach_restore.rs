@@ -38,7 +38,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
         groups: vec![GroupRecord {
-            key: GroupKey::new(900, None, 0),
+            key: GroupKey::new(Key(900), None, 0),
             parent_anchor: AnchorId::INVALID,
             depth: 0,
             subtree_len: 1,
@@ -79,7 +79,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
         groups: vec![GroupRecord {
-            key: GroupKey::new(901, None, 0),
+            key: GroupKey::new(Key(901), None, 0),
             parent_anchor: AnchorId::INVALID,
             depth: 0,
             subtree_len: 1,
@@ -112,9 +112,9 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
 
 #[test]
 fn detach_restore_preserves_nested_payloads_and_scopes() {
-    const PARENT_KEY: Key = 100;
-    const CHILD_KEY: Key = 200;
-    const GRANDCHILD_KEY: Key = 300;
+    const PARENT_KEY: u64 = 100;
+    const CHILD_KEY: u64 = 200;
+    const GRANDCHILD_KEY: u64 = 300;
     const CHILD_SCOPE: ScopeId = 7;
     const GRANDCHILD_SCOPE: ScopeId = 8;
 
@@ -122,9 +122,9 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let (child_slot, grandchild_slot, child_anchor) = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let child_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -133,7 +133,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         );
         session.record_node_with_parent(21, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
-        let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+        let grandchild = begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         session.set_group_scope(grandchild.group, labeled_scope(GRANDCHILD_SCOPE));
         let grandchild_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -161,7 +161,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -205,16 +205,16 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         restored_grandchild_scope,
         restored_grandchild_slot,
     ) = harness.session(move |session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, Some(detached));
+        let child = begin_unkeyed(session, Key(CHILD_KEY), Some(detached));
         let child_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
             || 0_i32,
         );
 
-        let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+        let grandchild = begin_unkeyed(session, Key(GRANDCHILD_KEY), None);
         let grandchild_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -260,10 +260,10 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 
 #[test]
 fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexes() {
-    const PARENT_KEY: Key = 320;
-    const CHILD_A_KEY: Key = 321;
-    const CHILD_B_KEY: Key = 322;
-    const CHILD_C_KEY: Key = 323;
+    const PARENT_KEY: u64 = 320;
+    const CHILD_A_KEY: u64 = 321;
+    const CHILD_B_KEY: u64 = 322;
+    const CHILD_C_KEY: u64 = 323;
     const CHILD_B_SCOPE: ScopeId = 324;
 
     let mut harness = SlotHarness::new();
@@ -271,14 +271,14 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, child_a_anchor, child_b_anchor, child_c_anchor, child_b_slot) = harness
         .session(|session| {
-            let parent = begin_unkeyed(session, PARENT_KEY, None);
+            let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
 
-            let child_a = begin_unkeyed(session, CHILD_A_KEY, None);
+            let child_a = begin_unkeyed(session, Key(CHILD_A_KEY), None);
             let child_a_result = session.finish_group_body();
             assert!(child_a_result.detached_children.is_empty());
             session.end_group();
 
-            let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
+            let child_b = begin_unkeyed(session, Key(CHILD_B_KEY), None);
             session.set_group_scope(child_b.group, labeled_scope(CHILD_B_SCOPE));
             let child_b_slot = session.value_slot_with_kind(
                 PayloadKind::Internal,
@@ -289,7 +289,7 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
             assert!(child_b_result.detached_children.is_empty());
             session.end_group();
 
-            let child_c = begin_unkeyed(session, CHILD_C_KEY, None);
+            let child_c = begin_unkeyed(session, Key(CHILD_C_KEY), None);
             let child_c_result = session.finish_group_body();
             assert!(child_c_result.detached_children.is_empty());
             session.end_group();
@@ -311,14 +311,14 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_A_KEY, None);
+        begin_unkeyed(session, Key(CHILD_A_KEY), None);
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
         session.end_group();
 
-        begin_unkeyed(session, CHILD_C_KEY, None);
+        begin_unkeyed(session, Key(CHILD_C_KEY), None);
         let child_c_result = session.finish_group_body();
         assert!(child_c_result.detached_children.is_empty());
         session.end_group();
@@ -374,10 +374,10 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 
 #[test]
 fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes() {
-    const PARENT_KEY: Key = 340;
-    const CHILD_A_KEY: Key = 341;
-    const CHILD_B_KEY: Key = 342;
-    const CHILD_C_KEY: Key = 343;
+    const PARENT_KEY: u64 = 340;
+    const CHILD_A_KEY: u64 = 341;
+    const CHILD_B_KEY: u64 = 342;
+    const CHILD_C_KEY: u64 = 343;
     const CHILD_B_SCOPE: ScopeId = 344;
     const CHILD_B_NODE: NodeId = 345;
 
@@ -385,14 +385,14 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
 
     harness.begin_pass(SlotPassMode::Compose);
     let (parent_anchor, child_b_anchor, child_b_slot) = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        begin_unkeyed(session, CHILD_A_KEY, None);
+        begin_unkeyed(session, Key(CHILD_A_KEY), None);
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
         session.end_group();
 
-        let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
+        let child_b = begin_unkeyed(session, Key(CHILD_B_KEY), None);
         session.set_group_scope(child_b.group, labeled_scope(CHILD_B_SCOPE));
         let child_b_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -404,7 +404,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
 
-        begin_unkeyed(session, CHILD_C_KEY, None);
+        begin_unkeyed(session, Key(CHILD_C_KEY), None);
         let child_c_result = session.finish_group_body();
         assert!(child_c_result.detached_children.is_empty());
         session.end_group();
@@ -420,15 +420,15 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         assert_eq!(parent.anchor, parent_anchor);
 
-        begin_unkeyed(session, CHILD_A_KEY, None);
+        begin_unkeyed(session, Key(CHILD_A_KEY), None);
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
         session.end_group();
 
-        begin_unkeyed(session, CHILD_C_KEY, None);
+        begin_unkeyed(session, Key(CHILD_C_KEY), None);
         let child_c_result = session.finish_group_body();
         assert!(child_c_result.detached_children.is_empty());
         session.end_group();
@@ -440,7 +440,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
     });
     harness.finish_pass();
 
-    assert_eq!(detached.root_key().static_key, CHILD_B_KEY);
+    assert_eq!(detached.root_key().static_key, Key(CHILD_B_KEY));
     assert_eq!(
         detached.group_anchors().collect::<Vec<_>>(),
         vec![child_b_anchor]
@@ -451,8 +451,8 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
         vec![CHILD_B_NODE]
     );
     assert_eq!(scope_labels(detached.scopes()), vec![CHILD_B_SCOPE]);
-    assert_eq!(harness.table.groups[1].key.static_key, CHILD_A_KEY);
-    assert_eq!(harness.table.groups[2].key.static_key, CHILD_C_KEY);
+    assert_eq!(harness.table.groups[1].key.static_key, Key(CHILD_A_KEY));
+    assert_eq!(harness.table.groups[2].key.static_key, Key(CHILD_C_KEY));
 
     let retain_key = RetainKey {
         parent_scope: None,
@@ -467,15 +467,15 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
     harness.begin_pass(SlotPassMode::Compose);
     let (restored_kind, restored_scope, restored_slot, restored_node) =
         harness.session(|session| {
-            let parent = begin_unkeyed(session, PARENT_KEY, None);
+            let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
             assert_eq!(parent.anchor, parent_anchor);
 
-            begin_unkeyed(session, CHILD_A_KEY, None);
+            begin_unkeyed(session, Key(CHILD_A_KEY), None);
             let child_a_result = session.finish_group_body();
             assert!(child_a_result.detached_children.is_empty());
             session.end_group();
 
-            let child_b = begin_unkeyed(session, CHILD_B_KEY, Some(restored));
+            let child_b = begin_unkeyed(session, Key(CHILD_B_KEY), Some(restored));
             let restored_slot = session.value_slot_with_kind(
                 PayloadKind::Internal,
                 crate::slot::BRANCH_PATH_ROOT,
@@ -499,7 +499,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
             assert!(child_b_result.detached_children.is_empty());
             session.end_group();
 
-            begin_unkeyed(session, CHILD_C_KEY, None);
+            begin_unkeyed(session, Key(CHILD_C_KEY), None);
             let child_c_result = session.finish_group_body();
             assert!(child_c_result.detached_children.is_empty());
             session.end_group();
@@ -534,17 +534,17 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
 
 #[test]
 fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
-    const PARENT_KEY: Key = 354;
-    const CHILD_KEY: Key = 355;
+    const PARENT_KEY: u64 = 354;
+    const CHILD_KEY: u64 = 355;
 
-    let (mut harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (mut harness, detached) = detached_single_child(Key(PARENT_KEY), Key(CHILD_KEY));
     let parent_anchor = harness.table.groups[0].anchor;
     let group_count_before = harness.table.groups.len();
     let detached_anchor = detached
         .group_anchors()
         .next()
         .expect("detached subtree must contain an anchor");
-    let wrong_key = GroupKey::new(CHILD_KEY + 1, None, 0);
+    let wrong_key = GroupKey::new(Key(CHILD_KEY + 1), None, 0);
 
     let restore =
         try_restore_detached_child(&mut harness.table, parent_anchor, 1, wrong_key, detached);
@@ -563,13 +563,13 @@ fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
 
 #[test]
 fn restore_subtree_rejects_empty_detached_subtree_without_mutating_table() {
-    const PARENT_KEY: Key = 356;
-    const CHILD_KEY: Key = 357;
+    const PARENT_KEY: u64 = 356;
+    const CHILD_KEY: u64 = 357;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent = begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         assert!(parent_result.detached_children.is_empty());
         session.end_group();
@@ -583,7 +583,7 @@ fn restore_subtree_rejects_empty_detached_subtree_without_mutating_table() {
         payloads: Vec::new(),
         nodes: Vec::new(),
     };
-    let restore_key = GroupKey::new(CHILD_KEY, None, 0);
+    let restore_key = GroupKey::new(Key(CHILD_KEY), None, 0);
     let restore = try_restore_detached_child(
         &mut harness.table,
         parent_anchor,
@@ -618,17 +618,17 @@ fn empty_detached_subtree_root_scope_id_is_absent() {
 
 #[test]
 fn removing_conditional_child_returns_detached_subtree() {
-    const PARENT_KEY: Key = 350;
-    const CHILD_KEY: Key = 351;
+    const PARENT_KEY: u64 = 350;
+    const CHILD_KEY: u64 = 351;
     const CHILD_SCOPE: ScopeId = 91;
 
     let mut harness = SlotHarness::new();
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
 
-        let child = begin_unkeyed(session, CHILD_KEY, None);
+        let child = begin_unkeyed(session, Key(CHILD_KEY), None);
         session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
@@ -648,7 +648,7 @@ fn removing_conditional_child_returns_detached_subtree() {
 
     harness.begin_pass(SlotPassMode::Compose);
     let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, Key(PARENT_KEY), None);
         let parent_result = session.finish_group_body();
         session.end_group();
         assert_eq!(parent_result.detached_children.len(), 1);
@@ -656,7 +656,7 @@ fn removing_conditional_child_returns_detached_subtree() {
     });
     harness.finish_pass();
 
-    assert_eq!(detached.root_key().static_key, CHILD_KEY);
+    assert_eq!(detached.root_key().static_key, Key(CHILD_KEY));
     assert_eq!(
         detached
             .root_scope()

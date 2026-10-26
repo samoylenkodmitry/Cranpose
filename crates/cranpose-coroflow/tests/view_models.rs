@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use cranpose_core::Key;
+
 mod support;
 
 use coroflow::{MainScope, MutableStateFlow, StateFlow};
@@ -53,7 +55,7 @@ type Handles<T> = Rc<RefCell<Vec<Handle<T>>>>;
 type Resolved<T> = Rc<RefCell<Vec<(Handle<T>, Rc<T>)>>>;
 
 fn render(composition: &mut Composition<MemoryApplier>, content: impl FnMut() + 'static) {
-    composition.render(1, content).expect("render");
+    composition.render(Key(1), content).expect("render");
     composition.runtime_handle().drain_ui();
 }
 

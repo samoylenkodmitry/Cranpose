@@ -3,7 +3,7 @@ mod support;
 use std::{cell::RefCell, rc::Rc};
 
 use coroflow::MutableStateFlow;
-use cranpose_core::{Composition, MemoryApplier};
+use cranpose_core::{Composition, Key, MemoryApplier};
 use cranpose_coroflow::{StateFlowCollect, collects_in};
 use cranpose_services::{LifecycleState, dispatch_lifecycle_state};
 use support::{composition, pump_until};
@@ -35,7 +35,7 @@ fn a_lifecycle_aware_collection_lets_go_while_the_app_is_stopped() {
         move |composition: &mut Composition<MemoryApplier>| {
             let (seen, flow) = (Rc::clone(&seen), flow.clone());
             composition
-                .render(1, move || {
+                .render(Key(1), move || {
                     seen.borrow_mut()
                         .push(flow.collectAsStateWithLifecycle().get());
                 })

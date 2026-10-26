@@ -662,7 +662,7 @@ fn launched_effect_runs_and_cancels() {
         let scopes_for_render = Rc::clone(&captured_scopes);
         let state = *key_state;
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let key = state.value();
                 let runs = Arc::clone(&runs);
                 let captured_scopes = Rc::clone(&scopes_for_render);
@@ -710,7 +710,7 @@ fn launched_effect_runs_side_effect_body() {
     {
         let captured_scopes = Rc::clone(&captured_scopes);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let key = state.value();
                 let tx = tx.clone();
                 let captured_scopes = Rc::clone(&captured_scopes);
@@ -747,7 +747,7 @@ fn launched_effect_background_updates_ui() {
     {
         let receiver = Rc::clone(&receiver);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect((), move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
@@ -785,7 +785,7 @@ fn launched_effect_background_async_updates_ui() {
     {
         let receiver = Rc::clone(&receiver);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect((), move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
@@ -824,7 +824,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
     {
         let receiver = Rc::clone(&receiver);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect(key, move |scope| {
@@ -846,7 +846,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
     {
         let receiver = Rc::clone(&receiver);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect(key, move |scope| {
@@ -886,7 +886,7 @@ fn launched_effect_relaunches_on_branch_change() {
         let runs = Arc::clone(&runs);
         let recorded_scopes = Rc::clone(&recorded_scopes);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let runs = Arc::clone(&runs);
                 let recorded_scopes = Rc::clone(&recorded_scopes);
                 if show_first {
@@ -953,7 +953,7 @@ fn anchor_survives_conditional_removal() {
         let runs = Arc::clone(&runs);
         let captured_scope = Rc::clone(&captured_scope);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 if toggle.value() {
                     with_current_composer(|composer| {
                         composer.emit_node(|| TestDummyNode);
@@ -1803,7 +1803,7 @@ fn launched_effect_reruns_on_hash_colliding_but_unequal_keys() {
         let runs = Arc::clone(&runs);
         let scopes = Rc::clone(&captured_scopes);
         composition
-            .render(0, move || {
+            .render(Key(0), move || {
                 let runs = Arc::clone(&runs);
                 let scopes = Rc::clone(&scopes);
                 let key = HashCollidingKey { tag: tag.get() };
