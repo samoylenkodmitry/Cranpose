@@ -20,6 +20,9 @@ struct ModifierNodeEntry {
     element: DynModifierElement,
     node: Rc<RefCell<dyn ModifierNode>>,
     capabilities: NodeCapabilities,
+    // The union of the node's capabilities and those of every node after it,
+    // while no node of the chain delegates.
+    aggregate: NodeCapabilities,
 }
 
 impl ModifierNodeEntry {
@@ -34,6 +37,7 @@ impl ModifierNodeEntry {
             element,
             node,
             capabilities,
+            aggregate: NodeCapabilities::empty(),
         };
         entry
             .node
@@ -165,10 +169,12 @@ fn detach_node_tree(node: &mut dyn ModifierNode) {
 pub struct ModifierNodeChain {
     entries: Vec<ModifierNodeEntry>,
     pub(super) aggregated_capabilities: NodeCapabilities,
-    // The chain's nodes in order, delegates after the node that delegates to
-    // them, each with its capabilities and the union of its own and those of
-    // every node after it: the links between them, which no node keeps.
-    pub(super) ordered_nodes: Vec<(NodePath, NodeCapabilities, NodeCapabilities)>,
+    // While a node of the chain delegates: the chain's nodes in order,
+    // delegates after the node that delegates to them, each with its
+    // capabilities and the union of its own and those of every node after
+    // it. Empty otherwise, when the entries are the order and keep the
+    // unions: most chains delegate nowhere and allocate none.
+    delegated_order: Vec<(NodePath, NodeCapabilities, NodeCapabilities)>,
     /// Whether the chain's nodes are attached. A node that joins an attached
     /// chain attaches as it joins; one that joins a detached chain waits for
     /// [`Self::attach_nodes`].
@@ -439,7 +445,7 @@ impl ModifierNodeChain {
         Self {
             entries: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
-            ordered_nodes: Vec::new(),
+            delegated_order: Vec::new(),
             attached: false,
         }
     }
@@ -791,12 +797,10 @@ impl ModifierNodeChain {
         let target = node_data_ptr(node);
         // A node comes before its delegates, so a delegate that starts its
         // node's memory finds the node.
-        (0..self.ordered_nodes.len())
+        (0..self.order_len())
             .find(|&index| {
-                self.with_path(self.ordered_nodes[index].0, |node| {
-                    node_data_ptr(node) == target
-                })
-                .unwrap_or(false)
+                self.with_path(self.order_at(index).0, |node| node_data_ptr(node) == target)
+                    .unwrap_or(false)
             })
             .map(|index| self.node_ref(ChainPosition::Node(index)))
     }
@@ -843,8 +847,8 @@ impl ModifierNodeChain {
     where
         F: FnMut(&mut dyn ModifierNode, NodeCapabilities),
     {
-        for index in 0..self.ordered_nodes.len() {
-            let (path, cached_caps, _agg) = self.ordered_nodes[index];
+        for index in 0..self.order_len() {
+            let (path, cached_caps, _agg) = self.order_at(index);
             let mut node_borrow = self.entries[path.entry()].node.borrow_mut();
             let mut current: &mut dyn ModifierNode = &mut *node_borrow;
             for &delegate_index in path.delegates() {
@@ -878,22 +882,59 @@ impl ModifierNodeChain {
         Some(f(current))
     }
 
+    // How many nodes the chain's order holds, delegates included.
+    pub(super) fn order_len(&self) -> usize {
+        if self.delegated_order.is_empty() {
+            self.entries.len()
+        } else {
+            self.delegated_order.len()
+        }
+    }
+
+    // The node at `index` of the chain's order: its path, its capabilities
+    // and the union of capabilities from it to the tail.
+    pub(super) fn order_at(&self, index: usize) -> (NodePath, NodeCapabilities, NodeCapabilities) {
+        if self.delegated_order.is_empty() {
+            let entry = &self.entries[index];
+            (NodePath::root(index), entry.capabilities, entry.aggregate)
+        } else {
+            self.delegated_order[index]
+        }
+    }
+
     // Orders the nodes again and works out the union of capabilities from
     // each node to the tail.
     fn sync_chain_links(&mut self) {
-        self.rebuild_ordered_nodes();
+        self.rebuild_delegated_order();
         let mut aggregate = NodeCapabilities::empty();
-        for (_, caps, aggregate_child) in self.ordered_nodes.iter_mut().rev() {
-            aggregate |= *caps;
-            *aggregate_child = aggregate;
+        if self.delegated_order.is_empty() {
+            for entry in self.entries.iter_mut().rev() {
+                aggregate |= entry.capabilities;
+                entry.aggregate = aggregate;
+            }
+        } else {
+            for (_, caps, aggregate_child) in self.delegated_order.iter_mut().rev() {
+                aggregate |= *caps;
+                *aggregate_child = aggregate;
+            }
         }
         self.aggregated_capabilities = aggregate;
     }
 
-    fn rebuild_ordered_nodes(&mut self) {
-        self.ordered_nodes.clear();
-        // One link per entry unless an entry delegates; see `rebuild_tail`.
-        self.ordered_nodes.reserve_exact(self.entries.len());
+    fn rebuild_delegated_order(&mut self) {
+        let delegates = self.entries.iter().any(|entry| {
+            let mut delegates = false;
+            entry
+                .node
+                .borrow()
+                .for_each_delegate(&mut |_| delegates = true);
+            delegates
+        });
+        if !delegates {
+            self.delegated_order = Vec::new();
+            return;
+        }
+        self.delegated_order.clear();
         let mut path_buf = [0usize; MAX_DELEGATE_DEPTH];
         for (index, entry) in self.entries.iter().enumerate() {
             let node_borrow = entry.node.borrow();
@@ -902,7 +943,7 @@ impl ModifierNodeChain {
                 index,
                 &mut path_buf,
                 0,
-                &mut self.ordered_nodes,
+                &mut self.delegated_order,
             );
         }
     }

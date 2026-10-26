@@ -9,7 +9,7 @@ enum TraversalDirection {
     Backward,
 }
 
-/// Iterator walking a modifier chain by indexing into `ordered_nodes`.
+/// Iterator walking a modifier chain by indexing into its order.
 pub struct ModifierChainIter<'a> {
     chain: &'a ModifierNodeChain,
     cursor: usize,
@@ -22,13 +22,13 @@ impl<'a> ModifierChainIter<'a> {
         Self {
             chain,
             cursor: 0,
-            remaining: chain.ordered_nodes.len(),
+            remaining: chain.order_len(),
             direction: TraversalDirection::Forward,
         }
     }
 
     pub(super) fn backward(chain: &'a ModifierNodeChain) -> Self {
-        let len = chain.ordered_nodes.len();
+        let len = chain.order_len();
         Self {
             chain,
             cursor: len.wrapping_sub(1),
@@ -85,7 +85,7 @@ pub(super) enum ChainPosition {
 impl ModifierChainNodeRef<'_> {
     fn path(&self) -> Option<NodePath> {
         match self.position {
-            ChainPosition::Node(index) => Some(self.chain.ordered_nodes[index].0),
+            ChainPosition::Node(index) => Some(self.chain.order_at(index).0),
             ChainPosition::Head | ChainPosition::Tail => None,
         }
     }
@@ -102,7 +102,7 @@ impl ModifierChainNodeRef<'_> {
         let position = match self.position {
             ChainPosition::Head => return None,
             ChainPosition::Node(index) => index.checked_sub(1),
-            ChainPosition::Tail => self.chain.ordered_nodes.len().checked_sub(1),
+            ChainPosition::Tail => self.chain.order_len().checked_sub(1),
         }
         .map_or(ChainPosition::Head, ChainPosition::Node);
         Some(self.chain.node_ref(position))
@@ -116,7 +116,7 @@ impl ModifierChainNodeRef<'_> {
             ChainPosition::Node(index) => index + 1,
             ChainPosition::Tail => return None,
         };
-        let position = if next < self.chain.ordered_nodes.len() {
+        let position = if next < self.chain.order_len() {
             ChainPosition::Node(next)
         } else {
             ChainPosition::Tail
@@ -128,7 +128,7 @@ impl ModifierChainNodeRef<'_> {
     #[inline]
     pub fn kind_set(&self) -> NodeCapabilities {
         match self.position {
-            ChainPosition::Node(index) => self.chain.ordered_nodes[index].1,
+            ChainPosition::Node(index) => self.chain.order_at(index).1,
             ChainPosition::Head | ChainPosition::Tail => NodeCapabilities::empty(),
         }
     }
@@ -148,7 +148,7 @@ impl ModifierChainNodeRef<'_> {
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
         match self.position {
             ChainPosition::Head => self.chain.aggregated_capabilities,
-            ChainPosition::Node(index) => self.chain.ordered_nodes[index].2,
+            ChainPosition::Node(index) => self.chain.order_at(index).2,
             ChainPosition::Tail => NodeCapabilities::empty(),
         }
     }
