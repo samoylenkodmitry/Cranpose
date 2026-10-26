@@ -75,6 +75,8 @@ pub(crate) mod purchases;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod services;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod shell_creation;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod surface;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod text_input;
