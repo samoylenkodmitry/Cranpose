@@ -170,9 +170,16 @@ struct Corner {
     reach: f32,
 }
 
+// The side of a corner's centre on which its square lies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+}
+
 impl Corner {
-    /// `square_left` when the corner's square lies left of its centre.
-    fn new(radius: f32, centre_x: f32, centre_y: f32, square_left: bool) -> Self {
+    /// `square` names the side of its centre on which the corner's square lies.
+    fn new(radius: f32, centre_x: f32, centre_y: f32, square: Side) -> Self {
         if radius > 0.0 {
             return Self {
                 centre_x,
@@ -181,7 +188,7 @@ impl Corner {
             };
         }
         Self {
-            centre_x: if square_left {
+            centre_x: if square == Side::Left {
                 f32::NEG_INFINITY
             } else {
                 f32::INFINITY
@@ -210,25 +217,25 @@ impl RoundedFill {
                 radii.top_left,
                 left + radii.top_left,
                 top + radii.top_left,
-                true,
+                Side::Left,
             ),
             top_right: Corner::new(
                 radii.top_right,
                 right - radii.top_right,
                 top + radii.top_right,
-                false,
+                Side::Right,
             ),
             bottom_right: Corner::new(
                 radii.bottom_right,
                 right - radii.bottom_right,
                 bottom - radii.bottom_right,
-                false,
+                Side::Right,
             ),
             bottom_left: Corner::new(
                 radii.bottom_left,
                 left + radii.bottom_left,
                 bottom - radii.bottom_left,
-                true,
+                Side::Left,
             ),
         }
     }
