@@ -70,6 +70,19 @@ impl SvgDocument {
     pub(super) fn intrinsic_size(&self) -> Size {
         self.intrinsic_size
     }
+
+    fn raster_transform(&self, width: u32, height: u32) -> Transform {
+        let sx = width as f32 / self.view_box.width;
+        let sy = height as f32 / self.view_box.height;
+        Transform::from_row(
+            sx,
+            0.0,
+            0.0,
+            sy,
+            -self.view_box.min_x * sx,
+            -self.view_box.min_y * sy,
+        )
+    }
 }
 
 pub(super) fn parse_svg_document(bytes: &[u8]) -> Result<SvgDocument, SvgPainterError> {
@@ -135,21 +148,6 @@ pub(super) fn demultiplied_rgba_pixels(pixmap: &Pixmap) -> Vec<u8> {
         .collect()
 }
 
-impl SvgDocument {
-    fn raster_transform(&self, width: u32, height: u32) -> Transform {
-        let sx = width as f32 / self.view_box.width;
-        let sy = height as f32 / self.view_box.height;
-        Transform::from_row(
-            sx,
-            0.0,
-            0.0,
-            sy,
-            -self.view_box.min_x * sx,
-            -self.view_box.min_y * sy,
-        )
-    }
-}
-
 fn draw_rect(pixmap: &mut tiny_skia::PixmapMut<'_>, rect: &SvgRect, transform: Transform) {
     if let Some(fill) = rect.fill
         && let Some(skia_rect) = SkiaRect::from_xywh(rect.x, rect.y, rect.width, rect.height)
@@ -208,6 +206,21 @@ fn rect_path(rect: &SvgRect) -> Option<Path> {
 impl SvgColor {
     fn apply_to(self, paint: &mut Paint<'_>) {
         paint.set_color_rgba8(self.r, self.g, self.b, self.a);
+    }
+
+    const BLACK: Self = Self {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+
+    fn with_opacity(self, opacity: f32) -> Self {
+        let opacity = opacity.clamp(0.0, 1.0);
+        Self {
+            a: ((self.a as f32 * opacity).round()).clamp(0.0, 255.0) as u8,
+            ..self
+        }
     }
 }
 
@@ -450,23 +463,6 @@ fn parse_line_join(value: Option<&str>) -> LineJoin {
         Some("round") => LineJoin::Round,
         Some("bevel") => LineJoin::Bevel,
         _ => LineJoin::Miter,
-    }
-}
-
-impl SvgColor {
-    const BLACK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 255,
-    };
-
-    fn with_opacity(self, opacity: f32) -> Self {
-        let opacity = opacity.clamp(0.0, 1.0);
-        Self {
-            a: ((self.a as f32 * opacity).round()).clamp(0.0, 255.0) as u8,
-            ..self
-        }
     }
 }
 

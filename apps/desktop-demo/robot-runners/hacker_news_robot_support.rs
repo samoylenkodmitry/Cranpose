@@ -90,9 +90,7 @@ impl MockHackerNewsClient {
         let id_str = suffix.strip_suffix(".json")?;
         id_str.parse::<u64>().ok()
     }
-}
 
-impl MockHackerNewsClient {
     fn text_for(&self, url: &str) -> Result<String, HttpError> {
         if url.ends_with("/topstories.json") {
             return Ok(self.topstories_json());

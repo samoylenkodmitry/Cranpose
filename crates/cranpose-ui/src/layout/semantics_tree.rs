@@ -91,7 +91,7 @@ pub struct SemanticsNode {
     /// Id of the runtime node this semantics node describes.
     pub node_id: NodeId,
     /// Where the node lies in the root's coordinates: its layout rect,
-    /// before graphics-layer transforms, as [`LayoutBox::rect`] holds it.
+    /// before graphics-layer transforms, as [`LayoutBox::rect`](super::LayoutBox::rect) holds it.
     pub bounds: GeometryRect,
     /// Where layout put the node inside its parent's content, from which a
     /// tree update moves a node that did not change along with its parent.

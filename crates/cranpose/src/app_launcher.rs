@@ -51,6 +51,14 @@ impl AndroidGpuBackend {
             _ => self,
         }
     }
+
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    pub(crate) fn wgpu_backends(self) -> wgpu::Backends {
+        match self {
+            Self::Vulkan => wgpu::Backends::VULKAN,
+            Self::OpenGlEs => wgpu::Backends::GL,
+        }
+    }
 }
 
 #[cfg(test)]
