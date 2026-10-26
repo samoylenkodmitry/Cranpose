@@ -615,21 +615,6 @@ impl WgpuFrameGraphExecutor {
         self.upload_allocators.reset();
     }
 
-    pub(crate) fn upload_texture(
-        &mut self,
-        queue: &wgpu::Queue,
-        destination: wgpu::TexelCopyTextureInfo<'_>,
-        data: &[u8],
-        data_layout: wgpu::TexelCopyBufferLayout,
-        size: wgpu::Extent3d,
-    ) -> FrameCommandStats {
-        queue.write_texture(destination, data, data_layout, size);
-        note_upload_write();
-        FrameCommandStats {
-            upload_bytes: data.len() as u64,
-            ..FrameCommandStats::default()
-        }
-    }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn begin<'a>(
@@ -2155,6 +2140,23 @@ impl UploadRing {
 pub(crate) const TEST_READBACK: wgpu::BufferUsages = wgpu::BufferUsages::COPY_SRC;
 #[cfg(not(test))]
 pub(crate) const TEST_READBACK: wgpu::BufferUsages = wgpu::BufferUsages::empty();
+
+/// Writes `data` to `destination` through `queue`, counted as one upload
+/// write of the frame.
+pub(crate) fn upload_texture(
+    queue: &wgpu::Queue,
+    destination: wgpu::TexelCopyTextureInfo<'_>,
+    data: &[u8],
+    data_layout: wgpu::TexelCopyBufferLayout,
+    size: wgpu::Extent3d,
+) -> FrameCommandStats {
+    queue.write_texture(destination, data, data_layout, size);
+    note_upload_write();
+    FrameCommandStats {
+        upload_bytes: data.len() as u64,
+        ..FrameCommandStats::default()
+    }
+}
 
 /// A buffer of `usage` that holds `contents` from its creation: written
 /// where it is mapped in the mapped mode, and copied from the staging buffer

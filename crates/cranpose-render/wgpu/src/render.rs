@@ -2231,7 +2231,6 @@ impl GpuRenderer {
                 pipelines: &self.pipelines,
                 uniforms: &mut self.viewport_uniforms,
                 queue: &self.queue,
-                executor: &mut self.frame_graph_executor,
                 stats: &mut self.frame_stats,
             },
         }
@@ -3040,7 +3039,6 @@ impl GpuRenderer {
         retained: bool,
     ) -> Option<Rc<OffscreenTarget>> {
         let (width, height) = (bounds.width, bounds.height);
-        let device = Arc::clone(&self.device);
         let (scratch_width, scratch_height) =
             crate::effect_renderer::blur_scratch_size(pixel_radius, pixel_radius, width, height);
         let full_size_result = shadow.post_blur_cutouts.is_some()
@@ -3101,7 +3099,7 @@ impl GpuRenderer {
             );
             let scratch = frame
                 .recorder
-                .acquire_transient_offscreen(&device, scratch_descriptor);
+                .acquire_transient_offscreen(&self.device, scratch_descriptor);
             let blurred = if full_size_result && (scratch_width, scratch_height) != (width, height)
             {
                 Some(self.shadow_transient(
@@ -3119,7 +3117,7 @@ impl GpuRenderer {
             };
             let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
                 frame.recorder,
-                &device,
+                &self.device,
                 &source,
                 &scratch,
                 BlurDest {
@@ -3137,7 +3135,7 @@ impl GpuRenderer {
             if let Some(blurred) = &blurred {
                 self.effect_renderer.encode_upscale_pass(
                     frame.recorder,
-                    &device,
+                    &self.device,
                     blurred,
                     &result.view,
                 );

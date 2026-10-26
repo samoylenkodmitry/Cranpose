@@ -109,7 +109,7 @@ impl ImageTextures {
                 view_formats: &[],
             });
 
-        let upload_stats = upload.executor.upload_texture(
+        let upload_stats = crate::frame_graph::upload_texture(
             upload.queue,
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,

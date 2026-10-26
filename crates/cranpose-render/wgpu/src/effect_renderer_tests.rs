@@ -104,7 +104,7 @@ fn patterned_source(device: &wgpu::Device, queue: &wgpu::Queue) -> OffscreenTarg
             (0..32).flat_map(move |x| [(x * 7) as u8, (y * 5) as u8, ((x + y) * 3) as u8, 255])
         })
         .collect();
-    WgpuFrameGraphExecutor::new().upload_texture(
+    crate::frame_graph::upload_texture(
         queue,
         source.texture().as_image_copy(),
         &pixels,
