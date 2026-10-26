@@ -1,0 +1,6 @@
+# Sites left for each lint of the dylint libraries in lints/ that
+# `scripts/ci/dylint_budget.py` counts (`just dylint`). A count only goes
+# down: lower it in the commit that removes sites (`just dylint-lower`).
+
+[lints]
+guard_across_callback = 38

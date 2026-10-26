@@ -1,0 +1,20 @@
+[package]
+name = "guard_across_callback"
+version = "0.1.0"
+description = "Finds a callback that runs while a RefCell borrow or a lock guard is alive"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "6.0"
+
+[dev-dependencies]
+dylint_testing = "6.0"
+
+[workspace]
+
+[package.metadata.rust-analyzer]
+rustc_private = true

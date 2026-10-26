@@ -1,0 +1,5 @@
+# The lint runs inside rustc, so it builds with the repo's pinned nightly
+# (rust-toolchain-nightly.toml) and the compiler crates of that nightly.
+[toolchain]
+channel = "nightly-2026-10-03"
+components = ["llvm-tools-preview", "rustc-dev"]

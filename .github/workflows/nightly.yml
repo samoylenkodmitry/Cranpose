@@ -238,6 +238,24 @@ jobs:
       - name: Check the dependency advisories
         run: just deny-advisories
 
+  # The type-aware lints of lints/ (cargo-dylint on the pinned nightly), each
+  # lint's sites against scripts/ci/dylint_budget.toml.
+  dylint:
+    name: dylint lints (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Check the dylint budgets
+        run: just dylint
+
   # Each feature of the framework crates built alone (cargo-hack, about 12
   # minutes), and the generic functions that copy most IR into the desktop
   # binary, as a report.
