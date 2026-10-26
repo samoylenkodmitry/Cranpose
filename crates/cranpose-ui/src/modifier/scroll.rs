@@ -1680,6 +1680,112 @@ impl Modifier {
             (0.0, 0.0),
         ))
     }
+
+    /// Creates a vertically scrollable modifier for lazy lists.
+    ///
+    /// This connects pointer gestures to LazyListState for scroll handling.
+    /// Unlike regular vertical_scroll, no layout offset is applied here
+    /// since LazyListState manages item positioning internally.
+    /// Creates a vertically scrollable modifier for lazy lists.
+    ///
+    /// This connects pointer gestures to LazyListState for scroll handling.
+    /// Unlike regular vertical_scroll, no layout offset is applied here
+    /// since LazyListState manages item positioning internally.
+    pub fn lazy_vertical_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
+        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+            state_identity: state.inner_ptr() as usize,
+            axis: Axis::Vertical,
+            reverse_scrolling,
+        });
+        self.lazy_vertical_scroll_with_context(state, reverse_scrolling, (0.0, 0.0), motion_context)
+    }
+
+    pub(crate) fn lazy_vertical_scroll_with_context(
+        self,
+        state: LazyListState,
+        reverse_scrolling: bool,
+        content_padding: (f32, f32),
+        motion_context: ScrollMotionContext,
+    ) -> Self {
+        self.then(lazy_scroll_impl(
+            state,
+            Axis::Vertical,
+            reverse_scrolling,
+            content_padding,
+            motion_context,
+        ))
+    }
+
+    pub(crate) fn lazy_horizontal_scroll_with_context(
+        self,
+        state: LazyListState,
+        reverse_scrolling: bool,
+        content_padding: (f32, f32),
+        motion_context: ScrollMotionContext,
+    ) -> Self {
+        self.then(lazy_scroll_impl(
+            state,
+            Axis::Horizontal,
+            reverse_scrolling,
+            content_padding,
+            motion_context,
+        ))
+    }
+
+    /// Drags along `axis`, reporting each delta to `state`.
+    ///
+    /// The gesture is the one the scroll containers run — touch slop before a
+    /// drag begins, axis locking so a mostly-vertical drag never steals a
+    /// horizontal one, the primary pointer only, and yielding to whoever
+    /// consumed the event first — so a dragged control and a scrolled list feel
+    /// the same under a finger. Unlike a scroll, a release does not fling: a
+    /// control the user placed stays where it was let go.
+    ///
+    /// Deltas are logical pixels, positive to the right for [`Axis::Horizontal`]
+    /// and downwards for [`Axis::Vertical`].
+    pub fn draggable(self, axis: Axis, state: DraggableState) -> Self {
+        self.then(draggable_impl(axis, state, None))
+    }
+
+    /// Scrolls content with custom placement along `axis`.
+    ///
+    /// Supplies drag, wheel and inertial scrolling without translating or
+    /// clipping layout. A new pointer press interrupts the fling. The state's
+    /// consumption handler stops it when the content reaches a boundary.
+    pub fn scrollable(self, axis: Axis, state: ScrollableState) -> Self {
+        let identity = state.identity();
+        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
+            state_identity: identity,
+            axis,
+        });
+        self.then(Self::with_element(MotionContextAnimatedElement::new(
+            motion_context.clone(),
+        )))
+        .then(nested_drag_gesture_input(
+            (identity, axis),
+            DragGesture {
+                target: state,
+                axis,
+                reverse_input: false,
+                motion_context,
+                guard: None,
+            },
+        ))
+    }
+
+    /// Drags along `axis` only while `guard` says so.
+    ///
+    /// The guard is asked per event, so a control can stop accepting a drag
+    /// half way through one and the gesture ends rather than being applied to
+    /// a control that has since been disabled.
+    pub fn draggable_guarded(
+        self,
+        axis: Axis,
+        state: DraggableState,
+        guard: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.then(draggable_impl(axis, state, Some(Rc::new(guard))))
+    }
 }
 
 fn scroll_impl(
@@ -1777,59 +1883,6 @@ fn scroll_semantics(
 }
 
 use cranpose_foundation::lazy::{LazyListState, LazySettlePolicy};
-
-impl Modifier {
-    /// Creates a vertically scrollable modifier for lazy lists.
-    ///
-    /// This connects pointer gestures to LazyListState for scroll handling.
-    /// Unlike regular vertical_scroll, no layout offset is applied here
-    /// since LazyListState manages item positioning internally.
-    /// Creates a vertically scrollable modifier for lazy lists.
-    ///
-    /// This connects pointer gestures to LazyListState for scroll handling.
-    /// Unlike regular vertical_scroll, no layout offset is applied here
-    /// since LazyListState manages item positioning internally.
-    pub fn lazy_vertical_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
-        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
-            state_identity: state.inner_ptr() as usize,
-            axis: Axis::Vertical,
-            reverse_scrolling,
-        });
-        self.lazy_vertical_scroll_with_context(state, reverse_scrolling, (0.0, 0.0), motion_context)
-    }
-
-    pub(crate) fn lazy_vertical_scroll_with_context(
-        self,
-        state: LazyListState,
-        reverse_scrolling: bool,
-        content_padding: (f32, f32),
-        motion_context: ScrollMotionContext,
-    ) -> Self {
-        self.then(lazy_scroll_impl(
-            state,
-            Axis::Vertical,
-            reverse_scrolling,
-            content_padding,
-            motion_context,
-        ))
-    }
-
-    pub(crate) fn lazy_horizontal_scroll_with_context(
-        self,
-        state: LazyListState,
-        reverse_scrolling: bool,
-        content_padding: (f32, f32),
-        motion_context: ScrollMotionContext,
-    ) -> Self {
-        self.then(lazy_scroll_impl(
-            state,
-            Axis::Horizontal,
-            reverse_scrolling,
-            content_padding,
-            motion_context,
-        ))
-    }
-}
 
 fn lazy_scroll_impl(
     state: LazyListState,
@@ -1958,63 +2011,6 @@ fn jump_to_row(state: &LazyListState, index: usize) -> bool {
     }
     state.scroll_to_item(index, 0.0);
     true
-}
-
-impl Modifier {
-    /// Drags along `axis`, reporting each delta to `state`.
-    ///
-    /// The gesture is the one the scroll containers run — touch slop before a
-    /// drag begins, axis locking so a mostly-vertical drag never steals a
-    /// horizontal one, the primary pointer only, and yielding to whoever
-    /// consumed the event first — so a dragged control and a scrolled list feel
-    /// the same under a finger. Unlike a scroll, a release does not fling: a
-    /// control the user placed stays where it was let go.
-    ///
-    /// Deltas are logical pixels, positive to the right for [`Axis::Horizontal`]
-    /// and downwards for [`Axis::Vertical`].
-    pub fn draggable(self, axis: Axis, state: DraggableState) -> Self {
-        self.then(draggable_impl(axis, state, None))
-    }
-
-    /// Scrolls content with custom placement along `axis`.
-    ///
-    /// Supplies drag, wheel and inertial scrolling without translating or
-    /// clipping layout. A new pointer press interrupts the fling. The state's
-    /// consumption handler stops it when the content reaches a boundary.
-    pub fn scrollable(self, axis: Axis, state: ScrollableState) -> Self {
-        let identity = state.identity();
-        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
-            state_identity: identity,
-            axis,
-        });
-        self.then(Self::with_element(MotionContextAnimatedElement::new(
-            motion_context.clone(),
-        )))
-        .then(nested_drag_gesture_input(
-            (identity, axis),
-            DragGesture {
-                target: state,
-                axis,
-                reverse_input: false,
-                motion_context,
-                guard: None,
-            },
-        ))
-    }
-
-    /// Drags along `axis` only while `guard` says so.
-    ///
-    /// The guard is asked per event, so a control can stop accepting a drag
-    /// half way through one and the gesture ends rather than being applied to
-    /// a control that has since been disabled.
-    pub fn draggable_guarded(
-        self,
-        axis: Axis,
-        state: DraggableState,
-        guard: impl Fn() -> bool + 'static,
-    ) -> Self {
-        self.then(draggable_impl(axis, state, Some(Rc::new(guard))))
-    }
 }
 
 fn draggable_impl(
