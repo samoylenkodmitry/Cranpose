@@ -375,8 +375,7 @@ impl TextResources {
     /// Writes the glyphs the pass placed in the atlas to its texture, ahead
     /// of the submit that draws them.
     pub(crate) fn flush_glyph_uploads(&mut self, upload: &mut FrameUploads<'_>) {
-        self.glyph_atlas
-            .flush_uploads(upload.queue, upload.stats);
+        self.glyph_atlas.flush_uploads(upload.queue, upload.stats);
     }
 
     fn glyph_atlas_entry_for_placement(

@@ -113,7 +113,7 @@ use pipeline_compiler::PipelineCompilation;
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
-use render::{FrameOutput, GpuRenderer, GpuRendererInit};
+use render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
@@ -245,9 +245,16 @@ impl GpuTarget {
     }
 }
 
+// A renderer that draws on the calling thread, and the executor its frames go
+// through.
+struct SyncPresenter {
+    renderer: GpuRenderer,
+    submit: FrameSubmit,
+}
+
 enum PresentBackend {
     None,
-    Sync(Box<GpuRenderer>),
+    Sync(Box<SyncPresenter>),
     #[cfg(not(target_arch = "wasm32"))]
     Threaded(PresentHandle),
 }
@@ -324,7 +331,7 @@ impl WgpuRenderer {
 
     fn sync_gpu_renderer(&self) -> Option<&GpuRenderer> {
         match &self.backend {
-            PresentBackend::Sync(gpu_renderer) => Some(gpu_renderer.as_ref()),
+            PresentBackend::Sync(sync) => Some(&sync.renderer),
             _ => None,
         }
     }
@@ -377,7 +384,11 @@ impl WgpuRenderer {
 
     fn install_gpu(&mut self, target: GpuTarget, pipeline_compilation: PipelineCompilation) {
         let init = self.next_gpu_init(target, pipeline_compilation);
-        self.backend = PresentBackend::Sync(Box::new(GpuRenderer::new(init)));
+        let submit = FrameSubmit::new(&init);
+        self.backend = PresentBackend::Sync(Box::new(SyncPresenter {
+            renderer: GpuRenderer::new(init),
+            submit,
+        }));
     }
 
     /// Retires the live backend and bumps the renderer epoch, then describes
@@ -569,8 +580,8 @@ impl WgpuRenderer {
     /// memory. A runtime calls it once its app holds still; the next frame
     /// draws whole.
     pub fn release_kept_copy(&mut self) {
-        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
-            gpu_renderer.release_kept_copy();
+        if let PresentBackend::Sync(sync) = &mut self.backend {
+            sync.renderer.release_kept_copy();
         }
     }
 
@@ -582,20 +593,24 @@ impl WgpuRenderer {
         height: u32,
         image: frame::ImageContent,
     ) -> Result<(), WgpuRendererError> {
-        let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
+        let PresentBackend::Sync(sync) = &mut self.backend else {
             return Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
                     .to_string(),
             ));
         };
+        let SyncPresenter {
+            renderer: gpu_renderer,
+            submit,
+        } = &mut **sync;
         let packet = self
             .frontend
             .build_frame_packet(width, height, self.renderer_epoch, self.surface_epoch)
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
-            width,
-            height,
+            submit,
+            (width, height),
             packet,
             self.surface_epoch,
             &mut returns,
@@ -629,9 +644,10 @@ impl WgpuRenderer {
         timeout: std::time::Duration,
         stop: &dyn Fn() -> bool,
     ) -> bool {
-        let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
+        let PresentBackend::Sync(sync) = &mut self.backend else {
             return false;
         };
+        let gpu_renderer = &mut sync.renderer;
         let deadline = web_time::Instant::now() + timeout;
         let mut compiling = gpu_renderer.prepare_recorded();
         while compiling {
@@ -654,12 +670,16 @@ impl WgpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<CapturedFrame, WgpuRendererError> {
-        let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
+        let PresentBackend::Sync(sync) = &mut self.backend else {
             return Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
                     .to_string(),
             ));
         };
+        let SyncPresenter {
+            renderer: gpu_renderer,
+            submit,
+        } = &mut **sync;
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
@@ -672,8 +692,8 @@ impl WgpuRenderer {
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render_to_rgba_pixels(
-            width,
-            height,
+            submit,
+            (width, height),
             packet,
             self.surface_epoch,
             &mut returns,
@@ -957,7 +977,7 @@ impl WgpuRenderer {
     /// The counters of the most recent frame the renderer drew, or `None` before it drew one.
     pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
         match &self.backend {
-            PresentBackend::Sync(gpu_renderer) => gpu_renderer.last_frame_stats(),
+            PresentBackend::Sync(sync) => sync.renderer.last_frame_stats(),
             #[cfg(not(target_arch = "wasm32"))]
             PresentBackend::Threaded(handle) => *handle
                 .status()
@@ -1000,8 +1020,8 @@ impl WgpuRenderer {
     /// it does not draw with comes later. A renderer that does not draw on
     /// the calling thread builds nothing.
     pub fn build_first_screen_pipelines(&mut self, records: &[u8], viewport: (u32, u32)) {
-        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
-            gpu_renderer.build_first_screen(records, viewport);
+        if let PresentBackend::Sync(sync) = &mut self.backend {
+            sync.renderer.build_first_screen(records, viewport);
         }
     }
 
@@ -1009,9 +1029,10 @@ impl WgpuRenderer {
     /// print. Empty unless `CRANPOSE_GPU_PASS_TIMING` armed pass timing on a
     /// device with [`wgpu::Features::TIMESTAMP_QUERY`].
     pub fn gpu_pass_timings(&self) -> GpuPassTimingReport {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::gpu_pass_timings)
-            .unwrap_or_default()
+        match &self.backend {
+            PresentBackend::Sync(sync) => sync.submit.executor.pass_timing_report(),
+            _ => GpuPassTimingReport::default(),
+        }
     }
 
     /// The sizes and capacities of the renderer's CPU-side scene data, scratch buffers and
@@ -1059,8 +1080,8 @@ impl WgpuRenderer {
     /// out the draws that use them.
     #[cfg(target_arch = "wasm32")]
     pub fn background_pipelines_landed(&mut self) {
-        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
-            gpu_renderer.background_pipelines_landed();
+        if let PresentBackend::Sync(sync) = &mut self.backend {
+            sync.renderer.background_pipelines_landed();
         }
     }
 
@@ -1071,8 +1092,8 @@ impl WgpuRenderer {
     /// once this is called, and draws switch to each as it lands.
     #[cfg(target_arch = "wasm32")]
     pub fn compile_pipelines_in_background(&mut self) {
-        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
-            gpu_renderer.pipelines.compile_pipelines_in_background();
+        if let PresentBackend::Sync(sync) = &mut self.backend {
+            sync.renderer.pipelines.compile_pipelines_in_background();
         }
     }
 
@@ -1138,16 +1159,20 @@ impl WgpuRenderer {
         height: u32,
         packet: HeldFramePacket,
     ) -> Result<PresentOutcome, WgpuRendererError> {
-        let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
+        let PresentBackend::Sync(sync) = &mut self.backend else {
             return Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
                     .to_string(),
             ));
         };
+        let SyncPresenter {
+            renderer: gpu_renderer,
+            submit,
+        } = &mut **sync;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
-            width,
-            height,
+            submit,
+            (width, height),
             packet.0,
             self.surface_epoch,
             &mut returns,
@@ -1337,7 +1362,7 @@ impl Renderer for WgpuRenderer {
 
     fn needs_frame_warmup(&self) -> bool {
         match &self.backend {
-            PresentBackend::Sync(gpu_renderer) => gpu_renderer.needs_frame_warmup(),
+            PresentBackend::Sync(sync) => sync.renderer.needs_frame_warmup(),
             #[cfg(not(target_arch = "wasm32"))]
             PresentBackend::Threaded(handle) => handle
                 .status()
@@ -1349,7 +1374,7 @@ impl Renderer for WgpuRenderer {
 
     fn awaits_pipelines(&self) -> bool {
         match &self.backend {
-            PresentBackend::Sync(gpu_renderer) => gpu_renderer.pipelines.awaits_pipelines(),
+            PresentBackend::Sync(sync) => sync.renderer.pipelines.awaits_pipelines(),
             #[cfg(not(target_arch = "wasm32"))]
             PresentBackend::Threaded(handle) => {
                 let status = handle.status();

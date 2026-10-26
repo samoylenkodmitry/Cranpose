@@ -615,7 +615,6 @@ impl WgpuFrameGraphExecutor {
         self.upload_allocators.reset();
     }
 
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn begin<'a>(
         &'a mut self,

@@ -961,8 +961,13 @@ enum FrameRoot {
 enum OutputStep<'a> {
     /// Nothing: the frame rendered into the presentable image.
     None,
-    /// The output conversion into the view, from the bind group's source.
-    Convert(&'a wgpu::TextureView, &'a wgpu::BindGroup),
+    /// The output conversion into the view, from the bind group's source,
+    /// through the converter of `mode`.
+    Convert {
+        view: &'a wgpu::TextureView,
+        bind_group: &'a wgpu::BindGroup,
+        mode: OutputMode,
+    },
     /// A whole copy, between the composition target and an image that
     /// comes cleared.
     Copy {
@@ -1004,11 +1009,17 @@ impl FrameRoot {
             Self::Composition {
                 composition,
                 cleared: None,
-            } => output_view.map_or(OutputStep::None, |view| {
-                OutputStep::Convert(
+            } => output_view.map_or(OutputStep::None, |view| match screenshot_bind_group {
+                Some(bind_group) => OutputStep::Convert {
                     view,
-                    screenshot_bind_group.unwrap_or(&composition.output_bind_group),
-                )
+                    bind_group,
+                    mode: OutputMode::Screenshot,
+                },
+                None => OutputStep::Convert {
+                    view,
+                    bind_group: &composition.output_bind_group,
+                    mode: OutputMode::Display,
+                },
             }),
         }
     }
@@ -1164,7 +1175,6 @@ pub(crate) struct GpuRenderer {
     pub(crate) copy_free: UploadMode,
     /// Text runs the frame has drawn so far, cached or not.
     pub(crate) pass_scratch: crate::draw_pass::PassScratch,
-    frame_graph_executor: WgpuFrameGraphExecutor,
     pub(crate) stage_side_scratch: StageSideScratch,
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
@@ -1361,10 +1371,6 @@ impl GpuRenderer {
         let screenshot_converter =
             OutputConverter::new(&device, adapter_backend, wgpu::TextureFormat::Rgba8Unorm);
         let effects_ms = instant_ms(effects_started, Instant::now());
-        let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
-        frame_graph_executor.init_pass_timing(&device, &queue);
-        #[cfg(target_arch = "wasm32")]
-        frame_graph_executor.batch_queue_writes(adapter_backend == wgpu::Backend::BrowserWebGpu);
         let shape_shader = SharedShader::new(
             &device,
             adapter_backend,
@@ -1478,7 +1484,6 @@ impl GpuRenderer {
             images: ImageTextures::new(),
             copy_free,
             pass_scratch: crate::draw_pass::PassScratch::default(),
-            frame_graph_executor,
             stage_side_scratch: StageSideScratch::default(),
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
@@ -2044,7 +2049,7 @@ impl GpuRenderer {
         self.deferred_offscreen_releases.push(target);
     }
 
-    fn flush_deferred_offscreen_releases(&mut self) {
+    fn flush_deferred_offscreen_releases(&mut self, executor: &mut WgpuFrameGraphExecutor) {
         self.gates.end_frame(&mut self.layer_cache);
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
@@ -2052,14 +2057,12 @@ impl GpuRenderer {
         self.layer_cache.end_frame();
         for (transient, target) in self.layer_cache.take_released() {
             match transient {
-                Some(descriptor) => self
-                    .frame_graph_executor
-                    .return_cached_transient(descriptor, target),
+                Some(descriptor) => executor.return_cached_transient(descriptor, target),
                 None => self.effect_renderer.release_offscreen(target),
             }
         }
         self.effect_renderer.end_offscreen_frame();
-        self.frame_graph_executor.end_transient_frame();
+        executor.end_transient_frame();
         self.depth_targets.end_frame();
         self.scene_pass.end_frame();
         self.surface_atlas_sizes.end_frame();
@@ -2068,13 +2071,14 @@ impl GpuRenderer {
 impl GpuRenderer {
     pub(crate) fn render(
         &mut self,
-        width: u32,
-        height: u32,
+        submit: &mut FrameSubmit,
+        viewport: (u32, u32),
         packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
         output: FrameOutput<'_>,
     ) -> Result<(), String> {
+        let (width, height) = viewport;
         let FrameOutput {
             mode: output_mode,
             view: output_view,
@@ -2131,7 +2135,7 @@ impl GpuRenderer {
             })
         });
         let output = frame_root.output(output_view, screenshot_bind_group.as_ref());
-        let submitted = self.render_graph(root, packet, repaint, returns, output_mode, output);
+        let submitted = self.render_graph(submit, root, packet, repaint, returns, output);
         #[cfg(not(target_arch = "wasm32"))]
         self.effect_renderer
             .compiler()
@@ -2143,16 +2147,16 @@ impl GpuRenderer {
         if self.effect_renderer.take_skipped_draw() {
             self.pipelines.note_placeholder(&self.frame_stats);
         }
-        self.flush_deferred_offscreen_releases();
+        self.flush_deferred_offscreen_releases(&mut submit.executor);
         self.pass_scratch.glyph_instances.end_frame();
 
-        self.record_pool_sizes();
+        self.record_pool_sizes(&submit.executor);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.keep_window(plan, &submitted);
         let result = submitted.map(drop);
-        self.frame_graph_executor.reset_upload_allocators();
-        self.close_frame_stats();
+        submit.executor.reset_upload_allocators();
+        self.close_frame_stats(submit);
         let after_stats = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
             log::warn!(
@@ -2168,7 +2172,7 @@ impl GpuRenderer {
     }
 
     // Notes the sizes of the caches and pools the frame left.
-    fn record_pool_sizes(&self) {
+    fn record_pool_sizes(&self, executor: &WgpuFrameGraphExecutor) {
         self.frame_stats
             .layer_cache_size
             .set(self.layer_cache.len() as u32);
@@ -2178,12 +2182,12 @@ impl GpuRenderer {
         self.frame_stats.offscreen_pool_size.set(
             self.effect_renderer
                 .retained_offscreen_count()
-                .saturating_add(self.frame_graph_executor.retained_texture_count())
+                .saturating_add(executor.retained_texture_count())
                 .saturating_add(usize::from(self.composition_target.is_some())) as u32,
         );
         self.frame_stats.offscreen_pool_bytes.set(
             (self.effect_renderer.retained_offscreen_bytes() as u64)
-                .saturating_add(self.frame_graph_executor.retained_texture_bytes())
+                .saturating_add(executor.retained_texture_bytes())
                 .saturating_add(self.composition_target.as_ref().map_or(0, |target| {
                     u64::from(target.target.width)
                         .saturating_mul(u64::from(target.target.height))
@@ -2200,10 +2204,9 @@ impl GpuRenderer {
 
     // Takes the frame's stats, logs and prints them as asked, and resets
     // them for the next frame.
-    fn close_frame_stats(&mut self) {
+    fn close_frame_stats(&mut self, submit: &FrameSubmit) {
         self.history.close(&self.frame_stats, &self.device);
-        self.frame_graph_executor
-            .end_pass_timing_frame(&self.device, &self.queue);
+        submit.end_pass_timing_frame();
         self.frame_stats.reset();
     }
 
@@ -2238,10 +2241,6 @@ impl GpuRenderer {
 
     pub(crate) fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
         self.history.last()
-    }
-
-    pub(crate) fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
-        self.frame_graph_executor.pass_timing_report()
     }
 
     pub(crate) fn needs_frame_warmup(&self) -> bool {
@@ -2493,12 +2492,13 @@ impl GpuRenderer {
     }
     pub(crate) fn render_to_rgba_pixels(
         &mut self,
-        width: u32,
-        height: u32,
+        submit: &mut FrameSubmit,
+        viewport: (u32, u32),
         packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
     ) -> Result<Vec<u8>, String> {
+        let (width, height) = viewport;
         if width == 0 || height == 0 {
             return Err("Screenshot size must be non-zero".to_string());
         }
@@ -2519,18 +2519,19 @@ impl GpuRenderer {
             texture: None,
             image: ImageContent::Untracked,
         };
-        self.render(width, height, packet, surface_epoch, returns, output)?;
+        self.render(submit, viewport, packet, surface_epoch, returns, output)?;
         if returns.outcome != PresentOutcome::Presented {
             return Err(format!(
                 "Screenshot rendering did not complete: {:?}",
                 returns.outcome
             ));
         }
-        self.read_screenshot_pixels(&output_texture, errors_before)
+        self.read_screenshot_pixels(submit, &output_texture, errors_before)
     }
 
     fn read_screenshot_pixels(
         &mut self,
+        submit: &mut FrameSubmit,
         output_texture: &wgpu::Texture,
         errors_before: u64,
     ) -> Result<Vec<u8>, String> {
@@ -2551,8 +2552,6 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        let device = Arc::clone(&self.device);
-        let queue = Arc::clone(&self.queue);
         let mut graph = WgpuFrameGraph::new(Some("Screenshot Copy Encoder"));
         let source = graph.import_surface("screenshot-copy-source");
         graph.add_fallible_command_pass(Some("Screenshot Copy Pass"), &[source], &[], |context| {
@@ -2579,9 +2578,7 @@ impl GpuRenderer {
             );
             Ok(())
         });
-        let mut executor = std::mem::take(&mut self.frame_graph_executor);
-        let execution = executor.execute_recorded_graph(&device, &queue, graph);
-        self.frame_graph_executor = executor;
+        let execution = submit.execute(graph);
         self.recall_frame_uploads();
         let execution = execution.map_err(|error| error.to_string())?;
         let submission_index = execution.submission;
@@ -2638,19 +2635,15 @@ impl GpuRenderer {
     /// Records and submits the frame: whether it submitted anything.
     fn render_graph(
         &mut self,
+        submit: &mut FrameSubmit,
         root_target: &Rc<OffscreenTarget>,
         packet: FramePacket,
         repaint: Repaint,
         returns: &mut RenderReturns,
-        output_mode: OutputMode,
         output: OutputStep<'_>,
     ) -> Result<bool, String> {
         #[cfg(target_arch = "wasm32")]
-        let (device, queue, graph_start) = (
-            Arc::clone(&self.device),
-            Arc::clone(&self.queue),
-            Instant::now(),
-        );
+        let graph_start = Instant::now();
         let FramePacket {
             root,
             overlay,
@@ -2668,22 +2661,14 @@ impl GpuRenderer {
         };
 
         #[cfg(not(target_arch = "wasm32"))]
-        let (result, submitted) = self.execute_frame_graph(draw, &page, output_mode, output);
+        let (result, submitted) = self.execute_frame_graph(submit, draw, &page, output);
 
         #[cfg(target_arch = "wasm32")]
         let (result, submitted) = {
-            let mut executor = std::mem::take(&mut self.frame_graph_executor);
             let (result, execution) = {
-                let mut frame_encoder =
-                    executor.begin(&device, &queue, Some("Renderer Frame Encoder"));
+                let mut frame_encoder = submit.begin(Some("Renderer Frame Encoder"));
                 let initial_pass_count = frame_encoder.recorded_pass_count();
-                let result = self.encode_frame(
-                    &mut frame_encoder,
-                    draw,
-                    Rc::clone(&page),
-                    output_mode,
-                    output,
-                );
+                let result = self.encode_frame(&mut frame_encoder, draw, Rc::clone(&page), output);
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {
                         Some(frame_encoder.finish())
@@ -2693,7 +2678,6 @@ impl GpuRenderer {
                 (result, execution)
             };
             let after_execute = Instant::now();
-            self.frame_graph_executor = executor;
             if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
                 log::warn!("[wgpu-render-stage:graph] total_ms={total_ms:.2}",);
             }
@@ -2725,29 +2709,23 @@ impl GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     fn execute_frame_graph(
         &mut self,
+        submit: &mut FrameSubmit,
         draw: FrameDraw<'_>,
         page: &Rc<OffscreenTarget>,
-        output_mode: OutputMode,
         output: OutputStep<'_>,
     ) -> (Result<(), String>, bool) {
-        let device = Arc::clone(&self.device);
-        let queue = Arc::clone(&self.queue);
         let graph_start = Instant::now();
-        let mut executor = std::mem::take(&mut self.frame_graph_executor);
         let mut frame_graph = WgpuFrameGraph::new(Some("Renderer Frame Graph"));
         let surface = frame_graph.import_surface("renderer-surface");
         frame_graph.add_fallible_recorded_command_pass(
             Some("Renderer Frame Pass"),
             &[],
             &[surface],
-            |frame_encoder| {
-                self.encode_frame(frame_encoder, draw, Rc::clone(page), output_mode, output)
-            },
+            |frame_encoder| self.encode_frame(frame_encoder, draw, Rc::clone(page), output),
         );
         let after_build = Instant::now();
-        let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
+        let execution = submit.execute(frame_graph);
         let after_execute = Instant::now();
-        self.frame_graph_executor = executor;
         self.recall_frame_uploads();
         if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
             log::warn!(
@@ -2776,7 +2754,6 @@ impl GpuRenderer {
         recorder: &mut C,
         draw: FrameDraw<'_>,
         page: Rc<OffscreenTarget>,
-        output_mode: OutputMode,
         output: OutputStep<'_>,
     ) -> Result<(), String> {
         FrameExecutor::new(self, recorder).render_frame(
@@ -2789,8 +2766,12 @@ impl GpuRenderer {
         )?;
         match output {
             OutputStep::None => {}
-            OutputStep::Convert(output_view, bind_group) => {
-                match output_mode {
+            OutputStep::Convert {
+                view: output_view,
+                bind_group,
+                mode,
+            } => {
+                match mode {
                     OutputMode::Display => &self.output_converter,
                     OutputMode::Screenshot => &self.screenshot_converter,
                 }
@@ -3948,9 +3929,11 @@ mod pass_depth;
 use depth_targets::DepthTargets;
 pub(crate) use pass_depth::PassDepth;
 mod frame_history;
+mod frame_submit;
 mod frame_uploads;
 use frame_history::FrameHistory;
 pub use frame_history::frames_presented;
+pub(crate) use frame_submit::FrameSubmit;
 pub(crate) use frame_uploads::{DrawParts, FrameUploads};
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
