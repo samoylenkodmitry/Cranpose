@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::{Brush, Color, Point, Rect};
+use cranpose_ui_graphics::{BrushSampler, Color, Point, whole};
 
 #[doc(hidden)]
 pub fn color_to_rgba(color: Color) -> [f32; 4] {
@@ -63,17 +63,25 @@ const LEVEL: f32 = 1.0 / 255.0;
 /// column N reports column N-1. The pattern is a phase as much as a matrix,
 /// so the phase is part of what has to match.
 pub fn gradient_dither_offset(x: f32, y: f32) -> f32 {
-    let px = x.floor().max(0.0) as u32 + 1;
-    let py = y.floor().max(0.0) as u32 + 1;
-    let m = ((py & 1) << 3) | ((px & 1) << 2) | (py & 2) | ((px & 2) >> 1);
+    dither_offset(dither_cell(x), dither_cell(y))
+}
+
+// The column or row of the pattern a coordinate falls in, of which only
+// the two low bits count.
+fn dither_cell(coordinate: f32) -> u32 {
+    whole::floor(coordinate).max(0.0) as u32 + 1
+}
+
+fn dither_offset(column: u32, row: u32) -> f32 {
+    let m = ((row & 1) << 3) | ((column & 1) << 2) | (row & 2) | ((column & 2) >> 1);
     m as f32 * (1.0 / 16.0) - (15.0 / 32.0)
 }
 
-fn dither_gradient(rgba: [f32; 4], x: f32, y: f32) -> [f32; 4] {
+fn dither_by(rgba: [f32; 4], offset: f32) -> [f32; 4] {
     if rgba[3] <= 0.0 {
         return rgba;
     }
-    let offset = gradient_dither_offset(x, y) * LEVEL;
+    let offset = offset * LEVEL;
     [
         (rgba[0] + offset).clamp(0.0, 1.0),
         (rgba[1] + offset).clamp(0.0, 1.0),
@@ -82,22 +90,104 @@ fn dither_gradient(rgba: [f32; 4], x: f32, y: f32) -> [f32; 4] {
     ]
 }
 
-/// The brush's color at `(x, y)` in `rect`, a gradient's dithered from
+/// The brush's color at `(x, y)`, a gradient's dithered from
 /// `dither_origin` as Skia dithers it.
 #[doc(hidden)]
 pub fn sample_brush_rgba(
-    brush: &Brush,
-    rect: Rect,
+    brush: &BrushSampler<'_>,
     x: f32,
     y: f32,
     dither_origin: Point,
 ) -> [f32; 4] {
-    let rgba = color_to_rgba(brush.color_at(rect, Point::new(x, y)));
-    match brush {
-        Brush::Solid(_) => rgba,
-        _ => dither_gradient(rgba, x - dither_origin.x, y - dither_origin.y),
+    let rgba = color_to_rgba(brush.color_at(Point::new(x, y)));
+    if brush.is_solid() {
+        return rgba;
+    }
+    dither_by(
+        rgba,
+        gradient_dither_offset(x - dither_origin.x, y - dither_origin.y),
+    )
+}
+
+/// The colors a brush gives the pixels of one row or one column along which
+/// it does not change: what [`sample_brush_rgba`] gives each, worked out
+/// once for each of the four cells of the dither pattern along the line.
+#[doc(hidden)]
+pub struct DitheredLine {
+    by_cell: [[f32; 4]; 4],
+}
+
+impl DitheredLine {
+    /// The row at `y` of `brush`, which [`BrushSampler::has_uniform_rows`],
+    /// sampled at its pixel centre `x`: its colors by the column of the
+    /// pattern a pixel falls in.
+    pub fn row(brush: &BrushSampler<'_>, x: f32, y: f32, dither_origin: Point) -> Self {
+        let row = dither_cell(y - dither_origin.y);
+        Self::dithered(brush, Point::new(x, y), |column| dither_offset(column, row))
+    }
+
+    /// The column at `x` of `brush`, which
+    /// [`BrushSampler::has_uniform_columns`], sampled at its pixel centre
+    /// `y`: its colors by the row of the pattern a pixel falls in.
+    pub fn column(brush: &BrushSampler<'_>, x: f32, y: f32, dither_origin: Point) -> Self {
+        let column = dither_cell(x - dither_origin.x);
+        Self::dithered(brush, Point::new(x, y), |row| dither_offset(column, row))
+    }
+
+    fn dithered(brush: &BrushSampler<'_>, at: Point, offset: impl Fn(u32) -> f32) -> Self {
+        let rgba = color_to_rgba(brush.color_at(at));
+        if brush.is_solid() {
+            return Self { by_cell: [rgba; 4] };
+        }
+        Self {
+            by_cell: [0, 1, 2, 3].map(|cell| dither_by(rgba, offset(cell))),
+        }
+    }
+
+    /// The four colors, by the cell of the pattern a pixel falls in.
+    pub fn colors(&self) -> &[[f32; 4]; 4] {
+        &self.by_cell
     }
 }
+
+/// An axis of the dither pattern measured from `origin`: which of its four
+/// cells along the axis each pixel falls in.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct DitherAxis {
+    origin: f32,
+    // The origin as a whole number, when it is one that a pixel's centre
+    // subtracts from exactly.
+    whole_origin: Option<i32>,
+}
+
+impl DitherAxis {
+    pub fn new(origin: f32) -> Self {
+        Self {
+            origin,
+            whole_origin: (origin.fract() == 0.0 && origin.abs() < WHOLE_COORDINATES)
+                .then_some(origin as i32),
+        }
+    }
+
+    /// The cell of the pixel at `pixel`, which [`DitheredLine::colors`]
+    /// are indexed by.
+    pub fn cell(self, pixel: i32) -> usize {
+        // A whole origin puts the centre of the pixel at
+        // `pixel - origin + 0.5`, exactly, so its cell is
+        // `max(pixel - origin, 0) + 1` without the float steps.
+        let cell = match self.whole_origin {
+            Some(origin) if pixel.abs() < WHOLE_COORDINATES as i32 => {
+                (pixel - origin).max(0) as u32 + 1
+            }
+            _ => dither_cell(pixel as f32 + 0.5 - self.origin),
+        };
+        (cell & 3) as usize
+    }
+}
+
+// Below this magnitude a pixel's centre and a whole origin subtract exactly.
+const WHOLE_COORDINATES: f32 = 4_194_304.0;
 
 #[cfg(test)]
 #[path = "tests/brush_sampling_tests.rs"]

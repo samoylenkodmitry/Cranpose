@@ -1,0 +1,54 @@
+[package]
+name = "slint-bench"
+version = "0.1.0"
+edition = "2024"
+description = "The dashboard of the Cranpose ESP32 benchmarks in Slint"
+# Slint's license for embedded devices; this program is not part of Cranpose
+# and is never published.
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "slint-bench"
+harness = false
+
+[dependencies]
+esp-idf-svc = "0.53"
+log = "0.4"
+# Slint's settings for microcontrollers: without its std feature, which
+# would look for system fonts through memory maps ESP-IDF does not have, and
+# with its Path drawing, which that leaves out otherwise.
+slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "unsafe-single-threaded", "libm", "renderer-software", "software-renderer-path"] }
+
+[build-dependencies]
+embuild = "0.33.5"
+slint-build = "=1.18.1"
+
+# The display of the benchmark boards, which the LVGL benchmark draws
+# through too.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["../panel"]
+
+[workspace]
+
+# Slint 1.18.1 calls f32::rem_euclid in FittedPath::sample_at, which needs
+# its std feature. scripts/esp32/board_run.py unpacks the crate here with
+# that one call made through num_traits::Euclid.
+[patch.crates-io]
+i-slint-core = { path = "target/i-slint-core-1.18.1" }
+
+# As the Cranpose demo builds (see its Cargo.toml), but without LTO: built
+# with fat or thin LTO, Slint stops on an integer division by zero in its
+# gradient code on the ESP32-S3, which the same code does not do on the
+# desktop.
+[profile.release]
+opt-level = 2
+lto = false
+codegen-units = 1
+
+[profile.release.build-override]
+strip = false
+
+# build.rs passes on esp-idf-sys's cfgs, which name the chip.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(esp_idf_idf_target_esp32s3)"] }

@@ -44,7 +44,10 @@ def main():
                         default=HERE.parent.parent / "apps/esp32-demo/partitions.csv")
     parser.add_argument("--skip", type=int, default=60)
     parser.add_argument("--frames", type=int, default=120)
-    parser.add_argument("--timeout", type=float, default=60.0)
+    # Under the cache plugin a frame of a busy screen takes seconds of the
+    # host's time, more while it builds something else: the timeout only
+    # stops a run that hangs.
+    parser.add_argument("--timeout", type=float, default=900.0)
     args = parser.parse_args()
 
     qemu = PLUGINS / "bin/qemu-system-xtensa"

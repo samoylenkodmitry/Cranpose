@@ -1,6 +1,7 @@
 //! Brush definitions for painting (solid colors, gradients, etc.)
 
 use crate::{
+    brush_sampler::BrushSampler,
     color::Color,
     geometry::{Point, Rect},
     render_effect::TileMode,
@@ -300,126 +301,10 @@ impl Brush {
     /// any dithering. Gradient coordinates are offsets from `rect`'s
     /// top-left corner, and an infinite one is `rect`'s far edge. Where a
     /// [`TileMode::Decal`] gradient paints nothing the color is transparent.
+    /// [`BrushSampler`] gives the same colors for many points of one rect.
     pub fn color_at(&self, rect: Rect, point: Point) -> Color {
-        let (x, y) = (point.x, point.y);
-        let (colors, stops, t, tile_mode) = match self {
-            Self::Solid(color) => return *color,
-            Self::LinearGradient {
-                colors,
-                stops,
-                start,
-                end,
-                tile_mode,
-            } => {
-                let sx = resolve_gradient_point(rect.x, rect.width, start.x);
-                let sy = resolve_gradient_point(rect.y, rect.height, start.y);
-                let ex = resolve_gradient_point(rect.x, rect.width, end.x);
-                let ey = resolve_gradient_point(rect.y, rect.height, end.y);
-                let (dx, dy) = (ex - sx, ey - sy);
-                let denom = (dx * dx + dy * dy).max(f32::EPSILON);
-                let t = ((x - sx) * dx + (y - sy) * dy) / denom;
-                (colors, stops, t, *tile_mode)
-            }
-            Self::RadialGradient {
-                colors,
-                stops,
-                center,
-                radius,
-                tile_mode,
-            } => {
-                let dx = x - (rect.x + center.x);
-                let dy = y - (rect.y + center.y);
-                let t = (dx * dx + dy * dy).sqrt() / radius.max(f32::EPSILON);
-                (colors, stops, t, *tile_mode)
-            }
-            Self::SweepGradient {
-                colors,
-                stops,
-                center,
-            } => {
-                let angle = (y - (rect.y + center.y)).atan2(x - (rect.x + center.x));
-                // From 3 o'clock, clockwise, as Compose's sweep.
-                let t = (angle / std::f32::consts::TAU).rem_euclid(1.0);
-                (colors, stops, t, TileMode::Clamp)
-            }
-        };
-        match tiled_gradient_t(t, tile_mode) {
-            Some(t) => interpolate_colors(colors, stops.as_deref(), t),
-            None => TRANSPARENT,
-        }
+        BrushSampler::new(self, rect).color_at(point)
     }
-}
-
-const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
-
-fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
-    if value.is_finite() {
-        origin + value
-    } else if value.is_sign_positive() {
-        origin + extent
-    } else {
-        origin
-    }
-}
-
-/// Where `t` lands in the gradient's one span under `tile_mode`; `None`
-/// past a decal gradient's ends.
-fn tiled_gradient_t(t: f32, tile_mode: TileMode) -> Option<f32> {
-    match tile_mode {
-        TileMode::Clamp => Some(t.clamp(0.0, 1.0)),
-        TileMode::Decal => (0.0..=1.0).contains(&t).then_some(t),
-        TileMode::Repeated => Some(t.rem_euclid(1.0)),
-        TileMode::Mirror => {
-            let wrapped = t.rem_euclid(2.0);
-            Some(if wrapped <= 1.0 {
-                wrapped
-            } else {
-                2.0 - wrapped
-            })
-        }
-    }
-}
-
-fn interpolate_colors(colors: &[Color], stops: Option<&[f32]>, t: f32) -> Color {
-    let (Some(&first), Some(&last)) = (colors.first(), colors.last()) else {
-        return TRANSPARENT;
-    };
-    if colors.len() == 1 {
-        return first;
-    }
-    let clamped = t.clamp(0.0, 1.0);
-    if let Some(stops) = stops.filter(|stops| stops.len() == colors.len()) {
-        if stops.first().is_some_and(|&start| clamped <= start) {
-            return first;
-        }
-        for (pair, span) in colors.windows(2).zip(stops.windows(2)) {
-            if clamped <= span[1] {
-                let width = (span[1] - span[0]).max(f32::EPSILON);
-                return lerp_color(
-                    pair[0],
-                    pair[1],
-                    ((clamped - span[0]) / width).clamp(0.0, 1.0),
-                );
-            }
-        }
-        return last;
-    }
-    let scaled = clamped * (colors.len() - 1) as f32;
-    let index = scaled.floor() as usize;
-    match colors.get(index..index + 2) {
-        Some(&[from, to]) => lerp_color(from, to, scaled - index as f32),
-        _ => last,
-    }
-}
-
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    let lerp = |start: f32, end: f32| start + (end - start) * t;
-    Color(
-        lerp(a.0, b.0),
-        lerp(a.1, b.1),
-        lerp(a.2, b.2),
-        lerp(a.3, b.3),
-    )
 }
 
 #[cfg(test)]

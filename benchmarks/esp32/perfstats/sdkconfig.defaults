@@ -1,0 +1,4 @@
+# The idle task's run time, which perfstats reads, counted in microseconds of
+# esp_timer.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y

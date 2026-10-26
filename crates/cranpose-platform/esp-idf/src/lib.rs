@@ -292,11 +292,12 @@ impl Screen<'_, '_> {
             return Ok(());
         }
         let updated = Instant::now();
-        self.presenter.present(self.framebuffer, &mut self.panel)?;
+        let sent = self.presenter.present(self.framebuffer, &mut self.panel)?;
         let presented = Instant::now();
         let phases = FramePhases {
             update: updated.duration_since(now),
             present: presented.duration_since(updated),
+            sent,
         };
         FrameStats::record_into(&mut self.stats, self.start, phases, presented);
         Ok(())
@@ -395,6 +396,8 @@ const STATS_WINDOW: Duration = Duration::from_secs(5);
 struct FramePhases {
     update: Duration,
     present: Duration,
+    // The bytes the frame sent to the panel.
+    sent: usize,
 }
 
 struct FrameStats {
@@ -403,6 +406,7 @@ struct FrameStats {
     update: Duration,
     present: Duration,
     slowest: Duration,
+    sent: usize,
 }
 
 impl FrameStats {
@@ -413,6 +417,7 @@ impl FrameStats {
             update: Duration::ZERO,
             present: Duration::ZERO,
             slowest: Duration::ZERO,
+            sent: 0,
         }
     }
 
@@ -442,6 +447,7 @@ impl FrameStats {
         self.frames += 1;
         self.update += phases.update;
         self.present += phases.present;
+        self.sent += phases.sent;
         self.slowest = self.slowest.max(phases.update + phases.present);
         let window = presented.duration_since(self.window_start);
         if window < STATS_WINDOW {
@@ -450,13 +456,15 @@ impl FrameStats {
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
         let memory = memory::MemoryReport::now();
         log::info!(
-            "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms; \
-             heap {} KB free, {} KB in one block, {} KB at least; stack {} bytes never used",
+            "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms, \
+             sent {:.1} KB a frame; heap {} KB free, {} KB in one block, {} KB at least; \
+             stack {} bytes never used",
             self.frames,
             window.as_secs_f32(),
             average(self.update),
             average(self.present),
             self.slowest.as_secs_f32() * 1000.0,
+            self.sent as f32 / 1024.0 / self.frames as f32,
             memory.heap_free / 1024,
             memory.heap_largest / 1024,
             memory.heap_lowest / 1024,

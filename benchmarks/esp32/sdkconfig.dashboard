@@ -1,0 +1,6 @@
+# The LVGL benchmark shows the dashboard in place of the demo's screen.
+CONFIG_BENCH_DASHBOARD=y
+# Its objects take more than LVGL's default 64 KB pool. The pool stays
+# LVGL's own: ESP-IDF's malloc takes a lock on every call, and LVGL
+# allocates its draw tasks all through a frame.
+CONFIG_LV_MEM_SIZE_KILOBYTES=112

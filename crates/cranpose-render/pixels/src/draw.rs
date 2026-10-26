@@ -4,7 +4,7 @@ use cranpose_render_common::text_measure::{
     fallback_text_metrics,
 };
 use cranpose_render_common::{
-    brush_sampling::{color_to_rgba, sample_brush_rgba},
+    brush_sampling::{DitherAxis, DitheredLine, color_to_rgba, sample_brush_rgba},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
@@ -12,18 +12,23 @@ use cranpose_render_common::{
     text_measure::SoftwareTextResources,
 };
 use cranpose_ui_graphics::{
-    ArcGeometry, BlendMode, Brush, CornerRadii, LineGeometry, Point, Rect, StrokeJoin, Trapezoid,
-    expand_rect, whole,
+    ArcGeometry, BlendMode, Brush, BrushSampler, CornerRadii, LineGeometry, Point, Rect,
+    StrokeJoin, Trapezoid, expand_rect, whole,
 };
 
 use crate::{
     pipeline,
-    scene::{ImageDraw, RasterScene, Scene, TextDraw},
-    style::point_in_resolved_rounded_rect,
+    scene::{RasterScene, Scene},
 };
 
+mod image;
+mod reach;
+mod row_runs;
 mod text;
 
+use image::{blit_image_between_pixels, draw_image, image_rect};
+use reach::text_bounds;
+use row_runs::{INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
 
@@ -113,6 +118,28 @@ pub(crate) struct ClipBounds {
     pub min_y: i32,
     pub max_x: i32,
     pub max_y: i32,
+}
+
+impl ClipBounds {
+    fn within(self, limit: i32) -> bool {
+        [self.min_x, self.min_y, self.max_x, self.max_y]
+            .iter()
+            .all(|edge| edge.abs() <= limit)
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.min_x < other.max_x
+            && other.min_x < self.max_x
+            && self.min_y < other.max_y
+            && other.min_y < self.max_y
+    }
+
+    fn holds(self, other: Self) -> bool {
+        self.min_x <= other.min_x
+            && self.min_y <= other.min_y
+            && self.max_x >= other.max_x
+            && self.max_y >= other.max_y
+    }
 }
 
 /// The whole pixels of `rect` cut to `clip` and to the target's window.
@@ -249,27 +276,35 @@ fn draw_raster_scene(
         width,
         height,
     };
-    draw_raster_window(&mut target, scene, diagnostics, text);
+    let mut reach = Vec::new();
+    scene.reach_into(target.window(), &mut reach);
+    draw_raster_window(&mut target, scene, &reach, diagnostics, text);
 }
 
+/// Draws the items of `scene` into `target`'s window. `reach` holds where
+/// each item of the scene's order can draw, as [`RasterScene::reach_into`]
+/// puts it: an item that cannot draw in the window is passed over.
 pub(crate) fn draw_raster_window(
     target: &mut Target,
     scene: &RasterScene,
+    reach: &[Option<ClipBounds>],
     diagnostics: &RenderDiagnostics,
     text: &TextRaster,
 ) {
     let window = target.window();
     // The topmost item that paints the whole window opaquely hides what
     // lies under it there: drawing starts with it.
-    let first = scene
-        .order
-        .iter()
-        .rposition(|&item| scene.covers_window(item, window));
+    let first = scene.order.iter().zip(reach).rposition(|(&item, bounds)| {
+        bounds.is_some_and(|bounds| bounds.holds(window)) && scene.covers_window(item, window)
+    });
     if first.is_none() {
         clear_frame(target.pixels);
     }
-    for &item in &scene.order[first.unwrap_or(0)..] {
-        draw_item(target, scene, item, diagnostics, text);
+    let first = first.unwrap_or(0);
+    for (&item, bounds) in scene.order[first..].iter().zip(&reach[first..]) {
+        if bounds.is_some_and(|bounds| bounds.overlaps(window)) {
+            draw_item(target, scene, item, diagnostics, text);
+        }
     }
 }
 
@@ -314,101 +349,6 @@ pub(crate) fn draw_item(
             }
         }
     }
-}
-
-impl RasterScene {
-    /// The pixels `item` can reach before its clip, for the items drawn into
-    /// a frame directly; text reaches what its rasterized image covers.
-    pub(crate) fn item_reach(&self, item: RenderItem) -> Option<Rect> {
-        match item {
-            RenderItem::Shape(index) => {
-                let placed = place_shape(&self.shapes[index])?;
-                Some(placed.coverage.reach(placed.rect))
-            }
-            RenderItem::Image(index) => Some(image_rect(&self.images[index])),
-            RenderItem::Shadow(index) => {
-                let draw = &self.shadows[index];
-                let snap = draw
-                    .snap_anchor
-                    .map(snap_delta_for_anchor)
-                    .unwrap_or_default();
-                Some(draw.shadow.bounds.translate(snap.x, snap.y))
-            }
-            RenderItem::Text(_) => None,
-        }
-    }
-
-    /// Whether `item` paints every pixel of `window` with opaque bytes: an
-    /// opaque solid fill whose clipped bounds hold the window and, when
-    /// rounded, whose shape holds the window's corner pixels, and so every
-    /// pixel between them, the shape being convex.
-    fn covers_window(&self, item: RenderItem, window: ClipBounds) -> bool {
-        let RenderItem::Shape(index) = item else {
-            return false;
-        };
-        let draw = &self.shapes[index];
-        if !paints_opaque(&draw.brush, draw.blend_mode) {
-            return false;
-        }
-        let Some(PlacedShape {
-            coverage: ShapeCoverage::Fill { rect, radii },
-            ..
-        }) = place_shape(draw)
-        else {
-            return false;
-        };
-        if clip_rect_to_window(rect, draw.clip, window) != Some(window) {
-            return false;
-        }
-        radii.is_none_or(|radii| {
-            let (left, right) = (window.min_x as f32 + 0.5, window.max_x as f32 - 0.5);
-            let (top, bottom) = (window.min_y as f32 + 0.5, window.max_y as f32 - 0.5);
-            // Between the corners on either axis, every pixel the rect covers
-            // lies inside it: no corner needs a test.
-            let between_columns = left >= rect.x + radii.top_left.max(radii.bottom_left)
-                && right <= rect.x + rect.width - radii.top_right.max(radii.bottom_right);
-            let between_rows = top >= rect.y + radii.top_left.max(radii.top_right)
-                && bottom <= rect.y + rect.height - radii.bottom_left.max(radii.bottom_right);
-            between_columns
-                || between_rows
-                || [(left, top), (right, top), (left, bottom), (right, bottom)]
-                    .into_iter()
-                    .all(|(x, y)| point_in_resolved_rounded_rect(x, y, rect, &radii))
-        })
-    }
-
-    pub(crate) fn item_bounds(&self, item: RenderItem, window: ClipBounds) -> Option<ClipBounds> {
-        match item {
-            RenderItem::Shape(index) => {
-                let draw = &self.shapes[index];
-                let placed = place_shape(draw)?;
-                clip_rect_to_window(placed.coverage.reach(placed.rect), draw.clip, window)
-            }
-            RenderItem::Image(index) => {
-                let draw = &self.images[index];
-                if draw.alpha <= 0.0 {
-                    return None;
-                }
-                clip_rect_to_window(image_rect(draw), draw.clip, window)
-            }
-            RenderItem::Shadow(index) => {
-                let (shadow, clip) = placed_shadow(&self.shadows[index]);
-                clip_rect_to_window(shadow.bounds, clip, window)
-            }
-            RenderItem::Text(index) => text_bounds(&self.texts[index], window),
-        }
-    }
-}
-
-/// The pixels of `window` that the rasterized `draw` can reach.
-fn text_bounds(draw: &TextDraw, window: ClipBounds) -> Option<ClipBounds> {
-    let raster_rect = text_raster_rect(draw)?;
-    let reach = Rect {
-        width: whole::ceil(raster_rect.width).max(1.0),
-        height: whole::ceil(raster_rect.height).max(1.0),
-        ..raster_rect
-    };
-    clip_rect_to_window(reach, draw.clip, window)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -535,23 +475,47 @@ fn draw_shape(
     };
     let whole_rows = |_: f32, min_x: i32, max_x: i32| [(min_x, max_x), NO_RUN];
     match &coverage {
-        ShapeCoverage::Line(line) => paint.paint(whole_rows, |point| line.coverage(point)),
-        ShapeCoverage::Trapezoid(trapezoid) => {
-            paint.paint(whole_rows, |point| trapezoid.coverage(point));
+        ShapeCoverage::Line(line) => {
+            let frame = line.frame();
+            paint.paint(whole_rows, |point| {
+                Coverage::of(line.coverage_in(&frame, point))
+            });
         }
-        ShapeCoverage::Arc(arc) => paint.paint(
-            |y, min_x, max_x| arc_row_runs(arc, y, min_x, max_x),
-            |point| shape_sdf::arc_coverage(point, arc),
-        ),
+        ShapeCoverage::Trapezoid(trapezoid) => {
+            paint.paint(whole_rows, |point| Coverage::of(trapezoid.coverage(point)));
+        }
+        ShapeCoverage::Arc(arc) => {
+            let band = shape_sdf::ArcBand::new(arc);
+            paint.paint(
+                |y, min_x, max_x| arc_row_runs(arc, y, min_x, max_x),
+                |point| Coverage::of_distance(band.distance(point)),
+            );
+        }
         &ShapeCoverage::Stroke {
             rect,
             radii,
             half_width,
             join,
-        } => paint.paint(
-            |y, min_x, max_x| stroke_row_runs(rect, radii, half_width, join, y, min_x, max_x),
-            |point| shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join),
-        ),
+        } => {
+            let runs =
+                |y, min_x, max_x| stroke_row_runs(rect, radii, half_width, join, y, min_x, max_x);
+            // With one radius at every corner the distance is the exact one
+            // to a rounded box's band; corners of different radii meet
+            // where the distance can step.
+            if radii.is_none_or(|radii| radii == CornerRadii::uniform(radii.top_left)) {
+                paint.paint(runs, |point| {
+                    Coverage::of_distance(shape_sdf::stroked_rect_distance(
+                        point, rect, radii, half_width, join,
+                    ))
+                });
+            } else {
+                paint.paint(runs, |point| {
+                    Coverage::of(shape_sdf::stroked_rect_coverage(
+                        point, rect, radii, half_width, join,
+                    ))
+                });
+            }
+        }
         ShapeCoverage::Fill {
             rect,
             radii: Some(radii),
@@ -591,14 +555,114 @@ impl ShapeRows<'_, '_> {
                     }
                 }
             }
-            None => self.paint(runs, |_| 1.0),
+            None => {
+                let brush = BrushSampler::new(&self.draw.brush, self.rect);
+                if brush.has_uniform_rows() {
+                    self.fill_uniform_rows(runs);
+                } else if brush.has_uniform_columns()
+                    && brush.is_opaque()
+                    && self.draw.blend_mode == BlendMode::SrcOver
+                {
+                    self.fill_uniform_columns(runs);
+                } else {
+                    self.paint(runs, |_| Coverage::of(1.0));
+                }
+            }
         }
     }
 
-    /// Paints the pixels of each row's `runs` by their `coverage`. Out of
-    /// line, as [`draw_shadow`] is.
+    // Paints a fill whose brush gives every pixel of a row one color, such
+    // as a gradient that runs straight down: the pixels [`Self::paint`]
+    // paints, with each row's colors worked out once for the four columns
+    // of the dither pattern instead of once a pixel.
     #[inline(never)]
-    fn paint(self, runs: impl Fn(f32, i32, i32) -> RowRuns, coverage: impl Fn(Point) -> f32) {
+    fn fill_uniform_rows(self, runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        let Self {
+            target,
+            draw,
+            rect,
+            clip_bounds,
+            dither_origin,
+            diagnostics,
+            ..
+        } = self;
+        let brush = BrushSampler::new(&draw.brush, rect);
+        let columns = DitherAxis::new(dither_origin.x);
+        for py in clip_bounds.min_y..clip_bounds.max_y {
+            let center_y = py as f32 + 0.5;
+            let row_runs = runs(center_y, clip_bounds.min_x, clip_bounds.max_x);
+            let Some(&(first, _)) = row_runs.iter().find(|(start, end)| start < end) else {
+                continue;
+            };
+            let row = DitheredLine::row(&brush, first as f32 + 0.5, center_y, dither_origin);
+            let colors = row.colors();
+            let bytes = colors.map(|color| {
+                (draw.blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
+                    .then(|| opaque_bytes(color))
+            });
+            for (start, end) in row_runs {
+                for (px, dst) in (start..).zip(target.row(py, start, end)) {
+                    let cell = columns.cell(px);
+                    match bytes[cell] {
+                        Some(bytes) => *dst = bytes,
+                        None if colors[cell][3] > 0.0 => {
+                            blend_pixel(dst, colors[cell], draw.blend_mode, diagnostics);
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Paints a fill whose opaque brush gives every pixel of a column one
+    // color, such as a gradient that runs straight across: the pixels
+    // [`Self::paint`] paints, with each column's bytes worked out once for
+    // the four rows of the dither pattern instead of once a pixel.
+    #[inline(never)]
+    fn fill_uniform_columns(self, runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        let Self {
+            target,
+            draw,
+            rect,
+            clip_bounds,
+            dither_origin,
+            ..
+        } = self;
+        let brush = BrushSampler::new(&draw.brush, rect);
+        let rows = DitherAxis::new(dither_origin.y);
+        let top = clip_bounds.min_y as f32 + 0.5;
+        let mut band = [[[0u8; 4]; 4]; COLUMN_BAND];
+        let mut left = clip_bounds.min_x;
+        while left < clip_bounds.max_x {
+            let right = left
+                .saturating_add(COLUMN_BAND as i32)
+                .min(clip_bounds.max_x);
+            for (bytes, px) in band.iter_mut().zip(left..right) {
+                let column = DitheredLine::column(&brush, px as f32 + 0.5, top, dither_origin);
+                *bytes = column.colors().map(opaque_bytes);
+            }
+            for py in clip_bounds.min_y..clip_bounds.max_y {
+                let cell = rows.cell(py);
+                for (start, end) in runs(py as f32 + 0.5, left, right) {
+                    if start >= end {
+                        continue;
+                    }
+                    let first = (start - left) as usize;
+                    for (dst, bytes) in target.row(py, start, end).iter_mut().zip(&band[first..]) {
+                        *dst = bytes[cell];
+                    }
+                }
+            }
+            left = right;
+        }
+    }
+
+    /// Paints the pixels of each row's `runs` by their `coverage`, which
+    /// is not asked again for the pixels a coverage settles. Out of line,
+    /// as [`draw_shadow`] is.
+    #[inline(never)]
+    fn paint(self, runs: impl Fn(f32, i32, i32) -> RowRuns, coverage: impl Fn(Point) -> Coverage) {
         let Self {
             target,
             draw,
@@ -608,12 +672,24 @@ impl ShapeRows<'_, '_> {
             opaque,
             diagnostics,
         } = self;
+        let brush = BrushSampler::new(&draw.brush, rect);
+        let settles = clip_bounds.within(SETTLED_COORDINATES);
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
             for (start, end) in runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
+                let mut settled = Coverage::of(0.0);
                 for (px, dst) in (start..).zip(target.row(py, start, end)) {
                     let center_x = px as f32 + 0.5;
-                    let coverage = coverage(Point::new(center_x, center_y));
+                    let coverage = if settled.next > 0 {
+                        settled.next -= 1;
+                        settled.value
+                    } else {
+                        settled = coverage(Point::new(center_x, center_y));
+                        if !settles {
+                            settled.next = 0;
+                        }
+                        settled.value
+                    };
                     if coverage <= 0.0 {
                         continue;
                     }
@@ -624,8 +700,7 @@ impl ShapeRows<'_, '_> {
                         continue;
                     }
 
-                    let mut sample =
-                        sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
+                    let mut sample = sample_brush_rgba(&brush, center_x, center_y, dither_origin);
                     sample[3] *= coverage;
                     if sample[3] <= 0.0 {
                         continue;
@@ -637,168 +712,64 @@ impl ShapeRows<'_, '_> {
     }
 }
 
+// A pixel's coverage, and how many pixels after it along the row take the
+// same, which `ShapeRows::paint` then does not work out.
+#[derive(Clone, Copy)]
+struct Coverage {
+    value: f32,
+    next: u32,
+}
+
+impl Coverage {
+    fn of(value: f32) -> Self {
+        Self { value, next: 0 }
+    }
+
+    // The coverage of a pixel at `distance` from a shape's edge, where the
+    // distance changes by at most one from pixel to pixel, as an exact
+    // distance does. Inside by more than half a pixel the coverage is 1,
+    // outside by as much 0, and a distance that far in or out stays there for
+    // as many whole pixels as it reaches past that half pixel. The margin
+    // keeps the float error of the distance, far smaller, from settling a
+    // pixel the distance itself would not.
+    fn of_distance(distance: f32) -> Self {
+        let value = shape_sdf::coverage_for_distance(distance);
+        let reach = if distance <= -0.5 - SETTLE_MARGIN {
+            -0.5 - SETTLE_MARGIN - distance
+        } else if distance >= 0.5 + SETTLE_MARGIN {
+            distance - 0.5 - SETTLE_MARGIN
+        } else {
+            0.0
+        };
+        Self {
+            value,
+            next: if distance.is_finite() {
+                reach as u32
+            } else {
+                0
+            },
+        }
+    }
+}
+
+// Far more than the rounding of a distance between points of a window of up
+// to `SETTLED_COORDINATES` pixels a side.
+const SETTLE_MARGIN: f32 = 1.0 / 32.0;
+const SETTLED_COORDINATES: i32 = 16_384;
+
 /// The bytes an opaque solid colour leaves on a pixel it covers fully,
 /// whatever was there: what `blend_pixel` works out for it.
 fn opaque_solid_bytes(brush: &Brush, blend_mode: BlendMode) -> Option<[u8; 4]> {
     let Brush::Solid(color) = brush else {
         return None;
     };
-    paints_opaque(brush, blend_mode).then(|| {
-        let rgba = color_to_rgba(*color);
-        [
-            whole::round(rgba[0] * 255.0) as u8,
-            whole::round(rgba[1] * 255.0) as u8,
-            whole::round(rgba[2] * 255.0) as u8,
-            255,
-        ]
-    })
+    paints_opaque(brush, blend_mode).then(|| opaque_bytes(color_to_rgba(*color)))
 }
 
 /// Whether [`opaque_solid_bytes`] has bytes for `brush` under `blend_mode`,
 /// without working them out.
 fn paints_opaque(brush: &Brush, blend_mode: BlendMode) -> bool {
     blend_mode == BlendMode::SrcOver && matches!(brush, Brush::Solid(color) if color.3 >= 1.0)
-}
-
-/// How far from a band's edge a pixel centre still takes ink: the
-/// antialiasing reaches half a pixel, and the rest is room for the rounding
-/// in the distance functions.
-const INK_REACH: f32 = 0.5 + 1.0 / 64.0;
-
-/// The pixels of one row worth testing, as two runs `start..end`: the band on
-/// either side of a hole. A run with `start >= end` is empty.
-type RowRuns = [(i32, i32); 2];
-
-const NO_RUN: (i32, i32) = (0, 0);
-
-/// The pixels whose centres lie within `half` of `centre`, cut to
-/// `min..max`.
-fn run_within(centre: f32, half: f32, min: i32, max: i32) -> (i32, i32) {
-    let start = (whole::ceil(centre - half - 0.5) as i32).max(min);
-    let end = (whole::floor(centre + half - 0.5) as i32 + 1).min(max);
-    (start, end)
-}
-
-/// `run` without the pixels whose centres lie in `from..=to`.
-fn runs_around(run: (i32, i32), from: f32, to: f32) -> RowRuns {
-    let first = whole::ceil(from - 0.5) as i32;
-    let last = whole::floor(to - 0.5) as i32;
-    if first > last {
-        return [run, NO_RUN];
-    }
-    [(run.0, run.1.min(first)), (run.0.max(last + 1), run.1)]
-}
-
-/// The row of an arc that can take ink. Every point of the band, caps
-/// included, lies between the inner and the outer radius, so the row stops at
-/// the outer circle and skips the inner one.
-fn arc_row_runs(arc: &ArcGeometry, y: f32, min_x: i32, max_x: i32) -> RowRuns {
-    let dy = y - arc.center.y;
-    let outer = arc.outer_radius + INK_REACH;
-    let reach = outer * outer - dy * dy;
-    if reach.is_nan() || reach <= 0.0 {
-        return [NO_RUN, NO_RUN];
-    }
-    let run = run_within(arc.center.x, reach.sqrt(), min_x, max_x);
-    let inner = arc.inner_radius - INK_REACH;
-    let hole = inner * inner - dy * dy;
-    if inner <= 0.0 || hole.is_nan() || hole <= 0.0 {
-        return [run, NO_RUN];
-    }
-    let hole = hole.sqrt();
-    runs_around(run, arc.center.x - hole, arc.center.x + hole)
-}
-
-/// The row of a stroked rounded rect that can take ink: inside the outer edge
-/// grown by `INK_REACH`, and outside the part of the hole that lies at least
-/// `INK_REACH` inside the inner edge. Both edges are the rounded boxes
-/// `shape_sdf::sdf_stroked_rounded_rect` measures, taken on each side of the
-/// centre with that side's corner radius.
-fn stroke_row_runs(
-    rect: Rect,
-    radii: Option<CornerRadii>,
-    half_width: f32,
-    join: StrokeJoin,
-    y: f32,
-    min_x: i32,
-    max_x: i32,
-) -> RowRuns {
-    let half_width = half_width.max(0.0);
-    let half_size = (rect.width * 0.5, rect.height * 0.5);
-    let geometry = (
-        (half_size.0 - half_width).max(0.0),
-        (half_size.1 - half_width).max(0.0),
-    );
-    let outer = (geometry.0 + half_width, geometry.1 + half_width);
-    let inner = (
-        (geometry.0 - half_width).max(0.0),
-        (geometry.1 - half_width).max(0.0),
-    );
-    let centre_x = rect.x + half_size.0;
-    let local_y = (y - (rect.y + half_size.1)).abs();
-    if !(local_y.is_finite() && centre_x.is_finite()) {
-        return [(min_x, max_x), NO_RUN];
-    }
-    let radii = radii.unwrap_or_default();
-    let (left, right) = if y - (rect.y + half_size.1) > 0.0 {
-        (radii.bottom_left, radii.bottom_right)
-    } else {
-        (radii.top_left, radii.top_right)
-    };
-    // How far from the centre the grown outer edge reaches on one side;
-    // `None` when the row passes outside it.
-    let ink_reach = |radius: f32| {
-        let radius = if join != StrokeJoin::Round && radius < 0.0001 {
-            0.0
-        } else {
-            radius + half_width
-        };
-        let qy = local_y - outer.1 + radius;
-        let grown = radius + INK_REACH;
-        if qy.is_nan() || qy >= grown {
-            return None;
-        }
-        Some(if qy <= 0.0 {
-            outer.0 + INK_REACH
-        } else {
-            outer.0 - radius + (grown * grown - qy * qy).max(0.0).sqrt()
-        })
-    };
-    // How far from the centre the hole is empty on one side, if it is.
-    let empty_reach = |radius: f32| {
-        let radius = (radius - half_width).max(0.0);
-        let qy = local_y - inner.1 + radius;
-        if qy.is_nan() || qy > radius - INK_REACH {
-            return None;
-        }
-        let reach = if qy <= 0.0 {
-            inner.0 - INK_REACH
-        } else {
-            let span = (radius - INK_REACH) * (radius - INK_REACH) - qy * qy;
-            inner.0 - radius + span.max(0.0).sqrt()
-        };
-        (reach >= 0.0).then_some(reach)
-    };
-    // A side the row misses still keeps the centre's own column, which
-    // belongs to the left side.
-    let run = match (ink_reach(left), ink_reach(right)) {
-        (None, None) => return [NO_RUN, NO_RUN],
-        (left, right) => {
-            let from = centre_x - left.unwrap_or(0.0);
-            let to = centre_x + right.unwrap_or(0.0);
-            let start = (whole::ceil(from - 0.5) as i32).max(min_x);
-            let end = (whole::floor(to - 0.5) as i32 + 1).min(max_x);
-            (start, end)
-        }
-    };
-    match (empty_reach(left), empty_reach(right)) {
-        (Some(left), Some(right)) => runs_around(run, centre_x - left, centre_x + right),
-        (Some(left), None) => runs_around(run, centre_x - left, centre_x),
-        // The right side starts past the centre: the centre's own column
-        // belongs to the left one.
-        (None, Some(right)) => runs_around(run, centre_x + 1.0 / 64.0, centre_x + right),
-        (None, None) => [run, NO_RUN],
-    }
 }
 
 /// How much of a pixel a shape covers, decided once per shape: a line, an
@@ -872,148 +843,6 @@ impl ShapeCoverage {
     }
 }
 
-/// A rounded rect to fill, with what every row of it shares worked out once.
-struct RoundedFill {
-    rect: Rect,
-    /// A pixel whose centre lies in `flat_left..=flat_right`, between the
-    /// corners' widest reach on either side, is inside on every row of the
-    /// rect: an end there needs no test.
-    flat_left: f32,
-    flat_right: f32,
-    top_left: Corner,
-    top_right: Corner,
-    bottom_right: Corner,
-    bottom_left: Corner,
-}
-
-/// A rounded corner: a point in its square, the one between the circle's
-/// centre and the rect's corner, lies outside when it lies outside the
-/// circle. A corner without a radius has its centre at infinity on the side
-/// away from its square, so no point lies in the square.
-#[derive(Clone, Copy)]
-struct Corner {
-    centre_x: f32,
-    centre_y: f32,
-    /// The square of the radius.
-    reach: f32,
-}
-
-impl Corner {
-    /// `square_left` when the corner's square lies left of its centre.
-    fn new(radius: f32, centre_x: f32, centre_y: f32, square_left: bool) -> Self {
-        if radius > 0.0 {
-            return Self {
-                centre_x,
-                centre_y,
-                reach: radius.powi(2),
-            };
-        }
-        Self {
-            centre_x: if square_left {
-                f32::NEG_INFINITY
-            } else {
-                f32::INFINITY
-            },
-            centre_y,
-            reach: f32::INFINITY,
-        }
-    }
-
-    fn excludes(self, x: f32, y: f32) -> bool {
-        (x - self.centre_x).powi(2) + (y - self.centre_y).powi(2) > self.reach
-    }
-}
-
-impl RoundedFill {
-    fn new(rect: Rect, radii: &CornerRadii) -> Self {
-        let left = rect.x;
-        let right = rect.x + rect.width;
-        let top = rect.y;
-        let bottom = rect.y + rect.height;
-        Self {
-            rect,
-            flat_left: rect.x + radii.top_left.max(radii.bottom_left),
-            flat_right: rect.x + rect.width - radii.top_right.max(radii.bottom_right),
-            top_left: Corner::new(
-                radii.top_left,
-                left + radii.top_left,
-                top + radii.top_left,
-                true,
-            ),
-            top_right: Corner::new(
-                radii.top_right,
-                right - radii.top_right,
-                top + radii.top_right,
-                false,
-            ),
-            bottom_right: Corner::new(
-                radii.bottom_right,
-                right - radii.bottom_right,
-                bottom - radii.bottom_right,
-                false,
-            ),
-            bottom_left: Corner::new(
-                radii.bottom_left,
-                left + radii.bottom_left,
-                bottom - radii.bottom_left,
-                true,
-            ),
-        }
-    }
-
-    /// Whether a point of a row within the rect's height passes the left
-    /// half of [`point_in_resolved_rounded_rect`]: the left side and the
-    /// left corners, tested as that function tests them. Moving right, a
-    /// point that passes keeps passing.
-    fn clear_of_left(&self, x: f32, y: f32) -> bool {
-        let (top_left, bottom_left) = (self.top_left, self.bottom_left);
-        x >= self.rect.x
-            && !(x < top_left.centre_x && y < top_left.centre_y && top_left.excludes(x, y))
-            && !(x < bottom_left.centre_x && y > bottom_left.centre_y && bottom_left.excludes(x, y))
-    }
-
-    /// The right half of the test, as [`Self::clear_of_left`]: moving
-    /// left, a point that passes keeps passing.
-    fn clear_of_right(&self, x: f32, y: f32) -> bool {
-        let (top_right, bottom_right) = (self.top_right, self.bottom_right);
-        x <= self.rect.x + self.rect.width
-            && !(x > top_right.centre_x && y < top_right.centre_y && top_right.excludes(x, y))
-            && !(x > bottom_right.centre_x
-                && y > bottom_right.centre_y
-                && bottom_right.excludes(x, y))
-    }
-
-    /// The pixels of the row centred at `y` whose centres lie in the rounded
-    /// rect, within `min_x..max_x`. The shape is convex, so they form one
-    /// run: it starts at the first pixel clear of the left half and ends
-    /// after the last one clear of the right half, and a pixel between
-    /// passes both. When the first pixel clear of the left fails the right
-    /// half, so does every pixel after it, and the run is empty. Out of
-    /// line, so the row loop around a fill stays small enough to keep
-    /// inline.
-    #[inline(never)]
-    fn run(&self, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
-        let rect = self.rect;
-        if !(y >= rect.y && y <= rect.y + rect.height) {
-            return NO_RUN;
-        }
-        let flat = |x: i32| (self.flat_left..=self.flat_right).contains(&(x as f32 + 0.5));
-        let mut start = min_x;
-        if !(start < max_x && flat(start)) {
-            while start < max_x && !self.clear_of_left(start as f32 + 0.5, y) {
-                start += 1;
-            }
-        }
-        let mut end = max_x;
-        if !(end > start && flat(end - 1)) {
-            while end > start && !self.clear_of_right((end - 1) as f32 + 0.5, y) {
-                end -= 1;
-            }
-        }
-        (start, end)
-    }
-}
-
 fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {
     let snap_delta = draw
         .snap_anchor
@@ -1026,178 +855,23 @@ fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>)
     )
 }
 
-/// The device pixels an image covers: its rect where it lands, or the box
-/// of its turned rect.
-fn image_rect(draw: &ImageDraw) -> Rect {
-    if let Some(transform) = draw.transform {
-        return transform.bounds_for_rect(draw.rect);
-    }
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
-    draw.rect.translate(snap_delta.x, snap_delta.y)
+// The columns [`ShapeRows::fill_uniform_columns`] works out at a time: their
+// bytes, a kilobyte, sit on the stack.
+const COLUMN_BAND: usize = 64;
+
+// `unit` clamped to 0..=1 as the nearest of 256 levels, halves rounded up:
+// `whole::round(unit.clamp(0.0, 1.0) * 255.0) as u8`. Below 2^23 the
+// truncation and the fraction left are exact, and the level is never
+// negative, so a fraction from one half up is the whole step `round` takes.
+fn unit_byte(unit: f32) -> u8 {
+    let level = unit.clamp(0.0, 1.0) * 255.0;
+    let truncated = level as u32;
+    (truncated + u32::from(level - truncated as f32 >= 0.5)) as u8
 }
 
-#[inline(never)]
-fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
-    let rect = image_rect(draw);
-    if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
-        return;
-    }
-    let Some(clip_bounds) = clip_rect_to_bounds(rect, draw.clip, target) else {
-        return;
-    };
-    let Some(sampler) = ImageSampler::of(draw) else {
-        return;
-    };
-    // A turned image is read back through its transform: each pixel's
-    // centre lands somewhere in its rect, or outside it.
-    let to_image = match draw.transform {
-        Some(transform) => match transform.inverse() {
-            Some(inverse) => Some(inverse),
-            None => return,
-        },
-        None => None,
-    };
-    let image = draw.rect;
-    let local = |x: f32, y: f32| match to_image {
-        Some(inverse) => {
-            let point = inverse.map_point_in_front(Point::new(x, y))?;
-            image.contains(point.x, point.y).then(|| {
-                (
-                    (point.x - image.x) / image.width,
-                    (point.y - image.y) / image.height,
-                )
-            })
-        }
-        None => Some((
-            ((x - rect.x) / rect.width).clamp(0.0, 1.0),
-            ((y - rect.y) / rect.height).clamp(0.0, 1.0),
-        )),
-    };
-    for py in clip_bounds.min_y..clip_bounds.max_y {
-        let sample_y = py as f32 + 0.5;
-        let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
-        for (px, dst) in (clip_bounds.min_x..).zip(row) {
-            let Some((u, v)) = local(px as f32 + 0.5, sample_y) else {
-                continue;
-            };
-            let sample = sampler.sample(u, v);
-            if sample[3] > 0.0 {
-                blend_pixel(dst, sample, draw.blend_mode, diagnostics);
-            }
-        }
-    }
-}
-
-/// Reads an image's pixels at a place within its rect, with its sampling,
-/// source rect, colour filter and alpha applied.
-struct ImageSampler<'a> {
-    draw: &'a ImageDraw,
-    source: Rect,
-}
-
-impl<'a> ImageSampler<'a> {
-    /// `None` for an image with no pixels of its own to read.
-    fn of(draw: &'a ImageDraw) -> Option<Self> {
-        let (width, height) = (draw.image.width(), draw.image.height());
-        if width == 0
-            || height == 0
-            || draw.image.format() == cranpose_ui_graphics::ImagePixelFormat::External
-        {
-            return None;
-        }
-        let source = draw.src_rect.unwrap_or(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: width as f32,
-            height: height as f32,
-        });
-        Some(Self { draw, source })
-    }
-
-    /// The colour at `u`, `v`, the fractions of the rect's width and height.
-    fn sample(&self, u: f32, v: f32) -> [f32; 4] {
-        let Self { draw, source } = self;
-        let image = &draw.image;
-        let x = source.x + u * source.width;
-        let y = source.y + v * source.height;
-        let mut sample = match draw.sampling {
-            cranpose_ui_graphics::ImageSampling::Nearest => {
-                let src_x = (whole::floor(x) as i32).clamp(0, image.width() as i32 - 1);
-                let src_y = (whole::floor(y) as i32).clamp(0, image.height() as i32 - 1);
-                sample_image_nearest(image, src_x as u32, src_y as u32)
-            }
-            cranpose_ui_graphics::ImageSampling::Linear => {
-                sample_image_linear(image, x - 0.5, y - 0.5)
-            }
-        };
-        if let Some(filter) = &draw.color_filter {
-            sample = filter.apply_rgba(sample);
-        }
-        sample[3] *= draw.alpha.clamp(0.0, 1.0);
-        sample
-    }
-}
-
-fn sample_image_nearest(
-    image: &cranpose_ui_graphics::ImageBitmap,
-    src_x: u32,
-    src_y: u32,
-) -> [f32; 4] {
-    image
-        .rgba8_pixel(src_y as usize * image.width() as usize + src_x as usize)
-        .map(|channel| UNIT[usize::from(channel)])
-}
-
-fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32) -> [f32; 4] {
-    let img_width = image.width();
-    let img_height = image.height();
-    let x = x.clamp(0.0, img_width.saturating_sub(1) as f32);
-    let y = y.clamp(0.0, img_height.saturating_sub(1) as f32);
-    let x0 = whole::floor(x);
-    let y0 = whole::floor(y);
-    let tx = x - x0;
-    let ty = y - y0;
-    let x0 = (x0 as i32).clamp(0, img_width as i32 - 1) as u32;
-    let y0 = (y0 as i32).clamp(0, img_height as i32 - 1) as u32;
-    let x1 = (x0 + 1).min(img_width - 1);
-    let y1 = (y0 + 1).min(img_height - 1);
-    let top_left = sample_image_nearest(image, x0, y0);
-    let top_right = sample_image_nearest(image, x1, y0);
-    let bottom_left = sample_image_nearest(image, x0, y1);
-    let bottom_right = sample_image_nearest(image, x1, y1);
-
-    let mut out = [0.0; 4];
-    for channel in 0..4 {
-        let top = top_left[channel] + (top_right[channel] - top_left[channel]) * tx;
-        let bottom = bottom_left[channel] + (bottom_right[channel] - bottom_left[channel]) * tx;
-        out[channel] = top + (bottom - top) * ty;
-    }
-    out
-}
-
-/// Draws `image`, the size of `rect`, at a rect between whole pixels: each
-/// pixel samples the image linearly.
-fn blit_image_between_pixels(
-    target: &mut Target,
-    rect: Rect,
-    clip_bounds: ClipBounds,
-    image: &cranpose_ui_graphics::ImageBitmap,
-    diagnostics: &RenderDiagnostics,
-) {
-    for py in clip_bounds.min_y..clip_bounds.max_y {
-        let image_y = py as f32 - rect.y;
-        let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
-        for (px, dst) in (clip_bounds.min_x..).zip(row) {
-            let src = sample_image_linear(image, px as f32 - rect.x, image_y);
-            if src[3] <= 0.0 {
-                continue;
-            }
-            blend_pixel(dst, src, BlendMode::SrcOver, diagnostics);
-        }
-    }
+// The bytes an opaque `src` leaves on any pixel under `SrcOver`.
+fn opaque_bytes(src: [f32; 4]) -> [u8; 4] {
+    [unit_byte(src[0]), unit_byte(src[1]), unit_byte(src[2]), 255]
 }
 
 fn blend_pixel(
@@ -1224,10 +898,7 @@ fn blend_pixel(
     // An opaque source over anything is the source: the same bytes the
     // blend below works out, without reading the destination.
     if src_alpha >= 1.0 && resolved_blend_mode != BlendMode::DstOut {
-        dst[0] = whole::round(src[0].clamp(0.0, 1.0) * 255.0) as u8;
-        dst[1] = whole::round(src[1].clamp(0.0, 1.0) * 255.0) as u8;
-        dst[2] = whole::round(src[2].clamp(0.0, 1.0) * 255.0) as u8;
-        dst[3] = 255;
+        *dst = opaque_bytes(src);
         return;
     }
     let [dst_r, dst_g, dst_b, dst_a] = dst.map(|channel| UNIT[usize::from(channel)]);
@@ -1251,10 +922,12 @@ fn blend_pixel(
         ),
     };
 
-    dst[0] = whole::round(out_r.clamp(0.0, 1.0) * 255.0) as u8;
-    dst[1] = whole::round(out_g.clamp(0.0, 1.0) * 255.0) as u8;
-    dst[2] = whole::round(out_b.clamp(0.0, 1.0) * 255.0) as u8;
-    dst[3] = whole::round(out_a.clamp(0.0, 1.0) * 255.0) as u8;
+    *dst = [
+        unit_byte(out_r),
+        unit_byte(out_g),
+        unit_byte(out_b),
+        unit_byte(out_a),
+    ];
 }
 
 #[cfg(test)]

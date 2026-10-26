@@ -26,6 +26,9 @@ text-composed = []
 # seconds line, with readings, a panel that comes and goes, a counting button
 # and a list that scrolls by itself.
 workload = []
+# For the benchmarks against LVGL and Slint: in place of the demo's screen,
+# a dashboard that changes most of the display every frame.
+dashboard = []
 
 [dependencies]
 cranpose = { path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }

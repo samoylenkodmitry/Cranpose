@@ -19,6 +19,9 @@
 //! `STRIP_ROWS` (default 0, an area at once) draws each area in strips of
 //! that many rows, as a host with a small buffer does, and `REDRAW=all`
 //! draws the whole picture each frame, as a host does after a screen change.
+//!
+//! `SCREEN=dashboard` shows the dashboard of the ESP32 benchmarks, 320 by
+//! 480, in place of that screen: most of it changes every frame.
 
 #![allow(
     clippy::print_stderr,
@@ -37,6 +40,8 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 
+#[path = "../tests/support/dashboard.rs"]
+mod dashboard;
 #[path = "../tests/support/reading.rs"]
 mod reading;
 
@@ -44,6 +49,7 @@ use reading::{ComposedReading, DrawnReading};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
+const DASHBOARD_HEIGHT: u32 = 480;
 const FRAME_NANOS: u64 = 16_666_667;
 const WARMUP_FRAMES: u64 = 60;
 
@@ -81,18 +87,26 @@ fn bar_reads_in_draw() -> bool {
     std::env::var("BAR").is_ok_and(|bar| bar == "draw")
 }
 
-/// How each frame's pixels are drawn: `STRIP_ROWS` and `REDRAW`.
+// Whether the frames show the dashboard: `SCREEN=dashboard`.
+fn shows_dashboard() -> bool {
+    std::env::var("SCREEN").is_ok_and(|screen| screen == "dashboard")
+}
+
+// How each frame's pixels are drawn: `STRIP_ROWS` and `REDRAW`, on a
+// display `height` rows tall.
 #[derive(Clone, Copy)]
 struct Drawing {
     strip_rows: u32,
     whole_picture: bool,
+    height: u32,
 }
 
 impl Drawing {
-    fn from_env() -> Self {
+    fn from_env(height: u32) -> Self {
         Self {
             strip_rows: u32::try_from(env_count("STRIP_ROWS")).unwrap_or(u32::MAX),
             whole_picture: std::env::var("REDRAW").is_ok_and(|redraw| redraw == "all"),
+            height,
         }
     }
 
@@ -106,7 +120,7 @@ impl Drawing {
                 x: 0,
                 y: 0,
                 width: WIDTH,
-                height: HEIGHT,
+                height: self.height,
             });
         }
         for area in areas.iter() {
@@ -216,6 +230,15 @@ fn Nested(depth: usize) {
 
 #[composable]
 fn Screen() {
+    if shows_dashboard() {
+        dashboard::Dashboard("Cranpose");
+    } else {
+        BarScreen();
+    }
+}
+
+#[composable]
+fn BarScreen() {
     Column(
         Modifier::empty()
             .fill_max_size()
@@ -285,15 +308,20 @@ fn main() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(600);
-    let Ok(mut framebuffer) = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], Screen)
+    let height = if shows_dashboard() {
+        DASHBOARD_HEIGHT
+    } else {
+        HEIGHT
+    };
+    let Ok(mut framebuffer) = Framebuffer::new(WIDTH, height, 1.0, SystemTheme::Dark, &[], Screen)
     else {
         eprintln!("the framebuffer could not be created");
         return;
     };
     framebuffer.set_active(true);
-    let drawing = Drawing::from_env();
+    let drawing = Drawing::from_env(height);
     let mut areas = Vec::new();
-    let mut pixels = vec![0u8; WIDTH as usize * HEIGHT as usize * 4];
+    let mut pixels = vec![0u8; WIDTH as usize * height as usize * 4];
     run_frames(
         &mut framebuffer,
         (&mut areas, &mut pixels),

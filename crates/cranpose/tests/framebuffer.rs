@@ -16,6 +16,9 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 
+#[path = "support/dashboard.rs"]
+mod dashboard;
+
 const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
 const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);
 
@@ -213,4 +216,62 @@ fn preparing_an_area_draws_the_same_picture() {
     };
     prepared.prepare_area(area);
     assert!(picture_in_strips(&mut prepared, 8) == whole);
+}
+
+// A host that keeps its frame and draws only the changed areas, in strips
+// of eight rows as a board with a small buffer does, shows what a whole
+// redraw shows, every frame of a screen that changes most of itself each
+// frame and gains and loses list rows as it scrolls.
+#[test]
+fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
+    const WIDTH: u32 = 320;
+    const HEIGHT: u32 = 480;
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], || {
+        dashboard::Dashboard("Cranpose");
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    let whole = PixelRect {
+        x: 0,
+        y: 0,
+        width: WIDTH,
+        height: HEIGHT,
+    };
+    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut redrawn = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut area_pixels = Vec::new();
+    let mut areas = Vec::new();
+    for frame in 0..240u64 {
+        framebuffer.tick(frame * 16_666_667);
+        framebuffer.run_pending_tasks();
+        framebuffer.changed_areas(&mut areas);
+        for area in &areas {
+            for top in (area.y..area.y + area.height).step_by(8) {
+                let strip = PixelRect {
+                    y: top,
+                    height: 8.min(area.y + area.height - top),
+                    ..*area
+                };
+                area_pixels.resize(strip.width as usize * strip.height as usize * 4, 0);
+                framebuffer.draw_area(strip, &mut area_pixels);
+                let row_bytes = strip.width as usize * 4;
+                for (row, source) in area_pixels.chunks_exact(row_bytes).enumerate() {
+                    let start = ((strip.y as usize + row) * WIDTH as usize + strip.x as usize) * 4;
+                    kept[start..start + row_bytes].copy_from_slice(source);
+                }
+            }
+        }
+        framebuffer.draw_area(whole, &mut redrawn);
+        let differing = kept
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(redrawn.as_chunks::<4>().0)
+            .position(|(a, b)| a != b);
+        assert_eq!(
+            differing.map(|pixel| (pixel % WIDTH as usize, pixel / WIDTH as usize)),
+            None,
+            "frame {frame}: the kept frame differs from a whole redraw at (x, y); areas {areas:?}"
+        );
+    }
 }

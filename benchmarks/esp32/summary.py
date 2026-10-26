@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Prints the per-frame figures of benchmark logs that scripts/esp32/board_run.py
-saved with the perfstats component: frame time, instructions and stall
-cycles a frame, time to the first frame and the internal RAM left.
+saved with the perfstats component: frame time, the CPU time a frame takes
+(the time core 0 did not idle), instructions and stall cycles a frame, the
+bytes sent to the panel a frame, time to the first frame and the internal
+RAM left.
 
 Usage: summary.py LOG [LOG...]
 """
@@ -23,13 +25,22 @@ def summarize(path):
         return f"{path}: no frame statistics"
     rate = sum(rates) / len(rates)
     counts = {}
-    for match in re.finditer(r"PERF ([\d.]+) s (\S+) (\d+) (\S+) (\d+)", text):
-        frames = rate * float(match.group(1))
+    cpu = []
+    for match in re.finditer(r"PERF ([\d.]+) s (\S+) (\d+) (\S+) (\d+)(?: idle ([\d.]+) s)?", text):
+        seconds = float(match.group(1))
+        frames = rate * seconds
         counts[match.group(2)] = int(match.group(3)) / frames
         counts[match.group(4)] = int(match.group(5)) / frames
+        if match.group(6):
+            cpu.append((seconds - float(match.group(6))) * 1000 / frames)
+    sent = [float(kb) for kb in re.findall(r"sent ([\d.]+) KB a frame", text)]
     heap = re.findall(r"HEAP internal free (\d+) lowest (\d+)", text)
     first = re.search(r"I \((\d+)\) \S+: first frame after (\d+) ms", text)
-    fields = [f"frame {sum(busy) / len(busy):.2f} ms at {rate:.0f} fps"]
+    fields = [f"frame {sum(busy) / len(busy):.2f} ms at {rate:.1f} fps"]
+    if cpu:
+        fields.append(f"CPU {sum(cpu) / len(cpu):.2f} ms")
+    if sent:
+        fields.append(f"sent {sum(sent) / len(sent):.0f} KB")
     for name in ("instructions", "i-stall", "d-stall"):
         if name in counts:
             fields.append(f"{name} {counts[name] / 1000:.0f}K")
