@@ -268,7 +268,7 @@ fn update_dirty_nodes(
             &mut graph.root,
             remaining_dirty_nodes,
             kind,
-            true,
+            Level::Root,
             TranslateAncestorContext {
                 inherited_motion_context_animated: false,
                 update,
@@ -808,7 +808,7 @@ fn update_dirty_layer(
         layer,
         dirty_nodes,
         kind,
-        false,
+        Level::Child,
         TranslateAncestorContext {
             inherited_motion_context_animated: pass.motion_context_animated,
             update,
@@ -831,7 +831,7 @@ fn update_dirty_layer(
     };
     let hit_graph_dirty = rebuild_tracking_hits(layer, |layer| {
         release_for_rebuild(layer);
-        read_placed_node_data(applier, node_id, false, |data| {
+        read_placed_node_data(applier, node_id, Level::Child, |data| {
             write_node_layer(applier, node_id, data, context, layer);
         })
         .is_some()
@@ -859,23 +859,44 @@ struct TranslateAncestorContext {
     parent_abs: AbsOrigin,
 }
 
+// Whether a node lowers as the graph's root, the one node that may be a
+// window root, which then draws at the origin.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Level {
+    Root,
+    Child,
+}
+
+// Whether a retained layer's node kept its place in its parent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Position {
+    Kept,
+    Moved,
+}
+
 fn try_update_retained_layer(
     applier: &MemoryApplier,
     layer: &mut LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     kind: NodeUpdate,
-    root: bool,
+    level: Level,
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
     match kind {
-        NodeUpdate::Moved if !root => move_retained_layer(applier, layer, ancestors)
-            .or_else(|| translate_tracking_hits(applier, layer, dirty_nodes, ancestors)),
-        NodeUpdate::Draws if redraw_retained_layer(applier, layer, root, ancestors) => Some(false),
+        NodeUpdate::Moved if level == Level::Child => {
+            move_retained_layer(applier, layer, ancestors)
+                .or_else(|| translate_tracking_hits(applier, layer, dirty_nodes, ancestors))
+        }
+        NodeUpdate::Draws if redraw_retained_layer(applier, layer, level, ancestors) => Some(false),
         NodeUpdate::Content | NodeUpdate::Draws | NodeUpdate::Moved => {
             translate_tracking_hits(applier, layer, dirty_nodes, ancestors)
         }
-        NodeUpdate::Layer => update_layer_properties(applier, layer, root, false, ancestors),
-        NodeUpdate::MovedLayer => update_layer_properties(applier, layer, root, true, ancestors),
+        NodeUpdate::Layer => {
+            update_layer_properties(applier, layer, level, Position::Kept, ancestors)
+        }
+        NodeUpdate::MovedLayer => {
+            update_layer_properties(applier, layer, level, Position::Moved, ancestors)
+        }
     }
 }
 
@@ -886,7 +907,7 @@ fn try_update_retained_layer(
 fn redraw_retained_layer(
     applier: &MemoryApplier,
     container: &mut LayerNode,
-    root: bool,
+    level: Level,
     ancestors: TranslateAncestorContext,
 ) -> bool {
     // The wrapper of a node's outer draws is written with its layer.
@@ -896,9 +917,9 @@ fn redraw_retained_layer(
     let Some(node_id) = container.node_id else {
         return false;
     };
-    read_placed_node_data(applier, node_id, root, |data| {
+    read_placed_node_data(applier, node_id, level, |data| {
         let placement = container.origin_in_parent;
-        if !retained_layer_matches_layout(container, &data, placement, false, false) {
+        if !retained_layer_matches_layout(container, &data, placement, false, Position::Kept) {
             return false;
         }
         let Ok(plan) = translated_container(
@@ -957,17 +978,17 @@ fn content_layer_mut(container: &mut LayerNode) -> Option<&mut LayerNode> {
 }
 
 /// Whether `layer` still fits its node's layout, so new layer properties
-/// can update it in place: at `placement`, unless the node `moved`.
+/// can update it in place: at `placement`, unless the node moved.
 fn retained_layer_matches_layout(
     layer: &LayerNode,
     data: &SnapshotNodeData<'_>,
     placement: Point,
     wrapped: bool,
-    moved: bool,
+    position: Position,
 ) -> bool {
     let state = &data.layout_state;
     let slices = &data.modifier_slices;
-    (moved || state.position() == placement)
+    (position == Position::Moved || state.position() == placement)
         && Rect::from_size(state.size()) == layer.node_rect()
         && slices.layer_bounds(state.size()) == layer.local_bounds
         && state.content_offset() == layer.content_offset
@@ -977,23 +998,23 @@ fn retained_layer_matches_layout(
 fn update_layer_properties(
     applier: &MemoryApplier,
     container: &mut LayerNode,
-    root: bool,
-    moved: bool,
+    level: Level,
+    position: Position,
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
     let node_id = layer_identity(container)?;
     let wrapped = container.wraps.is_some();
     // The wrapper of a node's outer draws holds its placement; a moved
     // wrapped node is drawn again.
-    if moved && wrapped {
+    if position == Position::Moved && wrapped {
         return None;
     }
     let placement = container.origin_in_parent;
-    let hit_graph_dirty = read_placed_node_data(applier, node_id, root, |data| {
+    let hit_graph_dirty = read_placed_node_data(applier, node_id, level, |data| {
         let target = content_layer_mut(container)?;
         let slices = &data.modifier_slices;
         let state = &data.layout_state;
-        if !retained_layer_matches_layout(target, &data, placement, wrapped, moved) {
+        if !retained_layer_matches_layout(target, &data, placement, wrapped, position) {
             return None;
         }
         let context = LowerContext {
@@ -2374,12 +2395,12 @@ impl AbsOrigin {
 fn read_placed_node_data<R>(
     applier: &MemoryApplier,
     node_id: NodeId,
-    root: bool,
+    level: Level,
     read: impl FnOnce(SnapshotNodeData<'_>) -> R,
 ) -> Option<R> {
     read_node_data(applier, node_id, |mut data| {
         if data.window_root {
-            if !root {
+            if level == Level::Child {
                 return None;
             }
             data.layout_state = data.layout_state.at_origin();
@@ -2393,7 +2414,7 @@ fn read_placed_node_data<R>(
 }
 
 fn lower_root_into(applier: &MemoryApplier, node_id: NodeId, target: &mut LayerNode) -> bool {
-    read_placed_node_data(applier, node_id, true, |data| {
+    read_placed_node_data(applier, node_id, Level::Root, |data| {
         write_node_layer(applier, node_id, data, LowerContext::ROOT, target);
     })
     .is_some()
@@ -2404,7 +2425,7 @@ fn lower_child(
     node_id: NodeId,
     context: LowerContext,
 ) -> Option<Box<LayerNode>> {
-    read_placed_node_data(applier, node_id, false, |data| {
+    read_placed_node_data(applier, node_id, Level::Child, |data| {
         let mut layer = crate::layer_recycling::layer_box();
         write_node_layer(applier, node_id, data, context, &mut layer);
         layer
