@@ -1918,15 +1918,9 @@ impl EffectRenderer {
         radius: (f32, f32),
         tile_mode: TileMode,
     ) -> BlurUniforms {
-        let direction = if axis.is_horizontal() {
-            [1.0, 0.0]
-        } else {
-            [0.0, 1.0]
-        };
-        let kernel_radius = if axis.is_horizontal() {
-            radius.0
-        } else {
-            radius.1
+        let (direction, kernel_radius) = match axis {
+            Axis::Horizontal => ([1.0, 0.0], radius.0),
+            Axis::Vertical => ([0.0, 1.0], radius.1),
         };
         let key = kernel_radius.to_bits();
         let kernel = {

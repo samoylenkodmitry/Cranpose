@@ -138,20 +138,10 @@ impl ScrollGestureState {
 }
 
 #[inline]
-fn calculate_total_delta(from: Point, to: Point, axis: Axis) -> f32 {
-    if axis.is_vertical() {
-        to.y - from.y
-    } else {
-        to.x - from.x
-    }
-}
-
-#[inline]
-fn calculate_incremental_delta(from: Point, to: Point, axis: Axis) -> f32 {
-    if axis.is_vertical() {
-        to.y - from.y
-    } else {
-        to.x - from.x
+fn delta_along(from: Point, to: Point, axis: Axis) -> f32 {
+    match axis {
+        Axis::Horizontal => to.x - from.x,
+        Axis::Vertical => to.y - from.y,
     }
 }
 
@@ -696,14 +686,13 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return false;
         };
 
-        let incremental_delta = calculate_incremental_delta(last_pos, position, self.axis);
+        let incremental_delta = delta_along(last_pos, position, self.axis);
 
         let mut edge_candidate = false;
         if !gs.is_dragging && !gs.axis_locked_out {
-            let signed_main_delta = calculate_total_delta(down_pos, position, self.axis);
+            let signed_main_delta = delta_along(down_pos, position, self.axis);
             let main_delta = signed_main_delta.abs();
-            let cross_delta =
-                calculate_total_delta(down_pos, position, self.axis.cross_axis()).abs();
+            let cross_delta = delta_along(down_pos, position, self.axis.cross_axis()).abs();
             if main_delta > DRAG_THRESHOLD && main_delta >= cross_delta {
                 if self.scroll_target.can_consume(signed_main_delta) {
                     gs.is_dragging = true;
