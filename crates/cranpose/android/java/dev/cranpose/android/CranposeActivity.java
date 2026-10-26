@@ -2274,6 +2274,12 @@ public class CranposeActivity extends NativeActivity {
     private String describeDocuments(List<Uri> documents) {
         StringBuilder out = new StringBuilder();
         for (Uri uri : documents) {
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+                // Some providers only grant access for the current session.
+            }
             if (out.length() > 0) {
                 out.append('\n');
             }
