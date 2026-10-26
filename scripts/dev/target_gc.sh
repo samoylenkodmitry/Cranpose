@@ -506,7 +506,7 @@ echo "Free disk: ${start_free}G. Target: ${min_free_gb}G."
 # crate without reuse the next time it changes, which costs far less than the
 # whole target, so idle state goes first. rustc renews a crate directory with
 # every session, so its mtime is the crate's last build. Targets with a live
-# build or process, and locked worktrees such as seeds, keep theirs; the
+# build or process, and locked worktrees keep theirs; the
 # primary and current checkouts lose only idle state, never the target.
 idle_incremental_dirs() {
     local target="$1" dir
