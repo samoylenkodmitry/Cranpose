@@ -756,18 +756,13 @@ fn render_once(
     match current_surface_texture(surface, "android") {
         SurfaceFrame::Ready(frame) => {
             timings.after_acquire_ns = super::frame_telemetry::monotonic_nanos();
-            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(crate::surface_format::display_surface_view_format(
-                    resources.config.format,
-                )),
-                ..Default::default()
-            });
-            let (width, height) = shell.buffer_size();
-
-            if let Err(e) = shell
-                .renderer()
-                .render_surface_texture(&frame, &view, width, height)
-            {
+            let size = shell.buffer_size();
+            if let Err(e) = crate::wgpu_surface::render_surface_frame(
+                shell.renderer(),
+                &frame,
+                resources.config.format,
+                size,
+            ) {
                 log::error!("Render error: {e:?}");
             }
 
@@ -1495,26 +1490,24 @@ fn create_android_surface_config(
     let desired_maximum_frame_latency = android_frame_latency(
         super::frame_telemetry::system_property("debug.cranpose.frame_latency").as_deref(),
     );
-    let usage = cranpose_render_wgpu::presentable_root_usages(surface_caps.usages);
+    let config = crate::wgpu_surface::root_surface_config(
+        &surface_caps,
+        surface_format,
+        (width, height),
+        present_mode,
+        alpha_mode,
+        desired_maximum_frame_latency,
+    );
     log::info!(
-        "Android surface: formats {:?}, usages {:?} (configured {usage:?}), supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
+        "Android surface: formats {:?}, usages {:?} (configured {:?}), supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
         surface_caps.formats,
         surface_caps.usages,
+        config.usage,
         surface_caps.present_modes,
         present_mode,
         desired_maximum_frame_latency,
     );
-    Ok(wgpu::SurfaceConfiguration {
-        usage,
-        format: surface_format,
-        width,
-        height,
-        present_mode,
-        alpha_mode,
-        color_space: wgpu::SurfaceColorSpace::Auto,
-        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
-        desired_maximum_frame_latency,
-    })
+    Ok(config)
 }
 
 fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> bool {

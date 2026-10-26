@@ -50,6 +50,45 @@ pub(crate) fn create_wgpu_surface_and_adapter(
     Ok((instance, surface, adapter))
 }
 
+// The configuration of a window's root surface: `format` at `width` by
+// `height`, the usages a presentable root takes from `caps`, and a display
+// view of the format.
+pub(crate) fn root_surface_config(
+    caps: &wgpu::SurfaceCapabilities,
+    format: wgpu::TextureFormat,
+    (width, height): (u32, u32),
+    present_mode: wgpu::PresentMode,
+    alpha_mode: wgpu::CompositeAlphaMode,
+    desired_maximum_frame_latency: u32,
+) -> wgpu::SurfaceConfiguration {
+    wgpu::SurfaceConfiguration {
+        usage: cranpose_render_wgpu::presentable_root_usages(caps.usages),
+        format,
+        width,
+        height,
+        present_mode,
+        alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: crate::surface_format::display_surface_view_formats(format),
+        desired_maximum_frame_latency,
+    }
+}
+
+// Draws the app into the surface `frame` through a view in the display
+// format of the surface's `format`, at `width` by `height` pixels.
+pub(crate) fn render_surface_frame(
+    renderer: &mut cranpose_render_wgpu::WgpuRenderer,
+    frame: &wgpu::SurfaceTexture,
+    format: wgpu::TextureFormat,
+    (width, height): (u32, u32),
+) -> Result<(), cranpose_render_wgpu::WgpuRendererError> {
+    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(crate::surface_format::display_surface_view_format(format)),
+        ..Default::default()
+    });
+    renderer.render_surface_texture(frame, &view, width, height)
+}
+
 pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str) -> SurfaceFrame {
     match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(frame) => SurfaceFrame::Ready(frame),

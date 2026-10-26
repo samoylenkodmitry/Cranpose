@@ -328,17 +328,14 @@ pub async fn run(
         .ok_or_else(|| JsValue::from_str("web surface reports no supported alpha modes"))?;
 
     let present_mode = crate::present_mode::select_present_mode(&surface_caps);
-    let surface_config = wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::presentable_root_usages(surface_caps.usages),
-        format: surface_format,
-        width: buffer_width,
-        height: buffer_height,
+    let surface_config = crate::wgpu_surface::root_surface_config(
+        &surface_caps,
+        surface_format,
+        (buffer_width, buffer_height),
         present_mode,
         alpha_mode,
-        color_space: wgpu::SurfaceColorSpace::Auto,
-        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
-        desired_maximum_frame_latency: 2,
-    };
+        2,
+    );
 
     // The renderer starts, and with it the first screen's recorded
     // pipelines, before the surface: the page reads nothing back from the
@@ -901,22 +898,15 @@ impl CanvasPresenter {
         let config = self.config.borrow();
         match current_surface_texture(&self.surface, "web") {
             SurfaceFrame::Ready(output) => {
-                let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(crate::surface_format::display_surface_view_format(
-                        config.format,
-                    )),
-                    ..Default::default()
-                });
-                let render_width = output.texture.width();
-                let render_height = output.texture.height();
+                let size = (output.texture.width(), output.texture.height());
                 {
                     let mut app_mut = app.borrow_mut();
                     self.discovery.begin_frame(app_mut.renderer());
-                    if let Err(err) = app_mut.renderer().render_surface_texture(
+                    if let Err(err) = crate::wgpu_surface::render_surface_frame(
+                        app_mut.renderer(),
                         &output,
-                        &view,
-                        render_width,
-                        render_height,
+                        config.format,
+                        size,
                     ) {
                         log::error!("render failed: {err:?}");
                     }
