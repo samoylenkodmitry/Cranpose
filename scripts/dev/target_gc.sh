@@ -147,7 +147,10 @@ is_gradle_output_dir() {
 
 # Every build output directory under DIR, to DEPTH levels: cargo caches (by
 # their tag) and Gradle output. It does not descend into a directory it has
-# already found, nor into .git, node_modules or a staged removal.
+# already found, nor into .git, node_modules or a staged removal, nor into a
+# target's deps, incremental and .fingerprint: they hold nearly all of its
+# files and no build output of their own, and walking them took a sweep most
+# of an hour.
 discover_build_output() {
     local dir="$1" depth="$2" found
     while IFS= read -r found; do
@@ -157,7 +160,8 @@ discover_build_output() {
             *) is_gradle_output_dir "$found" || continue ;;
         esac
         printf '%s\n' "$found"
-    done < <(find "$dir" -maxdepth "$depth" \( -name .git -o -name node_modules -o -name '*.gc-[0-9]*' \) -prune \
+    done < <(find "$dir" -maxdepth "$depth" \( -name .git -o -name node_modules -o -name '*.gc-[0-9]*' \
+        -o -name deps -o -name incremental -o -name .fingerprint \) -prune \
         -o \( -type f -name CACHEDIR.TAG -print \) \
         -o \( -type d \( -name build -o -name .gradle \) -print -prune \) 2>/dev/null)
 }
@@ -406,8 +410,14 @@ emit_candidate() {
     seen_targets+="$target_real"$'\n'
     local live=0
     worktree_has_live_process "$wt" && live=1
-    size_mb="$(dir_size_mb "$target")"
-    [ -n "$size_mb" ] || size_mb=0
+    # A sweep that removes reads what it freed from df: walking every target
+    # with du took most of an hour on 55 targets while a build waited on the
+    # disk guard. Only a report measures sizes.
+    size_mb=0
+    if [ "$apply" -eq 0 ]; then
+        size_mb="$(dir_size_mb "$target")"
+        [ -n "$size_mb" ] || size_mb=0
+    fi
 
     last="$(target_last_build "$target")"
     now="$(date +%s)"
@@ -438,7 +448,9 @@ emit_candidate() {
 }
 
 collapse_candidates() {
-    awk -F '\t' -v minimum="$min_size_mb" '
+    local minimum="$min_size_mb"
+    [ "$apply" -eq 0 ] || minimum=0
+    awk -F '\t' -v minimum="$minimum" '
         { last[NR] = $1; size[NR] = $2; protect[NR] = $3; path[NR] = $4 }
         END {
             for (i = 1; i <= NR; i++) {
@@ -505,7 +517,7 @@ idle_incremental_dirs() {
 }
 
 prune_idle_incremental() {
-    local last size_mb protect target label dir dir_mb mb pruned_mb=0 pruned_dirs=0 any=0
+    local last size_mb protect target label dir dir_mb dirs pruned_mb=0 pruned_dirs=0 any=0
     while IFS=$'\t' read -r last size_mb protect target; do
         [ -n "$target" ] || continue
         case "$protect" in
@@ -514,20 +526,22 @@ prune_idle_incremental() {
         esac
         label="$(basename "$(dirname "$target")")/$(basename "$target")"
         dir_mb=0
+        dirs=0
         while IFS= read -r dir; do
             [ -n "$dir" ] || continue
-            mb="$(dir_size_mb "$dir")"
             if [ "$apply" -eq 1 ]; then
                 reclaim "$dir" || continue
+            else
+                dir_mb=$(( dir_mb + $(dir_size_mb "$dir") ))
             fi
-            dir_mb=$(( dir_mb + mb ))
-            pruned_dirs=$((pruned_dirs + 1))
+            dirs=$((dirs + 1))
         done < <(idle_incremental_dirs "$target")
-        [ "$dir_mb" -gt 0 ] || continue
+        [ "$dirs" -gt 0 ] || continue
         any=1
+        pruned_dirs=$(( pruned_dirs + dirs ))
         pruned_mb=$(( pruned_mb + dir_mb ))
         if [ "$apply" -eq 1 ]; then
-            printf '%-38s %8s  idle incremental state RECLAIMED\n' "$label" "$(human_gb "$dir_mb")"
+            printf '%-38s %8s  idle incremental state RECLAIMED (%s crate dirs)\n' "$label" "-" "$dirs"
         else
             printf '%-38s %8s  idle incremental state: would reclaim\n' "$label" "$(human_gb "$dir_mb")"
         fi
@@ -536,7 +550,7 @@ $candidates
 EOF
     [ "$any" -eq 1 ] || return 0
     if [ "$apply" -eq 1 ]; then
-        echo "Reclaimed $(human_gb "$pruned_mb") of idle incremental state in $pruned_dirs crate dirs. Free disk: $(free_gb "$self_root")G."
+        echo "Reclaimed idle incremental state in $pruned_dirs crate dirs. Free disk: $(free_gb "$self_root")G."
     else
         echo "Would reclaim $(human_gb "$pruned_mb") of idle incremental state in $pruned_dirs crate dirs."
     fi
@@ -546,7 +560,7 @@ if [ "$start_free" -lt "$min_free_gb" ]; then
     echo
     prune_idle_incremental
     if [ "$apply" -eq 1 ]; then
-        # The whole-target pass below measures sizes again: pruning shrank them.
+        # The whole-target pass below sees which targets the pruning emptied.
         seen_targets=""
         candidates="$(collect_candidates | collapse_candidates | sort -n)"
     fi
@@ -554,7 +568,6 @@ fi
 echo
 printf '%-38s %8s  %-14s %s\n' "BUILD OUTPUT" "SIZE" "LAST BUILT" "DECISION"
 
-reclaimed_mb=0
 would_mb=0
 now="$(date +%s)"
 free_now="$start_free"
@@ -565,24 +578,26 @@ while IFS=$'\t' read -r last size_mb protect target; do
     age_h=$(( (now - last) / 3600 ))
     if [ "$age_h" -lt 48 ]; then age="${age_h}h ago"; else age="$(( age_h / 24 ))d ago"; fi
 
+    size_label="$(human_gb "$size_mb")"
+    [ "$apply" -eq 0 ] || size_label="-"
     if [ "$protect" != "-" ]; then
-        printf '%-38s %8s  %-14s %s\n' "$label" "$(human_gb "$size_mb")" "$age" "protected: $protect"
+        printf '%-38s %8s  %-14s %s\n' "$label" "$size_label" "$age" "protected: $protect"
         continue
     fi
 
     projected=$(( free_now + size_mb / 1024 ))
     if [ "$free_now" -ge "$min_free_gb" ]; then
-        printf '%-38s %8s  %-14s %s\n' "$label" "$(human_gb "$size_mb")" "$age" "keep: budget already met"
+        printf '%-38s %8s  %-14s %s\n' "$label" "$size_label" "$age" "keep: budget already met"
         continue
     fi
 
     if [ "$apply" -eq 1 ]; then
+        before="$free_now"
         if reclaim "$target"; then
-            reclaimed_mb=$(( reclaimed_mb + size_mb ))
             free_now="$(free_gb "$self_root")"
-            printf '%-38s %8s  %-14s %s\n' "$label" "$(human_gb "$size_mb")" "$age" "RECLAIMED -> ${free_now}G free"
+            printf '%-38s %8s  %-14s %s\n' "$label" "$(( free_now - before ))G" "$age" "RECLAIMED -> ${free_now}G free"
         else
-            printf '%-38s %8s  %-14s %s\n' "$label" "$(human_gb "$size_mb")" "$age" "FAILED to reclaim"
+            printf '%-38s %8s  %-14s %s\n' "$label" "$size_label" "$age" "FAILED to reclaim"
         fi
     else
         would_mb=$(( would_mb + size_mb ))
@@ -595,7 +610,7 @@ EOF
 
 echo
 if [ "$apply" -eq 1 ]; then
-    echo "Reclaimed $(human_gb "$reclaimed_mb"). Free disk: $(free_gb "$self_root")G (was ${start_free}G)."
+    echo "Reclaimed $(( $(free_gb "$self_root") - start_free ))G. Free disk: $(free_gb "$self_root")G (was ${start_free}G)."
     if [ "$(free_gb "$self_root")" -lt "$min_free_gb" ]; then
         echo "Still under the ${min_free_gb}G target: everything else is protected." >&2
     fi
