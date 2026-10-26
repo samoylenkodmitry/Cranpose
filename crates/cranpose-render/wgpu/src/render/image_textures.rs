@@ -143,7 +143,7 @@ impl ImageUploader<'_> {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bytes = image.pixels().len();
         let cached = CachedImageTexture {
-            bind_groups: self.pipelines.image_bind_groups(&view, alpha_mask),
+            bind_groups: self.pipelines.image_bind_groups(&view, image.format()),
             _texture: texture,
             _view: view,
             bytes,
@@ -165,7 +165,7 @@ impl ImageUploader<'_> {
         let view = image
             .external_handle::<wgpu::TextureView>()
             .ok_or("an external texture's handle is not a wgpu::TextureView")?;
-        let bind_groups = self.pipelines.image_bind_groups(view, false);
+        let bind_groups = self.pipelines.image_bind_groups(view, image.format());
         let binding = bind_groups.binding(sampling);
         self.textures.insert_external(key, bind_groups);
         Ok(binding)

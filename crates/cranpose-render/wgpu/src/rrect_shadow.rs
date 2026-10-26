@@ -8,7 +8,7 @@ use cranpose_ui_graphics::{BlendMode, Rect};
 
 use crate::{
     geometry::{canonicalize_device_coordinate, snap_delta_for_anchor},
-    render::{blend_state_for_mode, create_render_pipeline_logged, overlay_depth_state},
+    render::{PassDepth, blend_state_for_mode, create_render_pipeline_logged},
     scene::RRectShadowDraw,
     shared_shader::SharedShader,
 };
@@ -165,16 +165,15 @@ pub(crate) fn create_rrect_shadow_pipeline(
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     shader: &SharedShader,
-    depth: bool,
+    depth: PassDepth,
 ) -> wgpu::RenderPipeline {
     let module = shader.module();
     create_render_pipeline_logged(
         device,
         cache,
-        if depth {
-            "rrect-shadow depth"
-        } else {
-            "rrect-shadow"
+        match depth {
+            PassDepth::On => "rrect-shadow depth",
+            PassDepth::Off => "rrect-shadow",
         },
         wgpu::RenderPipelineDescriptor {
             label: Some("Round Rect Shadow Pipeline"),
@@ -204,7 +203,7 @@ pub(crate) fn create_rrect_shadow_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: overlay_depth_state(depth),
+            depth_stencil: depth.overlay_state(),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,

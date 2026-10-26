@@ -45,7 +45,7 @@ mod pipeline {
     use std::sync::Arc;
 
     use super::MeshVertex;
-    use crate::fixed_pipeline::FixedPipelineJob;
+    use crate::{fixed_pipeline::FixedPipelineJob, render::PassDepth};
 
     const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
@@ -78,7 +78,7 @@ fn fs_mesh(shaded: Shaded) -> @location(0) vec4<f32> {
         device: &Arc<wgpu::Device>,
         cache: Option<wgpu::PipelineCache>,
         format: wgpu::TextureFormat,
-        depth: bool,
+        depth: PassDepth,
     ) -> FixedPipelineJob {
         let device = Arc::clone(device);
         Box::new(move || {
@@ -91,10 +91,9 @@ fn fs_mesh(shaded: Shaded) -> @location(0) vec4<f32> {
                 bind_group_layouts: &[],
                 immediate_size: 0,
             });
-            let tag = if depth {
-                "mesh/fallback/depth"
-            } else {
-                "mesh/fallback"
+            let tag = match depth {
+                PassDepth::On => "mesh/fallback/depth",
+                PassDepth::Off => "mesh/fallback",
             };
             crate::render::create_render_pipeline_logged(
                 &device,
@@ -128,7 +127,7 @@ fn fs_mesh(shaded: Shaded) -> @location(0) vec4<f32> {
                         strip_index_format: Some(wgpu::IndexFormat::Uint16),
                         ..wgpu::PrimitiveState::default()
                     },
-                    depth_stencil: crate::render::overlay_depth_state(depth),
+                    depth_stencil: depth.overlay_state(),
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
                     cache: None,

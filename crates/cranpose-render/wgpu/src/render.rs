@@ -703,7 +703,7 @@ pub fn pipelines_created_off_frame() -> u64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PassFrame {
     pub(crate) size: (u32, u32),
-    pub(crate) depth: bool,
+    pub(crate) depth: PassDepth,
 }
 
 impl PassFrame {
@@ -732,16 +732,6 @@ const PASS_DEPTH_STEP: f32 = 1.0 / 1_048_576.0;
 /// `record_depth` and `batch_depth` place it: later draws nearer.
 pub(crate) fn pass_order_depth(index: u32) -> f32 {
     (1.0 - (index as f32 + 1.0) * PASS_DEPTH_STEP).max(0.0)
-}
-
-/// The depth state of a glyph or image pipeline: in a pass with a depth
-/// buffer it paints what later opaque interiors leave visible, as shapes do.
-pub(crate) fn overlay_depth_state(depth: bool) -> Option<wgpu::DepthStencilState> {
-    if depth {
-        ShapeDepth::Tested.stencil_state()
-    } else {
-        None
-    }
 }
 
 #[repr(C)]
@@ -879,11 +869,11 @@ pub(crate) struct ViewportUniformParams {
 impl ViewportUniformParams {
     // The fallback meshes' target in this viewport, counting depth from its
     // base in a pass with the depth buffer.
-    fn mesh_target(self, depth: bool) -> crate::mesh_fallback::MeshTarget {
+    fn mesh_target(self, depth: PassDepth) -> crate::mesh_fallback::MeshTarget {
         crate::mesh_fallback::MeshTarget {
             offset: self.offset,
             size: [self.width as f32, self.height as f32],
-            depth_base: depth.then_some(self.depth_base),
+            depth_base: depth.is_on().then_some(self.depth_base),
         }
     }
 
@@ -1568,17 +1558,18 @@ impl GpuRenderer {
         let (compiler, backend) = (&self.pipelines.compiler, self.pipelines.adapter_backend);
         for quads in [GlyphQuads::Aligned, GlyphQuads::Turned] {
             self.pipelines
-                .glyph_atlas_pipeline_resource(false, quads)
+                .glyph_atlas_pipeline_resource(PassDepth::Off, quads)
                 .queue(
                     compiler,
                     lane,
                     backend,
-                    self.pipelines.glyph_atlas_pipeline_job(false, quads),
+                    self.pipelines
+                        .glyph_atlas_pipeline_job(PassDepth::Off, quads),
                 );
         }
         self.effect_renderer.warm_composites(&self.device);
         let rounded = ImageVariant {
-            depth: false,
+            depth: PassDepth::Off,
             alpha_mask: false,
             rounded: true,
         };
@@ -1591,11 +1582,11 @@ impl GpuRenderer {
                 self.pipelines
                     .image_pipeline_job(BlendMode::SrcOver, rounded),
             );
-        self.pipelines.rrect_shadow_pipeline[0].queue(
+        self.pipelines.rrect_shadow_pipeline[PassDepth::Off.index()].queue(
             compiler,
             lane,
             backend,
-            self.pipelines.rrect_shadow_pipeline_job(false),
+            self.pipelines.rrect_shadow_pipeline_job(PassDepth::Off),
         );
         self.pipelines
             .shape_pipelines
@@ -1690,7 +1681,7 @@ impl GpuRenderer {
         visit: &mut dyn FnMut(&FixedPipeline, &dyn Fn() -> FixedPipelineJob),
     ) {
         self.effect_renderer.for_each_fixed(&self.device, visit);
-        for depth in [false, true] {
+        for depth in PassDepth::BOTH {
             for (alpha_mask, rounded) in
                 [(false, false), (true, false), (false, true), (true, true)]
             {
@@ -1713,7 +1704,7 @@ impl GpuRenderer {
                 );
             }
             visit(
-                &self.pipelines.rrect_shadow_pipeline[usize::from(depth)],
+                &self.pipelines.rrect_shadow_pipeline[depth.index()],
                 &|| Box::new(self.pipelines.rrect_shadow_pipeline_job(depth)),
             );
         }
@@ -1834,7 +1825,7 @@ impl GpuRenderer {
         space: DrawSpace,
         range: std::ops::Range<usize>,
         draws: &[RunDrawCall],
-        depth: bool,
+        depth: PassDepth,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
         if self.pipelines.mesh_pipeline(depth).is_none()
@@ -1868,7 +1859,7 @@ impl GpuRenderer {
         viewport: ViewportUniformParams,
         range: std::ops::Range<usize>,
         draws: &[RunDrawCall],
-        depth: bool,
+        depth: PassDepth,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
         if self.pipelines.mesh_pipeline(depth).is_none()
@@ -1905,7 +1896,7 @@ impl GpuRenderer {
         let depth = frame.depth;
         let Some(pipeline) = self.pipelines.ready_or_left_out(
             &self.frame_stats,
-            &self.pipelines.rrect_shadow_pipeline[usize::from(depth)],
+            &self.pipelines.rrect_shadow_pipeline[depth.index()],
             || self.pipelines.rrect_shadow_pipeline_job(depth),
         ) else {
             return Ok(());
@@ -3194,11 +3185,11 @@ impl GpuRenderer {
         tier: RunTier,
         ablation: ShapeAblation,
         turns: ShapeTurns,
-        (depth, clip): (bool, SegmentClip),
+        (depth, clip): (PassDepth, SegmentClip),
         viewport: ViewportUniformParams,
     ) -> ShapePipelineKey {
         let blend_mode = supported_blend_mode(segment.blend);
-        let laid = depth
+        let laid = depth.is_on()
             && blend_mode == BlendMode::SrcOver
             && !placement.paints()
             && clip != SegmentClip::Rounded
@@ -3220,7 +3211,7 @@ impl GpuRenderer {
                 ),
             ),
             turns,
-            depth: if depth {
+            depth: if depth.is_on() {
                 ShapeDepth::Tested
             } else {
                 ShapeDepth::Off
@@ -3237,7 +3228,7 @@ impl GpuRenderer {
         run: &RunDraw,
         space: DrawSpace,
         window: &std::ops::Range<u32>,
-        (depth, mut depth_keys): (bool, Option<&mut PipelineDemand>),
+        (depth, mut depth_keys): (PassDepth, Option<&mut PipelineDemand>),
         (draws, pipelines): (&mut Vec<RunDrawCall>, &mut PipelineDemand),
     ) -> StoreRunBatch {
         let (viewport, root_scale) = (space.viewport, space.scale);
@@ -3263,7 +3254,7 @@ impl GpuRenderer {
                     )
                 };
                 if let Some(keys) = depth_keys.as_deref_mut() {
-                    keys.add(key(true));
+                    keys.add(key(PassDepth::On));
                 }
                 key(depth)
             },
@@ -3364,7 +3355,7 @@ impl GpuRenderer {
                     )
                 };
                 if let Some(keys) = depth_keys.as_deref_mut() {
-                    keys.add(key(true));
+                    keys.add(key(PassDepth::On));
                 }
                 key(depth)
             },
@@ -3444,7 +3435,7 @@ impl GpuRenderer {
         uniform_slot: usize,
         scissor: (u32, u32, u32, u32),
         planned: impl ExactSizeIterator<Item = PlannedRunDraw>,
-        meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, bool)>,
+        meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, PassDepth)>,
     ) -> Result<(), String> {
         self.frame_stats.add_draw_calls(planned.len() as u32);
         let (x, y, width, height) = scissor;
@@ -3516,7 +3507,7 @@ impl GpuRenderer {
         draws: &[RunDrawCall],
         scissor: (u32, u32, u32, u32),
         stage: RunStage,
-        meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, bool)>,
+        meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, PassDepth)>,
     ) -> Result<(), String> {
         let calls = RunCalls {
             uniform_slot: batch.uniform_slot,
@@ -3573,7 +3564,7 @@ impl GpuRenderer {
         image_slot: &ImageSlot,
         uniform_slot: usize,
         cmds: &[ImageDrawCmd],
-        (blend_mode, depth): (BlendMode, bool),
+        (blend_mode, depth): (BlendMode, PassDepth),
         bound: Option<(u32, u32, u32, u32)>,
     ) -> Result<(), String> {
         if cmds.is_empty() {
@@ -4531,7 +4522,9 @@ pub(crate) use image_draws::{
     ImageBatch, ImageDrawCmd, ImageSlot, place_image_draws, resolve_image_geometry,
 };
 mod depth_targets;
+mod pass_depth;
 use depth_targets::DepthTargets;
+pub(crate) use pass_depth::PassDepth;
 mod frame_history;
 use frame_history::FrameHistory;
 pub use frame_history::frames_presented;

@@ -1,9 +1,9 @@
 use cranpose_ui_graphics::{BlendMode, ColorFilter, ImageBitmap, ImageSampling, Point, Rect};
 
 use super::{
-    DeviceRoundedClip, DrawSpace, FrameCommandRecorder, TargetRect, Vertex, blend_state_for_mode,
-    confined_scissor, create_render_pipeline_logged, image_textures::ImageUploader,
-    overlay_depth_state, scissor_rect_for_layer,
+    DeviceRoundedClip, DrawSpace, FrameCommandRecorder, PassDepth, TargetRect, Vertex,
+    blend_state_for_mode, confined_scissor, create_render_pipeline_logged,
+    image_textures::ImageUploader, scissor_rect_for_layer,
 };
 use crate::{
     frame_graph::{BufferUpload, UploadAllocatorSpec},
@@ -42,7 +42,8 @@ pub(super) fn create_image_pipeline(
         device,
         cache,
         &format!(
-            "image blend={blend_mode:?} depth={depth} alpha_mask={alpha_mask} rounded={rounded}"
+            "image blend={blend_mode:?} depth={} alpha_mask={alpha_mask} rounded={rounded}",
+            depth.is_on()
         ),
         wgpu::RenderPipelineDescriptor {
             label: Some("Image Pipeline"),
@@ -72,7 +73,7 @@ pub(super) fn create_image_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: overlay_depth_state(depth),
+            depth_stencil: depth.overlay_state(),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -256,7 +257,7 @@ pub(crate) struct ImageBinding {
 /// alpha mask or a color image, and taking a rounded clip in place or not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ImageVariant {
-    pub(super) depth: bool,
+    pub(super) depth: PassDepth,
     pub(super) alpha_mask: bool,
     pub(super) rounded: bool,
 }

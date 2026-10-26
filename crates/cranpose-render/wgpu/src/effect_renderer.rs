@@ -20,6 +20,7 @@ use crate::{
     offscreen::{OffscreenPool, OffscreenTarget},
     pipeline_compiler::{CompileLane, PipelineCompiler},
     pipeline_recorder::PipelineRecorder,
+    render::PassDepth,
     scissor::{read_scissor, scaled_scissor, widened_scissor},
     shader_cache::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
@@ -647,25 +648,25 @@ fn unmasked_nearest(sample_mode: CompositeSampleMode, masked: bool) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CompositeVariant {
     sampling: bool,
-    depth: bool,
+    depth: PassDepth,
 }
 
 impl CompositeVariant {
     const COUNT: usize = 4;
 
     const ALL: [Self; Self::COUNT] = [
-        Self::new(false, false),
-        Self::new(true, false),
-        Self::new(false, true),
-        Self::new(true, true),
+        Self::new(false, PassDepth::Off),
+        Self::new(true, PassDepth::Off),
+        Self::new(false, PassDepth::On),
+        Self::new(true, PassDepth::On),
     ];
 
-    const fn new(sampling: bool, depth: bool) -> Self {
+    const fn new(sampling: bool, depth: PassDepth) -> Self {
         Self { sampling, depth }
     }
 
     const fn index(self) -> usize {
-        self.sampling as usize | (self.depth as usize) << 1
+        self.sampling as usize | self.depth.index() << 1
     }
 }
 
@@ -1190,7 +1191,7 @@ fn projective_pipeline_job(
                     cull_mode: None,
                     ..Default::default()
                 },
-                depth_stencil: crate::render::overlay_depth_state(variant.depth),
+                depth_stencil: variant.depth.overlay_state(),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
@@ -1776,7 +1777,7 @@ impl EffectRenderer {
                 )],
             },
             self.surface_format,
-            (blend, crate::render::overlay_depth_state(variant.depth)),
+            (blend, variant.depth.overlay_state()),
         )
     }
 
@@ -1786,7 +1787,7 @@ impl EffectRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_composites(&self, device: &wgpu::Device) {
         for sampling in [false, true] {
-            let variant = CompositeVariant::new(sampling, false);
+            let variant = CompositeVariant::new(sampling, PassDepth::Off);
             self.blit_pipeline_target(BlendMode::SrcOver, variant)
                 .0
                 .queue(
@@ -1796,7 +1797,7 @@ impl EffectRenderer {
                     self.blit_pipeline_job(device, BlendMode::SrcOver, variant),
                 );
         }
-        let texels = CompositeVariant::new(true, false);
+        let texels = CompositeVariant::new(true, PassDepth::Off);
         self.projective_pipeline_target(BlendMode::SrcOver, texels)
             .0
             .queue(
@@ -3185,7 +3186,7 @@ impl EffectRenderer {
         let Some(pipeline) = self.blit_pipeline(
             device,
             options.blend_mode,
-            CompositeVariant::new(options.unmasked_nearest(), false),
+            CompositeVariant::new(options.unmasked_nearest(), PassDepth::Off),
         ) else {
             return;
         };
@@ -3215,7 +3216,10 @@ impl EffectRenderer {
             source_viewport: item.source_viewport,
             sample_mode: item.sample_mode,
         };
-        let variant = CompositeVariant::new(options.unmasked_nearest(), item.depth.is_some());
+        let variant = CompositeVariant::new(
+            options.unmasked_nearest(),
+            item.depth.map_or(PassDepth::Off, |_| PassDepth::On),
+        );
         self.prefetch_blit(CompileLane::WarmUp, device, item.blend_mode, variant);
         let mut uniforms = Self::composite_pass_uniforms(options);
         uniforms.depth[0] = item.depth.unwrap_or(0.0);
@@ -3255,7 +3259,7 @@ impl EffectRenderer {
             CompileLane::Later,
             device,
             blend_mode,
-            CompositeVariant::new(unmasked_nearest(sample_mode, masked), false),
+            CompositeVariant::new(unmasked_nearest(sample_mode, masked), PassDepth::Off),
         );
     }
 
@@ -3266,7 +3270,7 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         draw: &PreparedCompositeDraw<'_>,
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let variant = CompositeVariant {
@@ -3319,7 +3323,7 @@ impl EffectRenderer {
     ) -> PreparedProjectiveComposite<'a> {
         let variant = CompositeVariant::new(
             item.sample_mode == CompositeSampleMode::Texels,
-            item.depth.is_some(),
+            item.depth.map_or(PassDepth::Off, |_| PassDepth::On),
         );
         self.prefetch_projective(CompileLane::WarmUp, device, item.blend_mode, variant);
         let vertices = item
@@ -3394,7 +3398,7 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         draw: &PreparedProjectiveComposite<'_>,
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let variant = CompositeVariant {

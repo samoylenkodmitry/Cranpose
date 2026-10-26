@@ -14,8 +14,8 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassFrame, RunStage, StoreRunBatch,
-        TargetRect, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
+        ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
+        StoreRunBatch, TargetRect, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
         scissor_rect_for_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
         text_draw_geometry_in_rect,
     },
@@ -505,7 +505,11 @@ impl GpuRenderer {
         let mut scratch = self.take_pass_scratch();
         let device = Arc::clone(&self.device);
         let takes_depth = self.depth_gate.may() && takes_depth(segments);
-        let depth = takes_depth && self.depth_gate.is_open();
+        let depth = if takes_depth && self.depth_gate.is_open() {
+            PassDepth::On
+        } else {
+            PassDepth::Off
+        };
         let mut prep = PassPrep {
             recorder,
             device: &device,
@@ -523,7 +527,7 @@ impl GpuRenderer {
             arena_draws: std::mem::take(&mut scratch.arena_draws),
             meshes: std::mem::take(&mut scratch.meshes),
             pipelines: std::mem::take(&mut scratch.pipelines),
-            depth_keys: (takes_depth && !depth).then(PipelineDemand::default),
+            depth_keys: (takes_depth && !depth.is_on()).then(PipelineDemand::default),
             chunk_start: 0,
             chunk_base: 0,
             chunk_slot: None,
@@ -627,7 +631,7 @@ impl GpuRenderer {
         &self,
         batches: &[Batch<'_>],
         scratch: &PassScratch,
-        depth_lane: (bool, CompileLane),
+        depth_lane: (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         for batch in batches {
@@ -681,7 +685,7 @@ impl GpuRenderer {
         self.prefetch_overlay_pipelines(
             batches,
             scratch,
-            (true, CompileLane::Later),
+            (PassDepth::On, CompileLane::Later),
             &mut |pending| awaited.push(pending),
         );
         self.depth_gate.waited_for(awaited);
@@ -696,7 +700,7 @@ impl GpuRenderer {
         buffers: &PassBuffers,
     ) -> Result<(), String> {
         let target_size = frame.size;
-        if frame.depth {
+        if frame.depth.is_on() {
             for batch in batches.iter().rev() {
                 self.draw_shape_batch(pass, batch, cmds.arena, None, frame, RunStage::Interiors)?;
             }
@@ -792,9 +796,9 @@ impl GpuRenderer {
         label: &'static str,
         target: PassTarget<'_>,
         load_op: wgpu::LoadOp<wgpu::Color>,
-        depth: bool,
+        depth: PassDepth,
     ) -> wgpu::RenderPass<'p> {
-        if depth {
+        if depth.is_on() {
             self.frame_stats
                 .depth_passes
                 .set(self.frame_stats.depth_passes.get() + 1);
@@ -870,7 +874,7 @@ pub(crate) struct RunCalls<'a> {
     pub(crate) draws: &'a [RunDrawCall],
     pub(crate) scissor: (u32, u32, u32, u32),
     pub(crate) stage: RunStage,
-    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, bool)>,
+    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, PassDepth)>,
 }
 
 /// Changes between flat and turned segments a pass takes before its shapes
@@ -1320,7 +1324,7 @@ struct PassPrep<'a, 's, C> {
     chunk: Option<usize>,
     held: HeldDraws,
     /// Whether the pass has a depth buffer its opaque interiors fill first.
-    depth: bool,
+    depth: PassDepth,
     /// Whether the pass's flat and turned segments alternate often enough
     /// that its shapes draw with the pipeline telling them apart per record.
     mixed_turns: bool,
@@ -1583,7 +1587,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         if let Some(slot) = self.chunk_slot {
             return slot;
         }
-        let slot = if self.depth {
+        let slot = if self.depth.is_on() {
             renderer.claim_uniform_slot(ViewportUniformParams {
                 depth_base: self.chunk_base as f32,
                 ..binding.bound
@@ -1610,7 +1614,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             return;
         }
         let uniform_slot = self.chunk_uniform_slot(renderer, binding);
-        if self.depth {
+        if self.depth.is_on() {
             self.depth_seq = self.chunk_base.saturating_add(records);
         }
         self.batches.push(Batch::Arena {
@@ -1699,7 +1703,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         viewport: ViewportUniformParams,
         base: Option<u32>,
     ) -> usize {
-        if self.depth {
+        if self.depth.is_on() {
             let base = base.unwrap_or_else(|| self.next_place());
             renderer.claim_uniform_slot(ViewportUniformParams {
                 depth_base: base as f32,
@@ -1723,6 +1727,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     /// so later opaque interiors hide it and earlier ones do not.
     fn composite_depth(&mut self) -> Option<f32> {
         self.depth
+            .is_on()
             .then(|| crate::render::pass_order_depth(self.next_place()))
     }
 
@@ -1735,7 +1740,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         renderer: &GpuRenderer,
         run: &SegmentRun<'s, '_>,
     ) -> ViewportUniformParams {
-        if !self.depth {
+        if !self.depth.is_on() {
             return run.viewport;
         }
         let open = self.chunk.map_or(0, |_| renderer.open_arena_records());
@@ -1938,7 +1943,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     self.depth,
                     &mut self.meshes,
                 );
-                if self.depth {
+                if self.depth.is_on() {
                     self.take_depth_range(batch.draws.clone());
                 }
                 self.batches.push(Batch::StoreRun {

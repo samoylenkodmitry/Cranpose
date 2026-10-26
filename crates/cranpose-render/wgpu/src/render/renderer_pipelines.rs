@@ -4,12 +4,12 @@
 
 use std::{cell::Cell, sync::Arc};
 
-use cranpose_ui_graphics::BlendMode;
+use cranpose_ui_graphics::{BlendMode, ImagePixelFormat};
 
 use super::{
     CompileLane, CompilerSend, FixedPipeline, GlyphDrawCmd, GlyphQuads, ImageBindGroups,
-    ImageDrawCmd, ImageVariant, Pending, ShapePipelines, SharedShader, create_glyph_atlas_pipeline,
-    create_image_pipeline,
+    ImageDrawCmd, ImageVariant, PassDepth, Pending, ShapePipelines, SharedShader,
+    create_glyph_atlas_pipeline, create_image_pipeline,
 };
 use crate::{
     gpu_stats::FrameStats, pipeline_compiler::PipelineCompiler,
@@ -166,7 +166,7 @@ impl RendererPipelines {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
         };
-        &pipelines[usize::from(variant.depth)
+        &pipelines[variant.depth.index()
             + 2 * usize::from(variant.alpha_mask)
             + 4 * usize::from(variant.rounded)]
     }
@@ -257,7 +257,7 @@ impl RendererPipelines {
         &self,
         cmds: &[ImageDrawCmd],
         blend_mode: BlendMode,
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let mut last = None;
@@ -287,7 +287,7 @@ impl RendererPipelines {
     pub(crate) fn prefetch_glyph_pipelines(
         &self,
         cmds: &[GlyphDrawCmd],
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let mut last = None;
@@ -312,10 +312,10 @@ impl RendererPipelines {
     /// while it is still to land.
     pub(crate) fn prefetch_shadow_pipeline(
         &self,
-        (depth, lane): (bool, CompileLane),
+        (depth, lane): (PassDepth, CompileLane),
         awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
-        if let Some(pending) = self.rrect_shadow_pipeline[usize::from(depth)].prefetch(
+        if let Some(pending) = self.rrect_shadow_pipeline[depth.index()].prefetch(
             lane,
             &self.compiler,
             self.adapter_backend,
@@ -360,7 +360,7 @@ impl RendererPipelines {
 
     pub(super) fn glyph_atlas_pipeline_job(
         &self,
-        depth: bool,
+        depth: PassDepth,
         quads: GlyphQuads,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
@@ -377,7 +377,7 @@ impl RendererPipelines {
     pub(super) fn glyph_atlas_pipeline(
         &self,
         stats: &FrameStats,
-        depth: bool,
+        depth: PassDepth,
         quads: GlyphQuads,
     ) -> Option<&wgpu::RenderPipeline> {
         let resource = self.glyph_atlas_pipeline_resource(depth, quads);
@@ -402,7 +402,7 @@ impl RendererPipelines {
     /// draws take while their own compile.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn warm_mesh_fallback(&self) {
-        for (depth, pipeline) in [false, true].into_iter().zip(&self.mesh_pipelines) {
+        for (depth, pipeline) in PassDepth::BOTH.into_iter().zip(&self.mesh_pipelines) {
             pipeline.queue(
                 &self.compiler,
                 CompileLane::Demanded,
@@ -419,7 +419,7 @@ impl RendererPipelines {
 
     pub(super) fn rrect_shadow_pipeline_job(
         &self,
-        depth: bool,
+        depth: PassDepth,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
@@ -430,7 +430,7 @@ impl RendererPipelines {
 
     pub(super) fn glyph_atlas_pipeline_resource(
         &self,
-        depth: bool,
+        depth: PassDepth,
         quads: GlyphQuads,
     ) -> &FixedPipeline {
         let kind = match quads {
@@ -438,16 +438,16 @@ impl RendererPipelines {
             GlyphQuads::Aligned => 1,
             GlyphQuads::Turned => 2,
         };
-        &self.glyph_atlas_pipeline[usize::from(depth) + 2 * kind]
+        &self.glyph_atlas_pipeline[depth.index() + 2 * kind]
     }
 
     /// The fallback pipeline for a pass with a depth buffer or not, once it
     /// is built; none on the web, which leaves every fallback out of its
     /// build.
     #[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "no meshes"))]
-    pub(super) fn mesh_pipeline(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
+    pub(super) fn mesh_pipeline(&self, depth: PassDepth) -> Option<&wgpu::RenderPipeline> {
         #[cfg(not(target_arch = "wasm32"))]
-        return self.mesh_pipelines[usize::from(depth)].built();
+        return self.mesh_pipelines[depth.index()].built();
         #[cfg(target_arch = "wasm32")]
         None
     }
@@ -531,13 +531,14 @@ impl RendererPipelines {
         self.drew_placeholder.get()
     }
 
+    // The bindings of a texture of `format` pixels, nearest and linear.
     pub(super) fn image_bind_groups(
         &self,
         view: &wgpu::TextureView,
-        alpha_mask: bool,
+        format: ImagePixelFormat,
     ) -> ImageBindGroups {
         ImageBindGroups {
-            alpha_mask,
+            alpha_mask: matches!(format, ImagePixelFormat::Alpha8 { .. }),
             nearest: self.image_bind_group(view, &self.image_nearest_sampler),
             linear: self.image_bind_group(view, &self.image_linear_sampler),
         }

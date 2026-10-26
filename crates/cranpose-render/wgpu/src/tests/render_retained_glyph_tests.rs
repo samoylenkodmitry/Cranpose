@@ -153,7 +153,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
             None,
             PassFrame {
                 size: (8, 8),
-                depth: false,
+                depth: PassDepth::Off,
             },
         )
     });

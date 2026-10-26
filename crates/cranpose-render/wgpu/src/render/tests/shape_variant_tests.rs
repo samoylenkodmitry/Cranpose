@@ -3,7 +3,7 @@ use cranpose_ui_graphics::{
 };
 
 use super::{RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, ShapeVariant};
-use crate::ablation::ShapeAblation;
+use crate::{ablation::ShapeAblation, render::PassDepth};
 
 fn fill_segment(gradient: bool, vertex_gradient: bool, interiors: bool) -> RecordSegment {
     RecordSegment {
@@ -127,7 +127,7 @@ fn vertex_shading_requires_an_aligned_placement_and_viewport_without_turns() {
                     RunTier::Arena,
                     ShapeAblation::default(),
                     turns,
-                    (false, SegmentClip::Untested),
+                    (PassDepth::Off, SegmentClip::Untested),
                     viewport,
                 );
                 let vertex = snapped && offset[0].fract() == 0.0 && turns == ShapeTurns::None;
