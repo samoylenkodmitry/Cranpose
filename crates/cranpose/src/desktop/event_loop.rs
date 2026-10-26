@@ -3030,20 +3030,15 @@ impl App {
         };
         let after_acquire = Instant::now();
 
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(crate::surface_format::display_surface_view_format(
-                native.surface_config.format,
-            )),
-            ..Default::default()
-        });
         let Some(mut surface) = native_surface(app, native) else {
             return false;
         };
-        if let Err(error) = surface.renderer().render_surface_texture(
+        let config = &native.surface_config;
+        if let Err(error) = crate::wgpu_surface::render_surface_frame(
+            surface.renderer(),
             &output,
-            &view,
-            native.surface_config.width,
-            native.surface_config.height,
+            config.format,
+            (config.width, config.height),
         ) {
             log::error!("native window render failed: {error:?}");
             return false;
@@ -3648,17 +3643,14 @@ fn surface_config_for_window(
     transparent: bool,
     frame_latency: u32,
 ) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
-    Ok(wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::presentable_root_usages(surface_caps.usages),
-        format: surface_format,
-        width,
-        height,
+    Ok(crate::wgpu_surface::root_surface_config(
+        surface_caps,
+        surface_format,
+        (width, height),
         present_mode,
-        alpha_mode: select_alpha_mode(surface_caps, transparent)?,
-        color_space: wgpu::SurfaceColorSpace::Auto,
-        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
-        desired_maximum_frame_latency: frame_latency,
-    })
+        select_alpha_mode(surface_caps, transparent)?,
+        frame_latency,
+    ))
 }
 
 fn wgpu_renderer_for_surface(
@@ -5694,18 +5686,12 @@ impl ApplicationHandler for App {
                     };
                     let after_acquire = Instant::now();
 
-                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
-                        format: Some(crate::surface_format::display_surface_view_format(
-                            primary.config.format,
-                        )),
-                        ..Default::default()
-                    });
-
-                    if let Err(err) = app.renderer().render_surface_texture(
+                    let config = &primary.config;
+                    if let Err(err) = crate::wgpu_surface::render_surface_frame(
+                        app.renderer(),
                         &output,
-                        &view,
-                        primary.config.width,
-                        primary.config.height,
+                        config.format,
+                        (config.width, config.height),
                     ) {
                         log::error!("render failed: {err:?}");
                         return;

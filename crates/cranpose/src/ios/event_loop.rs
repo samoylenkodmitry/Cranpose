@@ -364,17 +364,13 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
         match current_surface_texture(&gpu.surface, "ios") {
             SurfaceFrame::Ready(frame) => {
-                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(crate::surface_format::display_surface_view_format(
-                        gpu.config.format,
-                    )),
-                    ..Default::default()
-                });
-                let (width, height) = shell.buffer_size();
-                if let Err(error) = shell
-                    .renderer()
-                    .render_surface_texture(&frame, &view, width, height)
-                {
+                let size = shell.buffer_size();
+                if let Err(error) = crate::wgpu_surface::render_surface_frame(
+                    shell.renderer(),
+                    &frame,
+                    gpu.config.format,
+                    size,
+                ) {
                     log::error!("iOS render error: {error:?}");
                 }
                 shell.renderer().present(frame);
@@ -674,17 +670,14 @@ fn ios_surface_config(
         .copied()
         .ok_or(LaunchError::NoSurfaceAlphaMode)?;
     let present_mode = crate::present_mode::select_present_mode(&caps);
-    Ok(wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::presentable_root_usages(caps.usages),
+    Ok(crate::wgpu_surface::root_surface_config(
+        &caps,
         format,
-        width,
-        height,
+        (width, height),
         present_mode,
         alpha_mode,
-        color_space: wgpu::SurfaceColorSpace::Auto,
-        view_formats: crate::surface_format::display_surface_view_formats(format),
-        desired_maximum_frame_latency: 2,
-    })
+        2,
+    ))
 }
 
 /// Runs a Cranpose application on iOS, blocking for the lifetime of the app.
