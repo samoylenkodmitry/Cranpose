@@ -297,7 +297,6 @@ impl ModifierChainHandle {
         self.revision = next_revision();
         if id.is_some() {
             self.chain.detach_nodes();
-            self.chain.repair_chain();
             self.chain.attach_nodes(context);
         }
     }
@@ -315,7 +314,6 @@ impl ModifierChainHandle {
     pub(crate) fn remount(&mut self, node_id: Option<NodeId>) {
         self.revision = next_revision();
         let mut context = self.context(node_id);
-        self.chain.repair_chain();
         self.chain.attach_nodes(&mut context);
         self.keep_for_next(context);
     }
