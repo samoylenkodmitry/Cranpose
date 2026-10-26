@@ -757,19 +757,29 @@ fn text_node(node_id: NodeId, label: &str) -> SemanticsNode {
     )
 }
 
-fn one_row_tree(row: SemanticsNode) -> (SemanticsNode, HashMap<NodeId, AccessibilityRect>) {
-    let root = node(
-        NodeId(1),
+// A 300 by 200 layout root, NodeId(1), over `rows` stacked 40 high each.
+fn rows_tree(rows: Vec<SemanticsNode>) -> (SemanticsNode, HashMap<NodeId, AccessibilityRect>) {
+    let mut bounds =
+        HashMap::from_iter([(NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0))]);
+    bounds.extend(rows.iter().zip(0u8..).map(|(row, index)| {
+        let y = f32::from(index) * 40.0;
+        (row.node_id, AccessibilityRect::new(0.0, y, 300.0, 40.0))
+    }));
+    let root = node(NodeId(1), SemanticsRole::Layout, Vec::new(), None, rows);
+    (root, bounds)
+}
+
+// An empty editable field, NodeId(7), that a test gives its actions.
+fn editable_field() -> SemanticsNode {
+    let mut field = node(
+        NodeId(7),
         SemanticsRole::Layout,
         Vec::new(),
-        None,
-        vec![row],
+        Some(""),
+        Vec::new(),
     );
-    let bounds = HashMap::from_iter([
-        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-    ]);
-    (root, bounds)
+    field.update_details(|details| details.editable_text = true);
+    field
 }
 
 #[test]
@@ -915,17 +925,7 @@ fn projected_field(name: Option<&str>, text: &str, password: bool) -> Vec<Access
     field.update_details(|details| details.editable_text = true);
     field.update_details(|details| details.password = password);
     field.text = Some(text.to_owned());
-    let root = node(
-        NodeId(1),
-        SemanticsRole::Layout,
-        Vec::new(),
-        None,
-        vec![field],
-    );
-    let bounds = HashMap::from_iter([
-        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-    ]);
+    let (root, bounds) = rows_tree(vec![field]);
     project_semantics(&placed(&root, &bounds))
 }
 
@@ -1382,7 +1382,7 @@ fn the_way_out_sits_after_the_actions_the_app_named() {
             }
         }));
     });
-    let (root, bounds) = one_row_tree(row);
+    let (root, bounds) = rows_tree(vec![row]);
 
     let projected = project_semantics(&placed(&root, &bounds));
     assert_eq!(listed_actions(&projected[0]), vec!["Pin", DISMISS_LABEL]);
@@ -1410,7 +1410,7 @@ fn a_long_press_is_named_and_sits_after_the_custom_actions() {
             }
         }));
     });
-    let (root, bounds) = one_row_tree(row);
+    let (root, bounds) = rows_tree(vec![row]);
 
     let projected = project_semantics(&placed(&root, &bounds));
     assert_eq!(
@@ -1433,7 +1433,7 @@ fn a_long_press_is_named_and_sits_after_the_custom_actions() {
 #[test]
 fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
     let mut plain = text_node(NodeId(2), "Milk");
-    let (root, bounds) = one_row_tree(plain.clone());
+    let (root, bounds) = rows_tree(vec![plain.clone()]);
     assert_eq!(
         project_semantics(&placed(&root, &bounds))[0]
             .details()
@@ -1446,7 +1446,7 @@ fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
         details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
     });
     plain.update_details(|details| details.on_long_click_label = Some("   ".into()));
-    let (root, bounds) = one_row_tree(plain);
+    let (root, bounds) = rows_tree(vec![plain]);
     assert_eq!(
         project_semantics(&placed(&root, &bounds))[0]
             .details()
@@ -1479,18 +1479,7 @@ fn a_dropdown_and_a_picker_keep_their_own_roles() {
         Vec::new(),
     );
     picker.widget_role = Some(cranpose_ui::SemanticsWidgetRole::ValuePicker);
-    let root = node(
-        NodeId(1),
-        SemanticsRole::Layout,
-        Vec::new(),
-        None,
-        vec![dropdown, picker],
-    );
-    let bounds = HashMap::from_iter([
-        (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-        (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        (NodeId(3), AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
-    ]);
+    let (root, bounds) = rows_tree(vec![dropdown, picker]);
 
     let projected = project_semantics(&placed(&root, &bounds));
 
@@ -1596,14 +1585,7 @@ fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
 fn a_reader_hands_a_field_its_text() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
-    let mut root = node(
-        NodeId(7),
-        SemanticsRole::Layout,
-        Vec::new(),
-        Some(""),
-        Vec::new(),
-    );
-    root.update_details(|details| details.editable_text = true);
+    let mut root = editable_field();
     root.update_details(|details| {
         details.set_text = Some(cranpose_ui::SemanticsSetText::new(move |text| {
             seen.borrow_mut().push(text.to_owned());
@@ -1745,14 +1727,7 @@ fn voice_control_names_and_a_language_reach_the_element() {
 fn a_reader_moves_the_caret_of_a_field() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
-    let mut root = node(
-        NodeId(7),
-        SemanticsRole::Layout,
-        Vec::new(),
-        Some(""),
-        Vec::new(),
-    );
-    root.update_details(|details| details.editable_text = true);
+    let mut root = editable_field();
     root.text = Some("añb😀c".to_owned());
     root.update_details(|details| {
         details.set_selection = Some(cranpose_ui::SemanticsSetSelection::new(
@@ -1816,17 +1791,7 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
         field.update_details(|details| {
             details.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
         });
-        let root = node(
-            NodeId(1),
-            SemanticsRole::Layout,
-            Vec::new(),
-            None,
-            vec![field],
-        );
-        let bounds = HashMap::from_iter([
-            (NodeId(1), AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-            (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        ]);
+        let (root, bounds) = rows_tree(vec![field]);
 
         let projected = project_semantics(&placed(&root, &bounds));
 

@@ -134,6 +134,20 @@ fn record_ids(update: &AccessibilityUpdate) -> Vec<i32> {
         .collect()
 }
 
+// Publishes "One" and "Two", then `next` over them; returns the second update
+// and the ids the first one assigned.
+fn republished(next: Vec<AccessibilityElement>) -> (AccessibilityUpdate, Vec<i32>) {
+    let (mut wire, mut snapshot) = published(&[
+        labelled(NodeId(1), "One", 0.0),
+        labelled(NodeId(2), "Two", 30.0),
+    ]);
+    let ids = snapshot.ids.clone();
+    let update = wire
+        .publish(&mut snapshot, next, 2.0)
+        .expect("unique identities");
+    (update, ids)
+}
+
 fn labelled(node_id: NodeId, label: &str, y: f32) -> AccessibilityElement {
     AccessibilityElement {
         node_id,
@@ -176,21 +190,10 @@ fn an_unchanged_snapshot_leaves_the_host_alone() {
 
 #[test]
 fn the_host_reads_the_order_then_the_moves_then_the_records_in_one_message() {
-    let (mut wire, mut snapshot) = published(&[
-        labelled(NodeId(1), "One", 0.0),
-        labelled(NodeId(2), "Two", 30.0),
+    let (update, ids) = republished(vec![
+        labelled(NodeId(1), "Uno", 0.0),
+        labelled(NodeId(2), "Two", 40.0),
     ]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![
-                labelled(NodeId(1), "Uno", 0.0),
-                labelled(NodeId(2), "Two", 40.0),
-            ],
-            2.0,
-        )
-        .expect("unique identities");
     let message: Vec<u8> = update.message().collect();
     assert_eq!(message.len(), update.message_len());
     let mut reader = PayloadReader {
@@ -211,21 +214,10 @@ fn the_host_reads_the_order_then_the_moves_then_the_records_in_one_message() {
 
 #[test]
 fn a_control_that_only_moved_is_sent_as_its_new_bounds() {
-    let (mut wire, mut snapshot) = published(&[
+    let (update, ids) = republished(vec![
         labelled(NodeId(1), "One", 0.0),
-        labelled(NodeId(2), "Two", 30.0),
+        labelled(NodeId(2), "Two", 40.0),
     ]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![
-                labelled(NodeId(1), "One", 0.0),
-                labelled(NodeId(2), "Two", 40.0),
-            ],
-            2.0,
-        )
-        .expect("unique identities");
     assert!(update.records.is_empty(), "a move resends no record");
     assert_eq!(update.moves, vec![ids[1], 0, 80, 200, 120]);
     assert_eq!(update.order, ids);
@@ -243,21 +235,10 @@ fn a_move_smaller_than_a_pixel_leaves_the_host_alone() {
 
 #[test]
 fn a_control_that_says_something_else_is_resent_in_full() {
-    let (mut wire, mut snapshot) = published(&[
+    let (update, ids) = republished(vec![
         labelled(NodeId(1), "One", 0.0),
-        labelled(NodeId(2), "Two", 30.0),
+        labelled(NodeId(2), "Three", 40.0),
     ]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![
-                labelled(NodeId(1), "One", 0.0),
-                labelled(NodeId(2), "Three", 40.0),
-            ],
-            2.0,
-        )
-        .expect("unique identities");
     assert_eq!(record_ids(&update), vec![ids[1]]);
     assert_eq!(fields(&update.records)[0][9], "Three");
     assert!(
@@ -268,21 +249,10 @@ fn a_control_that_says_something_else_is_resent_in_full() {
 
 #[test]
 fn a_spoken_change_is_resent_with_its_flag() {
-    let (mut wire, mut snapshot) = published(&[
+    let (update, ids) = republished(vec![
         labelled(NodeId(1), "One", 0.0),
-        labelled(NodeId(2), "Two", 30.0),
+        labelled(NodeId(2), "Two now", 30.0),
     ]);
-    let ids = snapshot.ids.clone();
-    let update = wire
-        .publish(
-            &mut snapshot,
-            vec![
-                labelled(NodeId(1), "One", 0.0),
-                labelled(NodeId(2), "Two now", 30.0),
-            ],
-            2.0,
-        )
-        .expect("unique identities");
     assert_eq!(record_ids(&update), vec![ids[1]]);
     assert_eq!(fields(&update.records)[0][29], "1");
 }
