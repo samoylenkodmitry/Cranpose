@@ -54,7 +54,7 @@ where
         targets
     }
 
-    fn dispatch_targets<I>(&mut self, targets: I, event: PointerEvent, stop_on_consume: bool)
+    fn dispatch_targets<I>(&mut self, targets: I, event: PointerEvent, stop: Stop)
     where
         I: IntoIterator<Item = <<R as Renderer>::Scene as RenderScene>::HitTarget>,
     {
@@ -64,13 +64,13 @@ where
             target.dispatch_with_applier(&mut applier, event.clone());
             log::trace!(
                 target: "cranpose::input",
-                "dispatch {:?} node={} consumed={} stop_on_consume={}",
+                "dispatch {:?} node={} consumed={} stop={:?}",
                 event.kind,
                 node_id,
                 event.is_consumed(),
-                stop_on_consume,
+                stop,
             );
-            if stop_on_consume && event.is_consumed() {
+            if stop == Stop::AtConsumer && event.is_consumed() {
                 break;
             }
         }
@@ -91,7 +91,7 @@ where
             .filter_map(|node_id| self.surface().renderer.scene().find_target(node_id))
             .collect::<Vec<_>>();
 
-        self.dispatch_targets(targets, event.clone(), true);
+        self.dispatch_targets(targets, event.clone(), Stop::AtConsumer);
 
         event.is_consumed()
     }
@@ -171,7 +171,7 @@ where
                         )
                         .with_buttons(self.surface().buttons_pressed)
                         .with_source(self.surface().pointer_source);
-                    self.dispatch_targets(targets, event, false);
+                    self.dispatch_targets(targets, event, Stop::Never);
                     return true;
                 }
 
@@ -198,7 +198,7 @@ where
                     .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
                     .with_buttons(self.surface().buttons_pressed)
                     .with_source(self.surface().pointer_source);
-                self.dispatch_targets(std::iter::once(target), exit_event, false);
+                self.dispatch_targets(std::iter::once(target), exit_event, Stop::Never);
             }
         }
 
@@ -208,7 +208,7 @@ where
                     .pointer_event(PointerEventKind::Enter, pos, pos, event_time)
                     .with_buttons(self.surface().buttons_pressed)
                     .with_source(self.surface().pointer_source);
-                self.dispatch_targets(std::iter::once(hit.clone()), enter_event, false);
+                self.dispatch_targets(std::iter::once(hit.clone()), enter_event, Stop::Never);
             }
         }
 
@@ -220,7 +220,7 @@ where
                 .pointer_event(PointerEventKind::Move, pos, pos, event_time)
                 .with_buttons(self.surface().buttons_pressed)
                 .with_source(self.surface().pointer_source);
-            self.dispatch_targets(hits, event, true);
+            self.dispatch_targets(hits, event, Stop::AtConsumer);
             true
         } else {
             false
@@ -377,7 +377,7 @@ where
             hit.dispatch_with_applier(&mut applier, event.clone());
             log::trace!(
                 target: "cranpose::input",
-                "dispatch {:?} node={} consumed={} stop_on_consume=true",
+                "dispatch {:?} node={} consumed={} stop=AtConsumer",
                 event.kind,
                 node_id,
                 event.is_consumed(),
@@ -460,7 +460,7 @@ where
         if targets.is_empty() {
             return false;
         }
-        self.dispatch_targets(targets, event, false);
+        self.dispatch_targets(targets, event, Stop::Never);
         true
     }
 
@@ -483,7 +483,7 @@ where
             return false;
         }
         let event = self.cursor_event(PointerEventKind::ButtonUp(button), event_time);
-        self.dispatch_targets(targets, event, false);
+        self.dispatch_targets(targets, event, Stop::Never);
         true
     }
 
@@ -617,7 +617,7 @@ where
                 .with_buttons(corrected_buttons)
                 .with_source(self.surface().pointer_source);
 
-            self.dispatch_targets(targets, event, false);
+            self.dispatch_targets(targets, event, Stop::Never);
             true
         } else {
             false
@@ -700,7 +700,7 @@ where
                     .with_buttons(self.surface().buttons_pressed)
                     .with_id(pointer_id)
                     .with_source(self.surface().pointer_source);
-                self.dispatch_targets(targets, event, false);
+                self.dispatch_targets(targets, event, Stop::Never);
                 true
             })
             .unwrap_or(false)
@@ -759,7 +759,7 @@ where
                 if targets.is_empty() {
                     return false;
                 }
-                self.dispatch_targets(targets, event, false);
+                self.dispatch_targets(targets, event, Stop::Never);
                 true
             })
             .unwrap_or(false)
@@ -1038,7 +1038,7 @@ where
             let mut capture_event =
                 PointerEvent::rotary(PointerEventKind::RotaryScrollPre, rotary, position);
             capture_event.modifiers = self.shell.app.modifiers;
-            self.dispatch_targets(capture_targets, capture_event.clone(), true);
+            self.dispatch_targets(capture_targets, capture_event.clone(), Stop::AtConsumer);
             if capture_event.is_consumed() {
                 return true;
             }
@@ -1050,7 +1050,7 @@ where
             let mut bubble_event =
                 PointerEvent::rotary(PointerEventKind::RotaryScroll, rotary, position);
             bubble_event.modifiers = self.shell.app.modifiers;
-            self.dispatch_targets(bubble_targets, bubble_event.clone(), true);
+            self.dispatch_targets(bubble_targets, bubble_event.clone(), Stop::AtConsumer);
             if bubble_event.is_consumed() {
                 return true;
             }
@@ -1132,7 +1132,7 @@ where
             .pointer_event(PointerEventKind::Cancel, cursor, cursor, event_time)
             .with_source(self.surface().pointer_source);
         let _event_handler = enter_event_handler_scope();
-        let _ = run_in_mutable_snapshot(|| self.dispatch_targets(targets, event, false));
+        let _ = run_in_mutable_snapshot(|| self.dispatch_targets(targets, event, Stop::Never));
     }
 
     fn route_drag_and_drop(&mut self) {
@@ -1192,7 +1192,7 @@ where
                 )
                 .with_source(self.surface().pointer_source);
 
-            self.dispatch_targets(targets, event, false);
+            self.dispatch_targets(targets, event, Stop::Never);
         }
 
         let pos = Point {
@@ -1205,7 +1205,7 @@ where
                 let exit_event = self
                     .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
                     .with_source(self.surface().pointer_source);
-                self.dispatch_targets(std::iter::once(target), exit_event, false);
+                self.dispatch_targets(std::iter::once(target), exit_event, Stop::Never);
             }
         }
         self.surface_mut().hovered_nodes.clear();
@@ -2339,4 +2339,11 @@ fn plain_key_down(event: &KeyEvent) -> bool {
         && !event.modifiers.ctrl
         && !event.modifiers.meta
         && !event.modifiers.alt
+}
+
+// Whether a dispatch stops at the first target that consumes the event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stop {
+    AtConsumer,
+    Never,
 }
