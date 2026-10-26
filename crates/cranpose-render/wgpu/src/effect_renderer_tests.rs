@@ -33,7 +33,7 @@ fn capture_blur_batch(
             BlurDraw {
                 source: BlurSource::Primary,
                 uniforms: BlurUniformSpec {
-                    horizontal: true,
+                    axis: Axis::Horizontal,
                     sampled: (32, 32),
                     source: source_region,
                     dest: dest_region,
@@ -334,22 +334,26 @@ fn cached_blur_kernels_preserve_fractional_radii_axes_and_eviction() {
             (f32::INFINITY, 2.0),
         ])
     {
-        for horizontal in [true, false] {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
             let uniforms = renderer.blur_uniforms(
-                horizontal,
+                axis,
                 (64, 32),
                 region_uniform((3, 5, 17, 19)),
                 region_uniform((7, 11, 17, 19)),
                 radius,
                 TileMode::Mirror,
             );
-            let expected = BlurKernel::of_radius(if horizontal { radius.0 } else { radius.1 });
+            let expected = BlurKernel::of_radius(if axis.is_horizontal() {
+                radius.0
+            } else {
+                radius.1
+            });
             assert_eq!(
                 uniforms.pairs,
                 expected
                     .pairs
                     .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
-                "radius={radius:?}, horizontal={horizontal}"
+                "radius={radius:?}, axis={axis:?}"
             );
             assert_eq!(
                 uniforms.kernel,

@@ -9,7 +9,7 @@ use cranpose_core::location_key;
 use cranpose_foundation::lazy::{LazyItems, LazyListIntervalContent, LazyListScope};
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
-    Box, BoxSpec, GridCells, LayoutDirection, LazyHorizontalStaggeredGrid,
+    Axis, Box, BoxSpec, GridCells, LayoutDirection, LazyHorizontalStaggeredGrid,
     LazyHorizontalStaggeredGridSpec, LazyStaggeredGridState, LazyVerticalStaggeredGrid,
     LazyVerticalStaggeredGridSpec, Modifier, ProvideLayoutDirection, Rect,
     rememberLazyStaggeredGridState,
@@ -27,9 +27,9 @@ struct Grid {
 
 /// An item `length` long along the grid's axis that names itself by its
 /// index and notes that it composed.
-fn item(index: usize, length: f32, vertical: bool, composed: &RefCell<BTreeSet<usize>>) {
+fn item(index: usize, length: f32, axis: Axis, composed: &RefCell<BTreeSet<usize>>) {
     composed.borrow_mut().insert(index);
-    let modifier = if vertical {
+    let modifier = if axis.is_vertical() {
         Modifier::empty().fill_max_width().height(length)
     } else {
         Modifier::empty().fill_max_height().width(length)
@@ -46,7 +46,7 @@ fn add_items(
     scope: &mut LazyListIntervalContent,
     lengths: &'static [f32],
     full: &'static [usize],
-    vertical: bool,
+    axis: Axis,
     composed: &Rc<RefCell<BTreeSet<usize>>>,
 ) {
     let composed = Rc::clone(composed);
@@ -58,7 +58,7 @@ fn add_items(
                 1
             }
         }),
-        move |index| item(index, lengths[index], vertical, &composed),
+        move |index| item(index, lengths[index], axis, &composed),
     );
 }
 
@@ -74,7 +74,7 @@ impl Grid {
                 Modifier::empty().size_points(WIDTH, HEIGHT),
                 grid,
                 spec.clone(),
-                |scope| add_items(scope, lengths, full, true, composed),
+                |scope| add_items(scope, lengths, full, Axis::Vertical, composed),
             );
         })
     }
@@ -243,7 +243,7 @@ fn a_horizontal_grid_fills_rows_of_their_own_widths() {
             Modifier::empty().size_points(WIDTH, HEIGHT),
             grid,
             LazyHorizontalStaggeredGridSpec::new(GridCells::Fixed(2)),
-            move |scope| add_items(scope, &[120.0, 60.0, 60.0], &[], false, &noted),
+            move |scope| add_items(scope, &[120.0, 60.0, 60.0], &[], Axis::Horizontal, &noted),
         );
     });
     let at = |grid: &mut Grid, index: usize| {

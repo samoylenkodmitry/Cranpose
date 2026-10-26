@@ -18,7 +18,7 @@ use crate::{
     fling_animation::{
         FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
     },
-    nested_scroll::{NestedScrollSource, ScrollAxis},
+    nested_scroll::NestedScrollSource,
     render_state::schedule_modifier_slices_repass,
     scroll::{
         ScrollElement, ScrollMotionContext, ScrollMotionContextKey, ScrollSettlePolicy,
@@ -138,8 +138,8 @@ impl ScrollGestureState {
 }
 
 #[inline]
-fn calculate_total_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
-    if is_vertical {
+fn calculate_total_delta(from: Point, to: Point, axis: Axis) -> f32 {
+    if axis.is_vertical() {
         to.y - from.y
     } else {
         to.x - from.x
@@ -147,8 +147,8 @@ fn calculate_total_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
 }
 
 #[inline]
-fn calculate_incremental_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
-    if is_vertical {
+fn calculate_incremental_delta(from: Point, to: Point, axis: Axis) -> f32 {
+    if axis.is_vertical() {
         to.y - from.y
     } else {
         to.x - from.x
@@ -209,7 +209,7 @@ trait ScrollTarget: Clone {
 struct NestedTarget<S> {
     target: S,
     parent: crate::nested_scroll::NestedScrollParent,
-    axis: ScrollAxis,
+    axis: Axis,
 }
 
 impl<S: ScrollTarget> ScrollTarget for NestedTarget<S> {
@@ -361,7 +361,7 @@ impl ScrollTarget for LazyListState {
 
 struct DragGesture<S: ScrollTarget> {
     target: S,
-    is_vertical: bool,
+    axis: Axis,
     reverse_input: bool,
     motion_context: ScrollMotionContext,
     guard: Option<Rc<dyn Fn() -> bool>>,
@@ -409,17 +409,12 @@ where
     };
     let DragGesture {
         target,
-        is_vertical,
+        axis,
         reverse_input,
         motion_context,
         guard,
     } = gesture;
     let identity = parent.identity();
-    let axis = if is_vertical {
-        ScrollAxis::Vertical
-    } else {
-        ScrollAxis::Horizontal
-    };
     drag_gesture_input(
         (key, identity),
         DragGesture {
@@ -428,7 +423,7 @@ where
                 parent,
                 axis,
             },
-            is_vertical,
+            axis,
             reverse_input,
             motion_context,
             guard,
@@ -443,7 +438,7 @@ where
 {
     let DragGesture {
         target,
-        is_vertical,
+        axis,
         reverse_input,
         motion_context,
         guard,
@@ -454,7 +449,7 @@ where
         let detector = ScrollGestureDetector::new(
             Rc::clone(&gesture_state),
             target.clone(),
-            is_vertical,
+            axis,
             reverse_input,
             motion_context.overscroll(),
             motion_context.clone(),
@@ -512,7 +507,7 @@ where
                             PointerEventKind::Up => detector.on_up(event.time_ms),
                             PointerEventKind::Cancel => detector.on_cancel(),
                             PointerEventKind::Scroll => detector.on_scroll(
-                                if is_vertical {
+                                if axis.is_vertical() {
                                     event.scroll_delta.y
                                 } else {
                                     event.scroll_delta.x
@@ -603,7 +598,7 @@ struct ScrollGestureDetector<S: ScrollTarget> {
 
     scroll_target: S,
 
-    is_vertical: bool,
+    axis: Axis,
 
     reverse_scrolling: bool,
 
@@ -616,7 +611,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     fn new(
         gesture_state: Rc<RefCell<ScrollGestureState>>,
         scroll_target: S,
-        is_vertical: bool,
+        axis: Axis,
         reverse_scrolling: bool,
         overscroll: crate::scroll::OverscrollEffect,
         motion_context: ScrollMotionContext,
@@ -624,7 +619,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         Self {
             gesture_state,
             scroll_target,
-            is_vertical,
+            axis,
             reverse_scrolling,
             overscroll,
             motion_context,
@@ -656,7 +651,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.gesture_start_event_time_ms = time_ms;
         gs.is_overscrolling = self.overscroll.offset().abs() > 0.001;
 
-        let pos = if self.is_vertical {
+        let pos = if self.axis.is_vertical() {
             position.y
         } else {
             position.x
@@ -701,13 +696,14 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return false;
         };
 
-        let incremental_delta = calculate_incremental_delta(last_pos, position, self.is_vertical);
+        let incremental_delta = calculate_incremental_delta(last_pos, position, self.axis);
 
         let mut edge_candidate = false;
         if !gs.is_dragging && !gs.axis_locked_out {
-            let signed_main_delta = calculate_total_delta(down_pos, position, self.is_vertical);
+            let signed_main_delta = calculate_total_delta(down_pos, position, self.axis);
             let main_delta = signed_main_delta.abs();
-            let cross_delta = calculate_total_delta(down_pos, position, !self.is_vertical).abs();
+            let cross_delta =
+                calculate_total_delta(down_pos, position, self.axis.cross_axis()).abs();
             if main_delta > DRAG_THRESHOLD && main_delta >= cross_delta {
                 if self.scroll_target.can_consume(signed_main_delta) {
                     gs.is_dragging = true;
@@ -723,7 +719,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         gs.last_position = Some(position);
 
-        let pos = if self.is_vertical {
+        let pos = if self.axis.is_vertical() {
             position.y
         } else {
             position.x
@@ -1226,7 +1222,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         Self {
             gesture_state: Rc::clone(&self.gesture_state),
             scroll_target: self.scroll_target.clone(),
-            is_vertical: self.is_vertical,
+            axis: self.axis,
             reverse_scrolling: self.reverse_scrolling,
             overscroll: self.overscroll.clone(),
             motion_context: self.motion_context.clone(),
@@ -1432,7 +1428,7 @@ enum TranslatedContentOffsetSource {
     LayoutContentOffset,
     LazyList {
         state: LazyListState,
-        is_vertical: bool,
+        axis: Axis,
         reverse_scrolling: bool,
     },
 }
@@ -1444,20 +1440,16 @@ impl TranslatedContentOffsetSource {
     ) -> Option<Rc<dyn Fn() -> Point>> {
         match self {
             Self::LayoutContentOffset => None,
-            Self::LazyList {
-                state, is_vertical, ..
-            } => Some(Rc::new(lazy_list_content_offset_reader(
-                *state,
-                *is_vertical,
-                overscroll,
+            Self::LazyList { state, axis, .. } => Some(Rc::new(lazy_list_content_offset_reader(
+                *state, *axis, overscroll,
             ))),
         }
     }
 
-    fn is_vertical(&self) -> Option<bool> {
+    fn axis(&self) -> Option<Axis> {
         match self {
             Self::LayoutContentOffset => None,
-            Self::LazyList { is_vertical, .. } => Some(*is_vertical),
+            Self::LazyList { axis, .. } => Some(*axis),
         }
     }
 
@@ -1473,7 +1465,7 @@ impl TranslatedContentOffsetSource {
 
 fn lazy_list_content_offset_reader(
     state: LazyListState,
-    is_vertical: bool,
+    axis: Axis,
     overscroll: crate::scroll::OverscrollEffect,
 ) -> impl Fn() -> Point {
     move || {
@@ -1488,7 +1480,7 @@ fn lazy_list_content_offset_reader(
         };
         overscroll.set_dimension(viewport);
         let bounce = overscroll.offset();
-        if is_vertical {
+        if axis.is_vertical() {
             Point::new(0.0, main_offset + bounce)
         } else {
             Point::new(main_offset + bounce, 0.0)
@@ -1534,7 +1526,7 @@ impl PartialEq for TranslatedContentContextElement {
     fn eq(&self, other: &Self) -> bool {
         self.identity == other.identity
             && self.overscroll.ptr_eq(&other.overscroll)
-            && self.offset_source.is_vertical() == other.offset_source.is_vertical()
+            && self.offset_source.axis() == other.offset_source.axis()
             && self.offset_source.reverse_scrolling() == other.offset_source.reverse_scrolling()
     }
 }
@@ -1544,7 +1536,7 @@ impl Eq for TranslatedContentContextElement {}
 impl std::hash::Hash for TranslatedContentContextElement {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.identity.hash(state);
-        self.offset_source.is_vertical().hash(state);
+        self.offset_source.axis().hash(state);
         self.offset_source.reverse_scrolling().hash(state);
     }
 }
@@ -1596,7 +1588,7 @@ impl Modifier {
     pub fn horizontal_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
         self.then(scroll_impl(
             state,
-            false,
+            Axis::Horizontal,
             reverse_scrolling,
             None,
             (0.0, 0.0),
@@ -1614,7 +1606,7 @@ impl Modifier {
     pub fn vertical_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
         self.then(scroll_impl(
             state,
-            true,
+            Axis::Vertical,
             reverse_scrolling,
             None,
             (0.0, 0.0),
@@ -1634,7 +1626,7 @@ impl Modifier {
         let density = crate::density();
         self.then(scroll_impl(
             state,
-            true,
+            Axis::Vertical,
             reverse_scrolling,
             None,
             (density.dp(padding.top), density.dp(padding.bottom)),
@@ -1655,7 +1647,7 @@ impl Modifier {
         let density = crate::density();
         self.then(scroll_impl(
             state,
-            false,
+            Axis::Horizontal,
             reverse_scrolling,
             None,
             (density.dp(padding.left), density.dp(padding.right)),
@@ -1676,7 +1668,7 @@ impl Modifier {
     ) -> Self {
         self.then(scroll_impl(
             state,
-            false,
+            Axis::Horizontal,
             reverse_scrolling,
             Some(Rc::new(|| false)),
             (0.0, 0.0),
@@ -1693,7 +1685,7 @@ impl Modifier {
     ) -> Self {
         self.then(scroll_impl(
             state,
-            true,
+            Axis::Vertical,
             reverse_scrolling,
             Some(Rc::new(|| false)),
             (0.0, 0.0),
@@ -1703,24 +1695,24 @@ impl Modifier {
 
 fn scroll_impl(
     state: ScrollState,
-    is_vertical: bool,
+    axis: Axis,
     reverse_scrolling: bool,
     guard: Option<Rc<dyn Fn() -> bool>>,
     content_padding: (f32, f32),
 ) -> Modifier {
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: state.id(),
-        is_vertical,
+        axis,
         reverse_scrolling,
     });
     motion_context
         .observe_activity(|| Box::new(move |active| state.set_scroll_in_progress(active)));
 
     let pointer_input = nested_drag_gesture_input(
-        (state.id(), is_vertical),
+        (state.id(), axis),
         DragGesture {
             target: state,
-            is_vertical,
+            axis,
             reverse_input: false,
             motion_context: motion_context.clone(),
             guard,
@@ -1728,16 +1720,16 @@ fn scroll_impl(
     );
 
     let overscroll = motion_context.overscroll();
-    let element = ScrollElement::new(state, overscroll.clone(), is_vertical, reverse_scrolling);
+    let element = ScrollElement::new(state, overscroll.clone(), axis, reverse_scrolling);
     let layout_modifier =
         Modifier::with_element(element).with_inspector_metadata(inspector_metadata(
-            if is_vertical {
+            if axis.is_vertical() {
                 "verticalScroll"
             } else {
                 "horizontalScroll"
             },
             move |info| {
-                info.add_property("isVertical", is_vertical.to_string());
+                info.add_property("isVertical", axis.is_vertical().to_string());
                 info.add_property("reverseScrolling", reverse_scrolling.to_string());
             },
         ));
@@ -1758,7 +1750,7 @@ fn scroll_impl(
         .then(layout_modifier)
         .semantics(scroll_semantics(
             state,
-            is_vertical,
+            axis,
             reverse_scrolling,
             content_padding,
         ))
@@ -1770,7 +1762,7 @@ fn scroll_impl(
 /// Without this a reader's cursor stops at the last row it can see.
 fn scroll_semantics(
     state: ScrollState,
-    is_vertical: bool,
+    axis: Axis,
     reverse_scrolling: bool,
     content_padding: (f32, f32),
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
@@ -1781,14 +1773,14 @@ fn scroll_semantics(
             reverse_scrolling,
         )
         .with_content_padding(content_padding.0, content_padding.1);
-        if is_vertical {
+        if axis.is_vertical() {
             config.vertical_scroll = Some(range);
         } else {
             config.horizontal_scroll = Some(range);
         }
         config.scroll_by = Some(cranpose_foundation::SemanticsScrollBy::new(
             move |dx, dy| {
-                let delta = if is_vertical { dy } else { dx };
+                let delta = if axis.is_vertical() { dy } else { dx };
                 state.dispatch_raw_delta(delta).abs() > f32::EPSILON
             },
         ));
@@ -1811,7 +1803,7 @@ impl Modifier {
     pub fn lazy_vertical_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
         let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
             state_identity: state.inner_ptr() as usize,
-            is_vertical: true,
+            axis: Axis::Vertical,
             reverse_scrolling,
         });
         self.lazy_vertical_scroll_with_context(state, reverse_scrolling, (0.0, 0.0), motion_context)
@@ -1826,7 +1818,7 @@ impl Modifier {
     ) -> Self {
         self.then(lazy_scroll_impl(
             state,
-            true,
+            Axis::Vertical,
             reverse_scrolling,
             content_padding,
             motion_context,
@@ -1842,7 +1834,7 @@ impl Modifier {
     ) -> Self {
         self.then(lazy_scroll_impl(
             state,
-            false,
+            Axis::Horizontal,
             reverse_scrolling,
             content_padding,
             motion_context,
@@ -1852,14 +1844,14 @@ impl Modifier {
 
 fn lazy_scroll_impl(
     state: LazyListState,
-    is_vertical: bool,
+    axis: Axis,
     reverse_scrolling: bool,
     content_padding: (f32, f32),
     motion_context: ScrollMotionContext,
 ) -> Modifier {
     let list_state = state;
     let state_id = state.inner_ptr() as usize;
-    let key = (state_id, is_vertical, reverse_scrolling);
+    let key = (state_id, axis, reverse_scrolling);
     motion_context
         .observe_activity(|| Box::new(move |active| state.set_gesture_scroll_active(active)));
     let overscroll = motion_context.overscroll();
@@ -1867,7 +1859,7 @@ fn lazy_scroll_impl(
         state_id,
         TranslatedContentOffsetSource::LazyList {
             state,
-            is_vertical,
+            axis,
             reverse_scrolling,
         },
         overscroll,
@@ -1879,7 +1871,7 @@ fn lazy_scroll_impl(
             key,
             DragGesture {
                 target: list_state,
-                is_vertical,
+                axis,
                 reverse_input: reverse_scrolling,
                 motion_context,
                 guard: None,
@@ -1887,7 +1879,7 @@ fn lazy_scroll_impl(
         ))
         .semantics(lazy_scroll_semantics(
             list_state,
-            is_vertical,
+            axis,
             reverse_scrolling,
             content_padding,
         ))
@@ -1900,7 +1892,7 @@ fn lazy_scroll_impl(
 /// the two answers: can it page back, can it page on.
 pub(crate) fn lazy_scroll_semantics(
     state: LazyListState,
-    is_vertical: bool,
+    axis: Axis,
     reverse_scrolling: bool,
     content_padding: (f32, f32),
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
@@ -1918,20 +1910,20 @@ pub(crate) fn lazy_scroll_semantics(
             .with_content_padding(content_padding.0, content_padding.1);
         let count = state.total_items_count();
         config.collection = Some(cranpose_foundation::CollectionInfo {
-            rows: if is_vertical { count } else { 1 },
-            columns: if is_vertical { 1 } else { count },
+            rows: if axis.is_vertical() { count } else { 1 },
+            columns: if axis.is_vertical() { 1 } else { count },
         });
         config
             .role
             .get_or_insert(cranpose_foundation::SemanticsWidgetRole::List);
-        if is_vertical {
+        if axis.is_vertical() {
             config.vertical_scroll = Some(range);
         } else {
             config.horizontal_scroll = Some(range);
         }
         config.scroll_by = Some(cranpose_foundation::SemanticsScrollBy::new(
             move |dx, dy| {
-                let delta = if is_vertical { dy } else { dx };
+                let delta = if axis.is_vertical() { dy } else { dx };
                 match state.settle_policy() {
                     Some(policy) => settle_reader_scroll(&state, &policy, delta),
                     None => state.dispatch_scroll_delta(-delta).abs() > f32::EPSILON,
@@ -2001,20 +1993,19 @@ impl Modifier {
     /// clipping layout. A new pointer press interrupts the fling. The state's
     /// consumption handler stops it when the content reaches a boundary.
     pub fn scrollable(self, axis: Axis, state: ScrollableState) -> Self {
-        let is_vertical = axis.is_vertical();
         let identity = state.identity();
         let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
             state_identity: identity,
-            is_vertical,
+            axis,
         });
         self.then(Self::with_element(MotionContextAnimatedElement::new(
             motion_context.clone(),
         )))
         .then(nested_drag_gesture_input(
-            (identity, is_vertical),
+            (identity, axis),
             DragGesture {
                 target: state,
-                is_vertical,
+                axis,
                 reverse_input: false,
                 motion_context,
                 guard: None,
@@ -2042,17 +2033,16 @@ fn draggable_impl(
     state: DraggableState,
     guard: Option<Rc<dyn Fn() -> bool>>,
 ) -> Modifier {
-    let is_vertical = axis.is_vertical();
     let identity = state.identity();
     drag_gesture_input(
-        (identity, is_vertical),
+        (identity, axis),
         DragGesture {
             target: state,
-            is_vertical,
+            axis,
             reverse_input: false,
             motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
                 state_identity: identity,
-                is_vertical,
+                axis,
             }),
             guard,
         },

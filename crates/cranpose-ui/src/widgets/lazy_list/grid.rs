@@ -15,7 +15,7 @@ use cranpose_foundation::lazy::{
     LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallOffsetVec,
     measure_lazy_list_with_beyond_bounds_policy, rememberLazyListStateWithPosition,
 };
-use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
+use cranpose_ui_layout::{Axis, LinearArrangement, MeasureScope as _};
 
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
@@ -769,7 +769,7 @@ pub(super) fn measure_grid_viewport(
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, frame.is_vertical, available);
+        .begin_pass(scope, frame.axis, available);
     let near_lines = state.nearest_range();
     let last = lines.line(near_lines.end.saturating_sub(1));
     let near = lines.line(near_lines.start).first..last.first + last.count;
@@ -781,7 +781,7 @@ pub(super) fn measure_grid_viewport(
         });
     }
     let inputs = LazyListItemMeasureInputs {
-        is_vertical: frame.is_vertical,
+        axis: frame.axis,
         cross_axis_size: available,
         content,
         state,
@@ -839,7 +839,7 @@ pub(super) fn measure_grid_viewport(
 pub(super) fn grid_semantics(
     modifier: Modifier,
     grid: Option<&CellLayout>,
-    vertical: bool,
+    axis: Axis,
 ) -> Modifier {
     let Some(CellLayout::Grid(grid)) = grid else {
         return modifier;
@@ -847,7 +847,7 @@ pub(super) fn grid_semantics(
     let lines = Rc::clone(&grid.lines);
     modifier.semantics(move |config| {
         let lines = lines.borrow();
-        let (rows, columns) = if vertical {
+        let (rows, columns) = if axis.is_vertical() {
             (lines.line_count, lines.columns)
         } else {
             (lines.columns, lines.line_count)

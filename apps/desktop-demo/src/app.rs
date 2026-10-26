@@ -3,6 +3,7 @@ use std::{
     rc::Rc,
 };
 
+use cranpose::Axis;
 use cranpose_animation::{
     animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
     AnimationType, RepeatMode, StartOffset,
@@ -1697,7 +1698,7 @@ fn recursive_layout_example() {
                     .padding(12.0),
                 ColumnSpec::default(),
                 move || {
-                    recursive_layout_node(Modifier::empty(), depth, true, 0);
+                    recursive_layout_node(Modifier::empty(), depth, Axis::Horizontal, 0);
                 },
             );
         },
@@ -1705,7 +1706,7 @@ fn recursive_layout_example() {
 }
 
 #[composable]
-fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, index: usize) {
+fn recursive_layout_node(modifier: Modifier, depth: usize, axis: Axis, index: usize) {
     let accent = [
         Color(0.25, 0.32, 0.58, 0.75),
         Color(0.30, 0.20, 0.45, 0.75),
@@ -1738,7 +1739,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                         .padding(6.0),
                     TextStyle::default(),
                 );
-            } else if horizontal {
+            } else if axis.is_horizontal() {
                 Row(
                     Modifier::empty().fill_max_width(),
                     RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
@@ -1747,7 +1748,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                             recursive_layout_node(
                                 Modifier::empty().rowWeight(1.0, true),
                                 depth - 1,
-                                false,
+                                Axis::Vertical,
                                 index * 2 + child_idx + 1,
                             );
                         }
@@ -1762,7 +1763,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                             recursive_layout_node(
                                 Modifier::empty().columnWeight(1.0, true),
                                 depth - 1,
-                                true,
+                                Axis::Horizontal,
                                 index * 2 + child_idx + 1,
                             );
                         }

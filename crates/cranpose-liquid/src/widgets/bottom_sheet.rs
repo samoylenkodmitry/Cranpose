@@ -14,8 +14,8 @@ use cranpose_core::{
 use cranpose_foundation::SemanticsExpand;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Alignment, GraphicsLayer, HorizontalAlignment, Modifier, NestedScroll, NestedScrollConnection,
-    NestedScrollSource, Rect, ScrollAxis, ScrollableState, Size,
+    Alignment, Axis, GraphicsLayer, HorizontalAlignment, Modifier, NestedScroll,
+    NestedScrollConnection, NestedScrollSource, Rect, ScrollableState, Size,
     widgets::{
         Box, BoxSpec, Column, ColumnSpec, DEFAULT_SCRIM, DialogSpec, DialogWithFadingScrim,
         local_popup_viewport,
@@ -23,7 +23,6 @@ use cranpose_ui::{
     window_insets,
 };
 use cranpose_ui_graphics::{Brush, CornerRadii};
-use cranpose_ui_layout::Axis;
 
 use crate::theme::liquid_colors;
 
@@ -270,8 +269,8 @@ fn watch_hidden(sheet: &Rc<Sheet>) {
 struct SheetConnection(Rc<Sheet>);
 
 impl NestedScrollConnection for SheetConnection {
-    fn on_pre_scroll(&self, axis: ScrollAxis, available: f32, source: NestedScrollSource) -> f32 {
-        if axis != ScrollAxis::Vertical || source != NestedScrollSource::Drag || available >= 0.0 {
+    fn on_pre_scroll(&self, axis: Axis, available: f32, source: NestedScrollSource) -> f32 {
+        if axis != Axis::Vertical || source != NestedScrollSource::Drag || available >= 0.0 {
             return 0.0;
         }
         self.0.drag_by(available)
@@ -279,19 +278,19 @@ impl NestedScrollConnection for SheetConnection {
 
     fn on_post_scroll(
         &self,
-        axis: ScrollAxis,
+        axis: Axis,
         _consumed: f32,
         available: f32,
         source: NestedScrollSource,
     ) -> f32 {
-        if axis != ScrollAxis::Vertical || source != NestedScrollSource::Drag || available <= 0.0 {
+        if axis != Axis::Vertical || source != NestedScrollSource::Drag || available <= 0.0 {
             return 0.0;
         }
         self.0.drag_by(available)
     }
 
-    fn on_pre_fling(&self, axis: ScrollAxis, velocity: f32) -> f32 {
-        if axis == ScrollAxis::Vertical && self.0.release(velocity) {
+    fn on_pre_fling(&self, axis: Axis, velocity: f32) -> f32 {
+        if axis == Axis::Vertical && self.0.release(velocity) {
             velocity
         } else {
             0.0

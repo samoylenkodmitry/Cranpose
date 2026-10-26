@@ -2,6 +2,7 @@
 //! CSS flexbox.
 
 use cranpose_core::NodeId;
+use cranpose_ui_layout::Axis;
 
 use super::layout::{LayoutEnvironment, compose_layout};
 use crate::{composable, layout::flex_box::FlexBoxMeasurePolicy, modifier::Modifier};
@@ -21,8 +22,11 @@ pub enum FlexDirection {
 }
 
 impl FlexDirection {
-    pub(crate) fn is_horizontal(self) -> bool {
-        matches!(self, Self::Row | Self::RowReverse)
+    pub(crate) fn main_axis(self) -> Axis {
+        match self {
+            Self::Row | Self::RowReverse => Axis::Horizontal,
+            Self::Column | Self::ColumnReverse => Axis::Vertical,
+        }
     }
 
     pub(crate) fn is_reverse(self) -> bool {

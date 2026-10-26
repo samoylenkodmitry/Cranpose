@@ -223,7 +223,7 @@ pub use modifier_nodes::{
     FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
     PaddingNode, SizeElement, SizeNode,
 };
-pub use nested_scroll::{NestedScroll, NestedScrollConnection, NestedScrollSource, ScrollAxis};
+pub use nested_scroll::{NestedScroll, NestedScrollConnection, NestedScrollSource};
 pub use nine_patch::{
     NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_count, tile_quads,
 };

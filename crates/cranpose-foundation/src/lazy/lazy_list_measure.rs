@@ -6,6 +6,8 @@
 
 use std::collections::VecDeque;
 
+use cranpose_ui_layout::Axis;
+
 use super::{
     bounds_adjuster::BoundsAdjuster,
     diagnostics,
@@ -29,8 +31,8 @@ const MIN_IDLE_WARM_BEYOND_BOUNDS_ITEMS: usize = 4;
 /// Configuration for lazy list measurement.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LazyListMeasureConfig {
-    /// Whether the list is vertical (true) or horizontal (false).
-    pub is_vertical: bool,
+    /// The axis along which the list lays out its items.
+    pub axis: Axis,
     /// Whether horizontal placement resolves start from the right edge.
     pub is_rtl: bool,
 
@@ -54,18 +56,18 @@ pub struct LazyListMeasureConfig {
     pub beyond_bounds_item_count: usize,
 
     /// Vertical arrangement for distributing items.
-    /// Used when `is_vertical` is true.
+    /// Used when `axis` is [`Axis::Vertical`].
     pub vertical_arrangement: Option<cranpose_ui_layout::LinearArrangement>,
 
     /// Horizontal arrangement for distributing items.
-    /// Used when `is_vertical` is false.
+    /// Used when `axis` is [`Axis::Horizontal`].
     pub horizontal_arrangement: Option<cranpose_ui_layout::LinearArrangement>,
 }
 
 impl Default for LazyListMeasureConfig {
     fn default() -> Self {
         Self {
-            is_vertical: true,
+            axis: Axis::Vertical,
             is_rtl: false,
             reverse_layout: false,
             before_content_padding: 0.0,

@@ -19,7 +19,7 @@ use cranpose_foundation::lazy::{
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
 use cranpose_ui_layout::{
-    Constraints, LinearArrangement, MeasureResult, MeasureScope as _, round_to_px,
+    Axis, Constraints, LinearArrangement, MeasureResult, MeasureScope as _, round_to_px,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -51,7 +51,7 @@ struct LazyItemMeasureContext {
     index: usize,
     key_slot_id: u64,
     content_type: Option<u64>,
-    is_vertical: bool,
+    axis: Axis,
     cross_axis_size: f32,
 }
 
@@ -210,7 +210,7 @@ struct ResolvedContentPadding {
 
 fn resolve_content_padding(
     padding: PaddingValues,
-    is_vertical: bool,
+    axis: Axis,
     reverse_layout: bool,
     direction: LayoutDirection,
     density: f32,
@@ -224,7 +224,7 @@ fn resolve_content_padding(
         px(edges.bottom),
     );
     // A row lays out from its start edge; right-to-left placement mirrors it.
-    let (first, last) = if is_vertical {
+    let (first, last) = if axis.is_vertical() {
         (top, bottom)
     } else {
         (px(padding.start), px(padding.end))
@@ -234,7 +234,7 @@ fn resolve_content_padding(
     } else {
         (first, last)
     };
-    if is_vertical {
+    if axis.is_vertical() {
         ResolvedContentPadding {
             before,
             after,
@@ -253,7 +253,7 @@ fn resolve_content_padding(
 
 #[derive(Clone, Copy)]
 struct LazyListItemMeasureInputs<'a> {
-    is_vertical: bool,
+    axis: Axis,
     cross_axis_size: f32,
     content: &'a LazyListIntervalContent,
     state: &'a LazyListState,
@@ -285,7 +285,7 @@ fn measure_lazy_list_item(
         index,
         key_slot_id,
         content_type,
-        is_vertical: inputs.is_vertical,
+        axis: inputs.axis,
         cross_axis_size: inputs.cross_axis_size,
     };
 
@@ -432,8 +432,8 @@ fn keep_lazy_list_item(
     }
 }
 
-fn lazy_list_child_constraints(is_vertical: bool, cross_axis_size: f32) -> Constraints {
-    if is_vertical {
+fn lazy_list_child_constraints(axis: Axis, cross_axis_size: f32) -> Constraints {
+    if axis.is_vertical() {
         Constraints {
             min_width: 0.0,
             max_width: cross_axis_size,
@@ -457,8 +457,7 @@ fn measure_lazy_list_children(
     context: LazyItemMeasureContext,
     measure_start: Instant,
 ) -> LazyListMeasuredItem {
-    let child_constraints =
-        lazy_list_child_constraints(context.is_vertical, context.cross_axis_size);
+    let child_constraints = lazy_list_child_constraints(context.axis, context.cross_axis_size);
 
     let mut total_main_size: f32 = 0.0;
     let mut max_cross_size: f32 = 0.0;
@@ -477,7 +476,7 @@ fn measure_lazy_list_children(
             },
             |measured| measured.size(),
         );
-        let (main, cross) = if context.is_vertical {
+        let (main, cross) = if context.axis.is_vertical() {
             (size.height, size.width)
         } else {
             (size.width, size.height)
@@ -560,7 +559,7 @@ struct LazyListMeasureContext<'a> {
 
 /// The constraint-derived sizes a measure pass works with.
 struct LazyFrame {
-    is_vertical: bool,
+    axis: Axis,
     raw_viewport_size: f32,
     cross_axis_size: f32,
     /// The cross-axis size inside the cross-axis content padding.
@@ -568,15 +567,15 @@ struct LazyFrame {
 }
 
 impl LazyFrame {
-    fn new(constraints: Constraints, is_vertical: bool, config: &LazyListLayoutConfig) -> Self {
-        let (raw_viewport_size, cross_axis_size) = if is_vertical {
+    fn new(constraints: Constraints, axis: Axis, config: &LazyListLayoutConfig) -> Self {
+        let (raw_viewport_size, cross_axis_size) = if axis.is_vertical() {
             (constraints.max_height, constraints.max_width)
         } else {
             (constraints.max_width, constraints.max_height)
         };
         let (cross_start, cross_end) = config.cross_padding;
         Self {
-            is_vertical,
+            axis,
             raw_viewport_size,
             cross_axis_size,
             item_cross_axis_size: (cross_axis_size - cross_start - cross_end).max(0.0),
@@ -587,11 +586,11 @@ impl LazyFrame {
 fn measure_lazy_list_internal(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     constraints: Constraints,
-    is_vertical: bool,
+    axis: Axis,
     content: &Rc<LazyListIntervalContent>,
     context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
-    let frame = LazyFrame::new(constraints, is_vertical, context.config);
+    let frame = LazyFrame::new(constraints, axis, context.config);
     let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
     let (result, count) = match &context.config.grid {
@@ -622,11 +621,9 @@ fn measure_list_viewport(
     let config = &context.config.measure;
     let measured_item_cache = context.measured_item_cache;
     let items_count = content.item_count();
-    measured_item_cache.borrow_mut().begin_pass(
-        scope,
-        frame.is_vertical,
-        frame.item_cross_axis_size,
-    );
+    measured_item_cache
+        .borrow_mut()
+        .begin_pass(scope, frame.axis, frame.item_cross_axis_size);
     let near = state.nearest_range();
     if items_count > 0 {
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
@@ -636,7 +633,7 @@ fn measure_list_viewport(
 
     let scroll_delta_for_direction = state.peek_scroll_delta();
     let item_measure_inputs = LazyListItemMeasureInputs {
-        is_vertical: frame.is_vertical,
+        axis: frame.axis,
         cross_axis_size: frame.item_cross_axis_size,
         content,
         state,
@@ -687,7 +684,7 @@ fn place_lazy_list(
 ) -> MeasureResult {
     let state = context.state;
     let overscroll = context.overscroll;
-    let is_vertical = frame.is_vertical;
+    let axis = frame.axis;
     let cross_axis_size = frame.cross_axis_size;
     let effective_viewport_size = result.viewport_size;
     overscroll.set_dimension(effective_viewport_size);
@@ -717,7 +714,7 @@ fn place_lazy_list(
         }
     };
 
-    let width = if is_vertical {
+    let width = if axis.is_vertical() {
         cross_axis_size
     } else {
         resolve_main_axis(
@@ -726,7 +723,7 @@ fn place_lazy_list(
             constraints.max_width,
         )
     };
-    let height = if is_vertical {
+    let height = if axis.is_vertical() {
         resolve_main_axis(
             result.total_content_size,
             constraints.min_height,
@@ -756,7 +753,7 @@ fn place_lazy_list(
         );
         let bounce = overscroll.offset();
         for placement in placements.iter_mut() {
-            if is_vertical {
+            if axis.is_vertical() {
                 placement.y += bounce;
             } else {
                 placement.x += bounce;
@@ -1132,7 +1129,7 @@ impl PartialEq for LazyListContentHandle {
 
 #[derive(Default)]
 struct LazyMeasuredItemCache {
-    is_vertical: bool,
+    axis: Option<Axis>,
     cross_axis_bits: u32,
     telemetry: LazyCacheTelemetry,
     entries: HashMap<usize, CachedLazyMeasuredItem>,
@@ -1181,16 +1178,16 @@ impl LazyMeasuredItemCache {
         self.focused = Some((slot, index));
     }
 
-    fn retain_constraint_scope(&mut self, is_vertical: bool, cross_axis_size: f32) {
+    fn retain_constraint_scope(&mut self, axis: Axis, cross_axis_size: f32) {
         let cross_axis_bits = normalized_axis_bits(cross_axis_size);
         if self.entries.is_empty() {
-            self.is_vertical = is_vertical;
+            self.axis = Some(axis);
             self.cross_axis_bits = cross_axis_bits;
             return;
         }
-        if self.is_vertical != is_vertical || self.cross_axis_bits != cross_axis_bits {
+        if self.axis != Some(axis) || self.cross_axis_bits != cross_axis_bits {
             self.clear();
-            self.is_vertical = is_vertical;
+            self.axis = Some(axis);
             self.cross_axis_bits = cross_axis_bits;
         }
     }
@@ -1205,10 +1202,10 @@ impl LazyMeasuredItemCache {
     fn begin_pass(
         &mut self,
         scope: &SubcomposeMeasureScopeImpl<'_>,
-        is_vertical: bool,
+        axis: Axis,
         cross_axis_size: f32,
     ) {
-        self.retain_constraint_scope(is_vertical, cross_axis_size);
+        self.retain_constraint_scope(axis, cross_axis_size);
         self.retain_retained_slots(|slot_id| scope.slot_is_retained(slot_id));
     }
 
@@ -1336,7 +1333,7 @@ fn push_lazy_list_placements(
 ) {
     use cranpose_ui_layout::Arrangement;
 
-    let is_vertical = frame.is_vertical;
+    let axis = frame.axis;
     let config = &layout_config.measure;
 
     placements.clear();
@@ -1347,7 +1344,7 @@ fn push_lazy_list_placements(
             .sum(),
     );
 
-    let arrangement = if is_vertical {
+    let arrangement = if axis.is_vertical() {
         config
             .vertical_arrangement
             .unwrap_or(LinearArrangement::Start)
@@ -1410,7 +1407,7 @@ fn push_lazy_item_placements(
     viewport_size: f32,
     layout_config: &LazyListLayoutConfig,
 ) {
-    let (is_vertical, cross_axis_size) = (frame.is_vertical, frame.cross_axis_size);
+    let (axis, cross_axis_size) = (frame.axis, frame.cross_axis_size);
     let config = &layout_config.measure;
     let (cross_start, cross_end) = layout_config.cross_padding;
     let start = if config.reverse_layout {
@@ -1427,13 +1424,13 @@ fn push_lazy_item_placements(
     {
         let main = start + offset;
         let cell = item.child_cross_offsets.get(index).copied().unwrap_or(0.0);
-        let (mut x, y) = if is_vertical {
+        let (mut x, y) = if axis.is_vertical() {
             (cross_start + cell, main)
         } else {
             (main, cross_start + cell)
         };
         if config.is_rtl {
-            x = if is_vertical {
+            x = if axis.is_vertical() {
                 cross_axis_size
                     - cross_end
                     - cell
@@ -1503,7 +1500,7 @@ fn LazyColumnImpl(
     let direction = crate::layout_direction();
     let padding = resolve_content_padding(
         spec.content_padding,
-        true,
+        Axis::Vertical,
         spec.reverse_layout,
         direction,
         composed_density.density(),
@@ -1511,7 +1508,7 @@ fn LazyColumnImpl(
     let semantics_grid = grid.clone();
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
-            is_vertical: true,
+            axis: Axis::Vertical,
             is_rtl: direction.is_rtl(),
             reverse_layout: spec.reverse_layout,
             before_content_padding: padding.before,
@@ -1541,7 +1538,7 @@ fn LazyColumnImpl(
             .with(Clone::clone);
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
-        is_vertical: true,
+        axis: Axis::Vertical,
         reverse_scrolling: spec.reverse_layout,
     });
     let overscroll = motion_context.overscroll();
@@ -1560,7 +1557,7 @@ fn LazyColumnImpl(
                 measure_lazy_list_internal(
                     scope,
                     constraints,
-                    true,
+                    Axis::Vertical,
                     content.content(),
                     LazyListMeasureContext {
                         state: &state,
@@ -1584,7 +1581,7 @@ fn LazyColumnImpl(
             motion_context,
         ),
         semantics_grid.as_ref(),
-        true,
+        Axis::Vertical,
     );
 
     let node_id = cranpose_core::with_current_composer(|composer| {
@@ -1648,7 +1645,7 @@ fn LazyRowImpl(
     let reverse_scrolling = spec.reverse_layout ^ is_rtl;
     let padding = resolve_content_padding(
         spec.content_padding,
-        false,
+        Axis::Horizontal,
         spec.reverse_layout,
         direction,
         composed_density.density(),
@@ -1656,7 +1653,7 @@ fn LazyRowImpl(
     let semantics_grid = grid.clone();
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
-            is_vertical: false,
+            axis: Axis::Horizontal,
             is_rtl,
             reverse_layout: spec.reverse_layout,
             before_content_padding: padding.before,
@@ -1686,7 +1683,7 @@ fn LazyRowImpl(
             .with(Clone::clone);
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
-        is_vertical: false,
+        axis: Axis::Horizontal,
         reverse_scrolling,
     });
     let overscroll = motion_context.overscroll();
@@ -1705,7 +1702,7 @@ fn LazyRowImpl(
                 measure_lazy_list_internal(
                     scope,
                     constraints,
-                    false,
+                    Axis::Horizontal,
                     content.content(),
                     LazyListMeasureContext {
                         state: &state,
@@ -1731,7 +1728,7 @@ fn LazyRowImpl(
                 motion_context,
             ),
         semantics_grid.as_ref(),
-        false,
+        Axis::Horizontal,
     );
 
     let node_id = cranpose_core::with_current_composer(|composer| {

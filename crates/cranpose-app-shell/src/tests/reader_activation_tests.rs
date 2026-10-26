@@ -1,4 +1,7 @@
-use cranpose_ui::widgets::dialog::{Dialog, DialogSpec};
+use cranpose_ui::{
+    Axis,
+    widgets::dialog::{Dialog, DialogSpec},
+};
 
 use super::*;
 
@@ -386,15 +389,15 @@ fn native_snapshot_revision_survives_an_earlier_semantics_read() {
 #[test]
 fn keyboard_focus_reveals_an_offscreen_control() {
     let _guard = test_guard();
-    for horizontal in [false, true] {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
         for reverse in [false, true] {
-            let (mut shell, scroll) = scrolling_controls(horizontal, reverse);
+            let (mut shell, scroll) = scrolling_controls(axis, reverse);
             assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
             shell.update();
-            assert_control_visible(&mut shell, "First", horizontal);
+            assert_control_visible(&mut shell, "First", axis);
             assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
             shell.update();
-            assert_control_visible(&mut shell, "Add page", horizontal);
+            assert_control_visible(&mut shell, "Add page", axis);
             let scroll = scroll.borrow().expect("scroll state");
             let manual = if reverse { scroll.max_value() } else { 0.0 };
             scroll.scroll_to(manual);
@@ -448,27 +451,27 @@ fn keyboard_reaches_every_item_in_a_lazy_list() {
                 Some(reader_control_id(&mut shell, &label)),
                 "{label}"
             );
-            assert_control_visible(&mut shell, &label, false);
+            assert_control_visible(&mut shell, &label, Axis::Vertical);
         }
     }
 }
 
-fn assert_control_visible(shell: &mut AppShell<HitGraphRenderer>, label: &str, horizontal: bool) {
+fn assert_control_visible(shell: &mut AppShell<HitGraphRenderer>, label: &str, axis: Axis) {
     let target = reader_control_id(shell, label);
     let (x, y, width, height) = shell.node_layout_bounds(target).expect("focused bounds");
-    let (start, size, extent) = if horizontal {
+    let (start, size, extent) = if axis.is_horizontal() {
         (x, width, 240.0)
     } else {
         (y, height, 120.0)
     };
     assert!(
         start >= -0.001 && start + size <= extent + 0.001,
-        "{label}: start={start}, size={size}, horizontal={horizontal}"
+        "{label}: start={start}, size={size}, axis={axis:?}"
     );
 }
 
 fn scrolling_controls(
-    horizontal: bool,
+    axis: Axis,
     reverse: bool,
 ) -> (AppShell<HitGraphRenderer>, Rc<RefCell<Option<ScrollState>>>) {
     let scroll = Rc::new(RefCell::new(None));
@@ -490,7 +493,7 @@ fn scrolling_controls(
                     BoxSpec::default(),
                     || {},
                 );
-                Spacer(Modifier::empty().size(if horizontal {
+                Spacer(Modifier::empty().size(if axis.is_horizontal() {
                     Size::new(400.0, 1.0)
                 } else {
                     Size::new(1.0, 400.0)
@@ -504,7 +507,7 @@ fn scrolling_controls(
                     || {},
                 );
             };
-            if horizontal {
+            if axis.is_horizontal() {
                 Row(
                     modifier.horizontal_scroll(content_scroll, reverse),
                     RowSpec::default(),
@@ -563,15 +566,15 @@ fn reader_activation_enters_text_editing_without_moving_the_selection() {
 #[test]
 fn reader_reveal_scrolls_both_axes_without_starting_keyboard_focus() {
     let _guard = test_guard();
-    for horizontal in [false, true] {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
         for reverse in [false, true] {
-            let (mut shell, scroll) = scrolling_controls(horizontal, reverse);
+            let (mut shell, scroll) = scrolling_controls(axis, reverse);
             shell.set_semantics_enabled(true);
             for label in ["First", "Add page", "First"] {
                 let target = reader_control_id(&mut shell, label);
                 shell.accessibility_reveal(target);
                 shell.update();
-                assert_control_visible(&mut shell, label, horizontal);
+                assert_control_visible(&mut shell, label, axis);
                 assert_eq!(
                     shell.app_context().enter(cranpose_ui::active_focus_target),
                     None
@@ -590,14 +593,14 @@ fn reader_reveal_scrolls_both_axes_without_starting_keyboard_focus() {
 #[test]
 fn reader_reveal_keeps_controls_clear_of_scroll_content_insets() {
     let _guard = test_guard();
-    for horizontal in [false, true] {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
         for reverse in [false, true] {
-            assert_reader_content_insets(horizontal, reverse);
+            assert_reader_content_insets(axis, reverse);
         }
     }
 }
 
-fn assert_reader_content_insets(horizontal: bool, reverse: bool) {
+fn assert_reader_content_insets(axis: Axis, reverse: bool) {
     let mut shell = AppShell::new(
         HitGraphRenderer::default(),
         location_key(file!(), line!(), column!()),
@@ -607,7 +610,7 @@ fn assert_reader_content_insets(horizontal: bool, reverse: bool) {
                 for label in ["English", "Spanish", "Korean"] {
                     Box(
                         Modifier::empty()
-                            .size(if horizontal {
+                            .size(if axis.is_horizontal() {
                                 Size::new(48.0, 200.0)
                             } else {
                                 Size::new(200.0, 48.0)
@@ -620,12 +623,12 @@ fn assert_reader_content_insets(horizontal: bool, reverse: bool) {
                     Spacer(Modifier::empty().size(Size::new(160.0, 160.0)));
                 }
             };
-            let padding = if horizontal {
+            let padding = if axis.is_horizontal() {
                 cranpose_ui_graphics::EdgeInsets::from_components(24.0, 0.0, 40.0, 0.0)
             } else {
                 cranpose_ui_graphics::EdgeInsets::from_components(0.0, 24.0, 0.0, 40.0)
             };
-            if horizontal {
+            if axis.is_horizontal() {
                 Row(
                     Modifier::empty()
                         .size(Size::new(160.0, 240.0))
@@ -651,10 +654,14 @@ fn assert_reader_content_insets(horizontal: bool, reverse: bool) {
         shell.accessibility_reveal(target);
         shell.update();
         let (x, y, width, height) = shell.node_layout_bounds(target).expect("control bounds");
-        let (start, size) = if horizontal { (x, width) } else { (y, height) };
+        let (start, size) = if axis.is_horizontal() {
+            (x, width)
+        } else {
+            (y, height)
+        };
         assert!(
             start >= 24.0 && start + size <= 120.0,
-            "{label}: start={start}, size={size}, horizontal={horizontal}, reverse={reverse}"
+            "{label}: start={start}, size={size}, axis={axis:?}, reverse={reverse}"
         );
     }
 }
@@ -666,15 +673,11 @@ struct LazyEditorFixture {
     active_effects: Rc<Cell<usize>>,
 }
 
-fn lazy_editor_fixture(horizontal: bool, reverse: bool) -> LazyEditorFixture {
-    lazy_editor_fixture_with_rows(horizontal, reverse, 20)
+fn lazy_editor_fixture(axis: Axis, reverse: bool) -> LazyEditorFixture {
+    lazy_editor_fixture_with_rows(axis, reverse, 20)
 }
 
-fn lazy_editor_fixture_with_rows(
-    horizontal: bool,
-    reverse: bool,
-    rows: usize,
-) -> LazyEditorFixture {
+fn lazy_editor_fixture_with_rows(axis: Axis, reverse: bool, rows: usize) -> LazyEditorFixture {
     let captured = Rc::new(RefCell::new(None));
     let state = Rc::clone(&captured);
     let active_effects = Rc::new(Cell::new(0usize));
@@ -722,7 +725,7 @@ fn lazy_editor_fixture_with_rows(
                 });
             };
             let modifier = Modifier::empty().size(Size::new(240.0, 120.0));
-            if horizontal {
+            if axis.is_horizontal() {
                 cranpose_ui::LazyRow(
                     modifier,
                     list,
@@ -770,14 +773,14 @@ fn scroll_lazy_editor(fixture: &mut LazyEditorFixture, delta: f32) {
 #[test]
 fn lazy_list_keeps_the_active_editor_when_the_reader_scrolls_away() {
     let _guard = test_guard();
-    for horizontal in [false, true] {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
         for reverse in [false, true] {
-            let mut fixture = lazy_editor_fixture(horizontal, reverse);
+            let mut fixture = lazy_editor_fixture(axis, reverse);
             let merchant = reader_control_id(&mut fixture.shell, "Merchant");
             scroll_lazy_editor(&mut fixture, -2800.0);
             assert!(
                 fixture.list.first_visible_item_index() > 5,
-                "horizontal={horizontal} reverse={reverse} first={}",
+                "axis={axis:?} reverse={reverse} first={}",
                 fixture.list.first_visible_item_index()
             );
             assert_eq!(fixture.active_effects.get(), 1);
@@ -827,7 +830,7 @@ fn lazy_list_keeps_the_active_editor_when_the_reader_scrolls_away() {
 #[test]
 fn lazy_list_keeps_the_active_editor_scrolled_far_past_the_items_it_maps_keys_for() {
     let _guard = test_guard();
-    let mut fixture = lazy_editor_fixture_with_rows(false, false, 3_000);
+    let mut fixture = lazy_editor_fixture_with_rows(Axis::Vertical, false, 3_000);
     fixture
         .shell
         .app_context()
@@ -896,15 +899,15 @@ fn reader_reveal_stops_when_a_scroll_action_reports_no_geometric_progress() {
 #[test]
 fn retained_lazy_editor_remains_readable_and_can_be_revealed() {
     let _guard = test_guard();
-    for horizontal in [false, true] {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
         for reverse in [false, true] {
-            let mut fixture = lazy_editor_fixture(horizontal, reverse);
+            let mut fixture = lazy_editor_fixture(axis, reverse);
             let merchant = reader_control_id(&mut fixture.shell, "Merchant");
             scroll_lazy_editor(&mut fixture, -2800.0);
             assert_eq!(reader_control_id(&mut fixture.shell, "Merchant"), merchant);
             assert!(fixture.shell.accessibility_reveal(merchant));
             fixture.shell.update();
-            assert_control_visible(&mut fixture.shell, "Merchant", horizontal);
+            assert_control_visible(&mut fixture.shell, "Merchant", axis);
             assert_eq!(fixture.active_effects.get(), 1);
         }
     }
@@ -1043,7 +1046,7 @@ fn reader_reveal_reaches_a_control_through_deep_and_wide_content() {
         .expect("nested focus");
     shell.update();
     assert_eq!(scroll.value(), scroll.max_value());
-    assert_control_visible(&mut shell, "Nested target", false);
+    assert_control_visible(&mut shell, "Nested target", Axis::Vertical);
     let target = reader_control_id(&mut shell, "Nested target");
     assert!(!shell.accessibility_reveal(target));
 }
@@ -1051,7 +1054,7 @@ fn reader_reveal_reaches_a_control_through_deep_and_wide_content() {
 #[test]
 fn lazy_list_releases_the_offscreen_editor_after_focus_is_cleared() {
     let _guard = test_guard();
-    let mut fixture = lazy_editor_fixture(false, false);
+    let mut fixture = lazy_editor_fixture(Axis::Vertical, false);
     scroll_lazy_editor(&mut fixture, -1200.0);
     fixture.shell.app_context().enter(|| {
         run_in_mutable_snapshot(|| cranpose_ui::FocusManager.clear_focus()).expect("clear focus");
@@ -1064,7 +1067,7 @@ fn lazy_list_releases_the_offscreen_editor_after_focus_is_cleared() {
 #[test]
 fn lazy_list_does_not_retain_an_editor_removed_from_content() {
     let _guard = test_guard();
-    let mut fixture = lazy_editor_fixture(false, false);
+    let mut fixture = lazy_editor_fixture(Axis::Vertical, false);
     scroll_lazy_editor(&mut fixture, -1200.0);
     fixture.show_editor.set(false);
     fixture.shell.update();
@@ -1124,14 +1127,14 @@ fn reader_focus_reveals_other_controls_without_replacing_the_active_editor() {
     shell.update();
     let before = shell.ime_editor_state().expect("active merchant editor");
     assert!(shell.accessibility_reveal(payment));
-    assert_control_visible(&mut shell, "Payment", false);
+    assert_control_visible(&mut shell, "Payment", Axis::Vertical);
     shell.update();
     let after = shell
         .ime_editor_state()
         .expect("reader navigation retains the editor");
     assert_eq!(after.text, before.text);
     assert_eq!((after.selection_start, after.selection_end), (2, 4));
-    assert_control_visible(&mut shell, "Payment", false);
+    assert_control_visible(&mut shell, "Payment", Axis::Vertical);
     assert!(!shell.accessibility_reveal(NodeId(usize::MAX)));
     assert!(shell.accessibility_activate(payment, None));
     shell.update();

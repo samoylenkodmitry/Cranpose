@@ -4,7 +4,7 @@ use super::*;
 
 fn frame() -> LazyFrame {
     LazyFrame {
-        is_vertical: true,
+        axis: Axis::Vertical,
         raw_viewport_size: 100.0,
         cross_axis_size: 50.0,
         item_cross_axis_size: 50.0,
@@ -50,7 +50,7 @@ fn lazy_list_placements_reuse_output_storage() {
     let item = placed_item(0, 7.0, &[NodeId(101), NodeId(102)], &[0.0, 5.0]);
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
-            is_vertical: true,
+            axis: Axis::Vertical,
             is_rtl: false,
             reverse_layout: false,
             before_content_padding: 0.0,
@@ -83,7 +83,7 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
 
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
-            is_vertical: true,
+            axis: Axis::Vertical,
             is_rtl: false,
             reverse_layout: false,
             before_content_padding: 0.0,

@@ -5,6 +5,7 @@ use std::{
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_key};
 use cranpose_macros::composable;
+use cranpose_ui_layout::Axis;
 
 use crate::{
     Box, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, ScrollState, Size, Text, TextStyle,
@@ -12,13 +13,13 @@ use crate::{
     measure_layout_with_options,
 };
 
-fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
+fn expected_layout_counts(depth: usize, axis: Axis) -> (usize, usize) {
     if depth <= 1 {
         return (1, 0);
     }
-    let (left_total, left_two) = expected_layout_counts(depth - 1, !horizontal);
-    let (right_total, right_two) = expected_layout_counts(depth - 1, !horizontal);
-    if horizontal {
+    let (left_total, left_two) = expected_layout_counts(depth - 1, axis.cross_axis());
+    let (right_total, right_two) = expected_layout_counts(depth - 1, axis.cross_axis());
+    if axis.is_horizontal() {
         let total = 1 + 1 + left_total + right_total;
         let two = 1 + 1 + left_two + right_two;
         (total, two)
@@ -610,7 +611,7 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
 }
 
 #[composable]
-fn alternating_recursive_node(modifier: Modifier, depth: usize, horizontal: bool, index: usize) {
+fn alternating_recursive_node(modifier: Modifier, depth: usize, axis: Axis, index: usize) {
     let label = format!("Node {index} depth {depth}");
     Column(modifier.padding(6.0), ColumnSpec::default(), move || {
         Text(
@@ -619,7 +620,7 @@ fn alternating_recursive_node(modifier: Modifier, depth: usize, horizontal: bool
             TextStyle::default(),
         );
         if depth > 1 {
-            if horizontal {
+            if axis.is_horizontal() {
                 Row(
                     Modifier::empty().fill_max_width(),
                     RowSpec::default(),
@@ -632,7 +633,7 @@ fn alternating_recursive_node(modifier: Modifier, depth: usize, horizontal: bool
                                 alternating_recursive_node(
                                     Modifier::empty().rowWeight(1.0, true),
                                     depth - 1,
-                                    false,
+                                    Axis::Vertical,
                                     child_index,
                                 );
                             });
@@ -650,7 +651,7 @@ fn alternating_recursive_node(modifier: Modifier, depth: usize, horizontal: bool
                                 alternating_recursive_node(
                                     Modifier::empty(),
                                     depth - 1,
-                                    true,
+                                    Axis::Horizontal,
                                     child_index,
                                 );
                             });
@@ -665,7 +666,7 @@ fn alternating_recursive_node(modifier: Modifier, depth: usize, horizontal: bool
 #[composable]
 fn recursive_layout_root(depth_state: MutableState<usize>) {
     let depth = depth_state.get();
-    alternating_recursive_node(Modifier::empty(), depth, true, 0);
+    alternating_recursive_node(Modifier::empty(), depth, Axis::Horizontal, 0);
 }
 
 fn layout_two_child_stats(composition: &mut Composition<MemoryApplier>) -> (usize, usize) {
@@ -760,7 +761,7 @@ fn recursive_layout_nodes_preserve_extent() {
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, &mut || {
-            alternating_recursive_node(Modifier::empty(), 4, true, 0);
+            alternating_recursive_node(Modifier::empty(), 4, Axis::Horizontal, 0);
         })
         .expect("initial render");
 
@@ -822,7 +823,7 @@ fn recursive_layout_nodes_preserve_extent() {
     }
 
     let (_actual_total, actual_two) = count_layout_nodes(layout.root());
-    let (_expected_total, expected_two) = expected_layout_counts(4, true);
+    let (_expected_total, expected_two) = expected_layout_counts(4, Axis::Horizontal);
     assert_eq!(
         actual_two, expected_two,
         "branching layout nodes lost children"
@@ -860,10 +861,10 @@ fn recursive_layout_updates_keep_all_branches() {
         updated_unknown, 0,
         "unexpected unknown layout nodes after update"
     );
-    let (_, expected_two) = expected_layout_counts(4, true);
+    let (_, expected_two) = expected_layout_counts(4, Axis::Horizontal);
     assert_eq!(
         baseline_two,
-        expected_layout_counts(2, true).1,
+        expected_layout_counts(2, Axis::Horizontal).1,
         "baseline tree mismatch"
     );
     assert_eq!(
@@ -896,7 +897,7 @@ fn tab_switching_recursive_layout_preserves_branches() {
         initial_unknown, 0,
         "unexpected unknown nodes after first switch to recursive tab"
     );
-    let (_, expected_two_initial) = expected_layout_counts(3, true);
+    let (_, expected_two_initial) = expected_layout_counts(3, Axis::Horizontal);
     assert_eq!(
         initial_two, expected_two_initial,
         "recursive layout lost branches on first switch"
@@ -924,7 +925,7 @@ fn tab_switching_recursive_layout_preserves_branches() {
         unknown, 0,
         "unexpected unknown nodes after second switch to recursive tab"
     );
-    let (_, expected_two) = expected_layout_counts(4, true);
+    let (_, expected_two) = expected_layout_counts(4, Axis::Horizontal);
     assert_eq!(
         two_count, expected_two,
         "recursive layout lost branches after second switch"
@@ -950,7 +951,7 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
         baseline_unknown, 0,
         "unexpected unknown nodes at baseline depth"
     );
-    let (_, expected_two_depth3) = expected_layout_counts(3, true);
+    let (_, expected_two_depth3) = expected_layout_counts(3, Axis::Horizontal);
     assert_eq!(
         baseline_two, expected_two_depth3,
         "baseline layout tree mismatch at depth 3"
@@ -967,7 +968,7 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
         decreased_unknown, 0,
         "unexpected unknown nodes after depth decrease"
     );
-    let (_, expected_two_depth2) = expected_layout_counts(2, true);
+    let (_, expected_two_depth2) = expected_layout_counts(2, Axis::Horizontal);
     assert_eq!(
         decreased_two, expected_two_depth2,
         "layout tree mismatch after decreasing depth"

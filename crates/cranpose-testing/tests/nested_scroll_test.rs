@@ -10,8 +10,8 @@ use std::{
 
 use cranpose_testing::create_headless_robot_test;
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, Modifier, NestedScroll, NestedScrollConnection,
-    NestedScrollSource, ScrollAxis, ScrollState, Size,
+    Axis, Box, BoxSpec, Column, ColumnSpec, Modifier, NestedScroll, NestedScrollConnection,
+    NestedScrollSource, ScrollState, Size,
 };
 
 /// Takes `pre` of every move before the column, everything the column
@@ -28,14 +28,14 @@ struct Container {
 }
 
 impl NestedScrollConnection for Container {
-    fn on_pre_scroll(&self, axis: ScrollAxis, available: f32, _: NestedScrollSource) -> f32 {
-        assert_eq!(axis, ScrollAxis::Vertical);
+    fn on_pre_scroll(&self, axis: Axis, available: f32, _: NestedScrollSource) -> f32 {
+        assert_eq!(axis, Axis::Vertical);
         let took = available * self.pre;
         self.took_before.set(self.took_before.get() + took);
         took
     }
 
-    fn on_post_scroll(&self, _: ScrollAxis, _: f32, available: f32, _: NestedScrollSource) -> f32 {
+    fn on_post_scroll(&self, _: Axis, _: f32, available: f32, _: NestedScrollSource) -> f32 {
         if !self.post {
             return 0.0;
         }
@@ -43,7 +43,7 @@ impl NestedScrollConnection for Container {
         available
     }
 
-    fn on_pre_fling(&self, _: ScrollAxis, velocity: f32) -> f32 {
+    fn on_pre_fling(&self, _: Axis, velocity: f32) -> f32 {
         self.velocity.set(velocity);
         if self.fling { velocity } else { 0.0 }
     }
