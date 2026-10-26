@@ -62,6 +62,15 @@ impl PlatformTextInputState {
     fn handler(&self) -> Option<Rc<dyn PlatformTextInputHandler>> {
         self.handler.borrow().clone()
     }
+
+    pub(crate) fn notify_focus_lost(&self) {
+        if !self.keyboard_requested.replace(false) {
+            return;
+        }
+        if let Some(handler) = self.handler() {
+            handler.hide_keyboard();
+        }
+    }
 }
 
 /// Installs the platform soft-keyboard handler for the current app context.
@@ -93,19 +102,8 @@ pub(crate) fn notify_text_input_focus_gained() {
 
 pub(crate) fn notify_text_input_focus_lost() {
     crate::render_state::require_current_app_context("platform text input session access")
-        .notify_text_input_focus_lost();
-}
-
-impl crate::AppContext {
-    pub(crate) fn notify_text_input_focus_lost(&self) {
-        let state = &self.text_input_session;
-        if !state.keyboard_requested.replace(false) {
-            return;
-        }
-        if let Some(handler) = state.handler() {
-            handler.hide_keyboard();
-        }
-    }
+        .text_input_session
+        .notify_focus_lost();
 }
 
 /// Hides the software keyboard the framework asked for, keeping the field's

@@ -2,7 +2,7 @@ use cranpose_render_common::Renderer;
 use cranpose_ui_graphics::{Rect, Size};
 use web_time::Instant;
 
-use crate::{DevOverlayControl, FramePacingMode, RootSurface, ShellApp};
+use crate::{FramePacingMode, RootSurface, ShellApp};
 
 const DEV_OVERLAY_PADDING: f32 = 8.0;
 const DEV_OVERLAY_FONT_SIZE: f32 = 14.0;
@@ -10,41 +10,79 @@ const DEV_OVERLAY_CHAR_WIDTH: f32 = 7.0;
 const DEV_OVERLAY_SEPARATOR: &str = " | ";
 const DEV_OVERLAY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
-pub(super) fn draw_dev_overlay<R: Renderer>(app: &ShellApp, surface: &mut RootSurface<R>) {
-    let viewport_size = surface.viewport_size();
-    surface.refresh_dev_overlay_text_for_frame_at(app, viewport_size, Instant::now());
-    surface
-        .renderer
-        .draw_dev_overlay(surface.dev_overlay_text.as_str(), viewport_size);
+#[derive(Clone, Copy, Debug)]
+struct DevOverlayControl {
+    bounds: Rect,
+    mode: FramePacingMode,
 }
 
-impl<R: Renderer> RootSurface<R> {
-    fn refresh_dev_overlay_text_for_frame_at(
-        &mut self,
-        app: &ShellApp,
-        viewport_size: Size,
-        now: Instant,
-    ) {
-        if !self.dev_overlay_text_needs_refresh(viewport_size, now) {
-            return;
-        }
-        self.dev_overlay_text = self.build_dev_overlay_text(app, viewport_size);
-        self.dev_overlay_last_refresh = Some(now);
-        self.dev_overlay_viewport = Some(viewport_size);
+// A surface's dev overlay: its line of frame statistics and the frame pacing
+// controls in it, built again when the viewport changes or the line is
+// older than DEV_OVERLAY_REFRESH_INTERVAL.
+#[derive(Default)]
+pub(crate) struct DevOverlay {
+    controls: Vec<DevOverlayControl>,
+    text: String,
+    pub(crate) last_refresh: Option<Instant>,
+    viewport: Option<Size>,
+}
+
+pub(crate) fn draw_dev_overlay<R: Renderer>(app: &ShellApp, surface: &mut RootSurface<R>) {
+    let viewport_size = surface.viewport_size();
+    let overlay = &mut surface.dev_overlay;
+    overlay.refresh_for_frame_at(app, viewport_size, Instant::now());
+    surface
+        .renderer
+        .draw_dev_overlay(overlay.text.as_str(), viewport_size);
+}
+
+impl DevOverlay {
+    pub(crate) fn invalidate(&mut self) {
+        self.text.clear();
+        self.last_refresh = None;
+        self.viewport = None;
     }
 
-    fn dev_overlay_text_needs_refresh(&self, viewport_size: Size, now: Instant) -> bool {
-        if self.dev_overlay_text.is_empty() || self.dev_overlay_viewport != Some(viewport_size) {
+    pub(crate) fn control_center(&self, mode: FramePacingMode) -> Option<(f32, f32)> {
+        self.controls
+            .iter()
+            .find(|control| control.mode == mode)
+            .map(|control| {
+                (
+                    control.bounds.x + control.bounds.width * 0.5,
+                    control.bounds.y + control.bounds.height * 0.5,
+                )
+            })
+    }
+
+    pub(crate) fn control_at(&self, x: f32, y: f32) -> Option<FramePacingMode> {
+        self.controls
+            .iter()
+            .find(|control| control.bounds.contains(x, y))
+            .map(|control| control.mode)
+    }
+
+    fn refresh_for_frame_at(&mut self, app: &ShellApp, viewport_size: Size, now: Instant) {
+        if !self.needs_refresh(viewport_size, now) {
+            return;
+        }
+        self.text = self.build_text(app, viewport_size);
+        self.last_refresh = Some(now);
+        self.viewport = Some(viewport_size);
+    }
+
+    fn needs_refresh(&self, viewport_size: Size, now: Instant) -> bool {
+        if self.text.is_empty() || self.viewport != Some(viewport_size) {
             return true;
         }
 
-        self.dev_overlay_last_refresh.is_none_or(|last| {
+        self.last_refresh.is_none_or(|last| {
             now.checked_duration_since(last).unwrap_or_default() >= DEV_OVERLAY_REFRESH_INTERVAL
         })
     }
 
-    fn build_dev_overlay_text(&mut self, app: &ShellApp, viewport_size: Size) -> String {
-        self.dev_overlay_controls.clear();
+    fn build_text(&mut self, app: &ShellApp, viewport_size: Size) -> String {
+        self.controls.clear();
 
         let stats = app.fps_monitor.stats();
         // Each field with its rank: a viewport too narrow for the whole line,
@@ -115,7 +153,7 @@ impl<R: Renderer> RootSurface<R> {
         let text_y = overlay_y + DEV_OVERLAY_PADDING / 4.0;
         let text_height = DEV_OVERLAY_FONT_SIZE * 1.4;
 
-        self.dev_overlay_controls = controls
+        self.controls = controls
             .into_iter()
             .map(|(start, end, mode)| DevOverlayControl {
                 bounds: Rect {

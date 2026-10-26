@@ -12,6 +12,16 @@ use cranpose_core::{
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
+mod display_scale;
+
+use display_scale::normalize_density;
+pub use display_scale::{
+    MAX_FONT_SCALE, MIN_FONT_SCALE, current_density, current_font_scale, current_font_scale_curve,
+    scale_sp, set_density, set_font_scale, set_font_scale_curve,
+};
+pub(crate) use display_scale::{
+    current_host_density, current_scaling_font_scale_curve, text_layout_stamp,
+};
 
 struct RenderState {
     layout_repasses: RefCell<DirtyNodeSet>,
@@ -370,168 +380,11 @@ impl AppContext {
     pub fn downgrade(&self) -> Weak<Self> {
         self.self_weak.borrow().clone()
     }
-}
 
-impl Drop for AppContext {
-    fn drop(&mut self) {
-        let id = self.id;
-        crate::thread_state::try_with(|state| {
-            state.app_contexts.borrow_mut().remove(&id);
-        });
-    }
-}
+    // What a layout pass takes from its app context. A pass looks the
+    // context up once and asks it directly: each lookup reads a thread-local,
+    // which on ESP-IDF goes through a pthread key.
 
-fn app_context_by_id(id: AppContextId) -> Option<Rc<AppContext>> {
-    crate::thread_state::try_with(|state| {
-        let contexts = &state.app_contexts;
-        let context = contexts.borrow().get(&id).cloned()?;
-        let Some(context) = context.upgrade() else {
-            contexts.borrow_mut().remove(&id);
-            return None;
-        };
-        Some(context)
-    })
-    .flatten()
-}
-
-#[cfg(test)]
-fn app_context_registry_entry_count() -> usize {
-    crate::thread_state::try_with(|state| state.app_contexts.borrow().len()).unwrap_or_default()
-}
-
-pub(crate) fn with_app_context_by_id<R>(
-    id: AppContextId,
-    f: impl FnOnce(&Rc<AppContext>) -> R,
-) -> Option<R> {
-    app_context_by_id(id).map(|context| f(&context))
-}
-
-pub(crate) fn current_app_context_id() -> AppContextId {
-    require_current_app_context("app context identity access").id
-}
-
-pub(crate) fn with_layout_node_registry_by_app_context<R>(
-    id: AppContextId,
-    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState) -> R,
-) -> Option<R> {
-    with_app_context_by_id(id, |context| f(&context.layout_node_registry))
-}
-
-pub(crate) fn enter_app_context_by_id<R>(id: AppContextId, f: impl FnOnce() -> R) -> Option<R> {
-    with_app_context_by_id(id, |context| context.enter(f))
-}
-
-pub(crate) fn current_app_context() -> Option<Rc<AppContext>> {
-    crate::thread_state::try_with(|state| {
-        let mut stack = state.app_context_stack.borrow_mut();
-        loop {
-            let context = stack.last()?;
-            if let Some(context) = context.upgrade() {
-                return Some(context);
-            }
-            stack.pop();
-        }
-    })
-    .flatten()
-}
-
-#[doc(hidden)]
-pub fn has_current_app_context() -> bool {
-    current_app_context().is_some()
-}
-
-pub(crate) fn require_current_app_context(operation: &str) -> Rc<AppContext> {
-    if let Some(context) = current_app_context() {
-        return context;
-    }
-    require_current_app_context_without_scope(operation)
-}
-
-fn require_current_app_context_without_scope(operation: &str) -> Rc<AppContext> {
-    panic!("{operation} requires an active AppContext")
-}
-
-fn with_render_state<R>(f: impl FnOnce(&RenderState) -> R) -> R {
-    let context = require_current_app_context("render state access");
-    f(&context.state)
-}
-
-fn normalize_density(density: f32) -> f32 {
-    if density.is_finite() && density > 0.0 {
-        density
-    } else {
-        1.0
-    }
-}
-
-fn normalize_font_scale(scale: f32) -> f32 {
-    if scale.is_finite() && scale > 0.0 {
-        scale.clamp(MIN_FONT_SCALE, MAX_FONT_SCALE)
-    } else {
-        1.0
-    }
-}
-
-/// Smallest system font scale honoured; below this, text stops being readable
-/// as text.
-pub const MIN_FONT_SCALE: f32 = 0.5;
-/// Largest system font scale honoured. Android's own accessibility slider tops
-/// out at 2.0.
-pub const MAX_FONT_SCALE: f32 = 3.0;
-
-pub(crate) fn with_text_measurer<R>(f: impl FnOnce(&dyn crate::text::TextMeasurer) -> R) -> R {
-    let context = require_current_app_context("text measurer access");
-    context.text.with_measurer(f)
-}
-
-/// Tells the current app context's text service, and its measurer, a
-/// layout pass starts. Outside an app context there is neither to tell.
-#[cfg(test)]
-pub(crate) fn begin_text_layout_pass() {
-    if let Some(context) = current_app_context() {
-        context.begin_text_layout_pass();
-    }
-}
-
-pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextService) -> R) -> R {
-    let context = require_current_app_context("text service access");
-    context.text.pay_owed_pass();
-    f(&context.text)
-}
-
-pub(crate) fn set_current_text_measurer(measurer: Rc<dyn crate::text::TextMeasurer>) {
-    let Some(context) = current_app_context() else {
-        panic!("set_text_measurer requires an active AppContext");
-    };
-    context.set_text_measurer_rc(measurer);
-}
-
-pub(crate) fn set_modifier_chain_trace(callback: Arc<ModifierChainTraceCallback>) -> AppContextId {
-    let context = require_current_app_context("modifier chain trace installation");
-    *context.modifier_chain_trace.borrow_mut() = Some(callback);
-    context.id
-}
-
-pub(crate) fn clear_modifier_chain_trace(context_id: AppContextId) {
-    let _ = with_app_context_by_id(context_id, |context| {
-        *context.modifier_chain_trace.borrow_mut() = None;
-    });
-}
-
-pub(crate) fn emit_modifier_chain_trace(nodes: &[crate::modifier::ModifierChainInspectorNode]) {
-    let Some(context) = current_app_context() else {
-        return;
-    };
-    let callback = context.modifier_chain_trace.borrow().clone();
-    if let Some(callback) = callback {
-        callback(nodes);
-    }
-}
-
-/// What a layout pass takes from its app context. A pass looks the context
-/// up once and asks it directly: each lookup reads a thread-local, which on
-/// ESP-IDF goes through a pthread key.
-impl AppContext {
     /// Tells the text service, and its measurer, a layout pass starts.
     pub(crate) fn begin_text_layout_pass(&self) {
         self.text.begin_layout_pass();
@@ -583,31 +436,7 @@ impl AppContext {
     pub(crate) fn take_layout_repass_nodes(&self) -> Vec<NodeId> {
         self.state.layout_repasses.borrow_mut().take_dirty_nodes()
     }
-}
 
-pub(crate) fn invalidate_layout_cache_epoch() {
-    require_current_app_context("layout cache epoch access").invalidate_layout_caches();
-}
-
-pub(crate) fn record_last_fling_velocity(velocity: f32) {
-    if let Some(context) = current_app_context() {
-        context.last_fling_velocity_bits.set(velocity.to_bits());
-    }
-}
-
-#[doc(hidden)]
-pub fn debug_last_fling_velocity() -> f32 {
-    let context = require_current_app_context("fling velocity diagnostics access");
-    f32::from_bits(context.last_fling_velocity_bits.get())
-}
-
-#[doc(hidden)]
-pub fn debug_reset_last_fling_velocity() {
-    let context = require_current_app_context("fling velocity diagnostics access");
-    context.last_fling_velocity_bits.set(0.0f32.to_bits());
-}
-
-impl AppContext {
     pub(crate) fn lazy_prefetch(&self) -> &crate::lazy_prefetch::LazyPrefetchState {
         &self.lazy_prefetch
     }
@@ -837,6 +666,188 @@ impl AppContext {
     pub fn active_focus_target(&self) -> Option<NodeId> {
         self.focus_dispatch.active_focus_target()
     }
+
+    /// Whether a semantics invalidation waits, as
+    /// [`has_pending_semantics_invalidations`](crate::has_pending_semantics_invalidations)
+    /// says in the current context.
+    pub fn has_pending_semantics_invalidations(&self) -> bool {
+        self.semantics_dispatch.has_pending()
+    }
+
+    /// Whether a text field holds focus, as
+    /// [`has_focused_field`](crate::has_focused_field) says in the current
+    /// context; without one, the keyboard the framework asked for goes away.
+    pub fn has_focused_field(&self) -> bool {
+        let has_focus = self.text_field_focus.has_focused_field();
+        if !has_focus {
+            self.text_input_session.notify_focus_lost();
+        }
+        has_focus
+    }
+
+    /// Advances the cursor blink, as
+    /// [`tick_cursor_blink`](crate::tick_cursor_blink) does in the current
+    /// context.
+    pub fn tick_cursor_blink(&self) -> bool {
+        // Without a focused field no caret blinks, and the clock is not read.
+        self.cursor_animation.next_blink_time().is_some()
+            && self.cursor_animation.tick_blink(web_time::Instant::now())
+    }
+}
+
+impl Drop for AppContext {
+    fn drop(&mut self) {
+        let id = self.id;
+        crate::thread_state::try_with(|state| {
+            state.app_contexts.borrow_mut().remove(&id);
+        });
+    }
+}
+
+fn app_context_by_id(id: AppContextId) -> Option<Rc<AppContext>> {
+    crate::thread_state::try_with(|state| {
+        let contexts = &state.app_contexts;
+        let context = contexts.borrow().get(&id).cloned()?;
+        let Some(context) = context.upgrade() else {
+            contexts.borrow_mut().remove(&id);
+            return None;
+        };
+        Some(context)
+    })
+    .flatten()
+}
+
+#[cfg(test)]
+fn app_context_registry_entry_count() -> usize {
+    crate::thread_state::try_with(|state| state.app_contexts.borrow().len()).unwrap_or_default()
+}
+
+pub(crate) fn with_app_context_by_id<R>(
+    id: AppContextId,
+    f: impl FnOnce(&Rc<AppContext>) -> R,
+) -> Option<R> {
+    app_context_by_id(id).map(|context| f(&context))
+}
+
+pub(crate) fn current_app_context_id() -> AppContextId {
+    require_current_app_context("app context identity access").id
+}
+
+pub(crate) fn with_layout_node_registry_by_app_context<R>(
+    id: AppContextId,
+    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState) -> R,
+) -> Option<R> {
+    with_app_context_by_id(id, |context| f(&context.layout_node_registry))
+}
+
+pub(crate) fn enter_app_context_by_id<R>(id: AppContextId, f: impl FnOnce() -> R) -> Option<R> {
+    with_app_context_by_id(id, |context| context.enter(f))
+}
+
+pub(crate) fn current_app_context() -> Option<Rc<AppContext>> {
+    crate::thread_state::try_with(|state| {
+        let mut stack = state.app_context_stack.borrow_mut();
+        loop {
+            let context = stack.last()?;
+            if let Some(context) = context.upgrade() {
+                return Some(context);
+            }
+            stack.pop();
+        }
+    })
+    .flatten()
+}
+
+#[doc(hidden)]
+pub fn has_current_app_context() -> bool {
+    current_app_context().is_some()
+}
+
+pub(crate) fn require_current_app_context(operation: &str) -> Rc<AppContext> {
+    if let Some(context) = current_app_context() {
+        return context;
+    }
+    require_current_app_context_without_scope(operation)
+}
+
+fn require_current_app_context_without_scope(operation: &str) -> Rc<AppContext> {
+    panic!("{operation} requires an active AppContext")
+}
+
+fn with_render_state<R>(f: impl FnOnce(&RenderState) -> R) -> R {
+    let context = require_current_app_context("render state access");
+    f(&context.state)
+}
+
+pub(crate) fn with_text_measurer<R>(f: impl FnOnce(&dyn crate::text::TextMeasurer) -> R) -> R {
+    let context = require_current_app_context("text measurer access");
+    context.text.with_measurer(f)
+}
+
+/// Tells the current app context's text service, and its measurer, a
+/// layout pass starts. Outside an app context there is neither to tell.
+#[cfg(test)]
+pub(crate) fn begin_text_layout_pass() {
+    if let Some(context) = current_app_context() {
+        context.begin_text_layout_pass();
+    }
+}
+
+pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextService) -> R) -> R {
+    let context = require_current_app_context("text service access");
+    context.text.pay_owed_pass();
+    f(&context.text)
+}
+
+pub(crate) fn set_current_text_measurer(measurer: Rc<dyn crate::text::TextMeasurer>) {
+    let Some(context) = current_app_context() else {
+        panic!("set_text_measurer requires an active AppContext");
+    };
+    context.set_text_measurer_rc(measurer);
+}
+
+pub(crate) fn set_modifier_chain_trace(callback: Arc<ModifierChainTraceCallback>) -> AppContextId {
+    let context = require_current_app_context("modifier chain trace installation");
+    *context.modifier_chain_trace.borrow_mut() = Some(callback);
+    context.id
+}
+
+pub(crate) fn clear_modifier_chain_trace(context_id: AppContextId) {
+    let _ = with_app_context_by_id(context_id, |context| {
+        *context.modifier_chain_trace.borrow_mut() = None;
+    });
+}
+
+pub(crate) fn emit_modifier_chain_trace(nodes: &[crate::modifier::ModifierChainInspectorNode]) {
+    let Some(context) = current_app_context() else {
+        return;
+    };
+    let callback = context.modifier_chain_trace.borrow().clone();
+    if let Some(callback) = callback {
+        callback(nodes);
+    }
+}
+
+pub(crate) fn invalidate_layout_cache_epoch() {
+    require_current_app_context("layout cache epoch access").invalidate_layout_caches();
+}
+
+pub(crate) fn record_last_fling_velocity(velocity: f32) {
+    if let Some(context) = current_app_context() {
+        context.last_fling_velocity_bits.set(velocity.to_bits());
+    }
+}
+
+#[doc(hidden)]
+pub fn debug_last_fling_velocity() -> f32 {
+    let context = require_current_app_context("fling velocity diagnostics access");
+    f32::from_bits(context.last_fling_velocity_bits.get())
+}
+
+#[doc(hidden)]
+pub fn debug_reset_last_fling_velocity() {
+    let context = require_current_app_context("fling velocity diagnostics access");
+    context.last_fling_velocity_bits.set(0.0f32.to_bits());
 }
 
 pub(crate) fn with_scroll_motion_context_store<R>(
@@ -1400,118 +1411,6 @@ pub fn take_geometry_scene_nodes() -> GeometrySceneNodes {
 /// ```
 pub fn take_geometry_scene_nodes_into(output: &mut GeometrySceneNodes) {
     require_current_app_context("render state access").take_geometry_scene_nodes_into(output);
-}
-
-/// Returns the current density scale factor (logical px per dp).
-pub fn current_density() -> f32 {
-    with_render_state(|state| f32::from_bits(state.density_bits.get()))
-}
-
-/// Updates the current density scale factor.
-///
-/// This triggers a global layout invalidation when the value changes because
-/// density impacts layout, text measurement, and input thresholds.
-pub fn set_density(density: f32) {
-    let normalized = normalize_density(density);
-    let new_bits = normalized.to_bits();
-    with_render_state(|state| {
-        let old_bits = state.density_bits.replace(new_bits);
-        if old_bits != new_bits {
-            state.layout_invalidated.set(true);
-        }
-    });
-}
-
-/// Returns the system font scale — the multiplier the user chose in the
-/// platform's font-size setting, `1.0` when they left it alone.
-///
-/// This is the setting `Sp` is defined against, so text follows it while
-/// everything measured in `Dp` does not. A platform that does not report one
-/// leaves it at `1.0`.
-///
-/// It is the number to *report*, not the number to multiply by: what a size in
-/// `Sp` comes to is [`scale_sp`], and on Android 14 and up the two are not the
-/// same arithmetic. See [`crate::font_scale`].
-pub fn current_font_scale() -> f32 {
-    current_font_scale_curve().scale()
-}
-
-/// Returns the conversion the platform performs for a size in `Sp`.
-///
-/// The setting is not a multiplier on every platform — see
-/// [`crate::font_scale`] — so this, and not [`current_font_scale`], is what a
-/// size in `Sp` is resolved through. The scalar remains the thing to *report*.
-pub fn current_font_scale_curve() -> crate::font_scale::FontScaleCurve {
-    with_render_state(|state| state.font_scale.get())
-}
-
-/// The current app context's density and font scale curve, read through one
-/// lookup of the context, or `None` outside a context.
-pub(crate) fn current_host_density() -> Option<(f32, crate::font_scale::FontScaleCurve)> {
-    current_app_context().map(|context| {
-        (
-            f32::from_bits(context.state.density_bits.get()),
-            context.state.font_scale.get(),
-        )
-    })
-}
-
-/// The running app's font scale curve, or `None` when it leaves every size as
-/// it is, which the caller then need not read.
-pub(crate) fn current_scaling_font_scale_curve() -> Option<crate::font_scale::FontScaleCurve> {
-    with_render_state(|state| (!state.font_scale_identity.get()).then(|| state.font_scale.get()))
-}
-
-/// What a prepared text layout is valid for: the text service's generation
-/// and the font scale curve's fingerprint, read in one app context access.
-pub(crate) fn text_layout_stamp() -> (u64, u32) {
-    let context = require_current_app_context("text layout stamp access");
-    (
-        context.text.generation(),
-        context.state.font_scale_fingerprint.get(),
-    )
-}
-
-/// A size in scale-independent pixels, in dp, through the running app's curve.
-pub fn scale_sp(sp: f32) -> f32 {
-    current_font_scale_curve().sp_to_dp(sp)
-}
-
-/// Updates the system font scale, taking it as a plain multiplier.
-///
-/// Hosts call this when the platform reports the setting, and again whenever it
-/// changes while the app is running — on Android that is a configuration
-/// change, which arrives without the process restarting. Like density it
-/// invalidates layout, because every `Sp` size on screen has just changed.
-///
-/// A host whose platform converts `Sp` through a table of its own calls
-/// [`set_font_scale_curve`] instead.
-pub fn set_font_scale(scale: f32) {
-    set_font_scale_curve(crate::font_scale::FontScaleCurve::linear(scale));
-}
-
-/// Updates the system font scale and the conversion behind it.
-///
-/// Hosts that can read the platform's real `Sp` conversion call this instead of
-/// [`set_font_scale`], which is the same thing with no table behind it. A curve
-/// whose scale is not a value a platform could report is refused the same way a
-/// bare scalar is, and refusing it drops the table with it: knots sampled at a
-/// scale that was rejected describe a conversion the app is not going to use.
-pub fn set_font_scale_curve(curve: crate::font_scale::FontScaleCurve) {
-    let normalized = normalize_font_scale(curve.scale());
-    let curve = if (normalized - curve.scale()).abs() <= f32::EPSILON {
-        curve
-    } else {
-        crate::font_scale::FontScaleCurve::linear(normalized)
-    };
-    with_render_state(|state| {
-        if state.font_scale.get() != curve {
-            state.font_scale.set(curve);
-            state.font_scale_identity.set(curve.is_identity());
-            state.font_scale_fingerprint.set(curve.fingerprint());
-            state.layout_invalidated.set(true);
-        }
-    });
 }
 
 /// Requests that the renderer rebuild the current scene.

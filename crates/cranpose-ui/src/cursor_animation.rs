@@ -19,6 +19,16 @@ impl CursorAnimationState {
         }
     }
 
+    // Advances the blink at `now`; a flip draws the focused field's caret
+    // again.
+    pub(crate) fn tick_blink(&self, now: Instant) -> bool {
+        let flipped = self.tick(now);
+        if flipped {
+            invalidate_focused_caret();
+        }
+        flipped
+    }
+
     pub(crate) fn start(&self) -> bool {
         let flipped = !self.is_visible();
         self.cursor_alpha.set(1.0);
@@ -116,25 +126,8 @@ pub fn tick_cursor_blink() -> bool {
 #[cfg(test)]
 pub(crate) fn tick_cursor_blink_at(now: Instant) -> bool {
     crate::render_state::require_current_app_context("cursor animation access")
-        .tick_cursor_blink_at(now)
-}
-
-impl crate::AppContext {
-    /// Advances the cursor blink, as [`tick_cursor_blink`] does in the
-    /// current context.
-    pub fn tick_cursor_blink(&self) -> bool {
-        // Without a focused field no caret blinks, and the clock is not read.
-        self.cursor_animation.next_blink_time().is_some()
-            && self.tick_cursor_blink_at(Instant::now())
-    }
-
-    fn tick_cursor_blink_at(&self, now: Instant) -> bool {
-        let flipped = self.cursor_animation.tick(now);
-        if flipped {
-            invalidate_focused_caret();
-        }
-        flipped
-    }
+        .cursor_animation
+        .tick_blink(now)
 }
 
 /// Returns the next cursor blink transition time, if any.

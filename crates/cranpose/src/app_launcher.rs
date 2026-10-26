@@ -23,35 +23,9 @@ use cranpose_ui::{
 ))]
 use thiserror::Error;
 
-/// Graphics API used by the Android WGPU renderer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AndroidGpuBackend {
-    /// Render through Vulkan.
-    #[default]
-    Vulkan,
-    /// Render through OpenGL ES.
-    OpenGlEs,
-}
+mod android_gpu_backend;
 
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
-))]
-impl AndroidGpuBackend {
-    pub(crate) fn with_override(self, value: Option<&str>) -> Self {
-        match value.map(str::trim) {
-            Some(value) if value.eq_ignore_ascii_case("vulkan") => Self::Vulkan,
-            Some(value)
-                if ["gl", "gles", "opengl"]
-                    .iter()
-                    .any(|name| value.eq_ignore_ascii_case(name)) =>
-            {
-                Self::OpenGlEs
-            }
-            _ => self,
-        }
-    }
-}
+pub use android_gpu_backend::AndroidGpuBackend;
 
 #[cfg(test)]
 #[path = "tests/inspector_settings.rs"]

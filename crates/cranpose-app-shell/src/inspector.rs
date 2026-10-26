@@ -287,6 +287,7 @@ impl DeveloperInspector {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R: Renderer> AppShell<R>
 where
     R::Error: Debug,

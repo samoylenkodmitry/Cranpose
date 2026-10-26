@@ -2,7 +2,7 @@ use super::*;
 
 mod dev_overlay;
 mod frame_telemetry;
-use dev_overlay::draw_dev_overlay;
+pub(crate) use dev_overlay::{DevOverlay, draw_dev_overlay};
 use frame_telemetry::{
     FrameStages, RenderPhaseDirtyDiagnostics, frame_stage_telemetry_threshold_ms,
     log_frame_stage_telemetry, log_render_phase_dirty_diagnostics,

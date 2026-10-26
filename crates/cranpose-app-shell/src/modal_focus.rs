@@ -3,6 +3,7 @@ use cranpose_render_common::Renderer;
 
 use crate::AppShell;
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R: Renderer> AppShell<R>
 where
     R::Error: std::fmt::Debug,

@@ -484,6 +484,7 @@ struct App {
     file_drops: super::incoming::FileDrops,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "device loss in its module")]
 impl App {
     fn new(
         mut settings: AppSettings,
@@ -3082,6 +3083,31 @@ impl App {
     fn set_robot_controller(&mut self, controller: RobotController) {
         self.robot.controller = Some(controller);
     }
+
+    fn observe_presence(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
+        if let Some(native) = self.native_windows.get_mut(&window_id) {
+            match event {
+                WindowEvent::Occluded(occluded) => native.occluded = *occluded,
+                WindowEvent::SurfaceResized(size) => {
+                    native.minimized = size.width == 0 || size.height == 0;
+                }
+                _ => {}
+            }
+        }
+        if let Some(presence) = &mut self.primary_presence {
+            presence.observe(window_id, event);
+        }
+    }
+
+    fn publish_settled_presence(&mut self) {
+        if let Some(state) = self
+            .primary_presence
+            .as_mut()
+            .and_then(super::lifecycle::WindowPresence::settled)
+        {
+            cranpose_services::advance_lifecycle(state);
+        }
+    }
 }
 
 fn apply_frame_pacing_mode(
@@ -5064,33 +5090,6 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
         match window.request_ime_update(ImeRequest::Disable) {
             Ok(()) | Err(ImeRequestError::NotEnabled) => {}
             Err(error) => log::debug!("winit IME disable failed: {error}"),
-        }
-    }
-}
-
-impl App {
-    fn observe_presence(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
-        if let Some(native) = self.native_windows.get_mut(&window_id) {
-            match event {
-                WindowEvent::Occluded(occluded) => native.occluded = *occluded,
-                WindowEvent::SurfaceResized(size) => {
-                    native.minimized = size.width == 0 || size.height == 0;
-                }
-                _ => {}
-            }
-        }
-        if let Some(presence) = &mut self.primary_presence {
-            presence.observe(window_id, event);
-        }
-    }
-
-    fn publish_settled_presence(&mut self) {
-        if let Some(state) = self
-            .primary_presence
-            .as_mut()
-            .and_then(super::lifecycle::WindowPresence::settled)
-        {
-            cranpose_services::advance_lifecycle(state);
         }
     }
 }

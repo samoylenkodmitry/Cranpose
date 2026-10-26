@@ -1012,15 +1012,6 @@ struct AndroidGpuSetup {
     renderer_needs_init: bool,
 }
 
-impl AndroidGpuBackend {
-    fn wgpu_backends(self) -> wgpu::Backends {
-        match self {
-            Self::Vulkan => wgpu::Backends::VULKAN,
-            Self::OpenGlEs => wgpu::Backends::GL,
-        }
-    }
-}
-
 struct AndroidWgpuContext {
     instance: wgpu::Instance,
     backend: AndroidGpuBackend,

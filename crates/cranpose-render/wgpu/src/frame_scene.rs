@@ -118,6 +118,7 @@ pub(super) struct PendingMesh {
     clip: Option<Rect>,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "3D steps in their files")]
 impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     /// Renders the content of a mesh surface, whole, and holds it for its
     /// scene's pass.

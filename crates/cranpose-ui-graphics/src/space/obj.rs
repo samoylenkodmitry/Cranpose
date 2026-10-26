@@ -52,6 +52,7 @@ struct Builder {
     indices: Vec<u32>,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "constructor by its parser")]
 impl Mesh {
     /// A mesh read from the text of a Wavefront OBJ file.
     ///

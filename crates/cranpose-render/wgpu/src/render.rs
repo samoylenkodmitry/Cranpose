@@ -1216,6 +1216,7 @@ pub(crate) struct GpuRendererInit {
     pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "draw passes in draw_pass")]
 impl GpuRenderer {
     pub(crate) fn new(init: GpuRendererInit) -> Self {
         let GpuRendererInit {
@@ -2054,8 +2055,7 @@ impl GpuRenderer {
         self.scene_pass.end_frame();
         self.surface_atlas_sizes.end_frame();
     }
-}
-impl GpuRenderer {
+
     pub(crate) fn render(
         &mut self,
         submit: &mut FrameSubmit,
@@ -3672,20 +3672,18 @@ impl GpuRenderer {
             bytemuck::cast_slice(glyphs),
         )
     }
-}
 
-fn align_to(value: u32, alignment: u32) -> u32 {
-    debug_assert!(alignment > 0);
-    value.div_ceil(alignment) * alignment
-}
-
-impl GpuRenderer {
     fn convert_surface_pixels_to_rgba(&self, pixels: &[u8]) -> Result<Vec<u8>, String> {
         if !pixels.len().is_multiple_of(4) {
             return Err("Screenshot readback has an incomplete pixel".to_string());
         }
         Ok(pixels.to_vec())
     }
+}
+
+fn align_to(value: u32, alignment: u32) -> u32 {
+    debug_assert!(alignment > 0);
+    value.div_ceil(alignment) * alignment
 }
 
 /// The scissor of a logical rect in a target whose origin sits at

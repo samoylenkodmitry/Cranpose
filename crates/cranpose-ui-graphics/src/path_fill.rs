@@ -594,13 +594,3 @@ fn side_shared(side: [f32; 2], others: impl Iterator<Item = [f32; 2]>) -> Option
     }
     Some(false)
 }
-
-impl PathFillRule {
-    /// Whether a point the path winds around `winding` times is filled.
-    pub(crate) fn contains(self, winding: i32) -> bool {
-        match self {
-            Self::NonZero => winding != 0,
-            Self::EvenOdd => winding % 2 != 0,
-        }
-    }
-}

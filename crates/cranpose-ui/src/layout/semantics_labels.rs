@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use super::{SemanticsNode, SemanticsRole, SemanticsWidgetRole};
 
+#[expect(clippy::multiple_inherent_impl, reason = "labels in their own module")]
 impl SemanticsNode {
     /// Whether this node combines its static descendants into one reader stop.
     /// Independently operable descendants remain separate stops.

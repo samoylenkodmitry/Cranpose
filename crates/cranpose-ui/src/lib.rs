@@ -64,6 +64,7 @@ mod lazy_prefetch;
 pub mod localization;
 pub mod modal;
 mod modal_nodes;
+#[expect(clippy::multiple_inherent_impl, reason = "one file per modifier")]
 mod modifier;
 mod modifier_nodes;
 pub mod mouse_input;

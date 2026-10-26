@@ -112,6 +112,7 @@ pub mod runtime;
 mod runtime_cell;
 #[cfg(test)]
 pub(crate) use runtime::{TestRuntime, TestScheduler};
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 mod slot;
 mod slots_host;
 pub(crate) use slots_host::SlotPassOutcome;

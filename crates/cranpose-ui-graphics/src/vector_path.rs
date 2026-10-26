@@ -316,6 +316,14 @@ impl PathFillRule {
             }
         }
     }
+
+    /// Whether a point the path winds around `winding` times is filled.
+    pub(crate) fn contains(self, winding: i32) -> bool {
+        match self {
+            Self::NonZero => winding != 0,
+            Self::EvenOdd => winding % 2 != 0,
+        }
+    }
 }
 
 /// Writes a row's summed coverage, scaled by `opacity`, into its row of the

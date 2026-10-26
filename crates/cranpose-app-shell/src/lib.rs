@@ -10,7 +10,9 @@ mod modal_focus;
 #[cfg(debug_assertions)]
 mod semantics_check;
 mod shell_debug;
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 mod shell_frame;
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 mod shell_input;
 mod surface;
 mod touch_router;
@@ -470,12 +472,6 @@ impl FrameSchedule {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct DevOverlayControl {
-    bounds: Rect,
-    mode: FramePacingMode,
-}
-
 /// Development options for debugging and performance monitoring.
 ///
 /// These are rendered directly by the renderer (not via composition)
@@ -606,6 +602,7 @@ impl ShellApp {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> AppShell<R>
 where
     R: Renderer,
@@ -940,7 +937,7 @@ where
 
     fn invalidate_dev_overlay_text(&mut self) {
         for surface in &mut self.surfaces {
-            surface.invalidate_dev_overlay_text();
+            surface.dev_overlay.invalidate();
         }
     }
 
@@ -1024,7 +1021,7 @@ where
     /// a pacing control has to hard-code a coordinate and silently starts
     /// passing against empty space the moment the overlay's text changes.
     pub fn dev_overlay_control_center(&self, mode: FramePacingMode) -> Option<(f32, f32)> {
-        self.surfaces[0].dev_overlay_control_center(mode)
+        self.surfaces[0].dev_overlay.control_center(mode)
     }
 
     /// Sets the primary surface's viewport and lays out and renders at once.

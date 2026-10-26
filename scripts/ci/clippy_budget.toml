@@ -14,7 +14,6 @@
 "clippy::let_underscore_must_use" = 264
 "clippy::let_underscore_untyped" = 700
 "clippy::missing_assert_message" = 191
-"clippy::multiple_inherent_impl" = 96
 "clippy::needless_pass_by_value" = 174
 "clippy::ref_option" = 18
 "clippy::significant_drop_tightening" = 203
