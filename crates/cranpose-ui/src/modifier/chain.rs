@@ -46,9 +46,9 @@ pub struct ModifierChainHandle {
     /// operation reports it. A context lives for one operation only; a kept
     /// one took a hundred bytes of every node.
     pending_invalidations: Option<Box<ModifierInvalidations>>,
-    resolved: ResolvedModifiers,
-    /// What the chain tells the parent's measure policy, worked out with
-    /// `resolved`.
+    /// What the chain tells the parent's measure policy, which reads it on
+    /// every pass. The resolved modifiers, which only a subcompose node's
+    /// measure and on-request readers take, are worked out when read.
     parent_data: cranpose_ui_layout::ParentData,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
@@ -125,7 +125,6 @@ impl ModifierChainHandle {
             chain,
             layout_direction: crate::LayoutDirection::Ltr,
             pending_invalidations: None,
-            resolved: ResolvedModifiers::default(),
             parent_data: cranpose_ui_layout::ParentData::default(),
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
@@ -347,8 +346,15 @@ impl ModifierChainHandle {
         self.capabilities.contains(NodeCapabilities::DRAW)
     }
 
+    /// The padding, layout properties and offset of the chain, worked out
+    /// from its layout nodes.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        self.resolved
+        let resolution = self.resolution();
+        let mut resolved = ResolvedModifiers::default();
+        resolved.set_padding(resolution.padding);
+        resolved.set_layout_properties(resolution.layout);
+        resolved.set_offset(resolution.offset);
+        resolved
     }
 
     /// What the chain tells the parent's measure policy about its node.
@@ -416,22 +422,25 @@ impl ModifierChainHandle {
         snapshot
     }
 
-    /// Works out the chain's resolved modifiers and parent data again, in
-    /// one walk over its layout nodes.
-    fn resolve(&mut self) {
+    // One walk over the chain's layout nodes, from the outermost in.
+    fn resolution(&self) -> Resolution {
         let mut resolution = Resolution::default();
         self.chain
             .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
                 node_ref.with_node(|node| resolution.take(node.as_any()));
             });
+        resolution
+    }
+
+    /// Works out the chain's parent data again.
+    fn resolve(&mut self) {
         let Resolution {
             layout,
-            padding,
-            offset,
             fill_width,
             fill_height,
             layout_data,
-        } = resolution;
+            ..
+        } = self.resolution();
         let weight = layout.weight.unwrap_or_default();
         self.parent_data = cranpose_ui_layout::ParentData {
             weight: weight.weight,
@@ -444,9 +453,6 @@ impl ModifierChainHandle {
             fill_height_fraction: fill_height.unwrap_or_default(),
             layout_data,
         };
-        self.resolved.set_padding(padding);
-        self.resolved.set_layout_properties(layout);
-        self.resolved.set_offset(offset);
     }
 }
 
