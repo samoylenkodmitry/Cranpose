@@ -15,17 +15,17 @@ impl SnapshotId {
         self.0
     }
 
-    /// The id the runtime hands out after this one.
+    // The id the runtime hands out after this one.
     pub(crate) const fn next(self) -> Self {
         Self(self.0 + 1)
     }
 
-    /// The id the runtime handed out before this one, or the first id.
+    // The id the runtime handed out before this one, or the first id.
     pub(crate) const fn previous(self) -> Self {
         Self(self.0.saturating_sub(1))
     }
 
-    /// How many ids the runtime handed out from `earlier` to this one.
+    // How many ids the runtime handed out from `earlier` to this one.
     pub(crate) const fn since(self, earlier: Self) -> usize {
         self.0.saturating_sub(earlier.0)
     }
