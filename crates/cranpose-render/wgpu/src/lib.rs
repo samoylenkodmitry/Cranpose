@@ -25,6 +25,7 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 mod glass_split;
+mod gpu_target;
 /// The GLSL templates of the built-in shader modules, which `build.rs` wrote.
 #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
 mod gl_templates {
@@ -106,6 +107,7 @@ use frame_packet::RenderReturns;
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
+pub use gpu_target::GpuTarget;
 pub use initial_present::{clear_to_background, clear_to_default_background};
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 use pipeline_compiler::PipelineCompilation;
@@ -208,41 +210,6 @@ pub struct DebugCpuAllocationStats {
     pub scratch_glyph_instances_cap: usize,
     pub layer_cache_len: usize,
     pub layer_cache_bytes: u64,
-}
-
-/// The device a renderer draws with, the surface format it presents and what
-/// the adapter behind the device supports.
-#[derive(Clone)]
-pub struct GpuTarget {
-    /// The device every GPU resource is created on.
-    pub device: Arc<wgpu::Device>,
-    /// The queue frames are submitted to.
-    pub queue: Arc<wgpu::Queue>,
-    /// The format of the surface frames are presented to.
-    pub surface_format: wgpu::TextureFormat,
-    /// The graphics API the adapter runs on.
-    pub adapter_backend: wgpu::Backend,
-    /// What the adapter supports below the full WebGPU feature set.
-    pub adapter_downlevel: wgpu::DownlevelFlags,
-}
-
-impl GpuTarget {
-    /// A target on a device of `adapter`, presenting to a surface of
-    /// `surface_format`.
-    pub fn on_adapter(
-        adapter: &wgpu::Adapter,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
-        Self {
-            device,
-            queue,
-            surface_format,
-            adapter_backend: adapter.get_info().backend,
-            adapter_downlevel: adapter.get_downlevel_capabilities().flags,
-        }
-    }
 }
 
 // A renderer that draws on the calling thread, and the executor its frames go
