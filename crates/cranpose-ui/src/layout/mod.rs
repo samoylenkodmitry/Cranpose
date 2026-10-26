@@ -1236,6 +1236,7 @@ struct LayoutNodeMeasure<'a> {
     spare: MeasuredSpare,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "bottom-up pass in its file")]
 impl LayoutBuilderState {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,

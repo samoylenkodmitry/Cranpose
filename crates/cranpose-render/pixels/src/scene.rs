@@ -287,6 +287,7 @@ pub(crate) struct RasterScene {
     pub(crate) kept: Vec<Range<usize>>,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "item reach in draw/reach")]
 impl RasterScene {
     pub(crate) fn new() -> Self {
         Self {

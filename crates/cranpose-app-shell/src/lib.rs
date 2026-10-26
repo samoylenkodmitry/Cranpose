@@ -10,7 +10,9 @@ mod modal_focus;
 #[cfg(debug_assertions)]
 mod semantics_check;
 mod shell_debug;
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 mod shell_frame;
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 mod shell_input;
 mod surface;
 mod touch_router;
@@ -600,6 +602,7 @@ impl ShellApp {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> AppShell<R>
 where
     R: Renderer,

@@ -6,6 +6,7 @@ use crate::{
     recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
 };
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl Composer {
     fn planned_node_parent(&self, id: NodeId) -> Option<NodeId> {
         if let Some(parent) = self.current_parent_hint().filter(|parent| *parent != id) {

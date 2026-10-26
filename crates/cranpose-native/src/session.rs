@@ -154,10 +154,7 @@ impl NativeSession {
 }
 
 #[uniffi::export]
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "uniffi exports every method of its block, and new takes a closure it cannot export"
-)]
+#[expect(clippy::multiple_inherent_impl, reason = "uniffi exports whole impls")]
 impl NativeSession {
     /// Attaches the platform frame callback and requests an initial frame.
     pub fn set_listener(&self, listener: Box<dyn FrameListener>) -> Result<(), NativeError> {

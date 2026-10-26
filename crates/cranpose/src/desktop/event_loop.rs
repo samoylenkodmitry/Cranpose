@@ -484,6 +484,7 @@ struct App {
     file_drops: super::incoming::FileDrops,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "device loss in its module")]
 impl App {
     fn new(
         mut settings: AppSettings,

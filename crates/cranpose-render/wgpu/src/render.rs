@@ -1216,6 +1216,7 @@ pub(crate) struct GpuRendererInit {
     pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "draw passes in draw_pass")]
 impl GpuRenderer {
     pub(crate) fn new(init: GpuRendererInit) -> Self {
         let GpuRendererInit {

@@ -5,6 +5,7 @@ type SubcomposeScopeIds = Vec<(NodeId, Vec<(u64, Vec<usize>)>)>;
 #[cfg(any(test, feature = "test-support"))]
 type SlotGroupEntry = (usize, Key, Option<usize>, usize);
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> AppShell<R>
 where
     R: Renderer,
@@ -242,6 +243,7 @@ fn debug_info_report<R: Renderer>(app: &mut ShellApp, surface: &mut RootSurface<
     report
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> SurfaceMut<'_, R>
 where
     R: Renderer,

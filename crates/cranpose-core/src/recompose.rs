@@ -19,6 +19,7 @@ impl RecomposeChildCursor {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl Composer {
     fn begin_scope_group(&self, scope: &RecomposeScope) -> Option<Option<NodeId>> {
         let started = self.with_slot_session_mut(|slots| {

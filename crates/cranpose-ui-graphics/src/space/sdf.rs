@@ -113,6 +113,7 @@ impl Samples {
     }
 }
 
+#[expect(clippy::multiple_inherent_impl, reason = "constructor by its parser")]
 impl Mesh {
     /// The surface where `field` is zero within the box from `bounds.0` to
     /// `bounds.1`: a signed distance field, negative inside the shape,

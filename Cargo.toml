@@ -192,6 +192,12 @@ needless_raw_string_hashes = "warn"
 elidable_lifetime_names = "warn"
 manual_assert = "warn"
 
+# A type keeps its methods in one impl block in its own file. A concern that
+# owns its fields is a part type with its own block; where a type's methods
+# sit in the files of their concerns (a modifier per file, the slot table),
+# the extra block expects this lint with the reason.
+multiple_inherent_impl = "deny"
+
 # The workspace builds the fork from forks/. Crates name it by version, so a
 # published crate takes the same fork from crates.io.
 [patch.crates-io]
