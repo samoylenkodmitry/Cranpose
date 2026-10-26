@@ -225,5 +225,32 @@ check "a vanished worktree's registration is pruned" \
 check "a live worktree's registration stays" \
     "$(git -C "$main_wt" worktree list --porcelain | grep -c "^worktree $resolved/new\$" || true)" "1"
 
+# Under the budget, idle incremental state goes before any whole target, even
+# in the primary checkout, whose target itself stays. State a build touched
+# within the idle window stays, and so does a locked worktree's, a seed's.
+make_incremental() {
+    mkdir -p "$1/ci/incremental/$2/s-session"
+    echo state > "$1/ci/incremental/$2/s-session/query-cache.bin"
+    [ -z "${3:-}" ] || touch -t "$3" "$1/ci/incremental/$2"
+}
+make_target "$main_wt/target" 202608010000
+make_incremental "$main_wt/target" idle_crate-1 202608010000
+make_incremental "$main_wt/target" recent_crate-2
+make_target "$root/new/target" 202608010000
+make_incremental "$root/new/target" seed_crate-3 202608010000
+git -C "$main_wt" worktree lock --reason "cargo seed" "$root/new"
+gc --min-free-gb 999999 --busy-minutes 0 >/dev/null 2>&1 || true
+check "a dry run keeps idle incremental state" \
+    "$([ -d "$main_wt/target/ci/incremental/idle_crate-1" ] && echo present || echo gone)" "present"
+gc --apply --min-free-gb 999999 --busy-minutes 0 >/dev/null 2>&1 || true
+check "idle incremental state is reclaimed" \
+    "$([ -d "$main_wt/target/ci/incremental/idle_crate-1" ] && echo present || echo gone)" "gone"
+check "recently built incremental state stays" \
+    "$([ -d "$main_wt/target/ci/incremental/recent_crate-2" ] && echo present || echo gone)" "present"
+check "the primary checkout keeps its target" "$([ -d "$main_wt/target" ] && echo present || echo gone)" "present"
+check "a locked worktree keeps its incremental state" \
+    "$([ -d "$root/new/target/ci/incremental/seed_crate-3" ] && echo present || echo gone)" "present"
+git -C "$main_wt" worktree unlock "$root/new"
+
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]
