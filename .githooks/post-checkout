@@ -1,0 +1,10 @@
+#!/bin/sh
+# A new worktree starts with the seed's warm cargo target instead of building
+# the workspace from nothing (scripts/dev/worktree_seed.py). Git runs this hook
+# after `git worktree add` with the null commit as the previous HEAD; branch
+# switches and clones of other machines, which have no `cranpose.seed`, return
+# at once. Seeding never fails the checkout.
+[ "$1" = 0000000000000000000000000000000000000000 ] || exit 0
+git config --get cranpose.seed >/dev/null || exit 0
+top="$(git rev-parse --show-toplevel)" || exit 0
+python3 "$(dirname "$0")/../scripts/dev/worktree_seed.py" clone --refresh-behind "$top" || true

@@ -62,6 +62,7 @@ readonly CACHEDIR_SIGNATURE='Signature: 8a477f597d28d172789f06886806bc55'
 apply=0
 min_free_gb=150
 busy_minutes=15
+idle_incremental_minutes=60
 include_locked=0
 include_self=0
 include_main=0
@@ -79,6 +80,9 @@ usage: target_gc.sh [options]
   --busy-minutes N    A target written within N minutes has a live build and is
                       never evicted (default: 15).
   --min-size-mb N     Ignore target dirs smaller than N MB (default: 100).
+  --idle-incremental-minutes N
+                      Under the budget, first remove the incremental state of
+                      crates no build touched for N minutes (default: 60).
   --repo DIR          Sweep this repository's worktrees rather than the one
                       containing the current directory. Always pass this from a
                       script: defaulting to wherever the caller happens to be
@@ -107,6 +111,7 @@ while [ $# -gt 0 ]; do
         --min-free-gb) min_free_gb="${2:?--min-free-gb needs a value}"; shift ;;
         --busy-minutes) busy_minutes="${2:?--busy-minutes needs a value}"; shift ;;
         --min-size-mb) min_size_mb="${2:?--min-size-mb needs a value}"; shift ;;
+        --idle-incremental-minutes) idle_incremental_minutes="${2:?--idle-incremental-minutes needs a value}"; shift ;;
         --repo) repo_arg="${2:?--repo needs a value}"; shift ;;
         --root) extra_roots+=("${2:?--root needs a value}"); shift ;;
         -h|--help) usage; exit 0 ;;
@@ -284,7 +289,8 @@ reap_orphans() {
             rm -rf "$staged"
             [ -d "$staged" ] || reaped=$((reaped + 1))
         done < <(find "$wt" -maxdepth 6 \( -name .git -o -name node_modules \) -prune \
-            -o -type d \( -name 'target*.gc-[0-9]*' -o -name 'build.gc-[0-9]*' -o -name '.gradle.gc-[0-9]*' \) \
+            -o -type d \( -name 'target*.gc-[0-9]*' -o -name 'build.gc-[0-9]*' -o -name '.gradle.gc-[0-9]*' \
+                -o -path '*/incremental/*.gc-[0-9]*' \) \
             -print -prune 2>/dev/null)
     done <<EOF
 $(worktree_records)
@@ -480,6 +486,71 @@ fi
 
 start_free="$(free_gb "$self_root")"
 echo "Free disk: ${start_free}G. Target: ${min_free_gb}G."
+
+# Incremental compilation state is most of a busy worktree's target -- 27 of
+# 43GB in one measured on 2026-10-26, 847 crate directories written within six
+# hours by gates that each build their own feature set -- and most of it
+# belongs to crate builds the worktree stopped repeating. rustc rebuilds such a
+# crate without reuse the next time it changes, which costs far less than the
+# whole target, so idle state goes first. rustc renews a crate directory with
+# every session, so its mtime is the crate's last build. Targets with a live
+# build or process, and locked worktrees such as seeds, keep theirs; the
+# primary and current checkouts lose only idle state, never the target.
+idle_incremental_dirs() {
+    local target="$1" dir
+    for dir in "$target"/*/incremental "$target"/*/*/incremental; do
+        [ -d "$dir" ] || continue
+        find "$dir" -mindepth 1 -maxdepth 1 -type d -mmin "+$idle_incremental_minutes" 2>/dev/null
+    done
+}
+
+prune_idle_incremental() {
+    local last size_mb protect target label dir dir_mb mb pruned_mb=0 pruned_dirs=0 any=0
+    while IFS=$'\t' read -r last size_mb protect target; do
+        [ -n "$target" ] || continue
+        case "$protect" in
+            -|"current worktree"|"primary checkout"*) ;;
+            *) continue ;;
+        esac
+        label="$(basename "$(dirname "$target")")/$(basename "$target")"
+        dir_mb=0
+        while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            mb="$(dir_size_mb "$dir")"
+            if [ "$apply" -eq 1 ]; then
+                reclaim "$dir" || continue
+            fi
+            dir_mb=$(( dir_mb + mb ))
+            pruned_dirs=$((pruned_dirs + 1))
+        done < <(idle_incremental_dirs "$target")
+        [ "$dir_mb" -gt 0 ] || continue
+        any=1
+        pruned_mb=$(( pruned_mb + dir_mb ))
+        if [ "$apply" -eq 1 ]; then
+            printf '%-38s %8s  idle incremental state RECLAIMED\n' "$label" "$(human_gb "$dir_mb")"
+        else
+            printf '%-38s %8s  idle incremental state: would reclaim\n' "$label" "$(human_gb "$dir_mb")"
+        fi
+    done <<EOF
+$candidates
+EOF
+    [ "$any" -eq 1 ] || return 0
+    if [ "$apply" -eq 1 ]; then
+        echo "Reclaimed $(human_gb "$pruned_mb") of idle incremental state in $pruned_dirs crate dirs. Free disk: $(free_gb "$self_root")G."
+    else
+        echo "Would reclaim $(human_gb "$pruned_mb") of idle incremental state in $pruned_dirs crate dirs."
+    fi
+}
+
+if [ "$start_free" -lt "$min_free_gb" ]; then
+    echo
+    prune_idle_incremental
+    if [ "$apply" -eq 1 ]; then
+        # The whole-target pass below measures sizes again: pruning shrank them.
+        seen_targets=""
+        candidates="$(collect_candidates | collapse_candidates | sort -n)"
+    fi
+fi
 echo
 printf '%-38s %8s  %-14s %s\n' "BUILD OUTPUT" "SIZE" "LAST BUILT" "DECISION"
 
