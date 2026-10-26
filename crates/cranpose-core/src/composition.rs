@@ -4,9 +4,9 @@ use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
-    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, CompositionPassDebugStats,
-    ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, RetentionPolicy,
-    Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
+    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, ConcreteApplierHost,
+    DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, RetentionPolicy, Runtime,
+    RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
     collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
     scheduler_ref,
 };
@@ -661,4 +661,30 @@ impl<A: Applier + 'static> Drop for Composition<A> {
         self.runtime.restore_thread_state();
         self.teardown = Some(runtime::enter_state_teardown_scope());
     }
+}
+
+/// The largest sizes that the command queues and the side effect list reached during one
+/// composition pass, for debugging memory use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompositionPassDebugStats {
+    /// Most node commands queued at once.
+    pub commands_len: usize,
+    /// Largest capacity reserved for node commands.
+    pub commands_cap: usize,
+    /// Most bytes of command arguments queued at once.
+    pub command_payload_len_bytes: usize,
+    /// Largest capacity reserved for command arguments, in bytes.
+    pub command_payload_cap_bytes: usize,
+    /// Most child list updates queued at once.
+    pub sync_children_len: usize,
+    /// Largest capacity reserved for child list updates.
+    pub sync_children_cap: usize,
+    /// Most child ids stored for child list updates.
+    pub sync_child_ids_len: usize,
+    /// Largest capacity reserved for those child ids.
+    pub sync_child_ids_cap: usize,
+    /// Most side effects queued at once.
+    pub side_effects_len: usize,
+    /// Largest capacity reserved for the side effects.
+    pub side_effects_cap: usize,
 }

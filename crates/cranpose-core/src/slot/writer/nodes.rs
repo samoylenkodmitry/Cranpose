@@ -50,7 +50,7 @@ impl SlotTable {
                 .break_value()
         };
         #[cfg(any(test, debug_assertions))]
-        if crate::slot_validation_diagnostics_enabled() {
+        if crate::slot::slot_validation_diagnostics_enabled() {
             assert_eq!(
                 found,
                 self.try_for_each_root_in(group_index, first.parent_id, &mut ControlFlow::Break)
@@ -146,7 +146,7 @@ impl SlotTable {
 
     #[cfg(any(test, debug_assertions))]
     fn debug_assert_roots_in_emission_order(&self, group_index: usize, parent: Option<NodeId>) {
-        if !crate::slot_validation_diagnostics_enabled() {
+        if !crate::slot::slot_validation_diagnostics_enabled() {
             return;
         }
         let Some(group) = self.groups.get(group_index) else {

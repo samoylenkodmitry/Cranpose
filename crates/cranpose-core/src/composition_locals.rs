@@ -1,16 +1,17 @@
 use std::{
     any::Any,
     cell::RefCell,
+    hash::{Hash, Hasher},
     rc::{Rc, Weak},
     sync::Arc,
 };
 
 use crate::{
-    Composer, LocalKey, RuntimeHandle, composer_context,
+    Composer, Key, RuntimeHandle, avalanche_location_key, composer, composer_context,
     state::{MutationPolicy, OwnedMutableState},
 };
 
-fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
+fn provider_entry_source(key: &LocalKey, caller: Key) -> Key {
     (key.entry_source() ^ caller).wrapping_mul(0x0000_0100_0000_01b3)
 }
 
@@ -19,7 +20,7 @@ fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
 pub struct ProvidedValue {
     key: LocalKey,
     #[expect(clippy::type_complexity, reason = "one boxed closure per local")]
-    apply: Box<dyn Fn(&Composer, crate::Key) -> (Rc<dyn Any>, bool)>,
+    apply: Box<dyn Fn(&Composer, Key) -> (Rc<dyn Any>, bool)>,
 }
 
 impl ProvidedValue {
@@ -32,7 +33,7 @@ impl ProvidedValue {
     pub(crate) fn into_entry(
         self,
         composer: &Composer,
-        site: crate::Key,
+        site: Key,
     ) -> (LocalKey, Rc<dyn Any>, bool) {
         let Self { key, apply } = self;
         let (entry, static_changed) = apply(composer, site);
@@ -207,7 +208,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
         let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
-            apply: Box::new(move |composer: &Composer, site: crate::Key| {
+            apply: Box::new(move |composer: &Composer, site: Key| {
                 let runtime = composer.runtime_handle();
                 let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
                 let entry_ref = composer.remember_internal(source, || {
@@ -238,7 +239,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
         let compute: Rc<ComputeLocalFn<T>> = Rc::new(compute);
         ProvidedValue {
             key,
-            apply: Box::new(move |composer: &Composer, site: crate::Key| {
+            apply: Box::new(move |composer: &Composer, site: Key| {
                 let runtime = composer.runtime_handle();
                 let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
                 let entry_ref = composer.remember_internal(source, || {
@@ -390,16 +391,13 @@ impl<T: Clone + 'static> StaticDeferred<T> {
 /// The innermost provider frame a static local was last read under, and
 /// what it found there.
 struct StaticRead<T: Clone + 'static> {
-    frame: Option<Weak<crate::composer::LocalFrame>>,
+    frame: Option<Weak<composer::LocalFrame>>,
     found: StaticFound<T>,
 }
 
 /// Whether `frame` is the innermost frame of `stack`. A weak handle keeps
 /// its frame's allocation, so no other frame takes the address meanwhile.
-fn is_top_frame(
-    frame: &Option<Weak<crate::composer::LocalFrame>>,
-    stack: &crate::LocalStackSnapshot,
-) -> bool {
+fn is_top_frame(frame: &Option<Weak<composer::LocalFrame>>, stack: &LocalStackSnapshot) -> bool {
     match (frame, stack) {
         (Some(frame), Some(top)) => std::ptr::eq(frame.as_ptr(), Rc::as_ptr(top)),
         (None, None) => true,
@@ -421,7 +419,7 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
     /// they run once the caller releases the stack.
     pub(crate) fn provided_under(
         &self,
-        stack: &crate::LocalStackSnapshot,
+        stack: &LocalStackSnapshot,
     ) -> Result<T, StaticDeferred<T>> {
         let mut last = self.last_read.borrow_mut();
         if let Some(read) = &*last
@@ -438,8 +436,8 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         provided.read()
     }
 
-    fn find(&self, stack: &crate::LocalStackSnapshot) -> Provided<T> {
-        let Some(entry) = crate::composer::provided_entry(stack, &self.key) else {
+    fn find(&self, stack: &LocalStackSnapshot) -> Provided<T> {
+        let Some(entry) = composer::provided_entry(stack, &self.key) else {
             return Provided::Default;
         };
         match entry.downcast::<StaticLocalEntry<T>>() {
@@ -466,7 +464,7 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
-            apply: Box::new(move |composer: &Composer, site: crate::Key| {
+            apply: Box::new(move |composer: &Composer, site: Key| {
                 let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
                 let entry_ref = composer
                     .remember_internal(source, || Rc::new(StaticLocalEntry::new(value.clone())));
@@ -488,7 +486,7 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         let compute: Rc<ComputeLocalFn<T>> = Rc::new(compute);
         ProvidedValue {
             key: self.key.clone(),
-            apply: Box::new(move |_: &Composer, _: crate::Key| {
+            apply: Box::new(move |_: &Composer, _: Key| {
                 let entry = Rc::new(StaticComputedLocalEntry {
                     compute: Rc::clone(&compute),
                 });
@@ -560,4 +558,45 @@ pub fn staticCompositionLocalWithComputedDefaultOf<T: Clone + PartialEq + 'stati
     compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
 ) -> StaticCompositionLocal<T> {
     staticCompositionLocalOf(move || compute(&CompositionLocalAccessorScope { _private: () }))
+}
+
+/// The composition locals in scope: the innermost provider's frame, whose
+/// parents lead out to the outermost, or `None` outside every provider. A
+/// provider pushes one frame over the chain, so a snapshot of the locals is
+/// a shared pointer and never a copy of them.
+pub(crate) type LocalStackSnapshot = Option<Rc<composer::LocalFrame>>;
+
+#[derive(Clone)]
+pub(crate) struct LocalKey(Rc<()>);
+
+impl LocalKey {
+    fn new() -> Self {
+        Self(Rc::new(()))
+    }
+
+    pub(crate) fn entry_source(&self) -> Key {
+        avalanche_location_key(Rc::as_ptr(&self.0) as usize as u64)
+    }
+}
+
+impl std::fmt::Debug for LocalKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LocalKey")
+            .field(&(Rc::as_ptr(&self.0) as usize))
+            .finish()
+    }
+}
+
+impl PartialEq for LocalKey {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for LocalKey {}
+
+impl Hash for LocalKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state);
+    }
 }

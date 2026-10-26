@@ -41,7 +41,7 @@ impl SlotTable {
 #[cfg(any(test, debug_assertions))]
 impl SlotTable {
     pub(crate) fn debug_verify(&self) {
-        if crate::slot_validation_diagnostics_enabled()
+        if crate::slot::slot_validation_diagnostics_enabled()
             && let Err(err) = self.validate()
         {
             panic!("slot table invariant violation: {err:?}");
@@ -49,7 +49,7 @@ impl SlotTable {
     }
 
     pub(in crate::slot) fn debug_assert_valid_after(&self, operation: &'static str) {
-        if crate::slot_validation_diagnostics_enabled() {
+        if crate::slot::slot_validation_diagnostics_enabled() {
             if let Err(err) = self.validate() {
                 panic!("slot table invariant violation after {operation}: {err:?}");
             }

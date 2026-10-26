@@ -11,7 +11,7 @@ source_text_checks = 341
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 305
+"bool-parameter" = 304
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 11
 "get-prefix" = 133
@@ -48,7 +48,6 @@ limit = 1000
 "crates/cranpose-app-shell/src/shell_input.rs" = 2342
 "crates/cranpose-capabilities/src/lib.rs" = 1069
 "crates/cranpose-core/src/composer.rs" = 2740
-"crates/cranpose-core/src/lib.rs" = 5442
 "crates/cranpose-core/src/runtime.rs" = 1808
 "crates/cranpose-core/src/snapshot_v2/mod.rs" = 1022
 "crates/cranpose-core/src/state.rs" = 2391

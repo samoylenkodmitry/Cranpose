@@ -1,8 +1,10 @@
 use std::{
+    any::{Any, TypeId},
     cell::{Cell, RefCell},
+    hash::{Hash, Hasher},
     rc::Rc,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -17,9 +19,11 @@ use crate as cranpose_core;
 use crate::snapshot_v2::{TestRuntimeGuard, reset_runtime_for_tests};
 use crate::{
     SnapshotStateObserver,
+    collections::map::HashSet,
     slot::ActiveGroupId,
     snapshot_v2::take_mutable_snapshot,
     state::{MutationPolicy, SnapshotMutableState},
+    subcompose::{ContentTypeReusePolicy, SlotId, SubcomposeState},
 };
 
 #[cfg(test)]
@@ -127,7 +131,11 @@ fn state_chain_assert_env_flag_is_not_process_cached() {
 
 #[test]
 fn core_diagnostic_env_flags_are_not_process_cached() {
-    let source = include_str!("../lib.rs");
+    let source = [
+        include_str!("../location_key.rs"),
+        include_str!("../slot/mod.rs"),
+    ]
+    .concat();
 
     assert!(
         !source.contains("OnceLock<bool>") && !source.contains("get_or_init(|| std::env::var_os"),
@@ -137,7 +145,7 @@ fn core_diagnostic_env_flags_are_not_process_cached() {
 
 #[test]
 fn location_key_debug_state_is_not_process_global() {
-    let source = include_str!("../lib.rs");
+    let source = include_str!("../location_key.rs");
     assert!(!source.contains("location_key_registry() -> &'static"));
     assert!(!source.contains("location_key_collision_count() -> &'static"));
 }
@@ -151,7 +159,7 @@ fn composition_local_keys_do_not_use_process_global_counter() {
     assert!(!lib_source.contains("next_local_key"));
     assert!(!local_source.contains("next_local_key"));
     assert!(
-        lib_source.contains("struct LocalKey(Rc<()>)"),
+        local_source.contains("struct LocalKey(Rc<()>)"),
         "a local's identity is the allocation its clones share, never a \
          process-global counter"
     );
@@ -174,10 +182,10 @@ fn composition_local_key_identity_is_retained_per_local() {
 
 #[test]
 fn recompose_scope_live_count_is_runtime_owned() {
-    let lib_source = include_str!("../lib.rs");
+    let scope_source = include_str!("../recompose_scope.rs");
     let debug_source = include_str!("../debug_trace.rs");
 
-    assert!(!lib_source.contains("LIVE_RECOMPOSE_SCOPE_COUNT"));
+    assert!(!scope_source.contains("LIVE_RECOMPOSE_SCOPE_COUNT"));
     assert!(!debug_source.contains("LIVE_RECOMPOSE_SCOPE_COUNT"));
 }
 
@@ -202,7 +210,7 @@ fn runtime_ids_do_not_use_process_global_counter() {
 
 #[test]
 fn recompose_scope_ids_do_not_use_process_global_counter() {
-    let source = include_str!("../lib.rs");
+    let source = include_str!("../recompose_scope.rs");
     assert!(!source.contains("NEXT_SCOPE_ID"));
     assert!(!source.contains("next_scope_id"));
 }

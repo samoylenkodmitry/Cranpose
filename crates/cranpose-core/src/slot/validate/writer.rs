@@ -78,7 +78,7 @@ impl SlotWriteSessionState {
                 count: self.pending_payload_location_refresh_count(),
             });
         }
-        if crate::slot_validation_diagnostics_enabled() {
+        if crate::slot::slot_validation_diagnostics_enabled() {
             table.validate()?;
         } else {
             table.assert_fast_integrity("slot writer validation");

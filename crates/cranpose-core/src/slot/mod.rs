@@ -66,3 +66,13 @@ pub(crate) use validate::SlotInvariantError;
 #[cfg(test)]
 pub(crate) use validate::SlotTreeContext;
 pub(crate) use writer::{GroupFrameStorage, SlotWriteSessionState};
+
+#[cfg(test)]
+pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
+    true
+}
+
+#[cfg(all(debug_assertions, not(test)))]
+pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
+    crate::env_flag!("CRANPOSE_VALIDATE_SLOTS")
+}
