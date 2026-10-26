@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{
@@ -18,6 +18,7 @@ use crate as cranpose_core;
 use crate::snapshot_v2::{TestRuntimeGuard, reset_runtime_for_tests};
 use crate::{
     SnapshotStateObserver,
+    collections::map::HashSet,
     slot::ActiveGroupId,
     snapshot_v2::take_mutable_snapshot,
     state::{MutationPolicy, SnapshotMutableState},
