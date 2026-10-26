@@ -739,7 +739,7 @@ fn a_path_opens_here_and_everything_else_is_the_platforms() {
             let path = crate::test_scratch_dir("media-source-opener").join("document.bin");
             std::fs::write(&path, uri.as_bytes())?;
             Ok(MediaSourceHandle {
-                stream: std::fs::File::open(path)?,
+                stream: File::open(path)?,
                 len: Some(uri.len() as u64),
             })
         }
