@@ -151,18 +151,25 @@ impl SurfaceDirt {
             full_scene_dirty,
             needs_scene_rebuild,
         };
-        dirt.fill_scene_updates();
+        dirt.fill_scene_updates(frame.pointer_dirty);
         dirt
     }
 
     // A node in two of the lists stays in both: the scene merges a node's
-    // updates as it keys them, so sorting every id to drop the second copy
-    // would do that work twice. Nothing was composed or laid out for a
-    // visual update, so its draw nodes' draws read state that changed;
-    // otherwise they, the laid out nodes and the structural parents are
-    // recorded again.
-    fn fill_scene_updates(&mut self) {
-        let visual = self.use_visual_update();
+    // updates as it keys them, and draws with any other change record the
+    // node's content, so sorting every id to drop the second copy would do
+    // that work twice. The laid out nodes and the structural parents are
+    // recorded again. A draw node's draws read state that changed: the
+    // scene records them around the child layers it keeps, or the whole
+    // node when its layer no longer fits it, even in a frame that composed
+    // or laid out other nodes. After a pointer pass every draw node is
+    // recorded whole, which collects its hits again.
+    fn fill_scene_updates(&mut self, pointer_dirty: bool) {
+        let draws = if pointer_dirty {
+            NodeUpdate::Content
+        } else {
+            NodeUpdate::Draws
+        };
         let updates = &mut self.scene_updates;
         updates.clear();
         updates.extend(self.moved_nodes.iter().map(|&id| (id, NodeUpdate::Moved)));
@@ -171,20 +178,12 @@ impl SurfaceDirt {
                 .iter()
                 .map(|&id| (id, NodeUpdate::Layer)),
         );
-        if visual {
-            updates.extend(
-                self.draw_dirty_nodes
-                    .iter()
-                    .map(|&id| (id, NodeUpdate::Draws)),
-            );
-        } else {
-            let recorded = self
-                .draw_dirty_nodes
-                .iter()
-                .chain(&self.layout_dirty_nodes)
-                .chain(&self.structural_parents);
-            updates.extend(recorded.map(|&id| (id, NodeUpdate::Content)));
-        }
+        updates.extend(self.draw_dirty_nodes.iter().map(|&id| (id, draws)));
+        let recorded = self
+            .layout_dirty_nodes
+            .iter()
+            .chain(&self.structural_parents);
+        updates.extend(recorded.map(|&id| (id, NodeUpdate::Content)));
     }
 
     fn use_partial_update(&self) -> bool {

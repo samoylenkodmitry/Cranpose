@@ -218,6 +218,71 @@ fn preparing_an_area_draws_the_same_picture() {
     assert!(picture_in_strips(&mut prepared, 8) == whole);
 }
 
+// A screen at step `first` that goes to step 1 on its second frame. The
+// step changes a line of text, so that frame composes and lays out, and
+// colors the draws of three boxes: one that only draws, one after the text
+// that the wider line moves, and one whose width the step sets.
+fn stepping_framebuffer(first: u32) -> Framebuffer {
+    let mut framebuffer = Framebuffer::new(80, 40, 1.0, SystemTheme::Light, &[], move || {
+        let step = rememberMutableStateOf(|| first);
+        LaunchedEffectAsync((), move |scope| {
+            Box::pin(async move {
+                scope.runtime().frame_clock().next_frame().await;
+                step.set(1);
+            })
+        });
+        let colored = move |width: f32| {
+            Modifier::empty()
+                .size(Size::new(width, 8.0))
+                .draw_behind(move |scope| {
+                    let color = if step.get() == 0 { RED } else { GREEN };
+                    scope.draw_rect(Brush::solid(color));
+                })
+        };
+        Column(
+            Modifier::empty().fill_max_size(),
+            ColumnSpec::default(),
+            move || {
+                Row(Modifier::empty(), RowSpec::default(), move || {
+                    let line = if step.get() == 0 {
+                        "a"
+                    } else {
+                        "a longer line"
+                    };
+                    Text(line, Modifier::empty(), TextStyle::default());
+                    Box(colored(8.0), BoxSpec::default(), || {});
+                });
+                Box(colored(20.0), BoxSpec::default(), || {});
+                let width = if step.get() == 0 { 10.0 } else { 30.0 };
+                Box(colored(width), BoxSpec::default(), || {});
+            },
+        );
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    for frame in 1..=4 {
+        framebuffer.tick(frame * 16_666_667);
+        framebuffer.run_pending_tasks();
+    }
+    framebuffer.changed_areas(&mut Vec::new());
+    framebuffer
+}
+
+// A node whose draws read changed state draws them again in a frame that
+// also composed and laid out other nodes, as it does where it moved or
+// resized in that frame.
+#[test]
+fn draws_that_change_with_a_layout_show_as_a_new_screen_shows_them() {
+    let mut stepped = stepping_framebuffer(0);
+    let mut fresh = stepping_framebuffer(1);
+    let picture = picture_in_strips(&mut fresh, 40);
+    assert!(
+        picture.as_chunks::<4>().0.contains(&[0, 255, 0, 255]),
+        "the boxes draw"
+    );
+    assert!(picture_in_strips(&mut stepped, 40) == picture);
+}
+
 // A host that keeps its frame and draws only the changed areas, in strips
 // of eight rows as a board with a small buffer does, shows what a whole
 // redraw shows, every frame of a screen that changes most of itself each
