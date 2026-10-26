@@ -344,36 +344,14 @@ impl GpuRenderer {
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
         let device = Arc::clone(&self.device);
-        let takes_depth = self.depth_gate.may() && takes_depth(segments);
-        let depth = if takes_depth && self.depth_gate.is_open() {
-            PassDepth::On
-        } else {
-            PassDepth::Off
-        };
-        let mut prep = PassPrep {
+        let (depth, depth_keys) = self.pass_depth(segments);
+        let mut prep = PassPrep::new(
             recorder,
-            device: &device,
-            target,
-            load_op,
-            batches: Vec::new(),
-            chunk: None,
-            held: std::mem::take(&mut scratch.held),
-            depth,
-            mixed_turns: turns_mixed(segments),
-            overlay_segment: None,
-            overlay_images: None,
-            depth_seq: 0,
-            open: None,
-            arena_draws: std::mem::take(&mut scratch.arena_draws),
-            meshes: std::mem::take(&mut scratch.meshes),
-            pipelines: std::mem::take(&mut scratch.pipelines),
-            depth_keys: (takes_depth && !depth.is_on()).then(PipelineDemand::default),
-            chunk_start: 0,
-            chunk_base: 0,
-            chunk_slot: None,
-            chunk_clip: None,
-            chunk_scissor: None,
-        };
+            (&device, target, load_op),
+            (depth, depth_keys),
+            turns_mixed(segments),
+            &mut scratch,
+        );
         let prepared = prep.segments(self, (segments, layout), &mut scratch);
         prep.finish(self);
         self.flush_glyph_uploads();
@@ -441,6 +419,18 @@ impl GpuRenderer {
         drop(batches);
         self.pass_scratch = scratch;
         result
+    }
+
+    // The depth a pass over `segments` draws with, and the shape pipelines
+    // it collects for a depth buffer when it could take one but its gate is
+    // still shut.
+    fn pass_depth(&self, segments: &[PassSegment<'_>]) -> (PassDepth, Option<PipelineDemand>) {
+        let takes_depth = self.depth_gate.may() && takes_depth(segments);
+        if takes_depth && self.depth_gate.is_open() {
+            (PassDepth::On, None)
+        } else {
+            (PassDepth::Off, takes_depth.then(PipelineDemand::default))
+        }
     }
 
     fn take_pass_scratch(&mut self) -> PassScratch {
@@ -1207,7 +1197,40 @@ struct PassPrep<'a, 's, C> {
     chunk_scissor: Option<TargetRect>,
 }
 
-impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
+impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
+    fn new(
+        recorder: &'a mut C,
+        (device, target, load_op): (&'a wgpu::Device, PassTarget<'a>, wgpu::LoadOp<wgpu::Color>),
+        (depth, depth_keys): (PassDepth, Option<PipelineDemand>),
+        mixed_turns: bool,
+        scratch: &mut PassScratch,
+    ) -> Self {
+        Self {
+            recorder,
+            device,
+            target,
+            load_op,
+            batches: Vec::new(),
+            chunk: None,
+            held: std::mem::take(&mut scratch.held),
+            depth,
+            mixed_turns,
+            overlay_segment: None,
+            overlay_images: None,
+            depth_seq: 0,
+            open: None,
+            arena_draws: std::mem::take(&mut scratch.arena_draws),
+            meshes: std::mem::take(&mut scratch.meshes),
+            pipelines: std::mem::take(&mut scratch.pipelines),
+            depth_keys,
+            chunk_start: 0,
+            chunk_base: 0,
+            chunk_slot: None,
+            chunk_clip: None,
+            chunk_scissor: None,
+        }
+    }
+
     fn target_size(&self) -> (u32, u32) {
         (self.target.width, self.target.height)
     }

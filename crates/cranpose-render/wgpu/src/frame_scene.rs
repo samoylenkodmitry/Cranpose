@@ -237,14 +237,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         } else {
             ScenePipeline::Plain
         });
-        let shaded = (
-            StepPipeline::Shaded(if shadows {
-                ShadedVariant::Shadowed
-            } else {
-                ShadedVariant::Plain
-            }),
-            ScenePhase::Shaded,
-        );
+        let shaded = shaded_step(shadows);
         let volumes = StepPipeline::Volumes(VolumeVariant::Color);
         let portals = |pass: PortalPass| (StepPipeline::Portals(pass), ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
@@ -633,6 +626,17 @@ fn draw_surfaces<'d>(
         }
         render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
     }
+}
+
+// The step that draws the shaded surfaces, lit by the shadow map when the
+// scene casts shadows.
+fn shaded_step(shadows: bool) -> (StepPipeline, ScenePhase) {
+    let variant = if shadows {
+        ShadedVariant::Shadowed
+    } else {
+        ShadedVariant::Plain
+    };
+    (StepPipeline::Shaded(variant), ScenePhase::Shaded)
 }
 
 /// The device pixels a scene's glass reads behind it: the pixels each glass
