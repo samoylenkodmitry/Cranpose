@@ -2020,7 +2020,7 @@ fn a_glyph_hanging_off_the_canvas_paints_only_the_pixels_on_it() {
         // outside the area.
         for stride in [SIDE, SIDE + 2] {
             let mut pixels = vec![[0u8; 4]; (stride * SIDE) as usize];
-            draw_mask_glyph_solid_u8(
+            draw_mask_glyph_solid(
                 &mut pixels,
                 stride as usize,
                 (SIDE, SIDE),

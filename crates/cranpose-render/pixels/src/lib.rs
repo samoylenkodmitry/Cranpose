@@ -4,19 +4,23 @@
 mod damage;
 mod draw;
 mod pipeline;
+mod pixel;
 /// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
 pub mod sprites;
 mod style;
 mod surface;
 
+pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates,
+    rgb565::{Rgb565Be, Rgb565Le},
     text_measure::{CachedFontTextMeasurer, SoftwareTextResources},
 };
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
 pub use draw::draw_scene;
+use pixel::Pixel;
 pub use scene::{HitRegion, Scene};
 
 /// A rectangle of device pixels: columns `x..x + width` of rows
@@ -246,10 +250,44 @@ impl PixelsRenderer {
     /// `area.width` pixels, `area.height` of them. Draws nothing before the
     /// first [`Self::update_picture`] or when `pixels` is shorter than the area.
     pub fn draw_picture_area(&self, picture: &Picture, area: PixelRect, pixels: &mut [u8]) {
+        self.draw_picture_area_as(picture, area, pixels.as_chunks_mut::<4>().0);
+    }
+
+    /// Draws `area` of `picture` into `pixels` as rows of 16-bit pixels, 5
+    /// bits of red, 6 of green and 5 of blue, stored in `order`, as a display
+    /// takes them: `area.width` pixels a row, `area.height` rows. Each pixel
+    /// keeps the high bits of the bytes [`Self::draw_picture_area`] draws,
+    /// except where a drawing blends over another, which blends over the
+    /// 16-bit pixel.
+    pub fn draw_picture_area_rgb565(
+        &self,
+        picture: &Picture,
+        area: PixelRect,
+        pixels: &mut [u16],
+        order: Rgb565Order,
+    ) {
+        match order {
+            Rgb565Order::LittleEndian => self.draw_picture_area_as::<Rgb565Le>(
+                picture,
+                area,
+                bytemuck::cast_slice_mut(pixels),
+            ),
+            Rgb565Order::BigEndian => self.draw_picture_area_as::<Rgb565Be>(
+                picture,
+                area,
+                bytemuck::cast_slice_mut(pixels),
+            ),
+        }
+    }
+
+    // Out of line, one function a format: a display takes one byte order, and
+    // a build that keeps its drawing in fast memory keeps only that one.
+    #[inline(never)]
+    fn draw_picture_area_as<P: Pixel>(&self, picture: &Picture, area: PixelRect, pixels: &mut [P]) {
         let Some(raster) = picture.raster.as_ref() else {
             return;
         };
-        let len = area.width as usize * area.height as usize * 4;
+        let len = area.width as usize * area.height as usize;
         let Some(pixels) = pixels.get_mut(..len) else {
             return;
         };

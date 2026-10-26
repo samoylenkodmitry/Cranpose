@@ -9,7 +9,7 @@ use std::{
 };
 
 use cranpose::{
-    framebuffer::{Framebuffer, PixelRect},
+    framebuffer::{Framebuffer, PixelRect, Rgb565Order},
     prelude::*,
 };
 use cranpose_animation::{
@@ -337,6 +337,60 @@ fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
             differing.map(|pixel| (pixel % WIDTH as usize, pixel / WIDTH as usize)),
             None,
             "frame {frame}: the kept frame differs from a whole redraw at (x, y); areas {areas:?}"
+        );
+    }
+}
+
+// A display of 16-bit pixels shows what the bytes show, cut to 5, 6 and 5
+// bits, but for two things, each a step of a channel at most: a drawing that
+// blends over another blends over the 16-bit pixel, and a gradient comes
+// undithered, as the dither of its bytes moves less than those bits keep.
+// On the dashboard two such steps meet at most.
+#[test]
+fn the_dashboard_drawn_as_rgb565_keeps_the_high_bits_of_its_bytes() {
+    const WIDTH: u32 = 320;
+    const HEIGHT: u32 = 480;
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], || {
+        dashboard::Dashboard("Cranpose");
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    let whole = PixelRect {
+        x: 0,
+        y: 0,
+        width: WIDTH,
+        height: HEIGHT,
+    };
+    let pixels = (WIDTH * HEIGHT) as usize;
+    let mut bytes = vec![0u8; pixels * 4];
+    let mut little = vec![0u16; pixels];
+    let mut big = vec![0u16; pixels];
+    for frame in [0u64, 45, 120] {
+        framebuffer.tick(frame * 16_666_667);
+        framebuffer.run_pending_tasks();
+        framebuffer.changed_areas(&mut Vec::new());
+        framebuffer.draw_area(whole, &mut bytes);
+        framebuffer.draw_area_rgb565(whole, &mut little, Rgb565Order::LittleEndian);
+        framebuffer.draw_area_rgb565(whole, &mut big, Rgb565Order::BigEndian);
+        let mut stepped = 0;
+        for ((rgba, &little), &big) in bytes.as_chunks::<4>().0.iter().zip(&little).zip(&big) {
+            assert_eq!(little.to_le_bytes(), big.to_be_bytes(), "frame {frame}");
+            let cut = [rgba[0] >> 3, rgba[1] >> 2, rgba[2] >> 3];
+            let shown =
+                [little >> 11, (little >> 5) & 0x3F, little & 0x1F].map(|channel| channel as u8);
+            if cut != shown {
+                stepped += 1;
+                for (cut, shown) in cut.into_iter().zip(shown) {
+                    assert!(
+                        cut.abs_diff(shown) <= 2,
+                        "frame {frame}: {rgba:?} shown as {little:#06x}"
+                    );
+                }
+            }
+        }
+        assert!(
+            stepped < pixels / 20,
+            "frame {frame}: {stepped} pixels differ"
         );
     }
 }

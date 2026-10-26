@@ -22,6 +22,9 @@
 //!
 //! `SCREEN=dashboard` shows the dashboard of the ESP32 benchmarks, 320 by
 //! 480, in place of that screen: most of it changes every frame.
+//!
+//! `PIXELS=rgb565` draws 16-bit pixels, high byte first, as the ESP32
+//! boards' displays take them, in place of RGBA bytes.
 
 #![allow(
     clippy::print_stderr,
@@ -33,7 +36,7 @@ use std::hint::black_box;
 
 use cranpose::{
     SystemTheme,
-    framebuffer::{Framebuffer, PixelRect},
+    framebuffer::{Framebuffer, PixelRect, Rgb565Order},
     prelude::*,
 };
 use cranpose_animation::{
@@ -112,7 +115,7 @@ impl Drawing {
 
     /// Draws the areas `framebuffer` changed, or its whole picture, into
     /// `pixels`.
-    fn draw(self, framebuffer: &mut Framebuffer, areas: &mut Vec<PixelRect>, pixels: &mut [u8]) {
+    fn draw(self, framebuffer: &mut Framebuffer, areas: &mut Vec<PixelRect>, pixels: &mut Pixels) {
         framebuffer.changed_areas(areas);
         if self.whole_picture {
             areas.clear();
@@ -135,10 +138,40 @@ impl Drawing {
                     height: rows.min(area.y + area.height - top),
                     ..*area
                 };
-                let len = strip.width as usize * strip.height as usize * 4;
-                framebuffer.draw_area(strip, &mut pixels[..len]);
+                let len = strip.width as usize * strip.height as usize;
+                match pixels {
+                    Pixels::Rgba(bytes) => framebuffer.draw_area(strip, &mut bytes[..len * 4]),
+                    Pixels::Rgb565(words) => framebuffer.draw_area_rgb565(
+                        strip,
+                        &mut words[..len],
+                        Rgb565Order::BigEndian,
+                    ),
+                }
                 top += strip.height;
             }
+        }
+    }
+}
+
+// The pixels the frames draw into, as `PIXELS` says.
+enum Pixels {
+    Rgba(Vec<u8>),
+    Rgb565(Vec<u16>),
+}
+
+impl Pixels {
+    fn from_env(len: usize) -> Self {
+        if std::env::var("PIXELS").is_ok_and(|pixels| pixels == "rgb565") {
+            Self::Rgb565(vec![0; len])
+        } else {
+            Self::Rgba(vec![0; len * 4])
+        }
+    }
+
+    fn checksum(&self) -> u64 {
+        match self {
+            Self::Rgba(bytes) => bytes.iter().map(|&byte| u64::from(byte)).sum(),
+            Self::Rgb565(words) => words.iter().map(|&word| u64::from(word)).sum(),
         }
     }
 }
@@ -274,7 +307,7 @@ fn BarScreen() {
 /// Runs frames `from..to`, drawing each into `pixels` as `drawing` says.
 fn run_frames(
     framebuffer: &mut Framebuffer,
-    (areas, pixels): (&mut Vec<PixelRect>, &mut [u8]),
+    (areas, pixels): (&mut Vec<PixelRect>, &mut Pixels),
     drawing: Drawing,
     from: u64,
     to: u64,
@@ -290,7 +323,7 @@ fn run_frames(
 #[inline(never)]
 fn steady_frames(
     framebuffer: &mut Framebuffer,
-    target: (&mut Vec<PixelRect>, &mut [u8]),
+    target: (&mut Vec<PixelRect>, &mut Pixels),
     drawing: Drawing,
     frames: u64,
 ) {
@@ -321,7 +354,7 @@ fn main() {
     framebuffer.set_active(true);
     let drawing = Drawing::from_env(height);
     let mut areas = Vec::new();
-    let mut pixels = vec![0u8; WIDTH as usize * height as usize * 4];
+    let mut pixels = Pixels::from_env(WIDTH as usize * height as usize);
     run_frames(
         &mut framebuffer,
         (&mut areas, &mut pixels),
@@ -330,8 +363,5 @@ fn main() {
         WARMUP_FRAMES,
     );
     steady_frames(&mut framebuffer, (&mut areas, &mut pixels), drawing, frames);
-    println!(
-        "frames {frames} checksum {}",
-        black_box(pixels.iter().map(|&byte| u64::from(byte)).sum::<u64>())
-    );
+    println!("frames {frames} checksum {}", black_box(pixels.checksum()));
 }

@@ -18,6 +18,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     pipeline,
+    pixel::{GradientColors, Pixel},
     scene::{Outline, RasterScene, Scene},
 };
 
@@ -66,18 +67,18 @@ pub(crate) fn snap_delta_for_anchor(anchor: Point) -> Point {
     Point::new(snapped.x - anchor.x, snapped.y - anchor.y)
 }
 
-/// A window of the device frame: the RGBA8 pixels `left..left + width` by
+/// A window of the device frame: the pixels `left..left + width` by
 /// `top..top + height`, row by row. The whole frame is the window at the
 /// origin; a sprite's texture is the window around the one item it holds.
-pub(crate) struct Target<'a> {
-    pub pixels: &'a mut [u8],
+pub(crate) struct Target<'a, P = [u8; 4]> {
+    pub pixels: &'a mut [P],
     pub left: i32,
     pub top: i32,
     pub width: u32,
     pub height: u32,
 }
 
-impl Target<'_> {
+impl<P> Target<'_, P> {
     pub(crate) fn window(&self) -> ClipBounds {
         ClipBounds {
             min_x: self.left,
@@ -89,14 +90,14 @@ impl Target<'_> {
 
     /// The pixels `start..end` of row `y`, which lie inside the window
     /// unless the run is empty (`end <= start`).
-    fn row(&mut self, y: i32, start: i32, end: i32) -> &mut [[u8; 4]] {
+    fn row(&mut self, y: i32, start: i32, end: i32) -> &mut [P] {
         if end <= start {
             return &mut [];
         }
         let row = (y - self.top) as usize * self.width as usize;
         let from = row + (start - self.left) as usize;
         let to = row + (end - self.left) as usize;
-        &mut self.pixels.as_chunks_mut::<4>().0[from..to]
+        &mut self.pixels[from..to]
     }
 }
 
@@ -143,7 +144,11 @@ impl ClipBounds {
 }
 
 /// The whole pixels of `rect` cut to `clip` and to the target's window.
-fn clip_rect_to_bounds(rect: Rect, clip: Option<Rect>, target: &Target) -> Option<ClipBounds> {
+fn clip_rect_to_bounds<P>(
+    rect: Rect,
+    clip: Option<Rect>,
+    target: &Target<'_, P>,
+) -> Option<ClipBounds> {
     clip_rect_to_window(rect, clip, target.window())
 }
 
@@ -234,54 +239,12 @@ pub(crate) fn draw_scene_scaled(
             text,
         );
     } else {
-        clear_frame(frame);
+        clear_frame(frame.as_chunks_mut::<4>().0);
     }
 }
 
-fn clear_frame(frame: &mut [u8]) {
-    fill_pixels(frame.as_chunks_mut::<4>().0, [18, 18, 24, 255]);
-}
-
-// Paints every pixel of `pixels` with `bytes`: as whole 32-bit words where
-// the pixels are aligned for them, a store a pixel instead of four.
-fn fill_pixels(pixels: &mut [[u8; 4]], bytes: [u8; 4]) {
-    match bytemuck::try_cast_slice_mut::<[u8; 4], u32>(pixels) {
-        Ok(words) => fill_words(words, u32::from_ne_bytes(bytes)),
-        Err(_) => pixels.fill(bytes),
-    }
-}
-
-// `words.fill(word)` four words a step: a step of the plain loop stores one
-// word, and its counter and branch cost more than the store.
-fn fill_words(words: &mut [u32], word: u32) {
-    let (quads, rest) = words.as_chunks_mut::<4>();
-    for quad in quads {
-        *quad = [word; 4];
-    }
-    rest.fill(word);
-}
-
-// Paints `pixels` with the four pixels of `pattern` over and over from the
-// first: as whole 32-bit words where the pixels are aligned for them, a
-// store a pixel instead of four.
-fn fill_pattern(pixels: &mut [[u8; 4]], pattern: [[u8; 4]; 4]) {
-    match bytemuck::try_cast_slice_mut::<[u8; 4], u32>(pixels) {
-        Ok(words) => repeat(words, pattern.map(u32::from_ne_bytes)),
-        Err(_) => repeat(pixels, pattern),
-    }
-}
-
-// Four items a step: a step of the plain loop stores one item, and its
-// counter and branch cost more than the store.
-fn repeat<T: Copy>(items: &mut [T], pattern: [T; 4]) {
-    let (quads, rest) = items.as_chunks_mut::<4>();
-    for quad in quads {
-        *quad = pattern;
-    }
-    // At most three items: a copy of a slice calls memcpy for them.
-    for (item, &value) in rest.iter_mut().zip(&pattern) {
-        *item = value;
-    }
+fn clear_frame<P: Pixel>(frame: &mut [P]) {
+    P::fill(frame, P::opaque([18, 18, 24, 255]));
 }
 
 fn draw_raster_scene(
@@ -293,7 +256,7 @@ fn draw_raster_scene(
     text: &TextRaster,
 ) {
     let mut target = Target {
-        pixels: frame,
+        pixels: frame.as_chunks_mut::<4>().0,
         left: 0,
         top: 0,
         width,
@@ -307,8 +270,8 @@ fn draw_raster_scene(
 /// Draws the items of `scene` into `target`'s window. `reach` holds where
 /// each item of the scene's order can draw, as [`RasterScene::reach_into`]
 /// puts it: an item that cannot draw in the window is passed over.
-pub(crate) fn draw_raster_window(
-    target: &mut Target,
+pub(crate) fn draw_raster_window<P: Pixel>(
+    target: &mut Target<'_, P>,
     scene: &RasterScene,
     reach: &[Option<ClipBounds>],
     diagnostics: &RenderDiagnostics,
@@ -354,8 +317,8 @@ pub(crate) fn prepare_raster_window(scene: &RasterScene, window: ClipBounds, tex
 /// Draws one item of `scene` into `target`, where it reaches the target's
 /// window. A shape, an image or a shadow cuts itself to the window as it
 /// places itself; a text is checked first, as rasterizing it costs more.
-pub(crate) fn draw_item(
-    target: &mut Target,
+pub(crate) fn draw_item<P: Pixel>(
+    target: &mut Target<'_, P>,
     scene: &RasterScene,
     item: RenderItem,
     diagnostics: &RenderDiagnostics,
@@ -387,8 +350,8 @@ pub(crate) enum RenderItem {
 /// shapes a fill does not paint: the item loop keeps the solid fills and
 /// text that most frames draw, and the rest takes code only where it draws.
 #[inline(never)]
-fn draw_shadow(
-    target: &mut Target,
+fn draw_shadow<P: Pixel>(
+    target: &mut Target<'_, P>,
     draw: &crate::scene::ShadowDraw,
     diagnostics: &RenderDiagnostics,
 ) {
@@ -410,8 +373,7 @@ fn draw_shadow(
             if coverage <= 0.0 {
                 continue;
             }
-            blend_pixel(
-                dst,
+            dst.blend_unit(
                 [color[0], color[1], color[2], color[3] * coverage],
                 BlendMode::SrcOver,
                 diagnostics,
@@ -470,8 +432,8 @@ pub(crate) fn place_shape(draw: &crate::scene::DrawShape) -> Option<PlacedShape>
     })
 }
 
-fn draw_shape(
-    target: &mut Target,
+fn draw_shape<P: Pixel>(
+    target: &mut Target<'_, P>,
     draw: &crate::scene::DrawShape,
     diagnostics: &RenderDiagnostics,
 ) {
@@ -493,7 +455,7 @@ fn draw_shape(
         rect,
         clip_bounds,
         dither_origin,
-        opaque: opaque_solid_bytes(&draw.brush, draw.blend_mode),
+        opaque: opaque_solid_bytes(&draw.brush, draw.blend_mode).map(P::opaque),
         diagnostics,
     };
     let whole_rows = |_: f32, min_x: i32, max_x: i32| [(min_x, max_x), NO_RUN];
@@ -554,27 +516,27 @@ fn draw_shape(
 /// its own copy of the loop: the work a kind does once per shape, such as an
 /// arc's sines or a line's direction, then stays out of the other kinds'
 /// rows, where the compiler would otherwise hoist it for every shape.
-struct ShapeRows<'a, 'p> {
-    target: &'a mut Target<'p>,
+struct ShapeRows<'a, 'p, P> {
+    target: &'a mut Target<'p, P>,
     draw: &'a crate::scene::DrawShape,
     rect: Rect,
     clip_bounds: ClipBounds,
     dither_origin: Point,
-    /// The bytes the brush leaves on a pixel it covers whole, when it is an
+    /// The pixel the brush leaves on a pixel it covers whole, when it is an
     /// opaque solid colour.
-    opaque: Option<[u8; 4]>,
+    opaque: Option<P>,
     diagnostics: &'a RenderDiagnostics,
 }
 
-impl ShapeRows<'_, '_> {
+impl<P: Pixel> ShapeRows<'_, '_, P> {
     /// Paints a fill, which covers every pixel of its runs whole.
     fn fill(self, runs: impl Fn(f32, i32, i32) -> RowRuns) {
         match self.opaque {
-            Some(bytes) => {
+            Some(pixel) => {
                 let bounds = self.clip_bounds;
                 for py in bounds.min_y..bounds.max_y {
                     for (start, end) in runs(py as f32 + 0.5, bounds.min_x, bounds.max_x) {
-                        fill_pixels(self.target.row(py, start, end), bytes);
+                        P::fill(self.target.row(py, start, end), pixel);
                     }
                 }
             }
@@ -617,30 +579,35 @@ impl ShapeRows<'_, '_> {
             let Some(&(first, _)) = row_runs.iter().find(|(start, end)| start < end) else {
                 continue;
             };
-            let row = DitheredLine::row(&brush, first as f32 + 0.5, center_y, dither_origin);
+            let row = match P::GRADIENT {
+                GradientColors::Dithered => {
+                    DitheredLine::row(&brush, first as f32 + 0.5, center_y, dither_origin)
+                }
+                GradientColors::Plain => DitheredLine::plain(&brush, first as f32 + 0.5, center_y),
+            };
             let colors = row.colors();
-            let bytes = colors.map(|color| {
+            let cells = colors.map(|color| {
                 (draw.blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
-                    .then(|| opaque_bytes(color))
+                    .then(|| P::opaque(opaque_bytes(color)))
             });
-            let opaque = match bytes {
+            let opaque = match cells {
                 [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
                 _ => None,
             };
             for (start, end) in row_runs {
                 let pixels = target.row(py, start, end);
-                if let Some(cells) = opaque
+                if let Some(pattern) = opaque
                     && let Some(first) = columns.stepping_cell(start, end)
                 {
-                    fill_pattern(pixels, [0, 1, 2, 3].map(|step| cells[(first + step) & 3]));
+                    P::fill_pattern(pixels, [0, 1, 2, 3].map(|step| pattern[(first + step) & 3]));
                     continue;
                 }
                 for (px, dst) in (start..).zip(pixels) {
                     let cell = columns.cell(px);
-                    match bytes[cell] {
-                        Some(bytes) => *dst = bytes,
+                    match cells[cell] {
+                        Some(pixel) => *dst = pixel,
                         None if colors[cell][3] > 0.0 => {
-                            blend_pixel(dst, colors[cell], draw.blend_mode, diagnostics);
+                            dst.blend_unit(colors[cell], draw.blend_mode, diagnostics);
                         }
                         None => {}
                     }
@@ -666,15 +633,20 @@ impl ShapeRows<'_, '_> {
         let brush = BrushSampler::new(&draw.brush, rect);
         let rows = DitherAxis::new(dither_origin.y);
         let top = clip_bounds.min_y as f32 + 0.5;
-        let mut band = [[[0u8; 4]; 4]; COLUMN_BAND];
+        let mut band = [[P::opaque([0, 0, 0, 255]); 4]; COLUMN_BAND];
         let mut left = clip_bounds.min_x;
         while left < clip_bounds.max_x {
             let right = left
                 .saturating_add(COLUMN_BAND as i32)
                 .min(clip_bounds.max_x);
-            for (bytes, px) in band.iter_mut().zip(left..right) {
-                let column = DitheredLine::column(&brush, px as f32 + 0.5, top, dither_origin);
-                *bytes = column.colors().map(opaque_bytes);
+            for (cells, px) in band.iter_mut().zip(left..right) {
+                let column = match P::GRADIENT {
+                    GradientColors::Dithered => {
+                        DitheredLine::column(&brush, px as f32 + 0.5, top, dither_origin)
+                    }
+                    GradientColors::Plain => DitheredLine::plain(&brush, px as f32 + 0.5, top),
+                };
+                *cells = column.colors().map(|color| P::opaque(opaque_bytes(color)));
             }
             for py in clip_bounds.min_y..clip_bounds.max_y {
                 let cell = rows.cell(py);
@@ -683,8 +655,8 @@ impl ShapeRows<'_, '_> {
                         continue;
                     }
                     let first = (start - left) as usize;
-                    for (dst, bytes) in target.row(py, start, end).iter_mut().zip(&band[first..]) {
-                        *dst = bytes[cell];
+                    for (dst, cells) in target.row(py, start, end).iter_mut().zip(&band[first..]) {
+                        *dst = cells[cell];
                     }
                 }
             }
@@ -727,19 +699,26 @@ impl ShapeRows<'_, '_> {
                     if coverage <= 0.0 {
                         continue;
                     }
-                    if let Some(bytes) = opaque
+                    if let Some(pixel) = opaque
                         && coverage >= 1.0
                     {
-                        *dst = bytes;
+                        *dst = pixel;
                         continue;
                     }
 
-                    let mut sample = sample_brush_rgba(&brush, center_x, center_y, dither_origin);
+                    let mut sample = match P::GRADIENT {
+                        GradientColors::Dithered => {
+                            sample_brush_rgba(&brush, center_x, center_y, dither_origin)
+                        }
+                        GradientColors::Plain => {
+                            color_to_rgba(brush.color_at(Point::new(center_x, center_y)))
+                        }
+                    };
                     sample[3] *= coverage;
                     if sample[3] <= 0.0 {
                         continue;
                     }
-                    blend_pixel(dst, sample, draw.blend_mode, diagnostics);
+                    dst.blend_unit(sample, draw.blend_mode, diagnostics);
                 }
             }
         }
@@ -912,7 +891,7 @@ fn opaque_bytes(src: [f32; 4]) -> [u8; 4] {
     [unit_byte(src[0]), unit_byte(src[1]), unit_byte(src[2]), 255]
 }
 
-fn blend_pixel(
+pub(crate) fn blend_pixel(
     dst: &mut [u8; 4],
     src: [f32; 4],
     blend_mode: BlendMode,

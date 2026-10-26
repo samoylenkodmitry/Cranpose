@@ -144,6 +144,15 @@ impl DitheredLine {
         }
     }
 
+    /// The color of `brush` at `(x, y)` in every cell, undithered: for a
+    /// target whose steps are coarser than the dither, which would cut it
+    /// away.
+    pub fn plain(brush: &BrushSampler<'_>, x: f32, y: f32) -> Self {
+        Self {
+            by_cell: [color_to_rgba(brush.color_at(Point::new(x, y))); 4],
+        }
+    }
+
     /// The four colors, by the cell of the pattern a pixel falls in.
     pub fn colors(&self) -> &[[f32; 4]; 4] {
         &self.by_cell

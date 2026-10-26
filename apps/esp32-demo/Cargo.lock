@@ -807,7 +807,6 @@ dependencies = [
 name = "cranpose-platform-esp-idf"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
  "cranpose",
  "esp-idf-svc",
  "esp-idf-sys",
@@ -820,6 +819,7 @@ name = "cranpose-render-common"
 version = "0.17.2"
 dependencies = [
  "ab_glyph",
+ "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-ui",

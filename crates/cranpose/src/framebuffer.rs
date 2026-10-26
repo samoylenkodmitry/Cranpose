@@ -13,8 +13,8 @@ use std::rc::Rc;
 pub use cranpose_app_shell::FrameSchedule;
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_foundation::PointerSource;
-pub use cranpose_render_pixels::PixelRect;
 use cranpose_render_pixels::{Picture, PixelsRenderer};
+pub use cranpose_render_pixels::{PixelRect, Rgb565Order};
 use cranpose_services::{
     SystemTheme,
     host::{LifecycleState, dispatch_lifecycle_state},
@@ -219,6 +219,18 @@ impl Framebuffer {
         let drawing = &self.drawing;
         self.shell.primary().with_renderer(|renderer| {
             renderer.draw_picture_area(drawing, area, pixels);
+        });
+    }
+
+    /// Draws `area` of the picture [`Self::changed_areas`] took last into
+    /// `pixels` as a display of 16-bit pixels takes them: 5 bits of red, 6 of
+    /// green and 5 of blue, stored in `order`, rows of `area.width` pixels,
+    /// `area.height` of them. It draws them straight, without the bytes
+    /// [`Self::draw_area`] draws and a second pass over them.
+    pub fn draw_area_rgb565(&mut self, area: PixelRect, pixels: &mut [u16], order: Rgb565Order) {
+        let drawing = &self.drawing;
+        self.shell.primary().with_renderer(|renderer| {
+            renderer.draw_picture_area_rgb565(drawing, area, pixels, order);
         });
     }
 

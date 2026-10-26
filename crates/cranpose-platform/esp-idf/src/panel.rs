@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose::framebuffer::{PixelRect, SurfaceError};
+use cranpose::framebuffer::{PixelRect, Rgb565Order, SurfaceError};
 use esp_idf_svc::{
     hal::{
         delay::{BLOCK, Ets, FreeRtos, TICK_RATE_HZ},
@@ -25,15 +25,6 @@ use esp_idf_svc::{
     },
     sys::{self, EspError, esp, esp_lcd_panel_handle_t, esp_lcd_panel_io_handle_t},
 };
-
-/// The colour encoding a panel reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PixelFormat {
-    /// RGB565 with the low byte first, as QEMU's virtual panel reads it.
-    Rgb565,
-    /// RGB565 with the high byte first, as display controllers read it.
-    Rgb565BigEndian,
-}
 
 /// One command of a display controller's start-up sequence.
 #[derive(Clone, Copy, Debug)]
@@ -157,7 +148,7 @@ pub struct Panel<'d> {
     device: Device<'d>,
     width: u32,
     height: u32,
-    format: PixelFormat,
+    format: Rgb565Order,
     column_alignment: u32,
     row_alignment: u32,
     backlight: Option<BacklightSwitch<'d>>,
@@ -380,7 +371,8 @@ impl<'d> Panel<'d> {
             device: Device::Driver(handle),
             width,
             height,
-            format: PixelFormat::Rgb565,
+            // QEMU's virtual panel reads the low byte first.
+            format: Rgb565Order::LittleEndian,
             column_alignment: 1,
             row_alignment: 1,
             backlight: None,
@@ -481,7 +473,7 @@ impl<'d> Panel<'d> {
             device: Device::Dcs(dcs),
             width: controller.width,
             height: controller.height,
-            format: PixelFormat::Rgb565BigEndian,
+            format: Rgb565Order::BigEndian,
             column_alignment: controller.column_alignment.max(1),
             row_alignment: controller.row_alignment.max(1),
             backlight,
@@ -498,8 +490,8 @@ impl<'d> Panel<'d> {
         self.height
     }
 
-    /// Returns the colour encoding the panel reads.
-    pub(crate) fn format(&self) -> PixelFormat {
+    /// Returns the byte order of the 16-bit pixels the panel reads.
+    pub(crate) fn format(&self) -> Rgb565Order {
         self.format
     }
 
@@ -599,8 +591,8 @@ impl Drop for Panel<'_> {
 }
 
 /// `len` pixels in memory of the heap's capabilities, zeroed.
-pub(crate) struct PixelBuffer<T = u16> {
-    pixels: NonNull<T>,
+pub(crate) struct PixelBuffer {
+    pixels: NonNull<u16>,
     len: usize,
 }
 
@@ -614,31 +606,23 @@ impl PixelBuffer {
     pub(crate) fn in_psram(len: usize) -> Option<Self> {
         Self::with_caps(len, sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT)
     }
-}
-
-impl<T: bytemuck::Zeroable> PixelBuffer<T> {
-    // Internal memory, which the CPU reads and writes without a cache: the
-    // heap of the ESP32-S3 serves its default allocations from PSRAM first.
-    pub(crate) fn internal(len: usize) -> Result<Self, SurfaceError> {
-        Self::with_caps(len, sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT).ok_or(SurfaceError)
-    }
 
     fn with_caps(len: usize, caps: u32) -> Option<Self> {
-        let memory = unsafe { sys::heap_caps_calloc(len, size_of::<T>(), caps) };
-        let pixels = NonNull::new(memory.cast::<T>())?;
+        let memory = unsafe { sys::heap_caps_calloc(len, size_of::<u16>(), caps) };
+        let pixels = NonNull::new(memory.cast::<u16>())?;
         Some(Self { pixels, len })
     }
 
-    pub(crate) fn as_slice(&self) -> &[T] {
+    pub(crate) fn as_slice(&self) -> &[u16] {
         unsafe { slice::from_raw_parts(self.pixels.as_ptr(), self.len) }
     }
 
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [u16] {
         unsafe { slice::from_raw_parts_mut(self.pixels.as_ptr(), self.len) }
     }
 }
 
-impl<T> Drop for PixelBuffer<T> {
+impl Drop for PixelBuffer {
     fn drop(&mut self) {
         unsafe { sys::heap_caps_free(self.pixels.as_ptr().cast()) };
     }

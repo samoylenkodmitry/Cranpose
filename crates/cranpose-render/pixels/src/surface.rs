@@ -113,7 +113,7 @@ pub(crate) fn rasterize_surface(
 ) -> Option<ImageBitmap> {
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
     let mut target = Target {
-        pixels: &mut pixels,
+        pixels: pixels.as_chunks_mut::<4>().0,
         left: 0,
         top: 0,
         width,

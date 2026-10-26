@@ -28,6 +28,12 @@ from v0_pattern import pattern
 # IRAM of the classic ESP32 and of the ESP32-S3. Code there needs no move.
 IRAM = [(0x40070000, 0x400C0000), (0x40370000, 0x403E0000)]
 
+# QEMU's panel takes the low byte of a 16-bit pixel first and the boards'
+# panels the high byte. Every build links the drawing for both orders, so a
+# function QEMU ran for the low byte first is named by the twin that the
+# boards run.
+QEMU_ORDER, BOARD_ORDER = "8Rgb565Le", "8Rgb565Be"
+
 
 def framework_function(name, app_crates):
     return name.startswith("_R") and "cranpose" in name and not any(
@@ -55,9 +61,12 @@ class Profile:
         self.placed = set()
         self.shares = {}
         for i in candidates:
-            text = pattern(self.names[i])
-            if i not in self.matched(text):
-                sys.exit(f"{text} does not match {self.names[i]}")
+            own = pattern(self.names[i])
+            if i not in self.matched(own):
+                sys.exit(f"{own} does not match {self.names[i]}")
+            text = own.replace(QEMU_ORDER, BOARD_ORDER)
+            if not self.matched(text):
+                sys.exit(f"{text} matches nothing in {elf}")
             self.shares[text] = self.shares.get(text, 0.0) + hits[i] / total
 
     def matched(self, text):

@@ -1,8 +1,6 @@
 use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
-    software_text_raster::{
-        self, TextPixelWindow, TextPixels, TextRasterRequest, blend_byte_pixel, paint_text,
-    },
+    software_text_raster::{self, TextPixelWindow, TextPixels, TextRasterRequest, paint_text},
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{Point, Rect};
@@ -11,10 +9,10 @@ use super::{
     Target, TextRaster, blit_image_between_pixels, clip_rect_to_bounds, on_pixel_grid,
     snap_delta_for_anchor,
 };
-use crate::scene::TextDraw;
+use crate::{pixel::Pixel, scene::TextDraw};
 
-pub(super) fn draw_text(
-    target: &mut Target,
+pub(super) fn draw_text<P: Pixel>(
+    target: &mut Target<'_, P>,
     draw: &TextDraw,
     diagnostics: &RenderDiagnostics,
     text: &TextRaster,
@@ -51,10 +49,10 @@ pub(super) fn draw_text(
 /// pixels. Returns whether it did: a text that needs an image of its own,
 /// as a gradient or a shadow does, goes through
 /// [`rasterize_text_part`] instead.
-fn paint_text_over_target(
+fn paint_text_over_target<P: Pixel>(
     draw: &TextDraw,
     raster_rect: Rect,
-    target: &mut Target,
+    target: &mut Target<'_, P>,
     text: &TextRaster,
 ) -> bool {
     let Some(bounds) = clip_rect_to_bounds(raster_rect, draw.clip, target) else {
@@ -63,11 +61,11 @@ fn paint_text_over_target(
     let first = (bounds.min_y - target.top) as usize * target.width as usize
         + (bounds.min_x - target.left) as usize;
     let stride = target.width as usize;
-    let Some(pixels) = target.pixels.as_chunks_mut::<4>().0.get_mut(first..) else {
+    let Some(pixels) = target.pixels.get_mut(first..) else {
         return true;
     };
     let window = TextPixelWindow {
-        pixels,
+        pixels: P::text_rows(pixels),
         stride,
         width: (bounds.max_x - bounds.min_x) as u32,
         height: (bounds.max_y - bounds.min_y) as u32,
@@ -155,8 +153,8 @@ pub(super) fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
     ))
 }
 
-fn blit_rasterized_text(
-    target: &mut Target,
+fn blit_rasterized_text<P: Pixel>(
+    target: &mut Target<'_, P>,
     rect: Rect,
     clip: Option<Rect>,
     text: TextPixels,
@@ -187,7 +185,7 @@ fn blit_rasterized_text(
             .get(first..first + row.len())
             .unwrap_or_default();
         for (dst, src) in row.iter_mut().zip(source) {
-            blend_byte_pixel(dst, *src);
+            dst.blend_bytes(*src);
         }
     }
 }
