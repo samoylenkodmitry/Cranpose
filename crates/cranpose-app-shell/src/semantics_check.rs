@@ -43,7 +43,7 @@ fn first_difference(kept: &SemanticsNode, rebuilt: &SemanticsNode) -> Option<Str
     let ids = |node: &SemanticsNode| {
         node.children
             .iter()
-            .map(|child| child.node_id)
+            .map(|child| child.node_id.0)
             .collect::<Vec<_>>()
     };
     if ids(kept) != ids(rebuilt) {
