@@ -5,7 +5,7 @@ use std::{
 
 use smallvec::SmallVec;
 
-use super::{DeferredDrop, GroupRecord, checked_usize_to_u32};
+use super::{DeferredDrop, GroupRecord, MOVABLE_STATIC_KEY, checked_usize_to_u32};
 use crate::{AnchorId, Key, NodeId, RecomposeScope, collections::map::HashSet};
 
 /// The root nodes of a group's subtree: most groups have a few, kept inline.
@@ -38,6 +38,14 @@ impl GroupKey {
             ordinal,
         }
     }
+
+    pub(crate) fn is_movable(self) -> bool {
+        self.static_key == MOVABLE_STATIC_KEY && self.explicit_key.is_some()
+    }
+
+    pub(crate) fn movable_id(self) -> Option<Key> {
+        self.is_movable().then_some(self.explicit_key).flatten()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -66,7 +74,7 @@ impl GroupKeySeed {
 
     pub(crate) fn movable(id: Key) -> Self {
         Self {
-            static_key: super::MOVABLE_STATIC_KEY,
+            static_key: MOVABLE_STATIC_KEY,
             explicit_key: Some(id),
             exact: true,
         }
