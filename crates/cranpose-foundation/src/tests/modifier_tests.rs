@@ -1065,8 +1065,6 @@ impl SemanticsDelegatingHostNode {
         };
         node.state
             .set_capabilities(NodeCapabilities::LAYOUT | NodeCapabilities::MODIFIER_LOCALS);
-        node.state.set_parent_link(None);
-        node.state.set_child_link(None);
         node
     }
 }
