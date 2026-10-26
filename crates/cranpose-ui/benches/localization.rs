@@ -1,6 +1,6 @@
 use std::{hint::black_box, time::Duration};
 
-use cranpose_core::{Composition, MemoryApplier};
+use cranpose_core::{Composition, Key, MemoryApplier};
 use cranpose_ui::{
     AppContext, Catalog, Locale, Modifier, ProvideLocalization, Text, TextStyle, composable,
     localization::Resource, tr,
@@ -68,7 +68,7 @@ fn benchmark(c: &mut Criterion) {
                     0
                 };
                 composition
-                    .render(17, || {
+                    .render(Key(17), || {
                         ProvideLocalization(&catalog, locales[language].clone(), || {
                             Label(localized, black_box(count));
                         });

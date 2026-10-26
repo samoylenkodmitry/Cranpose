@@ -22,7 +22,7 @@ fn event_messages_own_arguments_and_follow_later_language_changes() {
     let language = MutableState::with_runtime(locale("en"), composition.runtime_handle());
     let output = Rc::new(RefCell::new(String::new()));
     composition
-        .render(981, {
+        .render(cranpose_core::Key(981), {
             let output = Rc::clone(&output);
             move || DeferredRoot(language, message.clone(), Rc::clone(&output))
         })
@@ -81,7 +81,7 @@ fn changing_language_after_a_cached_read_updates_existing_composables() {
     let tick = MutableState::with_runtime(0, composition.runtime_handle());
     let output = Rc::new(RefCell::new(Vec::new()));
     composition
-        .render(901, {
+        .render(cranpose_core::Key(901), {
             let output = Rc::clone(&output);
             move || Root(catalog(), language, tick, Rc::clone(&output))
         })
@@ -201,7 +201,7 @@ fn replacing_catalogs_and_changing_arguments_refreshes_text() {
         )
         .expect("catalog");
         composition
-            .render(905, {
+            .render(cranpose_core::Key(905), {
                 let result = Rc::clone(&result);
                 move || {
                     ProvideLocalization(&catalog, locale("fr"), || {
@@ -228,7 +228,7 @@ fn application_preferences_update_retained_text_and_restore_system_language() {
     let retained = UiText::from(cranpose_ui::message!("Save", id = "save"));
     let mut composition = run_test_composition(|| {});
     composition
-        .render(991, {
+        .render(cranpose_core::Key(991), {
             let (application, controller) = (application.clone(), Rc::clone(&controller));
             let output = Rc::clone(&output);
             move || {
@@ -276,7 +276,7 @@ fn in_memory_language_changes_do_not_require_a_worker_runtime() {
     let output = Rc::new(RefCell::new(String::new()));
     let mut composition = run_test_composition(|| {});
     composition
-        .render(992, {
+        .render(cranpose_core::Key(992), {
             let (application, controller) = (application.clone(), Rc::clone(&controller));
             let output = Rc::clone(&output);
             move || {
