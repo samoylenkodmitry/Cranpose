@@ -204,7 +204,7 @@ pub fn advance_global_snapshot(new_id: SnapshotId) {
 }
 
 #[cfg(test)]
-pub fn global_snapshot_id() -> SnapshotId {
+pub(super) fn global_snapshot_id() -> SnapshotId {
     let global = GlobalSnapshot::get_or_create();
     global.snapshot_id()
 }

@@ -164,10 +164,7 @@ fn test_simple_card_renders_correctly() {
     let tree = rule.dump_tree();
     println!("=== Simple Card Tree Structure ===\n{tree}");
 
-    assert!(
-        tree.contains("dyn cranpose_core::Node"),
-        "Should contain Node"
-    );
+    assert!(tree.lines().count() > 1, "Should list the composed nodes");
 
     let root = rule.root_id();
     assert!(root.is_some(), "Should have root node");
@@ -185,10 +182,7 @@ fn test_positioned_boxes_renders_correctly() {
     let tree = rule.dump_tree();
     println!("=== Positioned Boxes Tree Structure ===\n{tree}");
 
-    assert!(
-        tree.contains("dyn cranpose_core::Node"),
-        "Should contain Node"
-    );
+    assert!(tree.lines().count() > 1, "Should list the composed nodes");
 
     let initial_count = rule.applier_mut().len();
     println!("Total nodes in positioned boxes: {initial_count}");

@@ -47,7 +47,7 @@ impl HitPathTracker {
     }
 
     #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.paths.is_empty()
     }
 }

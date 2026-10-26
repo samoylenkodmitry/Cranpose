@@ -792,7 +792,7 @@ impl GraphicsLayerNode {
     }
 
     #[cfg(test)]
-    pub fn layer(&self) -> GraphicsLayer {
+    pub(crate) fn layer(&self) -> GraphicsLayer {
         if let Some(resolve) = self.layer_resolver(0) {
             resolve()
         } else {
@@ -1842,7 +1842,7 @@ impl DrawCommandNode {
     }
 
     #[cfg(test)]
-    pub fn commands(&self) -> &[DrawCommand] {
+    pub(crate) fn commands(&self) -> &[DrawCommand] {
         &self.commands
     }
 
