@@ -1,10 +1,10 @@
-use std::{io::Seek, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use cranpose_services::MediaError;
 use symphonia::core::{
     codecs::{
         CodecParameters,
-        audio::{AudioDecoder, AudioDecoderOptions},
+        audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions},
     },
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
     io::{MediaSource, MediaSourceStream},
@@ -15,10 +15,7 @@ use symphonia::core::{
 use crate::{
     http::{self, HttpSource},
     source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError, SourceCancel},
-    spool::Spool,
 };
-
-const SPOOL_DIRECTORY: &str = "cranpose-media-spool";
 
 pub(crate) struct Decoder {
     format: Box<dyn FormatReader>,
@@ -31,6 +28,7 @@ pub(crate) struct Decoder {
     read: usize,
     exhausted: bool,
     skip_frames: u64,
+    seekable: bool,
 }
 
 impl Decoder {
@@ -40,6 +38,7 @@ impl Decoder {
     }
 
     fn from_media(media: Box<dyn MediaSource>, uri: &str) -> Result<Self, MediaError> {
+        let seekable = media.is_seekable();
         let stream = MediaSourceStream::new(media, Default::default());
 
         let mut hint = Hint::new();
@@ -56,10 +55,10 @@ impl Decoder {
             )
             .map_err(|error| MediaError::Failed(format!("{uri}: {error}")))?;
 
-        Self::from_format(format)
+        Self::from_format(format, seekable)
     }
 
-    fn from_format(format: Box<dyn FormatReader>) -> Result<Self, MediaError> {
+    fn from_format(format: Box<dyn FormatReader>, seekable: bool) -> Result<Self, MediaError> {
         let track = format
             .first_track(TrackType::Audio)
             .ok_or_else(|| MediaError::Failed("the item has no audio track".to_owned()))?;
@@ -74,9 +73,8 @@ impl Decoder {
             ));
         };
 
-        let decoder = symphonia::default::get_codecs()
-            .make_audio_decoder(&params, &AudioDecoderOptions::default())
-            .map_err(|error| MediaError::Failed(error.to_string()))?;
+        let decoder =
+            audio_decoder(&params).map_err(|error| MediaError::Failed(error.to_string()))?;
 
         let sample_rate = params
             .sample_rate
@@ -101,7 +99,12 @@ impl Decoder {
             read: 0,
             exhausted: false,
             skip_frames: 0,
+            seekable,
         })
+    }
+
+    pub(crate) fn is_seekable(&self) -> bool {
+        self.seekable
     }
 
     pub(crate) fn probe_duration(uri: &str) -> Option<Duration> {
@@ -210,6 +213,9 @@ impl SampleSource for Decoder {
     }
 
     fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
+        if !self.seekable {
+            return Err(SeekError::Unsupported);
+        }
         let time = Time::try_from_nanos_u128(position.as_nanos()).ok_or_else(|| {
             SeekError::Failed(format!("{position:?} is not a reachable position"))
         })?;
@@ -259,36 +265,17 @@ fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SourceCancel), MediaEr
         let (source, cancel) = HttpSource::open(uri)?;
         return Ok((Box::new(source), cancel));
     }
-    let handle = cranpose_services::open_media_source(uri).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::Unsupported {
-            MediaError::UnsupportedSource(uri.to_owned())
-        } else {
-            MediaError::Failed(format!("{uri}: {error}"))
-        }
-    })?;
-    let mut file = handle.stream;
-    if seeks(&mut file) {
-        return Ok((Box::new(file), SourceCancel::default()));
+    crate::file_source::open(uri)
+}
+
+fn audio_decoder(
+    params: &AudioCodecParameters,
+) -> symphonia::core::errors::Result<Box<dyn AudioDecoder>> {
+    #[cfg(feature = "all-codecs")]
+    if params.codec == symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS {
+        return Ok(Box::new(crate::opus::Opus::new(params)?));
     }
-    log::debug!(
-        "cranpose-media: {uri} does not seek; spooling {} bytes",
-        handle
-            .len
-            .map_or_else(|| "an unstated number of".to_owned(), |len| len.to_string())
-    );
-    let (spool, cancel) = Spool::start(Box::new(file), &spool_directory()?, handle.len)
-        .map_err(|error| MediaError::Failed(format!("{uri}: no spool: {error}")))?;
-    Ok((Box::new(spool), cancel))
-}
-
-fn seeks(file: &mut std::fs::File) -> bool {
-    file.stream_position().is_ok()
-}
-
-fn spool_directory() -> Result<std::path::PathBuf, MediaError> {
-    let directories = cranpose_services::application_directories()
-        .map_err(|error| MediaError::Failed(format!("no cache directory: {error}")))?;
-    Ok(directories.cache.join(SPOOL_DIRECTORY))
+    symphonia::default::get_codecs().make_audio_decoder(params, &AudioDecoderOptions::default())
 }
 
 #[cfg(test)]

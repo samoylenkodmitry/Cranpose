@@ -738,15 +738,15 @@ fn a_path_opens_here_and_everything_else_is_the_platforms() {
         fn open(&self, uri: &str) -> std::io::Result<MediaSourceHandle> {
             let path = crate::test_scratch_dir("media-source-opener").join("document.bin");
             std::fs::write(&path, uri.as_bytes())?;
-            Ok(MediaSourceHandle {
-                stream: File::open(path)?,
-                len: Some(uri.len() as u64),
-            })
+            Ok(MediaSourceHandle::new(
+                File::open(path)?,
+                Some(uri.len() as u64),
+            ))
         }
     }
     fn read(handle: MediaSourceHandle) -> String {
         let mut text = String::new();
-        std::io::Read::read_to_string(&mut { handle.stream }, &mut text).expect("read");
+        std::io::Read::read_to_string(&mut { handle }, &mut text).expect("read");
         text
     }
 
@@ -754,7 +754,7 @@ fn a_path_opens_here_and_everything_else_is_the_platforms() {
     let path = crate::test_scratch_dir("media-source").join("track.bin");
     std::fs::write(&path, b"bytes").expect("write the fixture");
     let file = open_media_source(&uri_for_path(&path)).expect("the file");
-    assert_eq!(file.len, Some(5), "a real file states its length");
+    assert_eq!(file.byte_len(), Some(5), "a real file states its length");
     assert_eq!(read(file), "bytes");
     let error = open_media_source("content://provider/document/7").expect_err("no opener");
     assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
@@ -762,7 +762,7 @@ fn a_path_opens_here_and_everything_else_is_the_platforms() {
     set_platform_media_source_opener(Arc::new(Opener));
     let opened = open_media_source("content://provider/document/7").expect("the opener");
     clear_platform_media_source_opener();
-    assert_eq!(opened.len, Some(29));
+    assert_eq!(opened.byte_len(), Some(29));
     assert_eq!(read(opened), "content://provider/document/7");
 }
 

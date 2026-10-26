@@ -56,10 +56,10 @@ struct DocumentOpener;
 
 impl MediaSourceOpener for DocumentOpener {
     fn open(&self, uri: &str) -> std::io::Result<MediaSourceHandle> {
-        Ok(MediaSourceHandle {
-            stream: super::file_picker::open_content_uri(uri)?,
-            len: super::file_picker::content_uri_length(uri),
-        })
+        Ok(MediaSourceHandle::new(
+            super::file_picker::open_content_uri(uri)?,
+            super::file_picker::content_uri_length(uri),
+        ))
     }
 }
 

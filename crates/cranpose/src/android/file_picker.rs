@@ -450,6 +450,10 @@ impl Content for AndroidDocument {
         self.metadata.clone()
     }
 
+    fn media_uri(&self) -> Result<String, ContentError> {
+        Ok(self.metadata.identifier.clone())
+    }
+
     /// The provider opens and reads the document on a thread of its own: a
     /// cloud provider may download it first.
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {

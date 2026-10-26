@@ -60,6 +60,7 @@ ignores:
   - crates/cranpose/src/android/writable_folder.rs
   - crates/cranpose/src/apple/audio_session.rs
   - crates/cranpose/src/apple/camera.rs
+  - crates/cranpose/src/apple/media_source.rs
   - crates/cranpose/src/apple/microphone.rs
   - crates/cranpose/src/apple/network.rs
   - crates/cranpose/src/apple/wearable.rs

@@ -40,3 +40,6 @@ pub(crate) mod windows_menu;
 pub(crate) mod windows_network;
 
 pub use event_loop::*;
+
+#[cfg(feature = "media-backend")]
+mod media;
