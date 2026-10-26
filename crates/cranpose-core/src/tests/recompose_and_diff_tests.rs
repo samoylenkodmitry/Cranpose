@@ -876,7 +876,7 @@ fn source_origins_survive_independent_child_recomposition() {
     let mut composition = test_composition();
     let state = MutableState::with_runtime(0, composition.runtime_handle());
     composition
-        .render(9031, &mut || traced_parent(state))
+        .render(Key(9031), &mut || traced_parent(state))
         .expect("initial render");
     state.set_value(1);
     assert!(
