@@ -69,17 +69,19 @@ fn observation_leases_drive_subscriber_liveness() {
     let callback: Rc<dyn Fn()> = Rc::new(move || {
         notifications_for_callback.set(notifications_for_callback.get() + 1);
     });
-    state.subscriber_callback(Rc::clone(&callback), false);
+    state
+        .subscribers
+        .subscriber_callback(Rc::clone(&callback), false);
 
     let first = StateObject::observation_lease(&*state).expect("first observation lease");
     let second = StateObject::observation_lease(&*state).expect("second observation lease");
-    assert!(state.has_subscribers());
+    assert!(state.subscribers.has_subscribers());
     assert_eq!(notifications.get(), 1);
 
     drop(first);
-    assert!(state.has_subscribers());
+    assert!(state.subscribers.has_subscribers());
     drop(second);
-    assert!(!state.has_subscribers());
+    assert!(!state.subscribers.has_subscribers());
 
     let third = StateObject::observation_lease(&*state).expect("third observation lease");
     assert_eq!(notifications.get(), 2);
@@ -92,23 +94,23 @@ fn observation_leases_preserve_clones_scope_counts_and_state_lifetimes() {
     let second = SnapshotMutableState::new_in_rc(200i32, Rc::new(NeverEqual));
     let lease = first.observation_lease().unwrap();
     let clone = Rc::clone(&lease);
-    assert!(first.has_subscribers());
-    assert!(!second.has_subscribers());
+    assert!(first.subscribers.has_subscribers());
+    assert!(!second.subscribers.has_subscribers());
 
     drop(lease);
-    assert!(first.has_subscribers());
-    assert!(!first.add_scope_observer());
+    assert!(first.subscribers.has_subscribers());
+    assert!(!first.subscribers.add_scope_observer());
     drop(clone);
-    assert!(first.has_subscribers());
-    first.remove_scope_observers(1);
-    assert!(!first.has_subscribers());
+    assert!(first.subscribers.has_subscribers());
+    first.subscribers.remove_scope_observers(1);
+    assert!(!first.subscribers.has_subscribers());
 
     let lease = second.observation_lease().unwrap();
     let weak = Rc::downgrade(&second);
     drop(second);
     assert!(weak.upgrade().is_none());
     drop(lease);
-    assert!(!first.has_subscribers());
+    assert!(!first.subscribers.has_subscribers());
 }
 
 #[test]
@@ -600,7 +602,7 @@ fn event_loop_writes_keep_the_record_chain_bounded() {
         .expect("event snapshot applies");
         let _ = state.get();
         if event % 500 == 499 {
-            lens.push(state.record_chain_debug().len());
+            lens.push(record_chain(&state.head).len());
         }
     }
 
