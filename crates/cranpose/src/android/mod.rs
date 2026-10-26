@@ -7,6 +7,8 @@
 pub(crate) mod accessibility;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod accessibility_wire;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod activity_window_layout;
 #[cfg(target_os = "android")]
 pub(crate) mod app_info;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
@@ -34,6 +36,8 @@ pub(crate) mod haptics_queue;
 pub(crate) mod heart_rate;
 #[cfg(target_os = "android")]
 pub(crate) mod host;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod host_window_requests;
 #[cfg(target_os = "android")]
 pub(crate) mod jni;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]

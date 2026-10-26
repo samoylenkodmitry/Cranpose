@@ -20,6 +20,10 @@ use ndk::native_window::NativeWindow;
 
 use super::{
     display_timing::{DisplayTimingObserver, DisplayedFrame},
+    host_window_requests::{
+        PendingHostWindowSizeRequest, confirm_android_host_window_request,
+        dispatch_android_surface_size_request, dispatch_registered_android_surface_size_request,
+    },
     jni::{clear_pending_android_jni_exception, with_android_activity_env},
     keyboard::{self, AndroidKeyTranslator, AndroidSoftKeyboard, is_system_key},
     overlay_window,
@@ -762,13 +766,6 @@ fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInpu
             }
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct PendingHostWindowSizeRequest {
-    state: Option<android_host_window::AndroidHostWindowState>,
-    requested: Size,
-    requested_at: Instant,
 }
 
 struct AndroidFrameDriver {
@@ -1996,131 +1993,6 @@ fn create_android_surface_config(
     })
 }
 
-fn dispatch_android_surface_size_request(
-    app: &android_activity::AndroidApp,
-    requested: Size,
-    position: Point,
-    density: f32,
-    overlay_options: Option<AndroidOverlayWindowOptions>,
-) -> Result<(), String> {
-    let requested =
-        android_host_window::validate_logical_size(requested).map_err(|error| error.to_string())?;
-    if overlay_options.is_some() {
-        return overlay_window::update_android_overlay_window_bounds(
-            app, position, requested, density,
-        );
-    }
-
-    let (width_px, height_px) =
-        android_host_window::logical_to_physical_window_size(requested, density);
-    set_android_window_layout_px(app, width_px, height_px)
-}
-
-fn dispatch_registered_android_surface_size_request(
-    app: &android_activity::AndroidApp,
-    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
-    density: f32,
-    overlay_options: Option<AndroidOverlayWindowOptions>,
-    last_dispatched: &mut Option<(android_host_window::AndroidHostWindowState, u64, u64)>,
-    pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
-) {
-    let Some(request) =
-        android_host_window::latest_android_host_window_request(host_window_registry)
-    else {
-        return;
-    };
-    let dispatch_key = (
-        request.state,
-        request.size_revision,
-        if overlay_options.is_some() {
-            request.position_revision
-        } else {
-            0
-        },
-    );
-    if *last_dispatched == Some(dispatch_key) {
-        return;
-    }
-
-    let position = overlay_options
-        .filter(|_| request.position_revision == 0)
-        .map_or(request.position, |options| {
-            Point::new(options.x as f32, options.y as f32)
-        });
-    request.state.mark_pending(request.size);
-    match dispatch_android_surface_size_request(
-        app,
-        request.size,
-        position,
-        density,
-        overlay_options,
-    ) {
-        Ok(()) => {
-            *last_dispatched = Some(dispatch_key);
-            *pending_confirmation = Some(PendingHostWindowSizeRequest {
-                state: Some(request.state),
-                requested: request.size,
-                requested_at: Instant::now(),
-            });
-            let target = if overlay_options.is_some() {
-                "Android overlay surface"
-            } else {
-                "Android host-window"
-            };
-            if overlay_options.is_some() {
-                log::info!(
-                    "Requested {target} bounds {:.1}x{:.1} dp at {:.1},{:.1} dp",
-                    request.size.width,
-                    request.size.height,
-                    position.x,
-                    position.y
-                );
-            } else {
-                log::info!(
-                    "Requested {target} size {:.1}x{:.1} dp",
-                    request.size.width,
-                    request.size.height
-                );
-            }
-        }
-        Err(message) => {
-            *last_dispatched = Some(dispatch_key);
-            request.state.mark_dispatch_failed(request.size, message);
-        }
-    }
-}
-
-fn confirm_android_host_window_request(
-    pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
-    actual_size: Size,
-) {
-    let Some(pending) = *pending_confirmation else {
-        return;
-    };
-
-    if android_host_window::sizes_match(pending.requested, actual_size) {
-        if let Some(state) = pending.state {
-            state.mark_applied(pending.requested, actual_size);
-        }
-        *pending_confirmation = None;
-        return;
-    }
-
-    if pending.requested_at.elapsed() >= android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT {
-        if let Some(state) = pending.state {
-            state.mark_unsupported(pending.requested, actual_size);
-        }
-        log::info!(
-            "Android surface size request {:.1}x{:.1} dp was not honored; actual is {:.1}x{:.1} dp",
-            pending.requested.width,
-            pending.requested.height,
-            actual_size.width,
-            actual_size.height
-        );
-        *pending_confirmation = None;
-    }
-}
-
 fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> bool {
     use jni::{jni_sig, jni_str};
 
@@ -2140,41 +2012,6 @@ fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> 
     .unwrap_or_else(|error| {
         log::warn!("{error}");
         false
-    })
-}
-
-fn set_android_window_layout_px(
-    app: &android_activity::AndroidApp,
-    width_px: i32,
-    height_px: i32,
-) -> Result<(), String> {
-    use jni::{jni_sig, jni_str, objects::JValue};
-
-    with_android_activity_env(app, |env, activity| {
-        let class = overlay_window::find_android_overlay_class(env, &activity)?;
-        let result = env
-            .call_static_method(
-                class,
-                jni_str!("setActivityWindowLayout"),
-                jni_sig!("(Landroid/app/Activity;II)I"),
-                &[
-                    JValue::Object(&activity),
-                    JValue::Int(width_px),
-                    JValue::Int(height_px),
-                ],
-            )
-            .and_then(jni::JValueOwned::i)
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                format!("failed to request Android window layout: {error}")
-            })?;
-
-        match result {
-            0 => Ok(()),
-            code => Err(format!(
-                "Android window layout request failed with code {code}"
-            )),
-        }
     })
 }
 
