@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 11
-private_docs = 13822
+private_docs = 13820
 for_test_fns = 40
 cranpose_env_names = 78
 source_text_checks = 341
@@ -17,7 +17,7 @@ half_state_words = 0
 "get-prefix" = 133
 "hashset-of-node-ids" = 17
 "manager-helper-util" = 8
-"rc-refcell-in-public-signature" = 3
+"rc-refcell-in-public-signature" = 2
 "state-holder-rebuilt" = 0
 "std-time-in-wasm-sources" = 0
 "unsafe-outside-boundary-modules" = 0

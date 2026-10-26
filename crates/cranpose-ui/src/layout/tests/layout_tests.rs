@@ -2192,7 +2192,7 @@ fn parent_data_uses_resolved_layout_properties() {
             state.bind(
                 LayoutChildBinding {
                     cache: node.cache_handles(),
-                    layout_state: Some(node.layout_state_handle()),
+                    layout_state: Some(node.layout_parts()),
                     parent_data: Some(node.parent_data()),
                     dirty: false,
                     descendant_dirty: false,
