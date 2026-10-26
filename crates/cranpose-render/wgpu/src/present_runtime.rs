@@ -16,7 +16,7 @@ static ENCODE_DELAY_MS: DebugToggle = DebugToggle::new("CRANPOSE_ENCODE_DELAY_MS
 
 use crate::{
     frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
-    render::{FrameOutput, GpuRenderer, GpuRendererInit},
+    render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
 };
 
 pub(crate) type PresentWaker = Arc<dyn Fn() + Send + Sync>;
@@ -97,6 +97,7 @@ pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> 
 
 pub(crate) struct PresentState {
     gpu_renderer: GpuRenderer,
+    submit: FrameSubmit,
     device: Arc<wgpu::Device>,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
@@ -125,6 +126,7 @@ impl PresentState {
         } = init;
         let device = Arc::clone(&gpu.device);
         let renderer_epoch = gpu.renderer_epoch;
+        let submit = FrameSubmit::new(&gpu);
         let gpu_renderer = GpuRenderer::new(gpu);
         if let Some(landing) = gpu_renderer.pipelines.landing() {
             let _ = status.landing.set(landing);
@@ -139,6 +141,7 @@ impl PresentState {
         }));
         Self {
             gpu_renderer,
+            submit,
             device,
             surface: None,
             config: None,
@@ -323,8 +326,8 @@ impl PresentState {
         let image = crate::frame::ImageContent::of(&frame);
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
-            width,
-            height,
+            &mut self.submit,
+            (width, height),
             packet,
             self.surface_epoch,
             &mut returns,
@@ -451,8 +454,8 @@ impl PresentState {
         let after_acquire_ns = self.now();
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
-            width,
-            height,
+            &mut self.submit,
+            (width, height),
             packet,
             self.surface_epoch,
             &mut returns,

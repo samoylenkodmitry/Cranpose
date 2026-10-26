@@ -14,7 +14,6 @@ use super::{
     blend_state_for_mode, create_render_pipeline_logged,
 };
 use crate::{
-    frame_graph::WgpuFrameGraphExecutor,
     geometry::SegmentTransform,
     gpu_stats::{self},
     shared_shader::SharedShader,
@@ -377,7 +376,6 @@ impl TextGlyphAtlas {
     pub(super) fn flush_uploads(
         &mut self,
         queue: &wgpu::Queue,
-        executor: &mut WgpuFrameGraphExecutor,
         frame_stats: &mut gpu_stats::FrameStats,
     ) {
         let mut coverage = 0;
@@ -414,7 +412,7 @@ impl TextGlyphAtlas {
                 }
                 coverage += glyph_width * usize::from(entry.height);
             }
-            let upload_stats = executor.upload_texture(
+            let upload_stats = crate::frame_graph::upload_texture(
                 queue,
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.texture,

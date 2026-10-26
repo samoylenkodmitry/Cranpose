@@ -222,16 +222,15 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             ]
         });
         let eye = scene.camera.eye();
-        let device = Arc::clone(&self.renderer.device);
         let mut draws = Vec::with_capacity(meshes.len());
         for held in meshes {
             let shown = (page, eye, light_projection, backdrop_region);
-            if let Some(draw) = self.prepare_surface(held, shown, &device) {
+            if let Some(draw) = self.prepare_surface(held, shown) {
                 draws.push(draw);
             }
         }
-        let shadows = light_projection.is_some() && self.draw_shadow_map(&draws, &device);
-        let windows = self.prepare_windows(&draws, (&scene, page, eye), &device);
+        let shadows = light_projection.is_some() && self.draw_shadow_map(&draws);
+        let windows = self.prepare_windows(&draws, (&scene, page, eye));
         let opaque = StepPipeline::Fixed(if shadows {
             ScenePipeline::Shadowed
         } else {
@@ -256,7 +255,6 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     glow,
                 ],
                 (&draws, windows.as_ref(), None),
-                &device,
             );
             return Ok(());
         };
@@ -271,7 +269,6 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 portals(PortalPass::Colour { glow: false }),
             ],
             (&draws, windows.as_ref(), None),
-            &device,
         );
         if self
             .renderer
@@ -303,7 +300,6 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 glow,
             ],
             (&draws, windows.as_ref(), Some(&copy)),
-            &device,
         );
         Ok(())
     }
@@ -320,7 +316,6 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             Option<&PreparedWindows>,
             Option<&Rc<OffscreenTarget>>,
         ),
-        device: &wgpu::Device,
     ) {
         let drawn = |phase: ScenePhase| draws.iter().filter(move |draw| draw.phase == phase);
         // The portals' step draws while a window shows any space.
@@ -337,6 +332,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             _ => renderer.scene_no_shadow(),
         };
         let effects = &renderer.effect_renderer;
+        let device = &renderer.device;
         let backdrop = backdrop.map(|texture| {
             texture.get_or_create_bind_group(
                 device,
@@ -389,13 +385,19 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
 
     /// Draws the scene's shadow casters into the shadow map, as the light
     /// sees them; false while the shadow pipelines compile.
-    fn draw_shadow_map(&mut self, draws: &[PreparedSurface<'_>], device: &wgpu::Device) -> bool {
+    fn draw_shadow_map(&mut self, draws: &[PreparedSurface<'_>]) -> bool {
         // Both pipelines are asked for, so both compile side by side.
         let shadowed = self
             .renderer
             .scene_surface_pipeline(ScenePipeline::Shadowed)
             .is_some();
-        if !shadowed || self.renderer.scene_pass.shadow_map(device).is_none() {
+        if !shadowed
+            || self
+                .renderer
+                .scene_pass
+                .shadow_map(&self.renderer.device)
+                .is_none()
+        {
             return false;
         }
         let renderer = &*self.renderer;
@@ -406,6 +408,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             return false;
         };
         let effects = &renderer.effect_renderer;
+        let device = &renderer.device;
         let mut shadow_pass = self
             .recorder
             .begin_timed_render_pass(&wgpu::RenderPassDescriptor {
@@ -436,7 +439,6 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         &mut self,
         held: &'m PendingMesh,
         (page, eye, light_projection, backdrop_region): (ScenePage, Vec3, Option<Mat4>, [f32; 4]),
-        device: &wgpu::Device,
     ) -> Option<PreparedSurface<'m>> {
         let scene = &held.mesh.scene;
         let surface = &held.mesh.surface;
@@ -455,7 +457,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 self.recorder.upload_uniform(
                     UploadAllocatorId::SceneVolume,
                     scene_volume_uniform_spec(),
-                    device,
+                    &self.renderer.device,
                     layout,
                     bytemuck::bytes_of(&uniforms),
                 )
@@ -477,7 +479,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 self.recorder.upload_uniform(
                     UploadAllocatorId::SceneSurface,
                     scene_surface_uniform_spec(),
-                    device,
+                    &self.renderer.device,
                     layout,
                     bytemuck::bytes_of(&uniforms),
                 )
@@ -489,7 +491,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 Some(self.recorder.upload_uniform(
                     UploadAllocatorId::SceneShaded,
                     scene_shaded_uniform_spec(),
-                    device,
+                    &self.renderer.device,
                     layout,
                     bytemuck::bytes_of(&values),
                 ))
@@ -505,7 +507,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let (buffers, staged) = self
             .renderer
             .scene_pass
-            .mesh_buffers((device, &mut *self.recorder), &surface.mesh);
+            .mesh_buffers((&self.renderer.device, &mut *self.recorder), &surface.mesh);
         self.renderer.frame_stats.record_command_stats(staged);
         Some(PreparedSurface {
             held,

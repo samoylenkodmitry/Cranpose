@@ -1,17 +1,13 @@
-use super::{
-    ImageTextures, RendererPipelines, ViewportUniforms, WgpuFrameGraphExecutor,
-    text_resources::TextResources,
-};
+use super::{ImageTextures, RendererPipelines, ViewportUniforms, text_resources::TextResources};
 use crate::gpu_stats::FrameStats;
 
 // What a frame's draws upload through: the pipelines whose layouts and
 // samplers new bindings use, the viewport uniforms a draw claims a slot in,
-// and the queue, executor and stats a texture's upload goes through.
+// and the queue and stats a texture's upload goes through.
 pub(crate) struct FrameUploads<'a> {
     pub(super) pipelines: &'a RendererPipelines,
     pub(super) uniforms: &'a mut ViewportUniforms,
     pub(super) queue: &'a wgpu::Queue,
-    pub(super) executor: &'a mut WgpuFrameGraphExecutor,
     pub(super) stats: &'a mut FrameStats,
 }
 

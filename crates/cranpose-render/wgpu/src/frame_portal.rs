@@ -50,7 +50,6 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         &mut self,
         draws: &[PreparedSurface<'_>],
         (scene, page, eye): (&crate::collect::SceneDraw, ScenePage, Vec3),
-        device: &wgpu::Device,
     ) -> Option<PreparedWindows> {
         // A doorway draws when a surface lies behind it, or behind one seen
         // through it; the eye sees parents before what lies behind them.
@@ -69,7 +68,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let (buffers, staged) = self
             .renderer
             .scene_pass
-            .window_buffers((device, &mut *self.recorder));
+            .window_buffers((&self.renderer.device, &mut *self.recorder));
         self.renderer.frame_stats.record_command_stats(staged);
         let mut windows = Vec::new();
         for (index, seen) in scene.seen.iter().enumerate() {
@@ -103,7 +102,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             let uniform = self.recorder.upload_uniform(
                 UploadAllocatorId::SceneSurface,
                 scene_surface_uniform_spec(),
-                device,
+                &self.renderer.device,
                 self.renderer.scene_uniform_layout(),
                 bytemuck::bytes_of(&uniforms),
             );

@@ -180,7 +180,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
 
 fn whiten_atlas(renderer: &GpuRenderer) {
     let size = renderer.text.glyph_atlas.size();
-    WgpuFrameGraphExecutor::new().upload_texture(
+    crate::frame_graph::upload_texture(
         &renderer.queue,
         renderer.text.glyph_atlas.texture.as_image_copy(),
         &vec![255; (size * size) as usize],

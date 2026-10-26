@@ -3917,7 +3917,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         );
         let blur_scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
-        let device = Arc::clone(&self.renderer.device);
         self.renderer.effect_renderer.record_substrates(
             members
                 .iter()
@@ -3926,7 +3925,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         );
         self.renderer.effect_renderer.encode_blur_atlas_passes(
             self.recorder,
-            &device,
+            &self.renderer.device,
             atlas,
             &blur_scratch,
             &result,
@@ -4299,14 +4298,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         layer_pixel_rect: [f32; 4],
         reads: EffectReads,
     ) -> Result<(), String> {
-        let device = Arc::clone(&self.renderer.device);
         let format = self.renderer.pipelines.composition_format;
         let scratch = self
             .renderer
             .effect_renderer
             .acquire_recorded_effect_scratch_targets(
                 self.recorder,
-                &device,
+                &self.renderer.device,
                 effect,
                 source.width,
                 source.height,
@@ -4316,7 +4314,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let mut refs = scratch.refs();
             let passes = self.renderer.effect_renderer.encode_effect(
                 self.recorder,
-                &device,
+                &self.renderer.device,
                 EffectTarget {
                     source,
                     dest_view: &dest.view,
