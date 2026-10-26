@@ -104,10 +104,11 @@ impl AudioDecoder for Opus {
                 }
             }
         }
-        self.output.trim(
-            packet.trim_start.get() as usize,
-            packet.trim_end.get() as usize,
-        );
+        let trim_start = usize::try_from(packet.trim_start.get())
+            .map_err(|_| Error::DecodeError("Opus trim start is too large"))?;
+        let trim_end = usize::try_from(packet.trim_end.get())
+            .map_err(|_| Error::DecodeError("Opus trim end is too large"))?;
+        self.output.trim(trim_start, trim_end);
         Ok(self.output.as_generic_audio_buffer_ref())
     }
 
