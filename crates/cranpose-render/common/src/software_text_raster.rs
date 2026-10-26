@@ -50,6 +50,7 @@ use crate::{
     },
     font_tracking::FontTracking,
     gpos_kerning::KernedFont,
+    rgb565::{GlyphPixel, Rgb565Be, Rgb565Le},
     text_cache_key::{TextCacheKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
     text_mask_gamma::TextLuminance,
@@ -3229,18 +3230,27 @@ impl GlyphRasterClip {
     }
 }
 
-/// Straight-alpha RGBA pixels that a text paints over, as a renderer's
-/// target holds them: `width` by `height` of them from the first, a row
-/// every `stride` pixels.
+/// Pixels that a text paints over, as a renderer's target holds them:
+/// `width` by `height` of them from the first, a row every `stride` pixels.
 pub struct TextPixelWindow<'a> {
     /// The pixels from the window's top left corner on.
-    pub pixels: &'a mut [[u8; 4]],
+    pub pixels: TextPixelRows<'a>,
     /// Pixels from the start of one row to the start of the next.
     pub stride: usize,
     /// Width of the window in pixels.
     pub width: u32,
     /// Height of the window in pixels.
     pub height: u32,
+}
+
+/// The pixels of a [`TextPixelWindow`], in the format the renderer draws.
+pub enum TextPixelRows<'a> {
+    /// Straight-alpha RGBA bytes.
+    Rgba(&'a mut [[u8; 4]]),
+    /// 16-bit pixels stored low byte first.
+    Rgb565Le(&'a mut [Rgb565Le]),
+    /// 16-bit pixels stored high byte first.
+    Rgb565Be(&'a mut [Rgb565Be]),
 }
 
 enum TextRasterPixels<'a> {
@@ -3288,7 +3298,7 @@ impl<'a> TextRasterCanvas<'a> {
             TextRasterPixels::Solid(pixels) => {
                 if let Brush::Solid(color) = paint.brush {
                     let color = color_to_rgba(*color);
-                    draw_mask_glyph_solid_u8(
+                    draw_mask_glyph_solid(
                         pixels.as_chunks_mut::<4>().0,
                         self.width as usize,
                         area,
@@ -3301,15 +3311,36 @@ impl<'a> TextRasterCanvas<'a> {
             }
             TextRasterPixels::Window(window) => {
                 if let Brush::Solid(color) = paint.brush {
-                    draw_mask_glyph_solid_u8(
-                        window.pixels,
-                        window.stride,
-                        area,
-                        mask,
-                        color_to_rgba(*color),
-                        paint.alpha,
-                        OverBlend,
-                    );
+                    let (stride, color) = (window.stride, color_to_rgba(*color));
+                    match &mut window.pixels {
+                        TextPixelRows::Rgba(pixels) => draw_mask_glyph_solid(
+                            pixels,
+                            stride,
+                            area,
+                            mask,
+                            color,
+                            paint.alpha,
+                            OverBlend,
+                        ),
+                        TextPixelRows::Rgb565Le(pixels) => draw_mask_glyph_solid(
+                            pixels,
+                            stride,
+                            area,
+                            mask,
+                            color,
+                            paint.alpha,
+                            OverBlend,
+                        ),
+                        TextPixelRows::Rgb565Be(pixels) => draw_mask_glyph_solid(
+                            pixels,
+                            stride,
+                            area,
+                            mask,
+                            color,
+                            paint.alpha,
+                            OverBlend,
+                        ),
+                    }
                 }
             }
             TextRasterPixels::Blended(pixels) => {
@@ -4998,11 +5029,11 @@ fn blend_src_over_u8(dst: &mut [u8], src: [f32; 4]) {
     dst[3] = whole::round(out_alpha.clamp(0.0, 1.0) * 255.0) as u8;
 }
 
-/// How a solid glyph's pixel goes over the pixel under it.
-trait SolidGlyphBlend {
+/// How a solid glyph's pixel goes over the pixel `P` under it.
+trait SolidGlyphBlend<P> {
     /// Puts `src`, the glyph's color with its coverage as alpha, over
     /// `dst`; `alpha` gives that coverage as a unit value.
-    fn blend(&self, dst: &mut [u8; 4], src: [u8; 4], alpha: impl FnOnce() -> f32);
+    fn blend(&self, dst: &mut P, src: [u8; 4], alpha: impl FnOnce() -> f32);
 }
 
 /// A text's own canvas: a pixel no glyph covered yet takes the glyph's,
@@ -5011,7 +5042,7 @@ struct CanvasBlend {
     color: [f32; 4],
 }
 
-impl SolidGlyphBlend for CanvasBlend {
+impl SolidGlyphBlend<[u8; 4]> for CanvasBlend {
     fn blend(&self, dst: &mut [u8; 4], src: [u8; 4], alpha: impl FnOnce() -> f32) {
         if dst[3] == 0 {
             *dst = src;
@@ -5025,22 +5056,22 @@ impl SolidGlyphBlend for CanvasBlend {
 /// pixel would, so a glyph that overlaps no other draws the same bytes.
 struct OverBlend;
 
-impl SolidGlyphBlend for OverBlend {
-    fn blend(&self, dst: &mut [u8; 4], src: [u8; 4], _alpha: impl FnOnce() -> f32) {
-        blend_byte_pixel(dst, src);
+impl<P: GlyphPixel> SolidGlyphBlend<P> for OverBlend {
+    fn blend(&self, dst: &mut P, src: [u8; 4], _alpha: impl FnOnce() -> f32) {
+        dst.blend_bytes(src);
     }
 }
 
 /// Paints the solid glyph `mask` in `color` over an `area` of `pixels`,
 /// width by height, a row every `stride` pixels.
-fn draw_mask_glyph_solid_u8(
-    pixels: &mut [[u8; 4]],
+fn draw_mask_glyph_solid<P>(
+    pixels: &mut [P],
     stride: usize,
     (width, height): (u32, u32),
     mask: &GlyphMask,
     color: [f32; 4],
     alpha_multiplier: f32,
-    blend: impl SolidGlyphBlend,
+    blend: impl SolidGlyphBlend<P>,
 ) {
     let red = whole::round(color[0].clamp(0.0, 1.0) * 255.0) as u8;
     let green = whole::round(color[1].clamp(0.0, 1.0) * 255.0) as u8;

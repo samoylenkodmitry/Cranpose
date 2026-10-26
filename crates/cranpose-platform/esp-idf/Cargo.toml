@@ -18,7 +18,6 @@ default = ["small-block-alloc"]
 small-block-alloc = []
 
 [dependencies]
-bytemuck = "1.25"
 cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
 # Its link arguments reach the build script, which checks that ESP-IDF

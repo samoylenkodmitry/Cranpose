@@ -58,7 +58,7 @@ fn alpha_masks_render_exactly_as_rgba_images() {
                     };
                     let mut frame = [41, 71, 101, 255].repeat(32 * 32);
                     let mut target = Target {
-                        pixels: &mut frame,
+                        pixels: frame.as_chunks_mut::<4>().0,
                         left: 0,
                         top: 0,
                         width: 32,
@@ -131,7 +131,7 @@ fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
     };
     let mut frame = vec![0; 8 * 8 * 4];
     let mut target = Target {
-        pixels: &mut frame,
+        pixels: frame.as_chunks_mut::<4>().0,
         left: 0,
         top: 0,
         width: 8,

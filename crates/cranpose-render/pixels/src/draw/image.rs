@@ -4,8 +4,8 @@
 use cranpose_render_common::graph_scene::RenderDiagnostics;
 use cranpose_ui_graphics::{BlendMode, Point, Rect, whole};
 
-use super::{ClipBounds, Target, UNIT, blend_pixel, clip_rect_to_bounds, snap_delta_for_anchor};
-use crate::scene::ImageDraw;
+use super::{ClipBounds, Target, UNIT, clip_rect_to_bounds, snap_delta_for_anchor};
+use crate::{pixel::Pixel, scene::ImageDraw};
 
 /// The device pixels an image covers: its rect where it lands, or the box
 /// of its turned rect.
@@ -21,7 +21,11 @@ pub(super) fn image_rect(draw: &ImageDraw) -> Rect {
 }
 
 #[inline(never)]
-pub(super) fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
+pub(super) fn draw_image<P: Pixel>(
+    target: &mut Target<'_, P>,
+    draw: &ImageDraw,
+    diagnostics: &RenderDiagnostics,
+) {
     let rect = image_rect(draw);
     if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
         return;
@@ -66,7 +70,7 @@ pub(super) fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &Re
             };
             let sample = sampler.sample(u, v);
             if sample[3] > 0.0 {
-                blend_pixel(dst, sample, draw.blend_mode, diagnostics);
+                dst.blend_unit(sample, draw.blend_mode, diagnostics);
             }
         }
     }
@@ -161,8 +165,8 @@ fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32
 
 /// Draws `image`, the size of `rect`, at a rect between whole pixels: each
 /// pixel samples the image linearly.
-pub(super) fn blit_image_between_pixels(
-    target: &mut Target,
+pub(super) fn blit_image_between_pixels<P: Pixel>(
+    target: &mut Target<'_, P>,
     rect: Rect,
     clip_bounds: ClipBounds,
     image: &cranpose_ui_graphics::ImageBitmap,
@@ -176,7 +180,7 @@ pub(super) fn blit_image_between_pixels(
             if src[3] <= 0.0 {
                 continue;
             }
-            blend_pixel(dst, src, BlendMode::SrcOver, diagnostics);
+            dst.blend_unit(src, BlendMode::SrcOver, diagnostics);
         }
     }
 }

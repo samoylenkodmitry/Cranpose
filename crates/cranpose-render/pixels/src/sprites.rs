@@ -563,7 +563,7 @@ impl Canonical {
         let height = (window.max_y - window.min_y) as u32;
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
         let mut target = Target {
-            pixels: &mut pixels,
+            pixels: pixels.as_chunks_mut::<4>().0,
             left: window.min_x,
             top: window.min_y,
             width,

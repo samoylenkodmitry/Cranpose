@@ -1,68 +1,26 @@
 use cranpose::framebuffer::{Framebuffer, PixelRect, SurfaceError};
 use esp_idf_svc::sys::EspError;
 
-use crate::panel::{Panel, PixelBuffer, PixelFormat};
+use crate::panel::{Panel, PixelBuffer};
 
 pub(crate) struct Presenter {
     areas: Vec<PixelRect>,
-    /// One word a pixel, so the encode loads each pixel's four bytes at once.
-    rgba: PixelBuffer<u32>,
     /// The buffers the panel reads, in turn: while it reads one, the next
-    /// strip is drawn and encoded into the other.
+    /// strip is drawn into the other, in the pixels the panel takes.
     strips: Vec<PixelBuffer>,
     next_strip: usize,
     strip_pixels: usize,
-}
-
-/// `pixel`, straight RGBA8 in a little-endian word, as RGB565: red's top
-/// five bits, green's top six and blue's top five. Each field comes from the
-/// word with one shift and one mask.
-fn rgb565(pixel: u32) -> u16 {
-    (((pixel & 0xF8) << 8) | ((pixel >> 5) & 0x07E0) | ((pixel >> 19) & 0x1F)) as u16
-}
-
-/// [`rgb565`] with its high byte first, as display controllers read it,
-/// without swapping the bytes after: the first byte takes red's top five
-/// bits and green's top three, the second green's next three and blue's top
-/// five.
-fn rgb565_big_endian(pixel: u32) -> u16 {
-    ((pixel & 0xF8) | ((pixel >> 13) & 0x07) | ((pixel << 3) & 0xE000) | ((pixel >> 11) & 0x1F00))
-        as u16
-}
-
-fn encode(rgba: &[u32], strip: &mut [u16], format: PixelFormat) {
-    match format {
-        PixelFormat::Rgb565 => encode_with(rgba, strip, rgb565),
-        PixelFormat::Rgb565BigEndian => encode_with(rgba, strip, rgb565_big_endian),
-    }
-}
-
-/// Writes `encoded` of each pixel of `rgba` into `strip`, four pixels a
-/// step: a step of the plain loop spends a third of its instructions on its
-/// counter, pointers and branch.
-fn encode_with(rgba: &[u32], strip: &mut [u16], encoded: impl Fn(u32) -> u16) {
-    let len = rgba.len().min(strip.len());
-    let (quads, rest) = rgba[..len].as_chunks::<4>();
-    let (out_quads, out_rest) = strip[..len].as_chunks_mut::<4>();
-    for (out, quad) in out_quads.iter_mut().zip(quads) {
-        *out = quad.map(&encoded);
-    }
-    for (out, &pixel) in out_rest.iter_mut().zip(rest) {
-        *out = encoded(pixel);
-    }
 }
 
 impl Presenter {
     /// A presenter that draws `strip_rows` rows of `panel` at a time.
     pub(crate) fn new(panel: &Panel<'_>, strip_rows: u32) -> Result<Self, SurfaceError> {
         let strip_pixels = panel.width() as usize * panel.aligned_rows(strip_rows.max(1)) as usize;
-        let rgba = PixelBuffer::internal(strip_pixels)?;
         let strips = (0..panel.buffers())
             .map(|_| PixelBuffer::for_transfer(strip_pixels))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             areas: Vec::new(),
-            rgba,
             strips,
             next_strip: 0,
             strip_pixels,
@@ -88,21 +46,15 @@ impl Presenter {
             sent += area.width as usize * area.height as usize * 2;
             for strip_area in strips(area, self.rows_per_strip(panel, area)) {
                 let pixels = strip_area.width as usize * strip_area.height as usize;
-                if ahead.is_none() {
-                    framebuffer.draw_area(
-                        strip_area,
-                        bytemuck::cast_slice_mut(&mut self.rgba.as_mut_slice()[..pixels]),
-                    );
-                }
                 panel.wait_for_free_buffer();
                 let strip = &mut self.strips[self.next_strip];
-                let encoded = &mut strip.as_mut_slice()[..pixels];
+                let drawn = &mut strip.as_mut_slice()[..pixels];
                 match &ahead {
                     Some(picture) => {
                         let first = strip_area.y as usize * panel.width() as usize;
-                        encoded.copy_from_slice(&picture.as_slice()[first..first + pixels]);
+                        drawn.copy_from_slice(&picture.as_slice()[first..first + pixels]);
                     }
-                    None => encode(&self.rgba.as_slice()[..pixels], encoded, panel.format()),
+                    None => framebuffer.draw_area_rgb565(strip_area, drawn, panel.format()),
                 }
                 panel.draw_rect(strip_area, strip)?;
                 self.next_strip = (self.next_strip + 1) % self.strips.len();
@@ -143,13 +95,9 @@ impl Presenter {
         };
         for strip_area in strips(whole, self.rows_per_strip(panel, whole)) {
             let pixels = strip_area.width as usize * strip_area.height as usize;
-            framebuffer.draw_area(
-                strip_area,
-                bytemuck::cast_slice_mut(&mut self.rgba.as_mut_slice()[..pixels]),
-            );
             let first = strip_area.y as usize * whole.width as usize;
-            encode(
-                &self.rgba.as_slice()[..pixels],
+            framebuffer.draw_area_rgb565(
+                strip_area,
                 &mut picture.as_mut_slice()[first..first + pixels],
                 panel.format(),
             );

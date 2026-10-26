@@ -45,6 +45,8 @@ pub mod primitive_emit;
 pub mod raster_cache;
 /// Shared cases that every renderer backend is checked against.
 pub mod render_contract;
+/// 16-bit pixels of the format most small displays take.
+pub mod rgb565;
 /// Building and updating the render graph from the layout tree.
 pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
