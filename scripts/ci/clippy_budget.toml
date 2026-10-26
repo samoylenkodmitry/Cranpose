@@ -12,7 +12,7 @@
 "clippy::inline_always" = 63
 "clippy::iter_over_hash_type" = 32
 "clippy::let_underscore_must_use" = 263
-"clippy::let_underscore_untyped" = 699
+"clippy::let_underscore_untyped" = 698
 "clippy::missing_assert_message" = 191
 "clippy::needless_pass_by_value" = 173
 "clippy::ref_option" = 18
