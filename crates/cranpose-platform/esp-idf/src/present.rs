@@ -6,7 +6,7 @@ use crate::panel::{Panel, PixelBuffer, PixelFormat};
 pub(crate) struct Presenter {
     areas: Vec<PixelRect>,
     /// One word a pixel, so the encode loads each pixel's four bytes at once.
-    rgba: Vec<u32>,
+    rgba: PixelBuffer<u32>,
     /// The buffers the panel reads, in turn: while it reads one, the next
     /// strip is drawn and encoded into the other.
     strips: Vec<PixelBuffer>,
@@ -56,10 +56,7 @@ impl Presenter {
     /// A presenter that draws `strip_rows` rows of `panel` at a time.
     pub(crate) fn new(panel: &Panel<'_>, strip_rows: u32) -> Result<Self, SurfaceError> {
         let strip_pixels = panel.width() as usize * panel.aligned_rows(strip_rows.max(1)) as usize;
-        let mut rgba = Vec::new();
-        rgba.try_reserve_exact(strip_pixels)
-            .map_err(|_| SurfaceError)?;
-        rgba.resize(strip_pixels, 0);
+        let rgba = PixelBuffer::internal(strip_pixels)?;
         let strips = (0..panel.buffers())
             .map(|_| PixelBuffer::for_transfer(strip_pixels))
             .collect::<Result<Vec<_>, _>>()?;
@@ -94,7 +91,7 @@ impl Presenter {
                 if ahead.is_none() {
                     framebuffer.draw_area(
                         strip_area,
-                        bytemuck::cast_slice_mut(&mut self.rgba[..pixels]),
+                        bytemuck::cast_slice_mut(&mut self.rgba.as_mut_slice()[..pixels]),
                     );
                 }
                 panel.wait_for_free_buffer();
@@ -105,7 +102,7 @@ impl Presenter {
                         let first = strip_area.y as usize * panel.width() as usize;
                         encoded.copy_from_slice(&picture.as_slice()[first..first + pixels]);
                     }
-                    None => encode(&self.rgba[..pixels], encoded, panel.format()),
+                    None => encode(&self.rgba.as_slice()[..pixels], encoded, panel.format()),
                 }
                 panel.draw_rect(strip_area, strip)?;
                 self.next_strip = (self.next_strip + 1) % self.strips.len();
@@ -148,11 +145,11 @@ impl Presenter {
             let pixels = strip_area.width as usize * strip_area.height as usize;
             framebuffer.draw_area(
                 strip_area,
-                bytemuck::cast_slice_mut(&mut self.rgba[..pixels]),
+                bytemuck::cast_slice_mut(&mut self.rgba.as_mut_slice()[..pixels]),
             );
             let first = strip_area.y as usize * whole.width as usize;
             encode(
-                &self.rgba[..pixels],
+                &self.rgba.as_slice()[..pixels],
                 &mut picture.as_mut_slice()[first..first + pixels],
                 panel.format(),
             );
