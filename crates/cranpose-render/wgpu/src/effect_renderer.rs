@@ -13,7 +13,7 @@ use crate::{
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
+        TextureRegionCopy, UniformUpload, UploadAllocatorId, copy_compatible,
     },
     glass_split::split_scissors,
     gpu_stats::FrameStats,
@@ -32,8 +32,13 @@ use crate::{
 };
 
 mod scratch_targets;
+mod upload_specs;
 use scratch_targets::acquire_recorded_effect_scratch_textures_into;
 pub(crate) use scratch_targets::{EffectScratchTargetProvider, RecordedEffectScratchTargets};
+use upload_specs::{
+    blit_uniform_spec, blur_uniform_spec, effect_uniform_spec, offset_uniform_spec,
+    projective_blit_uniform_spec, projective_blit_vertex_spec,
+};
 
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
@@ -317,24 +322,6 @@ fn blur_block(source: (u32, u32, u32, u32), scratch: (u32, u32, u32, u32)) -> u3
     (source.2 as f32 / scratch.2.max(1) as f32).round().max(1.0) as u32
 }
 
-fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
-    let (buffer, bind_group) = match pass {
-        UploadAllocatorId::BlurDownsample => (
-            "Blur Downsample Uniform Buffer",
-            "Blur Downsample Uniform Bind Group",
-        ),
-        UploadAllocatorId::BlurHorizontal => (
-            "Blur Horizontal Uniform Buffer",
-            "Blur Horizontal Uniform Bind Group",
-        ),
-        _ => (
-            "Blur Vertical Uniform Buffer",
-            "Blur Vertical Uniform Bind Group",
-        ),
-    };
-    UploadAllocatorSpec::uniform(buffer, bind_group, size_of::<BlurUniforms>() as u64)
-}
-
 #[derive(Clone, Copy)]
 struct BlurDraw {
     source: BlurSource,
@@ -442,45 +429,6 @@ impl BlurDraw {
             BlurFilter::Mean => BlurPipeline::Mean,
         }
     }
-}
-
-fn offset_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Offset Uniform Buffer",
-        "Offset Uniform Bind Group",
-        size_of::<OffsetUniforms>() as u64,
-    )
-}
-
-fn blit_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Blit Uniform Buffer",
-        "Blit Uniform Bind Group",
-        size_of::<BlitUniforms>() as u64,
-    )
-}
-
-fn projective_blit_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Projective Blit Uniform Buffer",
-        "Projective Blit Uniform Bind Group",
-        size_of::<ProjectiveBlitUniforms>() as u64,
-    )
-}
-
-fn projective_blit_vertex_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::vertex(
-        "Projective Blit Vertex Buffer",
-        (size_of::<ProjectiveBlitVertex>() * 5) as u64,
-    )
-}
-
-fn effect_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Effect Uniform Buffer",
-        "Effect Uniform Bind Group",
-        (RuntimeShader::MAX_UNIFORMS * size_of::<f32>()) as u64,
-    )
 }
 
 #[derive(Copy, Clone, Debug)]
