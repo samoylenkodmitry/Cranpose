@@ -178,8 +178,11 @@ mod device_loss;
 #[cfg(feature = "robot")]
 #[path = "robot_driver.rs"]
 mod robot_driver;
+#[path = "robot_seat.rs"]
+mod robot_seat;
 #[cfg(feature = "robot")]
-use robot_driver::{RobotController, RobotTurn, bound_robot_park};
+use robot_driver::{RobotController, RobotTurn};
+use robot_seat::RobotSeat;
 
 struct DesktopGpuContext {
     gpu: crate::GpuContext,
@@ -448,10 +451,7 @@ struct App {
     last_cursor_position: Option<(f32, f32)>,
     primary_shown: Arc<std::sync::atomic::AtomicBool>,
     primary_presence: Option<super::lifecycle::WindowPresence>,
-    #[cfg(feature = "robot")]
-    robot_controller: Option<RobotController>,
-    #[cfg(feature = "robot")]
-    robot_app_hook: Option<Box<crate::RobotAppHook>>,
+    robot: RobotSeat,
     recorder: Option<crate::recorder::InputRecorder>,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
     event_proxy: EventLoopProxy,
@@ -484,12 +484,6 @@ struct App {
     vsync_interval: Duration,
     exiting: bool,
     file_drops: super::incoming::FileDrops,
-    #[cfg(feature = "robot")]
-    presented_frame_generation: u64,
-    #[cfg(feature = "robot")]
-    unpresentable_frames_since_present: u32,
-    #[cfg(feature = "robot")]
-    robot_visible_surface_dirty: bool,
 }
 
 impl App {
@@ -504,8 +498,7 @@ impl App {
             .record_to
             .take()
             .map(crate::recorder::InputRecorder::new);
-        #[cfg(feature = "robot")]
-        let robot_app_hook = settings.robot_app_hook.take();
+        let robot = RobotSeat::new(&mut settings);
         let integration = super::integration::Integration::new(settings.desktop_integration.take());
         let applied_frame_pacing_mode = settings.frame_pacing_mode;
         let custom_cursor_size = settings.custom_cursor_size;
@@ -548,10 +541,7 @@ impl App {
             last_cursor_position: None,
             primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             primary_presence: None,
-            #[cfg(feature = "robot")]
-            robot_controller: None,
-            #[cfg(feature = "robot")]
-            robot_app_hook,
+            robot,
             recorder,
             launch_error,
             event_proxy,
@@ -580,12 +570,6 @@ impl App {
             vsync_interval: default_vsync_interval(),
             exiting: false,
             file_drops: super::incoming::FileDrops::default(),
-            #[cfg(feature = "robot")]
-            presented_frame_generation: 0,
-            #[cfg(feature = "robot")]
-            unpresentable_frames_since_present: 0,
-            #[cfg(feature = "robot")]
-            robot_visible_surface_dirty: false,
         }
     }
 
@@ -726,12 +710,7 @@ impl App {
                     &mut self.last_frame_start_time,
                     frame_interval,
                 );
-                #[cfg(feature = "robot")]
-                if let Some(controller) = &mut self.robot_controller {
-                    controller.record_idle_update_result(update_result);
-                }
-                #[cfg(not(feature = "robot"))]
-                let _ = update_result;
+                self.robot.record_idle_update_result(update_result);
             }
             direct_declaration_update
         };
@@ -749,13 +728,7 @@ impl App {
             .app
             .as_ref()
             .is_some_and(AppShell::has_active_primary_gesture);
-        #[cfg(feature = "robot")]
-        let synthetic_primary_down = self
-            .robot_controller
-            .as_ref()
-            .is_some_and(RobotController::synthetic_primary_down);
-        #[cfg(not(feature = "robot"))]
-        let synthetic_primary_down = false;
+        let synthetic_primary_down = self.robot.synthetic_primary_down();
 
         let action = primary_pointer_gesture_poll_action(
             active,
@@ -3114,17 +3087,7 @@ impl App {
 
     #[cfg(feature = "robot")]
     fn set_robot_controller(&mut self, controller: RobotController) {
-        self.robot_controller = Some(controller);
-    }
-
-    #[cfg(feature = "robot")]
-    fn robot_drives(&self) -> bool {
-        self.robot_controller.is_some()
-    }
-
-    #[cfg(not(feature = "robot"))]
-    fn robot_drives(&self) -> bool {
-        false
+        self.robot.controller = Some(controller);
     }
 }
 
@@ -5156,12 +5119,7 @@ impl ApplicationHandler for App {
         if self.exiting {
             return;
         }
-        #[cfg(feature = "robot")]
-        if self
-            .robot_controller
-            .as_mut()
-            .is_some_and(RobotController::stage_pending_command)
-        {
+        if self.robot.stage_pending_command() {
             self.about_to_wait(event_loop);
             return;
         }
@@ -5321,7 +5279,7 @@ impl ApplicationHandler for App {
         let mut accessibility = super::accessibility::DesktopAccessibilityBridge::new(
             window.as_ref(),
             self.event_proxy.clone(),
-            self.robot_drives(),
+            self.robot.drives(),
         );
         accessibility.sync(&mut app);
         self.primary_wrap_size = wrap_primary_window_to_content(
@@ -5531,13 +5489,7 @@ impl ApplicationHandler for App {
                     )
                     .is_some()
                 });
-                #[cfg(feature = "robot")]
-                let synthetic_primary_down = self
-                    .robot_controller
-                    .as_ref()
-                    .is_some_and(RobotController::synthetic_primary_down);
-                #[cfg(not(feature = "robot"))]
-                let synthetic_primary_down = false;
+                let synthetic_primary_down = self.robot.synthetic_primary_down();
                 if primary_pointer_move_should_recover_press(
                     app.has_active_primary_gesture(),
                     synthetic_primary_down,
@@ -5682,16 +5634,9 @@ impl ApplicationHandler for App {
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
                 let frame_started_at = Instant::now();
-                #[cfg(feature = "robot")]
-                let robot_surface_dirty_before_update = self.robot_visible_surface_dirty;
-                #[cfg(not(feature = "robot"))]
-                let robot_surface_dirty_before_update = false;
+                let robot_surface_dirty_before_update = self.robot.visible_surface_dirty();
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
-                #[cfg_attr(
-                    not(feature = "robot"),
-                    expect(unused_variables, reason = "only the robot reads the update result")
-                )]
                 let update_result = update_app_with_native_window_registry(app, &registry);
                 wrap_primary_window_for_frame(
                     app,
@@ -5703,10 +5648,7 @@ impl ApplicationHandler for App {
                 if let Some(accessibility) = &mut self.accessibility {
                     accessibility.sync(app);
                 }
-                #[cfg(feature = "robot")]
-                if let Some(controller) = &mut self.robot_controller {
-                    controller.record_idle_update_result(update_result);
-                }
+                self.robot.record_idle_update_result(update_result);
                 let after_update = Instant::now();
                 sync_native_windows_after_event = true;
 
@@ -5746,11 +5688,7 @@ impl ApplicationHandler for App {
                                 frame_started_at,
                                 false,
                             );
-                            #[cfg(feature = "robot")]
-                            {
-                                self.unpresentable_frames_since_present =
-                                    self.unpresentable_frames_since_present.saturating_add(1);
-                            }
+                            self.robot.note_unpresentable();
                             return;
                         }
                     };
@@ -5808,18 +5746,8 @@ impl ApplicationHandler for App {
                         window.as_ref(),
                     );
                     self.device_loss.presented();
-                    #[cfg(feature = "robot")]
-                    {
-                        self.presented_frame_generation =
-                            self.presented_frame_generation.saturating_add(1);
-                        self.unpresentable_frames_since_present = 0;
-                        self.robot_visible_surface_dirty = false;
-                    }
-                    #[cfg(feature = "robot")]
-                    let robot_driven = self.robot_controller.is_some();
-                    #[cfg(not(feature = "robot"))]
-                    let robot_driven = false;
-                    if !robot_driven
+                    self.robot.note_presented();
+                    if !self.robot.drives()
                         && should_chain_no_vsync_redraw(
                             frame_interval,
                             app.frame_schedule().needs_frame,
@@ -5829,10 +5757,7 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     record_pacing_event(|diag| &mut diag.skipped_no_present);
-                    #[cfg(feature = "robot")]
-                    {
-                        self.robot_visible_surface_dirty = app.needs_redraw();
-                    }
+                    self.robot.note_skipped_present(app);
                 }
             }
             event => {
@@ -6022,14 +5947,7 @@ impl ApplicationHandler for App {
             }
         }
 
-        #[cfg(feature = "robot")]
-        let robot_needs_poll = self
-            .robot_controller
-            .as_mut()
-            .is_some_and(RobotController::awaiting_progress);
-
-        #[cfg(not(feature = "robot"))]
-        let robot_needs_poll = false;
+        let robot_needs_poll = self.robot.awaiting_progress();
 
         let control_flow = event_loop_control_flow(
             now,
@@ -6066,12 +5984,7 @@ impl ApplicationHandler for App {
             },
         );
 
-        #[cfg(feature = "robot")]
-        let control_flow = if self.robot_controller.is_some() {
-            bound_robot_park(control_flow, now)
-        } else {
-            control_flow
-        };
+        let control_flow = self.robot.bound_park(control_flow, now);
 
         record_pacing_event(match control_flow {
             ControlFlow::Poll => |diag: &mut PacingDiag| &mut diag.control_flow_poll,
