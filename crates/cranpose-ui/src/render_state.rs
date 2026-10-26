@@ -656,6 +656,33 @@ impl AppContext {
     pub fn active_focus_target(&self) -> Option<NodeId> {
         self.focus_dispatch.active_focus_target()
     }
+
+    /// Whether a semantics invalidation waits, as
+    /// [`has_pending_semantics_invalidations`](crate::has_pending_semantics_invalidations)
+    /// says in the current context.
+    pub fn has_pending_semantics_invalidations(&self) -> bool {
+        self.semantics_dispatch.has_pending()
+    }
+
+    /// Whether a text field holds focus, as
+    /// [`has_focused_field`](crate::has_focused_field) says in the current
+    /// context; without one, the keyboard the framework asked for goes away.
+    pub fn has_focused_field(&self) -> bool {
+        let has_focus = self.text_field_focus.has_focused_field();
+        if !has_focus {
+            self.text_input_session.notify_focus_lost();
+        }
+        has_focus
+    }
+
+    /// Advances the cursor blink, as
+    /// [`tick_cursor_blink`](crate::tick_cursor_blink) does in the current
+    /// context.
+    pub fn tick_cursor_blink(&self) -> bool {
+        // Without a focused field no caret blinks, and the clock is not read.
+        self.cursor_animation.next_blink_time().is_some()
+            && self.cursor_animation.tick_blink(web_time::Instant::now())
+    }
 }
 
 impl Drop for AppContext {

@@ -27,14 +27,6 @@ pub fn has_pending_semantics_invalidations() -> bool {
         .has_pending_semantics_invalidations()
 }
 
-impl crate::AppContext {
-    /// Whether a semantics invalidation waits, as
-    /// [`has_pending_semantics_invalidations`] says in the current context.
-    pub fn has_pending_semantics_invalidations(&self) -> bool {
-        self.semantics_dispatch.has_pending()
-    }
-}
-
 /// Services every pending semantics invalidation.
 ///
 /// The host calls this once per frame with the applier available, and bubbles
