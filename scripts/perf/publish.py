@@ -5,7 +5,7 @@ The run goes under `runs/`. `index.json` gains one entry per run, holding
 each scenario's medians and verdicts for each start (an app's first start
 after its install, and its second), so the dashboard draws its trends from
 the index and opens a run's file only for its legs. A run that was skipped
-publishes nothing.
+publishes nothing; a run that measured no launch publishes nothing and fails.
 Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
        publish.py --published KIND DEVICE COMMIT   exits 0 when such a run is in
                                                   the index, 1 when not
@@ -175,6 +175,10 @@ def main():
     if run.get('skipped'):
         print('nothing to publish:', run['skipped'])
         return
+    # Every launch failed: the phone's browser run of 2026-10-27, after a
+    # restart of the adb server took the page server's port from the phone.
+    if not any(scenario['legs'] for scenario in run['scenarios']):
+        raise SystemExit(f"nothing to publish: the {run['kind']} run measured no launch")
     stamp = run['started_at'][:10]
     device = run['device']['ro.product.model'].replace(' ', '-')
     file = f"runs/{stamp}-{run['kind']}-{(run.get('main') or 'manual')[:9]}-{device}.json"
