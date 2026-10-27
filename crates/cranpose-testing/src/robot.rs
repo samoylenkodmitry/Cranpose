@@ -127,7 +127,8 @@ where
     /// Pump the shell until its animations and frame callbacks have finished,
     /// then until it stops asking to be redrawn: the screen once its motion
     /// has settled. [`wait_for_idle`](Self::wait_for_idle) returns while an
-    /// animation that only moves pixels still runs.
+    /// animation that only moves pixels still runs. Motion that a frame of
+    /// that redraw starts, as a focus move's scroll does, is waited for too.
     ///
     /// # Panics
     ///
@@ -135,13 +136,19 @@ where
     /// infinite animation does.
     pub fn wait_for_motion(&mut self) {
         for _ in 0..HEADLESS_MOTION_FRAME_LIMIT {
-            if !self.shell.has_active_animations() && !self.shell.has_transient_frame_callbacks() {
+            if !self.has_motion() {
                 self.wait_for_idle();
-                return;
+                if !self.has_motion() {
+                    return;
+                }
             }
             self.advance_time(FRAME_NANOS);
         }
         panic!("wait_for_motion: animations still run after {HEADLESS_MOTION_FRAME_LIMIT} frames");
+    }
+
+    fn has_motion(&self) -> bool {
+        self.shell.has_active_animations() || self.shell.has_transient_frame_callbacks()
     }
 
     /// Perform a click at the given coordinates.

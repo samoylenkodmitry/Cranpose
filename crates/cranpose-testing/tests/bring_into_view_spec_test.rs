@@ -178,9 +178,10 @@ fn a_provided_spec_puts_the_focused_item_where_it_says() {
     );
 }
 
-#[test]
-fn a_pager_on_a_tv_turns_to_the_page_focus_moves_to() {
-    let mut robot = screen(UiModeType::Television, None, || {
+// Four 400-wide pages of two 200-wide targets each, on a device of
+// `ui_mode_type`.
+fn pager(ui_mode_type: UiModeType) -> RobotTestRule<TestRenderer> {
+    screen(ui_mode_type, None, || {
         HorizontalPager(
             Modifier::empty().size(Size::new(400.0, 400.0)),
             rememberPagerState(0),
@@ -201,10 +202,27 @@ fn a_pager_on_a_tv_turns_to_the_page_focus_moves_to() {
                 });
             },
         );
-    });
-    assert_eq!(
-        press_then_start_of(&mut robot, Key::DirectionRight, 3, 2),
-        0.0,
-        "the pager rests its page at the start, not at the pivot"
-    );
+    })
+}
+
+#[test]
+fn a_pager_turns_to_the_page_focus_moves_to() {
+    for ui_mode_type in [UiModeType::Normal, UiModeType::Television] {
+        let mut robot = pager(ui_mode_type);
+        assert_eq!(
+            press_then_start_of(&mut robot, Key::DirectionRight, 2, 1),
+            200.0,
+            "{ui_mode_type:?}: a target the page shows whole keeps the page"
+        );
+        assert_eq!(
+            press_then_start_of(&mut robot, Key::DirectionRight, 1, 2),
+            0.0,
+            "{ui_mode_type:?}: Right onto the next page's first half turns the page"
+        );
+        assert_eq!(
+            press_then_start_of(&mut robot, Key::DirectionLeft, 1, 1),
+            200.0,
+            "{ui_mode_type:?}: Left onto the page before turns back to it"
+        );
+    }
 }
