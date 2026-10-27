@@ -54,7 +54,32 @@ impl Composer {
         resolved
     }
 
+    // A derivation's callback derives its value again from the derived
+    // state it holds and reads no slot: it runs without its group, with its
+    // scope current for the states it reads to subscribe.
+    fn rerun_derivation(&self, scope: &RecomposeScope) {
+        self.scope_stack().push(scope.clone());
+        let saved_locals = std::mem::replace(&mut *self.local_stack(), scope.local_stack());
+        scope.run_recompose(self);
+        *self.local_stack() = saved_locals;
+        self.scope_stack().pop();
+        scope.mark_recomposed();
+    }
+
     pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {
+        if !scope.is_effectively_active() {
+            scope.defer_until_reactivated();
+        } else if !scope.is_invalid() {
+            scope.mark_recomposed();
+        } else if scope.is_derivation() {
+            self.rerun_derivation(scope);
+        } else {
+            self.recompose_content(scope);
+        }
+    }
+
+    // Runs the body of an invalid scope again in its group.
+    fn recompose_content(&self, scope: &RecomposeScope) {
         struct RecomposeGuard<'a> {
             composer: &'a Composer,
             scope: &'a RecomposeScope,
@@ -82,15 +107,6 @@ impl Composer {
             }
         }
 
-        if !scope.is_effectively_active() {
-            scope.defer_until_reactivated();
-            return;
-        }
-
-        if !scope.is_invalid() {
-            scope.mark_recomposed();
-            return;
-        }
         if let Some(first_root) = self.begin_scope_group(scope) {
             let parent_hint = scope.parent_hint();
             let previous_cursor = self.resolve_recompose_child_cursor();

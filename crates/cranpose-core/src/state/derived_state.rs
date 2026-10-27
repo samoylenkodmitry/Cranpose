@@ -55,8 +55,18 @@ impl<T: Clone + PartialEq + 'static> DerivedState<T> {
     }
 
     pub(crate) fn recompute(&self) {
-        let value = self.core.compute()();
-        self.core.state.set_value(value);
+        self.core.derive();
+    }
+
+    /// The recompose callback of the derivation's scope, which derives the
+    /// value again from this state without reading a slot.
+    pub(crate) fn rerun(&self) -> impl FnMut(&crate::Composer) + use<T> {
+        let core = Rc::downgrade(&self.core);
+        move |_| {
+            if let Some(core) = core.upgrade() {
+                core.derive();
+            }
+        }
     }
 
     /// The view readers read the value through.
@@ -68,6 +78,11 @@ impl<T: Clone + PartialEq + 'static> DerivedState<T> {
 impl<T: Clone + PartialEq + 'static> DerivedCore<T> {
     fn compute(&self) -> Rc<dyn Fn() -> T> {
         Rc::clone(&self.compute.borrow())
+    }
+
+    fn derive(&self) {
+        let value = self.compute()();
+        self.state.set_value(value);
     }
 }
 

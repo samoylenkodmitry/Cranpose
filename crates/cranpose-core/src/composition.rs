@@ -494,10 +494,10 @@ impl<A: Applier + 'static> Composition<A> {
             let Some(scopes) = runtime_handle.take_invalidated_scopes() else {
                 break;
             };
-            if scopes.is_empty() {
+            let Some(scopes) = self.rerun_derivations(&runtime_handle, scopes) else {
                 continue;
-            }
-            did_recompose |= recomposes_content(&scopes);
+            };
+            did_recompose = true;
             let runtime_clone = runtime_handle.clone();
             let scope_groups = self.group_scopes_by_host(scopes);
             let mut host_group_index = 0usize;
@@ -600,6 +600,46 @@ impl<A: Applier + 'static> Composition<A> {
         self.process_invalid_scopes_until_root_request()
     }
 
+    // Derives the values of the derivations among `scopes` again and gives
+    // back the other scopes, or none when none is left. A derivation reads
+    // no slot: it needs a composer for the states it reads to subscribe it,
+    // and no pass over a slot table. A value that changed invalidates its
+    // readers, for the next batch.
+    fn rerun_derivations(
+        &mut self,
+        runtime: &RuntimeHandle,
+        mut scopes: Vec<RecomposeScope>,
+    ) -> Option<Vec<RecomposeScope>> {
+        if scopes.iter().any(RecomposeScope::is_derivation) {
+            self.rerun_derivations_of(runtime, &mut scopes);
+        }
+        if scopes.is_empty() {
+            runtime.recycle_scopes(scopes);
+            return None;
+        }
+        Some(scopes)
+    }
+
+    fn rerun_derivations_of(&mut self, runtime: &RuntimeHandle, scopes: &mut Vec<RecomposeScope>) {
+        let _teardown = runtime::enter_state_teardown_scope();
+        let host = self.slots_host();
+        let composer = Composer::for_pass(
+            self.parked_composer.take(),
+            Rc::clone(&self.composer_state),
+            Rc::clone(&host),
+            self.applier_host(),
+            runtime.clone(),
+            self.root,
+        );
+        composer.install(|composer| {
+            for scope in scopes.iter().filter(|scope| scope.is_derivation()) {
+                composer.recompose_group(scope);
+            }
+        });
+        self.park_composer(&host, composer);
+        scopes.retain(|scope| !scope.is_derivation());
+    }
+
     /// Keeps the composer of a pass over the root slots for the next pass.
     fn park_composer(&mut self, host: &Rc<SlotsHost>, composer: Composer) {
         if Rc::ptr_eq(host, &self.slots) {
@@ -635,13 +675,6 @@ impl<A: Applier + 'static> Composition<A> {
         }
         Ok(())
     }
-}
-
-/// Whether running these scopes can change what the composition shows: a pass
-/// that only recomputes derived states changes nothing unless a derived value
-/// moved, and then its readers run in a pass of their own.
-fn recomposes_content(scopes: &[RecomposeScope]) -> bool {
-    scopes.iter().any(|scope| !scope.is_derivation())
 }
 
 /// Gives a pass's scope lists back to the runtime, for the next pass to

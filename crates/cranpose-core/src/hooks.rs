@@ -336,20 +336,16 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
     composer_context::with_composer(|composer| {
         composer.with_group(source, |composer| {
             let derivation = composer.current_recompose_scope();
-            if let Some(scope) = &derivation {
+            if let Some(scope) = &derivation
+                && !scope.is_derivation()
+            {
                 scope.mark_derivation();
+                // A read subscribes the innermost scope with a callback: the
+                // first derivation's reads would subscribe the reader.
+                composer.set_recompose_callback(|_| {});
             }
-            composer.set_recompose_callback(move |composer| {
-                composer
-                    .remember_at(source, || None::<DerivedState<T>>)
-                    .update(|slot| {
-                        if let Some(derived) = slot {
-                            derived.recompute();
-                        }
-                    });
-            });
             let runtime = composer.runtime_handle();
-            composer
+            let (state, rerun) = composer
                 .remember_at(source, || None::<DerivedState<T>>)
                 .update(|slot| {
                     let derived = match slot.take() {
@@ -361,9 +357,12 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
                         None => DerivedState::new(runtime, compute, derivation.as_ref()),
                     };
                     let state = derived.state();
+                    let rerun = derived.rerun();
                     *slot = Some(derived);
-                    state
-                })
+                    (state, rerun)
+                });
+            composer.set_recompose_callback(rerun);
+            state
         })
     })
 }
