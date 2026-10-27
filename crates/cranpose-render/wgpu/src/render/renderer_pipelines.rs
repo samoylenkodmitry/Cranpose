@@ -7,13 +7,19 @@ use std::{cell::Cell, sync::Arc};
 use cranpose_ui_graphics::{BlendMode, ImagePixelFormat};
 
 use super::{
-    CompileLane, CompilerSend, FixedPipeline, GlyphDrawCmd, GlyphQuads, ImageBindGroups,
-    ImageDrawCmd, ImageVariant, PassDepth, Pending, ShapePipelines, SharedShader,
-    create_glyph_atlas_pipeline, create_image_pipeline,
+    CompileLane, CompilerSend, FixedPipeline, GlyphDrawCmd, GlyphInstances, GlyphQuads,
+    ImageBindGroups, ImageDrawCmd, ImageVariant, PassDepth, PassFrame, Pending, ShapePipelines,
+    SharedShader, TurnedGlyph, ViewportUniforms, create_glyph_atlas_pipeline,
+    create_image_pipeline,
 };
 use crate::{
-    gpu_stats::FrameStats, pipeline_compiler::PipelineCompiler,
-    rrect_shadow::create_rrect_shadow_pipeline, run_store::RunDrawCall,
+    draw_pass::TrackedPass,
+    gpu_stats::FrameStats,
+    instant_triangles::{InstantBuffers, InstantDraw, InstantStandIn, InstantTriangles},
+    pipeline_compiler::PipelineCompiler,
+    rrect_shadow::create_rrect_shadow_pipeline,
+    run_store::RunDrawCall,
+    shaders,
     shape_pipelines::PipelineDemand,
 };
 
@@ -52,6 +58,41 @@ pub(super) const RRECT_SHADOW_PIPELINES: [&str; 2] = ["shadow/rrect", "shadow/rr
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const MESH_FALLBACK_PIPELINES: [&str; 2] = ["mesh/fallback", "mesh/fallback/depth"];
+
+// The shaders of images, glyphs and round rect shadows, whose pipelines
+// bind the viewport uniform and, but for shadows, a texture: `layouts`.
+pub(super) fn overlay_shaders(
+    device: &wgpu::Device,
+    backend: wgpu::Backend,
+    (uniform, texture): (&wgpu::BindGroupLayout, &wgpu::BindGroupLayout),
+) -> [SharedShader; 3] {
+    let textured = [Some(uniform), Some(texture)];
+    [
+        SharedShader::new(device, backend, "Image Shader", shaders::IMAGE, &textured),
+        SharedShader::new(
+            device,
+            backend,
+            "Glyph Atlas Shader",
+            shaders::GLYPH_ATLAS,
+            &textured,
+        ),
+        SharedShader::new(
+            device,
+            backend,
+            "Round Rect Shadow Shader",
+            shaders::RRECT_SHADOW,
+            &[Some(uniform)],
+        ),
+    ]
+}
+
+// What a fixed draw takes: its own pipeline, the instant one while its own
+// compiles, or nothing, when it is left out until its own lands.
+pub(crate) enum FixedDraw<'a> {
+    Own(&'a wgpu::RenderPipeline),
+    Instant(InstantStandIn<'a>),
+    LeftOut,
+}
 
 pub(crate) struct RendererPipelines {
     // The device, target format and backend every pipeline here builds
@@ -95,6 +136,10 @@ pub(crate) struct RendererPipelines {
     /// build their shape pipelines, or stand one in.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) mesh_pipelines: [FixedPipeline; 2],
+    // What fixed draws take while their own pipelines compile (see
+    // `crate::instant_triangles`); the web builds them where it draws.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) instant: crate::instant_triangles::InstantPipelines,
     pub(crate) image_shader: SharedShader,
     pub(crate) glyph_atlas_shader: SharedShader,
     pub(crate) rrect_shadow_shader: SharedShader,
@@ -325,19 +370,65 @@ impl RendererPipelines {
         }
     }
 
-    /// The image pipeline for a draw, or `None` while it compiles: the draw
-    /// is left out, and the frame after the pipeline lands draws it.
+    /// The image pipeline for a draw; while it compiles, the instant one for
+    /// a source-over draw, else nothing: the draw is left out.
     pub(crate) fn image_pipeline(
         &self,
         stats: &FrameStats,
         blend_mode: BlendMode,
         variant: ImageVariant,
-    ) -> Option<&wgpu::RenderPipeline> {
-        self.ready_or_left_out(
-            stats,
-            self.image_pipeline_resource(blend_mode, variant),
-            || self.image_pipeline_job(blend_mode, variant),
-        )
+    ) -> FixedDraw<'_> {
+        let own = self.image_pipeline_resource(blend_mode, variant);
+        let job = || self.image_pipeline_job(blend_mode, variant);
+        if let Some(pipeline) =
+            own.when_ready(&self.recorder, &self.compiler, self.adapter_backend, job)
+        {
+            return FixedDraw::Own(pipeline);
+        }
+        match self.instant_stand_in(variant.depth) {
+            Some(stand_in) if blend_mode == BlendMode::SrcOver => {
+                self.note_instant(stats);
+                FixedDraw::Instant(stand_in)
+            }
+            _ => {
+                self.note_placeholder(stats);
+                FixedDraw::LeftOut
+            }
+        }
+    }
+
+    // The instant pipeline for a pass with a depth buffer or not, once it is
+    // built; none on the web, which builds every pipeline where it draws.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(unused_variables, reason = "no stand-ins")
+    )]
+    pub(crate) fn instant_stand_in(&self, depth: PassDepth) -> Option<InstantStandIn<'_>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.instant.stand_in(depth);
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+
+    // Whether a pass with a depth buffer or not draws its shadows through
+    // the instant pipeline: it is built, and their own is neither built nor
+    // in the driver's cache, so it is queued on the demand lane.
+    pub(crate) fn shadows_stand_in(&self, depth: PassDepth) -> bool {
+        self.instant_stand_in(depth).is_some()
+            && !self.rrect_shadow_pipeline[depth.index()].ready_or_queue(
+                &self.compiler,
+                self.adapter_backend,
+                || self.rrect_shadow_pipeline_job(depth),
+            )
+    }
+
+    // Whether a pass with a depth buffer or not draws its turned glyphs with
+    // their own pipeline, as `shadows_ready` tells for shadows.
+    pub(crate) fn turned_glyphs_ready(&self, depth: PassDepth) -> bool {
+        self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Turned)
+            .ready_or_queue(&self.compiler, self.adapter_backend, || {
+                self.glyph_atlas_pipeline_job(depth, GlyphQuads::Turned)
+            })
     }
 
     /// `pipeline` for a draw, or `None` while it compiles, noting the draw
@@ -398,21 +489,38 @@ impl RendererPipelines {
         ready
     }
 
-    /// Queues, ahead of every other pipeline, the fallback pipelines shape
-    /// draws take while their own compile.
+    /// Queues, ahead of every other pipeline, what draws take while their
+    /// own compile: see [`crate::instant_triangles`].
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn warm_mesh_fallback(&self) {
-        for (depth, pipeline) in PassDepth::BOTH.into_iter().zip(&self.mesh_pipelines) {
-            pipeline.queue(
-                &self.compiler,
-                CompileLane::Demanded,
-                self.adapter_backend,
+    pub(super) fn warm_instant_tier(&self) {
+        let (compiler, lane, backend) =
+            (&self.compiler, CompileLane::Demanded, self.adapter_backend);
+        let (device, format) = (&self.device, self.composition_format);
+        for depth in PassDepth::BOTH {
+            self.mesh_pipelines[depth.index()].queue(
+                compiler,
+                lane,
+                backend,
                 crate::mesh_fallback::mesh_pipeline_job(
-                    &self.device,
+                    device,
                     self.pipeline_cache.clone(),
-                    self.composition_format,
+                    format,
                     depth,
                 ),
+            );
+            self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Plain)
+                .queue(
+                    compiler,
+                    lane,
+                    backend,
+                    self.glyph_atlas_pipeline_job(depth, GlyphQuads::Plain),
+                );
+            self.instant.pipeline(depth).queue(
+                compiler,
+                lane,
+                backend,
+                self.instant
+                    .job(device, self.pipeline_cache.clone(), format, depth),
             );
         }
     }
@@ -487,6 +595,54 @@ impl RendererPipelines {
         stats
             .placeholder_draws
             .set(stats.placeholder_draws.get() + 1);
+        self.await_landing();
+    }
+
+    // Lays a pass's turned glyphs as instant triangles while their pipeline
+    // for `depth` compiles and the instant one is built.
+    pub(crate) fn lay_turned_glyphs(
+        &self,
+        depth: PassDepth,
+        glyphs: &GlyphInstances,
+        instant: &mut InstantTriangles,
+    ) {
+        if !glyphs.turned.is_empty()
+            && self.instant_stand_in(depth).is_some()
+            && !self.turned_glyphs_ready(depth)
+        {
+            instant.lay_turned_glyphs(glyphs.turned.iter().map(TurnedGlyph::instant_corners));
+        }
+    }
+
+    // Draws `draw`'s instant triangles of `buffers` in a pass `frame`, under
+    // the viewport slot `uniforms` holds for it.
+    pub(crate) fn draw_instant(
+        &self,
+        pass: &mut TrackedPass<'_, '_>,
+        (frame, draw): (PassFrame, &InstantDraw<'_>),
+        buffers: Option<&InstantBuffers>,
+        (uniforms, stats): (&ViewportUniforms, &FrameStats),
+    ) -> Result<(), String> {
+        if draw.indices.is_empty() {
+            return Ok(());
+        }
+        let stand_in = self
+            .instant_stand_in(frame.depth)
+            .ok_or_else(|| "instant draw without the instant pipeline".to_string())?;
+        let buffers = buffers.ok_or_else(|| "instant draw without its triangles".to_string())?;
+        let (x, y, width, height) = frame.scissor(draw.scissor);
+        pass.set_scissor_rect(x, y, width, height);
+        uniforms.bind(pass, draw.uniform_slot)?;
+        let texture = (draw.texture, draw.texels);
+        stand_in.draw(pass, buffers, texture, draw.indices.clone());
+        self.note_instant(stats);
+        Ok(())
+    }
+
+    // Notes a draw that took the instant pipeline while its own compiles,
+    // and waits for the next pipeline to land.
+    pub(crate) fn note_instant(&self, stats: &FrameStats) {
+        stats.instant_draws.set(stats.instant_draws.get() + 1);
         self.await_landing();
     }
 

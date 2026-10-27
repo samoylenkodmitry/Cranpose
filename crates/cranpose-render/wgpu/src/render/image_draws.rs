@@ -12,6 +12,7 @@ use crate::{
         SegmentTransform, axis_aligned_quad_rect, canonicalized_scaled_quad, scaled_quad,
         snap_delta_for_anchor, translate_quad,
     },
+    instant_triangles::InstantTexels,
     rect_to_quad,
     scene::ImageDraw,
     shared_shader::SharedShader,
@@ -20,10 +21,10 @@ use crate::{
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub(crate) struct Vertex {
-    position: [f32; 2],
-    color: [f32; 4],
-    uv: [f32; 2],
-    uv_bounds: [f32; 4],
+    pub(crate) position: [f32; 2],
+    pub(crate) color: [f32; 4],
+    pub(crate) uv: [f32; 2],
+    pub(crate) uv_bounds: [f32; 4],
 }
 
 impl Vertex {
@@ -34,7 +35,7 @@ impl Vertex {
         3 => Float32x4,
     ];
 
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -287,6 +288,17 @@ pub(crate) struct ImageVariant {
     pub(super) depth: PassDepth,
     pub(super) alpha_mask: bool,
     pub(super) rounded: bool,
+}
+
+impl ImageVariant {
+    // How the instant pipeline reads the image while this variant compiles.
+    pub(super) fn texels(self) -> InstantTexels {
+        if self.alpha_mask {
+            InstantTexels::Coverage
+        } else {
+            InstantTexels::Straight
+        }
+    }
 }
 
 pub(crate) struct ImageDrawCmd {

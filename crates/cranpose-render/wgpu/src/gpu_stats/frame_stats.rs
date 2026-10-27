@@ -55,6 +55,7 @@ pub(crate) struct FrameStats {
     pub shape_vertices: Cell<u64>,
     pub shape_passes: Cell<u32>,
     pub shape_pipeline_fallback_draws: Cell<u32>,
+    pub instant_draws: Cell<u32>,
     pub shape_specialized_draws: Cell<u32>,
     pub shape_interior_draws: Cell<u32>,
     pub depth_passes: Cell<u32>,
@@ -93,6 +94,7 @@ impl FrameStats {
     pub(crate) fn drew_stand_in(&self) -> bool {
         self.placeholder_draws.get() != 0
             || self.shape_pipeline_fallback_draws.get() != 0
+            || self.instant_draws.get() != 0
             || self.shader_pipeline_fallback_draws.get() != 0
     }
 
@@ -453,6 +455,7 @@ impl FrameStats {
             shape_vertices: self.shape_vertices.get(),
             shape_passes: self.shape_passes.get(),
             shape_pipeline_fallback_draws: self.shape_pipeline_fallback_draws.get(),
+            instant_draws: self.instant_draws.get(),
             shape_specialized_draws: self.shape_specialized_draws.get(),
             shape_interior_draws: self.shape_interior_draws.get(),
             depth_passes: self.depth_passes.get(),
@@ -531,6 +534,7 @@ impl FrameStats {
         self.shape_vertices.set(0);
         self.shape_passes.set(0);
         self.shape_pipeline_fallback_draws.set(0);
+        self.instant_draws.set(0);
         self.shape_specialized_draws.set(0);
         self.shape_interior_draws.set(0);
         self.depth_passes.set(0);

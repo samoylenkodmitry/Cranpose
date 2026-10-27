@@ -10,17 +10,18 @@ use crate::{
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
+    instant_triangles::{InstantDraw, InstantStandIn, InstantTriangles, LayerTexels},
     lazy_resource::Pending,
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
         ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
-        StoreRunBatch, TargetRect, ViewportUniformParams, scissor_rect_for_rect,
-        segment_scene_rect, supported_blend_mode,
+        StoreRunBatch, TargetRect, TurnedGlyphs, ViewportUniformParams, scissor_rect_for_rect,
+        supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
-    scene::{CompositorScene, DrawOp, DrawOpKind, RRectShadowDraw, RunDraw, TextDraw},
+    scene::{CompositorScene, DrawOp, RRectShadowDraw, RunDraw, TextDraw},
     scissor::{intersect_scissors, scissor_in_target},
     shape_pipelines::PipelineDemand,
 };
@@ -30,9 +31,15 @@ use held_draws::{HeldCmds, HeldDraws};
 mod tracked_pass;
 pub(crate) use tracked_pass::TrackedPass;
 mod op_items;
-use op_items::{OpItems, Texts, merge_items};
+pub(crate) use op_items::segment_draws_anything;
+use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
+mod interiors_first;
+mod target_space;
+pub(crate) use interiors_first::lays_interiors_first;
+use interiors_first::takes_depth;
+use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
 /// A render target and its size in pixels.
 #[derive(Clone, Copy)]
@@ -227,6 +234,7 @@ enum Batch<'a> {
     Composite(PreparedCompositeDraw<'a>),
     Shader(PreparedShaderDraw<'a>),
     Projective(PreparedProjectiveComposite<'a>),
+    Instant(InstantDraw<'a>),
 }
 
 /// The scissor a shape batch's `stage` draws under: the batch's, and for its
@@ -241,30 +249,6 @@ fn stage_scissor(
         (RunStage::Paint, Some(clip)) => crate::render::intersect_target_rects(scissor, clip),
         _ => Some(scissor),
     }
-}
-
-fn dest_in_target(dest: (f32, f32, f32, f32), segment_offset: [f32; 2]) -> (f32, f32, f32, f32) {
-    (
-        dest.0 - segment_offset[0],
-        dest.1 - segment_offset[1],
-        dest.2,
-        dest.3,
-    )
-}
-
-fn mask_in_target(
-    mask: Option<RoundedCompositeMask>,
-    segment_offset: [f32; 2],
-) -> Option<RoundedCompositeMask> {
-    mask.map(|mask| RoundedCompositeMask {
-        rect: [
-            mask.rect[0] - segment_offset[0],
-            mask.rect[1] - segment_offset[1],
-            mask.rect[2],
-            mask.rect[3],
-        ],
-        radii: mask.radii,
-    })
 }
 
 fn composite_visible(
@@ -330,6 +314,7 @@ impl GpuRenderer {
                 .then(|| self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)),
             turned_glyphs: (!scratch.glyph_instances.turned.is_empty())
                 .then(|| self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned)),
+            instant: scratch.instant.upload(recorder, &self.device),
         }
     }
 
@@ -368,6 +353,8 @@ impl GpuRenderer {
             self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
         }
         self.pipelines.ensure_run_pipelines(&mut prep.pipelines);
+        let laid = (&scratch.glyph_instances, &mut scratch.instant);
+        self.pipelines.lay_turned_glyphs(depth, laid.0, laid.1);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
         scratch.meshes = prep.meshes;
@@ -447,6 +434,7 @@ impl GpuRenderer {
         scratch.glyph_instances.clear();
         scratch.glyph_cmds.clear();
         scratch.shadow_instances.clear();
+        scratch.instant.clear();
         scratch
     }
 
@@ -497,7 +485,10 @@ impl GpuRenderer {
                     depth_lane,
                     awaited,
                 ),
-                Batch::StoreRun { .. } | Batch::Arena { .. } | Batch::Shader(_) => {}
+                Batch::StoreRun { .. }
+                | Batch::Arena { .. }
+                | Batch::Shader(_)
+                | Batch::Instant(_) => {}
             }
         }
     }
@@ -532,7 +523,6 @@ impl GpuRenderer {
         cmds: PassCmds<'_>,
         buffers: &PassBuffers,
     ) -> Result<(), String> {
-        let target_size = frame.size;
         if frame.depth.is_on() {
             for batch in batches.iter().rev() {
                 self.draw_shape_batch(pass, batch, cmds.arena, None, frame, RunStage::Interiors)?;
@@ -568,9 +558,10 @@ impl GpuRenderer {
                     uniform_slot,
                     scissor,
                 } => {
+                    let stand_in = self.pipelines.instant_stand_in(frame.depth);
                     self.draw_glyph_cmds(
                         pass,
-                        (buffers.glyphs.as_ref(), buffers.turned_glyphs.as_ref()),
+                        (buffers.glyphs.as_ref(), buffers.turned_glyphs(stand_in)),
                         *uniform_slot,
                         &cmds.glyphs[range.clone()],
                         *scissor,
@@ -595,28 +586,50 @@ impl GpuRenderer {
                         frame,
                     )?;
                 }
-                Batch::Composite(prepared) => {
-                    self.effect_renderer.draw_prepared_composite(
-                        pass.untracked(),
-                        (&self.device, target_size),
-                        prepared,
-                    );
-                }
-                Batch::Shader(prepared) => {
-                    self.effect_renderer.draw_prepared_shader_src_over(
-                        pass.untracked(),
-                        target_size,
-                        prepared,
-                    );
-                }
-                Batch::Projective(prepared) => {
-                    self.effect_renderer.draw_prepared_projective_composite(
-                        pass.untracked(),
-                        (&self.device, target_size),
-                        prepared,
-                    );
-                }
+                Batch::Composite(_)
+                | Batch::Shader(_)
+                | Batch::Projective(_)
+                | Batch::Instant(_) => self.draw_layer(pass, frame, batch, buffers)?,
             }
+        }
+        Ok(())
+    }
+
+    // Draws a layer's batch: its composite, through a runtime shader or
+    // tilted, or the instant triangles standing in for it; other batches
+    // draw nothing here.
+    fn draw_layer(
+        &mut self,
+        pass: &mut TrackedPass<'_, '_>,
+        frame: PassFrame,
+        batch: &Batch<'_>,
+        buffers: &PassBuffers,
+    ) -> Result<(), String> {
+        let target_size = frame.size;
+        match batch {
+            Batch::Composite(prepared) => self.effect_renderer.draw_prepared_composite(
+                pass.untracked(),
+                (&self.device, target_size),
+                prepared,
+            ),
+            Batch::Shader(prepared) => self.effect_renderer.draw_prepared_shader_src_over(
+                pass.untracked(),
+                target_size,
+                prepared,
+            ),
+            Batch::Projective(prepared) => self.effect_renderer.draw_prepared_projective_composite(
+                pass.untracked(),
+                (&self.device, target_size),
+                prepared,
+            ),
+            Batch::Instant(draw) => {
+                let context = (&self.viewport_uniforms, &self.frame_stats);
+                let laid = buffers.instant.as_ref();
+                return self
+                    .pipelines
+                    .draw_instant(pass, (frame, draw), laid, context);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -726,108 +739,6 @@ fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
         >= MIXED_TURN_CHANGES
 }
 
-/// Whether passes on `backend` may lay opaque interiors down first. On GL
-/// and in a browser's WebGPU the depth buffer is memory of its own and the
-/// pre-pass's draws each cross into JavaScript: in Chrome on a Mate 20 X the
-/// gauntlet at tier 8 held 11 MB more and spent 1-2% more CPU a frame with
-/// it, for 0.6% fewer GPU cycles.
-pub(crate) fn lays_interiors_first(backend: wgpu::Backend) -> bool {
-    !matches!(backend, wgpu::Backend::Gl | wgpu::Backend::BrowserWebGpu)
-}
-
-/// Whether a pass of `segments` lays its opaque interiors down in a depth
-/// pre-pass: one with an opaque fill worth laying down, unless it composites
-/// through a runtime shader, whose pipelines draw into passes without a
-/// depth buffer alone. A blit takes its place in the pass's order as glyphs
-/// and images do.
-fn takes_depth(segments: &[PassSegment<'_>]) -> bool {
-    !cranpose_core::DIAGNOSTICS.no_interiors_first.equals("1")
-        && segments.iter().all(|segment| {
-            segment
-                .composites
-                .iter()
-                .all(|composite| !matches!(composite.kind, ResolvedCompositeKind::Shader { .. }))
-        })
-        && segments.iter().any(segment_has_occluders)
-}
-
-/// Whether a run `segment` draws holds an opaque fill with an interior worth
-/// laying down ahead of the paint.
-fn segment_has_occluders(segment: &PassSegment<'_>) -> bool {
-    segment
-        .ops
-        .iter()
-        .enumerate()
-        .any(|(op_index, op)| match op.kind {
-            DrawOpKind::Run(index) => {
-                let window = (op_index == 0)
-                    .then(|| segment.first_run_window.clone())
-                    .flatten()
-                    .unwrap_or(0..u32::MAX);
-                let run = &segment.scene.runs[index];
-                let shapes = &run.tables().shapes;
-                let mut first = 0;
-                run.segment_records().any(|records| {
-                    let start = first;
-                    first += records.count;
-                    let mut drawn = start.max(window.start)..first.min(window.end);
-                    if !records.occluders || drawn.is_empty() {
-                        return false;
-                    }
-                    drawn == (start..first)
-                        || drawn.any(|ordinal| {
-                            shapes.occludes((records.start + ordinal - start) as usize)
-                        })
-                })
-            }
-            _ => false,
-        })
-}
-
-/// The logical rect a segment's draws are judged against: its scissor
-/// within the target, or the whole target, at the segment's offset, mapped
-/// back through the segment's transform.
-fn segment_viewport_rect(target: PassTarget<'_>, segment: &PassSegment<'_>) -> Rect {
-    let (x, y, width, height) = segment
-        .scissor
-        .unwrap_or((0, 0, target.width, target.height));
-    segment_scene_rect(
-        segment.transform,
-        Rect {
-            x: segment.offset[0] + x as f32,
-            y: segment.offset[1] + y as f32,
-            width: width as f32,
-            height: height as f32,
-        },
-        segment.scale,
-    )
-}
-
-/// Whether drawing `segment` into `target` touches any pixel: some op or
-/// composite of it reaches into its scissor, by the same test the pass
-/// applies when it draws.
-pub(crate) fn segment_draws_anything(target: PassTarget<'_>, segment: &PassSegment<'_>) -> bool {
-    let viewport_rect = segment_viewport_rect(target, segment);
-    merge_items(
-        segment,
-        viewport_rect,
-        (target.width, target.height),
-        Texts::Drawn,
-    )
-    .next()
-    .is_some()
-}
-
-/// Re-bases an inverse (target pixel -> source pixel) matrix onto a target
-/// whose origin is `offset` pixels into the space the matrix was built for.
-fn translate_inverse(inverse: [[f32; 3]; 3], offset: [f32; 2]) -> [[f32; 3]; 3] {
-    let mut shifted = inverse;
-    for row in &mut shifted {
-        row[2] += row[0] * offset[0] + row[1] * offset[1];
-    }
-    shifted
-}
-
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
 /// commands, kept on the renderer between frames so they never reallocate.
 /// The quads a pass drew from its scratch, uploaded for its draws: fallback
@@ -839,9 +750,22 @@ struct PassBuffers {
     shadows: Option<crate::frame_graph::BufferUpload>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
     turned_glyphs: Option<crate::frame_graph::BufferUpload>,
+    instant: Option<crate::instant_triangles::InstantBuffers>,
 }
 
 impl PassBuffers {
+    // Where the pass draws its turned glyphs from: see `TurnedGlyphs`.
+    fn turned_glyphs<'a>(&'a self, stand_in: Option<InstantStandIn<'a>>) -> TurnedGlyphs<'a> {
+        let laid = self
+            .instant
+            .as_ref()
+            .and_then(|laid| laid.glyphs(stand_in?));
+        laid.map_or(
+            TurnedGlyphs::Own(self.turned_glyphs.as_ref()),
+            TurnedGlyphs::Instant,
+        )
+    }
+
     /// The pass's fallback triangles, with the index range of each run draw
     /// of `meshes` that takes some.
     fn run_meshes<'a>(
@@ -870,6 +794,7 @@ pub(crate) struct PassScratch {
     pipelines: PipelineDemand,
     held: HeldDraws,
     pub(crate) meshes: crate::mesh_fallback::PassMeshes,
+    instant: InstantTriangles,
 }
 
 /// Where the image draws an item appends start in a pass's scratch.
@@ -1226,7 +1151,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                 }
                 Item::Composite(composite) => {
                     self.flush(renderer, run.binding);
-                    self.composite_item(renderer, composite, run)?;
+                    self.composite_item(renderer, composite, run, scratch)?;
                 }
             }
             items.next();
@@ -1404,12 +1329,29 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         place
     }
 
-    /// A composite's depth in a pass with a depth buffer: next in its order,
+    /// A composite's place in a pass with a depth buffer: next in its order,
     /// so later opaque interiors hide it and earlier ones do not.
-    fn composite_depth(&mut self) -> Option<f32> {
-        self.depth
-            .is_on()
-            .then(|| crate::render::pass_order_depth(self.next_place()))
+    fn composite_place(&mut self) -> Option<u32> {
+        self.depth.is_on().then(|| self.next_place())
+    }
+
+    // Pushes a layer's composite or, while its pipeline compiles and the
+    // instant one is built, the instant triangles `lay` lays with its
+    // surface `stand_in`, drawn at `place` within `scissor`.
+    fn push_layer(
+        &mut self,
+        (renderer, run): (&mut GpuRenderer, &SegmentRun<'s, '_>),
+        (composite, stand_in): (Batch<'s>, Option<&'s wgpu::BindGroup>),
+        (scissor, place): (Option<TargetRect>, Option<u32>),
+        lay: impl FnOnce() -> std::ops::Range<u32>,
+    ) {
+        let instant = renderer.pipelines.instant_stand_in(self.depth);
+        let Some(texture) = stand_in.filter(|_| instant.is_some()) else {
+            return self.batches.push(composite);
+        };
+        let uniform_slot = self.placed_slot(renderer, run.binding, run.binding.bound, place);
+        let draw = InstantDraw::layer(texture, uniform_slot, lay(), scissor);
+        self.batches.push(Batch::Instant(draw));
     }
 
     /// The viewport a text draws its glyphs under: in a pass with a depth
@@ -1777,10 +1719,17 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             return;
         }
         let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, None);
+        let scissor = run.segment.scissor;
+        if renderer.pipelines.shadows_stand_in(self.depth) {
+            let parts = scratch.shadow_instances[start..end].iter();
+            let indices = scratch.instant.lay_shadows(parts.map(ShadowInstance::part));
+            let draw = InstantDraw::shadows(uniform_slot, indices, scissor);
+            return self.batches.push(Batch::Instant(draw));
+        }
         self.batches.push(Batch::Shadows {
             instances: start as u32..end as u32,
             uniform_slot,
-            scissor: run.segment.scissor,
+            scissor,
         });
     }
 
@@ -1845,6 +1794,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         renderer: &mut GpuRenderer,
         composite: &'s ResolvedComposite,
         run: &SegmentRun<'s, '_>,
+        scratch: &mut PassScratch,
     ) -> Result<(), String> {
         let offset = run.segment.offset;
         let own_scissor = composite
@@ -1857,6 +1807,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             return Ok(());
         };
         let dest = dest_in_target(composite.dest, offset);
+        let place = self.composite_place();
         match &composite.kind {
             ResolvedCompositeKind::Blit {
                 alpha,
@@ -1877,7 +1828,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     }),
                     source_viewport: *source_viewport,
                     sample_mode: *sample_mode,
-                    depth: self.composite_depth(),
+                    depth: place.map(crate::render::pass_order_depth),
                 };
                 let prepared = renderer.effect_renderer.prepare_composite_draw(
                     self.recorder,
@@ -1885,38 +1836,18 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     self.load_op,
                     &item,
                 );
-                self.batches.push(Batch::Composite(prepared));
+                let effects = &renderer.effect_renderer;
+                let stand_in = effects.composite_stand_in(&renderer.device, &prepared);
+                let layer = (Batch::Composite(prepared), stand_in);
+                self.push_layer((renderer, run), layer, (scissor, place), || {
+                    let texels = LayerTexels::new(&composite.source, *source_viewport);
+                    scratch
+                        .instant
+                        .lay_composite(composite.dest, texels, *alpha)
+                });
             }
-            ResolvedCompositeKind::Shader {
-                shader,
-                layer_pixel_rect,
-                source_region,
-                source_logical_size,
-                substrate_regions,
-                rounded_mask,
-                alpha,
-            } => {
-                let Some(placement) = QuadPlacement::in_target(dest, self.target_size()) else {
-                    return Ok(());
-                };
-                let item = ShaderCompositeBatchItem {
-                    source: composite.source.as_ref(),
-                    shader: shader.as_ref(),
-                    layer_pixel_rect: *layer_pixel_rect,
-                    source_region: *source_region,
-                    source_logical_size: *source_logical_size,
-                    substrate_regions: *substrate_regions,
-                    rounded_mask: mask_in_target(*rounded_mask, offset),
-                    alpha: *alpha,
-                    scissor,
-                    dest_viewport: dest,
-                    placement,
-                };
-                let prepared = renderer
-                    .effect_renderer
-                    .prepare_shader_draw(self.recorder, &renderer.device, &item)
-                    .ok_or_else(|| "shader composite preparation failed".to_string())?;
-                self.batches.push(Batch::Shader(prepared));
+            ResolvedCompositeKind::Shader { .. } => {
+                self.shader_item(renderer, composite, (dest, scissor, offset))?;
             }
             ResolvedCompositeKind::Projective {
                 dest,
@@ -1937,16 +1868,70 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     blend_mode: supported_blend_mode(*blend_mode),
                     sample_mode: *sample_mode,
                     scissor,
-                    depth: self.composite_depth(),
+                    depth: place.map(crate::render::pass_order_depth),
                 };
                 let prepared = renderer.effect_renderer.prepare_projective_composite_draw(
                     self.recorder,
                     &renderer.device,
                     &item,
                 );
-                self.batches.push(Batch::Projective(prepared));
+                let effects = &renderer.effect_renderer;
+                let stand_in = effects.projective_stand_in(&renderer.device, &prepared);
+                let layer = (Batch::Projective(prepared), stand_in);
+                self.push_layer((renderer, run), layer, (scissor, place), || {
+                    let strip = &dest.strip()[..dest.corners().len()];
+                    let texels = LayerTexels::new(&composite.source, *source_region);
+                    scratch
+                        .instant
+                        .lay_projective(strip, (*inverse, texels), *alpha)
+                });
             }
         }
+        Ok(())
+    }
+
+    // Prepares `composite`, drawn through its runtime shader, over `dest`
+    // within `scissor`, both in the target, which starts `offset` into the
+    // segment's device space.
+    fn shader_item(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        composite: &'s ResolvedComposite,
+        (dest, scissor, offset): ((f32, f32, f32, f32), Option<TargetRect>, [f32; 2]),
+    ) -> Result<(), String> {
+        let ResolvedCompositeKind::Shader {
+            shader,
+            layer_pixel_rect,
+            source_region,
+            source_logical_size,
+            substrate_regions,
+            rounded_mask,
+            alpha,
+        } = &composite.kind
+        else {
+            return Ok(());
+        };
+        let Some(placement) = QuadPlacement::in_target(dest, self.target_size()) else {
+            return Ok(());
+        };
+        let item = ShaderCompositeBatchItem {
+            source: composite.source.as_ref(),
+            shader: shader.as_ref(),
+            layer_pixel_rect: *layer_pixel_rect,
+            source_region: *source_region,
+            source_logical_size: *source_logical_size,
+            substrate_regions: *substrate_regions,
+            rounded_mask: mask_in_target(*rounded_mask, offset),
+            alpha: *alpha,
+            scissor,
+            dest_viewport: dest,
+            placement,
+        };
+        let prepared = renderer
+            .effect_renderer
+            .prepare_shader_draw(self.recorder, &renderer.device, &item)
+            .ok_or_else(|| "shader composite preparation failed".to_string())?;
+        self.batches.push(Batch::Shader(prepared));
         Ok(())
     }
 }

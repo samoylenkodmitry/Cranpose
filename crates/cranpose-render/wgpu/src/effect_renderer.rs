@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
-use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
+use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel};
 use cranpose_ui::Axis;
 use cranpose_ui_graphics::{
     BlendMode, DrawSpecialization, MAX_SUBSTRATES, RenderEffect, RuntimeShader, ShaderTarget,
@@ -35,45 +35,15 @@ mod scratch_targets;
 mod uniform_values;
 mod upload_specs;
 use scratch_targets::acquire_recorded_effect_scratch_textures_into;
-pub(crate) use scratch_targets::{EffectScratchTargetProvider, RecordedEffectScratchTargets};
+pub(crate) use scratch_targets::{
+    EffectScratchTargetProvider, RecordedEffectScratchTargets, blur_scratch_size,
+    substrate_scratch_size,
+};
 use uniform_values::{composite_sampling_mode_value, tile_mode_uniform_value};
 use upload_specs::{
     blit_uniform_spec, blur_uniform_spec, effect_uniform_spec, offset_uniform_spec,
     projective_blit_uniform_spec, projective_blit_vertex_spec,
 };
-
-pub(crate) fn blur_scratch_size(
-    radius_x: f32,
-    radius_y: f32,
-    width: u32,
-    height: u32,
-) -> (u32, u32) {
-    scratch_size_at(blur_scratch_block(radius_x.max(radius_y)), width, height)
-}
-
-/// The scratch a substrate blur of `radius_px` runs at: a low-frequency copy
-/// read once per fragment tolerates a coarser grid than a blur that is the
-/// picture, so the scale doubles at half the radius the blur's does.
-pub(crate) fn substrate_scratch_size(radius_px: f32, width: u32, height: u32) -> (u32, u32) {
-    let scale = if radius_px < 3.0 {
-        1
-    } else if radius_px < 8.0 {
-        2
-    } else {
-        4
-    };
-    scratch_size_at(scale, width, height)
-}
-
-fn scratch_size_at(mut scale: u32, width: u32, height: u32) -> (u32, u32) {
-    while scale > 1 && (width / scale < 16 || height / scale < 16) {
-        scale /= 2;
-    }
-    if scale <= 1 {
-        return (width, height);
-    }
-    (width.div_ceil(scale).max(1), height.div_ceil(scale).max(1))
-}
 
 const MAX_BLUR_KERNEL_CACHE_ITEMS: usize = 32;
 const BLUR_TILE_MODES: [TileMode; 4] = [
@@ -3116,6 +3086,35 @@ impl EffectRenderer {
         blit.prefetch(lane, &self.compiler, self.adapter_backend, || {
             self.blit_pipeline_job(device, blend_mode, variant)
         })
+    }
+
+    // The surface `draw` composites, for the instant pipeline to draw while
+    // its own compiles, which this queues on the demand lane; none once it
+    // is built or in the driver's cache, or for a draw that replaces or
+    // erases what it covers, as the instant pipeline cannot.
+    pub(crate) fn composite_stand_in<'a>(
+        &self,
+        device: &wgpu::Device,
+        draw: &PreparedCompositeDraw<'a>,
+    ) -> Option<&'a wgpu::BindGroup> {
+        let (blit, _, _) = self.blit_pipeline_target(draw.blend_mode, draw.variant);
+        let job = || self.blit_pipeline_job(device, draw.blend_mode, draw.variant);
+        let own = matches!(draw.blend_mode, BlendMode::Src | BlendMode::DstOut)
+            || blit.ready_or_queue(&self.compiler, self.adapter_backend, job);
+        (!own).then_some(draw.texture_bind_group)
+    }
+
+    // `composite_stand_in` for a tilted layer's composite.
+    pub(crate) fn projective_stand_in<'a>(
+        &self,
+        device: &wgpu::Device,
+        draw: &PreparedProjectiveComposite<'a>,
+    ) -> Option<&'a wgpu::BindGroup> {
+        let (pipeline, _, _) = self.projective_pipeline_target(draw.blend_mode, draw.variant);
+        let job = || self.projective_pipeline_job(device, draw.blend_mode, draw.variant);
+        let own = matches!(draw.blend_mode, BlendMode::Src | BlendMode::DstOut)
+            || pipeline.ready_or_queue(&self.compiler, self.adapter_backend, job);
+        (!own).then_some(draw.texture_bind_group)
     }
 
     pub(crate) fn draw_prepared_composite(

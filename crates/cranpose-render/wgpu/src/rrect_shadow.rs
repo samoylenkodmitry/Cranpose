@@ -3,7 +3,7 @@
 //! every pixel it covers, so a shadow takes no surface, blur or composite.
 
 use bytemuck::{Pod, Zeroable};
-use cranpose_render_common::layer_shadow::ShadowRRect;
+use cranpose_render_common::layer_shadow::{ShadowHole, ShadowRRect};
 use cranpose_ui_graphics::{BlendMode, Rect};
 
 use crate::{
@@ -43,6 +43,25 @@ impl ShadowInstance {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
+    }
+    // The rect this instance covers, the shadow it is a part of and the
+    // shadow's colour.
+    pub(crate) fn part(&self) -> ([f32; 4], ShadowRRect, [f32; 4]) {
+        let [left, top, right, bottom] = self.bounds;
+        let [umbra_inset, distance_correction, inset, radius] = self.ramp;
+        let shadow = ShadowRRect {
+            bounds: Rect {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+            },
+            radii: self.radii,
+            umbra_inset,
+            distance_correction,
+            hole: (radius >= 0.0).then_some(ShadowHole { inset, radius }),
+        };
+        (self.draw, shadow, self.color)
     }
 }
 

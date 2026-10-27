@@ -35,6 +35,7 @@ mod glyph_run;
 mod glyph_run_arena;
 pub(crate) mod gpu_stats;
 mod initial_present;
+mod instant_triangles;
 mod lazy_resource;
 mod mesh_fallback;
 mod offscreen;
@@ -98,7 +99,7 @@ use frame_packet::RenderReturns;
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::RendererFrontend;
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
-pub use gpu_target::GpuTarget;
+pub use gpu_target::{GpuTarget, optional_device_features};
 pub use initial_present::{clear_to_background, clear_to_default_background};
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 use pipeline_compiler::PipelineCompilation;
@@ -112,25 +113,6 @@ pub use render::{
 };
 pub use scene::{HitRegion, Scene};
 pub use shared_shader::{shader_stages_flattened, shader_stages_folded};
-
-/// The optional device features the renderer exploits when the adapter
-/// offers them: pipeline caching (see `pipeline_disk_cache`), the
-/// timestamp queries behind `CRANPOSE_GPU_PASS_TIMING`, and, on a GPU
-/// that shares the host's memory, vertex and uniform buffers the CPU
-/// writes directly, so a frame's uploads need no copy. Every platform's
-/// `request_device` passes this so a profiling toggle never needs a rebuilt
-/// binary; intersecting with the adapter's own features keeps the request
-/// valid on adapters without them.
-pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    let mut wanted = wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY;
-    if matches!(
-        adapter.get_info().device_type,
-        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
-    ) {
-        wanted |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
-    }
-    adapter.features() & wanted
-}
 
 #[doc(hidden)]
 pub fn offscreen_render_target_for_tests(
