@@ -20,12 +20,10 @@
 use std::ops::Range;
 
 use cranpose_render_common::layer_shadow::ShadowRRect;
+use wgpu::util::DeviceExt;
 
 use crate::{
-    draw_pass::TrackedPass,
-    frame_graph::{BufferUpload, FrameCommandRecorder, UploadAllocatorSpec},
-    offscreen::OffscreenTarget,
-    render::Vertex,
+    draw_pass::TrackedPass, frame_graph::BufferUpload, offscreen::OffscreenTarget, render::Vertex,
 };
 
 // How the instant fragment reads a draw's texture.
@@ -404,22 +402,35 @@ impl InstantTriangles {
         self.turned_glyphs = None;
     }
 
-    pub(crate) fn upload<C: FrameCommandRecorder>(
-        &self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-    ) -> Option<InstantBuffers> {
+    // The pass's triangles in buffers of their own, dropped with the frame.
+    // The frame's upload rings keep the largest frame they held while later
+    // frames fill half of it, and these draw only in a launch's first frames:
+    // the gauntlet's at tier 12 laid 0.5 MB in one frame.
+    pub(crate) fn upload(&self, device: &wgpu::Device) -> Option<InstantBuffers> {
+        let buffer = |label, contents: &[u8], usage| {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents,
+                usage,
+            });
+            let len = buffer.size();
+            BufferUpload {
+                buffer,
+                offset: 0,
+                len,
+            }
+        };
         (!self.indices.is_empty()).then(|| InstantBuffers {
             turned_glyphs: self.turned_glyphs,
-            vertices: recorder.upload_buffer(
-                UploadAllocatorSpec::vertex("Instant Vertex Buffer", size_of::<Vertex>() as u64),
-                device,
+            vertices: buffer(
+                "Instant Vertices",
                 bytemuck::cast_slice(&self.vertices),
+                wgpu::BufferUsages::VERTEX,
             ),
-            indices: recorder.upload_buffer(
-                UploadAllocatorSpec::index("Instant Index Buffer", size_of::<u32>() as u64),
-                device,
+            indices: buffer(
+                "Instant Indices",
                 bytemuck::cast_slice(&self.indices),
+                wgpu::BufferUsages::INDEX,
             ),
         })
     }

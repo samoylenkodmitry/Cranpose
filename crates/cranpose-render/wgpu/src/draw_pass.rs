@@ -316,7 +316,7 @@ impl GpuRenderer {
                 .then(|| self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)),
             turned_glyphs: (!scratch.glyph_instances.turned.is_empty())
                 .then(|| self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned)),
-            instant: scratch.instant.upload(recorder, &self.device),
+            instant: scratch.instant.upload(&self.device),
         }
     }
 
