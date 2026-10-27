@@ -517,7 +517,7 @@ fn rows_of_lazy_cards_walk_past_their_viewports_and_keep_their_place() {
 }
 
 #[test]
-fn a_window_that_keeps_focus_gives_it_to_a_target_after_each_layout() {
+fn a_dpad_window_gives_focus_to_a_target_after_each_layout() {
     use cranpose_app_shell::AppShell;
     use cranpose_core::location_key;
 
@@ -545,7 +545,7 @@ fn a_window_that_keeps_focus_gives_it_to_a_target_after_each_layout() {
     );
     shell.set_viewport(200.0, 200.0);
     shell.set_buffer_size(200, 200);
-    shell.set_keeps_focus(true);
+    shell.set_dpad_navigation(true);
     shell.update();
     assert_eq!(
         *focused.borrow(),

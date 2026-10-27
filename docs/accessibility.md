@@ -565,7 +565,12 @@ tab bar, a radio group, a segmented control and a menu, the arrows move along
 the group and wrap at its ends. With nothing focused, Down and Right enter
 at the top left and Up and Left at the bottom right. When the focused
 control goes away, the next arrow goes to the control that took its place.
-A held key moves focus once a frame.
+A held key moves focus once a frame. In a window a D-pad drives
+(`AppShell::set_dpad_navigation`, which the Android host sets on a TV), a
+target takes focus after each layout that leaves none focused, the arrows
+move focus onto and out of a text field without opening the software
+keyboard, and the center button opens it, as Compose's text field does with
+a D-pad. Elsewhere the arrows move a focused field's caret.
 
 **A ring shows where focus is.** `Modifier::focusable()` is a focus target
 that draws a ring, a 2 point blue line with a 1 point white line inside it,

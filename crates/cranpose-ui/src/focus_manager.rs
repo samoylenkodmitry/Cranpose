@@ -60,6 +60,17 @@ pub fn request_focus_from_platform(node_id: NodeId) -> bool {
     focus_dispatch::request_focus_in_context(node_id)
 }
 
+/// Moves focus onto `node_id` as a D-pad does: a text field that takes it
+/// leaves the software keyboard closed until [`show_keyboard`] opens it.
+///
+/// [`show_keyboard`]: crate::text_field_focus::show_keyboard
+#[doc(hidden)]
+pub fn request_focus_without_keyboard(node_id: NodeId) -> bool {
+    crate::text_input_session::without_keyboard(|| {
+        focus_dispatch::request_focus_in_context(node_id)
+    })
+}
+
 fn next_target(direction: FocusDirection) -> Option<NodeId> {
     with_focus_order(|order| {
         if order.is_empty() {

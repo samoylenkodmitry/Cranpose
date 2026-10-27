@@ -39,6 +39,6 @@ pub(super) fn create<F: FnMut() + 'static>(
     shell.set_safe_area(android_platform_env().safe_area());
     let tv =
         android_platform_env().configuration().ui_mode_type == cranpose_ui::UiModeType::Television;
-    shell.set_keeps_focus(tv);
+    shell.set_dpad_navigation(tv);
     shell
 }
