@@ -162,7 +162,7 @@ fn differing_inside(first: &[u8], landed: &[u8]) -> Vec<(usize, usize)> {
 fn assert_fallback_matches(record: impl FnOnce(&mut DrawScopeDefault)) {
     let (first, stats, landed) = first_and_landed(&graph(record));
     assert!(
-        stats.shape_pipeline_fallback_draws > 0,
+        stats.instant_draws > 0,
         "the first frame must draw shapes while their pipelines compile: {stats:?}"
     );
     assert_eq!(stats.placeholder_draws, 0, "no shape is left out");

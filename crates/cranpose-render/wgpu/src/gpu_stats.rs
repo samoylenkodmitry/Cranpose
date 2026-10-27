@@ -222,11 +222,11 @@ pub struct FrameStatsSnapshot {
     pub shape_vertices: u64,
     /// Batches of shape draws the frame recorded.
     pub shape_passes: u32,
-    /// Shape draws that took a stand-in while their pipeline compiled: a
-    /// general pipeline, or triangles the CPU laid out.
+    /// Shape draws that took their exact base, a universal pipeline, while
+    /// their specialized one compiled: the same bytes.
     pub shape_pipeline_fallback_draws: u32,
-    /// Image, glyph, shadow and layer draws that took the instant pipeline
-    /// while their own compiled.
+    /// Draws that took a stand-in while their own pipeline compiled: shapes
+    /// as CPU triangles, images, glyphs, shadows, layers as instant ones.
     pub instant_draws: u32,
     /// Shape draws using a completed specialized pipeline.
     pub shape_specialized_draws: u32,

@@ -3316,7 +3316,7 @@ impl GpuRenderer {
                     self.pipelines.note_placeholder(&self.frame_stats);
                     continue;
                 };
-                self.pipelines.note_mesh_fallback(&self.frame_stats);
+                self.pipelines.note_instant(&self.frame_stats);
                 pass.set_pipeline(mesh_pipeline);
                 meshes.draw(pass, range);
                 bound_class = None;

@@ -396,6 +396,31 @@ impl ShapePipelineKey {
         depth: ShapeDepth::Off,
     };
 
+    // The exact base of passes without a depth buffer: the universal
+    // pipelines of source-over draws, under a rect clip or a rounded one.
+    // Every source-over shape draws through one of them, the bytes its
+    // specialization draws, while that compiles.
+    pub(crate) fn base_tier() -> [Self; 2] {
+        let rounded = Self {
+            variant: ShapeVariant {
+                clip: SegmentClip::Rounded,
+                ..ShapeVariant::GENERAL
+            },
+            ..Self::general_for_base()
+        };
+        [Self::general_for_base().universal(), rounded.universal()]
+    }
+
+    fn general_for_base() -> Self {
+        Self {
+            blend_mode: BlendMode::SrcOver,
+            tier: RunTier::Either,
+            variant: ShapeVariant::GENERAL,
+            turns: ShapeTurns::None,
+            depth: ShapeDepth::Off,
+        }
+    }
+
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
     pub(crate) fn to_bits(self) -> u64 {
@@ -521,14 +546,6 @@ impl ShapePipelineKey {
                 depth: ShapeDepth::Interior,
                 ..self
             })
-    }
-
-    pub(crate) fn general(self) -> Self {
-        Self {
-            tier: RunTier::Either,
-            variant: self.variant.general(),
-            ..self
-        }
     }
 
     /// The one pipeline that draws every key with this one's blend, depth

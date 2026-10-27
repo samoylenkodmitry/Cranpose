@@ -654,19 +654,11 @@ impl RendererPipelines {
         Ok(())
     }
 
-    // Notes a draw that took the instant pipeline while its own compiles,
-    // and waits for the next pipeline to land.
+    // Notes a draw that took the instant tier while its own pipeline
+    // compiles, CPU triangles for a shape, and waits for the next pipeline
+    // to land.
     pub(crate) fn note_instant(&self, stats: &FrameStats) {
         stats.instant_draws.set(stats.instant_draws.get() + 1);
-        self.await_landing();
-    }
-
-    /// Notes a shape drawn as fallback triangles while its pipeline
-    /// compiles, and waits for the next one to land.
-    pub(super) fn note_mesh_fallback(&self, stats: &FrameStats) {
-        stats
-            .shape_pipeline_fallback_draws
-            .set(stats.shape_pipeline_fallback_draws.get() + 1);
         self.await_landing();
     }
 

@@ -93,7 +93,6 @@ impl FrameStats {
     /// shader's general pipeline.
     pub(crate) fn drew_stand_in(&self) -> bool {
         self.placeholder_draws.get() != 0
-            || self.shape_pipeline_fallback_draws.get() != 0
             || self.instant_draws.get() != 0
             || self.shader_pipeline_fallback_draws.get() != 0
     }
