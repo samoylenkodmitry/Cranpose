@@ -11078,7 +11078,7 @@ fn enter_and_space_press_the_control_the_keyboard_focused() {
 }
 
 #[test]
-fn arrow_keys_move_focus_inside_a_selectable_group_and_nowhere_else() {
+fn arrow_keys_search_a_selectable_group_first_and_then_the_screen() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, || {
@@ -11107,24 +11107,23 @@ fn arrow_keys_move_focus_inside_a_selectable_group_and_nowhere_else() {
     assert_eq!(focused_description(&mut shell).as_deref(), Some("Two"));
 
     assert!(
-        !shell.on_key_event(&KeyEvent::key_down(Key::DirectionDown, "")),
-        "the control below the group is out of reach for an arrow key"
+        shell.on_key_event(&KeyEvent::key_down(Key::DirectionDown, "")),
+        "with nothing below inside the group, Down leaves it"
     );
     shell.update();
-    assert_eq!(focused_description(&mut shell).as_deref(), Some("Two"));
-
-    assert!(shell.on_key_event(&KeyEvent::key_down(Key::DirectionLeft, "")));
-    shell.update();
-    assert_eq!(focused_description(&mut shell).as_deref(), Some("One"));
-
-    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
-    shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("Below"));
+
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::DirectionUp, "")));
+    shell.update();
+    assert_eq!(
+        focused_description(&mut shell).as_deref(),
+        Some("Two"),
+        "Up takes the group member straight above the wide control"
+    );
+
     assert!(
         !shell.on_key_event(&KeyEvent::key_down(Key::DirectionUp, "")),
-        "outside a group an arrow key is left to the content"
+        "with nothing above, the key is left to the content"
     );
 }
 

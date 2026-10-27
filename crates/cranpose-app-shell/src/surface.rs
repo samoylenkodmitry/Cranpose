@@ -60,6 +60,10 @@ pub struct RootSurface<R: Renderer> {
     /// its bounds may be out of date though no node marked its semantics.
     semantics_moved: bool,
     pub(crate) modal_focus: Vec<(NodeId, Option<NodeId>)>,
+    // The frame time at which a navigation key last moved focus; a held
+    // key's repeats wait for the next frame, so they never queue moves
+    // behind a slow layout.
+    pub(crate) key_moved_focus_at: Option<u64>,
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
@@ -106,6 +110,7 @@ impl<R: Renderer> RootSurface<R> {
             semantics_tree: None,
             semantics_moved: false,
             modal_focus: Vec::new(),
+            key_moved_focus_at: None,
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),

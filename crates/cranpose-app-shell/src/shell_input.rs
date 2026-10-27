@@ -1266,16 +1266,7 @@ where
         if self.dispatch_modifier_key(&route, event, false) {
             return true;
         }
-        if !route.focus_is_current() || cranpose_ui::text_field_focus::has_focused_field() {
-            return false;
-        }
-        let handled = run_in_mutable_snapshot(|| cranpose_ui::dispatch_unhandled_key_event(event))
-            .unwrap_or(false);
-        if handled {
-            self.mark_dirty();
-            self.shell.app.request_layout_pass();
-        }
-        handled
+        route.focus_is_current() && self.on_unconsumed_key(event)
     }
 
     fn dispatch_modifier_key(
@@ -1366,7 +1357,7 @@ where
             return true;
         }
 
-        if self.on_activation_key(event) || self.on_arrow_key(event) {
+        if self.on_activation_key(event) {
             return true;
         }
 

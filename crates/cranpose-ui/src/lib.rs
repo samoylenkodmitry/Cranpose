@@ -97,6 +97,7 @@ pub mod text_layout_result;
 mod text_modifier_node;
 pub mod text_selection;
 mod thread_state;
+mod two_dimensional_focus_search;
 mod ui_strings;
 mod unhandled_keys;
 pub mod widgets;
