@@ -11059,7 +11059,15 @@ fn enter_and_space_press_the_control_the_keyboard_focused() {
 
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Enter, "")));
     shell.update();
+    assert_eq!(
+        presses.get(),
+        0,
+        "Enter presses the control and clicks it on release"
+    );
+    assert!(shell.on_key_event(&KeyEvent::key_up(Key::Enter)));
+    shell.update();
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Spacebar, " ")));
+    assert!(shell.on_key_event(&KeyEvent::key_up(Key::Spacebar)));
     shell.update();
     assert_eq!(presses.get(), 2, "Enter and Space each pressed the control");
     assert!(

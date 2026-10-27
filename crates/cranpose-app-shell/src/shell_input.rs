@@ -3,7 +3,7 @@ use cranpose_ui::FocusDirection;
 use super::*;
 
 mod dispatch_stop;
-mod key_activation;
+pub(crate) mod key_activation;
 mod key_navigation;
 
 use dispatch_stop::Stop;

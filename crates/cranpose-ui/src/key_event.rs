@@ -412,6 +412,11 @@ impl KeyEvent {
         Self::new(key, text, Modifiers::NONE, KeyEventType::KeyDown)
     }
 
+    /// Creates a key up event for `key`.
+    pub fn key_up(key: Key) -> Self {
+        Self::new(key, "", Modifiers::NONE, KeyEventType::KeyUp)
+    }
+
     /// Creates a key down event with modifiers.
     pub fn key_down_with_modifiers(
         key: Key,

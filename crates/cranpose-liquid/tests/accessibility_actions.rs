@@ -312,6 +312,9 @@ fn press_key(robot: &mut RobotTestRule<TestRenderer>, key: cranpose_ui::Key, tex
             .shell_mut()
             .on_key_event(&cranpose_ui::KeyEvent::key_down(key, text))
     );
+    robot
+        .shell_mut()
+        .on_key_event(&cranpose_ui::KeyEvent::key_up(key));
     robot.wait_for_idle();
 }
 
@@ -562,6 +565,9 @@ fn reader_selects_a_menu_item_and_dismisses_the_popup() {
                         "\r"
                     ))
             );
+            robot
+                .shell_mut()
+                .on_key_event(&cranpose_ui::KeyEvent::key_up(cranpose_ui::Key::Enter));
             robot.wait_for_idle();
         } else {
             activate(&mut robot, "Export text");

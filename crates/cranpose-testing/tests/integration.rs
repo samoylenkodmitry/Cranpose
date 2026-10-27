@@ -5,6 +5,7 @@ mod animated_content_test;
 #[cfg(feature = "image-loading")]
 mod async_image_test;
 mod button_clickable_test;
+mod click_keys_test;
 mod composition_switching_test;
 mod dialog_test;
 mod directional_focus_test;

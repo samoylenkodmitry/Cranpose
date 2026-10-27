@@ -64,6 +64,8 @@ pub struct RootSurface<R: Renderer> {
     // key's repeats wait for the next frame, so they never queue moves
     // behind a slow layout.
     pub(crate) key_moved_focus_at: Option<u64>,
+    // The press a click key holds until it comes up.
+    pub(crate) key_press: Option<crate::shell_input::key_activation::KeyPress>,
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
@@ -111,6 +113,7 @@ impl<R: Renderer> RootSurface<R> {
             semantics_moved: false,
             modal_focus: Vec::new(),
             key_moved_focus_at: None,
+            key_press: None,
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
