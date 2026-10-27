@@ -139,7 +139,7 @@ impl ClipBounds {
             && other.min_y < self.max_y
     }
 
-    fn holds(self, other: Self) -> bool {
+    pub(crate) fn holds(self, other: Self) -> bool {
         self.min_x <= other.min_x
             && self.min_y <= other.min_y
             && self.max_x >= other.max_x

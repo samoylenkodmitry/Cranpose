@@ -210,6 +210,12 @@ fn touch(a: ClipBounds, b: ClipBounds) -> bool {
 }
 
 fn add_area(areas: &mut Vec<ClipBounds>, mut area: ClipBounds) {
+    // No two areas the list holds touch, so an area inside the last one
+    // touches no other: the loop would take the last one out and put it
+    // back as it was.
+    if areas.last().is_some_and(|last| last.holds(area)) {
+        return;
+    }
     while let Some(index) = areas.iter().position(|other| touch(*other, area)) {
         area = union(areas.swap_remove(index), area);
     }
