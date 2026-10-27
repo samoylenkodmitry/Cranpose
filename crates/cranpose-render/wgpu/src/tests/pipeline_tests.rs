@@ -310,7 +310,7 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
         None,
     );
 
-    assert_eq!(scene.hits.len(), 1);
+    assert_eq!(scene.hit_targets().len(), 1);
     assert!(scene.graph.is_none());
 }
 

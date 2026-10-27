@@ -117,8 +117,8 @@ fn probe() -> Probe {
         None,
     );
     scene.replace_graph(graph);
-    let mut panels = scene
-        .hits
+    let targets = scene.hit_targets();
+    let mut panels = targets
         .iter()
         .filter(|hit| hit.local_bounds.width == PANEL.width)
         .map(|hit| hit.node_id);

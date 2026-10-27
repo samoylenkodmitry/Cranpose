@@ -187,7 +187,7 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<NodeId>, Rc<RefCell<Vec<usiz
         None,
     );
     let ids = scene
-        .hits
+        .hit_targets()
         .iter()
         .filter(|hit| (hit.local_bounds.height - TAP_ROW).abs() < f32::EPSILON)
         .map(|hit| hit.node_id)
@@ -198,7 +198,7 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<NodeId>, Rc<RefCell<Vec<usiz
 
 fn row_at(scene: &Scene, x: f32, y: f32) -> Option<usize> {
     let node_ids: Vec<_> = scene
-        .hits
+        .hit_targets()
         .iter()
         .filter(|hit| (hit.local_bounds.height - TAP_ROW).abs() < f32::EPSILON)
         .map(|hit| hit.node_id)

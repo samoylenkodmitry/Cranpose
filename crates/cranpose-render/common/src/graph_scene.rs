@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell},
     cmp::Reverse,
     rc::Rc,
 };
@@ -513,13 +513,43 @@ struct HitBuffers {
     capture_path: Vec<NodeId>,
 }
 
+// The hit targets of a scene's graph in draw order, the last drawn at the
+// end, and the storage the next collection of them reuses.
+#[derive(Default)]
+struct HitList {
+    hits: Vec<HitRegion>,
+    buffers: Vec<HitBuffers>,
+    // The draw order index the next pushed target receives.
+    next_z: usize,
+    // Where in `hits` the target of each node lies.
+    node_index: HashMap<NodeId, usize>,
+    // The graph changed a target since the list was collected: the next
+    // query collects it again.
+    stale: bool,
+}
+
+impl HitList {
+    // Removes the targets, releases their handlers and keeps their storage.
+    fn clear(&mut self) {
+        self.buffers.clear();
+        for hit in self.hits.drain(..) {
+            let mut buffers = HitBuffers {
+                hit_clips: hit.hit_clips,
+                capture_path: hit.capture_path,
+            };
+            buffers.hit_clips.clear();
+            buffers.capture_path.clear();
+            self.buffers.push(buffers);
+        }
+        self.node_index.clear();
+        self.next_z = 0;
+    }
+}
+
 /// The hit targets of a [`Scene`], borrowed apart from its graph, so a walk
 /// of the graph pushes targets while it reads the graph in place.
 pub(crate) struct HitTargets<'a> {
-    hits: &'a mut Vec<HitRegion>,
-    buffers: &'a mut Vec<HitBuffers>,
-    next_z: &'a mut usize,
-    node_index: &'a mut HashMap<NodeId, usize>,
+    list: &'a mut HitList,
     diagnostics: &'a Rc<RenderDiagnostics>,
 }
 
@@ -536,13 +566,14 @@ impl HitTargets<'_> {
         if handlers.pointer_inputs().is_empty() && handlers.pointer_icon().is_none() {
             return;
         }
-        let mut buffers = self.buffers.pop().unwrap_or_default();
+        let list = &mut *self.list;
+        let mut buffers = list.buffers.pop().unwrap_or_default();
         buffers.capture_path.extend_from_slice(capture_path);
 
-        let z_index = *self.next_z;
-        *self.next_z += 1;
-        let hit_index = self.hits.len();
-        self.hits.push(HitRegion::with_diagnostics(HitRegionInit {
+        let z_index = list.next_z;
+        list.next_z += 1;
+        let hit_index = list.hits.len();
+        list.hits.push(HitRegion::with_diagnostics(HitRegionInit {
             node_id,
             capture_path: buffers.capture_path,
             geometry,
@@ -552,7 +583,7 @@ impl HitTargets<'_> {
             z_index,
             diagnostics: Rc::clone(self.diagnostics),
         }));
-        self.node_index.insert(node_id, hit_index);
+        list.node_index.insert(node_id, hit_index);
     }
 }
 
@@ -560,14 +591,25 @@ impl HitTargets<'_> {
 pub struct Scene {
     /// The retained render graph, or `None` before the first build.
     pub graph: Option<RenderGraph>,
-    /// Hit targets in draw order, the last drawn at the end.
-    pub hits: Vec<HitRegion>,
-    hit_buffers: Vec<HitBuffers>,
-    /// Draw order index that the next pushed hit target receives.
-    pub next_hit_z: usize,
-    /// Position in `hits` of the target of each node, for finding a target by node id.
-    pub node_index: HashMap<NodeId, usize>,
+    // Collected from the graph when a query first needs them after it
+    // changed: a frame that moves a target and takes no pointer input does
+    // not walk the graph for targets.
+    hits: RefCell<HitList>,
     diagnostics: Rc<RenderDiagnostics>,
+}
+
+/// How many hit targets a [`Scene`] holds and has room for, and the same for
+/// its index of them by node, for debugging memory use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HitStorage {
+    /// Hit targets held.
+    pub hits_len: usize,
+    /// Room reserved for hit targets.
+    pub hits_capacity: usize,
+    /// Nodes indexed.
+    pub node_index_len: usize,
+    /// Room reserved in the node index.
+    pub node_index_capacity: usize,
 }
 
 impl Scene {
@@ -575,10 +617,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             graph: None,
-            hits: Vec::new(),
-            hit_buffers: Vec::new(),
-            next_hit_z: 0,
-            node_index: HashMap::default(),
+            hits: RefCell::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
         }
     }
@@ -588,11 +627,11 @@ impl Scene {
         self.diagnostics.as_ref()
     }
 
-    /// Rebuilds the retained graph and hit targets from the applier, reusing
-    /// storage from the previous graph.
+    /// Rebuilds the retained graph from the applier, reusing storage from the
+    /// previous graph. The hit targets follow the new graph.
     pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         let previous = self.graph.take();
-        self.clear_hits();
+        self.hits.get_mut().stale = true;
         let Some(graph) =
             crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
         else {
@@ -600,40 +639,49 @@ impl Scene {
         };
         crate::scene_builder::publish_space(applier, &graph);
         self.graph = Some(graph);
-        self.collect_hits();
     }
 
-    /// Pushes the hit targets of the scene's graph, which stays in place.
-    fn collect_hits(&mut self) {
-        let Self {
-            graph: Some(graph),
-            hits,
-            hit_buffers,
-            next_hit_z,
-            node_index,
-            diagnostics,
-        } = self
-        else {
-            return;
-        };
-        let mut targets = HitTargets {
-            hits,
-            buffers: hit_buffers,
-            next_z: next_hit_z,
-            node_index,
-            diagnostics,
-        };
-        crate::hit_graph::collect_hits_from_graph(
-            &graph.root,
-            ProjectiveTransform::identity(),
-            &mut targets,
-            None,
-        );
+    // The hit targets, collected from the graph first when it changed since
+    // they were.
+    fn fresh_hits(&self) -> Ref<'_, HitList> {
+        if self.hits.borrow().stale {
+            let mut list = self.hits.borrow_mut();
+            list.clear();
+            list.stale = false;
+            if let Some(graph) = &self.graph {
+                crate::hit_graph::collect_hits_from_graph(
+                    &graph.root,
+                    ProjectiveTransform::identity(),
+                    &mut HitTargets {
+                        list: &mut list,
+                        diagnostics: &self.diagnostics,
+                    },
+                    None,
+                );
+            }
+        }
+        self.hits.borrow()
+    }
+
+    /// The hit targets in draw order, the last drawn at the end.
+    pub fn hit_targets(&self) -> Vec<HitRegion> {
+        self.fresh_hits().hits.clone()
+    }
+
+    /// How much storage the hit targets take.
+    pub fn hit_storage(&self) -> HitStorage {
+        let list = self.hits.borrow();
+        HitStorage {
+            hits_len: list.hits.len(),
+            hits_capacity: list.hits.capacity(),
+            node_index_len: list.node_index.len(),
+            node_index_capacity: list.node_index.capacity(),
+        }
     }
 
     /// Applies content and layer-property changes to the retained graph.
     /// Empty updates or an unavailable scoped update rebuild the scene.
-    /// Hit targets are collected again when the update changed a hit target
+    /// The hit targets follow the graph when the update changed a hit target
     /// or the geometry above one: each updated layer compares its hit state,
     /// and the layers beneath one built again, before and after.
     pub fn update_from_applier(
@@ -656,16 +704,14 @@ impl Scene {
         if let Some(graph) = &self.graph {
             crate::scene_builder::publish_space(applier, graph);
         }
-        if !report.hit_graph_dirty {
-            return;
+        if report.hit_graph_dirty {
+            self.hits.get_mut().stale = true;
         }
-        self.clear_hits();
-        self.collect_hits();
     }
 
-    /// Adds an interactive target in draw order, ignoring targets that neither
-    /// handle a pointer nor name a pointer icon.
-    pub fn push_hit(
+    // Adds an interactive target in draw order, ignoring targets that neither
+    // handle a pointer nor name a pointer icon.
+    pub(crate) fn push_hit(
         &mut self,
         node_id: NodeId,
         capture_path: &[NodeId],
@@ -673,29 +719,18 @@ impl Scene {
         target: HitTargetSpec<'_>,
     ) {
         HitTargets {
-            hits: &mut self.hits,
-            buffers: &mut self.hit_buffers,
-            next_z: &mut self.next_hit_z,
-            node_index: &mut self.node_index,
+            list: self.hits.get_mut(),
             diagnostics: &self.diagnostics,
         }
         .push(node_id, capture_path, geometry, target);
     }
 
-    /// Removes all hit targets and releases their handlers while retaining vector capacity.
-    pub fn clear_hits(&mut self) {
-        self.hit_buffers.clear();
-        for hit in self.hits.drain(..) {
-            let mut buffers = HitBuffers {
-                hit_clips: hit.hit_clips,
-                capture_path: hit.capture_path,
-            };
-            buffers.hit_clips.clear();
-            buffers.capture_path.clear();
-            self.hit_buffers.push(buffers);
-        }
-        self.node_index.clear();
-        self.next_hit_z = 0;
+    // Removes all hit targets and releases their handlers while retaining
+    // their storage.
+    fn clear_hits(&mut self) {
+        let list = self.hits.get_mut();
+        list.clear();
+        list.stale = false;
     }
 
     /// Replaces the retained render graph and leaves the hit targets as they are.
@@ -719,22 +754,24 @@ impl RenderScene for Scene {
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
-        let mut hit_indices: Vec<usize> = self
+        let list = self.fresh_hits();
+        let mut hit_indices: Vec<usize> = list
             .hits
             .iter()
             .enumerate()
             .filter_map(|(index, hit)| hit.contains(x, y).then_some(index))
             .collect();
 
-        hit_indices.sort_by_key(|&index| Reverse(self.hits[index].z_index));
+        hit_indices.sort_by_key(|&index| Reverse(list.hits[index].z_index));
         hit_indices
             .into_iter()
-            .map(|index| self.hits[index].clone())
+            .map(|index| list.hits[index].clone())
             .collect()
     }
 
     fn hit_test_near(&self, x: f32, y: f32) -> Option<Self::HitTarget> {
-        self.hits
+        self.fresh_hits()
+            .hits
             .iter()
             .filter_map(|hit| hit.reach_distance(x, y).map(|distance| (distance, hit)))
             .min_by(|(near, hit), (other_near, other)| {
@@ -745,14 +782,16 @@ impl RenderScene for Scene {
     }
 
     fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
-        self.node_index
+        let list = self.fresh_hits();
+        list.node_index
             .get(&node_id)
-            .and_then(|&index| self.hits.get(index))
+            .and_then(|&index| list.hits.get(index))
             .cloned()
     }
 
     fn hit_test_ray(&self, scene: NodeId, ray: Ray) -> Vec<Self::HitTarget> {
-        let mut hit: Vec<&HitRegion> = self
+        let list = self.fresh_hits();
+        let mut hit: Vec<&HitRegion> = list
             .hits
             .iter()
             .filter(|hit| {
@@ -785,7 +824,8 @@ impl RenderScene for Scene {
     }
 
     fn surface_window_bounds(&self, node_id: NodeId) -> Option<Rect> {
-        let hit = self.hits.get(*self.node_index.get(&node_id)?)?;
+        let list = self.fresh_hits();
+        let hit = list.hits.get(*list.node_index.get(&node_id)?)?;
         let surface = hit.surface.as_ref()?;
         surface
             .target

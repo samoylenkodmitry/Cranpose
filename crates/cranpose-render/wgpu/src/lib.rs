@@ -189,10 +189,7 @@ pub struct CapturedFrame {
 pub struct DebugCpuAllocationStats {
     pub scene_graph_node_count: usize,
     pub scene_graph_heap_bytes: usize,
-    pub scene_hits_len: usize,
-    pub scene_hits_cap: usize,
-    pub scene_node_index_len: usize,
-    pub scene_node_index_cap: usize,
+    pub scene_hits: cranpose_render_common::graph_scene::HitStorage,
     pub text_renderer_pool_len: usize,
     pub text_renderer_pool_cap: usize,
     pub image_texture_cache_len: usize,
@@ -1019,10 +1016,7 @@ impl WgpuRenderer {
             .graph
             .as_ref()
             .map_or(0, RenderGraph::heap_bytes);
-        stats.scene_hits_len = self.frontend.scene.hits.len();
-        stats.scene_hits_cap = self.frontend.scene.hits.capacity();
-        stats.scene_node_index_len = self.frontend.scene.node_index.len();
-        stats.scene_node_index_cap = self.frontend.scene.node_index.capacity();
+        stats.scene_hits = self.frontend.scene.hit_storage();
         stats
     }
 
