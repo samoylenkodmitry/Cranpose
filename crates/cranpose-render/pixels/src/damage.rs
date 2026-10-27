@@ -262,6 +262,7 @@ fn common_ends(old: &RasterScene, new: &RasterScene) -> (usize, usize) {
 
 pub(crate) fn changed_areas(
     old: &RasterScene,
+    old_reach: &[Option<ClipBounds>],
     new: &RasterScene,
     window: ClipBounds,
     areas: &mut Vec<ClipBounds>,
@@ -270,61 +271,73 @@ pub(crate) fn changed_areas(
     let old_items = &old.order;
     let new_items = &new.order;
     let (common_start, common_end) = common_ends(old, new);
+    let changed = common_start..old_items.len() - common_end;
+    let reach = match old_reach.get(changed.clone()) {
+        Some(reach) if old_reach.len() == old_items.len() => RunReach::Kept(reach),
+        _ => RunReach::Unknown,
+    };
     add_changed_runs(
-        old,
-        &old_items[common_start..old_items.len() - common_end],
-        new,
-        &new_items[common_start..new_items.len() - common_end],
+        (old, &old_items[changed]),
+        (new, &new_items[common_start..new_items.len() - common_end]),
+        reach,
         window,
         areas,
     );
     merge_areas(areas);
 }
 
-// Adds to `areas` where the run `old_items` of `old` and the run
-// `new_items` of `new`, which take each other's place in one draw order,
-// draw differently. Items paired in order draw in the same order in both
-// scenes, so a pixel no changed pair and no unpaired item reaches keeps its
-// colour.
-pub(crate) fn add_changed_runs(
-    old: &RasterScene,
-    old_items: &[RenderItem],
-    new: &RasterScene,
-    new_items: &[RenderItem],
-    window: ClipBounds,
-    areas: &mut Vec<ClipBounds>,
-) {
-    let paired = old_items.len().min(new_items.len());
-    add_changed_pairs(
-        old,
-        &old_items[..paired],
-        new,
-        &new_items[..paired],
-        window,
-        areas,
-    );
-    for (scene, unpaired) in [(old, &old_items[paired..]), (new, &new_items[paired..])] {
-        for &item in unpaired {
-            if let Some(area) = scene.item_bounds(item, window) {
-                add_area(areas, area);
-            }
+// Where the items of an old run reach in the window, as the scene's reach
+// list holds them.
+pub(crate) enum RunReach<'a> {
+    // Not held: each old item's reach is worked out.
+    Unknown,
+    // Held, and kept as it is.
+    Kept(&'a [Option<ClipBounds>]),
+    // Held, and each new item's reach takes its old item's place: the new
+    // run takes the old run's place in the order, item for item.
+    Replaced(&'a mut [Option<ClipBounds>]),
+}
+
+impl RunReach<'_> {
+    fn old(
+        &self,
+        scene: &RasterScene,
+        index: usize,
+        item: RenderItem,
+        window: ClipBounds,
+    ) -> Option<ClipBounds> {
+        match self {
+            Self::Unknown => scene.item_bounds(item, window),
+            Self::Kept(reach) => reach[index],
+            Self::Replaced(reach) => reach[index],
+        }
+    }
+
+    fn replaces(&self) -> bool {
+        matches!(self, Self::Replaced(_))
+    }
+
+    fn replace(&mut self, index: usize, reach: Option<ClipBounds>) {
+        if let Self::Replaced(held) = self {
+            held[index] = reach;
         }
     }
 }
 
-/// Adds to `areas` where `old_items` of `old` and `new_items` of `new`, lists
-/// of one length matched item by item, draw differently: nothing for a pair
-/// that draws alike, the strips along the moved edges of a fill that only
-/// moved, and both items' bounds for any other pair.
-fn add_changed_pairs(
-    old: &RasterScene,
-    old_items: &[RenderItem],
-    new: &RasterScene,
-    new_items: &[RenderItem],
+// Adds to `areas` where the run `old.1` of the scene `old.0` and the run
+// `new.1` of `new.0`, which take each other's place in one draw order, draw
+// differently. Items paired in order draw in the same order in both scenes,
+// so a pixel no changed pair and no unpaired item reaches keeps its colour.
+// An item drawn as its pair was reaches where its pair did.
+pub(crate) fn add_changed_runs(
+    (old, old_items): (&RasterScene, &[RenderItem]),
+    (new, new_items): (&RasterScene, &[RenderItem]),
+    mut reach: RunReach<'_>,
     window: ClipBounds,
     areas: &mut Vec<ClipBounds>,
 ) {
-    for (&old_item, &new_item) in old_items.iter().zip(new_items) {
+    let paired = old_items.len().min(new_items.len());
+    for (index, (&old_item, &new_item)) in old_items.iter().zip(new_items).enumerate() {
         if same_item(old, old_item, new, new_item) {
             continue;
         }
@@ -334,12 +347,26 @@ fn add_changed_pairs(
             }
             _ => false,
         };
-        if !moved {
-            for (scene, item) in [(old, old_item), (new, new_item)] {
-                if let Some(area) = scene.item_bounds(item, window) {
-                    add_area(areas, area);
-                }
-            }
+        if moved && !reach.replaces() {
+            continue;
+        }
+        if !moved && let Some(area) = reach.old(old, index, old_item, window) {
+            add_area(areas, area);
+        }
+        let new_bounds = new.item_bounds(new_item, window);
+        if !moved && let Some(area) = new_bounds {
+            add_area(areas, area);
+        }
+        reach.replace(index, new_bounds);
+    }
+    for (index, &item) in old_items.iter().enumerate().skip(paired) {
+        if let Some(area) = reach.old(old, index, item, window) {
+            add_area(areas, area);
+        }
+    }
+    for &item in &new_items[paired..] {
+        if let Some(area) = new.item_bounds(item, window) {
+            add_area(areas, area);
         }
     }
 }

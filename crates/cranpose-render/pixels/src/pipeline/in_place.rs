@@ -16,7 +16,7 @@ use cranpose_render_common::{
 
 use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, scene_light};
 use crate::{
-    damage::{add_changed_runs, merge_areas},
+    damage::{RunReach, add_changed_runs, merge_areas},
     draw::{ClipBounds, TextRaster},
     scene::RasterScene,
 };
@@ -33,18 +33,21 @@ struct Repush<'a> {
     text: &'a TextRaster,
 }
 
-// Which items' reach an update in place changed.
+// Whether the scene's reach list still holds where each item reaches.
 pub(crate) enum UpdatedReach {
-    // Those of the subtrees pushed again, which lie where the old ones did.
-    Repushed,
-    // Any: a spliced subtree moved the items after it.
-    All,
+    // It does: the update put the reach of each item it changed in its
+    // item's place.
+    Held,
+    // It does not: a spliced subtree moved the items after it.
+    Lost,
 }
 
-/// A scene to bring up to its graph in place, and the storage the update
-/// borrows: a scene for the layers it pushes again, and its list of them.
+// A scene to bring up to its graph in place, where each of its items
+// reaches, and the storage the update borrows: a scene for the layers it
+// pushes again, and its list of them.
 pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
+    pub reach: &'a mut [Option<ClipBounds>],
     pub scratch: &'a mut RasterScene,
     pub pushed: &'a mut Vec<(usize, usize)>,
 }
@@ -65,11 +68,12 @@ impl InPlaceUpdate<'_> {
     ) -> Option<UpdatedReach> {
         let InPlaceUpdate {
             scene,
+            reach,
             scratch,
             pushed,
         } = self;
         update(
-            scene,
+            (scene, reach),
             scratch,
             pushed,
             graph,
@@ -86,7 +90,7 @@ impl InPlaceUpdate<'_> {
     reason = "the parts of `InPlaceUpdate::run`, taken apart to borrow each alone"
 )]
 fn update(
-    scene: &mut RasterScene,
+    (scene, reach): (&mut RasterScene, &mut [Option<ClipBounds>]),
     scratch: &mut RasterScene,
     pushed: &mut Vec<(usize, usize)>,
     graph: &RenderGraph,
@@ -120,13 +124,23 @@ fn update(
         same_extents &= extents.0 == extents.1;
     }
     areas.clear();
+    // Where the items of the old scene reach, when the list holds them.
+    let held = reach.len() == scene.order.len();
     for &(old, new) in pushed.iter() {
         let (old_record, new_record) = (&scene.subtrees[old], &scratch.subtrees[new]);
+        let order = old_record.start.order..old_record.stop.order;
+        let run_reach = match reach.get_mut(order.clone()) {
+            Some(run) if held && same_extents => RunReach::Replaced(run),
+            Some(run) if held => RunReach::Kept(run),
+            _ => RunReach::Unknown,
+        };
         add_changed_runs(
-            scene,
-            &scene.order[old_record.start.order..old_record.stop.order],
-            scratch,
-            &scratch.order[new_record.start.order..new_record.stop.order],
+            (scene, &scene.order[order]),
+            (
+                scratch,
+                &scratch.order[new_record.start.order..new_record.stop.order],
+            ),
+            run_reach,
             window,
             areas,
         );
@@ -140,10 +154,10 @@ fn update(
         }
     }
     merge_areas(areas);
-    Some(if same_extents {
-        UpdatedReach::Repushed
+    Some(if same_extents && held {
+        UpdatedReach::Held
     } else {
-        UpdatedReach::All
+        UpdatedReach::Lost
     })
 }
 
