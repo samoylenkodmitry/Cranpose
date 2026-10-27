@@ -1490,3 +1490,24 @@ fn a_surface_that_shows_the_scene_takes_no_frame_until_it_changes() {
         assert_eq!(after, swapchain, "{keeper:?}: the page after the change");
     }
 }
+
+// A frame that changes most of the window starts the run of skipped
+// comparisons, yet the frame right after it, if it draws the same, as a
+// warm-up frame after a page scrolled does, takes no image either.
+#[test]
+fn a_surface_shows_the_scene_right_after_a_frame_that_moved_the_page() {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::MovedPage, 1.0, Keeper::Swapchain(DIRECT));
+    for _ in 0..=SWAPCHAIN_START_FRAMES {
+        harness.frame(0);
+    }
+    let moved = harness.frame(1).stats.damage;
+    assert_eq!(moved, FrameDamage::Full, "the page moved");
+    harness.update(1);
+    assert!(
+        harness.shell.renderer().shows_scene(WIDTH, HEIGHT),
+        "the page as it was drawn"
+    );
+}

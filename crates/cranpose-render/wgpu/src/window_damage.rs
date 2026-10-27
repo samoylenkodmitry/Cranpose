@@ -412,10 +412,10 @@ pub(crate) struct WindowDamage {
 }
 
 impl WindowDamage {
-    // Whether `frame` draws what `kept` holds: no run of skips, a kept frame,
-    // and no item that differs from it.
+    // Whether `frame` draws what `kept` holds: a kept frame, which a skip run
+    // leaves only before its first skip, and no item that differs from it.
     pub(crate) fn shows(&mut self, frame: &FrameWindow<'_>, kept: &KeptWindow) -> bool {
-        if self.skipped > 0 || !kept.valid {
+        if !kept.valid {
             return false;
         }
         let complete = self.summarize(frame);
