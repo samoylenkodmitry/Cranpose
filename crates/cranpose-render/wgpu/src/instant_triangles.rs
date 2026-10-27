@@ -4,16 +4,18 @@
 // A pipeline takes 80 to 760 ms to compile on a Mali-G31 (Mi TV Stick) and
 // 20 to 210 ms on a Mali-G76, most of it a cost every program pays however
 // short, and a fresh install's first screen draws with about fifteen. So the
-// renderer queues three programs as it starts, ahead of every other: the
-// fallback triangles of shapes (`crate::mesh_fallback`), the plain glyph
-// program, and this one, which shades triangles of image vertices with a
-// texture. Images draw their own vertices through it; turned glyphs, shadows
-// and layer composites lay triangles here while their pipelines compile. It
+// renderer queues two programs as it starts, ahead of every other: the
+// fallback triangles of shapes (`crate::mesh_fallback`) and this one, which
+// shades triangles of image vertices with a texture; its twin for passes
+// with a depth buffer builds before passes start laying interiors first.
+// Images draw their own vertices through it; turned glyphs, shadows and
+// layer composites lay triangles here while their pipelines compile. It
 // draws what theirs draw, except that a rounded clip cuts as its scissor, a
 // shadow's falloff runs straight from its edge to its umbra, and a tilted
-// layer's texels follow its corners without perspective. A draw that blends other
-// than source-over waits for its own pipeline. Each draw counts as a
-// stand-in, so the frame after its pipeline lands draws it exactly.
+// layer's texels follow its corners without perspective. Draws that blend
+// other than source-over, and plain glyph quads, which only text off whole
+// pixels takes, wait for their own pipeline. The frame after a stand-in's
+// pipeline lands draws it exactly.
 
 use std::ops::Range;
 

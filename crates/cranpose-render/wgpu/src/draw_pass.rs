@@ -507,7 +507,7 @@ impl GpuRenderer {
         depth_keys: &PipelineDemand,
     ) {
         let mut awaited = self.depth_gate.take_awaited();
-        self.pipelines.warm_shapes_later(depth_keys, &mut awaited);
+        self.pipelines.warm_depth_later(depth_keys, &mut awaited);
         self.prefetch_overlay_pipelines(
             batches,
             scratch,

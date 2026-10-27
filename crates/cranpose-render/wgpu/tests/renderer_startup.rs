@@ -5,10 +5,10 @@ use crate::support;
 
 /// A renderer builds no pipeline on the creating thread, and its compiler
 /// builds exactly the warm-ups requested so far, each once, the instant
-/// tier's six (shape triangles, plain glyphs, instant triangles, with and
-/// without depth), and, with no record of a first screen, the eight most
-/// screens draw with: text on whole pixels and turned, the layer blit both
-/// ways and the turned one, rounded images, shadows and flat solid rects.
+/// tier's three (shape triangles with and without depth, instant triangles
+/// without), and, with no record of a first screen, the eight most screens
+/// draw with: text on whole pixels and turned, the layer blit both ways and
+/// the turned one, rounded images, shadows and flat solid rects.
 #[test]
 fn a_new_renderer_builds_only_the_requested_warm_ups() {
     let (_lock, (created, created_off_frame, requested), _renderer) =
@@ -29,7 +29,7 @@ fn a_new_renderer_builds_only_the_requested_warm_ups() {
     support::wait_for_background_compiler_idle();
     assert_eq!(
         pipelines_created_off_frame() - created_off_frame,
-        requested as u64 + 14,
+        requested as u64 + 11,
         "the compiler must build the requested warm-ups, the instant tier and the common eight"
     );
 }

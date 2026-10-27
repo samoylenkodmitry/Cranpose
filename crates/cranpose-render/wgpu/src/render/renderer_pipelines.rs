@@ -232,9 +232,9 @@ impl RendererPipelines {
         }
     }
 
-    /// Queues for a later frame the shape pipelines `keys` name and the
-    /// interiors they lay down, handing `awaited` each still to land.
-    pub(crate) fn warm_shapes_later(
+    /// Queues for a later frame the shape pipelines `keys` name, their interiors and the stand-ins
+    /// of a pass with a depth buffer (instant, aligned glyphs), handing `awaited` each to land.
+    pub(crate) fn warm_depth_later(
         &mut self,
         keys: &PipelineDemand,
         awaited: &mut Vec<Pending<wgpu::RenderPipeline>>,
@@ -243,6 +243,24 @@ impl RendererPipelines {
             self.shape_pipelines
                 .warm_later(key, &mut |pending| awaited.push(pending));
         }
+        let (depth, lane) = (PassDepth::On, CompileLane::Later);
+        let aligned = self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Aligned);
+        awaited.extend(
+            aligned.prefetch(lane, &self.compiler, self.adapter_backend, || {
+                self.glyph_atlas_pipeline_job(depth, GlyphQuads::Aligned)
+            }),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        awaited.extend(self.instant.pipeline(PassDepth::On).prefetch(
+            CompileLane::Later,
+            &self.compiler,
+            self.adapter_backend,
+            || {
+                let cache = self.pipeline_cache.clone();
+                self.instant
+                    .job(&self.device, cache, self.composition_format, PassDepth::On)
+            },
+        ));
     }
 
     /// See [`crate::WgpuRenderer::first_screen_pipelines`].
@@ -509,21 +527,17 @@ impl RendererPipelines {
                     depth,
                 ),
             );
-            self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Plain)
-                .queue(
-                    compiler,
-                    lane,
-                    backend,
-                    self.glyph_atlas_pipeline_job(depth, GlyphQuads::Plain),
-                );
-            self.instant.pipeline(depth).queue(
-                compiler,
-                lane,
-                backend,
-                self.instant
-                    .job(device, self.pipeline_cache.clone(), format, depth),
-            );
         }
+        // With a depth buffer it is built as passes may start laying
+        // interiors first: see `warm_depth_later`.
+        let depth = PassDepth::Off;
+        self.instant.pipeline(depth).queue(
+            compiler,
+            lane,
+            backend,
+            self.instant
+                .job(device, self.pipeline_cache.clone(), format, depth),
+        );
     }
 
     pub(super) fn rrect_shadow_pipeline_job(
