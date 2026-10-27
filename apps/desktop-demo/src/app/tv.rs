@@ -12,7 +12,8 @@ use cranpose_ui::{
     text::{SpanStyle, TextUnit},
     widgets::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec},
     Box as CranposeBox, BoxSpec, Color, Column, ColumnSpec, FocusRequester, Key, KeyEvent,
-    KeyEventType, LinearArrangement, Modifier, RoundedCornerShape, Size, Text, TextStyle,
+    KeyEventType, LinearArrangement, Modifier, PaddingValues, RoundedCornerShape, Size, Text,
+    TextStyle,
 };
 
 const ROWS: usize = 12;
@@ -22,6 +23,8 @@ const CARD: Size = Size {
     height: 124.0,
 };
 const FOCUSED_SCALE: f32 = 1.1;
+// The side margin a TV screen keeps clear, Compose for TV's 58 dp.
+const EDGE: f32 = 58.0;
 const SEEK_SECONDS: u32 = 10;
 const LENGTH_SECONDS: u32 = 3600;
 const BACKGROUND: Color = Color::from_rgb_u8(0x10, 0x12, 0x18);
@@ -73,12 +76,12 @@ fn CardRow(row: usize, playing: MutableState<Option<(usize, usize)>>) {
     Column(
         Modifier::empty()
             .fill_max_width()
-            .padding_each(48.0, 24.0, 0.0, 8.0),
+            .padding_each(0.0, 24.0, 0.0, 8.0),
         ColumnSpec::default(),
         move || {
             Text(
                 format!("Row {}", row + 1),
-                Modifier::empty(),
+                Modifier::empty().padding_each(EDGE, 0.0, 0.0, 0.0),
                 style(22.0, TEXT),
             );
             LazyRow(
@@ -89,6 +92,7 @@ fn CardRow(row: usize, playing: MutableState<Option<(usize, usize)>>) {
                 rememberLazyListState(),
                 LazyRowSpec {
                     horizontal_arrangement: LinearArrangement::SpacedBy(20.0),
+                    content_padding: PaddingValues::symmetric(EDGE, 0.0),
                     ..LazyRowSpec::default()
                 },
                 move |scope| {
