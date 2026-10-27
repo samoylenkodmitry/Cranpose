@@ -44,6 +44,8 @@ pub trait PlatformTextInputHandler {
 pub(crate) struct PlatformTextInputState {
     handler: RefCell<Option<Rc<dyn PlatformTextInputHandler>>>,
     keyboard_requested: Cell<bool>,
+    // Set while a focus request must leave the keyboard closed.
+    keyboard_held: Cell<bool>,
 }
 
 impl PlatformTextInputState {
@@ -51,6 +53,7 @@ impl PlatformTextInputState {
         Self {
             handler: RefCell::new(None),
             keyboard_requested: Cell::new(false),
+            keyboard_held: Cell::new(false),
         }
     }
 
@@ -89,6 +92,9 @@ pub fn clear_platform_text_input_handler() {
 
 pub(crate) fn notify_text_input_focus_gained() {
     let handler = crate::render_state::with_text_input_session(|state| {
+        if state.keyboard_held.get() {
+            return None;
+        }
         let handler = state.handler();
         if handler.is_some() {
             state.keyboard_requested.set(true);
@@ -104,6 +110,16 @@ pub(crate) fn notify_text_input_focus_lost() {
     crate::render_state::require_current_app_context("platform text input session access")
         .text_input_session
         .notify_focus_lost();
+}
+
+// Runs `focus`, in which a text field that takes focus leaves the software
+// keyboard closed.
+pub(crate) fn without_keyboard<R>(focus: impl FnOnce() -> R) -> R {
+    let held =
+        crate::render_state::with_text_input_session(|state| state.keyboard_held.replace(true));
+    let result = focus();
+    crate::render_state::with_text_input_session(|state| state.keyboard_held.set(held));
+    result
 }
 
 /// Hides the software keyboard the framework asked for, keeping the field's

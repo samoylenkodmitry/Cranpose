@@ -1300,7 +1300,7 @@ where
             return true;
         }
 
-        if self.on_activation_key(event) {
+        if self.on_activation_key(event) || self.on_field_dpad_key(event) {
             return true;
         }
 

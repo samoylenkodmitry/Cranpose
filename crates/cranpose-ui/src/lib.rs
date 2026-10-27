@@ -164,7 +164,9 @@ pub use focus_dispatch::{
     keyboard_focus_visible, process_focus_invalidations, schedule_focus_invalidation,
     set_active_focus_target, set_keyboard_focus_visible,
 };
-pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_platform};
+pub use focus_manager::{
+    FocusManager, local_focus_manager, request_focus_from_platform, request_focus_without_keyboard,
+};
 pub use focus_navigation::{KeyboardFocusTarget, keyboard_focus_target};
 pub use focus_order::{
     FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len, set_focus_order,

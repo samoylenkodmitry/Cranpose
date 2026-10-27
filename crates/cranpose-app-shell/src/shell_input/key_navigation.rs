@@ -70,6 +70,30 @@ where
         pressed
     }
 
+    // On a D-pad a focused text field leaves the arrows to focus navigation
+    // and opens its software keyboard on the center button, as Compose's
+    // text field does with a D-pad. An arrow with no target that way moves
+    // the caret. While the keyboard is open, the D-pad's keys go to it.
+    pub(super) fn on_field_dpad_key(&mut self, event: &KeyEvent) -> bool {
+        if !self.surface().dpad_navigation || !cranpose_ui::text_field_focus::has_focused_field() {
+            return false;
+        }
+        match event.key() {
+            Key::DirectionCenter => {
+                if event.type_() == KeyEventType::KeyDown
+                    && event.native_key_event().repeat_count == 0
+                {
+                    cranpose_ui::text_field_focus::show_keyboard();
+                }
+                true
+            }
+            Key::DirectionUp | Key::DirectionDown | Key::DirectionLeft | Key::DirectionRight => {
+                self.on_navigation_key(event)
+            }
+            _ => false,
+        }
+    }
+
     // Takes a key the focused control and its ancestors left: a navigation
     // key moves focus, and any other goes to the `UnhandledKeyEvents`
     // handlers unless a text field takes typing.
@@ -103,7 +127,10 @@ where
             Key::MoveHome | Key::MoveEnd => None,
             _ => return false,
         };
-        if !plain_key_down(event) || cranpose_ui::text_field_focus::has_focused_field() {
+        if !plain_key_down(event)
+            || (cranpose_ui::text_field_focus::has_focused_field()
+                && !self.surface().dpad_navigation)
+        {
             return false;
         }
         let frame = Some(self.shell.app.last_frame_time_nanos);
@@ -133,8 +160,12 @@ where
         let Some(target) = target else {
             return false;
         };
-        let moved = run_in_mutable_snapshot(|| cranpose_ui::request_focus_from_platform(target))
-            .unwrap_or(false);
+        let request = if self.surface().dpad_navigation {
+            cranpose_ui::request_focus_without_keyboard
+        } else {
+            cranpose_ui::request_focus_from_platform
+        };
+        let moved = run_in_mutable_snapshot(|| request(target)).unwrap_or(false);
         if moved {
             self.mark_dirty();
             self.note_focus_moved_by_keyboard(true);

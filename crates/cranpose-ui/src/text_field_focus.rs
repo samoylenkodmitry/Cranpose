@@ -441,6 +441,16 @@ pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
     }
 }
 
+/// Opens the software keyboard for the focused text field, as a D-pad's
+/// center does on a TV. Answers whether a field holds focus.
+pub fn show_keyboard() -> bool {
+    if !has_focused_field() {
+        return false;
+    }
+    crate::text_input_session::notify_text_input_focus_gained();
+    true
+}
+
 /// Clears focus from the currently focused text field.
 pub fn clear_focus() {
     let previous = focused_field_node();
