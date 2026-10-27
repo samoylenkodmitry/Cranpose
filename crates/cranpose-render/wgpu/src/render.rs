@@ -2457,10 +2457,7 @@ impl GpuRenderer {
         DebugCpuAllocationStats {
             scene_graph_node_count: 0,
             scene_graph_heap_bytes: 0,
-            scene_hits_len: 0,
-            scene_hits_cap: 0,
-            scene_node_index_len: 0,
-            scene_node_index_cap: 0,
+            scene_hits: cranpose_render_common::graph_scene::HitStorage::default(),
             text_renderer_pool_len: self.text.image_cache.len(),
             text_renderer_pool_cap: self.text.image_cache.cap().get(),
             image_texture_cache_len: self.images.len(),

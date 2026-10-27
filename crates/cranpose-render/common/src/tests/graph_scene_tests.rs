@@ -73,11 +73,11 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
         },
     );
     let captured = scene.find_target(NodeId(1)).expect("the first target");
-    let path_storage = scene.hits[0].capture_path.as_ptr();
+    let path_storage = scene.hits.get_mut().hits[0].capture_path.as_ptr();
     scene.clear_hits();
-    assert!(scene.hits.is_empty());
+    assert!(scene.hits.get_mut().hits.is_empty());
     assert!(scene.find_target(NodeId(1)).is_none());
-    assert_eq!(scene.next_hit_z, 0);
+    assert_eq!(scene.hits.get_mut().next_z, 0);
     assert_eq!(
         Rc::strong_count(&first),
         2,
@@ -92,10 +92,13 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
             handlers: &second,
         },
     );
-    assert_eq!(scene.hits[0].capture_path.as_ptr(), path_storage);
-    assert_eq!(scene.hits[0].capture_path, [NodeId(2)]);
-    assert_eq!(scene.hits[0].z_index, 0);
-    assert!(Rc::ptr_eq(&scene.hits[0].handlers, &second));
+    assert_eq!(
+        scene.hits.get_mut().hits[0].capture_path.as_ptr(),
+        path_storage
+    );
+    assert_eq!(scene.hits.get_mut().hits[0].capture_path, [NodeId(2)]);
+    assert_eq!(scene.hits.get_mut().hits[0].z_index, 0);
+    assert!(Rc::ptr_eq(&scene.hits.get_mut().hits[0].handlers, &second));
     let event = PointerEvent::new(
         PointerEventKind::Down,
         Point::new(5.0, 5.0),
@@ -121,8 +124,8 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
             handlers: &pointer_slices(&[]),
         },
     );
-    assert!(scene.hits.is_empty());
-    assert_eq!(scene.next_hit_z, 0);
+    assert!(scene.hits.get_mut().hits.is_empty());
+    assert_eq!(scene.hits.get_mut().next_z, 0);
 }
 
 #[test]
@@ -174,12 +177,12 @@ fn rebuilding_clip_buffers_replaces_clips_without_changing_captured_targets() {
     };
     push(&mut scene, &[clip(left)]);
     let captured = scene.find_target(NodeId(1)).unwrap();
-    let storage = scene.hits[0].hit_clips.as_ptr();
+    let storage = scene.hits.get_mut().hits[0].hit_clips.as_ptr();
     assert!(captured.contains(25.0, 25.0));
     assert!(!captured.contains(75.0, 25.0));
     scene.clear_hits();
     push(&mut scene, &[clip(right)]);
-    assert_eq!(scene.hits[0].hit_clips.as_ptr(), storage);
+    assert_eq!(scene.hits.get_mut().hits[0].hit_clips.as_ptr(), storage);
     assert!(scene.hit_test(25.0, 25.0).is_empty());
     assert_eq!(scene.hit_test(75.0, 25.0).len(), 1);
     assert!(captured.contains(25.0, 25.0));
@@ -322,8 +325,8 @@ fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
         },
     );
 
-    assert_eq!(scene.node_index.get(&NodeId(1)), Some(&0));
-    assert_eq!(scene.node_index.get(&NodeId(2)), Some(&1));
+    assert_eq!(scene.hits.get_mut().node_index.get(&NodeId(1)), Some(&0));
+    assert_eq!(scene.hits.get_mut().node_index.get(&NodeId(2)), Some(&1));
 
     let hits = scene.hit_test(10.0, 10.0);
     assert_eq!(
