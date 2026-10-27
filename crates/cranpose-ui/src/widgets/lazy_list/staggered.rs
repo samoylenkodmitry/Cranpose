@@ -8,9 +8,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{
-    BeyondItem, LazyItemSource as _, LazyListIntervalContent, LazyListMeasureResult,
-    LazyListMeasuredItem, LazyListState, LazyStaggeredItemSource, StaggeredGridMeasureConfig,
-    StaggeredLanes, measure_lazy_staggered_grid, rememberLazyListStateWithPosition,
+    BeyondItem, LazyListIntervalContent, LazyListMeasureResult, LazyListMeasuredItem,
+    LazyListState, LazyStaggeredItemSource, StaggeredGridMeasureConfig, StaggeredLanes,
+    measure_lazy_staggered_grid, rememberLazyListStateWithPosition,
 };
 use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 
@@ -250,7 +250,7 @@ impl LazyStaggeredItemSource for StaggeredItems<'_, '_, '_> {
 
     fn measure(&mut self, index: usize, lane: Option<usize>) -> LazyListMeasuredItem {
         self.items.inputs.cross_axis_size = self.width(lane);
-        self.items.measure(index)
+        self.items.item(index)
     }
 
     fn keep_beyond(&mut self, index: usize, lane: Option<usize>, distance: f32) -> BeyondItem {
@@ -260,7 +260,7 @@ impl LazyStaggeredItemSource for StaggeredItems<'_, '_, '_> {
         }
         self.items.inputs.cross_axis_size = self.width(lane);
         if self.items.place_beyond {
-            return BeyondItem::Placed(self.items.measure(index));
+            return BeyondItem::Placed(self.items.item(index));
         }
         self.items.keep(index, composed);
         BeyondItem::Kept
@@ -289,7 +289,7 @@ pub(super) fn measure_staggered_viewport(
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, frame.axis, available);
+        .begin_pass(frame.axis, available, |slot| scope.slot_is_retained(slot));
     let count = content.item_count();
     let near = state.nearest_range();
     if count > 0 {
@@ -325,7 +325,8 @@ pub(super) fn measure_staggered_viewport(
         sizes,
         full: available,
     };
-    source.items.beyond = beyond_composition(&source.items);
+    source.items.beyond =
+        beyond_composition(state, source.items.scroll_delta, source.items.place_beyond);
     let grid = StaggeredGridMeasureConfig {
         lane_offsets: (0..lanes).map(|lane| sizes.offset(lane)).collect(),
     };

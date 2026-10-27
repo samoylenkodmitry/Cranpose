@@ -5,6 +5,8 @@ pub(crate) mod flex_box;
 mod frame_layout_arena;
 pub(crate) mod grid;
 mod measure_telemetry;
+mod measured_spare;
+mod placed_root_measurements;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
 mod reveal;
@@ -26,12 +28,14 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
-    SemanticsWidgetRole, lazy::LazyItemRoots,
+    SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
+use measured_spare::MeasuredSpare;
+use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
     SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsPlacement, SemanticsRole,
     SemanticsText, SemanticsTree,
@@ -60,7 +64,9 @@ use crate::{
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
     render_state::AppContext,
-    subcompose_layout::{MeasureCallbacks, SubcomposeLayoutNode},
+    subcompose_layout::{
+        MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNode, SubcomposeLayoutNodeHandle,
+    },
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
@@ -1474,19 +1480,6 @@ impl LayoutBuilderState {
             }
         };
 
-        let runtime_handle = {
-            let mut runtime_handle = self.runtime_handle.borrow_mut();
-            if runtime_handle.is_none()
-                && let Ok(applier) = self.applier.try_borrow_typed()
-            {
-                *runtime_handle = applier.runtime_handle();
-            }
-            runtime_handle.clone().ok_or(NodeError::MissingContext {
-                id: node_id,
-                reason: "runtime handle required for subcomposition",
-            })?
-        };
-
         let props = resolved_modifiers.layout_properties();
         let padding = resolved_modifiers.padding();
         let offset = resolved_modifiers.offset();
@@ -1503,40 +1496,14 @@ impl LayoutBuilderState {
             inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
         }
 
-        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
-
-        let measure_result = node_handle.measure_with_callbacks(
-            &applier_host,
-            &runtime_handle,
+        let measure_result = self.subcompose_policy_result(
+            &node_handle,
             node_id,
             inner_constraints,
-            MeasureCallbacks {
-                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
-                    match self.measure_node(child_id, child_constraints) {
-                        Ok(measured) => {
-                            measured_children
-                                .borrow_mut()
-                                .insert(child_id, Rc::clone(&measured));
-                            let size = measured.size_for_parent();
-                            Placeable::value(size.width, size.height, child_id)
-                                .with_alignment_lines(measured.alignment_lines_for_parent())
-                        }
-                        Err(err) => {
-                            let mut slot = measure_error.borrow_mut();
-                            if slot.is_none() {
-                                *slot = Some(err);
-                            }
-                            Placeable::value(0.0, 0.0, child_id)
-                        }
-                    }
-                }),
-                retained_measure_lookup: Box::new(|child_id| {
-                    measured_children.borrow().get(&child_id).cloned()
-                }),
-                error: &measure_error,
-            },
+            &measured_children,
+            &measure_error,
         )?;
 
         if let Some(err) = measure_error.borrow_mut().take() {
@@ -1656,6 +1623,67 @@ impl LayoutBuilderState {
             )
             .into_rc(spare),
         ))
+    }
+
+    // The result of `node_handle`'s policy at `constraints`: from the slots
+    // of its last pass where its retained measure policy keeps them, else
+    // from a pass that composes, which puts the children it measures in
+    // `measured_children` and its first failure in `measure_error`.
+    fn subcompose_policy_result(
+        self: &Rc<Self>,
+        node_handle: &SubcomposeLayoutNodeHandle,
+        node_id: NodeId,
+        constraints: Constraints,
+        measured_children: &MeasuredChildren,
+        measure_error: &RefCell<Option<NodeError>>,
+    ) -> Result<cranpose_ui_layout::MeasureResult, NodeError> {
+        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
+        if let Some(result) = node_handle.measure_retained(&*applier_host, node_id, constraints) {
+            return Ok(result);
+        }
+        let runtime_handle = {
+            let mut runtime_handle = self.runtime_handle.borrow_mut();
+            if runtime_handle.is_none()
+                && let Ok(applier) = self.applier.try_borrow_typed()
+            {
+                *runtime_handle = applier.runtime_handle();
+            }
+            runtime_handle.clone().ok_or(NodeError::MissingContext {
+                id: node_id,
+                reason: "runtime handle required for subcomposition",
+            })?
+        };
+        node_handle.measure_with_callbacks(
+            &applier_host,
+            &runtime_handle,
+            node_id,
+            constraints,
+            MeasureCallbacks {
+                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
+                    match self.measure_node(child_id, child_constraints) {
+                        Ok(measured) => {
+                            measured_children
+                                .borrow_mut()
+                                .insert(child_id, Rc::clone(&measured));
+                            let size = measured.size_for_parent();
+                            Placeable::value(size.width, size.height, child_id)
+                                .with_alignment_lines(measured.alignment_lines_for_parent())
+                        }
+                        Err(err) => {
+                            let mut slot = measure_error.borrow_mut();
+                            if slot.is_none() {
+                                *slot = Some(err);
+                            }
+                            Placeable::value(0.0, 0.0, child_id)
+                        }
+                    }
+                }),
+                retained_measure_lookup: Box::new(|child_id| {
+                    measured_children.borrow().get(&child_id).cloned()
+                }),
+                error: measure_error,
+            },
+        )
     }
 
     fn measure_layout_node(
@@ -2222,44 +2250,6 @@ impl LayoutBuilderState {
     }
 }
 
-/// The measurement of each placement a lazy policy made, in order: see
-/// [`crate::subcompose_layout::SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
-struct PlacedRootMeasurements<'a> {
-    items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
-    /// The measurements of the item being placed, one a root; empty for an
-    /// item that holds none.
-    measured: &'a [Rc<MeasuredNode>],
-    /// The item's next root, and how many roots it has.
-    root: usize,
-    roots: usize,
-}
-
-impl<'a> PlacedRootMeasurements<'a> {
-    fn new(items: &'a [Rc<LazyItemRoots>]) -> Self {
-        Self {
-            items: items.iter(),
-            measured: &[],
-            root: 0,
-            roots: 0,
-        }
-    }
-
-    /// The measurement of the next placement; `None` for a root the item
-    /// holds none for, and once every item is placed.
-    fn next_measurement(&mut self) -> Option<&'a MeasuredNode> {
-        while self.root == self.roots {
-            let item = self.items.next()?;
-            self.measured = crate::widgets::lazy_list::root_measurements(item)
-                .map_or(&[], smallvec::SmallVec::as_slice);
-            self.root = 0;
-            self.roots = item.node_ids.len();
-        }
-        let measured = self.measured.get(self.root);
-        self.root += 1;
-        measured.map(|measured| &**measured)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct MeasuredNode {
     node_id: NodeId,
@@ -2331,32 +2321,6 @@ impl MeasuredNode {
             None => return Rc::new(self),
         }
         spare
-    }
-}
-
-/// The memory of a node's last measurement, children's list included, for
-/// its next measure to fill. It is taken only when nothing else holds the
-/// measurement.
-#[derive(Default)]
-struct MeasuredSpare {
-    node: Option<Rc<MeasuredNode>>,
-    children: Vec<MeasuredChild>,
-}
-
-impl MeasuredSpare {
-    fn take(cache: &NodeCache) -> Self {
-        let Some(mut node) = cache.take_previous_measurement() else {
-            return Self::default();
-        };
-        let Some(previous) = Rc::get_mut(&mut node) else {
-            return Self::default();
-        };
-        let mut children = std::mem::take(&mut previous.children);
-        children.clear();
-        Self {
-            node: Some(node),
-            children,
-        }
     }
 }
 

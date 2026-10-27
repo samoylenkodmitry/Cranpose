@@ -6,6 +6,7 @@
 use std::{
     any::Any,
     cell::RefCell,
+    convert::Infallible,
     rc::{Rc, Weak},
 };
 
@@ -644,7 +645,7 @@ impl LazyGridLines<'_, '_, '_> {
     /// Measures `item` at `width`.
     fn measure_at(&mut self, width: f32, item: usize) -> LazyListMeasuredItem {
         self.items.inputs.cross_axis_size = width;
-        self.items.measure(item)
+        self.items.item(item)
     }
 
     fn cell_width(&self, line: Line, cell: Cell) -> f32 {
@@ -654,10 +655,9 @@ impl LazyGridLines<'_, '_, '_> {
             self.sizes.width(cell.column, cell.span)
         }
     }
-}
 
-impl LazyItemSource for LazyGridLines<'_, '_, '_> {
-    fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
+    // Composes and measures the line at `index`.
+    fn line(&mut self, index: usize) -> LazyListMeasuredItem {
         let (lines, content) = (self.lines, self.items.inputs.content);
         let line = lines.line(index);
         if line.header {
@@ -716,26 +716,34 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
         measured.child_main_sizes = child_main_sizes;
         measured
     }
+}
 
-    fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem {
+impl LazyItemSource for LazyGridLines<'_, '_, '_> {
+    type Refusal = Infallible;
+
+    fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
+        Ok(self.line(index))
+    }
+
+    fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Infallible> {
         let (lines, content) = (self.lines, self.items.inputs.content);
         let line = lines.line(index);
         let place = self.items.place_beyond;
         for cell in lines.cells(line, content) {
             let composed = self.items.composed(cell.item);
             if !self.items.admits(composed, distance) {
-                return BeyondItem::Declined;
+                return Ok(BeyondItem::Declined);
             }
             if !place {
                 self.items.inputs.cross_axis_size = self.cell_width(line, cell);
                 self.items.keep(cell.item, composed);
             }
         }
-        if place {
-            BeyondItem::Placed(self.measure(index))
+        Ok(if place {
+            BeyondItem::Placed(self.line(index))
         } else {
             BeyondItem::Kept
-        }
+        })
     }
 }
 
@@ -769,7 +777,7 @@ pub(super) fn measure_grid_viewport(
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, frame.axis, available);
+        .begin_pass(frame.axis, available, |slot| scope.slot_is_retained(slot));
     let near_lines = state.nearest_range();
     let last = lines.line(near_lines.end.saturating_sub(1));
     let near = lines.line(near_lines.start).first..last.first + last.count;
@@ -807,7 +815,8 @@ pub(super) fn measure_grid_viewport(
         sizes,
         full: available,
     };
-    source.items.beyond = beyond_composition(&source.items);
+    source.items.beyond =
+        beyond_composition(state, source.items.scroll_delta, source.items.place_beyond);
     let mut result = measure_lazy_list_with_beyond_bounds_policy(
         line_count,
         state,
@@ -820,7 +829,7 @@ pub(super) fn measure_grid_viewport(
     if let Some(line) = focused {
         // Measured after the pass, which recycles the slots a forward scroll
         // skips from its first measured line.
-        let line = source.measure(line);
+        let line = source.line(line);
         place_focused_lazy_item(
             &mut result,
             line,
@@ -829,7 +838,7 @@ pub(super) fn measure_grid_viewport(
         );
     }
     if !lines.headers.is_empty() {
-        pin_sticky_header(&mut result, &lines.headers, |line| source.measure(line));
+        pin_sticky_header(&mut result, &lines.headers, |line| source.line(line));
     }
     (result, line_count)
 }
