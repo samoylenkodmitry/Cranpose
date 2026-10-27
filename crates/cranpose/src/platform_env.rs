@@ -79,6 +79,14 @@ impl PlatformEnvironment {
     }
 
     #[cfg_attr(
+        not(target_os = "android"),
+        expect(dead_code, reason = "only Android acts on the device kind")
+    )]
+    pub(crate) fn configuration(&self) -> Configuration {
+        self.configuration.get()
+    }
+
+    #[cfg_attr(
         not(any(target_os = "android", feature = "watchos", test)),
         expect(dead_code, reason = "only Android and watchOS report a device kind")
     )]

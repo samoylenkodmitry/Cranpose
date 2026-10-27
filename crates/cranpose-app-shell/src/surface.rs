@@ -64,6 +64,10 @@ pub struct RootSurface<R: Renderer> {
     // key's repeats wait for the next frame, so they never queue moves
     // behind a slow layout.
     pub(crate) key_moved_focus_at: Option<u64>,
+    // Whether a layout that leaves nothing focused gives focus to a target,
+    // and whether the next update checks so with no layout of its own.
+    pub(crate) keeps_focus: bool,
+    pub(crate) focus_check_due: bool,
     // The press a click key holds until it comes up.
     pub(crate) key_press: Option<crate::shell_input::key_activation::KeyPress>,
     pub(crate) frame_rate_preference: FrameRatePreference,
@@ -113,6 +117,8 @@ impl<R: Renderer> RootSurface<R> {
             semantics_moved: false,
             modal_focus: Vec::new(),
             key_moved_focus_at: None,
+            keeps_focus: false,
+            focus_check_due: false,
             key_press: None,
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
@@ -840,5 +846,35 @@ where
             .text_input_routes
             .borrow_mut()
             .set_active(id);
+    }
+}
+
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
+impl<R> AppShell<R>
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    /// While `keeps` is set, a layout that leaves nothing focused in the
+    /// primary window gives focus to a target: the one that took the place
+    /// of the target focus left, or the first one. A TV sets it, because a
+    /// remote acts only through focus.
+    pub fn set_keeps_focus(&mut self, keeps: bool) {
+        let primary = &mut self.surfaces[0];
+        primary.keeps_focus = keeps;
+        primary.focus_check_due = keeps;
+    }
+
+    // Ends an update: the surfaces are clean, and after a layout the primary
+    // window keeps a focused target when it is set to.
+    pub(crate) fn end_update(&mut self, laid_out: bool) {
+        for surface in &mut self.surfaces {
+            surface.is_dirty = false;
+        }
+        let primary = &mut self.surfaces[0];
+        if primary.keeps_focus && (laid_out || primary.focus_check_due) {
+            primary.focus_check_due = false;
+            self.primary().keep_focus();
+        }
     }
 }
