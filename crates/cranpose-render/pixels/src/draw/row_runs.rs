@@ -1,6 +1,8 @@
 //! Which pixels of a row a shape can cover: the runs a fill, a stroke or an
 //! arc band paints, before the coverage of each pixel in them.
 
+use std::cell::Cell;
+
 use cranpose_ui_graphics::{
     ArcGeometry, CornerRadii, LineFrame, LineGeometry, Point, Rect, StrokeJoin, whole,
 };
@@ -208,6 +210,19 @@ pub(super) struct RoundedFill {
     top_right: Corner,
     bottom_right: Corner,
     bottom_left: Corner,
+    // The rows from the lower of the top corners' centres to the higher of
+    // the bottom corners', on which no corner cuts the row: each has the
+    // same run, which the first of them works out.
+    middle: (f32, f32),
+    middle_run: Cell<Option<MiddleRun>>,
+}
+
+// The run of the middle rows within `min_x..max_x`.
+#[derive(Clone, Copy)]
+struct MiddleRun {
+    min_x: i32,
+    max_x: i32,
+    run: (i32, i32),
 }
 
 /// A rounded corner: a point in its square, the one between the circle's
@@ -261,34 +276,43 @@ impl RoundedFill {
         let right = rect.x + rect.width;
         let top = rect.y;
         let bottom = rect.y + rect.height;
+        let top_left = Corner::new(
+            radii.top_left,
+            left + radii.top_left,
+            top + radii.top_left,
+            Side::Left,
+        );
+        let top_right = Corner::new(
+            radii.top_right,
+            right - radii.top_right,
+            top + radii.top_right,
+            Side::Right,
+        );
+        let bottom_right = Corner::new(
+            radii.bottom_right,
+            right - radii.bottom_right,
+            bottom - radii.bottom_right,
+            Side::Right,
+        );
+        let bottom_left = Corner::new(
+            radii.bottom_left,
+            left + radii.bottom_left,
+            bottom - radii.bottom_left,
+            Side::Left,
+        );
         Self {
             rect,
             flat_left: rect.x + radii.top_left.max(radii.bottom_left),
             flat_right: rect.x + rect.width - radii.top_right.max(radii.bottom_right),
-            top_left: Corner::new(
-                radii.top_left,
-                left + radii.top_left,
-                top + radii.top_left,
-                Side::Left,
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+            middle: (
+                top_left.centre_y.max(top_right.centre_y),
+                bottom_left.centre_y.min(bottom_right.centre_y),
             ),
-            top_right: Corner::new(
-                radii.top_right,
-                right - radii.top_right,
-                top + radii.top_right,
-                Side::Right,
-            ),
-            bottom_right: Corner::new(
-                radii.bottom_right,
-                right - radii.bottom_right,
-                bottom - radii.bottom_right,
-                Side::Right,
-            ),
-            bottom_left: Corner::new(
-                radii.bottom_left,
-                left + radii.bottom_left,
-                bottom - radii.bottom_left,
-                Side::Left,
-            ),
+            middle_run: Cell::new(None),
         }
     }
 
@@ -328,6 +352,13 @@ impl RoundedFill {
         if !(y >= rect.y && y <= rect.y + rect.height) {
             return NO_RUN;
         }
+        let middle = y >= self.middle.0 && y <= self.middle.1;
+        if middle
+            && let Some(kept) = self.middle_run.get()
+            && (kept.min_x, kept.max_x) == (min_x, max_x)
+        {
+            return kept.run;
+        }
         let flat = |x: i32| (self.flat_left..=self.flat_right).contains(&(x as f32 + 0.5));
         let mut start = min_x;
         if !(start < max_x && flat(start)) {
@@ -340,6 +371,13 @@ impl RoundedFill {
             while end > start && !self.clear_of_right((end - 1) as f32 + 0.5, y) {
                 end -= 1;
             }
+        }
+        if middle {
+            self.middle_run.set(Some(MiddleRun {
+                min_x,
+                max_x,
+                run: (start, end),
+            }));
         }
         (start, end)
     }
