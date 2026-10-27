@@ -202,6 +202,25 @@ fn band_bucket_for(
         .then(|| band_bucket(segments))
 }
 
+// Whether a record changes no pixel: a solid brush with no alpha, under a
+// blend that keeps the destination where the source is transparent, as a
+// border in `Color::TRANSPARENT` does. Its quad would still shade every pixel
+// it covers.
+fn paints_nothing(body: &ShapeRecordBody, blend: BlendMode) -> bool {
+    body.brush == 0
+        && body.color[3] <= 0.0
+        && !matches!(
+            blend,
+            BlendMode::Clear
+                | BlendMode::Src
+                | BlendMode::SrcIn
+                | BlendMode::DstIn
+                | BlendMode::SrcOut
+                | BlendMode::DstAtop
+                | BlendMode::Modulate
+        )
+}
+
 /// Whether an arc's band strip costs less than `rect`, the quad it would
 /// otherwise draw; see [`ShapeRecord::is_banded`].
 pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
@@ -1426,6 +1445,9 @@ impl ShapeRecorder {
         (blend, shading): (BlendMode, BrushShading),
         band_bucket: Option<usize>,
     ) {
+        if paints_nothing(&body, blend) {
+            return;
+        }
         let index = self.tables.shapes.len() as u32;
         body.flags |= shading.flag();
         let brush_bit = 1u8
