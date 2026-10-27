@@ -118,6 +118,14 @@ where
         moved
     }
 
+    // Gives focus to a target when none holds it, as an arrow would: the
+    // target now where the last focused one was, or the first one.
+    pub(crate) fn keep_focus(&mut self) {
+        if cranpose_ui::active_focus_target().is_none() {
+            self.move_focus_by_arrow(FocusDirection::Down);
+        }
+    }
+
     fn move_focus_by_arrow(&mut self, direction: FocusDirection) -> bool {
         let target = self.with_layout_tree(|layout_tree| {
             cranpose_ui::arrow_focus_target(layout_tree?, direction)

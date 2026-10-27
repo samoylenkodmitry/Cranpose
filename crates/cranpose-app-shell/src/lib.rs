@@ -928,12 +928,6 @@ where
         }
     }
 
-    fn clear_surface_dirt(&mut self) {
-        for surface in &mut self.surfaces {
-            surface.is_dirty = false;
-        }
-    }
-
     fn invalidate_dev_overlay_text(&mut self) {
         for surface in &mut self.surfaces {
             surface.dev_overlay.invalidate();
@@ -1435,7 +1429,7 @@ where
             let result = self.process_frame_in_context(composed);
             stages.reached();
             log_update_stage_telemetry(&stages, outcome);
-            self.clear_surface_dirt();
+            self.end_update(result.structure_changed);
             result
         })
     }

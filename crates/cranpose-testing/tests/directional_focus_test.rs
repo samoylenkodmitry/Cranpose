@@ -515,3 +515,54 @@ fn rows_of_lazy_cards_walk_past_their_viewports_and_keep_their_place() {
         "Down walks past the three rows the column shows"
     );
 }
+
+#[test]
+fn a_window_that_keeps_focus_gives_it_to_a_target_after_each_layout() {
+    use cranpose_app_shell::AppShell;
+    use cranpose_core::location_key;
+
+    let shown: Rc<RefCell<Option<MutableState<bool>>>> = Rc::default();
+    let captured = Rc::clone(&shown);
+    let focused = Focused::default();
+    let seen = Rc::clone(&focused);
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let state = remember(|| mutableStateOf(true)).with(|state| *state);
+            captured.replace(Some(state));
+            let focused = Rc::clone(&seen);
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                for name in ["one", "two"] {
+                    cell(name, &focused);
+                }
+                if state.get() {
+                    cell("three", &focused);
+                }
+                cell("four", &focused);
+            });
+        },
+    );
+    shell.set_viewport(200.0, 200.0);
+    shell.set_buffer_size(200, 200);
+    shell.set_keeps_focus(true);
+    shell.update();
+    assert_eq!(
+        *focused.borrow(),
+        Some("one"),
+        "the first layout focuses a target"
+    );
+
+    for _ in 0..2 {
+        assert!(shell.on_key_event(&KeyEvent::key_down(Key::DirectionDown, "")));
+        shell.update();
+    }
+    assert_eq!(*focused.borrow(), Some("three"));
+    shown.borrow().expect("composed").set(false);
+    shell.update();
+    assert_eq!(
+        *focused.borrow(),
+        Some("four"),
+        "the target that took the removed one's place takes focus"
+    );
+}
