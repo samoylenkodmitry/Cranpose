@@ -70,8 +70,10 @@ pub(crate) fn main() {
 
             click(&robot, "Tools", "open Tools for the keyboard");
             wait_for(&robot, "Count", "the menu opened for the keyboard");
+            // A key stroke is its down and its up: Return clicks the line on
+            // its up, as a click key does.
             for key in ["Down", "Return"] {
-                if let Err(error) = robot.send_key(key) {
+                if let Err(error) = robot.send_key(key).and_then(|()| robot.release_key(key)) {
                     robot_exit::fail(&robot, &format!("{key} failed: {error}"));
                 }
             }
