@@ -20,12 +20,48 @@ pub struct BrushSampler<'a> {
 #[derive(Clone, Copy, Debug)]
 enum Paint<'a> {
     Solid(Color),
+    // The gradient most brushes are, which takes its own short steps.
+    LinearPair(LinearPair),
     Gradient {
         colors: &'a [Color],
         stops: Option<&'a [f32]>,
         tile_mode: TileMode,
         shape: GradientShape,
     },
+}
+
+// A linear gradient of two colors, clamped past its ends, with no stops of
+// its own: `first` at `start`, `last` at `(dx, dy)` from it.
+#[derive(Clone, Copy, Debug)]
+struct LinearPair {
+    start: Point,
+    dx: f32,
+    dy: f32,
+    length_squared: f32,
+    first: Color,
+    last: Color,
+    // `last - first`, a channel at a time, as the interpolation takes it.
+    step: Color,
+}
+
+impl LinearPair {
+    // The color the general steps give: `t` clamped, `last` at the end and
+    // `first` moved toward `last` by `t` elsewhere, in the same operations.
+    fn color_at(&self, point: Point) -> Color {
+        let t = ((point.x - self.start.x) * self.dx + (point.y - self.start.y) * self.dy)
+            / self.length_squared;
+        let t = t.clamp(0.0, 1.0);
+        if t >= 1.0 {
+            return self.last;
+        }
+        let (first, step) = (self.first, self.step);
+        Color(
+            first.0 + step.0 * t,
+            first.1 + step.1 * t,
+            first.2 + step.2 * t,
+            first.3 + step.3 * t,
+        )
+    }
 }
 
 // Where a point falls along a gradient.
@@ -65,15 +101,39 @@ impl<'a> BrushSampler<'a> {
                 let ex = resolve_gradient_point(rect.x, rect.width, end.x);
                 let ey = resolve_gradient_point(rect.y, rect.height, end.y);
                 let (dx, dy) = (ex - sx, ey - sy);
-                Paint::Gradient {
-                    colors,
-                    stops: stops.as_deref(),
-                    tile_mode: *tile_mode,
-                    shape: GradientShape::Linear {
-                        start: Point::new(sx, sy),
-                        dx,
-                        dy,
-                        length_squared: (dx * dx + dy * dy).max(f32::EPSILON),
+                let start = Point::new(sx, sy);
+                let length_squared = (dx * dx + dy * dy).max(f32::EPSILON);
+                // Stops of another count than the colors' go unread.
+                let own_stops = stops
+                    .as_ref()
+                    .is_some_and(|stops| stops.len() == colors.len());
+                match **colors {
+                    [first, last] if *tile_mode == TileMode::Clamp && !own_stops => {
+                        Paint::LinearPair(LinearPair {
+                            start,
+                            dx,
+                            dy,
+                            length_squared,
+                            first,
+                            last,
+                            step: Color(
+                                last.0 - first.0,
+                                last.1 - first.1,
+                                last.2 - first.2,
+                                last.3 - first.3,
+                            ),
+                        })
+                    }
+                    _ => Paint::Gradient {
+                        colors,
+                        stops: stops.as_deref(),
+                        tile_mode: *tile_mode,
+                        shape: GradientShape::Linear {
+                            start,
+                            dx,
+                            dy,
+                            length_squared,
+                        },
                     },
                 }
             }
@@ -112,6 +172,7 @@ impl<'a> BrushSampler<'a> {
     pub fn color_at(&self, point: Point) -> Color {
         let (colors, stops, tile_mode, shape) = match self.paint {
             Paint::Solid(color) => return color,
+            Paint::LinearPair(pair) => return pair.color_at(point),
             Paint::Gradient {
                 colors,
                 stops,
@@ -154,6 +215,7 @@ impl<'a> BrushSampler<'a> {
     pub fn has_uniform_rows(&self) -> bool {
         match self.paint {
             Paint::Solid(_) => true,
+            Paint::LinearPair(pair) => pair.dx == 0.0,
             Paint::Gradient { shape, .. } => {
                 matches!(shape, GradientShape::Linear { dx, .. } if dx == 0.0)
             }
@@ -165,6 +227,7 @@ impl<'a> BrushSampler<'a> {
     pub fn has_uniform_columns(&self) -> bool {
         match self.paint {
             Paint::Solid(_) => true,
+            Paint::LinearPair(pair) => pair.dy == 0.0,
             Paint::Gradient { shape, .. } => {
                 matches!(shape, GradientShape::Linear { dy, .. } if dy == 0.0)
             }
@@ -176,6 +239,7 @@ impl<'a> BrushSampler<'a> {
     pub fn is_opaque(&self) -> bool {
         match self.paint {
             Paint::Solid(color) => color.3 >= 1.0,
+            Paint::LinearPair(pair) => pair.first.3 >= 1.0 && pair.last.3 >= 1.0,
             Paint::Gradient {
                 colors, tile_mode, ..
             } => {
