@@ -542,7 +542,7 @@ pub async fn run(
                 .with_repeat_count(u32::from(event.repeat()));
 
             if let Ok(mut app_mut) = app.try_borrow_mut() {
-                if app_mut.on_key_event(&key_event) {
+                if super::keys::key_down_taken(&mut app_mut, &key_event) {
                     event.prevent_default();
                 }
                 request_frame();
