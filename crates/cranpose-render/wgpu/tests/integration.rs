@@ -25,6 +25,7 @@ mod capture_culling;
 mod chunk_across_glyphs;
 mod clipped_out_layer;
 mod clipped_text_batching;
+mod compile_rules;
 mod device_error_survival;
 mod device_limits;
 mod direct_surface_root_parity;
