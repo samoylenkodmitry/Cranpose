@@ -512,20 +512,15 @@ fn draw_shape<P: Pixel>(
         } => {
             let runs =
                 |y, min_x, max_x| stroke_row_runs(rect, radii, half_width, join, y, min_x, max_x);
+            let band = shape_sdf::StrokedBox::of_rect(rect, radii, half_width, join);
             // With one radius at every corner the distance is the exact one
             // to a rounded box's band; corners of different radii meet
             // where the distance can step.
             if radii.is_none_or(|radii| radii == CornerRadii::uniform(radii.top_left)) {
-                paint.paint(runs, |point| {
-                    Coverage::of_distance(shape_sdf::stroked_rect_distance(
-                        point, rect, radii, half_width, join,
-                    ))
-                });
+                paint.paint(runs, |point| Coverage::of_distance(band.distance(point)));
             } else {
                 paint.paint(runs, |point| {
-                    Coverage::of(shape_sdf::stroked_rect_coverage(
-                        point, rect, radii, half_width, join,
-                    ))
+                    Coverage::of(shape_sdf::coverage_for_distance(band.distance(point)))
                 });
             }
         }
