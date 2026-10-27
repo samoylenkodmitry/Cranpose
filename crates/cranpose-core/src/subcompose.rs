@@ -357,7 +357,11 @@ impl SubcomposeState {
 
     /// Finishes a subcompose pass, disposing slots that were not used.
     pub fn finish_pass(&mut self) -> SubcomposeDisposal {
-        self.dispose_or_reuse_starting_from_index(self.current_index)
+        let mut disposed = self.dispose_or_reuse_starting_from_index(self.current_index);
+        for (slot, node_id) in self.pool.end_pass() {
+            self.dispose_reusable_node(slot, node_id, &mut disposed);
+        }
+        disposed
     }
 
     /// Returns the SlotsHost for the given slot ID, creating a new one if it doesn't exist.
