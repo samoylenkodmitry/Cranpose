@@ -29,7 +29,9 @@ mod text;
 
 use image::{blit_image_between_pixels, draw_image, image_rect};
 use reach::text_bounds;
-use row_runs::{INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
+use row_runs::{
+    INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, line_row_runs, stroke_row_runs,
+};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
 
@@ -359,12 +361,15 @@ fn draw_shadow<P: Pixel>(
     let Some(bounds) = clip_rect_to_bounds(shadow.bounds, clip, target) else {
         return;
     };
-    let color = [
-        draw.color.r(),
-        draw.color.g(),
-        draw.color.b(),
-        draw.color.a(),
-    ];
+    let paint = P::paint(
+        [
+            draw.color.r(),
+            draw.color.g(),
+            draw.color.b(),
+            draw.color.a(),
+        ],
+        BlendMode::SrcOver,
+    );
     for py in bounds.min_y..bounds.max_y {
         let center_y = py as f32 + 0.5;
         let row = target.row(py, bounds.min_x, bounds.max_x);
@@ -373,11 +378,33 @@ fn draw_shadow<P: Pixel>(
             if coverage <= 0.0 {
                 continue;
             }
-            dst.blend_unit(
-                [color[0], color[1], color[2], color[3] * coverage],
-                BlendMode::SrcOver,
-                diagnostics,
-            );
+            dst.blend_paint(paint, coverage, diagnostics);
+        }
+    }
+}
+
+// Paints the runs of row `py` with one color: a fill where it covers them
+// opaquely, else a blend over each pixel.
+fn paint_row<P: Pixel>(
+    target: &mut Target<'_, P>,
+    py: i32,
+    runs: RowRuns,
+    color: [f32; 4],
+    blend_mode: BlendMode,
+    diagnostics: &RenderDiagnostics,
+) {
+    let runs = runs.into_iter().filter(|(start, end)| start < end);
+    if blend_mode == BlendMode::SrcOver && color[3] >= 1.0 {
+        let pixel = P::opaque(opaque_bytes(color));
+        for (start, end) in runs {
+            P::fill(target.row(py, start, end), pixel);
+        }
+    } else if color[3] > 0.0 {
+        let paint = P::paint(color, blend_mode);
+        for (start, end) in runs {
+            for dst in target.row(py, start, end) {
+                dst.blend_paint(paint, 1.0, diagnostics);
+            }
         }
     }
 }
@@ -462,9 +489,10 @@ fn draw_shape<P: Pixel>(
     match &coverage {
         ShapeCoverage::Line(line) => {
             let frame = line.frame();
-            paint.paint(whole_rows, |point| {
-                Coverage::of(line.coverage_in(&frame, point))
-            });
+            paint.paint(
+                |y, min_x, max_x| line_row_runs(line, &frame, y, min_x, max_x),
+                |point| Coverage::of(line.coverage_in(&frame, point)),
+            );
         }
         ShapeCoverage::Trapezoid(trapezoid) => {
             paint.paint(whole_rows, |point| Coverage::of(trapezoid.coverage(point)));
@@ -579,13 +607,13 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             let Some(&(first, _)) = row_runs.iter().find(|(start, end)| start < end) else {
                 continue;
             };
-            let row = match P::GRADIENT {
-                GradientColors::Dithered => {
-                    DitheredLine::row(&brush, first as f32 + 0.5, center_y, dither_origin)
-                }
-                GradientColors::Plain => DitheredLine::plain(&brush, first as f32 + 0.5, center_y),
-            };
-            let colors = row.colors();
+            let x = first as f32 + 0.5;
+            if P::GRADIENT == GradientColors::Plain {
+                let color = color_to_rgba(brush.color_at(Point::new(x, center_y)));
+                paint_row(target, py, row_runs, color, draw.blend_mode, diagnostics);
+                continue;
+            }
+            let colors = *DitheredLine::row(&brush, x, center_y, dither_origin).colors();
             let cells = colors.map(|color| {
                 (draw.blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
                     .then(|| P::opaque(opaque_bytes(color)))
@@ -594,6 +622,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
                 _ => None,
             };
+            let paints = colors.map(|color| P::paint(color, draw.blend_mode));
             for (start, end) in row_runs {
                 let pixels = target.row(py, start, end);
                 if let Some(pattern) = opaque
@@ -607,7 +636,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                     match cells[cell] {
                         Some(pixel) => *dst = pixel,
                         None if colors[cell][3] > 0.0 => {
-                            dst.blend_unit(colors[cell], draw.blend_mode, diagnostics);
+                            dst.blend_paint(paints[cell], 1.0, diagnostics);
                         }
                         None => {}
                     }
@@ -640,13 +669,16 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 .saturating_add(COLUMN_BAND as i32)
                 .min(clip_bounds.max_x);
             for (cells, px) in band.iter_mut().zip(left..right) {
-                let column = match P::GRADIENT {
-                    GradientColors::Dithered => {
-                        DitheredLine::column(&brush, px as f32 + 0.5, top, dither_origin)
+                let x = px as f32 + 0.5;
+                *cells = match P::GRADIENT {
+                    GradientColors::Dithered => DitheredLine::column(&brush, x, top, dither_origin)
+                        .colors()
+                        .map(|color| P::opaque(opaque_bytes(color))),
+                    GradientColors::Plain => {
+                        let color = color_to_rgba(brush.color_at(Point::new(x, top)));
+                        [P::opaque(opaque_bytes(color)); 4]
                     }
-                    GradientColors::Plain => DitheredLine::plain(&brush, px as f32 + 0.5, top),
                 };
-                *cells = column.colors().map(|color| P::opaque(opaque_bytes(color)));
             }
             for py in clip_bounds.min_y..clip_bounds.max_y {
                 let cell = rows.cell(py);
@@ -679,6 +711,13 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             diagnostics,
         } = self;
         let brush = BrushSampler::new(&draw.brush, rect);
+        // A solid brush blends the same color over every pixel.
+        let solid = brush.is_solid().then(|| {
+            P::paint(
+                color_to_rgba(brush.color_at(Point::default())),
+                draw.blend_mode,
+            )
+        });
         let settles = clip_bounds.within(SETTLED_COORDINATES);
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
@@ -706,19 +745,18 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                         continue;
                     }
 
-                    let mut sample = match P::GRADIENT {
-                        GradientColors::Dithered => {
-                            sample_brush_rgba(&brush, center_x, center_y, dither_origin)
-                        }
-                        GradientColors::Plain => {
-                            color_to_rgba(brush.color_at(Point::new(center_x, center_y)))
-                        }
-                    };
-                    sample[3] *= coverage;
-                    if sample[3] <= 0.0 {
-                        continue;
-                    }
-                    dst.blend_unit(sample, draw.blend_mode, diagnostics);
+                    let paint = solid.unwrap_or_else(|| {
+                        let sample = match P::GRADIENT {
+                            GradientColors::Dithered => {
+                                sample_brush_rgba(&brush, center_x, center_y, dither_origin)
+                            }
+                            GradientColors::Plain => {
+                                color_to_rgba(brush.color_at(Point::new(center_x, center_y)))
+                            }
+                        };
+                        P::paint(sample, draw.blend_mode)
+                    });
+                    dst.blend_paint(paint, coverage, diagnostics);
                 }
             }
         }
@@ -880,7 +918,7 @@ const COLUMN_BAND: usize = 64;
 // `whole::round(unit.clamp(0.0, 1.0) * 255.0) as u8`. Below 2^23 the
 // truncation and the fraction left are exact, and the level is never
 // negative, so a fraction from one half up is the whole step `round` takes.
-fn unit_byte(unit: f32) -> u8 {
+pub(crate) fn unit_byte(unit: f32) -> u8 {
     let level = unit.clamp(0.0, 1.0) * 255.0;
     let truncated = level as u32;
     (truncated + u32::from(level - truncated as f32 >= 0.5)) as u8

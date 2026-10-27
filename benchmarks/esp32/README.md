@@ -86,16 +86,16 @@ pool is in it.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Slint ES3C35P | LVGL E32R35T | Slint E32R35T |
 | --- | --- | --- | --- | --- | --- |
-| Frame | 39.6 ms | 27.8 ms | 71.5 ms | 108.7 ms | 88.7 ms |
-| Frames a second | 25.1 | 36.1 | 14.0 | 9.2 | 11.3 |
-| CPU a frame | 39.2 ms | 27.7 ms | 69.5 ms | 101.4 ms | 76.6 ms |
-| Sent a frame | 73 KB | 105 KB | 191 KB | 263 KB | 193 KB |
-| Instructions | 4,023K | 4,045K | 7,933K | 9,844K | 6,445K |
-| Cycles waiting for code | 2,939K | 901K | 3,384K | 8,322K | 6,782K |
-| Cycles waiting for data | 1,042K | 82K | 1,908K | 900K | 1,509K |
-| First frame after reset | 447 ms | 513 ms | 459 ms | 740 ms | 595 ms |
-| Internal RAM free (lowest) | 104 KB (73 KB) | 73 KB (42 KB) | 105 KB (72 KB) | 155 KB (155 KB) | 71 KB (62 KB) |
-| App image | 3.32 MB | 0.58 MB | 1.27 MB | 0.54 MB | 1.08 MB |
+| Frame | 34.4 ms | 27.8 ms | 71.5 ms | 108.7 ms | 88.7 ms |
+| Frames a second | 28.9 | 36.1 | 14.0 | 9.2 | 11.3 |
+| CPU a frame | 33.8 ms | 27.7 ms | 69.5 ms | 101.4 ms | 76.6 ms |
+| Sent a frame | 72 KB | 105 KB | 191 KB | 263 KB | 193 KB |
+| Instructions | 3,102K | 4,045K | 7,933K | 9,844K | 6,445K |
+| Cycles waiting for code | 2,811K | 901K | 3,384K | 8,322K | 6,782K |
+| Cycles waiting for data | 1,009K | 82K | 1,908K | 900K | 1,509K |
+| First frame after reset | 437 ms | 513 ms | 459 ms | 740 ms | 595 ms |
+| Internal RAM free (lowest) | 105 KB (74 KB) | 73 KB (42 KB) | 105 KB (72 KB) | 155 KB (155 KB) | 71 KB (62 KB) |
+| App image | 3.23 MB | 0.58 MB | 1.27 MB | 0.54 MB | 1.08 MB |
 
 Cranpose does not run the dashboard on the E32R35T: it keeps 453 KB of
 heap in 3,742 blocks for it (traced on the ES3C35P), and the classic ESP32
@@ -105,12 +105,11 @@ parts: the shapes of the pixel renderer's two copies of the raster scene
 (16 KB), draw lists (14 KB), modifier nodes (14 KB) and layer records
 (#902).
 
-On the ES3C35P Cranpose draws the dashboard in 0.55 of Slint's time and
-LVGL in 0.70 of Cranpose's. Slint's dirty region is at most three
+On the ES3C35P Cranpose draws the dashboard in 0.48 of Slint's time and
+LVGL in 0.81 of Cranpose's. Slint's dirty region is at most three
 rectangles, so it redraws and sends 191 KB a frame against Cranpose's 73 KB
-and LVGL's 105 KB. LVGL and Cranpose run the same number of instructions
-(4.0M); Cranpose waits 3.3 times as long for code and 13 times as long for
-data. A Cranpose frame runs through more code than its 125 KB of
+and LVGL's 105 KB. Cranpose runs fewer instructions than LVGL (3.1M against
+4.0M), and waits 3.1 times as long for code and 12 times as long for data. A Cranpose frame runs through more code than its 125 KB of
 IRAM and the 32 KB cache hold. Its waits for data are for PSRAM: the Rust
 heap takes its blocks with `heap_caps_malloc(MALLOC_CAP_DEFAULT)`, which
 the ESP32-S3 serves from PSRAM first, and 545 KB of the dashboard's heap
@@ -128,13 +127,13 @@ laying out the screen.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 0.43 ms | 0.94 ms | 1.20 ms | 1.74 ms |
+| Frame | 0.42 ms | 0.94 ms | 1.15 ms | 1.74 ms |
 | Instructions | 60K | 131K | 55K | 139K |
-| Cycles waiting for code | 26K | 63K | 217K | 159K |
-| Cycles waiting for data | 8K | 9K | 50K | 12K |
+| Cycles waiting for code | 24K | 63K | 211K | 159K |
+| Cycles waiting for data | 8K | 9K | 45K | 12K |
 | First frame after reset | 338 ms | 333 ms | 420 ms | 430 ms |
-| Internal RAM free (lowest) | 101 KB (70 KB) | 121 KB (90 KB) | 157 KB (154 KB) | 203 KB (203 KB) |
-| App image | 2.89 MB | 0.54 MB | 2.84 MB | 0.49 MB |
+| Internal RAM free (lowest) | 103 KB (72 KB) | 121 KB (90 KB) | 157 KB (154 KB) | 203 KB (203 KB) |
+| App image | 2.84 MB | 0.54 MB | 2.78 MB | 0.49 MB |
 
 On the ESP32-S3 IRAM comes out of the same internal RAM as the heap: the
 125 KB that holds Cranpose's per-frame code leaves it less of that RAM free
@@ -152,14 +151,14 @@ composes the number in a `Text` (`--feature text-composed`) or draws it in
 | Frame | ES3C35P | E32R35T |
 | --- | --- | --- |
 | LVGL, label set every frame | 2.42 ms | 3.51 ms |
-| Cranpose, drawn | 2.18 ms | 3.87 ms |
-| Cranpose, composed | 4.48 ms | 6.68 ms |
+| Cranpose, drawn | 2.08 ms | 3.86 ms |
+| Cranpose, composed | 4.42 ms | 6.49 ms |
 
 A drawn line takes no composition or layout, as the bar does. A composed
 line composes its `Text` and lays it out each frame: fewer instructions
-than LVGL's frame (185K against 298K on the ES3C35P), but over more code
+than LVGL's frame (184K against 298K on the ES3C35P), but over more code
 than IRAM and the cache hold, so it waits more than three times as long for
-code (812K cycles against 248K).
+code (798K cycles against 248K).
 
 Before its first frame each app waits out the panel's reset and start-up
 sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. LVGL

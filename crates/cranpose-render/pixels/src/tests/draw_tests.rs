@@ -690,31 +690,47 @@ fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
     );
 }
 
+// Slanted, level, upright, nearly level, steep and very short segments, so
+// that a row the rasterizer cuts short misses a pixel the line covers.
 #[test]
 fn a_line_covers_each_pixel_as_its_geometry_says() {
     use cranpose_ui_graphics::{LineGeometry, Stroke, StrokeCap, StrokeJoin};
-    for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
-        let line = LineGeometry::new(
-            Point::new(12.0, 44.0),
-            Point::new(48.5, 18.25),
-            Stroke {
-                width: 5.0,
-                cap,
-                join: StrokeJoin::Miter,
-            },
-        );
-        let mut shape = shape_template(line.bounds());
-        shape.outline = Outline::Line(line);
-        let frame = render_shape(shape);
-        for y in 0..CANVAS {
-            for x in 0..CANVAS {
-                let coverage = line.coverage(Point::new(x as f32 + 0.5, y as f32 + 0.5));
-                let expected = 18.0 + (255.0 - 18.0) * coverage;
-                let actual = f32::from(frame[((y * CANVAS + x) * 4) as usize]);
-                assert!(
-                    (actual - expected).abs() <= 2.0,
-                    "cap {cap:?}: pixel ({x}, {y}) is {actual}, its coverage says {expected}"
-                );
+    let segments = [
+        ((12.0, 44.0), (48.5, 18.25)),
+        ((10.0, 30.5), (54.0, 30.5)),
+        ((30.25, 8.0), (30.25, 56.0)),
+        ((8.0, 20.0), (56.0, 21.3)),
+        ((20.0, 6.0), (23.0, 58.0)),
+        ((30.0, 30.0), (31.0, 30.5)),
+    ];
+    for ((start, end), width) in segments
+        .into_iter()
+        .flat_map(|segment| [(segment, 5.0), (segment, 1.0)])
+    {
+        for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+            let line = LineGeometry::new(
+                Point::new(start.0, start.1),
+                Point::new(end.0, end.1),
+                Stroke {
+                    width,
+                    cap,
+                    join: StrokeJoin::Miter,
+                },
+            );
+            let mut shape = shape_template(line.bounds());
+            shape.outline = Outline::Line(line);
+            let frame = render_shape(shape);
+            for y in 0..CANVAS {
+                for x in 0..CANVAS {
+                    let coverage = line.coverage(Point::new(x as f32 + 0.5, y as f32 + 0.5));
+                    let expected = 18.0 + (255.0 - 18.0) * coverage;
+                    let actual = f32::from(frame[((y * CANVAS + x) * 4) as usize]);
+                    assert!(
+                        (actual - expected).abs() <= 2.0,
+                        "{start:?} to {end:?}, width {width}, cap {cap:?}: pixel ({x}, {y}) \
+                         is {actual}, its coverage says {expected}"
+                    );
+                }
             }
         }
     }

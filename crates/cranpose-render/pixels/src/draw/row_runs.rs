@@ -1,7 +1,9 @@
 //! Which pixels of a row a shape can cover: the runs a fill, a stroke or an
 //! arc band paints, before the coverage of each pixel in them.
 
-use cranpose_ui_graphics::{ArcGeometry, CornerRadii, Rect, StrokeJoin, whole};
+use cranpose_ui_graphics::{
+    ArcGeometry, CornerRadii, LineFrame, LineGeometry, Point, Rect, StrokeJoin, whole,
+};
 
 /// How far from a band's edge a pixel centre still takes ink: the
 /// antialiasing reaches half a pixel, and the rest is room for the rounding
@@ -30,6 +32,56 @@ fn runs_around(run: (i32, i32), from: f32, to: f32) -> RowRuns {
         return [run, NO_RUN];
     }
     [(run.0, run.1.min(first)), (run.0.max(last + 1), run.1)]
+}
+
+// The row of a stroked segment that can take ink: the pixels whose centres
+// lie within the half width of the segment's line, and within its half
+// length and cap of its midpoint along it, each grown by `INK_REACH`.
+pub(super) fn line_row_runs(
+    line: &LineGeometry,
+    frame: &LineFrame,
+    y: f32,
+    min_x: i32,
+    max_x: i32,
+) -> RowRuns {
+    let dy = y - frame.center.y;
+    let Point {
+        x: along_x,
+        y: along_y,
+    } = frame.direction;
+    // A pixel centre `dx` right of the midpoint lies `dx * along_y - dy *
+    // along_x` across the line and `dx * along_x + dy * along_y` along it.
+    let across = offsets_within(along_y, -dy * along_x, line.half_width + INK_REACH);
+    let along = offsets_within(
+        along_x,
+        dy * along_y,
+        frame.half_length + line.cap_reach() + INK_REACH,
+    );
+    let (Some(across), Some(along)) = (across, along) else {
+        return [NO_RUN, NO_RUN];
+    };
+    let (low, high) = (across.0.max(along.0), across.1.min(along.1));
+    if low.is_nan() || high.is_nan() || low > high {
+        return [NO_RUN, NO_RUN];
+    }
+    let run = run_within(
+        frame.center.x + (low + high) * 0.5,
+        (high - low) * 0.5,
+        min_x,
+        max_x,
+    );
+    [run, NO_RUN]
+}
+
+// The offsets `dx` for which `|dx * slope + offset|` is at most `reach`:
+// every one when the slope is zero and the offset within reach, none when
+// it is not.
+fn offsets_within(slope: f32, offset: f32, reach: f32) -> Option<(f32, f32)> {
+    if slope == 0.0 {
+        return (offset.abs() <= reach).then_some((f32::NEG_INFINITY, f32::INFINITY));
+    }
+    let (first, second) = ((-reach - offset) / slope, (reach - offset) / slope);
+    Some((first.min(second), first.max(second)))
 }
 
 /// The row of an arc that can take ink. Every point of the band, caps

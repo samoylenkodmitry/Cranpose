@@ -9,7 +9,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::BlendMode;
 
-use crate::draw::blend_pixel;
+use crate::draw::{blend_pixel, unit_byte};
 
 // How a format takes a gradient's colors.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,11 +25,17 @@ pub(crate) enum GradientColors {
 pub(crate) trait Pixel: GlyphPixel {
     const GRADIENT: GradientColors;
 
+    // A color worked out once to blend over many pixels of the format.
+    type Paint: Copy;
+
     // The pixel an opaque color of `bytes` gives.
     fn opaque(bytes: [u8; 4]) -> Self;
 
-    // `src`, straight-alpha unit values, over the pixel under `blend_mode`.
-    fn blend_unit(&mut self, src: [f32; 4], blend_mode: BlendMode, diagnostics: &RenderDiagnostics);
+    // `color`, straight-alpha unit values, to blend under `blend_mode`.
+    fn paint(color: [f32; 4], blend_mode: BlendMode) -> Self::Paint;
+
+    // `paint` over the pixel, its alpha scaled by `coverage`.
+    fn blend_paint(&mut self, paint: Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics);
 
     // Paints every pixel of `pixels` with `value`.
     fn fill(pixels: &mut [Self], value: Self);
@@ -45,17 +51,24 @@ pub(crate) trait Pixel: GlyphPixel {
 impl Pixel for [u8; 4] {
     const GRADIENT: GradientColors = GradientColors::Dithered;
 
+    type Paint = ([f32; 4], BlendMode);
+
     fn opaque(bytes: [u8; 4]) -> Self {
         bytes
     }
 
-    fn blend_unit(
+    fn paint(color: [f32; 4], blend_mode: BlendMode) -> Self::Paint {
+        (color, blend_mode)
+    }
+
+    fn blend_paint(
         &mut self,
-        src: [f32; 4],
-        blend_mode: BlendMode,
+        (mut color, blend_mode): Self::Paint,
+        coverage: f32,
         diagnostics: &RenderDiagnostics,
     ) {
-        blend_pixel(self, src, blend_mode, diagnostics);
+        color[3] *= coverage;
+        blend_pixel(self, color, blend_mode, diagnostics);
     }
 
     // As whole 32-bit words where the pixels are aligned for them, a store a
@@ -79,16 +92,49 @@ impl Pixel for [u8; 4] {
     }
 }
 
-// A 16-bit pixel blends as its bytes would, then keeps their high bits.
-fn blend_unit_565<P: Rgb565>(
+// A color to blend over 16-bit pixels, which blend as their bytes would and
+// then keep their high bits.
+#[derive(Clone, Copy)]
+pub(crate) enum Paint565 {
+    // Source over, the blend of nearly every drawing: the color's bytes,
+    // which blend in whole numbers as a glyph's do, and its alpha.
+    Over { bytes: [u8; 3], alpha: f32 },
+    // Any other mode blends the unit values as the bytes' blend does.
+    Unit([f32; 4], BlendMode),
+}
+
+fn paint_565(color: [f32; 4], blend_mode: BlendMode) -> Paint565 {
+    match blend_mode {
+        BlendMode::SrcOver => Paint565::Over {
+            bytes: [
+                unit_byte(color[0]),
+                unit_byte(color[1]),
+                unit_byte(color[2]),
+            ],
+            alpha: color[3],
+        },
+        _ => Paint565::Unit(color, blend_mode),
+    }
+}
+
+fn blend_paint_565<P: Rgb565 + GlyphPixel>(
     pixel: &mut P,
-    src: [f32; 4],
-    blend_mode: BlendMode,
+    paint: Paint565,
+    coverage: f32,
     diagnostics: &RenderDiagnostics,
 ) {
-    let mut rgba = pixel.to_rgba();
-    blend_pixel(&mut rgba, src, blend_mode, diagnostics);
-    *pixel = P::from_rgb(rgba);
+    match paint {
+        Paint565::Over {
+            bytes: [red, green, blue],
+            alpha,
+        } => pixel.blend_bytes([red, green, blue, unit_byte(alpha * coverage)]),
+        Paint565::Unit(mut color, blend_mode) => {
+            color[3] *= coverage;
+            let mut rgba = pixel.to_rgba();
+            blend_pixel(&mut rgba, color, blend_mode, diagnostics);
+            *pixel = P::from_rgb(rgba);
+        }
+    }
 }
 
 // Two 16-bit pixels a 32-bit store: the first pixel alone when it starts
@@ -142,17 +188,18 @@ impl Pixel565 for Rgb565Be {
 impl<P: Pixel565> Pixel for P {
     const GRADIENT: GradientColors = GradientColors::Plain;
 
+    type Paint = Paint565;
+
     fn opaque(bytes: [u8; 4]) -> Self {
         Self::from_rgb(bytes)
     }
 
-    fn blend_unit(
-        &mut self,
-        src: [f32; 4],
-        blend_mode: BlendMode,
-        diagnostics: &RenderDiagnostics,
-    ) {
-        blend_unit_565(self, src, blend_mode, diagnostics);
+    fn paint(color: [f32; 4], blend_mode: BlendMode) -> Self::Paint {
+        paint_565(color, blend_mode)
+    }
+
+    fn blend_paint(&mut self, paint: Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics) {
+        blend_paint_565(self, paint, coverage, diagnostics);
     }
 
     fn fill(pixels: &mut [Self], value: Self) {
