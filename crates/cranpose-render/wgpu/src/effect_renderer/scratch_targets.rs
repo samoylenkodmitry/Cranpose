@@ -1,6 +1,7 @@
+use cranpose_render_common::geometry::blur_scratch_block;
 use cranpose_ui_graphics::RenderEffect;
 
-use super::{ChainedSubstrates, blur_scratch_size};
+use super::ChainedSubstrates;
 use crate::{
     frame_graph::{FrameCommandRecorder, FrameTextureDescriptor},
     offscreen::OffscreenTarget,
@@ -135,4 +136,37 @@ pub(super) fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecor
             );
         }
     }
+}
+
+pub(crate) fn blur_scratch_size(
+    radius_x: f32,
+    radius_y: f32,
+    width: u32,
+    height: u32,
+) -> (u32, u32) {
+    scratch_size_at(blur_scratch_block(radius_x.max(radius_y)), width, height)
+}
+
+/// The scratch a substrate blur of `radius_px` runs at: a low-frequency copy
+/// read once per fragment tolerates a coarser grid than a blur that is the
+/// picture, so the scale doubles at half the radius the blur's does.
+pub(crate) fn substrate_scratch_size(radius_px: f32, width: u32, height: u32) -> (u32, u32) {
+    let scale = if radius_px < 3.0 {
+        1
+    } else if radius_px < 8.0 {
+        2
+    } else {
+        4
+    };
+    scratch_size_at(scale, width, height)
+}
+
+fn scratch_size_at(mut scale: u32, width: u32, height: u32) -> (u32, u32) {
+    while scale > 1 && (width / scale < 16 || height / scale < 16) {
+        scale /= 2;
+    }
+    if scale <= 1 {
+        return (width, height);
+    }
+    (width.div_ceil(scale).max(1), height.div_ceil(scale).max(1))
 }

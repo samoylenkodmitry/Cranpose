@@ -9,9 +9,10 @@ use super::{
     target_rect_within,
 };
 use crate::{
-    frame_graph::UploadAllocatorSpec,
+    frame_graph::{BufferUpload, UploadAllocatorSpec},
     geometry::{SegmentTransform, canonicalize_device_coordinate},
     idle_pool::FrameScratch,
+    instant_triangles::InstantGlyphs,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -215,6 +216,61 @@ impl TurnedGlyph {
             attributes: &Self::ATTRIBS,
         }
     }
+
+    // The glyph's corners as image vertices where the glyph program puts
+    // them: turned and moved in the space of the viewport its batch binds,
+    // which is unturned. See `crate::instant_triangles`.
+    pub(crate) fn instant_corners(&self) -> [super::Vertex; 4] {
+        let [left, top, right, bottom] = self.glyph.rect;
+        let [u_left, v_top, u_right, v_bottom] = self.glyph.uv;
+        let [a, b, c, d] = self.turn;
+        let corner = |(x, y): (f32, f32), uv: [f32; 2]| super::Vertex {
+            position: [
+                a * x + b * y + self.translation[0],
+                c * x + d * y + self.translation[1],
+            ],
+            color: self.glyph.color,
+            uv,
+            uv_bounds: self.glyph.uv_bounds,
+        };
+        [
+            corner((left, top), [u_left, v_top]),
+            corner((right, top), [u_right, v_top]),
+            corner((left, bottom), [u_left, v_bottom]),
+            corner((right, bottom), [u_right, v_bottom]),
+        ]
+    }
+}
+
+// Where a pass draws its turned glyphs from: their instances, with their
+// own pipeline, or the instant triangles it laid while that compiles.
+#[derive(Clone, Copy)]
+pub(crate) enum TurnedGlyphs<'a> {
+    Own(Option<&'a BufferUpload>),
+    Instant(InstantGlyphs<'a>),
+}
+
+impl<'a> TurnedGlyphs<'a> {
+    pub(crate) fn instances(self) -> Option<&'a BufferUpload> {
+        match self {
+            Self::Own(instances) => instances,
+            Self::Instant(_) => None,
+        }
+    }
+
+    // The instant triangles of `step`'s turned glyphs, and which they are,
+    // when the pass laid them.
+    pub(super) fn laid(
+        self,
+        step: &GlyphDrawStep<'_>,
+    ) -> Option<(InstantGlyphs<'a>, std::ops::Range<u32>)> {
+        match (self, step) {
+            (Self::Instant(laid), GlyphDrawStep::Shared(instances, GlyphQuads::Turned)) => {
+                Some((laid, instances.clone()))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The glyph quads a pass draws from its shared buffers: the plain ones and
@@ -403,6 +459,18 @@ pub(super) enum GlyphDrawStep<'a> {
         uniform_slot: usize,
         aligned: bool,
     },
+}
+
+impl GlyphDrawStep<'_> {
+    // The quads the step draws: a retained run's are plain or on whole
+    // pixels.
+    pub(super) fn quads(&self) -> GlyphQuads {
+        match *self {
+            Self::Shared(_, quads) => quads,
+            Self::Retained { aligned: true, .. } => GlyphQuads::Aligned,
+            Self::Retained { .. } => GlyphQuads::Plain,
+        }
+    }
 }
 
 /// The draws a batch's glyph commands take: consecutive shared commands with

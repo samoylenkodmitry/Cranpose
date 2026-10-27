@@ -1,9 +1,9 @@
 use cranpose_ui_graphics::Rect;
 
-use super::{Item, PassSegment, composite_visible, op_is_visible_in_rect};
+use super::{Item, PassSegment, PassTarget, composite_visible, op_is_visible_in_rect};
 use crate::{
     ablation::Ablation,
-    render::{run_draw_bounds, text_draw_geometry_in_rect},
+    render::{run_draw_bounds, segment_scene_rect, text_draw_geometry_in_rect},
     run_store::run_has_shapes,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
 };
@@ -167,4 +167,38 @@ fn op_item<'a>(
 /// `viewport_rect`.
 fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Option<Rect> {
     run_draw_bounds(run, root_scale).filter(|bounds| bounds.intersect(viewport_rect).is_some())
+}
+
+/// The logical rect a segment's draws are judged against: its scissor
+/// within the target, or the whole target, at the segment's offset, mapped
+/// back through the segment's transform.
+pub(super) fn segment_viewport_rect(target: PassTarget<'_>, segment: &PassSegment<'_>) -> Rect {
+    let (x, y, width, height) = segment
+        .scissor
+        .unwrap_or((0, 0, target.width, target.height));
+    segment_scene_rect(
+        segment.transform,
+        Rect {
+            x: segment.offset[0] + x as f32,
+            y: segment.offset[1] + y as f32,
+            width: width as f32,
+            height: height as f32,
+        },
+        segment.scale,
+    )
+}
+
+/// Whether drawing `segment` into `target` touches any pixel: some op or
+/// composite of it reaches into its scissor, by the same test the pass
+/// applies when it draws.
+pub(crate) fn segment_draws_anything(target: PassTarget<'_>, segment: &PassSegment<'_>) -> bool {
+    let viewport_rect = segment_viewport_rect(target, segment);
+    merge_items(
+        segment,
+        viewport_rect,
+        (target.width, target.height),
+        Texts::Drawn,
+    )
+    .next()
+    .is_some()
 }

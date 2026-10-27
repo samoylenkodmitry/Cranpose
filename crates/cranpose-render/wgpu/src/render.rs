@@ -54,7 +54,6 @@ use crate::{
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
-    shaders,
     shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
     shared_shader::SharedShader,
 };
@@ -715,63 +714,6 @@ pub(crate) fn pass_order_depth(index: u32) -> f32 {
     (1.0 - (index as f32 + 1.0) * PASS_DEPTH_STEP).max(0.0)
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub(crate) struct Vertex {
-    position: [f32; 2],
-    color: [f32; 4],
-    uv: [f32; 2],
-    uv_bounds: [f32; 4],
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
-        0 => Float32x2,
-        1 => Float32x4,
-        2 => Float32x2,
-        3 => Float32x4,
-    ];
-
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct Uniforms {
-    viewport: [f32; 2],
-    viewport_offset: [f32; 2],
-    transform: [f32; 4],
-    translation: [f32; 2],
-    reserved: [f32; 2],
-    inverse: [f32; 4],
-    origin: [f32; 2],
-    origin_reserved: [f32; 2],
-    placement: PlacementData,
-}
-
-impl Uniforms {
-    fn of(params: ViewportUniformParams, placement: PlacementData, tier: RunTier) -> Self {
-        let (transform, translation, inverse) = params.transform.uniform_parts();
-        Self {
-            viewport: [params.width as f32, params.height as f32],
-            viewport_offset: params.offset,
-            transform,
-            translation,
-            reserved: [params.depth_base, f32::from(tier as u8)],
-            inverse,
-            origin: params.origin,
-            origin_reserved: [0.0; 2],
-            placement,
-        }
-    }
-}
-
 fn survive_gpu_errors_enabled() -> bool {
     !cranpose_core::DIAGNOSTICS.survive_gpu_errors.equals("0")
 }
@@ -823,7 +765,7 @@ impl ViewportUniforms {
         )
     }
 
-    fn bind(&self, pass: &mut TrackedPass<'_, '_>, slot: usize) -> Result<(), String> {
+    pub(crate) fn bind(&self, pass: &mut TrackedPass<'_, '_>, slot: usize) -> Result<(), String> {
         let uniform = self
             .slots
             .get(slot)
@@ -1380,31 +1322,9 @@ impl GpuRenderer {
                 .filter_map(ShapePipelineKey::from_bits),
             recorder.clone(),
         );
-        let image_layouts = [
-            Some(&uniform_bind_group_layout),
-            Some(&image_bind_group_layout),
-        ];
-        let image_shader = SharedShader::new(
-            &device,
-            adapter_backend,
-            "Image Shader",
-            shaders::IMAGE,
-            &image_layouts,
-        );
-        let glyph_atlas_shader = SharedShader::new(
-            &device,
-            adapter_backend,
-            "Glyph Atlas Shader",
-            shaders::GLYPH_ATLAS,
-            &image_layouts,
-        );
-        let rrect_shadow_shader = SharedShader::new(
-            &device,
-            adapter_backend,
-            "Round Rect Shadow Shader",
-            shaders::RRECT_SHADOW,
-            &[Some(&uniform_bind_group_layout)],
-        );
+        let layouts = (&uniform_bind_group_layout, &image_bind_group_layout);
+        let [image_shader, glyph_atlas_shader, rrect_shadow_shader] =
+            renderer_pipelines::overlay_shaders(&device, adapter_backend, layouts);
 
         let mut renderer = Self {
             queue,
@@ -1438,6 +1358,12 @@ impl GpuRenderer {
                 rrect_shadow_pipeline: RRECT_SHADOW_PIPELINES.map(FixedPipeline::new),
                 #[cfg(not(target_arch = "wasm32"))]
                 mesh_pipelines: MESH_FALLBACK_PIPELINES.map(FixedPipeline::new),
+                #[cfg(not(target_arch = "wasm32"))]
+                instant: crate::instant_triangles::InstantPipelines::new(
+                    &device,
+                    adapter_backend,
+                    layouts,
+                ),
                 image_shader,
                 glyph_atlas_shader,
                 rrect_shadow_shader,
@@ -1502,7 +1428,7 @@ impl GpuRenderer {
         records: &crate::pipeline_records::PipelineRecords,
         holds_recorded: bool,
     ) {
-        self.pipelines.warm_mesh_fallback();
+        self.pipelines.warm_instant_tier();
         self.warm_fixed_pipelines(&|label| {
             records
                 .fixed
@@ -2083,7 +2009,7 @@ impl GpuRenderer {
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.text.begin_text_glyph_run_frame();
-        self.pass_scratch.meshes.begin_frame();
+        self.pass_scratch.begin_frame();
 
         let reads_page = packet.root.contains_backdrop()
             || packet
@@ -3512,13 +3438,16 @@ impl GpuRenderer {
                 rounded: cmd.clip.is_some(),
             };
             if bound_pipeline != Some(variant) {
-                let Some(pipeline) =
-                    self.pipelines
-                        .image_pipeline(&self.frame_stats, blend_mode, variant)
-                else {
-                    continue;
-                };
-                pass.set_pipeline(pipeline);
+                match self
+                    .pipelines
+                    .image_pipeline(&self.frame_stats, blend_mode, variant)
+                {
+                    FixedDraw::Own(pipeline) => pass.set_pipeline(pipeline),
+                    FixedDraw::Instant(stand_in) => {
+                        stand_in.bind(pass, variant.texels());
+                    }
+                    FixedDraw::LeftOut => continue,
+                }
                 bound_pipeline = Some(variant);
             }
             pass.set_bind_group(1, &cmd.image.bind_group, &[]);
@@ -3548,7 +3477,7 @@ impl GpuRenderer {
     pub(crate) fn draw_glyph_cmds(
         &self,
         pass: &mut TrackedPass<'_, '_>,
-        (glyph_slot, turned_slot): (Option<&BufferUpload>, Option<&BufferUpload>),
+        (glyph_slot, turned_slot): (Option<&BufferUpload>, TurnedGlyphs<'_>),
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
         bound: Option<(u32, u32, u32, u32)>,
@@ -3567,10 +3496,9 @@ impl GpuRenderer {
         let mut bound_run_instances: Option<&wgpu::Buffer> = None;
         let mut draws = 0u32;
         for draw in GlyphDraws::new(cmds) {
-            let scissor = match draw.scissor {
-                Some(scissor) => bounded_scissor(scissor, bound),
-                None => Some(whole_target),
-            };
+            let scissor = draw.scissor.map_or(Some(whole_target), |scissor| {
+                bounded_scissor(scissor, bound)
+            });
             let Some((x, y, width, height)) = scissor else {
                 continue;
             };
@@ -3580,24 +3508,31 @@ impl GpuRenderer {
                 bound_atlas = Some(draw.atlas);
             }
             draws += 1;
+            if let Some((laid, instances)) = turned_slot.laid(&draw.step) {
+                self.viewport_uniforms.bind(pass, uniform_slot)?;
+                laid.draw(pass, instances);
+                self.pipelines.note_instant(&self.frame_stats);
+                (bound_pipeline, shared_bound, bound_run_instances) = (None, None, None);
+                continue;
+            }
+            let quads = draw.step.quads();
+            if bound_pipeline != Some(quads) {
+                let pipeline =
+                    self.pipelines
+                        .glyph_atlas_pipeline(&self.frame_stats, frame.depth, quads);
+                let Some(pipeline) = pipeline else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
+                bound_pipeline = Some(quads);
+            }
             match draw.step {
                 GlyphDrawStep::Shared(instances, quads) => {
-                    if bound_pipeline != Some(quads) {
-                        let Some(pipeline) = self.pipelines.glyph_atlas_pipeline(
-                            &self.frame_stats,
-                            frame.depth,
-                            quads,
-                        ) else {
-                            continue;
-                        };
-                        pass.set_pipeline(pipeline);
-                        bound_pipeline = Some(quads);
-                    }
                     let kind = quads.kind();
                     if shared_bound != Some(kind) {
                         let slot = match kind {
                             GlyphKind::Plain => glyph_slot,
-                            GlyphKind::Turned => turned_slot,
+                            GlyphKind::Turned => turned_slot.instances(),
                         }
                         .ok_or_else(|| "shared glyph draw without glyph instances".to_string())?;
                         self.viewport_uniforms.bind(pass, uniform_slot)?;
@@ -3610,24 +3545,8 @@ impl GpuRenderer {
                 GlyphDrawStep::Retained {
                     run,
                     uniform_slot: retained_slot,
-                    aligned,
+                    ..
                 } => {
-                    let quads = if aligned {
-                        GlyphQuads::Aligned
-                    } else {
-                        GlyphQuads::Plain
-                    };
-                    if bound_pipeline != Some(quads) {
-                        let Some(pipeline) = self.pipelines.glyph_atlas_pipeline(
-                            &self.frame_stats,
-                            frame.depth,
-                            quads,
-                        ) else {
-                            continue;
-                        };
-                        pass.set_pipeline(pipeline);
-                        bound_pipeline = Some(quads);
-                    }
                     shared_bound = None;
                     self.viewport_uniforms.bind(pass, retained_slot)?;
                     let instances = run.span.instance_buffer();
@@ -3881,7 +3800,8 @@ fn window_draws(draws: &mut Vec<RunDrawCall>, start: usize, window: &std::ops::R
 
 mod glyph_draws;
 pub(crate) use glyph_draws::{
-    GlyphDrawCmd, GlyphInstance, GlyphInstances, defer_retained_glyph_runs, group_glyph_kinds,
+    GlyphDrawCmd, GlyphInstance, GlyphInstances, TurnedGlyphs, defer_retained_glyph_runs,
+    group_glyph_kinds,
 };
 use text_resources::TextResources;
 pub(crate) mod admission_gate;
@@ -3890,7 +3810,7 @@ mod renderer_pipelines;
 #[cfg(not(target_arch = "wasm32"))]
 use renderer_pipelines::MESH_FALLBACK_PIPELINES;
 use renderer_pipelines::{
-    GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,
+    FixedDraw, GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,
     RRECT_SHADOW_PIPELINES, RendererPipelines,
 };
 mod draw_space;
@@ -3901,12 +3821,14 @@ use image_textures::ImageTextures;
 mod text_glyph_cache;
 mod text_resources;
 pub(crate) use image_draws::{
-    ImageBatch, ImageDrawCmd, ImageSlot, place_image_draws, resolve_image_geometry,
+    ImageBatch, ImageDrawCmd, ImageSlot, Vertex, place_image_draws, resolve_image_geometry,
 };
 mod depth_targets;
 mod pass_depth;
+mod viewport_uniform;
 use depth_targets::DepthTargets;
 pub(crate) use pass_depth::PassDepth;
+use viewport_uniform::Uniforms;
 mod frame_history;
 mod frame_submit;
 mod frame_uploads;

@@ -162,7 +162,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
         );
         renderer.draw_glyph_cmds(
             &mut TrackedPass::new(&mut pass),
-            (None, None),
+            (None, TurnedGlyphs::Own(None)),
             0,
             commands,
             None,

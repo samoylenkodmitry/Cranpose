@@ -225,6 +225,9 @@ pub struct FrameStatsSnapshot {
     /// Shape draws that took a stand-in while their pipeline compiled: a
     /// general pipeline, or triangles the CPU laid out.
     pub shape_pipeline_fallback_draws: u32,
+    /// Image, glyph, shadow and layer draws that took the instant pipeline
+    /// while their own compiled.
+    pub instant_draws: u32,
     /// Shape draws using a completed specialized pipeline.
     pub shape_specialized_draws: u32,
     /// Shape draws laying opaque interiors down in a pass's depth pre-pass.

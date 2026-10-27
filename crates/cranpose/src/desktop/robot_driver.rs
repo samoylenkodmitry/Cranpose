@@ -419,7 +419,9 @@ fn capture_final_frame(
             .capture_frame_with_scale(width, height, scale)
             .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
         let drew_stand_ins = app.renderer().last_frame_stats().is_some_and(|stats| {
-            stats.placeholder_draws > 0 || stats.shape_pipeline_fallback_draws > 0
+            stats.placeholder_draws > 0
+                || stats.shape_pipeline_fallback_draws > 0
+                || stats.instant_draws > 0
         });
         if !drew_stand_ins || Instant::now() >= deadline {
             return Ok(captured);

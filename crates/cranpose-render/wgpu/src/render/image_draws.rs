@@ -1,8 +1,9 @@
+use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, ImageBitmap, ImageSampling, Point, Rect};
 
 use super::{
     DeviceRoundedClip, DrawSpace, FrameCommandRecorder, ImageTextures, PassDepth, TargetRect,
-    Vertex, blend_state_for_mode, confined_scissor, create_render_pipeline_logged,
+    blend_state_for_mode, confined_scissor, create_render_pipeline_logged,
     frame_uploads::FrameUploads, scissor_rect_for_layer,
 };
 use crate::{
@@ -11,10 +12,37 @@ use crate::{
         SegmentTransform, axis_aligned_quad_rect, canonicalized_scaled_quad, scaled_quad,
         snap_delta_for_anchor, translate_quad,
     },
+    instant_triangles::InstantTexels,
     rect_to_quad,
     scene::ImageDraw,
     shared_shader::SharedShader,
 };
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub(crate) struct Vertex {
+    pub(crate) position: [f32; 2],
+    pub(crate) color: [f32; 4],
+    pub(crate) uv: [f32; 2],
+    pub(crate) uv_bounds: [f32; 4],
+}
+
+impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x4,
+        2 => Float32x2,
+        3 => Float32x4,
+    ];
+
+    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
 
 pub(super) fn create_image_pipeline(
     device: &wgpu::Device,
@@ -260,6 +288,17 @@ pub(crate) struct ImageVariant {
     pub(super) depth: PassDepth,
     pub(super) alpha_mask: bool,
     pub(super) rounded: bool,
+}
+
+impl ImageVariant {
+    // How the instant pipeline reads the image while this variant compiles.
+    pub(super) fn texels(self) -> InstantTexels {
+        if self.alpha_mask {
+            InstantTexels::Coverage
+        } else {
+            InstantTexels::Straight
+        }
+    }
 }
 
 pub(crate) struct ImageDrawCmd {

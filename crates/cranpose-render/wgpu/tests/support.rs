@@ -946,8 +946,10 @@ pub(crate) fn capture_with_waits(
     let frame = capture_graph(renderer, graph, width, height);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     let built = cranpose_render_wgpu::pipelines_created() - before;
-    let waits =
-        built + u64::from(stats.placeholder_draws) + u64::from(stats.shape_pipeline_fallback_draws);
+    let waits = built
+        + u64::from(stats.placeholder_draws)
+        + u64::from(stats.shape_pipeline_fallback_draws)
+        + u64::from(stats.instant_draws);
     (frame, stats, waits)
 }
 
@@ -961,7 +963,7 @@ pub(crate) fn capture_drawn(
     loop {
         let frame = capture_graph(renderer, graph.clone(), width, height);
         let stats = renderer.last_frame_stats().expect("frame statistics");
-        if stats.placeholder_draws == 0 {
+        if stats.placeholder_draws == 0 && stats.instant_draws == 0 {
             return (frame, stats);
         }
         assert!(
@@ -1022,6 +1024,7 @@ pub(crate) fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
     stats.shape_pipeline_fallback_draws == 0
         && stats.shader_pipeline_fallback_draws == 0
         && stats.placeholder_draws == 0
+        && stats.instant_draws == 0
 }
 
 pub(crate) fn capture_settled(
