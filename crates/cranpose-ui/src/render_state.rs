@@ -89,6 +89,7 @@ pub struct AppContext {
     window_roots: crate::modifier::WindowRootRegistry,
     drag_and_drop: crate::modifier::DragAndDropState,
     placement_pass: crate::widgets::nodes::layout_node::PlacementPass,
+    memory_headroom: Cell<crate::MemoryHeadroom>,
 }
 
 /// Nonzero, so that an absent one takes no more room than one: every
@@ -182,6 +183,7 @@ impl AppContext {
             window_roots: crate::modifier::WindowRootRegistry::default(),
             drag_and_drop: crate::modifier::DragAndDropState::default(),
             placement_pass: crate::widgets::nodes::layout_node::PlacementPass::new(),
+            memory_headroom: Cell::new(crate::MemoryHeadroom::Ample),
         });
         *context.self_weak.borrow_mut() = Rc::downgrade(&context);
         crate::thread_state::with(|state| {
@@ -331,6 +333,14 @@ impl AppContext {
 
     pub(crate) fn lazy_prefetch(&self) -> &crate::lazy_prefetch::LazyPrefetchState {
         &self.lazy_prefetch
+    }
+
+    pub(crate) fn memory_headroom(&self) -> crate::MemoryHeadroom {
+        self.memory_headroom.get()
+    }
+
+    pub(crate) fn set_memory_headroom(&self, headroom: crate::MemoryHeadroom) {
+        self.memory_headroom.set(headroom);
     }
 
     /// Whether the next frame has work in this context: a render, pointer,

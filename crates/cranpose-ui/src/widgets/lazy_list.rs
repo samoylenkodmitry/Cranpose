@@ -25,7 +25,7 @@ use web_time::Instant;
 
 use super::PaddingValues;
 use crate::{
-    composable,
+    MemoryHeadroom, composable,
     layout::MeasuredNode,
     layout_direction::LayoutDirection,
     modifier::{Modifier, Size},
@@ -38,6 +38,9 @@ use crate::{
 };
 
 const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
+// With little memory left, the pool keeps the item that left last: a scroll
+// gives it to the item that comes next.
+const TIGHT_RETAINED_REUSABLE_SLOTS: usize = 1;
 const IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS: usize = 2;
 const IDLE_PREFETCH_ITEMS_PER_PASS: usize = 1;
 /// Where idle prefetch passes run, a scrolling frame composes the new items
@@ -632,7 +635,10 @@ fn measure_lazy_list_internal(
     context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
     let frame = LazyFrame::new(constraints, axis, context.config);
-    let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
+    let retained_reusable_slots = match crate::current_memory_headroom() {
+        MemoryHeadroom::Ample => EXPENSIVE_RETAINED_REUSABLE_SLOTS,
+        MemoryHeadroom::Tight => TIGHT_RETAINED_REUSABLE_SLOTS,
+    };
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
     let (result, count) = match &context.config.grid {
         Some(grid::CellLayout::Grid(grid)) => {
@@ -891,6 +897,11 @@ fn beyond_composition(
     scroll_delta: f32,
     place_beyond: bool,
 ) -> Option<BeyondBoundsComposition> {
+    // With little memory left a list keeps only the items it shows, unless
+    // it holds the focus and places their neighbours for a focus search.
+    if !place_beyond && crate::current_memory_headroom() == MemoryHeadroom::Tight {
+        return Some(BeyondBoundsComposition::viewport_only());
+    }
     if crate::lazy_prefetch::in_lazy_prefetch_pass() {
         state.hold_scroll_window();
         return Some(BeyondBoundsComposition::new(true, f32::INFINITY));
@@ -951,6 +962,8 @@ struct BeyondBoundsComposition {
     /// [`REACH_FRAMES`] frames, none at rest: the passes compose the rest.
     reach: f32,
     wants_prefetch: bool,
+    // `Tight` admits no item, composed or not.
+    memory: MemoryHeadroom,
 }
 
 impl BeyondBoundsComposition {
@@ -965,10 +978,23 @@ impl BeyondBoundsComposition {
             },
             reach,
             wants_prefetch: false,
+            memory: MemoryHeadroom::Ample,
+        }
+    }
+
+    // A composition that keeps nothing beyond the viewport, and leaves
+    // nothing there for an idle prefetch pass.
+    fn viewport_only() -> Self {
+        Self {
+            memory: MemoryHeadroom::Tight,
+            ..Self::new(false, 0.0)
         }
     }
 
     fn admits(&mut self, composed: bool, distance: f32) -> bool {
+        if self.memory == MemoryHeadroom::Tight {
+            return false;
+        }
         if composed {
             self.ready += 1;
             return true;

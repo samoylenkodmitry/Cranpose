@@ -115,6 +115,8 @@ impl PlatformEnvironment {
             ],
             || {
                 RootBackHandler();
+                #[cfg(target_os = "android")]
+                HeadroomFromPressure();
                 let content = || {
                     #[cfg(feature = "webview")]
                     self.native_views.provide(content);
@@ -144,6 +146,38 @@ fn RootBackHandler() {
         }
     });
 }
+
+// Turns the memory pressure Android reports into the headroom lazy layouts
+// read: tight from a low or critical report until a minute passes without
+// one. A host that measures its heap reports that instead.
+#[cfg(target_os = "android")]
+#[composable]
+fn HeadroomFromPressure() {
+    let reports = cranpose_services::rememberMemoryPressure();
+    let tight_reports = cranpose_core::rememberMutableStateOf(|| 0u32);
+    cranpose_core::CollectEvents(reports, (), move |report| {
+        if matches!(
+            report,
+            cranpose_services::MemoryPressure::Low | cranpose_services::MemoryPressure::Critical
+        ) {
+            cranpose_ui::set_memory_headroom(cranpose_ui::MemoryHeadroom::Tight);
+            tight_reports.set(tight_reports.get().wrapping_add(1));
+        }
+    });
+    let reported = tight_reports.value();
+    cranpose_core::LaunchedEffectAsync(reported, move |_| {
+        Box::pin(async move {
+            if reported > 0 {
+                cranpose_core::delay(TIGHT_AFTER_PRESSURE).await;
+                cranpose_ui::set_memory_headroom(cranpose_ui::MemoryHeadroom::Ample);
+            }
+        })
+    });
+}
+
+// How long a low or critical memory report keeps lazy layouts tight.
+#[cfg(target_os = "android")]
+const TIGHT_AFTER_PRESSURE: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[cfg(test)]
 #[path = "tests/platform_env_tests.rs"]
