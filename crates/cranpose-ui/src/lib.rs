@@ -33,6 +33,7 @@ pub use ui_strings::UiString;
 
 /// Screen reader announcements for events that have no control on screen.
 pub mod announce;
+mod arrow_focus;
 pub mod bring_into_view;
 pub mod clipboard_session;
 mod configuration;
@@ -105,8 +106,9 @@ pub mod widgets;
 mod word_boundaries;
 pub mod zoom;
 
-#[doc(hidden)]
 pub use announce::{Announcement, Announcer, announce, drain_announcements, local_announcer};
+#[doc(hidden)]
+pub use arrow_focus::arrow_focus_target;
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
@@ -162,8 +164,8 @@ pub use focus_dispatch::{
 pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_platform};
 pub use focus_navigation::{KeyboardFocusTarget, keyboard_focus_target};
 pub use focus_order::{
-    FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len,
-    selectable_group_of, set_focus_order, take_requested_focus_move,
+    FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len, set_focus_order,
+    take_requested_focus_move,
 };
 pub use focus_within::FocusWithin;
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};

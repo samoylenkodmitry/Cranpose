@@ -102,12 +102,6 @@ pub fn collect_focus_order_under(tree: &LayoutTree, node_id: NodeId) -> Vec<Focu
     entries
 }
 
-/// The nearest node above the given one that declares
-/// [`selectable_group`](crate::Modifier::selectable_group), when there is one.
-pub fn selectable_group_of(tree: &LayoutTree, node_id: NodeId) -> Option<NodeId> {
-    group_above(focus_root(tree.root()), node_id, None)
-}
-
 pub(crate) fn focus_root(root: &LayoutBox) -> &LayoutBox {
     top_modal(root).unwrap_or(root)
 }
@@ -128,28 +122,6 @@ fn top_modal(layout_box: &LayoutBox) -> Option<&LayoutBox> {
         })
 }
 
-fn group_above(layout_box: &LayoutBox, node_id: NodeId, group: Option<NodeId>) -> Option<NodeId> {
-    let group = if declares_selectable_group(layout_box) {
-        Some(layout_box.node_id)
-    } else {
-        group
-    };
-    if layout_box.node_id == node_id {
-        return group;
-    }
-    layout_box
-        .children
-        .iter()
-        .find_map(|child| group_above(child, node_id, group))
-}
-
-fn declares_selectable_group(layout_box: &LayoutBox) -> bool {
-    layout_box
-        .node_data
-        .semantics()
-        .is_some_and(is_selectable_group)
-}
-
 pub(crate) fn is_selectable_group(config: &SemanticsConfiguration) -> bool {
     config.selectable_group
         || matches!(
@@ -162,7 +134,7 @@ pub(crate) fn is_selectable_group(config: &SemanticsConfiguration) -> bool {
         )
 }
 
-fn find_box(layout_box: &LayoutBox, node_id: NodeId) -> Option<&LayoutBox> {
+pub(crate) fn find_box(layout_box: &LayoutBox, node_id: NodeId) -> Option<&LayoutBox> {
     if layout_box.node_id == node_id {
         return Some(layout_box);
     }

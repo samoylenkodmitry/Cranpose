@@ -555,7 +555,10 @@ field holds focus the two keys go to the field.
 focused control and its ancestors leave moves focus to the nearest control
 in that direction, by the rules of Compose's two-dimensional focus search: a
 control level with the focused one beats a nearer one beside it. Under
-`Modifier::selectable_group()` the search looks inside the group first. In a
+`Modifier::focus_group()` or `Modifier::selectable_group()` the search looks
+inside the group first, and a `Modifier::focus_restorer(fallback)` group
+gives focus back to the child it had when an arrow enters it again, as a
+row of cards on a TV keeps its place. In a
 tab bar, a radio group, a segmented control and a menu, the arrows move along
 the group and wrap at its ends. With nothing focused, Down and Right enter
 at the top left and Up and Left at the bottom right. When the focused

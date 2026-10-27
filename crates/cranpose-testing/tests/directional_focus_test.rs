@@ -7,7 +7,9 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_core::{MutableState, key, mutableStateOf, remember};
 use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, FocusRequester, Key, KeyEvent, Modifier, Row, RowSpec, Size,
+    Box, BoxSpec, Column, ColumnSpec, FocusRequester, Key, KeyEvent, LazyColumn, LazyColumnSpec,
+    LazyItems, LazyListScope, LazyRow, LazyRowSpec, Modifier, Row, RowSpec, Size,
+    rememberLazyListState,
 };
 
 type Focused = Rc<RefCell<Option<&'static str>>>;
@@ -311,4 +313,205 @@ fn a_held_arrow_moves_focus_once_a_frame() {
     );
     screen.robot.wait_for_idle();
     assert_eq!(screen.focused(), Some("four"));
+}
+
+// A row of 60 by 40 cells named by `names`, with the `group` modifier.
+fn row_of(names: &'static [&'static str], group: Modifier, focused: &Focused) {
+    let focused = Rc::clone(focused);
+    Row(group, RowSpec::default(), move || {
+        for name in names {
+            cell(name, &focused);
+        }
+    });
+}
+
+#[test]
+fn an_arrow_searches_its_focus_group_before_the_screen() {
+    let mut screen = Screen::new(|focused| {
+        let focused = Rc::clone(focused);
+        Box(Modifier::empty(), BoxSpec::default(), move || {
+            let inside = Rc::clone(&focused);
+            Row(
+                Modifier::empty().focus_group(),
+                RowSpec::default(),
+                move || {
+                    cell("first", &inside);
+                    Box(
+                        Modifier::empty().size(Size::new(180.0, 40.0)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    cell("far", &inside);
+                },
+            );
+            Box(
+                target("between", Size::new(60.0, 40.0), &focused).offset(120.0, 0.0),
+                BoxSpec::default(),
+                || {},
+            );
+        });
+    });
+    assert!(screen.press(Key::DirectionDown));
+    assert_eq!(screen.focused(), Some("first"));
+    assert!(screen.press(Key::DirectionRight));
+    assert_eq!(
+        screen.focused(),
+        Some("far"),
+        "Right stays in the group though a control outside it lies nearer"
+    );
+    assert!(screen.press(Key::DirectionLeft));
+    assert_eq!(
+        screen.focused(),
+        Some("first"),
+        "Left from the far cell skips the control outside the group too"
+    );
+}
+
+#[test]
+fn a_restoring_row_gives_focus_back_to_the_cell_it_had() {
+    let mut screen = Screen::new(|focused| {
+        let focused = Rc::clone(focused);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            row_of(
+                &["a1", "a2", "a3", "a4"],
+                Modifier::empty().focus_restorer(None),
+                &focused,
+            );
+            row_of(
+                &["b1", "b2", "b3", "b4"],
+                Modifier::empty().focus_restorer(None),
+                &focused,
+            );
+        });
+    });
+    for key in [Key::DirectionDown, Key::DirectionRight, Key::DirectionRight] {
+        assert!(screen.press(key));
+    }
+    assert_eq!(screen.focused(), Some("a3"));
+    assert!(screen.press(Key::DirectionDown));
+    assert_eq!(
+        screen.focused(),
+        Some("b3"),
+        "the first entry follows the arrow"
+    );
+    for _ in 0..2 {
+        assert!(screen.press(Key::DirectionLeft));
+    }
+    assert_eq!(screen.focused(), Some("b1"));
+    assert!(screen.press(Key::DirectionUp));
+    assert_eq!(
+        screen.focused(),
+        Some("a3"),
+        "the upper row gives focus back to the cell it had, not the one above b1"
+    );
+}
+
+#[test]
+fn a_restoring_row_entered_the_first_time_gives_focus_to_its_fallback() {
+    let built = FocusRequester::new();
+    let mut screen = Screen::new(move |focused| {
+        let focused = Rc::clone(focused);
+        let fallback = built.clone();
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            cell("above", &focused);
+            let row = Rc::clone(&focused);
+            let requester = fallback.clone();
+            Row(
+                Modifier::empty().focus_restorer(Some(fallback.clone())),
+                RowSpec::default(),
+                move || {
+                    cell("left", &row);
+                    Box(
+                        target("chosen", Size::new(60.0, 40.0), &row).focus_requester(&requester),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        });
+    });
+    for key in [Key::DirectionDown, Key::DirectionDown] {
+        assert!(screen.press(key));
+    }
+    assert_eq!(
+        screen.focused(),
+        Some("chosen"),
+        "Down from above reaches the left cell, and the row gives focus to its fallback"
+    );
+}
+
+#[test]
+fn rows_of_lazy_cards_walk_past_their_viewports_and_keep_their_place() {
+    let focused: Rc<RefCell<Option<(usize, usize)>>> = Rc::default();
+    let seen = Rc::clone(&focused);
+    let mut robot = create_headless_robot_test(400, 300, move || {
+        let seen = Rc::clone(&seen);
+        LazyColumn(
+            Modifier::empty().size(Size::new(400.0, 300.0)),
+            rememberLazyListState(),
+            LazyColumnSpec::default(),
+            move |scope| {
+                let seen = Rc::clone(&seen);
+                scope.items(LazyItems::new(20), move |row| {
+                    let seen = Rc::clone(&seen);
+                    LazyRow(
+                        Modifier::empty()
+                            .size(Size::new(400.0, 100.0))
+                            .focus_restorer(None),
+                        rememberLazyListState(),
+                        LazyRowSpec::default(),
+                        move |scope| {
+                            let seen = Rc::clone(&seen);
+                            scope.items(LazyItems::new(20), move |card| {
+                                let seen = Rc::clone(&seen);
+                                Box(
+                                    Modifier::empty()
+                                        .size(Size::new(120.0, 90.0))
+                                        .on_focus_changed(move |state| {
+                                            if state.is_focused() {
+                                                *seen.borrow_mut() = Some((row, card));
+                                            }
+                                        }),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            });
+                        },
+                    );
+                });
+            },
+        );
+    });
+    robot.wait_for_idle();
+    let mut press = |key| {
+        let taken = robot.shell_mut().on_key_event(&KeyEvent::key_down(key, ""));
+        robot.shell_mut().update();
+        assert!(taken, "{key:?}");
+        *focused.borrow()
+    };
+    press(Key::DirectionDown);
+    for _ in 0..5 {
+        press(Key::DirectionRight);
+    }
+    assert_eq!(
+        *focused.borrow(),
+        Some((0, 5)),
+        "Right walks past the three cards the row shows"
+    );
+    press(Key::DirectionDown);
+    assert_eq!(focused.borrow().map(|(row, _)| row), Some(1));
+    press(Key::DirectionUp);
+    assert_eq!(
+        *focused.borrow(),
+        Some((0, 5)),
+        "the first row gives focus back to the card it had"
+    );
+    for _ in 0..4 {
+        press(Key::DirectionDown);
+    }
+    assert_eq!(
+        focused.borrow().map(|(row, _)| row),
+        Some(4),
+        "Down walks past the three rows the column shows"
+    );
 }

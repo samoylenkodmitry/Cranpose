@@ -4,7 +4,7 @@ use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_foundation::FocusState;
 use cranpose_ui_graphics::Rect;
 
-use crate::dirty_node_queue::DirtyNodeQueue;
+use crate::{dirty_node_queue::DirtyNodeQueue, modifier::focus::FocusRestorer};
 
 pub(crate) trait FocusTargetHandle {
     fn set_focus_state(&self, state: FocusState);
@@ -13,6 +13,8 @@ pub(crate) trait FocusTargetHandle {
 struct FocusInvalidationManager {
     active_focus_target: Option<NodeId>,
     focus_targets: HashMap<NodeId, Vec<Rc<dyn FocusTargetHandle>>>,
+    // The focus groups, each with its restorer when it restores focus.
+    focus_groups: HashMap<NodeId, Option<Rc<FocusRestorer>>>,
     pending_focus_requests: VecDeque<NodeId>,
     dispatching_focus: bool,
 }
@@ -22,6 +24,7 @@ impl FocusInvalidationManager {
         Self {
             active_focus_target: None,
             focus_targets: HashMap::default(),
+            focus_groups: HashMap::default(),
             pending_focus_requests: VecDeque::new(),
             dispatching_focus: false,
         }
@@ -292,6 +295,40 @@ pub(crate) fn last_focus_rect() -> Option<Rect> {
 /// Returns the currently active focus target, if any.
 pub fn active_focus_target() -> Option<NodeId> {
     crate::render_state::require_current_app_context("focus dispatch access").active_focus_target()
+}
+
+pub(crate) fn register_focus_group(node_id: NodeId, restorer: Option<Rc<FocusRestorer>>) {
+    crate::render_state::with_focus_dispatch(|state| {
+        state
+            .manager
+            .borrow_mut()
+            .focus_groups
+            .insert(node_id, restorer);
+    });
+}
+
+pub(crate) fn unregister_focus_group(node_id: NodeId) {
+    crate::render_state::with_focus_dispatch(|state| {
+        state.manager.borrow_mut().focus_groups.remove(&node_id);
+    });
+}
+
+pub(crate) fn is_focus_group(node_id: NodeId) -> bool {
+    crate::render_state::with_focus_dispatch(|state| {
+        state.manager.borrow().focus_groups.contains_key(&node_id)
+    })
+}
+
+pub(crate) fn focus_restorer(node_id: NodeId) -> Option<Rc<FocusRestorer>> {
+    crate::render_state::with_focus_dispatch(|state| {
+        state
+            .manager
+            .borrow()
+            .focus_groups
+            .get(&node_id)
+            .cloned()
+            .flatten()
+    })
 }
 
 pub(crate) fn register_focus_target(node_id: NodeId, handle: Rc<dyn FocusTargetHandle>) {
