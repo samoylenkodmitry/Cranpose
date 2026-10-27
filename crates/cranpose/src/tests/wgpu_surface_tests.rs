@@ -16,20 +16,20 @@ impl PresentSurface for Surface {
     }
 }
 
-fn required(dirty: bool, changed: bool, owes: bool, shows: bool) -> bool {
-    surface_present_required(dirty, changed, &mut Surface { owes, shows })
+fn surface(owes: bool, shows: bool) -> Surface {
+    Surface { owes, shows }
 }
 
 #[test]
 fn present_is_required_until_surface_is_clean() {
-    assert!(required(true, false, false, false));
-    assert!(required(false, true, false, false));
-    assert!(required(false, false, true, false));
-    assert!(!required(false, false, false, false));
+    assert!(surface_present_required(true, false, &mut surface(false, false)));
+    assert!(surface_present_required(false, true, &mut surface(false, false)));
+    assert!(surface_present_required(false, false, &mut surface(true, false)));
+    assert!(!surface_present_required(false, false, &mut surface(false, false)));
 }
 
 #[test]
 fn a_surface_that_shows_the_scene_takes_no_image_unless_it_is_dirty() {
-    assert!(!required(false, true, true, true));
-    assert!(required(true, true, true, true));
+    assert!(!surface_present_required(false, true, &mut surface(true, true)));
+    assert!(surface_present_required(true, true, &mut surface(true, true)));
 }
