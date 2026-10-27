@@ -420,6 +420,18 @@ pub(crate) struct PlacedShape {
 }
 
 /// `rect` moved to whole pixels and grown to cover at least one.
+// Twice the x of the vertical line through the middle of `rect`, when the
+// line lies on a pixel's edge or centre and the window's pixels lie close
+// enough to it for a float to hold their offsets from it exactly: a pixel
+// and its twin across the line then lie as far from the line, to the bit.
+fn mirror_line(rect: Rect) -> Option<i32> {
+    // Pixels within this many of the line, and their centres' offsets, are
+    // whole or half numbers a float holds exactly.
+    const LIMIT: f32 = 4_194_304.0;
+    let twice = (rect.x + rect.width * 0.5) * 2.0;
+    (twice.fract() == 0.0 && twice.abs() < LIMIT).then(|| floor_pixel(twice))
+}
+
 fn on_pixel_grid(rect: Rect) -> Rect {
     Rect {
         x: whole::round(rect.x),
@@ -519,7 +531,11 @@ fn draw_shape<P: Pixel>(
             // to a rounded box's band; corners of different radii meet
             // where the distance can step.
             if radii.is_none_or(|radii| radii == CornerRadii::uniform(radii.top_left)) {
-                paint.paint(runs, |point| Coverage::of_distance(band.distance(point)));
+                paint.paint_stroke(
+                    runs,
+                    |point| Coverage::of_distance(band.distance(point)),
+                    mirror_line(rect),
+                );
             } else {
                 paint.paint(runs, |point| {
                     Coverage::of(shape_sdf::coverage_for_distance(band.distance(point)))

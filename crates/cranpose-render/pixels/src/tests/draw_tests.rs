@@ -792,40 +792,63 @@ fn arcs_cover_each_pixel_as_their_geometry_says() {
 #[test]
 fn stroked_rounded_rects_cover_each_pixel_as_their_geometry_says() {
     use cranpose_ui_graphics::{RoundedCornerShape, Stroke, StrokeCap};
-    let rect = Rect {
-        x: 6.4,
-        y: 9.8,
-        width: 50.5,
-        height: 41.25,
-    };
-    for shape_radii in [
-        None,
-        Some(RoundedCornerShape::uniform(0.3)),
-        Some(RoundedCornerShape::uniform(6.0)),
-        Some(RoundedCornerShape::new(2.0, 11.0, 0.0, 17.5)),
-        Some(RoundedCornerShape::uniform(100.0)),
-    ] {
-        for half_width in [0.5, 1.5, 4.25] {
-            for join in [StrokeJoin::Miter, StrokeJoin::Round, StrokeJoin::Bevel] {
-                let stroke = Stroke {
-                    width: half_width * 2.0,
-                    cap: StrokeCap::Butt,
-                    join,
-                };
-                let mut shape = shape_template(rect);
-                shape.outline = Outline::Stroke(shape_radii, stroke);
-                let frame = render_shape(shape);
-                let radii = shape_radii.map(|corners| {
-                    corners.resolve(
-                        (rect.width - half_width * 2.0).max(0.0),
-                        (rect.height - half_width * 2.0).max(0.0),
-                    )
-                });
-                assert_frame_matches_coverage(
-                    &format!("stroke {shape_radii:?} half width {half_width} {join:?}"),
-                    &frame,
-                    |point| shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join),
-                );
+    // A rect off the pixel grid, and two whose middles lie on a pixel's edge
+    // and on a pixel's centre, which pixels right of the middle copy from
+    // their twins left of it.
+    let rects = [
+        Rect {
+            x: 6.4,
+            y: 9.8,
+            width: 50.5,
+            height: 41.25,
+        },
+        Rect {
+            x: 6.0,
+            y: 9.0,
+            width: 50.0,
+            height: 41.0,
+        },
+        Rect {
+            x: 6.5,
+            y: 9.5,
+            width: 50.0,
+            height: 50.0,
+        },
+    ];
+    for rect in rects {
+        for shape_radii in [
+            None,
+            Some(RoundedCornerShape::uniform(0.3)),
+            Some(RoundedCornerShape::uniform(6.0)),
+            Some(RoundedCornerShape::new(2.0, 11.0, 0.0, 17.5)),
+            Some(RoundedCornerShape::uniform(100.0)),
+        ] {
+            for half_width in [0.5, 1.5, 4.25] {
+                for join in [StrokeJoin::Miter, StrokeJoin::Round, StrokeJoin::Bevel] {
+                    let stroke = Stroke {
+                        width: half_width * 2.0,
+                        cap: StrokeCap::Butt,
+                        join,
+                    };
+                    let mut shape = shape_template(rect);
+                    shape.outline = Outline::Stroke(shape_radii, stroke);
+                    let frame = render_shape(shape);
+                    let radii = shape_radii.map(|corners| {
+                        corners.resolve(
+                            (rect.width - half_width * 2.0).max(0.0),
+                            (rect.height - half_width * 2.0).max(0.0),
+                        )
+                    });
+                    assert_frame_matches_coverage(
+                        &format!(
+                            "stroke {rect:?} {shape_radii:?} half width {half_width} {join:?}"
+                        ),
+                        &frame,
+                        |point| {
+                            shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join)
+                        },
+                    );
+                }
             }
         }
     }

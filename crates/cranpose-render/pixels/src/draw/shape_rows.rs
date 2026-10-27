@@ -172,6 +172,30 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
         runs: impl Fn(f32, i32, i32) -> RowRuns,
         coverage: impl Fn(Point) -> Coverage,
     ) {
+        self.paint_rows(runs, coverage, None);
+    }
+
+    // Paints a stroke as `paint` does. With a `mirror`, twice the x of the
+    // line the stroke is symmetric about, a pixel right of the line takes
+    // the coverage its twin left of it took in the same row: their
+    // distances to the stroke are the same bits, as the caller checked.
+    #[inline(never)]
+    pub(super) fn paint_stroke(
+        self,
+        runs: impl Fn(f32, i32, i32) -> RowRuns,
+        coverage: impl Fn(Point) -> Coverage,
+        mirror: Option<i32>,
+    ) {
+        self.paint_rows(runs, coverage, mirror);
+    }
+
+    #[inline]
+    fn paint_rows(
+        self,
+        runs: impl Fn(f32, i32, i32) -> RowRuns,
+        coverage: impl Fn(Point) -> Coverage,
+        mirror: Option<i32>,
+    ) {
         let Self {
             target,
             draw,
@@ -190,21 +214,44 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             )
         });
         let settles = clip_bounds.within(SETTLED_COORDINATES);
+        let mut left = [0.0; MIRROR_SPAN];
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
+            // The pixels left of the mirror line whose coverage `left`
+            // holds, one run of them from the row's first.
+            let mut kept: Option<(i32, i32)> = None;
             for (start, end) in runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
                 let mut settled = Coverage::of(0.0);
                 for (px, dst) in (start..).zip(target.row(py, start, end)) {
                     let center_x = px as f32 + 0.5;
-                    let coverage = if settled.next > 0 {
-                        settled.next -= 1;
-                        settled.value
-                    } else {
-                        settled = coverage(Point::new(center_x, center_y));
-                        if !settles {
+                    let twin = mirror.map(|mirror| mirror - 1 - px);
+                    let coverage = match (twin, kept) {
+                        (Some(twin), Some((from, to)))
+                            if twin < px && (from..to).contains(&twin) =>
+                        {
+                            // The next pixel this run works out itself
+                            // takes no count the twins skipped.
                             settled.next = 0;
+                            left[twin.abs_diff(from) as usize]
                         }
-                        settled.value
+                        _ => {
+                            let value = if settled.next > 0 {
+                                settled.next -= 1;
+                                settled.value
+                            } else {
+                                settled = coverage(Point::new(center_x, center_y));
+                                if !settles {
+                                    settled.next = 0;
+                                }
+                                settled.value
+                            };
+                            if let Some(twin) = twin
+                                && twin > px
+                            {
+                                kept = keep_left(&mut left, kept, px, value);
+                            }
+                            value
+                        }
                     };
                     if coverage <= 0.0 {
                         continue;
@@ -231,6 +278,31 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 }
             }
         }
+    }
+}
+
+// How many pixels left of a mirror line a row keeps the coverage of.
+const MIRROR_SPAN: usize = 128;
+
+// Keeps `value`, the coverage of pixel `px` left of the mirror line, in
+// `left` when it extends the run `kept` holds, or starts the run when there
+// is none; the run then ends at a gap or at `MIRROR_SPAN` pixels.
+fn keep_left(
+    left: &mut [f32; MIRROR_SPAN],
+    kept: Option<(i32, i32)>,
+    px: i32,
+    value: f32,
+) -> Option<(i32, i32)> {
+    match kept {
+        None => {
+            left[0] = value;
+            Some((px, px + 1))
+        }
+        Some((from, to)) if to == px && (to.abs_diff(from) as usize) < MIRROR_SPAN => {
+            left[to.abs_diff(from) as usize] = value;
+            Some((from, to + 1))
+        }
+        kept => kept,
     }
 }
 
