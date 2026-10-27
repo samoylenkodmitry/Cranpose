@@ -166,3 +166,54 @@ fn stroked_rect_coverage_uses_the_inflated_bounds() {
         stroked_rect_coverage(Point::new(20.0, 20.0), bounds, None, 2.0, StrokeJoin::Miter);
     assert_eq!(interior, 0.0, "a stroke must not fill its interior");
 }
+
+// Whether `coverage` is what the f64 smoothstep gives `distance`, which
+// `coverage_for_distance` worked out before it took f32 steps for the edge:
+// the f32 nearest the f64 value, ties to the even one.
+fn is_f64_smoothstep_coverage(distance: f32, coverage: f32) -> bool {
+    let t = (distance + 0.5).clamp(0.0, 1.0);
+    if t <= 0.0 {
+        return coverage.to_bits() == 1.0f32.to_bits();
+    }
+    if t >= 1.0 {
+        return coverage.to_bits() == 0.0f32.to_bits();
+    }
+    let t = f64::from(t);
+    let value = 1.0 - t * t * (3.0 - 2.0 * t);
+    let bits = coverage.to_bits();
+    let off = |bits: u32| (f64::from(f32::from_bits(bits)) - value).abs();
+    let (here, up) = (off(bits), off(bits + 1));
+    let down = bits.checked_sub(1).map_or(f64::INFINITY, off);
+    let tie = here.to_bits() == up.to_bits() || here.to_bits() == down.to_bits();
+    (here < up && here < down) || (tie && bits.is_multiple_of(2))
+}
+
+// The distances from -0.5 to 0.5 whose bits lie `step` apart, and every one
+// of the `dense` nearest each end, where the coverage comes near 0 and 1.
+fn check_edge_coverage(step: usize, dense: u32) {
+    let half = 0.5f32.to_bits();
+    for bits in (0..=half)
+        .step_by(step)
+        .chain(half.saturating_sub(dense)..=half)
+        .chain(0..dense)
+    {
+        for distance in [f32::from_bits(bits), -f32::from_bits(bits)] {
+            let coverage = coverage_for_distance(distance);
+            assert!(
+                is_f64_smoothstep_coverage(distance, coverage),
+                "distance {distance:e} gives {coverage:e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn edge_coverage_keeps_the_bits_of_the_f64_smoothstep() {
+    check_edge_coverage(4093, 1 << 16);
+}
+
+#[test]
+#[ignore = "every distance in (-0.5, 0.5): 17 s in release"]
+fn edge_coverage_keeps_the_bits_of_the_f64_smoothstep_at_every_distance() {
+    check_edge_coverage(1, 0);
+}
