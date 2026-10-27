@@ -1954,7 +1954,7 @@ impl App {
             apply_pointer_button_frame_request(
                 &native.window,
                 &mut native.last_frame_start_time,
-                pointer_button_frame_request(handled),
+                input_frame_request(handled),
             );
             if drag_requested {
                 self.begin_native_window_drag(native);
@@ -2325,7 +2325,7 @@ impl App {
             apply_pointer_button_frame_request(
                 &native.window,
                 &mut native.last_frame_start_time,
-                pointer_button_frame_request(handled),
+                input_frame_request(handled),
             );
         }
         NativeWindowEventSettlement {
@@ -2381,7 +2381,7 @@ impl App {
             apply_pointer_button_frame_request(
                 &native.window,
                 &mut native.last_frame_start_time,
-                pointer_button_frame_request(press_handled),
+                input_frame_request(press_handled),
             );
             if drag_requested {
                 self.begin_native_window_drag_with_anchor(&mut native, Some(pointer.position));
@@ -2413,7 +2413,7 @@ impl App {
                 apply_pointer_button_frame_request(
                     &native.window,
                     &mut native.last_frame_start_time,
-                    pointer_button_frame_request(handled),
+                    input_frame_request(handled),
                 );
                 native.window.request_redraw();
                 handled_any = true;
@@ -2800,7 +2800,7 @@ impl App {
                         apply_pointer_button_frame_request(
                             &native.window,
                             &mut native.last_frame_start_time,
-                            pointer_button_frame_request(press_handled),
+                            input_frame_request(press_handled),
                         );
                         if drag_requested {
                             self.begin_native_window_drag_with_anchor(
@@ -4693,15 +4693,7 @@ struct PointerButtonFrameRequest {
     reset_frame_cap: bool,
 }
 
-fn pointer_button_frame_request(input_handled: bool) -> PointerButtonFrameRequest {
-    immediate_input_frame_request(input_handled)
-}
-
-fn scroll_frame_request(input_handled: bool) -> PointerButtonFrameRequest {
-    immediate_input_frame_request(input_handled)
-}
-
-fn immediate_input_frame_request(input_handled: bool) -> PointerButtonFrameRequest {
+fn input_frame_request(input_handled: bool) -> PointerButtonFrameRequest {
     PointerButtonFrameRequest {
         request_redraw: input_handled,
         reset_frame_cap: input_handled,
@@ -5486,7 +5478,7 @@ impl ApplicationHandler for App {
                         target: "cranpose::input",
                         "desktop pointer move recovered primary press"
                     );
-                    let request = pointer_button_frame_request(app.pointer_pressed());
+                    let request = input_frame_request(app.pointer_pressed());
                     apply_primary_pointer_button_frame_request(
                         window,
                         &mut self.last_frame_start_time,
@@ -5514,7 +5506,7 @@ impl ApplicationHandler for App {
                 {
                     request_redraw_once(window, &mut self.primary_redraw_pending);
                 }
-                let request = scroll_frame_request(dispatch_mouse_wheel(
+                let request = input_frame_request(dispatch_mouse_wheel(
                     &mut app.primary(),
                     platform,
                     self.current_modifiers,
@@ -5551,9 +5543,8 @@ impl ApplicationHandler for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        let request = pointer_button_frame_request(
-                            app.pointer_pressed_at_event_time(event_time),
-                        );
+                        let request =
+                            input_frame_request(app.pointer_pressed_at_event_time(event_time));
                         apply_primary_pointer_button_frame_request(
                             window,
                             &mut self.last_frame_start_time,
@@ -5572,7 +5563,7 @@ impl ApplicationHandler for App {
                         } else {
                             app.pointer_released_at_event_time(event_time)
                         };
-                        let request = pointer_button_frame_request(released);
+                        let request = input_frame_request(released);
                         app.sync_selection_to_primary();
                         apply_primary_pointer_button_frame_request(
                             window,

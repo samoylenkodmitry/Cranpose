@@ -8,6 +8,8 @@ pub(crate) mod accessibility_attributes;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod accessibility_options;
 pub(crate) mod accessibility_order;
+#[cfg(target_arch = "wasm32")]
+mod backend_preference;
 pub(crate) mod canvas_layout;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod canvas_watch;
