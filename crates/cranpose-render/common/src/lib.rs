@@ -3,6 +3,8 @@
 
 mod annotated_text;
 mod ascii_glyphs;
+/// Source-over blending of straight-alpha byte pixels.
+pub mod byte_blend;
 /// Debug switches read from environment variables, with programmatic overrides.
 pub mod dev_overlay;
 mod direct_mapped_cache;
