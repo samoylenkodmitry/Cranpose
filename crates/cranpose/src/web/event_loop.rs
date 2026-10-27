@@ -10,7 +10,13 @@ use cranpose_render_wgpu::WgpuRenderer;
 use wasm_bindgen::{JsCast, prelude::*};
 use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
-use super::pipeline_discovery::{GpuTarget, PipelineDiscovery};
+use super::{
+    backend_preference::{
+        WebBackendPreference, instance_backends, limit_webgl_extensions, requested_web_backend,
+        required_limits_for_web_backend,
+    },
+    pipeline_discovery::{GpuTarget, PipelineDiscovery},
+};
 use crate::{
     app_launcher::AppSettings,
     wgpu_surface::{
@@ -140,13 +146,6 @@ fn wheel_uptime_millis() -> u64 {
             .elapsed()
             .as_millis() as u64
     })
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WebBackendPreference {
-    Auto,
-    WebGpu,
-    Gl,
 }
 
 #[derive(Debug)]
@@ -773,7 +772,7 @@ pub async fn run(
         let present_required = surface_present_required(
             surface_dirty.get(),
             update_result.visual_changed,
-            app.borrow().needs_redraw(),
+            &mut app.borrow_mut().primary(),
         );
         device_loss.recover(&recovery);
         if present_required && !device_loss.paused() && presenter.present(&app, frame_started_at) {
@@ -1100,51 +1099,5 @@ fn fold_glass_on_mobile_devices(window: &web_sys::Window) {
         || (agent.contains("Macintosh") && navigator.max_touch_points() > 1)
     {
         cranpose_ui_graphics::set_glass_material_folds(true);
-    }
-}
-
-fn requested_web_backend(window: &web_sys::Window) -> WebBackendPreference {
-    let query = window.location().search().unwrap_or_default();
-    for pair in query.trim_start_matches('?').split('&') {
-        let Some((key, value)) = pair.split_once('=') else {
-            continue;
-        };
-        if key != "backend" {
-            continue;
-        }
-        return match value {
-            "webgpu" => WebBackendPreference::WebGpu,
-            "gl" => WebBackendPreference::Gl,
-            _ => WebBackendPreference::Auto,
-        };
-    }
-    WebBackendPreference::Auto
-}
-
-fn instance_backends(preference: WebBackendPreference) -> wgpu::Backends {
-    match preference {
-        WebBackendPreference::Auto => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
-        WebBackendPreference::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
-        WebBackendPreference::Gl => wgpu::Backends::GL,
-    }
-}
-
-// Cranpose's renderer needs no WebGL extension beyond the ones `glow` itself
-// uses, and each one a page enables can wait for the browser's GPU process
-// (forks/README.md). Code that renders with Cranpose's device, such as a game
-// engine, says what it needs, and then gets every one.
-fn limit_webgl_extensions(requirements: crate::GpuRequirements) {
-    if requirements == crate::GpuRequirements::default() {
-        wgpu::hal::gles::ask_only_for_used_extensions();
-    }
-}
-
-fn required_limits_for_web_backend(
-    backend: wgpu::Backend,
-    adapter_limits: wgpu::Limits,
-) -> wgpu::Limits {
-    match backend {
-        wgpu::Backend::BrowserWebGpu => wgpu::Limits::default().using_resolution(adapter_limits),
-        _ => wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits),
     }
 }

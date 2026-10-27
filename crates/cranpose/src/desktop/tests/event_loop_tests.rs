@@ -328,21 +328,20 @@ use super::{
     PressBelongsHere, PressToHandOver, PrimaryPointerGesturePollAction, RootId, WindowFocus,
     WinitWindowId, clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
     frame_cap_interval, frame_interval_for_mode, free_running_frame, held_press_after_step,
-    held_press_step, held_press_to_hand_over, initial_present_redraw_needed,
+    held_press_step, held_press_to_hand_over, initial_present_redraw_needed, input_frame_request,
     native_window_drag_poll_deadline, native_window_options_change_is_position_only,
     native_window_position_poll_needed, native_window_redraw_held_while_hidden,
     nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
     pace_after_empty_redraw, physical_outer_origin_from_surface, physical_surface_local_pointer,
-    physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
-    pointer_button_frame_request, press_belongs_here, press_to_hand_over,
-    primary_declaration_host_needs_direct_update, primary_frame_waker,
+    physical_surface_origin_from_outer, physical_surface_rect_contains_pointer, press_belongs_here,
+    press_to_hand_over, primary_declaration_host_needs_direct_update, primary_frame_waker,
     primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
     primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
     primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
-    primary_window_should_show, recovered_native_window_drag_start_pointer, scroll_frame_request,
+    primary_window_should_show, recovered_native_window_drag_start_pointer,
     should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
 };
-use crate::{app_launcher::AppSettings, wgpu_surface::surface_present_required};
+use crate::app_launcher::AppSettings;
 
 #[test]
 fn native_window_screen_position_is_declarative() {
@@ -728,10 +727,6 @@ fn surface_reconfigure_requests_replacement_frame_for_visible_surface() {
 fn a_window_back_on_screen_is_owed_the_frame_it_could_not_present() {
     assert!(occlusion_leaves_a_frame_owed(false));
     assert!(!occlusion_leaves_a_frame_owed(true));
-    assert!(
-        surface_present_required(occlusion_leaves_a_frame_owed(false), false, false),
-        "a reappearing window presents even when nothing new was drawn"
-    );
 }
 
 #[test]
@@ -768,28 +763,13 @@ fn hidden_primary_declaration_host_updates_without_redraw_event() {
 }
 
 #[test]
-fn pointer_button_input_requests_uncapped_frame_when_handled() {
-    let request = pointer_button_frame_request(true);
+fn pointer_and_scroll_input_requests_uncapped_frame_when_handled() {
+    let request = input_frame_request(true);
 
     assert!(request.request_redraw);
     assert!(request.reset_frame_cap);
     assert_eq!(
-        pointer_button_frame_request(false),
-        super::PointerButtonFrameRequest {
-            request_redraw: false,
-            reset_frame_cap: false,
-        }
-    );
-}
-
-#[test]
-fn scroll_input_requests_uncapped_frame_when_handled() {
-    let request = scroll_frame_request(true);
-
-    assert!(request.request_redraw);
-    assert!(request.reset_frame_cap);
-    assert_eq!(
-        scroll_frame_request(false),
+        input_frame_request(false),
         super::PointerButtonFrameRequest {
             request_redraw: false,
             reset_frame_cap: false,
