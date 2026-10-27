@@ -78,8 +78,8 @@ pub(super) fn activation_input(
 }
 
 pub(super) fn plain_key_down(event: &KeyEvent) -> bool {
-    event.event_type == KeyEventType::KeyDown
-        && !event.modifiers.ctrl
-        && !event.modifiers.meta
-        && !event.modifiers.alt
+    event.type_() == KeyEventType::KeyDown
+        && !event.modifiers().ctrl
+        && !event.modifiers().meta
+        && !event.modifiers().alt
 }

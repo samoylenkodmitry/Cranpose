@@ -2771,7 +2771,7 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
         request_probe_focus(&shell, &focus_flag, &handler);
     }
 
-    let event = KeyEvent::key_down(KeyCode::A, "a");
+    let event = KeyEvent::key_down(Key::A, "a");
     assert!(!shell.on_key_event(&event));
     assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
 }
@@ -2783,7 +2783,7 @@ fn escape_closes_the_modal_on_top_and_nothing_else() {
     let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
     shell.update();
 
-    let escape = KeyEvent::key_down(KeyCode::Escape, "");
+    let escape = KeyEvent::key_down(Key::Escape, "");
     assert!(
         !shell.on_key_event(&escape),
         "with no modal open the key belongs to the app"
@@ -2832,7 +2832,7 @@ fn escape_closes_the_menu_on_top_when_no_dialog_is_open() {
     shell.update();
     let open = captured.borrow().expect("the popup state is captured");
 
-    let escape = KeyEvent::key_down(KeyCode::Escape, "");
+    let escape = KeyEvent::key_down(Key::Escape, "");
     assert!(shell.on_key_event(&escape), "the menu on top takes Escape");
     assert!(
         !open.get_non_reactive(),
@@ -10733,7 +10733,7 @@ fn a_modal_excludes_background_semantics_and_keyboard_targets() {
         Some("Modal first")
     );
     for expected in ["Modal last", "Modal first", "Modal last"] {
-        assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+        assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
         shell.update();
         assert_eq!(focused_description(&mut shell).as_deref(), Some(expected));
     }
@@ -10851,12 +10851,12 @@ fn radio_keyboard_navigation_wraps_selects_and_uses_one_tab_stop() {
     shell.set_semantics_enabled(true);
     shell.update();
     for (key, expected, selection) in [
-        (KeyCode::Tab, "Radio two", 1),
-        (KeyCode::ArrowRight, "Radio three", 2),
-        (KeyCode::ArrowRight, "Radio one", 0),
-        (KeyCode::End, "Radio three", 2),
-        (KeyCode::Home, "Radio one", 0),
-        (KeyCode::Tab, "After radios", 0),
+        (Key::Tab, "Radio two", 1),
+        (Key::DirectionRight, "Radio three", 2),
+        (Key::DirectionRight, "Radio one", 0),
+        (Key::MoveEnd, "Radio three", 2),
+        (Key::MoveHome, "Radio one", 0),
+        (Key::Tab, "After radios", 0),
     ] {
         assert!(shell.on_key_event(&KeyEvent::key_down(key, "")), "{key:?}");
         shell.update();
@@ -10963,7 +10963,7 @@ fn closing_modal_publishes_restored_focus_in_the_same_frame() {
     );
     shell.set_semantics_enabled(true);
     shell.update();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
     shell.update();
     let open = open_state.get().expect("modal state");
     for (shown, expected) in [(true, "Modal"), (false, "Opener")] {
@@ -11046,10 +11046,10 @@ fn enter_and_space_press_the_control_the_keyboard_focused() {
     shell.update();
 
     assert!(
-        !shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "")),
+        !shell.on_key_event(&KeyEvent::key_down(Key::Enter, "")),
         "Enter does nothing while no control has focus"
     );
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
     shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("Send"));
     assert!(
@@ -11057,9 +11057,9 @@ fn enter_and_space_press_the_control_the_keyboard_focused() {
         "the ring shows after a keyboard move"
     );
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Enter, "")));
     shell.update();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Space, " ")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Spacebar, " ")));
     shell.update();
     assert_eq!(presses.get(), 2, "Enter and Space each pressed the control");
     assert!(
@@ -11098,32 +11098,32 @@ fn arrow_keys_move_focus_inside_a_selectable_group_and_nowhere_else() {
     shell.set_semantics_enabled(true);
     shell.update();
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
     shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("One"));
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowRight, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::DirectionRight, "")));
     shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("Two"));
 
     assert!(
-        !shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowDown, "")),
+        !shell.on_key_event(&KeyEvent::key_down(Key::DirectionDown, "")),
         "the control below the group is out of reach for an arrow key"
     );
     shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("Two"));
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowLeft, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::DirectionLeft, "")));
     shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("One"));
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "")));
     shell.update();
     assert_eq!(focused_description(&mut shell).as_deref(), Some("Below"));
     assert!(
-        !shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowUp, "")),
+        !shell.on_key_event(&KeyEvent::key_down(Key::DirectionUp, "")),
         "outside a group an arrow key is left to the content"
     );
 }

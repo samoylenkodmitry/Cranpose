@@ -7,7 +7,7 @@
 use cranpose::{CheckItem, KeyShortcut, Menu, MenuItem, Robot, WindowMenuBar};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use cranpose_ui::{KeyCode, Modifier, Modifiers, Text, TextStyle};
+use cranpose_ui::{Key, Modifier, Modifiers, Text, TextStyle};
 
 use crate::{robot_exit, robot_launch, text_input_robot_helpers};
 
@@ -100,7 +100,7 @@ pub(crate) fn main() {
                 Menu::new("Tools")
                     .item(
                         MenuItem::new("Count", move || counted.set(counted.get() + 1))
-                            .shortcut(KeyShortcut::new(KeyCode::K, command)),
+                            .shortcut(KeyShortcut::new(Key::K, command)),
                     )
                     .separator()
                     .submenu(Menu::new("Options").check(CheckItem::new(

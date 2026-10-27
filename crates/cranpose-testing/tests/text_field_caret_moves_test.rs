@@ -2,7 +2,7 @@
 //! wrapped line, Home and End to a wrapped line's ends, and left and right
 //! by the paragraph's reading direction.
 
-use cranpose_ui::{BasicTextFieldOptions, KeyCode, Modifiers};
+use cranpose_ui::{BasicTextFieldOptions, Key, Modifiers};
 
 use crate::support_text_field::{COMMAND, FocusedField, SHIFT};
 
@@ -22,53 +22,53 @@ fn caret(field: &mut FocusedField) -> usize {
 #[test]
 fn down_and_up_follow_wrapped_lines() {
     let mut field = focused(PARAGRAPH);
-    field.press(KeyCode::Home, COMMAND);
+    field.press(Key::MoveHome, COMMAND);
     // The paragraph has no line break: a move by hard line went to its end.
-    field.press(KeyCode::ArrowDown, Modifiers::NONE);
+    field.press(Key::DirectionDown, Modifiers::NONE);
     let second_line = caret(&mut field);
     assert!(
         second_line > 0 && second_line < PARAGRAPH.len(),
         "Down went to the next wrapped line, at {second_line}"
     );
-    field.press(KeyCode::ArrowUp, Modifiers::NONE);
+    field.press(Key::DirectionUp, Modifiers::NONE);
     assert_eq!(caret(&mut field), 0);
 }
 
 #[test]
 fn home_and_end_go_to_the_ends_of_a_wrapped_line() {
     let mut field = focused(PARAGRAPH);
-    field.press(KeyCode::Home, Modifiers::NONE);
+    field.press(Key::MoveHome, Modifiers::NONE);
     let last_line = caret(&mut field);
     assert!(
         last_line > 0,
         "Home from the end stopped at the last wrapped line's start, not the text's"
     );
     field
-        .press(KeyCode::Home, COMMAND)
-        .press(KeyCode::End, Modifiers::NONE);
+        .press(Key::MoveHome, COMMAND)
+        .press(Key::MoveEnd, Modifiers::NONE);
     let line_end = caret(&mut field);
     assert!(
         line_end > 0 && line_end < PARAGRAPH.len(),
         "End stopped at the first line's end, at {line_end}"
     );
-    field.press(KeyCode::Home, Modifiers::NONE);
+    field.press(Key::MoveHome, Modifiers::NONE);
     assert_eq!(caret(&mut field), 0);
 }
 
 #[test]
 fn left_and_right_follow_the_reading_direction() {
     let mut hebrew = focused(HEBREW);
-    hebrew.press(KeyCode::ArrowRight, Modifiers::NONE);
+    hebrew.press(Key::DirectionRight, Modifiers::NONE);
     assert_eq!(
         caret(&mut hebrew),
         HEBREW.len() - 2,
         "Right moves back in a right-to-left paragraph"
     );
-    hebrew.press(KeyCode::ArrowLeft, Modifiers::NONE);
+    hebrew.press(Key::DirectionLeft, Modifiers::NONE);
     assert_eq!(caret(&mut hebrew), HEBREW.len());
 
     let mut latin = focused("abc");
-    latin.press(KeyCode::ArrowLeft, Modifiers::NONE);
+    latin.press(Key::DirectionLeft, Modifiers::NONE);
     assert_eq!(
         caret(&mut latin),
         2,
@@ -79,6 +79,6 @@ fn left_and_right_follow_the_reading_direction() {
 #[test]
 fn shift_selection_follows_the_reading_direction() {
     let mut hebrew = focused(HEBREW);
-    hebrew.press(KeyCode::ArrowRight, SHIFT);
+    hebrew.press(Key::DirectionRight, SHIFT);
     assert_eq!(hebrew.selection(), (HEBREW.len() - 2, HEBREW.len()));
 }

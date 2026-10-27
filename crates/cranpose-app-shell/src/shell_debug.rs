@@ -3,7 +3,7 @@ use super::*;
 #[cfg(any(test, feature = "test-support"))]
 type SubcomposeScopeIds = Vec<(NodeId, Vec<(u64, Vec<usize>)>)>;
 #[cfg(any(test, feature = "test-support"))]
-type SlotGroupEntry = (usize, Key, Option<usize>, usize);
+type SlotGroupEntry = (usize, cranpose_core::Key, Option<usize>, usize);
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> AppShell<R>
@@ -126,7 +126,7 @@ where
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn debug_slot_table_groups(&self) -> Vec<(usize, Key, Option<usize>, usize)> {
+    pub fn debug_slot_table_groups(&self) -> Vec<SlotGroupEntry> {
         self.app.composition.debug_dump_slot_table_groups()
     }
 
@@ -241,24 +241,4 @@ fn debug_info_report<R: Renderer>(app: &mut ShellApp, surface: &mut RootSurface<
         writeln!(report, "No layout available").ok();
     }
     report
-}
-
-#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
-impl<R> SurfaceMut<'_, R>
-where
-    R: Renderer,
-    R::Error: Debug,
-{
-    /// The layout tree and headless scene of this surface, for a log.
-    pub fn debug_info_report(&mut self) -> String {
-        let (app, surface) = self.parts();
-        debug_info_report(app, surface)
-    }
-
-    /// Logs [`Self::debug_info_report`] and answers it.
-    pub fn log_debug_info(&mut self) -> String {
-        let report = self.debug_info_report();
-        log::info!(target: "cranpose::debug::screen", "\n{report}");
-        report
-    }
 }

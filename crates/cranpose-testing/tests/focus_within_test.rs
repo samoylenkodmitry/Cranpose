@@ -6,8 +6,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, FocusRequester, FocusWithin, KeyCode, KeyEvent, Modifier,
-    Size,
+    Box, BoxSpec, Column, ColumnSpec, FocusRequester, FocusWithin, Key, KeyEvent, Modifier, Size,
 };
 
 struct Screen {
@@ -74,7 +73,7 @@ impl Screen {
         assert!(
             self.robot
                 .shell_mut()
-                .on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t"))
+                .on_key_event(&KeyEvent::key_down(Key::Tab, "\t"))
         );
         self.robot.wait_for_idle();
     }

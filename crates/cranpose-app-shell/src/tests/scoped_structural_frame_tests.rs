@@ -279,7 +279,7 @@ struct CountedShell {
 }
 
 impl CountedShell {
-    fn settled(root_key: Key, content: impl FnMut() + 'static) -> Self {
+    fn settled(root_key: cranpose_core::Key, content: impl FnMut() + 'static) -> Self {
         let rebuilds = Rc::new(Cell::new(0));
         let updates = Rc::new(Cell::new(0));
         let mut shell = AppShell::new(

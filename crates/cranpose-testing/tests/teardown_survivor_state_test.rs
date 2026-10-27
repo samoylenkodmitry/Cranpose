@@ -10,7 +10,7 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_core::{MutableState, remember, rememberMutableStateOf};
 use cranpose_testing::robot::create_headless_robot_test;
 use cranpose_ui::{
-    BasicTextField, Box, BoxSpec, Column, ColumnSpec, FocusRequester, KeyCode, KeyEvent, Modifier,
+    BasicTextField, Box, BoxSpec, Column, ColumnSpec, FocusRequester, Key, KeyEvent, Modifier,
     PointerEventKind, PointerInputScope, ScrollState, Size, Spacer, Text, TextFieldState,
     TextStyle,
 };
@@ -166,7 +166,7 @@ fn controls_keep_focus_press_selection_and_scroll_through_a_large_teardown() {
 
     let shell = robot.shell_mut();
     shell.on_ime_finish_composing();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::X, "x")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::X, "x")));
     assert_eq!(
         field.text(),
         "xeipt",

@@ -212,7 +212,7 @@ fn dispatch_clears_stale_focus_owner_before_invoking_handler() {
         assert!(has_focused_field());
     }
 
-    let key_event = KeyEvent::key_down(crate::key_event::KeyCode::A, "a");
+    let key_event = KeyEvent::key_down(crate::key_event::Key::A, "a");
 
     assert!(!dispatch_key_event(&key_event));
     assert!(!dispatch_paste("stale paste"));
@@ -377,7 +377,7 @@ fn edit_count_moves_for_edits_and_not_for_reads_or_unhandled_keys() {
 
     request_focus(Rc::clone(&focus), mock_handler(), 0);
     let key = KeyEvent::new(
-        crate::KeyCode::A,
+        crate::Key::A,
         "a",
         crate::Modifiers::NONE,
         crate::KeyEventType::KeyDown,

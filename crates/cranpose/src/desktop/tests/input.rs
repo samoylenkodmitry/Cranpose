@@ -1,38 +1,22 @@
-use cranpose_app_shell::KeyCode;
-use winit::keyboard::{Key, KeyCode as WinitKeyCode, NamedKey, PhysicalKey};
+use cranpose_app_shell::Key;
+use winit::keyboard::{Key as LogicalKey, KeyCode, NamedKey, PhysicalKey};
 
-use super::app_key_code;
+use super::app_key;
 
 #[test]
 fn keypad_navigation_keys_follow_their_meaning() {
     for (physical, named, expected) in [
-        (
-            WinitKeyCode::Numpad4,
-            NamedKey::ArrowLeft,
-            KeyCode::ArrowLeft,
-        ),
-        (
-            WinitKeyCode::Numpad6,
-            NamedKey::ArrowRight,
-            KeyCode::ArrowRight,
-        ),
-        (WinitKeyCode::Numpad8, NamedKey::ArrowUp, KeyCode::ArrowUp),
-        (
-            WinitKeyCode::Numpad2,
-            NamedKey::ArrowDown,
-            KeyCode::ArrowDown,
-        ),
-        (WinitKeyCode::Numpad7, NamedKey::Home, KeyCode::Home),
-        (WinitKeyCode::Numpad1, NamedKey::End, KeyCode::End),
-        (WinitKeyCode::NumpadEnter, NamedKey::Enter, KeyCode::Enter),
-        (
-            WinitKeyCode::NumpadDecimal,
-            NamedKey::Delete,
-            KeyCode::Delete,
-        ),
+        (KeyCode::Numpad4, NamedKey::ArrowLeft, Key::DirectionLeft),
+        (KeyCode::Numpad6, NamedKey::ArrowRight, Key::DirectionRight),
+        (KeyCode::Numpad8, NamedKey::ArrowUp, Key::DirectionUp),
+        (KeyCode::Numpad2, NamedKey::ArrowDown, Key::DirectionDown),
+        (KeyCode::Numpad7, NamedKey::Home, Key::MoveHome),
+        (KeyCode::Numpad1, NamedKey::End, Key::MoveEnd),
+        (KeyCode::NumpadEnter, NamedKey::Enter, Key::NumPadEnter),
+        (KeyCode::NumpadDecimal, NamedKey::Delete, Key::Delete),
     ] {
         assert_eq!(
-            app_key_code(PhysicalKey::Code(physical), &Key::Named(named)),
+            app_key(PhysicalKey::Code(physical), &LogicalKey::Named(named)),
             expected
         );
     }
@@ -41,17 +25,17 @@ fn keypad_navigation_keys_follow_their_meaning() {
 #[test]
 fn letters_keep_their_physical_position() {
     assert_eq!(
-        app_key_code(
-            PhysicalKey::Code(WinitKeyCode::KeyC),
-            &Key::Character("с".into())
+        app_key(
+            PhysicalKey::Code(KeyCode::KeyC),
+            &LogicalKey::Character("с".into())
         ),
-        KeyCode::C
+        Key::C
     );
     assert_eq!(
-        app_key_code(
-            PhysicalKey::Code(WinitKeyCode::ArrowLeft),
-            &Key::Named(NamedKey::ArrowLeft)
+        app_key(
+            PhysicalKey::Code(KeyCode::ArrowLeft),
+            &LogicalKey::Named(NamedKey::ArrowLeft)
         ),
-        KeyCode::ArrowLeft
+        Key::DirectionLeft
     );
 }

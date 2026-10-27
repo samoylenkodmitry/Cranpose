@@ -35,9 +35,8 @@ use cranpose_foundation::{
     text::{TextFieldLineLimits, TextFieldState},
 };
 use cranpose_ui::{
-    BasicTextFieldDecorated, BasicTextFieldOptions, DashPathEffect, DrawStyle, FocusRequester,
-    KeyCode, KeyEvent, KeyEventType, Path, ScrollState, WindowCoordinates,
-    collect_is_hovered_as_state,
+    BasicTextFieldDecorated, BasicTextFieldOptions, DashPathEffect, DrawStyle, FocusRequester, Key,
+    KeyEvent, KeyEventType, Path, ScrollState, WindowCoordinates, collect_is_hovered_as_state,
     mouse_input::{MouseInput, MouseInputTarget, local_mouse_input},
     rememberMutableInteractionSource,
     text::{
@@ -737,14 +736,14 @@ fn workspace_shortcut(
     scroll_mode: MutableState<ScrollTarget>,
     streaming: MutableState<bool>,
 ) -> bool {
-    if event.event_type != KeyEventType::KeyDown || event.modifiers.any() {
+    if event.type_() != KeyEventType::KeyDown || event.modifiers().any() {
         return false;
     }
-    match event.key_code {
-        KeyCode::Digit1 => scroll_mode.set(ScrollTarget::Off),
-        KeyCode::Digit2 => scroll_mode.set(ScrollTarget::Sidebar),
-        KeyCode::Digit6 => scroll_mode.set(ScrollTarget::Watchlist),
-        KeyCode::Q => streaming.set(!streaming.get()),
+    match event.key() {
+        Key::One => scroll_mode.set(ScrollTarget::Off),
+        Key::Two => scroll_mode.set(ScrollTarget::Sidebar),
+        Key::Six => scroll_mode.set(ScrollTarget::Watchlist),
+        Key::Q => streaming.set(!streaming.get()),
         _ => return false,
     }
     true

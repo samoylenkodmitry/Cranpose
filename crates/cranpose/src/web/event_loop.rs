@@ -142,12 +142,12 @@ fn web_key_modifiers(event: &web_sys::KeyboardEvent) -> cranpose_app_shell::Modi
 
 fn web_key_event_prefix(
     event: &web_sys::KeyboardEvent,
-) -> Option<(cranpose_app_shell::KeyCode, cranpose_app_shell::Modifiers)> {
+) -> Option<(cranpose_app_shell::Key, cranpose_app_shell::Modifiers)> {
     if event.is_composing() || event.key_code() == 229 {
         return None;
     }
     Some((
-        cranpose_app_shell::KeyCode::from_dom_code(&event.code()),
+        cranpose_app_shell::Key::from_dom_code(&event.code()),
         web_key_modifiers(event),
     ))
 }
@@ -551,7 +551,7 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyEvent, KeyEventType};
 
-            let Some((key_code, modifiers)) = web_key_event_prefix(&event) else {
+            let Some((key, modifiers)) = web_key_event_prefix(&event) else {
                 return;
             };
             let text = {
@@ -559,12 +559,8 @@ pub async fn run(
                 if key.len() == 1 { key } else { String::new() }
             };
 
-            let key_event = KeyEvent {
-                key_code,
-                text,
-                modifiers,
-                event_type: KeyEventType::KeyDown,
-            };
+            let key_event = KeyEvent::new(key, text, modifiers, KeyEventType::KeyDown)
+                .with_repeat_count(u32::from(event.repeat()));
 
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 if app_mut.on_key_event(&key_event) {
@@ -583,16 +579,11 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyEvent, KeyEventType};
 
-            let Some((key_code, modifiers)) = web_key_event_prefix(&event) else {
+            let Some((key, modifiers)) = web_key_event_prefix(&event) else {
                 return;
             };
 
-            let key_event = KeyEvent {
-                key_code,
-                text: String::new(),
-                modifiers,
-                event_type: KeyEventType::KeyUp,
-            };
+            let key_event = KeyEvent::new(key, "", modifiers, KeyEventType::KeyUp);
 
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.on_key_event(&key_event);

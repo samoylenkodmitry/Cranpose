@@ -1,7 +1,7 @@
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_foundation::SemanticsWidgetRole;
 
-use crate::{KeyCode, LayoutTree, focus_dispatch, focus_order::FocusEntry};
+use crate::{Key, LayoutTree, focus_dispatch, focus_order::FocusEntry};
 
 /// A keyboard navigation destination and whether moving there selects it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,12 +103,12 @@ fn tab_targets(targets: &[Target], current: Option<NodeId>) -> Vec<&Target> {
 pub fn keyboard_focus_target(
     tree: &LayoutTree,
     current: Option<NodeId>,
-    key: KeyCode,
+    key: Key,
     shift: bool,
 ) -> Option<KeyboardFocusTarget> {
     let targets = targets(tree);
     crate::set_focus_order(targets.iter().map(|target| target.entry).collect());
-    if key == KeyCode::Tab {
+    if key == Key::Tab {
         let stops = tab_targets(&targets, current);
         let from = stops
             .iter()
@@ -140,19 +140,19 @@ pub fn keyboard_focus_target(
     })
 }
 
-fn group_key_index(members: &[&Target], from: usize, key: KeyCode, radio: bool) -> Option<usize> {
+fn group_key_index(members: &[&Target], from: usize, key: Key, radio: bool) -> Option<usize> {
     let horizontal = members.get(1).is_some_and(|second| {
         let first = members[0].entry.rect;
         (second.entry.rect.x - first.x).abs() >= (second.entry.rect.y - first.y).abs()
     });
     Some(match key {
-        KeyCode::Home => 0,
-        KeyCode::End => members.len() - 1,
-        KeyCode::ArrowLeft | KeyCode::ArrowRight if radio || horizontal => {
-            stepped_index(members.len(), Some(from), key == KeyCode::ArrowRight)?
+        Key::MoveHome => 0,
+        Key::MoveEnd => members.len() - 1,
+        Key::DirectionLeft | Key::DirectionRight if radio || horizontal => {
+            stepped_index(members.len(), Some(from), key == Key::DirectionRight)?
         }
-        KeyCode::ArrowUp | KeyCode::ArrowDown if radio || !horizontal => {
-            stepped_index(members.len(), Some(from), key == KeyCode::ArrowDown)?
+        Key::DirectionUp | Key::DirectionDown if radio || !horizontal => {
+            stepped_index(members.len(), Some(from), key == Key::DirectionDown)?
         }
         _ => return None,
     })

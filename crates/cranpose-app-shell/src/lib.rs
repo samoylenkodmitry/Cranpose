@@ -24,9 +24,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, NodeMarks,
-    SceneNodeAttachmentScratch, collections::map::HashSet, enter_event_handler_scope, location_key,
-    run_in_mutable_snapshot,
+    Applier, Composition, MemoryApplier, NodeError, NodeId, NodeMarks, SceneNodeAttachmentScratch,
+    collections::map::HashSet, enter_event_handler_scope, location_key, run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerId, PointerSource, RotaryScrollEvent,
@@ -41,7 +40,7 @@ use cranpose_ui::{
     format_screen_summary, process_focus_invalidations, process_pointer_repasses,
     process_semantics_invalidations, request_render_invalidation,
 };
-pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
+pub use cranpose_ui::{Key, KeyEvent, KeyEventType, NativeKeyEvent};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
 pub use frame_rate_boost::FrameRateBoost;
@@ -610,7 +609,7 @@ where
 {
     /// Creates a shell that composes `content` under `root_key`, with an 800 by 600 logical pixel
     /// viewport and a buffer of the same size in pixels at density 1.0.
-    pub fn new(renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
+    pub fn new(renderer: R, root_key: cranpose_core::Key, content: impl FnMut() + 'static) -> Self {
         Self::new_with_size(renderer, root_key, content, (800, 600), (800.0, 600.0))
     }
 
@@ -618,7 +617,7 @@ where
     /// a `viewport` in logical pixels at density 1.0.
     pub fn new_with_size(
         renderer: R,
-        root_key: Key,
+        root_key: cranpose_core::Key,
         content: impl FnMut() + 'static,
         buffer_size: (u32, u32),
         viewport: (f32, f32),
@@ -630,7 +629,7 @@ where
     /// renderer the same density as its root scale, for `buffer_size` pixels.
     pub fn new_with_size_and_density(
         mut renderer: R,
-        root_key: Key,
+        root_key: cranpose_core::Key,
         content: impl FnMut() + 'static,
         buffer_size: (u32, u32),
         viewport: (f32, f32),
@@ -1507,7 +1506,7 @@ where
 }
 
 /// Returns the standard root key to pass to the shell constructors. It is the same on every call.
-pub fn default_root_key() -> Key {
+pub fn default_root_key() -> cranpose_core::Key {
     location_key(file!(), line!(), column!())
 }
 

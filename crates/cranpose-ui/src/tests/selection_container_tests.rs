@@ -380,14 +380,14 @@ fn copy_puts_the_selection_on_the_clipboard_and_escape_clears_it() {
             meta: cfg!(target_os = "macos"),
             ..crate::Modifiers::NONE
         };
-        let copy = crate::KeyEvent::key_down_with_modifiers(crate::KeyCode::C, "c", command);
+        let copy = crate::KeyEvent::key_down_with_modifiers(crate::Key::C, "c", command);
         assert!(gesture.on_key(&copy));
         assert_eq!(
             crate::clipboard_session::clipboard_read_text().as_deref(),
             Some("hello")
         );
 
-        let escape = crate::KeyEvent::key_down(crate::KeyCode::Escape, "");
+        let escape = crate::KeyEvent::key_down(crate::Key::Escape, "");
         assert!(gesture.on_key(&escape));
         assert_eq!(page.registrar.selection(), None);
         assert!(!gesture.on_key(&copy), "nothing is left to copy");

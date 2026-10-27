@@ -1,4 +1,4 @@
-use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, PointerSource, SurfaceMut, WheelScroll};
+use cranpose_app_shell::{Key, KeyEvent, KeyEventType, PointerSource, SurfaceMut, WheelScroll};
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::Point;
 use web_time::Instant;
@@ -72,7 +72,7 @@ impl EmbedInput {
                     KeyEventType::KeyUp
                 };
                 surface.on_key_event(&KeyEvent::new(
-                    KeyCode::from_dom_code(code),
+                    Key::from_dom_code(code),
                     "",
                     modifiers,
                     event_type,

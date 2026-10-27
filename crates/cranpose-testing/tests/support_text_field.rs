@@ -7,7 +7,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, remember};
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
-    BasicTextFieldOptions, BasicTextFieldWithOptions, FocusRequester, KeyCode, KeyEvent, Modifier,
+    BasicTextFieldOptions, BasicTextFieldWithOptions, FocusRequester, Key, KeyEvent, Modifier,
     Modifiers, PlatformTextInputHandler, TextFieldState,
 };
 
@@ -104,7 +104,7 @@ impl FocusedField {
         });
         requester.request_focus().expect("field focus");
         let mut field = Self { shell, state };
-        field.press(KeyCode::End, Modifiers::NONE);
+        field.press(Key::MoveEnd, Modifiers::NONE);
         field
     }
 
@@ -113,7 +113,7 @@ impl FocusedField {
         self.state.get().expect("composed field")
     }
 
-    pub(crate) fn press(&mut self, key: KeyCode, modifiers: Modifiers) -> &mut Self {
+    pub(crate) fn press(&mut self, key: Key, modifiers: Modifiers) -> &mut Self {
         assert!(
             self.shell
                 .on_key_event(&KeyEvent::key_down_with_modifiers(key, "", modifiers)),
@@ -126,7 +126,7 @@ impl FocusedField {
     pub(crate) fn type_text(&mut self, text: &str) -> &mut Self {
         for character in text.chars() {
             self.shell
-                .on_key_event(&KeyEvent::key_down(KeyCode::Unknown, character.to_string()));
+                .on_key_event(&KeyEvent::key_down(Key::Unknown, character.to_string()));
         }
         self
     }

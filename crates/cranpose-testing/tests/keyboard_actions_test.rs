@@ -10,8 +10,8 @@ use cranpose_foundation::text::TextFieldLineLimits;
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
     BasicTextFieldOptions, BasicTextFieldWithOptions, Column, ColumnSpec, ContentType,
-    FocusRequester, ImeAction, KeyCode, KeyEvent, KeyboardActionHandler, KeyboardOptions,
-    KeyboardType, Modifier, TextFieldState,
+    FocusRequester, ImeAction, Key, KeyEvent, KeyboardActionHandler, KeyboardOptions, KeyboardType,
+    Modifier, TextFieldState,
 };
 
 use crate::support_text_field::{RecordingKeyboard, shell_with_keyboard};
@@ -85,7 +85,7 @@ impl Form {
             });
         });
         first.request_focus().expect("first field focus");
-        shell.on_key_event(&KeyEvent::key_down(KeyCode::End, ""));
+        shell.on_key_event(&KeyEvent::key_down(Key::MoveEnd, ""));
         keyboard.calls.borrow_mut().clear();
         Self {
             shell,
@@ -97,7 +97,7 @@ impl Form {
 
     fn press_enter(&mut self) -> bool {
         self.shell
-            .on_key_event(&KeyEvent::key_down(KeyCode::Enter, "\n"))
+            .on_key_event(&KeyEvent::key_down(Key::Enter, "\n"))
     }
 
     fn text(&mut self) -> String {

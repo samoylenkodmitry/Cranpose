@@ -111,13 +111,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     }
 
     fn handle_key(&self, event: &crate::key_event::KeyEvent) -> bool {
-        use crate::key_event::KeyEventType;
+        use crate::key_event::{Key, KeyEventType};
 
-        if event.event_type != KeyEventType::KeyDown {
+        if event.type_() != KeyEventType::KeyDown {
             return false;
         }
 
-        if event.key_code == crate::key_event::KeyCode::Enter && self.single_line() {
+        if matches!(event.key(), Key::Enter | Key::NumPadEnter) && self.single_line() {
             return self.perform_ime_action(crate::ImeAction::Default);
         }
 

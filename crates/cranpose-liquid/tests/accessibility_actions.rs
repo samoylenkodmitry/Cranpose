@@ -244,21 +244,21 @@ fn keyboard_moves_across_tabs_and_selects_the_focused_tab() {
         });
         robot.shell_mut().set_semantics_enabled(true);
         robot.wait_for_idle();
-        press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+        press_key(&mut robot, cranpose_ui::Key::Tab, "\t");
         assert_focused(&mut robot, "Search receipts");
-        press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+        press_key(&mut robot, cranpose_ui::Key::Tab, "\t");
         assert_focused(&mut robot, "Library");
         for (key, focused) in [
-            (cranpose_ui::KeyCode::ArrowRight, "Scan"),
-            (cranpose_ui::KeyCode::End, "Settings"),
-            (cranpose_ui::KeyCode::ArrowRight, "Library"),
-            (cranpose_ui::KeyCode::ArrowLeft, "Settings"),
+            (cranpose_ui::Key::DirectionRight, "Scan"),
+            (cranpose_ui::Key::MoveEnd, "Settings"),
+            (cranpose_ui::Key::DirectionRight, "Library"),
+            (cranpose_ui::Key::DirectionLeft, "Settings"),
         ] {
             press_key(&mut robot, key, "");
             assert_focused(&mut robot, focused);
             assert_selected(&mut robot, "Library");
         }
-        press_key(&mut robot, cranpose_ui::KeyCode::Enter, "\r");
+        press_key(&mut robot, cranpose_ui::Key::Enter, "\r");
         assert_selected(&mut robot, "Settings");
         assert_focused(&mut robot, "Settings");
     }
@@ -292,21 +292,21 @@ fn reader_selects_each_segment_and_receives_the_committed_value() {
         activate(&mut robot, label);
         assert_selected(&mut robot, label);
     }
-    press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+    press_key(&mut robot, cranpose_ui::Key::Tab, "\t");
     assert_focused(&mut robot, "Day");
     for (key, label) in [
-        (cranpose_ui::KeyCode::ArrowRight, "Month"),
-        (cranpose_ui::KeyCode::End, "Year"),
-        (cranpose_ui::KeyCode::Home, "Day"),
+        (cranpose_ui::Key::DirectionRight, "Month"),
+        (cranpose_ui::Key::MoveEnd, "Year"),
+        (cranpose_ui::Key::MoveHome, "Day"),
     ] {
         press_key(&mut robot, key, "");
         assert_selected(&mut robot, label);
     }
-    press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+    press_key(&mut robot, cranpose_ui::Key::Tab, "\t");
     assert_focused(&mut robot, "After segments");
 }
 
-fn press_key(robot: &mut RobotTestRule<TestRenderer>, key: cranpose_ui::KeyCode, text: &str) {
+fn press_key(robot: &mut RobotTestRule<TestRenderer>, key: cranpose_ui::Key, text: &str) {
     assert!(
         robot
             .shell_mut()
@@ -550,7 +550,7 @@ fn reader_selects_a_menu_item_and_dismisses_the_popup() {
                 robot
                     .shell_mut()
                     .on_key_event(&cranpose_ui::KeyEvent::key_down(
-                        cranpose_ui::KeyCode::ArrowDown,
+                        cranpose_ui::Key::DirectionDown,
                         ""
                     ))
             );
@@ -558,7 +558,7 @@ fn reader_selects_a_menu_item_and_dismisses_the_popup() {
                 robot
                     .shell_mut()
                     .on_key_event(&cranpose_ui::KeyEvent::key_down(
-                        cranpose_ui::KeyCode::Enter,
+                        cranpose_ui::Key::Enter,
                         "\r"
                     ))
             );

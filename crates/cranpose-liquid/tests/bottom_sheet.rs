@@ -15,7 +15,7 @@ use cranpose_testing::{
     RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
 };
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, KeyCode, KeyEvent, Modifier, Point, ScrollState, Size, Text,
+    Box, BoxSpec, Column, ColumnSpec, Key, KeyEvent, Modifier, Point, ScrollState, Size, Text,
     TextStyle,
 };
 
@@ -223,7 +223,7 @@ fn escape_and_the_back_gesture_slide_the_sheet_out() {
         let mut screen = screen(false);
         let shell = screen.robot.shell_mut();
         let handled = if escape {
-            shell.on_key_event(&KeyEvent::key_down(KeyCode::Escape, ""))
+            shell.on_key_event(&KeyEvent::key_down(Key::Escape, ""))
         } else {
             shell.dismiss_top_modal()
         };

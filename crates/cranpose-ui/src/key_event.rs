@@ -16,12 +16,13 @@ pub enum KeyEventType {
     KeyUp,
 }
 
-/// Physical key codes for keyboard input.
+/// A key on a keyboard, remote control or game controller, named as in
+/// Jetpack Compose's `androidx.compose.ui.input.key.Key`.
 ///
-/// These represent physical keys on the keyboard, independent of
-/// the character they produce (which depends on keyboard layout).
+/// Letters and digits name the physical key, independent of the character
+/// the keyboard layout gives it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum KeyCode {
+pub enum Key {
     /// The A key.
     A,
     /// The B key.
@@ -76,25 +77,25 @@ pub enum KeyCode {
     Z,
 
     /// The 0 key on the main number row.
-    Digit0,
+    Zero,
     /// The 1 key on the main number row.
-    Digit1,
+    One,
     /// The 2 key on the main number row.
-    Digit2,
+    Two,
     /// The 3 key on the main number row.
-    Digit3,
+    Three,
     /// The 4 key on the main number row.
-    Digit4,
+    Four,
     /// The 5 key on the main number row.
-    Digit5,
+    Five,
     /// The 6 key on the main number row.
-    Digit6,
+    Six,
     /// The 7 key on the main number row.
-    Digit7,
+    Seven,
     /// The 8 key on the main number row.
-    Digit8,
+    Eight,
     /// The 9 key on the main number row.
-    Digit9,
+    Nine,
 
     /// The F1 function key.
     F1,
@@ -121,18 +122,20 @@ pub enum KeyCode {
     /// The F12 function key.
     F12,
 
-    /// The up arrow key.
-    ArrowUp,
-    /// The down arrow key.
-    ArrowDown,
-    /// The left arrow key.
-    ArrowLeft,
-    /// The right arrow key.
-    ArrowRight,
-    /// The Home key.
-    Home,
-    /// The End key.
-    End,
+    /// The up arrow key, or up on a D-pad.
+    DirectionUp,
+    /// The down arrow key, or down on a D-pad.
+    DirectionDown,
+    /// The left arrow key, or left on a D-pad.
+    DirectionLeft,
+    /// The right arrow key, or right on a D-pad.
+    DirectionRight,
+    /// The center button of a D-pad: OK or Select on a remote.
+    DirectionCenter,
+    /// The Home key, which moves to the start of a line or list.
+    MoveHome,
+    /// The End key, which moves to the end of a line or list.
+    MoveEnd,
     /// The Page Up key.
     PageUp,
     /// The Page Down key.
@@ -144,10 +147,12 @@ pub enum KeyCode {
     Delete,
     /// The main Enter or Return key.
     Enter,
+    /// The Enter key on the number pad.
+    NumPadEnter,
     /// The Tab key.
     Tab,
     /// The space bar.
-    Space,
+    Spacebar,
     /// The Escape key.
     Escape,
 
@@ -156,9 +161,9 @@ pub enum KeyCode {
     /// The right Shift key.
     ShiftRight,
     /// The left Control key.
-    ControlLeft,
+    CtrlLeft,
     /// The right Control key.
-    ControlRight,
+    CtrlRight,
     /// The left Alt key, called Option on macOS.
     AltLeft,
     /// The right Alt key, called Option on macOS.
@@ -171,17 +176,17 @@ pub enum KeyCode {
     /// The minus and underscore key on US layouts.
     Minus,
     /// The equals and plus key on US layouts.
-    Equal,
+    Equals,
     /// The left square bracket key on US layouts.
-    BracketLeft,
+    LeftBracket,
     /// The right square bracket key on US layouts.
-    BracketRight,
+    RightBracket,
     /// The backslash key on US layouts.
     Backslash,
     /// The semicolon and colon key on US layouts.
     Semicolon,
     /// The apostrophe and quotation mark key on US layouts.
-    Quote,
+    Apostrophe,
     /// The comma key on US layouts.
     Comma,
     /// The period key on US layouts.
@@ -189,101 +194,169 @@ pub enum KeyCode {
     /// The forward slash key on US layouts.
     Slash,
     /// The grave accent and tilde key on US layouts, left of the 1 key.
-    Backquote,
+    Grave,
+
+    /// The Back key of a remote or of the Android system navigation.
+    Back,
+    /// The Menu key.
+    Menu,
+    /// The Search key of a remote.
+    Search,
+    /// The Info key of a remote.
+    Info,
+    /// The Guide key of a remote, which opens the program guide.
+    Guide,
+    /// The Settings key of a remote.
+    Settings,
+    /// The Channel Up key of a remote.
+    ChannelUp,
+    /// The Channel Down key of a remote.
+    ChannelDown,
+    /// The red program key of a remote.
+    ProgramRed,
+    /// The green program key of a remote.
+    ProgramGreen,
+    /// The yellow program key of a remote.
+    ProgramYellow,
+    /// The blue program key of a remote.
+    ProgramBlue,
+
+    /// The Play media key.
+    MediaPlay,
+    /// The Pause media key.
+    MediaPause,
+    /// The Play/Pause media key.
+    MediaPlayPause,
+    /// The Stop media key.
+    MediaStop,
+    /// The Next track media key.
+    MediaNext,
+    /// The Previous track media key.
+    MediaPrevious,
+    /// The Rewind media key.
+    MediaRewind,
+    /// The Fast Forward media key.
+    MediaFastForward,
+    /// The Record media key.
+    MediaRecord,
+
+    /// The A button of a game controller.
+    ButtonA,
+    /// The B button of a game controller.
+    ButtonB,
+    /// The X button of a game controller.
+    ButtonX,
+    /// The Y button of a game controller.
+    ButtonY,
+    /// The Select button of a game controller.
+    ButtonSelect,
+    /// The Start button of a game controller.
+    ButtonStart,
 
     /// Key not recognized or not mapped.
     Unknown,
 }
 
-const DOM_KEY_CODES: [(&str, KeyCode); 82] = [
-    ("KeyA", KeyCode::A),
-    ("KeyB", KeyCode::B),
-    ("KeyC", KeyCode::C),
-    ("KeyD", KeyCode::D),
-    ("KeyE", KeyCode::E),
-    ("KeyF", KeyCode::F),
-    ("KeyG", KeyCode::G),
-    ("KeyH", KeyCode::H),
-    ("KeyI", KeyCode::I),
-    ("KeyJ", KeyCode::J),
-    ("KeyK", KeyCode::K),
-    ("KeyL", KeyCode::L),
-    ("KeyM", KeyCode::M),
-    ("KeyN", KeyCode::N),
-    ("KeyO", KeyCode::O),
-    ("KeyP", KeyCode::P),
-    ("KeyQ", KeyCode::Q),
-    ("KeyR", KeyCode::R),
-    ("KeyS", KeyCode::S),
-    ("KeyT", KeyCode::T),
-    ("KeyU", KeyCode::U),
-    ("KeyV", KeyCode::V),
-    ("KeyW", KeyCode::W),
-    ("KeyX", KeyCode::X),
-    ("KeyY", KeyCode::Y),
-    ("KeyZ", KeyCode::Z),
-    ("Digit0", KeyCode::Digit0),
-    ("Digit1", KeyCode::Digit1),
-    ("Digit2", KeyCode::Digit2),
-    ("Digit3", KeyCode::Digit3),
-    ("Digit4", KeyCode::Digit4),
-    ("Digit5", KeyCode::Digit5),
-    ("Digit6", KeyCode::Digit6),
-    ("Digit7", KeyCode::Digit7),
-    ("Digit8", KeyCode::Digit8),
-    ("Digit9", KeyCode::Digit9),
-    ("F1", KeyCode::F1),
-    ("F2", KeyCode::F2),
-    ("F3", KeyCode::F3),
-    ("F4", KeyCode::F4),
-    ("F5", KeyCode::F5),
-    ("F6", KeyCode::F6),
-    ("F7", KeyCode::F7),
-    ("F8", KeyCode::F8),
-    ("F9", KeyCode::F9),
-    ("F10", KeyCode::F10),
-    ("F11", KeyCode::F11),
-    ("F12", KeyCode::F12),
-    ("ArrowUp", KeyCode::ArrowUp),
-    ("ArrowDown", KeyCode::ArrowDown),
-    ("ArrowLeft", KeyCode::ArrowLeft),
-    ("ArrowRight", KeyCode::ArrowRight),
-    ("Home", KeyCode::Home),
-    ("End", KeyCode::End),
-    ("PageUp", KeyCode::PageUp),
-    ("PageDown", KeyCode::PageDown),
-    ("Backspace", KeyCode::Backspace),
-    ("Delete", KeyCode::Delete),
-    ("Enter", KeyCode::Enter),
-    ("NumpadEnter", KeyCode::Enter),
-    ("Tab", KeyCode::Tab),
-    ("Space", KeyCode::Space),
-    ("Escape", KeyCode::Escape),
-    ("ShiftLeft", KeyCode::ShiftLeft),
-    ("ShiftRight", KeyCode::ShiftRight),
-    ("ControlLeft", KeyCode::ControlLeft),
-    ("ControlRight", KeyCode::ControlRight),
-    ("AltLeft", KeyCode::AltLeft),
-    ("AltRight", KeyCode::AltRight),
-    ("MetaLeft", KeyCode::MetaLeft),
-    ("MetaRight", KeyCode::MetaRight),
-    ("Minus", KeyCode::Minus),
-    ("Equal", KeyCode::Equal),
-    ("BracketLeft", KeyCode::BracketLeft),
-    ("BracketRight", KeyCode::BracketRight),
-    ("Backslash", KeyCode::Backslash),
-    ("Semicolon", KeyCode::Semicolon),
-    ("Quote", KeyCode::Quote),
-    ("Comma", KeyCode::Comma),
-    ("Period", KeyCode::Period),
-    ("Slash", KeyCode::Slash),
-    ("Backquote", KeyCode::Backquote),
+const DOM_KEY_CODES: [(&str, Key); 93] = [
+    ("KeyA", Key::A),
+    ("KeyB", Key::B),
+    ("KeyC", Key::C),
+    ("KeyD", Key::D),
+    ("KeyE", Key::E),
+    ("KeyF", Key::F),
+    ("KeyG", Key::G),
+    ("KeyH", Key::H),
+    ("KeyI", Key::I),
+    ("KeyJ", Key::J),
+    ("KeyK", Key::K),
+    ("KeyL", Key::L),
+    ("KeyM", Key::M),
+    ("KeyN", Key::N),
+    ("KeyO", Key::O),
+    ("KeyP", Key::P),
+    ("KeyQ", Key::Q),
+    ("KeyR", Key::R),
+    ("KeyS", Key::S),
+    ("KeyT", Key::T),
+    ("KeyU", Key::U),
+    ("KeyV", Key::V),
+    ("KeyW", Key::W),
+    ("KeyX", Key::X),
+    ("KeyY", Key::Y),
+    ("KeyZ", Key::Z),
+    ("Digit0", Key::Zero),
+    ("Digit1", Key::One),
+    ("Digit2", Key::Two),
+    ("Digit3", Key::Three),
+    ("Digit4", Key::Four),
+    ("Digit5", Key::Five),
+    ("Digit6", Key::Six),
+    ("Digit7", Key::Seven),
+    ("Digit8", Key::Eight),
+    ("Digit9", Key::Nine),
+    ("F1", Key::F1),
+    ("F2", Key::F2),
+    ("F3", Key::F3),
+    ("F4", Key::F4),
+    ("F5", Key::F5),
+    ("F6", Key::F6),
+    ("F7", Key::F7),
+    ("F8", Key::F8),
+    ("F9", Key::F9),
+    ("F10", Key::F10),
+    ("F11", Key::F11),
+    ("F12", Key::F12),
+    ("ArrowUp", Key::DirectionUp),
+    ("ArrowDown", Key::DirectionDown),
+    ("ArrowLeft", Key::DirectionLeft),
+    ("ArrowRight", Key::DirectionRight),
+    ("Home", Key::MoveHome),
+    ("End", Key::MoveEnd),
+    ("PageUp", Key::PageUp),
+    ("PageDown", Key::PageDown),
+    ("Backspace", Key::Backspace),
+    ("Delete", Key::Delete),
+    ("Enter", Key::Enter),
+    ("NumpadEnter", Key::NumPadEnter),
+    ("Tab", Key::Tab),
+    ("Space", Key::Spacebar),
+    ("Escape", Key::Escape),
+    ("ShiftLeft", Key::ShiftLeft),
+    ("ShiftRight", Key::ShiftRight),
+    ("ControlLeft", Key::CtrlLeft),
+    ("ControlRight", Key::CtrlRight),
+    ("AltLeft", Key::AltLeft),
+    ("AltRight", Key::AltRight),
+    ("MetaLeft", Key::MetaLeft),
+    ("MetaRight", Key::MetaRight),
+    ("Minus", Key::Minus),
+    ("Equal", Key::Equals),
+    ("BracketLeft", Key::LeftBracket),
+    ("BracketRight", Key::RightBracket),
+    ("Backslash", Key::Backslash),
+    ("Semicolon", Key::Semicolon),
+    ("Quote", Key::Apostrophe),
+    ("Comma", Key::Comma),
+    ("Period", Key::Period),
+    ("Slash", Key::Slash),
+    ("Backquote", Key::Grave),
+    ("ContextMenu", Key::Menu),
+    ("BrowserSearch", Key::Search),
+    ("MediaPlay", Key::MediaPlay),
+    ("MediaPause", Key::MediaPause),
+    ("MediaPlayPause", Key::MediaPlayPause),
+    ("MediaStop", Key::MediaStop),
+    ("MediaTrackNext", Key::MediaNext),
+    ("MediaTrackPrevious", Key::MediaPrevious),
+    ("MediaRewind", Key::MediaRewind),
+    ("MediaFastForward", Key::MediaFastForward),
+    ("MediaRecord", Key::MediaRecord),
 ];
 
-impl KeyCode {
+impl Key {
     /// The key a W3C `KeyboardEvent.code` value names, such as `"KeyA"`,
-    /// `"ArrowUp"` or `"ShiftLeft"`; `"NumpadEnter"` is [`KeyCode::Enter`]. A
-    /// code with no counterpart here is [`KeyCode::Unknown`].
+    /// `"ArrowUp"` or `"MediaPlayPause"`. A code with no counterpart here is
+    /// [`Key::Unknown`].
     pub fn from_dom_code(code: &str) -> Self {
         DOM_KEY_CODES
             .iter()
@@ -292,56 +365,123 @@ impl KeyCode {
     }
 }
 
+/// What the platform reported about a key event beyond the key, as
+/// `KeyEvent.nativeKeyEvent` holds in Compose.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeKeyEvent {
+    /// How many times the key repeated while held: 0 for the press itself,
+    /// 1 for the first repeat, and so on on Android. The desktop and the web
+    /// report only whether an event repeats, so every repeat there is 1.
+    pub repeat_count: u32,
+}
+
 /// A keyboard input event.
 ///
-/// Contains information about which key was pressed/released,
-/// the text it produces (if any), and modifier state.
+/// Holds the key, whether it went down or up, the modifier keys held with it
+/// and the text it typed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyEvent {
-    /// The physical key that was pressed.
-    pub key_code: KeyCode,
-    /// The text produced by this key press (may be empty for non-character keys).
-    /// This accounts for keyboard layout and modifiers (e.g., Shift+A = "A").
-    pub text: String,
-    /// Current state of modifier keys.
-    pub modifiers: Modifiers,
-    /// Type of event (down or up).
-    pub event_type: KeyEventType,
+    key: Key,
+    text: String,
+    modifiers: Modifiers,
+    type_: KeyEventType,
+    native: NativeKeyEvent,
 }
 
 impl KeyEvent {
-    /// Creates a new key event.
+    /// Creates a key event. `text` is what the key typed with the keyboard
+    /// layout and modifiers applied (Shift+A types "A"), empty for keys that
+    /// type nothing.
     pub fn new(
-        key_code: KeyCode,
+        key: Key,
         text: impl Into<String>,
         modifiers: Modifiers,
-        event_type: KeyEventType,
+        type_: KeyEventType,
     ) -> Self {
         Self {
-            key_code,
+            key,
             text: text.into(),
             modifiers,
-            event_type,
+            type_,
+            native: NativeKeyEvent::default(),
         }
     }
 
-    /// Creates a key down event with the given key code and text.
-    pub fn key_down(key_code: KeyCode, text: impl Into<String>) -> Self {
-        Self::new(key_code, text, Modifiers::NONE, KeyEventType::KeyDown)
+    /// Creates a key down event with the given key and text.
+    pub fn key_down(key: Key, text: impl Into<String>) -> Self {
+        Self::new(key, text, Modifiers::NONE, KeyEventType::KeyDown)
     }
 
     /// Creates a key down event with modifiers.
     pub fn key_down_with_modifiers(
-        key_code: KeyCode,
+        key: Key,
         text: impl Into<String>,
         modifiers: Modifiers,
     ) -> Self {
-        Self::new(key_code, text, modifiers, KeyEventType::KeyDown)
+        Self::new(key, text, modifiers, KeyEventType::KeyDown)
+    }
+
+    /// This event as the `repeat_count`th repeat of a held key.
+    #[must_use]
+    pub fn with_repeat_count(mut self, repeat_count: u32) -> Self {
+        self.native.repeat_count = repeat_count;
+        self
+    }
+
+    /// The key that went down or up.
+    pub fn key(&self) -> Key {
+        self.key
+    }
+
+    /// Whether the key went down or up.
+    pub fn type_(&self) -> KeyEventType {
+        self.type_
+    }
+
+    /// The text this key typed, empty for keys that type nothing.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The modifier keys held with this key.
+    pub fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
+    /// Whether a Shift key was held.
+    pub fn is_shift_pressed(&self) -> bool {
+        self.modifiers.shift
+    }
+
+    /// Whether a Control key was held.
+    pub fn is_ctrl_pressed(&self) -> bool {
+        self.modifiers.ctrl
+    }
+
+    /// Whether an Alt key was held.
+    pub fn is_alt_pressed(&self) -> bool {
+        self.modifiers.alt
+    }
+
+    /// Whether a Meta key was held.
+    pub fn is_meta_pressed(&self) -> bool {
+        self.modifiers.meta
+    }
+
+    /// The Unicode code point of the character this key typed, if it typed
+    /// one.
+    pub fn utf16_code_point(&self) -> Option<u32> {
+        self.text.chars().next().map(u32::from)
+    }
+
+    /// What the platform reported beyond the key, such as the repeat count.
+    pub fn native_key_event(&self) -> NativeKeyEvent {
+        self.native
     }
 
     /// Returns true if this is a key down event.
     pub fn is_key_down(&self) -> bool {
-        self.event_type == KeyEventType::KeyDown
+        self.type_ == KeyEventType::KeyDown
     }
 
     /// Returns true if this key produces printable text.
@@ -355,7 +495,7 @@ impl fmt::Display for KeyEvent {
         write!(
             f,
             "KeyEvent({:?}, text=\"{}\", {:?})",
-            self.key_code, self.text, self.event_type
+            self.key, self.text, self.type_
         )
     }
 }

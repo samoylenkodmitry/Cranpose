@@ -3,7 +3,7 @@
 //! own edits alone.
 
 use cranpose_foundation::text::InputTransformation;
-use cranpose_ui::{BasicTextFieldOptions, KeyCode, Modifiers};
+use cranpose_ui::{BasicTextFieldOptions, Key, Modifiers};
 
 use crate::support_text_field::FocusedField;
 
@@ -38,7 +38,7 @@ fn a_length_limit_rejects_typing_pasting_and_composing_past_it() {
     );
     assert_eq!(limited.selection(), (4, 4));
 
-    limited.press(KeyCode::Backspace, Modifiers::NONE);
+    limited.press(Key::Backspace, Modifiers::NONE);
     limited.type_text("\u{1F1F7}\u{1F1F8}");
     assert_eq!(
         limited.text(),
@@ -54,7 +54,7 @@ fn a_filter_keeps_only_the_edits_it_accepts() {
     assert_eq!(digits.text(), "1234");
     assert!(digits.shell.on_paste("5x"));
     assert_eq!(digits.text(), "1234", "a paste with a letter was refused");
-    digits.press(KeyCode::Backspace, Modifiers::NONE);
+    digits.press(Key::Backspace, Modifiers::NONE);
     assert_eq!(digits.text(), "123", "deleting digits leaves digits");
 }
 
@@ -65,7 +65,7 @@ fn a_replacement_puts_the_caret_after_it() {
         (upper != proposed).then_some(upper)
     });
     let mut field = field("ab", upper);
-    field.press(KeyCode::Home, Modifiers::NONE).type_text("c");
+    field.press(Key::MoveHome, Modifiers::NONE).type_text("c");
     assert_eq!(field.text(), "CAB");
     assert_eq!(field.selection(), (3, 3));
 }
@@ -82,7 +82,7 @@ fn the_app_edits_past_the_transformation() {
     let mut field = field("12", InputTransformation::max_length(2));
     assert!(field.state().set_text("hello"));
     assert_eq!(field.text(), "hello");
-    field.press(KeyCode::Backspace, Modifiers::NONE);
+    field.press(Key::Backspace, Modifiers::NONE);
     assert_eq!(
         field.text(),
         "hell",

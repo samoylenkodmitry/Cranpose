@@ -2281,7 +2281,7 @@ fn reading_semantics_snapshots_keeps_the_live_requester_bound() -> Result<(), No
     assert_eq!(requester.node_id(), Some(node_id), "semantics snapshot");
     crate::focus_order::collect_focus_order(&layout);
     assert_eq!(requester.node_id(), Some(node_id), "focus order");
-    crate::focus_navigation::keyboard_focus_target(&layout, None, crate::KeyCode::Tab, false);
+    crate::focus_navigation::keyboard_focus_target(&layout, None, crate::Key::Tab, false);
     assert_eq!(requester.node_id(), Some(node_id), "keyboard navigation");
     build_semantics_tree_from_applier(&mut applier, node_id)?;
     assert_eq!(requester.node_id(), Some(node_id), "retained semantics");

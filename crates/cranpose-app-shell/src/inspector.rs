@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::Renderer;
-use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, SemanticsTree};
+use cranpose_ui::{Key, KeyEvent, KeyEventType, SemanticsTree};
 use cranpose_ui_graphics::{EdgeInsets, Point, Rect, Size};
 
 use crate::{AppShell, RootSurface, ShellApp, SurfaceMut};
@@ -420,16 +420,16 @@ where
         }
         let inspector = &mut self.surface_mut().inspector;
         let action = if inspector.state.open && inspector.keyboard {
-            match event.key_code {
-                KeyCode::Escape => Some(InspectorAction::Toggle),
-                KeyCode::ArrowUp | KeyCode::ArrowLeft => Some(InspectorAction::Previous),
-                KeyCode::ArrowDown | KeyCode::ArrowRight => Some(InspectorAction::Next),
-                KeyCode::Digit1 => Some(InspectorAction::Normal),
-                KeyCode::Digit2 => Some(InspectorAction::Overlay),
-                KeyCode::Digit3 => Some(InspectorAction::Accessibility),
-                KeyCode::P => Some(InspectorAction::Pick),
-                KeyCode::PageUp => Some(InspectorAction::DetailsUp),
-                KeyCode::PageDown => Some(InspectorAction::DetailsDown),
+            match event.key() {
+                Key::Escape => Some(InspectorAction::Toggle),
+                Key::DirectionUp | Key::DirectionLeft => Some(InspectorAction::Previous),
+                Key::DirectionDown | Key::DirectionRight => Some(InspectorAction::Next),
+                Key::One => Some(InspectorAction::Normal),
+                Key::Two => Some(InspectorAction::Overlay),
+                Key::Three => Some(InspectorAction::Accessibility),
+                Key::P => Some(InspectorAction::Pick),
+                Key::PageUp => Some(InspectorAction::DetailsUp),
+                Key::PageDown => Some(InspectorAction::DetailsDown),
                 _ => None,
             }
         } else {
@@ -438,7 +438,7 @@ where
         let Some(action) = action else {
             return inspector.state.open && inspector.keyboard;
         };
-        if event.event_type == KeyEventType::KeyDown {
+        if event.type_() == KeyEventType::KeyDown {
             inspector.apply(action);
             self.mark_dirty();
         }
