@@ -16,6 +16,8 @@ pub(crate) mod app_update;
 #[cfg(target_os = "android")]
 pub(crate) mod camera;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod configuration;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod display_timing;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod event_loop;

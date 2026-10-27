@@ -17,6 +17,7 @@ use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 
 use super::{
+    configuration::{refresh_android_configuration, system_theme_from_android},
     display_timing::{DisplayTimingObserver, DisplayedFrame},
     host_window_requests::{
         PendingHostWindowSizeRequest, confirm_android_host_window_request,
@@ -90,15 +91,6 @@ fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
         ..cranpose_ui::EdgeInsets::default()
     };
     android_platform_env().set_ime_insets(insets)
-}
-
-fn system_theme_from_android(
-    night: ndk::configuration::UiModeNight,
-) -> cranpose_services::SystemTheme {
-    match night {
-        ndk::configuration::UiModeNight::Yes => cranpose_services::SystemTheme::Dark,
-        _ => cranpose_services::SystemTheme::Light,
-    }
 }
 
 fn drain_accessibility_activations(
@@ -1525,29 +1517,6 @@ fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> 
 }
 
 pub(crate) const DEFAULT_LOG_TAG: &str = "Cranpose";
-
-fn refresh_android_configuration(
-    app: &android_activity::AndroidApp,
-    shell: &mut Option<AppShell<WgpuRenderer>>,
-) {
-    #[cfg(feature = "localization")]
-    if android_platform_env().refresh_languages()
-        && let Some(shell) = shell
-    {
-        shell.request_root_render();
-    }
-    let theme = system_theme_from_android(app.config().ui_mode_night());
-    if android_platform_env().set_system_theme(theme)
-        && let Some(shell) = shell
-    {
-        shell.request_root_render();
-    }
-    if super::font_scale::refresh_font_scale(app)
-        && let Some(shell) = shell
-    {
-        shell.set_font_scale_curve(super::font_scale::font_scale_curve());
-    }
-}
 
 /// Sends the process's logs to logcat under `tag`, once.
 pub(crate) fn init_logging(tag: &str) {
