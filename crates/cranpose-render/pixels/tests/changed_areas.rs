@@ -1,8 +1,8 @@
 //! A frame kept by a host and redrawn only in the areas
 //! `PixelsRenderer::update_picture` reports stays equal to a full redraw, frame
 //! after frame, while content moves, resizes, changes color, text, alpha,
-//! shadow and stacking order, scrolls under a clip, and appears and
-//! disappears.
+//! shadow and stacking order, scrolls under a clip, appears and disappears,
+//! and arcs sweep.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,7 +11,9 @@ use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
-use cranpose_ui_graphics::{Color, ColorFilter, GraphicsLayer};
+use cranpose_ui_graphics::{
+    Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
+};
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 180;
@@ -723,5 +725,124 @@ fn a_row_added_below_still_content_leaves_that_content() {
             .iter()
             .all(|area| area.y + area.height <= 10 || area.y >= 110),
         "the top box changes and a row is added; the white box between them stays: {areas:?}"
+    );
+}
+
+// A ring over its track, from `start` by `sweep`, as a gauge draws it.
+fn ring(scope: &mut dyn DrawScope, center: Point, cap: StrokeCap, start: f32, sweep: f32) {
+    let stroke = Stroke::new(9.0);
+    scope.draw_circle_stroked(
+        Brush::solid(Color::from_rgb_u8(40, 44, 64)),
+        center,
+        30.0,
+        stroke,
+    );
+    scope.draw_arc(
+        Brush::solid(Color::from_rgba_u8(98, 160, 255, 200)),
+        center,
+        30.0,
+        start,
+        sweep,
+        Stroke { cap, ..stroke },
+    );
+}
+
+// The sweep at `step`: a fifth of a turn growing to over half a turn and
+// back.
+fn sweep(step: u32) -> f32 {
+    0.4 + 0.37 * step.min(FRAMES - step) as f32
+}
+
+// Rings whose sweeps grow past half a turn and shrink, with each cap; the
+// third sweeps counter-clockwise, so its start moves.
+#[composable]
+fn GrowingRings(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty().fill_max_size().draw_behind(move |scope| {
+            for (index, (cap, direction)) in [
+                (StrokeCap::Round, 1.0),
+                (StrokeCap::Butt, 1.0),
+                (StrokeCap::Square, -1.0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let center = Point::new(40.0 + index as f32 * 78.0, 60.3);
+                let start = -TAU / 4.0 + index as f32 * 0.7;
+                ring(scope, center, cap, start, direction * sweep(n));
+            }
+        }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn kept_frames_match_full_redraws_while_arcs_sweep() {
+    for scale in [1.0, 1.5, 2.0] {
+        kept_frames_match_full_redraws(scale, GrowingRings);
+    }
+}
+
+#[composable]
+fn GrowingRing(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty().fill_max_size().draw_behind(move |scope| {
+            ring(
+                scope,
+                Point::new(60.0, 60.0),
+                StrokeCap::Round,
+                -TAU / 4.0,
+                sweep(n),
+            );
+        }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn a_growing_ring_changes_only_the_area_around_its_end() {
+    let captured: Step = Rc::default();
+    let content = Rc::clone(&captured);
+    let mut shell = AppShell::new_with_size(
+        PixelsRenderer::new(),
+        location_key(file!(), line!(), column!()),
+        move || GrowingRing(Rc::clone(&content)),
+        (WIDTH, HEIGHT),
+        (WIDTH as f32, HEIGHT as f32),
+    );
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(1);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    // The end moves from 23 to 44 degrees past the top, clockwise: the ring
+    // and its track left of the top stay.
+    let changed: u32 = areas.iter().map(|area| area.width * area.height).sum();
+    assert!(!areas.is_empty());
+    assert!(
+        areas
+            .iter()
+            .all(|area| area.x >= 60 && area.y + area.height <= 60),
+        "only the top right quarter changes: {areas:?}"
+    );
+    assert!(
+        changed < 30 * 30,
+        "the area around the end is small: {changed} pixels in {areas:?}"
     );
 }

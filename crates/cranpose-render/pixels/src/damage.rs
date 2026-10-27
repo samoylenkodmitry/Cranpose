@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
-use cranpose_ui_graphics::{Brush, CornerRadii, Rect};
+use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
@@ -114,6 +114,73 @@ fn add_moved_fill_areas(
     };
     for strip in edge_strips(a, b, radii).into_iter().flatten() {
         if let Some(area) = clip_rect_to_window(strip, old.clip, window) {
+            add_area(areas, area);
+        }
+    }
+    true
+}
+
+// The sweeps of `old` and `new`, the shorter first, when both are one arc
+// that differs only in its sweep.
+fn swept_sweeps(old: &DrawShape, new: &DrawShape) -> Option<(f32, f32)> {
+    let DrawShape {
+        rect,
+        snap_anchor,
+        snap_to_pixel_grid,
+        brush,
+        outline,
+        clip,
+        blend_mode,
+    } = old;
+    let (Outline::Arc(a), Outline::Arc(b)) = (*outline, new.outline) else {
+        return None;
+    };
+    // A whole turn has no end of its own: it starts at angle zero.
+    let partial = |arc: ArcGeometry| !arc.is_degenerate() && arc.sweep_angle < TAU;
+    // An arc's rect is its bounds, which move with its sweep, and only a
+    // gradient reads it.
+    let alike = (*rect == new.rect || matches!(brush, Brush::Solid(_)))
+        && *snap_anchor == new.snap_anchor
+        && *snap_to_pixel_grid == new.snap_to_pixel_grid
+        && *brush == new.brush
+        && *clip == new.clip
+        && *blend_mode == new.blend_mode
+        && partial(a)
+        && partial(b)
+        && ArcGeometry {
+            sweep_angle: b.sweep_angle,
+            ..a
+        } == b;
+    alike.then_some(if a.sweep_angle < b.sweep_angle {
+        (a.sweep_angle, b.sweep_angle)
+    } else {
+        (b.sweep_angle, a.sweep_angle)
+    })
+}
+
+// Adds the area where `new` can draw other pixels than `old` when both are
+// one arc that differs only in its sweep: around the part between their
+// ends, caps included. Away from it a point lies inside or outside both
+// sweeps alike, and its coverage reads only the end it lies near. Returns
+// false and adds nothing for any other pair.
+fn add_swept_arc_areas(
+    old: &DrawShape,
+    new: &DrawShape,
+    window: ClipBounds,
+    areas: &mut Vec<ClipBounds>,
+) -> bool {
+    let Some((shorter, longer)) = swept_sweeps(old, new) else {
+        return false;
+    };
+    if let Some(placed) = place_shape(old)
+        && let ShapeCoverage::Arc(arc) = placed.coverage
+    {
+        let between = ShapeCoverage::Arc(ArcGeometry {
+            start_angle: arc.start_angle + shorter,
+            sweep_angle: longer - shorter,
+            ..arc
+        });
+        if let Some(area) = clip_rect_to_window(between.reach(placed.rect), old.clip, window) {
             add_area(areas, area);
         }
     }
@@ -347,20 +414,24 @@ pub(crate) fn add_changed_runs(
         if same_item(old, old_item, new, new_item) {
             continue;
         }
-        let moved = match (old_item, new_item) {
+        // A moved fill and a swept arc add only the areas their change
+        // reaches.
+        let narrowed = match (old_item, new_item) {
             (RenderItem::Shape(a), RenderItem::Shape(b)) => {
-                add_moved_fill_areas(&old.shapes[a], &new.shapes[b], window, areas)
+                let (old_shape, new_shape) = (&old.shapes[a], &new.shapes[b]);
+                add_moved_fill_areas(old_shape, new_shape, window, areas)
+                    || add_swept_arc_areas(old_shape, new_shape, window, areas)
             }
             _ => false,
         };
-        if moved && !reach.replaces() {
+        if narrowed && !reach.replaces() {
             continue;
         }
-        if !moved && let Some(area) = reach.old(old, index, old_item, window) {
+        if !narrowed && let Some(area) = reach.old(old, index, old_item, window) {
             add_area(areas, area);
         }
         let new_bounds = new.item_bounds(new_item, window);
-        if !moved && let Some(area) = new_bounds {
+        if !narrowed && let Some(area) = new_bounds {
             add_area(areas, area);
         }
         reach.replace(index, new_bounds);
