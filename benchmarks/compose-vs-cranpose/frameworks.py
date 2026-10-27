@@ -46,7 +46,7 @@ def measure_frameworks(args):
     apps = args.apps.split(',')
     if args.browser:
         server = BrowserServer(args.browser)
-        device.adb('reverse', f'tcp:{server.port}', f'tcp:{server.port}')
+        device.reverse(server.port)
         targets = {app: PageTarget(server, app, args.tier) for app in apps}
     else:
         targets = {app: AppTarget(app) for app in apps}

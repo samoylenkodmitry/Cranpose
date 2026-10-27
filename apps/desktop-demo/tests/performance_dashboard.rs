@@ -111,9 +111,39 @@ fn frames() -> FrameSource {
     )])))
 }
 
+// The browser runs of two nights, oldest first: the Mac's on Chrome 155, then
+// on Chrome 156; the phone's on Chrome 155, then one whose every launch
+// failed.
+const BROWSER_INDEX: &str = r#"{"runs": [
+ {"file": "runs/mac-155.json", "kind": "browser", "started_at": "2026-10-26T07:00:00+00:00",
+  "device": "Apple M3 Pro · Chrome 155", "protocol": {"run_s": 10, "starts": ["first", "second"]},
+  "subjects": [{"name": "web", "label": "Web Chrome 155"}],
+  "scenarios": {"gauntlet": {"legs": 2, "starts": {
+    "first": {"summary": {"web": {"fps": 21.5}}}, "second": {"summary": {"web": {"fps": 22.5}}}}}}},
+ {"file": "runs/phone-155.json", "kind": "browser", "started_at": "2026-10-26T07:40:00+00:00",
+  "device": "EVR-AL00 · Chrome 155", "protocol": {"run_s": 10, "starts": ["first", "second"]},
+  "subjects": [{"name": "web", "label": "Web Chrome 155"}],
+  "scenarios": {"gauntlet": {"legs": 2, "starts": {
+    "first": {"summary": {"web": {"fps": 13.5}}}, "second": {"summary": {"web": {"fps": 14.0}}}}}}},
+ {"file": "runs/mac-156.json", "kind": "browser", "started_at": "2026-10-27T07:00:00+00:00",
+  "device": "Apple M3 Pro · Chrome 156", "protocol": {"run_s": 10, "starts": ["first", "second"]},
+  "subjects": [{"name": "web", "label": "Web Chrome 156"}],
+  "scenarios": {"gauntlet": {"legs": 2, "starts": {
+    "first": {"summary": {"web": {"fps": 25.3}}}, "second": {"summary": {"web": {"fps": 26.2}}}}}}},
+ {"file": "runs/phone-155-failed.json", "kind": "browser", "started_at": "2026-10-27T07:40:00+00:00",
+  "device": "EVR-AL00 · Chrome 155", "protocol": {"run_s": 10, "starts": ["first", "second"]},
+  "subjects": [{"name": "web", "label": "Web Chrome 155"}],
+  "scenarios": {"gauntlet": {"legs": 0, "starts": {
+    "first": {"summary": {"web": {}}, "failures": {"web": "the page found no server"}},
+    "second": {"summary": {"web": {}}}}}}}
+]}"#;
+
 fn labels() -> Vec<String> {
-    let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
-    let source = frames();
+    labels_of(INDEX, frames())
+}
+
+fn labels_of(index: &str, source: FrameSource) -> Vec<String> {
+    let index = Rc::new(PerfIndex::parse(index).expect("the fixture parses"));
     let mut rule = ComposeTestRule::new();
     rule.set_content(move || PerformanceDashboard(Rc::clone(&index), None, source.clone()))
         .expect("the dashboard composes");
@@ -237,6 +267,42 @@ fn the_browser_runs_have_a_card_of_their_own_beside_the_native_ones() {
             "Frameworks in the browser · Apple M3 Pro · Chrome 154 · 2026-10-06"
         ),
         "the card says it is the browser's: {labels:?}"
+    );
+}
+
+#[test]
+fn a_new_chrome_takes_the_card_of_the_old_on_the_same_machine() {
+    let labels = labels_of(BROWSER_INDEX, FrameSource::Files(Rc::default()));
+    assert!(
+        shows(
+            &labels,
+            "Frameworks in the browser · Apple M3 Pro · Chrome 156 · 2026-10-27"
+        ),
+        "{labels:?}"
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.contains("Apple M3 Pro · Chrome 155")),
+        "the older Chrome's run has no card left: {labels:?}"
+    );
+}
+
+#[test]
+fn a_run_that_measured_nothing_leaves_the_one_before_it() {
+    let labels = labels_of(BROWSER_INDEX, FrameSource::Files(Rc::default()));
+    assert!(
+        shows(
+            &labels,
+            "Frameworks in the browser · EVR-AL00 · Chrome 155 · 2026-10-26"
+        ) && shows(&labels, "13.5"),
+        "{labels:?}"
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.contains("2026-10-27") && label.contains("EVR-AL00")),
+        "{labels:?}"
     );
 }
 

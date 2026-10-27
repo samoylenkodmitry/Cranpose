@@ -145,6 +145,19 @@ def publish_run(root, repo, environment=None):
 
 
 class PublishPushTest(unittest.TestCase):
+    def test_a_run_that_measured_no_launch_fails_and_publishes_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            failed = run()
+            failed['scenarios'][0]['legs'] = []
+            (root / 'run.json').write_text(json.dumps(failed))
+            published = publish_run(root, repo)
+            self.assertNotEqual(published.returncode, 0)
+            self.assertIn('measured no launch', published.stderr)
+            index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
+            self.assertEqual([entry['file'] for entry in index['runs']], ['runs/earlier.json'])
+
     def test_a_refused_push_is_made_again_on_the_latest_data_commit(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

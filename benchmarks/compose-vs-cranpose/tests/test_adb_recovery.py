@@ -42,6 +42,22 @@ class AdbRecoveryTest(unittest.TestCase):
         self.assertEqual(between, ['kill-server', 'start-server', '-s SERIAL wait-for-device'], lines)
         self.assertIn('-s SERIAL shell cmd package compile -m speed -f dev.perfcompare.compose', lines)
 
+    def test_a_restart_opens_the_reversed_ports_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tools, calls = Path(folder), Path(folder) / 'calls'
+            adb = tools / 'adb'
+            adb.write_text(FAKE_ADB.replace('*" install "*)', '*" shell cat "*)'))
+            adb.chmod(adb.stat().st_mode | stat.S_IEXEC)
+            environment = {'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'ADB_CALLS': str(calls)}
+            with patch.dict(os.environ, environment):
+                device = measure.Device('SERIAL')
+                device.reverse(8123)
+                device.shell('cat', '/proc/uptime', timeout=1)
+            lines = calls.read_text().splitlines()
+        self.assertEqual(lines[lines.index('kill-server'):],
+                         ['kill-server', 'start-server', '-s SERIAL wait-for-device',
+                          '-s SERIAL reverse tcp:8123 tcp:8123', '-s SERIAL shell cat /proc/uptime'], lines)
+
     def test_an_adb_that_hangs_again_after_the_restart_fails_the_install(self):
         with tempfile.TemporaryDirectory() as folder:
             tools, calls = Path(folder), Path(folder) / 'calls'

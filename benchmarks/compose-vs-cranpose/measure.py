@@ -147,6 +147,8 @@ RECONNECT_TIMEOUT_S = 60
 class Device:
     def __init__(self, serial):
         self.serial = serial
+        # The host ports the phone reaches at its own localhost (`reverse`).
+        self.reversed = []
 
     def run(self, args, timeout):
         """Runs `adb -s SERIAL args`. A command that hangs past `timeout` runs
@@ -165,7 +167,9 @@ class Device:
 
     def restart_adb(self):
         """Restarts the adb server, ending it by force when it does not answer,
-        and waits for the phone."""
+        waits for the phone and opens its reversed ports again: the server
+        that ended took them with it, and on 2026-10-27 every page Chrome
+        opened after a restart found no server."""
         try:
             subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=30)
         except subprocess.TimeoutExpired:
@@ -173,6 +177,16 @@ class Device:
         subprocess.run(['adb', 'start-server'], capture_output=True, timeout=30)
         subprocess.run(['adb', '-s', self.serial, 'wait-for-device'], capture_output=True,
                        timeout=RECONNECT_TIMEOUT_S)
+        for port in self.reversed:
+            result = subprocess.run(['adb', '-s', self.serial, 'reverse', f'tcp:{port}', f'tcp:{port}'],
+                                    capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f'adb reverse tcp:{port} failed after the restart: {result.stderr.strip()}')
+
+    def reverse(self, port):
+        """Lets the phone reach the host's `port` at its own localhost."""
+        self.adb('reverse', f'tcp:{port}', f'tcp:{port}')
+        self.reversed.append(port)
 
     def install(self, app, apk):
         """Installs `apk` as `app`, in place of an install signed by another
