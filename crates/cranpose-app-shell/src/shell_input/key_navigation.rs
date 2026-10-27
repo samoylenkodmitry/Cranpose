@@ -138,9 +138,68 @@ where
             return true;
         }
         let moved = self.on_group_navigation_key(event)
-            || direction.is_some_and(|direction| self.move_focus_by_arrow(direction));
+            || direction.is_some_and(|direction| {
+                self.move_focus_by_arrow(direction) || self.scroll_by_arrow(direction)
+            });
         if moved {
             self.surface_mut().key_moved_focus_at = frame;
+        }
+        moved
+    }
+
+    // Scrolls the nearest scroll container around the focused control that
+    // can move the arrow's way by half its viewport, as Android's ScrollView
+    // does for an arrow that finds no target: a page of text with nothing to
+    // focus scrolls with the keys. Answers whether it moved.
+    fn scroll_by_arrow(&mut self, direction: FocusDirection) -> bool {
+        let Some(focused) = cranpose_ui::active_focus_target() else {
+            return false;
+        };
+        let vertical = matches!(direction, FocusDirection::Up | FocusDirection::Down);
+        let forward = matches!(direction, FocusDirection::Down | FocusDirection::Right);
+        let container = {
+            let (app, surface) = self.parts();
+            surface.semantics_tree_for_input(app).and_then(|tree| {
+                let root = tree.root();
+                crate::focus_reveal::scroll_ancestors(root, focused)?
+                    .into_iter()
+                    .find_map(|ancestor| {
+                        let node = crate::focus_reveal::semantics_of(root, ancestor)?;
+                        let details = node.details();
+                        let range = if vertical {
+                            details.vertical_scroll
+                        } else {
+                            details.horizontal_scroll
+                        }?;
+                        let can_move = if forward != range.reverse {
+                            range.can_scroll_forward()
+                        } else {
+                            range.can_scroll_backward()
+                        };
+                        let action = details.scroll_by.clone()?;
+                        can_move.then_some((ancestor, action, range.reverse))
+                    })
+            })
+        };
+        let Some((ancestor, action, reverse)) = container else {
+            return false;
+        };
+        let Some(viewport) =
+            self.with_layout_tree(|tree| crate::focus_reveal::bounds_of(tree?.root(), ancestor))
+        else {
+            return false;
+        };
+        let half = if vertical {
+            viewport.height
+        } else {
+            viewport.width
+        } * 0.5;
+        let delta = if forward != reverse { half } else { -half };
+        let (dx, dy) = if vertical { (0.0, delta) } else { (delta, 0.0) };
+        let moved = run_in_mutable_snapshot(|| action.invoke(dx, dy)).unwrap_or(false);
+        if moved {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
         }
         moved
     }
