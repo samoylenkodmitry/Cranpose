@@ -97,6 +97,10 @@ impl Framebuffer {
         frame_bytes(width, height, density)?;
         let environment = PlatformEnvironment::new();
         environment.set_system_theme(theme);
+        #[cfg(feature = "watchos")]
+        environment.set_configuration(cranpose_ui::Configuration {
+            ui_mode_type: cranpose_ui::UiModeType::Watch,
+        });
         let root_environment = Rc::clone(&environment);
         let mut shell = AppShell::new_with_size_and_density(
             PixelsRenderer::with_fonts(fonts),

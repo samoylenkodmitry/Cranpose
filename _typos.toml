@@ -73,3 +73,5 @@ abd = "abd"
 caf = "caf"
 # Avalonia names its bitmap class `WriteableBitmap`.
 Writeable = "Writeable"
+# The ndk crate spells its appliance UI mode `UiModeType::Applicance`.
+Applicance = "Applicance"

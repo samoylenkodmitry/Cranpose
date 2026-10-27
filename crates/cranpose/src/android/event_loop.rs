@@ -17,7 +17,7 @@ use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 
 use super::{
-    configuration::{refresh_android_configuration, system_theme_from_android},
+    configuration::{read_android_configuration, refresh_android_configuration},
     display_timing::{DisplayTimingObserver, DisplayedFrame},
     host_window_requests::{
         PendingHostWindowSizeRequest, confirm_android_host_window_request,
@@ -1567,8 +1567,7 @@ pub fn run(
     super::host::install_activity(app.clone());
     crate::process_info::install();
 
-    android_platform_env()
-        .set_system_theme(system_theme_from_android(app.config().ui_mode_night()));
+    read_android_configuration(&app);
 
     super::font_scale::refresh_font_scale(&app);
 

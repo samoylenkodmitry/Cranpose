@@ -35,6 +35,7 @@ pub use ui_strings::UiString;
 pub mod announce;
 pub mod bring_into_view;
 pub mod clipboard_session;
+mod configuration;
 mod cursor_animation;
 mod debug;
 pub mod density;
@@ -109,6 +110,7 @@ pub use announce::{Announcement, Announcer, announce, drain_announcements, local
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
+pub use configuration::{Configuration, UiModeType, local_configuration};
 pub use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, DelegatableNode, LiveRegionMode, ModifierNode,
     ModifierNodeElement, NodeCapabilities, NodeState, PointerId, ProgressBarRangeInfo,

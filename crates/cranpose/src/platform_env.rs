@@ -1,7 +1,10 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_services::{SystemTheme, set_platform_system_theme};
-use cranpose_ui::{EdgeInsets, composable, local_ime_insets, local_safe_area_insets};
+use cranpose_ui::{
+    Configuration, EdgeInsets, composable, local_configuration, local_ime_insets,
+    local_safe_area_insets,
+};
 
 #[cfg(feature = "localization")]
 #[path = "platform_languages.rs"]
@@ -15,6 +18,7 @@ pub(crate) struct PlatformEnvironment {
     pub(crate) native_views: crate::native_view::NativeViewHost,
     safe_area: Cell<EdgeInsets>,
     ime_insets: Cell<EdgeInsets>,
+    configuration: Cell<Configuration>,
 }
 
 impl PlatformEnvironment {
@@ -59,6 +63,14 @@ impl PlatformEnvironment {
         changed
     }
 
+    #[cfg_attr(
+        not(any(target_os = "android", feature = "watchos")),
+        expect(dead_code, reason = "only Android and watchOS report a device kind")
+    )]
+    pub(crate) fn set_configuration(&self, configuration: Configuration) -> bool {
+        self.configuration.replace(configuration) != configuration
+    }
+
     pub(crate) fn set_system_theme(&self, theme: SystemTheme) -> bool {
         // Compared with the theme already known: detecting one here would
         // run the detection a theme reported at launch exists to skip.
@@ -74,6 +86,7 @@ impl PlatformEnvironment {
             [
                 local_safe_area_insets().provides(self.safe_area.get()),
                 local_ime_insets().provides(self.ime_insets.get()),
+                local_configuration().provides(self.configuration.get()),
                 cranpose_services::local_system_theme().provides(theme),
                 cranpose_services::local_launch_args().provides(launch_args),
             ],
