@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{OwnedMutableState, State};
-use crate::{RecomposeScope, RecomposeScopeInner, RuntimeHandle, runtime};
+use crate::{RecomposeScope, RecomposeScopeInner, RuntimeHandle, StateId, runtime};
 
 /// The value `derivedStateOf` derives, kept in a state cell its readers
 /// subscribe to.
@@ -72,6 +72,11 @@ impl<T: Clone + PartialEq + 'static> DerivedState<T> {
     /// The view readers read the value through.
     pub(crate) fn state(&self) -> State<T> {
         self.core.state.as_state().of_derived()
+    }
+
+    // The id a reader's scope notes when a new value invalidates it.
+    pub(crate) fn state_id(&self) -> StateId {
+        self.core.state.handle().runtime_state_id()
     }
 }
 

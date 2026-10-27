@@ -385,6 +385,12 @@ impl RecomposeScope {
         ScopeRead::Collected
     }
 
+    // Keeps the subscriptions the scope has: its body runs this pass without
+    // the reads that made them, as a skipped body does.
+    pub(crate) fn keep_reads(&self) {
+        self.inner.read_cursor.set(NOT_READING);
+    }
+
     /// Ends collecting reads. A body that ran makes its reads the scope's
     /// subscriptions and drops the states it did not read again, as Compose
     /// does; a skipped or unfinished one keeps the subscriptions it had.
@@ -768,6 +774,14 @@ impl RecomposeScope {
 
     pub(crate) fn mark_composed_once(&self) {
         self.inner.composed_once.set(true);
+    }
+
+    // Whether a change of the state `state_id` alone invalidated the scope.
+    pub(crate) fn invalidated_only_by_state(&self, state_id: StateId) -> bool {
+        !self.inner.unknown_invalidation_source.get()
+            && read_cell(&self.inner.invalidation_sources, |sources| {
+                !sources.is_empty() && sources.iter().all(|source| *source == state_id)
+            })
     }
 
     pub(crate) fn invalidated_only_by(&self, allowed_sources: &HashSet<StateId>) -> Option<bool> {
