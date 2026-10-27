@@ -143,7 +143,9 @@ fn Player(card: (usize, usize), playing: MutableState<Option<(usize, usize)>>) {
     let requester = cranpose_core::remember(FocusRequester::new).with(Clone::clone);
     let focus = requester.clone();
     LaunchedEffect(card, move |_| {
-        focus.request_focus().ok();
+        if let Err(error) = focus.request_focus() {
+            log::warn!("the TV player could not take focus: {error:?}");
+        }
     });
     let seconds = position.get();
     CranposeBox(
