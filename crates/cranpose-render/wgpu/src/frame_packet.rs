@@ -57,6 +57,9 @@ pub(crate) struct FramePacket {
     pub(crate) root: Box<LayerScene>,
     pub(crate) overlay: Option<Box<LayerScene>>,
     pub(crate) clear: wgpu::Color,
+    // Whether the app held still, asking for no frame, between the frame
+    // before and this one.
+    pub(crate) held_still: bool,
 }
 
 pub(crate) struct FrameSceneStorage {

@@ -1295,6 +1295,10 @@ impl Renderer for WgpuRenderer {
         self.frontend.refresh_dev_overlay();
     }
 
+    fn note_held_still(&mut self) {
+        self.frontend.held_still = true;
+    }
+
     fn set_inspector_overlay(&mut self, graph: Option<RenderGraph>) {
         self.frontend.inspector_overlay_graph = graph;
         self.frontend.refresh_dev_overlay();

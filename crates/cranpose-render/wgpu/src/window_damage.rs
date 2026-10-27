@@ -19,6 +19,7 @@ use super::{
 use crate::{
     collect::{ChildLayer, LayerScene},
     draw_pass::op_draw_bounds,
+    frame_packet::FramePacket,
     geometry::snap_delta_for_anchor,
     render::shadow_draw_bounds,
     scene::{
@@ -422,10 +423,8 @@ impl ClearedImages {
 
 /// What a frame draws into the window.
 pub(crate) struct FrameWindow<'a> {
-    pub(crate) root: &'a LayerScene,
-    pub(crate) overlay: Option<&'a LayerScene>,
+    pub(crate) packet: &'a FramePacket,
     pub(crate) viewport: (u32, u32),
-    pub(crate) root_scale: f32,
     /// What every pixel depends on besides the items, hashed: the clear
     /// colour, the glyph atlas and the debug switches.
     pub(crate) setting: u64,
@@ -454,7 +453,23 @@ pub(crate) struct WindowDamage {
 impl WindowDamage {
     /// Summarizes `frame` and compares it with `kept`.
     pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &mut KeptWindow) -> Damage {
+        if frame.packet.held_still {
+            self.end_run();
+        }
         self.begin_as(frame, kept, Summaries::KEPT)
+    }
+
+    // Ends the run of frames that changed most of the window: the app held
+    // still before this frame, so the frames on either side of the pause are
+    // not in a row, and this one summarizes as the frame after skipped ones
+    // does. Skips counted in frames would otherwise outlast many presses of a
+    // TV remote, each a few frames and a pause.
+    fn end_run(&mut self) {
+        if self.skipped > 0 {
+            self.skipped = 0;
+            self.baseline = true;
+        }
+        self.full_frames = 0;
     }
 
     /// Skips summarizing for the next `frames` frames; the frame after them
@@ -550,7 +565,7 @@ impl WindowDamage {
         self.next.items.clear();
         self.next.items.reserve(self.last_items);
         self.next.captures.clear();
-        let scale = frame.root_scale;
+        let scale = frame.packet.root_scale;
         if !scale.is_finite() || scale <= 0.0 {
             return false;
         }
@@ -575,8 +590,8 @@ impl WindowDamage {
             open: &mut self.open,
             complete: true,
         };
-        walk.layer(frame.root, &place, None);
-        if let Some(overlay) = frame.overlay {
+        walk.layer(&frame.packet.root, &place, None);
+        if let Some(overlay) = frame.packet.overlay.as_deref() {
             walk.summary.items.push(Item {
                 key: OVERLAY_KEY,
                 bounds: None,

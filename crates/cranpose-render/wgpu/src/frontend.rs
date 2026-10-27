@@ -31,6 +31,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) transparent_background: bool,
+    // Whether the app held still since the last packet; the next one says so.
+    pub(crate) held_still: bool,
 }
 
 impl RendererFrontend {
@@ -72,6 +74,7 @@ impl RendererFrontend {
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             transparent_background: false,
+            held_still: false,
         }
     }
 
@@ -165,6 +168,7 @@ impl RendererFrontend {
             root,
             overlay,
             clear: frame_clear_color(self.transparent_background),
+            held_still: std::mem::take(&mut self.held_still),
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {

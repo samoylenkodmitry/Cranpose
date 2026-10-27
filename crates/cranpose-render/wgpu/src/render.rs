@@ -2376,10 +2376,8 @@ impl GpuRenderer {
 
     fn frame_window<'p>(&self, packet: &'p FramePacket, viewport: (u32, u32)) -> FrameWindow<'p> {
         FrameWindow {
-            root: &packet.root,
-            overlay: packet.overlay.as_deref(),
+            packet,
             viewport,
-            root_scale: packet.root_scale,
             setting: self.text.frame_setting(packet.clear),
         }
     }

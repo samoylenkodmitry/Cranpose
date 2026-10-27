@@ -8,11 +8,17 @@ use crate::{FrameSchedule, PlatformFrameDriver};
 #[derive(Debug, Default)]
 pub struct FrameScheduler {
     latest: Cell<FrameSchedule>,
+    // Whether a schedule recorded since the surface's last frame asked for no
+    // frame and no update: the app held still between the two frames.
+    held_still: Cell<bool>,
 }
 
 impl FrameScheduler {
     /// Stores `schedule` as the latest one. A schedule that needs an update drops its deadline.
     pub fn record(&self, schedule: FrameSchedule) {
+        if !schedule.needs_frame && !schedule.needs_update {
+            self.held_still.set(true);
+        }
         self.latest.set(FrameSchedule {
             next_deadline: if schedule.needs_update {
                 None
@@ -35,5 +41,11 @@ impl FrameScheduler {
     /// Returns the latest stored schedule.
     pub fn snapshot(&self) -> FrameSchedule {
         self.latest.get()
+    }
+
+    // Whether the app held still since the last call, which each frame of
+    // the surface makes.
+    pub(crate) fn take_held_still(&self) -> bool {
+        self.held_still.take()
     }
 }

@@ -347,6 +347,13 @@ pub trait Renderer {
     /// in application hit testing, layout, or accessibility.
     fn set_inspector_overlay(&mut self, _graph: Option<graph::RenderGraph>) {}
 
+    /// Tells the renderer that its app held still between the last frame and the next one: the
+    /// shell asked the platform for no frame and no update. A renderer that compares frames to
+    /// draw only what changed counts the frames on either side of the pause apart.
+    ///
+    /// AppShell calls this before the first frame after such a pause.
+    fn note_held_still(&mut self) {}
+
     /// Returns whether renderer-side cache materialization needs a visible follow-up frame.
     fn needs_frame_warmup(&self) -> bool {
         false
