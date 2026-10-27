@@ -266,6 +266,38 @@ fn every_primitive_round_trips_through_the_record_byte_for_byte() {
     assert_eq!(recording.into_primitives_with_markers(), primitives);
 }
 
+// A border in a transparent colour changes no pixel where its blend keeps the
+// destination, so it takes no record and no GPU time; where its blend clears
+// or replaces the destination it still draws, and a visible one always does.
+#[test]
+fn a_transparent_shape_records_only_where_its_blend_changes_the_destination() {
+    let border = |color, blend_mode| DrawPrimitive::Blend {
+        primitive: Box::new(DrawPrimitive::RoundRect {
+            rect: rect(0.0, 0.0, 220.0, 124.0),
+            brush: Brush::solid(color),
+            radii: CornerRadii::uniform(12.0),
+            stroke: Some(Stroke::new(3.0)),
+        }),
+        blend_mode,
+    };
+    let records = |primitive| {
+        CommandRecording::from_primitives(vec![primitive])
+            .shapes()
+            .len()
+    };
+    for kept in [BlendMode::SrcOver, BlendMode::DstOut, BlendMode::Plus] {
+        assert_eq!(records(border(Color::TRANSPARENT, kept)), 0, "{kept:?}");
+    }
+    for changed in [BlendMode::Clear, BlendMode::Src, BlendMode::DstIn] {
+        assert_eq!(
+            records(border(Color::TRANSPARENT, changed)),
+            1,
+            "{changed:?}"
+        );
+    }
+    assert_eq!(records(border(Color::WHITE, BlendMode::SrcOver)), 1);
+}
+
 #[test]
 fn shapes_and_blended_shapes_are_records_everything_else_is_not() {
     let recording = CommandRecording::from_primitives(every_primitive());
