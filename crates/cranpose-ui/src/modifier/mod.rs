@@ -53,7 +53,7 @@ pub(crate) use chain::{
 };
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 use cranpose_foundation::{
-    DynModifierElement, FocusState, ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo,
+    DynModifierElement, ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo,
     SemanticsConfiguration, modifier_element,
 };
 pub use cranpose_foundation::{
@@ -70,8 +70,8 @@ pub use drag_and_drop::{
     DragAndDropSourceElement, DragAndDropSourceNode, DragAndDropState, DragAndDropTarget,
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
+#[cfg(test)]
 pub(crate) use focus::FocusRequesterElement;
-use focus::FocusTargetElement;
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester};
 pub use graphics_layer::GlassMaterial;
 pub use key_input::KeyEventRoute;
@@ -759,42 +759,6 @@ impl Modifier {
     pub fn test_tag(self, tag: impl Into<String>) -> Self {
         let tag = tag.into();
         self.stable_semantics(move |config| config.test_tag = Some(tag.clone()))
-    }
-
-    /// Makes this component focusable.
-    ///
-    /// This adds a focus target node that can receive focus and participate
-    /// in focus traversal. The component will be included in tab order and
-    /// can be focused programmatically.
-    pub fn focus_target(self) -> Self {
-        let element = FocusTargetElement::new();
-        let modifier = Self::from_dyn_element(modifier_element(element));
-        self.then(modifier)
-    }
-
-    /// Makes this component focusable with a callback for focus changes.
-    ///
-    /// The callback is invoked whenever the focus state changes, allowing
-    /// components to react to gaining or losing focus.
-    pub fn on_focus_changed<F>(self, callback: F) -> Self
-    where
-        F: Fn(FocusState) + 'static,
-    {
-        let element = FocusTargetElement::with_callback(callback);
-        let modifier = Self::from_dyn_element(modifier_element(element));
-        self.then(modifier)
-    }
-
-    /// Binds a [`FocusRequester`] to this node, so an app can move focus onto
-    /// it imperatively with [`FocusRequester::request_focus`].
-    ///
-    /// Pair it with [`focus_target`](Self::focus_target) (or
-    /// [`on_focus_changed`](Self::on_focus_changed)) on the same node —
-    /// `request_focus` moves whichever focus targets are attached there.
-    pub fn focus_requester(self, requester: &FocusRequester) -> Self {
-        let element = FocusRequesterElement::new(requester.clone());
-        let modifier = Self::from_dyn_element(modifier_element(element));
-        self.then(modifier)
     }
 
     /// Binds a [`SemanticsRequester`] to this node, so an app can mark the
