@@ -8,7 +8,7 @@ use cranpose_ui_graphics::{EdgeInsets, RoundedCornerShape};
 use smallvec::SmallVec;
 
 use super::{
-    super::{ModifierChainHandle, coordinator_geometry::CoordinatorRect},
+    super::{ModifierChainHandle, coordinator_rect::CoordinatorRect},
     DrawSite, FieldText, ModifierNodeSlices, SliceText,
 };
 use crate::{

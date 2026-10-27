@@ -16,7 +16,7 @@ mod blur;
 mod border;
 mod chain;
 mod clickable;
-mod coordinator_geometry;
+mod coordinator_rect;
 mod drag_and_drop;
 mod draw_cache;
 mod fill;
@@ -51,7 +51,7 @@ pub(crate) use chain::{
     InPlaceReach, InPlaceUpdate, ModifierChainHandle, ModifierChainInspectorNode,
     ModifierLocalsHandle,
 };
-pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
+pub(crate) use coordinator_rect::CoordinatorRect;
 use cranpose_foundation::{
     DynModifierElement, ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo,
     SemanticsConfiguration, modifier_element,

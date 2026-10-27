@@ -1065,10 +1065,6 @@ impl LayoutNode {
         &self.parts
     }
 
-    pub(crate) fn coordinator_geometry(&self) -> &crate::modifier::CoordinatorGeometry {
-        self.parts.coordinator_geometry()
-    }
-
     pub(crate) fn layout_runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
         self.parts.runtime_state()
     }

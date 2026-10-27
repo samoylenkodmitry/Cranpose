@@ -179,6 +179,11 @@ pub(super) struct CoordinatorChain {
     /// gave: a node whose modifiers did not change since measures again
     /// without walking its chain.
     synced: Option<(u64, ModifierChainInputs)>,
+    // Whether a measure placed the coordinators, whose rects the nodes'
+    // sizes and offsets give, and whether one of them moved since the scene
+    // last heard of the node.
+    placed: Cell<bool>,
+    moved: Cell<bool>,
 }
 
 impl CoordinatorChain {
@@ -193,6 +198,8 @@ impl CoordinatorChain {
         }
         let inputs = self.walk(node, density);
         self.synced = Some((revision, inputs));
+        // Other modifiers may place other coordinators.
+        self.moved.set(true);
         inputs
     }
 
@@ -326,7 +333,7 @@ impl CoordinatorChain {
                 constraints,
                 &mut placements,
             );
-            self.inner_size.set(measurement.size);
+            self.place(&self.inner_size, measurement.size);
             self.inner_constraints.set(Some(constraints));
             return Placeable::value(
                 measurement.size.width,
@@ -349,12 +356,15 @@ impl CoordinatorChain {
 
         let Some(layout_node) = node_borrow.as_layout_node() else {
             let placeable = wrapped.measure(constraints);
-            node.measured_size.set(Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            });
+            self.place(
+                &node.measured_size,
+                Size {
+                    width: placeable.width(),
+                    height: placeable.height(),
+                },
+            );
             let child_accumulated = self.total_content_offset_from(index + 1);
-            node.accumulated_offset.set(child_accumulated);
+            self.place(&node.accumulated_offset, child_accumulated);
             return placeable;
         };
 
@@ -372,7 +382,7 @@ impl CoordinatorChain {
             }
         };
 
-        node.measured_size.set(result.size);
+        self.place(&node.measured_size, result.size);
         let local_offset = Point {
             x: result.placement_offset_x,
             y: result.placement_offset_y,
@@ -382,7 +392,7 @@ impl CoordinatorChain {
             x: local_offset.x + child_accumulated.x,
             y: local_offset.y + child_accumulated.y,
         };
-        node.accumulated_offset.set(accumulated);
+        self.place(&node.accumulated_offset, accumulated);
 
         Placeable::value_with_offset(
             result.size.width,
@@ -418,30 +428,47 @@ impl CoordinatorChain {
         )
     }
 
-    /// Writes where each coordinator and the node's content ended up in the
-    /// last measure, relative to the node drawn at its `node_offset`, and
-    /// says whether any of them moved.
-    pub(super) fn write_geometry(
-        &self,
-        geometry: &crate::modifier::CoordinatorGeometry,
-        node_offset: Point,
-    ) -> bool {
+    // Sets a size or an offset the coordinators' rects come from, noting a
+    // coordinator that moved: a layer bounded by an inner coordinator
+    // changes when that coordinator does, though the node's size may not.
+    fn place<T: Copy + PartialEq>(&self, cell: &Cell<T>, value: T) {
+        if cell.replace(value) != value {
+            self.moved.set(true);
+        }
+    }
+
+    // Notes that a measure placed the coordinators, and says whether one of
+    // them moved since the last note.
+    pub(super) fn take_moved(&self) -> bool {
+        self.placed.set(true);
+        self.moved.take()
+    }
+
+    // Where the last measure put the coordinator `ordinal`, relative to the
+    // node drawn at its offset: for each layout modifier, from the outermost
+    // in, where it was placed and its size, then the node's content. A node
+    // of `node_size` without layout modifiers has its content alone, which
+    // fills it. `None` before a measure placed them.
+    pub(super) fn placed_rect(&self, ordinal: usize, node_size: Size) -> Option<GeometryRect> {
+        let (_, inputs) = self.synced.filter(|_| self.placed.get())?;
+        if !inputs.uses_chain {
+            return (ordinal == 0).then(|| GeometryRect::from_size(node_size));
+        }
         let content = self.total_content_offset_from(0);
         let placed = |inner_offset: Point, size: Size| GeometryRect {
-            x: content.x - inner_offset.x - node_offset.x,
-            y: content.y - inner_offset.y - node_offset.y,
+            x: content.x - inner_offset.x - inputs.offset.x,
+            y: content.y - inner_offset.y - inputs.offset.y,
             width: size.width,
             height: size.height,
         };
-        geometry.replace(
-            self.nodes
-                .iter()
-                .map(|node| placed(node.accumulated_offset.get(), node.measured_size.get()))
-                .chain(std::iter::once(placed(
-                    Point::default(),
-                    self.inner_size.get(),
-                ))),
-        )
+        match self.nodes.get(ordinal) {
+            Some(node) => Some(placed(
+                node.accumulated_offset.get(),
+                node.measured_size.get(),
+            )),
+            None => (ordinal == self.nodes.len())
+                .then(|| placed(Point::default(), self.inner_size.get())),
+        }
     }
 
     fn total_content_offset_from(&self, index: usize) -> Point {

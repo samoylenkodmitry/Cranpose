@@ -177,7 +177,6 @@ struct ModifierChainMeasurement {
     content_offset: Point,
     offset: Point,
     window_root: bool,
-    uses_chain: bool,
     /// The incoming constraints this measurement holds for besides its own.
     hold: Option<cranpose_ui_layout::ConstraintsHold>,
     /// Whether no child's size entered it: see
@@ -1747,7 +1746,7 @@ impl LayoutBuilderState {
             }
             self.with_applier_result(|applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |node| {
-                    if runtime_state.write_node_geometry(node, &measurement) {
+                    if runtime_state.take_moved_coordinators() {
                         node.note_geometry_change(node_id, &self.context);
                     }
                 })
@@ -1785,7 +1784,7 @@ impl LayoutBuilderState {
                     measurement.hold,
                     measurement.ignores_child_sizes,
                 );
-                if runtime_state.write_node_geometry(node, &measurement) {
+                if runtime_state.take_moved_coordinators() {
                     node.note_geometry_change(node_id, &self.context);
                 }
                 node.clear_needs_measure();
@@ -2172,7 +2171,6 @@ impl LayoutBuilderState {
                 content_offset: Point::default(),
                 offset: chain.offset,
                 window_root: chain.window_root,
-                uses_chain: false,
                 hold: if chain.window_root {
                     None
                 } else {
@@ -2232,7 +2230,6 @@ impl LayoutBuilderState {
             },
             offset: chain.offset,
             window_root: chain.window_root,
-            uses_chain: true,
             hold: if chain.window_root {
                 None
             } else {
@@ -2605,24 +2602,20 @@ impl LayoutRuntimeState {
         }
     }
 
-    /// Writes the node's coordinator geometry and returns whether it moved.
-    fn write_node_geometry(
+    // Notes that a measure placed the node's coordinators, and says whether
+    // one of them moved since the scene last heard of the node. A node
+    // without layout modifiers moves only with its size, which the node
+    // reports itself.
+    fn take_moved_coordinators(&self) -> bool {
+        self.coordinator_chain.take_moved()
+    }
+
+    pub(crate) fn placed_coordinator_rect(
         &self,
-        node: &LayoutNode,
-        measurement: &ModifierChainMeasurement,
-    ) -> bool {
-        let geometry = node.coordinator_geometry();
-        if measurement.uses_chain {
-            self.coordinator_chain
-                .write_geometry(geometry, measurement.offset)
-        } else {
-            geometry.replace([GeometryRect {
-                x: 0.0,
-                y: 0.0,
-                width: measurement.size.width,
-                height: measurement.size.height,
-            }])
-        }
+        ordinal: usize,
+        node_size: Size,
+    ) -> Option<GeometryRect> {
+        self.coordinator_chain.placed_rect(ordinal, node_size)
     }
 
     #[cfg(test)]
