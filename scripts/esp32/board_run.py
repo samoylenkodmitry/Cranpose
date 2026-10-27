@@ -252,7 +252,8 @@ def main():
     flash(args.board, port, elf, bootloader, partitions, args.log)
     capture = capture_usb if config["console"] == "usb" else capture_uart
     text = capture(port, args.seconds)
-    args.log.write_text(text)
+    # profile.py names the ROM's functions from the chip.
+    args.log.write_text(f"MCU {config['mcu']}\n{text}")
     shutil.copy(elf, args.log.with_suffix(".elf"))
     for line in text.splitlines():
         if SUMMARY.search(line):

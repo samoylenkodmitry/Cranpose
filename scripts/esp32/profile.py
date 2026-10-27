@@ -3,6 +3,11 @@
 share of samples of each function, hottest first, and with `--crates` the
 share and code size of each crate.
 
+Samples in the chip's ROM, such as its soft float and `memcpy`, count under
+the ROM's own function names (from Espressif's `esp-rom-elfs`) when the log
+names its chip on an `MCU` line, as board_run.py and sim_profile.py write
+it. Samples in no known function count as unknown.
+
 Usage: profile.py ELF LOG [--top N] [--crates]
 """
 
@@ -37,9 +42,35 @@ def functions(elf, demangle):
     return starts, sizes, names
 
 
+def rom_functions(log):
+    """The functions of the ROM of the chip `log` names, as `functions` gives
+    them, each up to the next, with " (ROM)" after its name: none when the
+    log names no chip or its ROM image is not installed."""
+    match = re.search(r"^MCU (\S+)$", open(log, errors="replace").read(), re.M)
+    if not match:
+        return [], [], []
+    pattern = str(pathlib.Path.home() / f".espressif/tools/esp-rom-elfs/*/{match.group(1)}_rev*_rom.elf")
+    # The latest revision: a later chip runs the ROM of its revision.
+    images = sorted(glob.glob(pattern), key=lambda path: int(re.search(r"_rev(\d+)_rom", path).group(1)))
+    if not images:
+        return [], [], []
+    out = subprocess.run([find_nm(), "-n", "--defined-only", images[-1]],
+                         capture_output=True, text=True, check=True).stdout
+    found = []
+    for line in out.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[1] in "tTwW":
+            found.append((int(parts[0], 16), parts[2]))
+    starts = [start for start, _ in found]
+    sizes = [after - start for start, after in zip(starts, starts[1:] + starts[-1:])]
+    return starts, sizes, [f"{name} (ROM)" for _, name in found]
+
+
 def samples(log, starts, sizes):
-    """The samples of each function index, from the `SPC` lines of `log`."""
+    """The samples of each function index, from the `SPC` lines of `log`,
+    and how many fell in none."""
     hits = {}
+    unknown = 0
     for line in open(log, errors="replace"):
         match = re.search(r"SPC ([0-9a-f]{8}) (\d+)", line)
         if match:
@@ -47,10 +78,14 @@ def samples(log, starts, sizes):
             index = bisect.bisect_right(starts, pc) - 1
             if index >= 0 and pc < starts[index] + sizes[index]:
                 hits[index] = hits.get(index, 0) + int(match.group(2))
-    return hits
+            else:
+                unknown += int(match.group(2))
+    return hits, unknown
 
 
 def crate(name):
+    if name.endswith(" (ROM)"):
+        return "ROM"
     match = re.match(r"<*([a-z_][a-z0-9_]*)::", name)
     return match.group(1) if match else "C code"
 
@@ -62,14 +97,18 @@ def main():
     parser.add_argument("--top", type=int, default=40)
     parser.add_argument("--crates", action="store_true")
     args = parser.parse_args()
-    starts, sizes, names = functions(args.elf, demangle=True)
-    hits = samples(args.log, starts, sizes)
+    app = functions(args.elf, demangle=True)
+    rom = rom_functions(args.log)
+    # ROM code lies below the app's code, so the two lists stay in order.
+    starts, sizes, names = (rom_part + app_part for rom_part, app_part in zip(rom, app))
+    hits, unknown = samples(args.log, starts, sizes)
     idle = {i for i in hits if names[i] in ("esp_cpu_wait_for_intr", "cpu_ll_waiti")}
-    total = sum(hits.values())
+    total = sum(hits.values()) + unknown
     busy = total - sum(hits[i] for i in idle)
     if not busy:
         sys.exit(f"{args.log} has no samples outside the idle wait")
-    print(f"{total} samples, {100 * busy / total:.1f}% outside the idle wait")
+    print(f"{total} samples, {100 * busy / total:.1f}% outside the idle wait, "
+          f"{100 * unknown / busy:.2f}% of those in no known function")
     rows = sorted((i for i in hits if i not in idle), key=lambda i: -hits[i])
     for i in rows[: args.top]:
         name = re.sub(r"::h[0-9a-f]{16}$", "", names[i])

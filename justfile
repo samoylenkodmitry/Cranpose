@@ -196,8 +196,9 @@ esp32-flash-e32r35t port: esp32-build-e32r35t
 
 # `app` is demo or lvgl, `board` es3c35p or e32r35t. See benchmarks/esp32/README.md.
 # Runs an app on a board and prints its frame time, instructions and stall cycles.
-esp32-bench board app="demo": _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} --app {{app}} --component benchmarks/esp32/perfstats --seconds 22 --log target/esp32/bench-{{app}}-{{board}}.log && python3 benchmarks/esp32/summary.py target/esp32/bench-{{app}}-{{board}}.log
+# `port` names the board's serial port when another device's name matches it.
+esp32-bench board app="demo" port="": _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} --app {{app}} {{ if port == "" { "" } else { "--port " + port } }} --component benchmarks/esp32/perfstats --seconds 22 --log target/esp32/bench-{{app}}-{{board}}.log && python3 benchmarks/esp32/summary.py target/esp32/bench-{{app}}-{{board}}.log
 
 # Runs without the per-frame code in IRAM. See
 # crates/cranpose-platform/esp-idf/components/cranpose_hot_code/README.md.
@@ -205,8 +206,9 @@ esp32-bench board app="demo": _disk-guard
 # (the demo's text-drawn or text-composed feature), and workload the work of
 # a busier screen (its workload feature).
 # Profiles the demo on a board with the sampler and prints the hottest functions.
-esp32-profile board mode="demo" seconds="40": _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if mode == "demo" { "" } else if mode == "workload" { "--feature workload" } else if mode == "dashboard" { "--feature dashboard" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
+# `port` as for esp32-bench.
+esp32-profile board mode="demo" seconds="40" port="": _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if port == "" { "" } else { "--port " + port } }} {{ if mode == "demo" { "" } else if mode == "workload" { "--feature workload" } else if mode == "dashboard" { "--feature dashboard" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
 
 # For the ES3C35P's IRAM list (see crates/cranpose-platform/esp-idf/
 # components/cranpose_hot_code/README.md): builds the demo for QEMU's ESP32-S3

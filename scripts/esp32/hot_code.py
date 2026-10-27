@@ -46,7 +46,7 @@ class Profile:
 
     def __init__(self, elf, log, app_crates):
         self.starts, self.sizes, self.names = functions(elf, demangle=False)
-        hits = samples(log, self.starts, self.sizes)
+        hits, _ = samples(log, self.starts, self.sizes)
         if not hits:
             sys.exit(f"{log} has no samples inside functions of {elf}")
         self.rust = [i for i in range(len(self.names)) if self.names[i].startswith("_R")]

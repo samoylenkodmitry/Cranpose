@@ -85,7 +85,8 @@ def main():
                 misses += int(fields[5])
             elif fields[0] == "line":
                 lines.append(f"SPC {int(fields[1], 16):08x} {fields[3]}")
-    args.log.write_text("\n".join(lines) + "\n")
+    # QEMU runs an ESP32-S3; profile.py names its ROM functions.
+    args.log.write_text("\n".join(["MCU esp32s3", *lines]) + "\n")
     print(f"{args.log}: {frames} frames, {misses / max(frames, 1):.0f} misses a frame")
 
 
