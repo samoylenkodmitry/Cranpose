@@ -60,9 +60,12 @@ pub struct RootSurface<R: Renderer> {
     /// its bounds may be out of date though no node marked its semantics.
     semantics_moved: bool,
     pub(crate) modal_focus: Vec<(NodeId, Option<NodeId>)>,
-    // The frame time at which a navigation key last moved focus; a held
+    // The frames the surface started, counted by `begin_frame`.
+    pub(crate) frames: u64,
+    // The frame count at which a navigation key last moved focus; a held
     // key's repeats wait for the next frame, so they never queue moves
-    // behind a slow layout.
+    // behind a slow layout. A count, not the frame time: Android draws its
+    // frames with `update_without_frame`, which leaves the time unchanged.
     pub(crate) key_moved_focus_at: Option<u64>,
     // Whether a D-pad drives the window, and whether the next update checks
     // for a focused target with no layout of its own.
@@ -116,6 +119,7 @@ impl<R: Renderer> RootSurface<R> {
             semantics_tree: None,
             semantics_moved: false,
             modal_focus: Vec::new(),
+            frames: 0,
             key_moved_focus_at: None,
             dpad_navigation: false,
             focus_check_due: false,
@@ -222,9 +226,11 @@ impl<R: Renderer> RootSurface<R> {
             && self.hit_path_tracker.has_path(PointerId::PRIMARY)
     }
 
-    // Tells the renderer when the app held still since the surface's last
-    // frame, before the next frame builds its scene.
-    pub(crate) fn pass_on_held_still(&mut self) {
+    // Starts a frame of the surface: counts it, and tells the renderer when
+    // the app held still since the last one, before the frame builds its
+    // scene.
+    pub(crate) fn begin_frame(&mut self) {
+        self.frames += 1;
         if self.frame_scheduler.take_held_still() {
             self.renderer.note_held_still();
         }

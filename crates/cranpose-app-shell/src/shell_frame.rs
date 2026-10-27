@@ -838,7 +838,7 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    surface.pass_on_held_still();
+    surface.begin_frame();
     let draw_dirty_nodes = std::mem::take(&mut surface.scoped_draw_nodes);
     let layer_property_nodes = std::mem::take(&mut surface.scoped_layer_property_nodes);
     let structural_parents = std::mem::take(&mut surface.structural_scene_nodes);
