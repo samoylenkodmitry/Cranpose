@@ -35,6 +35,7 @@ pub use ui_strings::UiString;
 pub mod announce;
 mod arrow_focus;
 pub mod bring_into_view;
+mod bring_into_view_spec;
 pub mod clipboard_session;
 mod configuration;
 mod cursor_animation;
@@ -81,6 +82,7 @@ pub mod round_scaling_list;
 pub mod round_scroll_indicator;
 pub mod safe_area;
 pub mod scroll;
+mod scroll_semantics;
 pub mod scrollbar;
 pub mod selection_container;
 mod semantics_dispatch;
@@ -112,12 +114,13 @@ pub use arrow_focus::arrow_focus_target;
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
+pub use bring_into_view_spec::local_bring_into_view_spec;
 pub use configuration::{Configuration, UiModeType, local_configuration};
 pub use cranpose_foundation::{
-    CanvasSemanticsNode, CollectionInfo, DelegatableNode, LiveRegionMode, ModifierNode,
-    ModifierNodeElement, NodeCapabilities, NodeState, PointerId, ProgressBarRangeInfo,
-    ScrollAxisRange, SemanticsConfiguration, SemanticsCustomAction, SemanticsDismiss,
-    SemanticsExpand, SemanticsLongClick, SemanticsMagicTap, SemanticsScrollBy,
+    BringIntoViewSpec, CanvasSemanticsNode, CollectionInfo, DelegatableNode, LiveRegionMode,
+    ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState, PointerId,
+    ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration, SemanticsCustomAction,
+    SemanticsDismiss, SemanticsExpand, SemanticsLongClick, SemanticsMagicTap, SemanticsScrollBy,
     SemanticsScrollToIndex, SemanticsSetProgress, SemanticsSetSelection, SemanticsSetText,
     SemanticsSpec, SemanticsWidgetRole, ToggleableState,
     lazy::{

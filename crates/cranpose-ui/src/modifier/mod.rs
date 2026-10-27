@@ -84,8 +84,6 @@ pub use pointer_input::PointerInputScope;
 pub(crate) use resolved_modifiers::{DimensionConstraint, LayoutProperties, LayoutWeight};
 pub use resolved_modifiers::{ResolvedBackground, ResolvedModifiers};
 pub use rotary_input::RotaryInputModifierNode;
-#[cfg(test)]
-pub(crate) use scroll::lazy_scroll_semantics;
 #[cfg(feature = "test-helpers")]
 pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 use semantics::SemanticsElement;

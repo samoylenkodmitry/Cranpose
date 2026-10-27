@@ -192,14 +192,11 @@ fn axis_delta(
     } else {
         (viewport_start, viewport_size)
     };
-    let visible_end = viewport_start + viewport_size;
-    let delta = if start < viewport_start && start + size < visible_end {
-        (start - viewport_start).max(start + size - visible_end)
-    } else if start + size > visible_end && start > viewport_start {
-        (start + size - visible_end).min(start - viewport_start)
-    } else {
-        0.0
-    };
+    let delta = range.bring_into_view_spec.calculate_scroll_distance(
+        start - viewport_start,
+        size,
+        viewport_size,
+    );
     let delta = if range.reverse { -delta } else { delta };
     if (delta > 0.0 && range.can_scroll_forward()) || (delta < 0.0 && range.can_scroll_backward()) {
         delta
