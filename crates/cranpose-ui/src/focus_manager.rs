@@ -69,22 +69,7 @@ fn next_target(direction: FocusDirection) -> Option<NodeId> {
         let current = active.and_then(|node_id| order.iter().position(|e| e.node_id == node_id));
 
         if let Some(arrow) = Arrow::of(direction) {
-            if let Some(index) = current {
-                let candidates = order.iter().filter(|entry| Some(entry.node_id) != active);
-                return find_best_candidate(candidates, order[index].rect, arrow);
-            }
-            // With the focused target gone, the arrow goes to the target that
-            // took its place, as a list gives focus to the item that moved
-            // into the removed one's row, or else searches from that place.
-            // With nothing focused before, it enters from the arrow's edge.
-            if let Some(last) = focus_dispatch::last_focus_rect() {
-                return order
-                    .iter()
-                    .find(|entry| covers_center(entry.rect, last))
-                    .map(|entry| entry.node_id)
-                    .or_else(|| find_best_candidate(order, last, arrow));
-            }
-            return find_best_candidate(order, entry_point(order, arrow)?, arrow);
+            return arrow_target(order, active, arrow);
         }
         match direction {
             FocusDirection::Next | FocusDirection::Enter => Some(step(order, current, 1)),
@@ -96,6 +81,30 @@ fn next_target(direction: FocusDirection) -> Option<NodeId> {
             | FocusDirection::Right => None,
         }
     })
+}
+
+// The target an arrow reaches in `order` from the focused target `active`.
+// With the focused target gone, the arrow goes to the target that took its
+// place, as a list gives focus to the item that moved into the removed one's
+// row, or else searches from that place. With nothing focused before, it
+// enters from the arrow's edge.
+pub(crate) fn arrow_target(
+    order: &[FocusEntry],
+    active: Option<NodeId>,
+    arrow: Arrow,
+) -> Option<NodeId> {
+    if let Some(focused) = order.iter().find(|entry| Some(entry.node_id) == active) {
+        let candidates = order.iter().filter(|entry| Some(entry.node_id) != active);
+        return find_best_candidate(candidates, focused.rect, arrow);
+    }
+    if let Some(last) = focus_dispatch::last_focus_rect() {
+        return order
+            .iter()
+            .find(|entry| covers_center(entry.rect, last))
+            .map(|entry| entry.node_id)
+            .or_else(|| find_best_candidate(order, last, arrow));
+    }
+    find_best_candidate(order, entry_point(order, arrow)?, arrow)
 }
 
 fn covers_center(rect: Rect, of: Rect) -> bool {

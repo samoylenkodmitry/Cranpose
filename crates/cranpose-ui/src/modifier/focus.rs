@@ -488,6 +488,168 @@ impl Modifier {
     }
 }
 
+// What a group remembers so that entering it again lands where focus left it.
+pub(crate) struct FocusRestorer {
+    fallback: RefCell<Option<FocusRequester>>,
+    saved: Cell<Option<NodeId>>,
+}
+
+impl FocusRestorer {
+    pub(crate) fn save(&self, child: NodeId) {
+        self.saved.set(Some(child));
+    }
+
+    // The child that had focus when it last left the group, else the
+    // fallback's node.
+    pub(crate) fn restored(&self) -> impl Iterator<Item = NodeId> {
+        let fallback = self
+            .fallback
+            .borrow()
+            .as_ref()
+            .and_then(FocusRequester::node_id);
+        self.saved.get().into_iter().chain(fallback)
+    }
+}
+
+pub(crate) struct FocusGroupNode {
+    state: NodeState,
+    restorer: Option<Rc<FocusRestorer>>,
+    registered_node_id: Option<NodeId>,
+}
+
+impl DelegatableNode for FocusGroupNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for FocusGroupNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.state.set_attached(true);
+        if let Some(node_id) = context.node_id() {
+            self.registered_node_id = Some(node_id);
+            focus_dispatch::register_focus_group(node_id, self.restorer.clone());
+        }
+    }
+
+    fn on_detach(&mut self) {
+        self.state.set_attached(false);
+        if let Some(node_id) = self.registered_node_id.take() {
+            focus_dispatch::unregister_focus_group(node_id);
+        }
+    }
+}
+
+#[derive(Clone)]
+enum GroupKind {
+    Plain,
+    // A restoring group, with the requester whose node takes focus when no
+    // child had it yet.
+    Restorer(Option<FocusRequester>),
+}
+
+#[derive(Clone)]
+pub(super) struct FocusGroupElement {
+    kind: GroupKind,
+}
+
+impl FocusGroupElement {
+    fn restores(&self) -> bool {
+        matches!(self.kind, GroupKind::Restorer(_))
+    }
+}
+
+impl std::fmt::Debug for FocusGroupElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FocusGroupElement")
+            .field("restores", &self.restores())
+            .finish()
+    }
+}
+
+impl PartialEq for FocusGroupElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.restores() == other.restores()
+    }
+}
+
+impl Hash for FocusGroupElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        "focus_group".hash(state);
+        self.restores().hash(state);
+    }
+}
+
+impl ModifierNodeElement for FocusGroupElement {
+    type Node = FocusGroupNode;
+
+    fn create(&self) -> Self::Node {
+        FocusGroupNode {
+            state: NodeState::new(),
+            restorer: match &self.kind {
+                GroupKind::Plain => None,
+                GroupKind::Restorer(fallback) => Some(Rc::new(FocusRestorer {
+                    fallback: RefCell::new(fallback.clone()),
+                    saved: Cell::new(None),
+                })),
+            },
+            registered_node_id: None,
+        }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if let (Some(restorer), GroupKind::Restorer(fallback)) = (&node.restorer, &self.kind) {
+            restorer.fallback.replace(fallback.clone());
+        }
+    }
+
+    fn inspector_name(&self) -> &'static str {
+        if self.restores() {
+            "focusRestorer"
+        } else {
+            "focusGroup"
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::NONE
+    }
+
+    fn always_update(&self) -> bool {
+        true
+    }
+}
+
+impl Modifier {
+    /// Makes this node a focus group, as Compose's `Modifier.focusGroup()`:
+    /// an arrow key from a target inside the group moves to the nearest
+    /// target inside it, and leaves the group only when there is none that
+    /// way.
+    pub fn focus_group(self) -> Self {
+        self.then(Self::from_dyn_element(super::modifier_element(
+            FocusGroupElement {
+                kind: GroupKind::Plain,
+            },
+        )))
+    }
+
+    /// Makes this node a [`focus_group`](Self::focus_group) that gives focus
+    /// back to the child that had it last when an arrow key enters the group
+    /// again, as Compose's `Modifier.focusRestorer(fallback)`. A row of
+    /// cards keeps its place this way while focus visits other rows.
+    ///
+    /// The first time, or when that child is gone, focus goes to the node
+    /// `fallback` is attached to; with `None`, to the target the key itself
+    /// reaches.
+    pub fn focus_restorer(self, fallback: Option<FocusRequester>) -> Self {
+        self.then(Self::from_dyn_element(super::modifier_element(
+            FocusGroupElement {
+                kind: GroupKind::Restorer(fallback),
+            },
+        )))
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/focus_tests.rs"]
 mod tests;

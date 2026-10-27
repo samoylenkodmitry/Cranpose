@@ -114,14 +114,19 @@ where
     }
 
     fn move_focus_by_arrow(&mut self, direction: FocusDirection) -> bool {
-        let focused = cranpose_ui::active_focus_target();
-        let group_order = self.with_layout_tree(|layout_tree| {
-            let layout_tree = layout_tree?;
-            let group = cranpose_ui::selectable_group_of(layout_tree, focused?)?;
-            Some(cranpose_ui::collect_focus_order_under(layout_tree, group))
+        let target = self.with_layout_tree(|layout_tree| {
+            cranpose_ui::arrow_focus_target(layout_tree?, direction)
         });
-        group_order.is_some_and(|order| self.move_focus_in_order(order, direction))
-            || self.move_focus_in_context(direction)
+        let Some(target) = target else {
+            return false;
+        };
+        let moved = run_in_mutable_snapshot(|| cranpose_ui::request_focus_from_platform(target))
+            .unwrap_or(false);
+        if moved {
+            self.mark_dirty();
+            self.note_focus_moved_by_keyboard(true);
+        }
+        moved
     }
 
     pub(super) fn note_focus_moved_by_keyboard(&mut self, keyboard: bool) {

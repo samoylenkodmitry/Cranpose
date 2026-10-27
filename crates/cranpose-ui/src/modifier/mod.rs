@@ -20,7 +20,7 @@ mod coordinator_geometry;
 mod drag_and_drop;
 mod draw_cache;
 mod fill;
-mod focus;
+pub(crate) mod focus;
 mod focus_ring;
 mod graphics_layer;
 mod key_input;
