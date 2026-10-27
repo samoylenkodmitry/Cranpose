@@ -41,6 +41,17 @@ pub enum DemoTab {
 
 pub const DEFAULT_INITIAL_TAB: DemoTab = DemoTab::Guide;
 
+// The tab a launch that names none opens: the TV screen on a TV, where a
+// remote drives the demo, and the guide elsewhere. Read in composition.
+pub(crate) fn launch_tab() -> DemoTab {
+    let configuration = cranpose_ui::local_configuration().current();
+    if configuration.ui_mode_type == cranpose_ui::UiModeType::Television {
+        DemoTab::Tv
+    } else {
+        DEFAULT_INITIAL_TAB
+    }
+}
+
 pub struct DemoTabInfo {
     pub tab: DemoTab,
     pub label: &'static str,
