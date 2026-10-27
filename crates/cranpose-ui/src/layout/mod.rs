@@ -5,6 +5,7 @@ pub(crate) mod flex_box;
 mod frame_layout_arena;
 pub(crate) mod grid;
 mod measure_telemetry;
+mod measured_spare;
 mod placed_root_measurements;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
@@ -33,6 +34,7 @@ use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
+use measured_spare::MeasuredSpare;
 use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
     SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsPlacement, SemanticsRole,
@@ -2300,32 +2302,6 @@ impl MeasuredNode {
             None => return Rc::new(self),
         }
         spare
-    }
-}
-
-/// The memory of a node's last measurement, children's list included, for
-/// its next measure to fill. It is taken only when nothing else holds the
-/// measurement.
-#[derive(Default)]
-struct MeasuredSpare {
-    node: Option<Rc<MeasuredNode>>,
-    children: Vec<MeasuredChild>,
-}
-
-impl MeasuredSpare {
-    fn take(cache: &NodeCache) -> Self {
-        let Some(mut node) = cache.take_previous_measurement() else {
-            return Self::default();
-        };
-        let Some(previous) = Rc::get_mut(&mut node) else {
-            return Self::default();
-        };
-        let mut children = std::mem::take(&mut previous.children);
-        children.clear();
-        Self {
-            node: Some(node),
-            children,
-        }
     }
 }
 
