@@ -52,7 +52,7 @@ fn pixel_rect(bounds: draw::ClipBounds) -> PixelRect {
 #[derive(Default)]
 pub struct Picture {
     raster: Option<scene::RasterScene>,
-    /// The scene before `raster`, whose storage the next one reuses.
+    /// The scene an update in place pushes the changed layers into.
     spare: scene::RasterScene,
     width: u32,
     height: u32,
@@ -158,10 +158,13 @@ impl PixelsRenderer {
         changed: &mut Vec<PixelRect>,
     ) {
         let scale = valid_scale(scale);
-        if self.update_picture_in_place(picture, width, height, scale) {
+        if let Some(reach) = self.update_picture_in_place(picture, width, height, scale) {
             changed.clear();
             changed.extend(picture.changed.iter().copied().map(pixel_rect));
-            picture.measure_repushed_reach();
+            match reach {
+                pipeline::UpdatedReach::Repushed => picture.measure_repushed_reach(),
+                pipeline::UpdatedReach::All => picture.measure_reach(),
+            }
             return;
         }
         let mut raster = std::mem::take(&mut picture.spare);
@@ -182,31 +185,33 @@ impl PixelsRenderer {
             }),
             _ => {}
         }
-        if let Some(old) = picture.raster.replace(raster) {
-            picture.spare = old;
-        }
+        // An update in place pushes into the spare scene only the layers it
+        // pushes again: it keeps no storage the size of a whole scene.
+        picture.raster = Some(raster);
+        picture.spare = scene::RasterScene::new();
         picture.width = width;
         picture.height = height;
         picture.scale = scale;
         picture.measure_reach();
     }
 
-    /// Brings `picture`'s scene up to the current scene where it lies, when
-    /// only some layers changed and push as many items as before, and puts
-    /// the areas they changed into `picture.changed`.
+    // Brings `picture`'s scene up to the current scene in place, and puts
+    // the areas the changed layers changed into `picture.changed`. `None`
+    // when the scene must be built again: the first time, after a change of
+    // size, scale or light, or of the root layer.
     fn update_picture_in_place(
         &self,
         picture: &mut Picture,
         width: u32,
         height: u32,
         scale: f32,
-    ) -> bool {
+    ) -> Option<pipeline::UpdatedReach> {
         let (Some(raster), Some(graph)) = (picture.raster.as_mut(), self.scene.graph.as_ref())
         else {
-            return false;
+            return None;
         };
         if (picture.width, picture.height, picture.scale) != (width, height, scale) {
-            return false;
+            return None;
         }
         let window = draw::ClipBounds {
             min_x: 0,

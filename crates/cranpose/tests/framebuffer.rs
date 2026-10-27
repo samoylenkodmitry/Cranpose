@@ -283,6 +283,126 @@ fn draws_that_change_with_a_layout_show_as_a_new_screen_shows_them() {
     assert!(picture_in_strips(&mut stepped, 40) == picture);
 }
 
+// The states of a growing screen: how many bars its box draws, whether its
+// column holds two more boxes, and whether its last box draws green.
+#[derive(Clone, Copy)]
+struct Growth {
+    bars: MutableState<u32>,
+    grown: MutableState<bool>,
+    green: MutableState<bool>,
+}
+
+// A box that draws `bars` green bars side by side.
+fn drawn_bars(bars: MutableState<u32>) -> Modifier {
+    Modifier::empty()
+        .size(Size::new(40.0, 10.0))
+        .draw_behind(move |scope| {
+            for index in 0..bars.get() {
+                scope.draw_rect_at(
+                    Rect {
+                        x: index as f32 * 12.0,
+                        y: 0.0,
+                        width: 10.0,
+                        height: 10.0,
+                    },
+                    Brush::solid(GREEN),
+                );
+            }
+        })
+}
+
+// A bar that draws green when `green`, else red.
+fn drawn_bar(green: MutableState<bool>) -> Modifier {
+    Modifier::empty()
+        .size(Size::new(30.0, 6.0))
+        .draw_behind(move |scope| {
+            let color = if green.get() { GREEN } else { RED };
+            scope.draw_rect(Brush::solid(color));
+        })
+}
+
+// A screen of a box that draws `bars` bars beside a box that stays, a column
+// that holds two more boxes between the two it keeps when `grown`, and a box
+// below that the column moves down, drawn green when `green`. The screen
+// keeps its states in `held` for the test to change, and its first picture
+// is drawn.
+fn growing_framebuffer(
+    (bars, grown, green): (u32, bool, bool),
+    held: Rc<Cell<Option<Growth>>>,
+) -> Framebuffer {
+    let mut framebuffer = Framebuffer::new(80, 80, 1.0, SystemTheme::Light, &[], move || {
+        let growth = remember(|| Growth {
+            bars: mutableStateOf(bars),
+            grown: mutableStateOf(grown),
+            green: mutableStateOf(green),
+        })
+        .with(|growth| *growth);
+        held.set(Some(growth));
+        let bar = |color: Color| {
+            Modifier::empty()
+                .size(Size::new(30.0, 6.0))
+                .background(color)
+        };
+        Column(
+            Modifier::empty().fill_max_size(),
+            ColumnSpec::default(),
+            move || {
+                Row(Modifier::empty(), RowSpec::default(), move || {
+                    Box(drawn_bars(growth.bars), BoxSpec::default(), || {});
+                    Box(bar(RED), BoxSpec::default(), || {});
+                });
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Box(bar(RED), BoxSpec::default(), || {});
+                    if growth.grown.get() {
+                        Box(bar(GREEN), BoxSpec::default(), || {});
+                        Box(bar(GREEN), BoxSpec::default(), || {});
+                    }
+                    Box(bar(RED), BoxSpec::default(), || {});
+                });
+                Box(drawn_bar(growth.green), BoxSpec::default(), || {});
+            },
+        );
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    framebuffer.tick(16_666_667);
+    framebuffer.changed_areas(&mut Vec::new());
+    framebuffer
+}
+
+// A kept picture whose layers come to draw more or fewer items than before,
+// or to hold more or fewer child layers, shows what a new screen shows, at
+// each of its steps.
+#[test]
+fn layers_that_draw_more_or_less_show_as_a_new_screen_shows_them() {
+    let held = Rc::new(Cell::new(None));
+    let mut kept = growing_framebuffer((1, false, false), Rc::clone(&held));
+    let growth = held.get().expect("the screen holds its states");
+    let steps = [
+        (3, false, false),
+        (3, false, true),
+        (3, true, true),
+        (1, true, false),
+        (2, false, true),
+    ];
+    for (frame, step) in (2..).zip(steps) {
+        let (bars, grown, green) = step;
+        growth.bars.set(bars);
+        growth.grown.set(grown);
+        growth.green.set(green);
+        assert!(
+            kept.tick(frame * 16_666_667),
+            "the step changes the picture"
+        );
+        kept.changed_areas(&mut Vec::new());
+        let mut fresh = growing_framebuffer(step, Rc::new(Cell::new(None)));
+        assert!(
+            picture_in_strips(&mut kept, 80) == picture_in_strips(&mut fresh, 80),
+            "{step:?}: the kept picture is the new screen's"
+        );
+    }
+}
+
 // A host that keeps its frame and draws only the changed areas, in strips
 // of eight rows as a board with a small buffer does, shows what a whole
 // redraw shows, every frame of a screen that changes most of itself each

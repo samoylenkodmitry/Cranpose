@@ -639,7 +639,7 @@ pub(crate) fn build_raster_scene(
 mod in_place;
 mod space;
 
-pub(crate) use in_place::InPlaceUpdate;
+pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
 use space::{push_seen_surfaces, seen_surfaces};
 
 /// The shadow light of a scene `graph` gives at `scale`.
