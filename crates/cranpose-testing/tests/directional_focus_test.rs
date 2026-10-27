@@ -285,16 +285,18 @@ fn a_key_handler_takes_an_arrow_before_focus_moves() {
     assert_eq!(screen.focused(), Some("right"), "Right is left to focus");
 }
 
+fn four_cells(focused: &Focused) {
+    let focused = Rc::clone(focused);
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        for name in ["one", "two", "three", "four"] {
+            cell(name, &focused);
+        }
+    });
+}
+
 #[test]
 fn a_held_arrow_moves_focus_once_a_frame() {
-    let mut screen = Screen::new(|focused| {
-        let focused = Rc::clone(focused);
-        Column(Modifier::empty(), ColumnSpec::default(), move || {
-            for name in ["one", "two", "three", "four"] {
-                cell(name, &focused);
-            }
-        });
-    });
+    let mut screen = Screen::new(four_cells);
     assert!(screen.press(Key::DirectionDown));
     assert_eq!(screen.focused(), Some("one"));
 
@@ -313,6 +315,22 @@ fn a_held_arrow_moves_focus_once_a_frame() {
     );
     screen.robot.wait_for_idle();
     assert_eq!(screen.focused(), Some("four"));
+}
+
+// Android draws its frames with `update_without_frame`, which runs no frame
+// callbacks and leaves the frame clock where it was. A held D-pad key still
+// moves once each frame drawn: on the Mi TV Stick a held Right moved focus
+// once and then took 40 repeats without moving.
+#[test]
+fn a_held_arrow_moves_once_each_frame_drawn_without_the_frame_clock() {
+    let mut screen = Screen::new(four_cells);
+    assert!(screen.press(Key::DirectionDown));
+    assert_eq!(screen.focused(), Some("one"));
+    for (repeat, name) in [(1, "two"), (2, "three"), (3, "four")] {
+        assert!(screen.press_held(Key::DirectionDown, repeat));
+        screen.robot.shell_mut().update_without_frame();
+        assert_eq!(screen.focused(), Some(name), "after repeat {repeat}");
+    }
 }
 
 // A row of 60 by 40 cells named by `names`, with the `group` modifier.

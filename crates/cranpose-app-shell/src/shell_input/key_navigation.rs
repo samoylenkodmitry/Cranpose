@@ -133,7 +133,7 @@ where
         {
             return false;
         }
-        let frame = Some(self.shell.app.last_frame_time_nanos);
+        let frame = Some(self.surface().frames);
         if event.native_key_event().repeat_count > 0 && self.surface().key_moved_focus_at == frame {
             return true;
         }
