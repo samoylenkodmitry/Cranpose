@@ -52,14 +52,12 @@ fn pixel_rect(bounds: draw::ClipBounds) -> PixelRect {
 #[derive(Default)]
 pub struct Picture {
     raster: Option<scene::RasterScene>,
-    /// The scene an update in place pushes the changed layers into.
+    /// The scene an update in place pushes each changed layer into.
     spare: scene::RasterScene,
     width: u32,
     height: u32,
     scale: f32,
     changed: Vec<draw::ClipBounds>,
-    /// The layers an update in place pushed again: their old and new records.
-    repushed: Vec<(usize, usize)>,
     // Where each item of `raster` can draw in the frame, in its order: each
     // strip a host draws passes over the items that miss it.
     reach: Vec<Option<draw::ClipBounds>>,
@@ -167,6 +165,9 @@ impl PixelsRenderer {
             }
             return;
         }
+        // An update in place that gave up after it changed part of the scene
+        // left the areas it changed: the scene holds those changes already.
+        let updated = (!picture.changed.is_empty()).then(|| std::mem::take(&mut picture.changed));
         let mut raster = std::mem::take(&mut picture.spare);
         self.fill_raster_scene(&mut raster, scale, picture.raster.as_ref());
         changed.clear();
@@ -181,6 +182,10 @@ impl PixelsRenderer {
                     picture.frame(),
                     &mut picture.changed,
                 );
+                if let Some(mut updated) = updated {
+                    picture.changed.append(&mut updated);
+                    damage::merge_areas(&mut picture.changed);
+                }
                 changed.extend(picture.changed.iter().copied().map(pixel_rect));
             }
             _ if width > 0 && height > 0 => changed.push(PixelRect {
@@ -204,7 +209,9 @@ impl PixelsRenderer {
     // Brings `picture`'s scene up to the current scene in place, and puts
     // the areas the changed layers changed into `picture.changed`. `None`
     // when the scene must be built again: the first time, after a change of
-    // size, scale or light, or of the root layer.
+    // size, scale or light, or of the root layer, or when a layer's records
+    // no longer lie in one run, with the areas the update changed before it
+    // stopped in `picture.changed`.
     fn update_picture_in_place(
         &self,
         picture: &mut Picture,
@@ -212,6 +219,7 @@ impl PixelsRenderer {
         height: u32,
         scale: f32,
     ) -> Option<pipeline::UpdatedReach> {
+        picture.changed.clear();
         let (Some(raster), Some(graph)) = (picture.raster.as_mut(), self.scene.graph.as_ref())
         else {
             return None;
@@ -229,7 +237,6 @@ impl PixelsRenderer {
             scene: raster,
             reach: &mut picture.reach,
             scratch: &mut picture.spare,
-            pushed: &mut picture.repushed,
         }
         .run(
             graph,
