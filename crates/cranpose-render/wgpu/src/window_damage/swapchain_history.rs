@@ -1,4 +1,4 @@
-use super::{Damage, DamageRects, KeptWindow, PresentedImage};
+use super::{Damage, DamageRects, FrameWindow, KeptWindow, PresentedImage, WindowDamage};
 
 /// The frames back a kept swapchain image can be drawn again from, and the
 /// images the history follows.
@@ -17,6 +17,9 @@ pub(crate) struct SwapchainHistory {
     damages: [Option<(u64, Damage)>; IMAGE_HISTORY],
     /// The summary of the frame presented last.
     pub(crate) kept: KeptWindow,
+    // Whether the surface shows the frame `kept` summarizes: the frame
+    // presented last drew into an image the history follows.
+    shows_kept: bool,
 }
 
 impl SwapchainHistory {
@@ -29,7 +32,7 @@ impl SwapchainHistory {
         }
     }
 
-    /// Forgets what the images hold.
+    // Forgets what the images hold.
     pub(crate) fn forget(&mut self) {
         self.held = [None; IMAGE_HISTORY];
         self.kept.forget();
@@ -41,6 +44,16 @@ impl SwapchainHistory {
         if let Some(held) = self.held.get_mut(image.index as usize) {
             *held = None;
         }
+        self.shows_kept = false;
+    }
+
+    // Whether `frame` draws what the surface shows: the frame presented last
+    // on the frame's surface, into an image the history follows, with no
+    // item changed since. Such a frame needs no image and no present.
+    pub(crate) fn shows(&self, frame: &FrameWindow<'_>, damage: &mut WindowDamage) -> bool {
+        self.shows_kept
+            && frame.packet.surface_epoch == self.surface_epoch
+            && damage.shows(frame, &self.kept)
     }
 
     /// The pixels that differ between the frame the kept `image` holds and a
@@ -70,6 +83,7 @@ impl SwapchainHistory {
     /// Ends a frame of `damage`: `image` holds it when it was `drawn` whole.
     pub(crate) fn record(&mut self, image: PresentedImage, damage: Damage, drawn: bool) {
         self.frame += 1;
+        self.shows_kept = true;
         self.damages[(self.frame % IMAGE_HISTORY as u64) as usize] = Some((self.frame, damage));
         if let Some(held) = self.held.get_mut(image.index as usize) {
             *held = drawn.then_some(self.frame);

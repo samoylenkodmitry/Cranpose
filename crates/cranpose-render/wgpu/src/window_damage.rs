@@ -405,9 +405,28 @@ pub(crate) struct WindowDamage {
     full_frames: u32,
     events: Vec<(usize, u8, usize)>,
     open: Vec<OpenEffect>,
+    // The frame `shows` summarized into `next`, and whether the summary
+    // describes it, for that frame's `begin` to take instead of summarizing
+    // again.
+    summarized_ahead: Option<(u64, bool)>,
 }
 
 impl WindowDamage {
+    // Whether `frame` draws what `kept` holds: no run of skips, a kept frame,
+    // and no item that differs from it.
+    pub(crate) fn shows(&mut self, frame: &FrameWindow<'_>, kept: &KeptWindow) -> bool {
+        if self.skipped > 0 || !kept.valid {
+            return false;
+        }
+        let complete = self.summarize(frame);
+        self.summarized_ahead = Some((frame.packet.frame_id, complete));
+        complete
+            && matches!(
+                compare(&kept.summary, &self.next, frame.viewport),
+                Damage::Part(changed) if changed.is_empty()
+            )
+    }
+
     /// Summarizes `frame` and compares it with `kept`.
     pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &mut KeptWindow) -> Damage {
         if frame.packet.held_still {
@@ -451,7 +470,10 @@ impl WindowDamage {
             self.baseline = self.skipped == 0;
             return Damage::Skipped;
         }
-        self.summarized = self.summarize(frame);
+        self.summarized = match self.summarized_ahead.take() {
+            Some((frame_id, complete)) if frame_id == frame.packet.frame_id => complete,
+            _ => self.summarize(frame),
+        };
         let baseline = std::mem::take(&mut self.baseline);
         let damage = if self.summarized && kept.valid {
             match compare(&kept.summary, &self.next, frame.viewport) {

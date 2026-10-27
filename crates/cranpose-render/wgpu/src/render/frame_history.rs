@@ -54,6 +54,11 @@ impl FrameHistory {
         }
     }
 
+    // A frame the surface already showed takes the warm-up frame it was owed.
+    pub(super) fn skip_frame(&mut self) {
+        self.warmup_frames = self.warmup_frames.saturating_sub(1);
+    }
+
     pub(super) fn last(&self) -> Option<FrameStatsSnapshot> {
         self.last
     }

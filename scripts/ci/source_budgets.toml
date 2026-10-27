@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 11
-private_docs = 13749
+private_docs = 13748
 for_test_fns = 40
 cranpose_env_names = 78
 source_text_checks = 341
@@ -68,15 +68,15 @@ limit = 1000
 "crates/cranpose-render/wgpu/src/effect_renderer.rs" = 3293
 "crates/cranpose-render/wgpu/src/frame.rs" = 5477
 "crates/cranpose-render/wgpu/src/frame_graph.rs" = 2549
-"crates/cranpose-render/wgpu/src/lib.rs" = 1200
+"crates/cranpose-render/wgpu/src/lib.rs" = 1225
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1189
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1666
-"crates/cranpose-render/wgpu/src/render.rs" = 3960
+"crates/cranpose-render/wgpu/src/render.rs" = 3971
 "crates/cranpose-render/wgpu/src/run_store.rs" = 2005
 "crates/cranpose-render/wgpu/src/scene_pass.rs" = 1459
 "crates/cranpose-render/wgpu/src/shader_cache.rs" = 1137
 "crates/cranpose-render/wgpu/src/shader_flatten.rs" = 1726
-"crates/cranpose-render/wgpu/src/window_damage.rs" = 1232
+"crates/cranpose-render/wgpu/src/window_damage.rs" = 1254
 "crates/cranpose-services/src/http.rs" = 1351
 "crates/cranpose-services/src/media.rs" = 1422
 "crates/cranpose-testing/src/robot_helpers.rs" = 1469
@@ -97,7 +97,7 @@ limit = 1000
 "crates/cranpose-ui/src/widgets/nodes/layout_node.rs" = 1438
 "crates/cranpose-ui/src/widgets/wear/scaling_list.rs" = 1648
 "crates/cranpose/src/accessibility.rs" = 2281
-"crates/cranpose/src/android/event_loop.rs" = 2233
+"crates/cranpose/src/android/event_loop.rs" = 2240
 "crates/cranpose/src/app_launcher.rs" = 1472
 "crates/cranpose/src/desktop/accessibility.rs" = 1237
 "crates/cranpose/src/desktop/event_loop.rs" = 6209

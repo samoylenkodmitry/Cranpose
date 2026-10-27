@@ -571,6 +571,12 @@ impl Harness {
     /// The frame of `step` drawn over the frame its keeper holds, and then
     /// into the direct image, whole.
     fn frame(&mut self, step: u32) -> Frame {
+        self.update(step);
+        self.draw()
+    }
+
+    // The page at `step`, updated but not drawn.
+    fn update(&mut self, step: u32) {
         let state = self
             .step
             .borrow()
@@ -579,6 +585,11 @@ impl Harness {
             .expect("the page remembers its step");
         self.shell.debug_enter_app_context(|| state.set(step));
         self.shell.update();
+    }
+
+    // The page drawn over the frame its keeper holds, and then into the
+    // direct image, whole.
+    fn draw(&mut self) -> Frame {
         let (kept, stats) = match self.keeper {
             Keeper::Composition => draw(&mut self.shell, &self.composed, Draw::Untracked),
             Keeper::Swapchain(_) => {
@@ -1447,5 +1458,35 @@ fn a_pause_ends_the_frames_that_skip_comparing() {
         let label = format!("{keeper:?}, the second frame after the pause");
         let after = harness.frame(MOVES + 4).stats;
         assert_within(&label, after.damage, Scene::MovedThenStill.reach());
+    }
+}
+
+// A surface that keeps its images already shows a frame that changes
+// nothing, and the renderer says so before the platform takes an image, so
+// such a frame takes none. After a change it draws again, from the scene the
+// question collected, the same as the frame drawn whole. The renderer's own
+// composition target never claims the surface shows the scene.
+#[test]
+fn a_surface_that_shows_the_scene_takes_no_frame_until_it_changes() {
+    for keeper in [Keeper::Swapchain(DIRECT), Keeper::Composition] {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::Shape, 1.0, keeper);
+        for _ in 0..=SWAPCHAIN_START_FRAMES {
+            harness.frame(0);
+        }
+        let swapchain = keeper != Keeper::Composition;
+        harness.update(0);
+        let still = harness.shell.renderer().shows_scene(WIDTH, HEIGHT);
+        assert_eq!(still, swapchain, "{keeper:?}: a still page");
+        harness.update(1);
+        let changed = harness.shell.renderer().shows_scene(WIDTH, HEIGHT);
+        assert!(!changed, "{keeper:?}: a changed page");
+        let frame = harness.draw();
+        support::assert_same_bytes(&format!("{keeper:?}"), WIDTH, &frame.kept, &frame.direct);
+        harness.update(1);
+        let after = harness.shell.renderer().shows_scene(WIDTH, HEIGHT);
+        assert_eq!(after, swapchain, "{keeper:?}: the page after the change");
     }
 }

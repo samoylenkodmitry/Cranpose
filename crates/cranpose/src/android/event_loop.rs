@@ -742,14 +742,19 @@ fn render_once(
     telemetry: &mut super::frame_telemetry::AndroidFrameTelemetry,
     timings: &mut super::frame_telemetry::FrameTimings,
 ) -> bool {
+    let size = shell.buffer_size();
     let Some(surface) = resources.surface.as_ref() else {
         telemetry.note_idle_iteration();
         return false;
     };
+    // A frame the surface already shows takes no image.
+    if !resources.surface_dirty && shell.renderer().shows_scene(size.0, size.1) {
+        telemetry.note_idle_iteration();
+        return false;
+    }
     match current_surface_texture(surface, "android") {
         SurfaceFrame::Ready(frame) => {
             timings.after_acquire_ns = super::frame_telemetry::monotonic_nanos();
-            let size = shell.buffer_size();
             if let Err(e) = crate::wgpu_surface::render_surface_frame(
                 shell.renderer(),
                 &frame,
@@ -815,6 +820,8 @@ fn drain_present_returns_into_loop(
                         work_ns = frame_timings.work_ns();
                     }
                 }
+                // The surface already showed the frame: nothing was drawn.
+                PresentOutcome::Unchanged => telemetry.note_idle_iteration(),
                 PresentOutcome::Cancelled(_) | PresentOutcome::NotRun => {
                     refused = true;
                     telemetry.note_idle_iteration();

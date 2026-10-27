@@ -44,6 +44,8 @@ pub enum PresentOutcome {
     NotRun,
     /// The packet was drawn and presented.
     Presented,
+    /// The packet drew what the surface showed: no image, draw or present.
+    Unchanged,
     /// The packet was refused before any encoding; the scene returned whole.
     Cancelled(CancelReason),
 }

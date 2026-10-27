@@ -573,7 +573,7 @@ impl WgpuRenderer {
         } = self.backend.sync_mut()?;
         let packet = self
             .frontend
-            .build_frame_packet(width, height, self.renderer_epoch, self.surface_epoch)
+            .take_packet(width, height, self.renderer_epoch, self.surface_epoch)
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
@@ -586,6 +586,31 @@ impl WgpuRenderer {
         );
         self.frontend.apply_returns(returns);
         result.map_err(WgpuRendererError::Wgpu)
+    }
+
+    /// Whether the surface already shows the current scene at `width` by
+    /// `height` device pixels: the frame drawn last into a surface that keeps
+    /// its presented images, with nothing changed since. A platform asks
+    /// before it takes the surface's next image, and when the surface shows
+    /// the scene it takes no image, draws nothing and presents nothing.
+    /// Otherwise the frame drawn next starts from the scene this collected.
+    pub fn shows_scene(&mut self, width: u32, height: u32) -> bool {
+        let PresentBackend::Sync(sync) = &mut self.backend else {
+            return false;
+        };
+        let Some(packet) =
+            self.frontend
+                .take_packet(width, height, self.renderer_epoch, self.surface_epoch)
+        else {
+            return false;
+        };
+        let shown = sync.renderer.shows(&packet, (width, height));
+        if shown {
+            self.frontend.recycle(packet);
+        } else {
+            self.frontend.keep_packet(packet);
+        }
+        shown
     }
 
     /// Render the current scene into an RGBA pixel buffer for robot tests.
