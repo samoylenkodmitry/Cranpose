@@ -270,34 +270,53 @@ pub(crate) fn changed_areas(
     let old_items = &old.order;
     let new_items = &new.order;
     let (common_start, common_end) = common_ends(old, new);
-    let old_changed = &old_items[common_start..old_items.len() - common_end];
-    let new_changed = &new_items[common_start..new_items.len() - common_end];
-    // Items paired in order draw in the same order in both scenes, so a
-    // pixel no changed pair and no unpaired item reaches keeps its colour.
-    let paired = old_changed.len().min(new_changed.len());
-    add_changed_pairs(
+    add_changed_runs(
         old,
-        &old_changed[..paired],
+        &old_items[common_start..old_items.len() - common_end],
         new,
-        &new_changed[..paired],
+        &new_items[common_start..new_items.len() - common_end],
         window,
         areas,
     );
-    for (scene, unpaired) in [(old, &old_changed[paired..]), (new, &new_changed[paired..])] {
+    merge_areas(areas);
+}
+
+// Adds to `areas` where the run `old_items` of `old` and the run
+// `new_items` of `new`, which take each other's place in one draw order,
+// draw differently. Items paired in order draw in the same order in both
+// scenes, so a pixel no changed pair and no unpaired item reaches keeps its
+// colour.
+pub(crate) fn add_changed_runs(
+    old: &RasterScene,
+    old_items: &[RenderItem],
+    new: &RasterScene,
+    new_items: &[RenderItem],
+    window: ClipBounds,
+    areas: &mut Vec<ClipBounds>,
+) {
+    let paired = old_items.len().min(new_items.len());
+    add_changed_pairs(
+        old,
+        &old_items[..paired],
+        new,
+        &new_items[..paired],
+        window,
+        areas,
+    );
+    for (scene, unpaired) in [(old, &old_items[paired..]), (new, &new_items[paired..])] {
         for &item in unpaired {
             if let Some(area) = scene.item_bounds(item, window) {
                 add_area(areas, area);
             }
         }
     }
-    merge_areas(areas);
 }
 
 /// Adds to `areas` where `old_items` of `old` and `new_items` of `new`, lists
 /// of one length matched item by item, draw differently: nothing for a pair
 /// that draws alike, the strips along the moved edges of a fill that only
 /// moved, and both items' bounds for any other pair.
-pub(crate) fn add_changed_pairs(
+fn add_changed_pairs(
     old: &RasterScene,
     old_items: &[RenderItem],
     new: &RasterScene,
