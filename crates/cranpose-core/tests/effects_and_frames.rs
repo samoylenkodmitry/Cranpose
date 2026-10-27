@@ -682,8 +682,8 @@ fn effects_written_once_in_a_loop_each_keep_their_place() {
 // spelled out as `#[composable]` expands it.
 fn counting_derived_reader(
     source: cranpose_core::MutableState<u32>,
-    derives: Rc<Cell<u32>>,
-    seen: Rc<RefCell<Vec<u32>>>,
+    derives: &Rc<Cell<u32>>,
+    seen: &Rc<RefCell<Vec<u32>>>,
 ) {
     fn body(
         source: cranpose_core::MutableState<u32>,
@@ -700,9 +700,9 @@ fn counting_derived_reader(
     let key = location_key(file!(), line!(), column!());
     cranpose_core::with_current_composer(|composer| {
         composer.with_group(key, |composer| {
-            let (again_derives, again_seen) = (Rc::clone(&derives), Rc::clone(&seen));
+            let (again_derives, again_seen) = (Rc::clone(derives), Rc::clone(seen));
             composer.set_recompose_callback(move |_| body(source, &again_derives, &again_seen));
-            body(source, &derives, &seen);
+            body(source, derives, seen);
         });
     });
 }
@@ -718,7 +718,7 @@ fn a_reader_that_recomposes_for_a_new_derived_value_derives_it_once() {
         let (derives, seen) = (Rc::clone(&derives), Rc::clone(&seen));
         composition
             .render(key, move || {
-                counting_derived_reader(source, Rc::clone(&derives), Rc::clone(&seen));
+                counting_derived_reader(source, &derives, &seen);
             })
             .expect("render succeeds");
     }
@@ -749,7 +749,7 @@ fn a_reader_that_recomposes_for_a_new_derived_value_derives_it_once() {
 fn offset_parent(
     offset: cranpose_core::MutableState<u32>,
     source: cranpose_core::MutableState<u32>,
-    seen: Rc<RefCell<Vec<u32>>>,
+    seen: &Rc<RefCell<Vec<u32>>>,
 ) {
     fn child(offset: u32, source: cranpose_core::MutableState<u32>, seen: &Rc<RefCell<Vec<u32>>>) {
         fn body(
@@ -779,9 +779,9 @@ fn offset_parent(
     let key = location_key(file!(), line!(), column!());
     cranpose_core::with_current_composer(|composer| {
         composer.with_group(key, |composer| {
-            let again_seen = Rc::clone(&seen);
+            let again_seen = Rc::clone(seen);
             composer.set_recompose_callback(move |_| body(offset, source, &again_seen));
-            body(offset, source, &seen);
+            body(offset, source, seen);
         });
     });
 }
@@ -795,7 +795,7 @@ fn a_derived_state_takes_the_argument_its_parent_passes_in_the_frame_its_value_c
     {
         let seen = Rc::clone(&seen);
         composition
-            .render(key, move || offset_parent(offset, source, Rc::clone(&seen)))
+            .render(key, move || offset_parent(offset, source, &seen))
             .expect("render succeeds");
     }
     assert_eq!(*seen.borrow(), vec![0]);
