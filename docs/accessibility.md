@@ -551,11 +551,16 @@ a release at the control's centre, so the same handler runs as for a tap,
 and a widget with its own gesture code needs no second path. While a text
 field holds focus the two keys go to the field.
 
-**Arrow keys inside a group.** Under `Modifier::selectable_group()`, a tab
-bar, a radio group, a segmented control, and inside a menu, the arrow keys
-move focus to the nearest control in that direction and never leave the
-group. Outside a group the arrows stay with the content, so a list still
-scrolls.
+**Arrow keys move focus.** An arrow key, or a remote's D-pad, that the
+focused control and its ancestors leave moves focus to the nearest control
+in that direction, by the rules of Compose's two-dimensional focus search: a
+control level with the focused one beats a nearer one beside it. Under
+`Modifier::selectable_group()` the search looks inside the group first. In a
+tab bar, a radio group, a segmented control and a menu, the arrows move along
+the group and wrap at its ends. With nothing focused, Down and Right enter
+at the top left and Up and Left at the bottom right. When the focused
+control goes away, the next arrow goes to the control that took its place.
+A held key moves focus once a frame.
 
 **A ring shows where focus is.** `Modifier::focusable()` is a focus target
 that draws a ring, a 2 point blue line with a 1 point white line inside it,

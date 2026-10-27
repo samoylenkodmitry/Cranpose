@@ -2,6 +2,7 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_foundation::FocusState;
+use cranpose_ui_graphics::Rect;
 
 use crate::dirty_node_queue::DirtyNodeQueue;
 
@@ -108,6 +109,9 @@ pub(crate) struct FocusInvalidationState {
     manager: RefCell<FocusInvalidationManager>,
     order: RefCell<Vec<crate::FocusEntry>>,
     requested_move: std::cell::Cell<Option<crate::FocusDirection>>,
+    // Where the target a focus move last reached lay, which an arrow
+    // searches from once that target is gone.
+    last_focus_rect: std::cell::Cell<Option<Rect>>,
 }
 
 impl FocusInvalidationState {
@@ -117,6 +121,7 @@ impl FocusInvalidationState {
             manager: RefCell::new(FocusInvalidationManager::new()),
             order: RefCell::new(Vec::new()),
             requested_move: std::cell::Cell::new(None),
+            last_focus_rect: std::cell::Cell::new(None),
         }
     }
 
@@ -134,6 +139,18 @@ impl FocusInvalidationState {
 
     pub(crate) fn with_focus_order<T>(&self, reader: impl FnOnce(&[crate::FocusEntry]) -> T) -> T {
         reader(&self.order.borrow())
+    }
+
+    pub(crate) fn note_focus_rect(&self, node_id: NodeId) {
+        let rect = self
+            .order
+            .borrow()
+            .iter()
+            .find(|entry| entry.node_id == node_id)
+            .map(|entry| entry.rect);
+        if rect.is_some() {
+            self.last_focus_rect.set(rect);
+        }
     }
 
     fn set_active_focus_target(&self, node_id: Option<NodeId>) {
@@ -255,6 +272,14 @@ pub fn has_pending_focus_invalidations() -> bool {
 /// the focus system to track which node currently has focus.
 pub fn set_active_focus_target(node_id: Option<NodeId>) {
     crate::render_state::with_focus_dispatch(|state| state.set_active_focus_target(node_id));
+}
+
+pub(crate) fn note_focus_rect(node_id: NodeId) {
+    crate::render_state::with_focus_dispatch(|state| state.note_focus_rect(node_id));
+}
+
+pub(crate) fn last_focus_rect() -> Option<Rect> {
+    crate::render_state::with_focus_dispatch(|state| state.last_focus_rect.get())
 }
 
 /// Returns the currently active focus target, if any.

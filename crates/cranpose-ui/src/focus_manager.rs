@@ -1,9 +1,11 @@
 use cranpose_core::{CompositionLocal, NodeId};
+use cranpose_ui_graphics::Rect;
 
 use crate::{
     focus_dispatch,
     focus_order::{FocusEntry, with_focus_order},
     modifier::FocusDirection,
+    two_dimensional_focus_search::{Arrow, entry_point, find_best_candidate},
 };
 
 /// Moves focus between the focus targets the tree holds, the way
@@ -27,7 +29,11 @@ impl FocusManager {
         let Some(target) = next_target(direction) else {
             return false;
         };
-        focus_dispatch::request_focus_in_context(target)
+        let moved = focus_dispatch::request_focus_in_context(target);
+        if moved {
+            focus_dispatch::note_focus_rect(target);
+        }
+        moved
     }
 
     /// Drops focus from whatever holds it, and answers whether one held it.
@@ -62,16 +68,39 @@ fn next_target(direction: FocusDirection) -> Option<NodeId> {
         let active = focus_dispatch::active_focus_target();
         let current = active.and_then(|node_id| order.iter().position(|e| e.node_id == node_id));
 
+        if let Some(arrow) = Arrow::of(direction) {
+            if let Some(index) = current {
+                let candidates = order.iter().filter(|entry| Some(entry.node_id) != active);
+                return find_best_candidate(candidates, order[index].rect, arrow);
+            }
+            // With the focused target gone, the arrow goes to the target that
+            // took its place, as a list gives focus to the item that moved
+            // into the removed one's row, or else searches from that place.
+            // With nothing focused before, it enters from the arrow's edge.
+            if let Some(last) = focus_dispatch::last_focus_rect() {
+                return order
+                    .iter()
+                    .find(|entry| covers_center(entry.rect, last))
+                    .map(|entry| entry.node_id)
+                    .or_else(|| find_best_candidate(order, last, arrow));
+            }
+            return find_best_candidate(order, entry_point(order, arrow)?, arrow);
+        }
         match direction {
             FocusDirection::Next | FocusDirection::Enter => Some(step(order, current, 1)),
             FocusDirection::Previous => Some(step(order, current, -1)),
-            FocusDirection::Exit => None,
-            FocusDirection::Up
+            FocusDirection::Exit
+            | FocusDirection::Up
             | FocusDirection::Down
             | FocusDirection::Left
-            | FocusDirection::Right => current.and_then(|index| nearest(order, index, direction)),
+            | FocusDirection::Right => None,
         }
     })
+}
+
+fn covers_center(rect: Rect, of: Rect) -> bool {
+    let (x, y) = (of.x + of.width * 0.5, of.y + of.height * 0.5);
+    x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 }
 
 fn step(order: &[FocusEntry], current: Option<usize>, delta: isize) -> NodeId {
@@ -82,34 +111,6 @@ fn step(order: &[FocusEntry], current: Option<usize>, delta: isize) -> NodeId {
         None => count - 1,
     };
     order[index as usize].node_id
-}
-
-fn nearest(order: &[FocusEntry], from: usize, direction: FocusDirection) -> Option<NodeId> {
-    let (from_x, from_y) = order[from].center();
-    let mut best: Option<(f32, NodeId)> = None;
-
-    for (index, entry) in order.iter().enumerate() {
-        if index == from {
-            continue;
-        }
-        let (x, y) = entry.center();
-        let (along, across) = match direction {
-            FocusDirection::Up => (from_y - y, (x - from_x).abs()),
-            FocusDirection::Down => (y - from_y, (x - from_x).abs()),
-            FocusDirection::Left => (from_x - x, (y - from_y).abs()),
-            FocusDirection::Right => (x - from_x, (y - from_y).abs()),
-            _ => continue,
-        };
-        if along <= 0.0 {
-            continue;
-        }
-        let cost = along + across * 2.0;
-        if best.is_none_or(|(best_cost, _)| cost < best_cost) {
-            best = Some((cost, entry.node_id));
-        }
-    }
-
-    best.map(|(_, node_id)| node_id)
 }
 
 #[cfg(test)]
