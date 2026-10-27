@@ -198,6 +198,20 @@ impl PerfRun {
                 .iter()
                 .any(|subject| subject.name == "compose")
     }
+
+    // Where the run measured: the machine, and whether in the browser. A
+    // browser run's device also names the browser's version, as `Apple M3
+    // Pro · Chrome 156` does, and a new version takes the card of the old.
+    fn place(&self) -> (&str, bool) {
+        let machine = self.device.split(" · ").next().unwrap_or(&self.device);
+        (machine, self.kind == "browser")
+    }
+
+    // Whether the run measured any launch: a run whose every launch failed
+    // has nothing to show.
+    fn measured(&self) -> bool {
+        self.scenarios.values().any(|scenario| scenario.legs > 0)
+    }
 }
 
 impl PerfIndex {
@@ -213,18 +227,19 @@ impl PerfIndex {
             .collect()
     }
 
-    /// The latest framework comparison on each device, the newest first.
+    /// The latest framework comparison in each place that measured a launch.
     pub(super) fn latest_framework_runs(&self) -> Vec<&PerfRun> {
-        let mut devices = Vec::new();
+        let mut places = Vec::new();
         self.runs
             .iter()
             .rev()
             .filter(|run| {
                 let first = run.compares_frameworks()
                     && run.keeps_starts()
-                    && !devices.contains(&run.device.as_str());
+                    && run.measured()
+                    && !places.contains(&run.place());
                 if first {
-                    devices.push(run.device.as_str());
+                    places.push(run.place());
                 }
                 first
             })
