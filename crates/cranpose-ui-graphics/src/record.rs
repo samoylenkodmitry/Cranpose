@@ -1004,6 +1004,10 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 #[derive(Clone, Debug)]
 pub struct ShapeRecorder {
     tables: RecordTables,
+    // The colour and stop lists of each brush record's gradient as the app
+    // gave them, shared: a materialized shape takes them, not copies the
+    // tables hold.
+    gradient_lists: Vec<GradientLists>,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -1014,12 +1018,20 @@ impl Default for ShapeRecorder {
     fn default() -> Self {
         Self {
             tables: RecordTables::default(),
+            gradient_lists: Vec::new(),
             last_segment_key: NO_SEGMENT_KEY,
             segment_waste: 0,
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
         }
     }
+}
+
+// A gradient's colours and stop positions.
+#[derive(Clone, Debug)]
+struct GradientLists {
+    colors: Arc<[Color]>,
+    stops: Option<Arc<[f32]>>,
 }
 
 impl PartialEq for ShapeRecorder {
@@ -1093,6 +1105,7 @@ impl ShapeRecorder {
     /// Empties the recorder while retaining its table capacities.
     pub fn clear(&mut self) {
         self.tables.clear();
+        self.gradient_lists.clear();
         self.last_segment_key = NO_SEGMENT_KEY;
         self.segment_waste = 0;
         self.min = [f32::INFINITY; 2];
@@ -1777,6 +1790,10 @@ impl ShapeRecorder {
         };
         tables.brushes.push(record);
         let handle = tables.brushes.len() as u32;
+        self.gradient_lists.push(GradientLists {
+            colors: Arc::clone(colors),
+            stops: stops.clone(),
+        });
         let first = colors.first().copied().unwrap_or(Color(0.0, 0.0, 0.0, 0.0));
         (handle, [first.0, first.1, first.2, first.3])
     }

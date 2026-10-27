@@ -1,5 +1,7 @@
 //! Brush definitions for painting (solid colors, gradients, etc.)
 
+use std::sync::Arc;
+
 use crate::{
     brush_sampler::BrushSampler,
     color::Color,
@@ -15,10 +17,10 @@ pub enum Brush {
     /// Colors blend along the line from `start` to `end`. Compose's `Brush.linearGradient`.
     LinearGradient {
         /// Colors to blend between, in order, from `start` to `end`.
-        colors: Vec<Color>,
+        colors: Arc<[Color]>,
         /// Positions of `colors` along the line from `start` to `end`, from 0.0 to 1.0; `None`
         /// spaces the colors evenly.
-        stops: Option<Vec<f32>>,
+        stops: Option<Arc<[f32]>>,
         /// Where the first color is reached, in logical pixels relative to the top-left corner of
         /// the painted area. An infinite coordinate means the far edge of that area.
         start: Point,
@@ -31,9 +33,9 @@ pub enum Brush {
     /// Colors blend with distance from `center`. Compose's `Brush.radialGradient`.
     RadialGradient {
         /// Colors to blend between, in order, from `center` outward.
-        colors: Vec<Color>,
+        colors: Arc<[Color]>,
         /// Positions of `colors` from 0.0 to 1.0; `None` spaces the colors evenly.
-        stops: Option<Vec<f32>>,
+        stops: Option<Arc<[f32]>>,
         /// Gradient center in logical pixels, relative to the top-left corner of the painted area.
         center: Point,
         /// Distance in logical pixels from `center` at which the last color is reached.
@@ -45,9 +47,9 @@ pub enum Brush {
     /// rest clockwise from it. Compose's `Brush.sweepGradient`.
     SweepGradient {
         /// Colors to blend between, in order.
-        colors: Vec<Color>,
+        colors: Arc<[Color]>,
         /// Positions of `colors` from 0.0 to 1.0; `None` spaces the colors evenly.
-        stops: Option<Vec<f32>>,
+        stops: Option<Arc<[f32]>>,
         /// Gradient center in logical pixels, relative to the top-left corner of the painted area.
         center: Point,
     },
@@ -87,6 +89,60 @@ impl Brush {
         }
     }
 
+    /// The brush with each colour through `paint`. A gradient keeps its colour
+    /// list, shared, when `paint` leaves every colour's bits as they are.
+    pub fn map_colors(self, paint: impl Fn(Color) -> Color) -> Self {
+        let map = |colors: Arc<[Color]>| {
+            let bits = |color: Color| [color.0, color.1, color.2, color.3].map(f32::to_bits);
+            if colors
+                .iter()
+                .all(|&color| bits(paint(color)) == bits(color))
+            {
+                colors
+            } else {
+                colors.iter().map(|&color| paint(color)).collect()
+            }
+        };
+        match self {
+            Self::Solid(color) => Self::Solid(paint(color)),
+            Self::LinearGradient {
+                colors,
+                stops,
+                start,
+                end,
+                tile_mode,
+            } => Self::LinearGradient {
+                colors: map(colors),
+                stops,
+                start,
+                end,
+                tile_mode,
+            },
+            Self::RadialGradient {
+                colors,
+                stops,
+                center,
+                radius,
+                tile_mode,
+            } => Self::RadialGradient {
+                colors: map(colors),
+                stops,
+                center,
+                radius,
+                tile_mode,
+            },
+            Self::SweepGradient {
+                colors,
+                stops,
+                center,
+            } => Self::SweepGradient {
+                colors: map(colors),
+                stops,
+                center,
+            },
+        }
+    }
+
     /// Whether the brush paints anything: some colour of it is not
     /// transparent.
     pub fn paints(&self) -> bool {
@@ -122,7 +178,7 @@ impl Brush {
         tile_mode: TileMode,
     ) -> Self {
         Self::LinearGradient {
-            colors,
+            colors: colors.into(),
             stops: None,
             start,
             end,
@@ -140,8 +196,8 @@ impl Brush {
     ) -> Self {
         let (colors, stops) = split_color_stops(color_stops);
         Self::LinearGradient {
-            colors,
-            stops: Some(stops),
+            colors: colors.into(),
+            stops: Some(stops.into()),
             start,
             end,
             tile_mode,
@@ -251,7 +307,7 @@ impl Brush {
         tile_mode: TileMode,
     ) -> Self {
         Self::RadialGradient {
-            colors,
+            colors: colors.into(),
             stops: None,
             center,
             radius,
@@ -269,8 +325,8 @@ impl Brush {
     ) -> Self {
         let (colors, stops) = split_color_stops(color_stops);
         Self::RadialGradient {
-            colors,
-            stops: Some(stops),
+            colors: colors.into(),
+            stops: Some(stops.into()),
             center,
             radius,
             tile_mode,
@@ -280,7 +336,7 @@ impl Brush {
     /// Creates a sweep gradient that spreads `colors` evenly around `center`.
     pub fn sweep_gradient(colors: Vec<Color>, center: Point) -> Self {
         Self::SweepGradient {
-            colors,
+            colors: colors.into(),
             stops: None,
             center,
         }
@@ -291,8 +347,8 @@ impl Brush {
     pub fn sweep_gradient_stops(color_stops: Vec<(f32, Color)>, center: Point) -> Self {
         let (colors, stops) = split_color_stops(color_stops);
         Self::SweepGradient {
-            colors,
-            stops: Some(stops),
+            colors: colors.into(),
+            stops: Some(stops.into()),
             center,
         }
     }

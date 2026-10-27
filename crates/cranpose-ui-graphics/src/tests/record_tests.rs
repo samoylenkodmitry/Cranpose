@@ -18,8 +18,8 @@ fn solid() -> Brush {
 
 fn linear_explicit() -> Brush {
     Brush::LinearGradient {
-        colors: vec![Color::RED, Color::GREEN, Color::BLUE],
-        stops: Some(vec![0.0, 0.25, 1.0]),
+        colors: vec![Color::RED, Color::GREEN, Color::BLUE].into(),
+        stops: Some(vec![0.0, 0.25, 1.0].into()),
         start: Point::new(1.0, 2.0),
         end: Point::new(3.0, 4.0),
         tile_mode: TileMode::Repeated,
@@ -28,8 +28,8 @@ fn linear_explicit() -> Brush {
 
 fn linear_mismatched_stops() -> Brush {
     Brush::LinearGradient {
-        colors: vec![Color::RED, Color::BLUE],
-        stops: Some(vec![0.5]),
+        colors: vec![Color::RED, Color::BLUE].into(),
+        stops: Some(vec![0.5].into()),
         start: Point::new(0.0, 0.0),
         end: Point::new(0.0, 10.0),
         tile_mode: TileMode::Clamp,
@@ -38,7 +38,7 @@ fn linear_mismatched_stops() -> Brush {
 
 fn radial() -> Brush {
     Brush::RadialGradient {
-        colors: vec![Color::WHITE, Color::BLACK],
+        colors: vec![Color::WHITE, Color::BLACK].into(),
         stops: None,
         center: Point::new(5.0, 6.0),
         radius: 7.0,
@@ -48,8 +48,8 @@ fn radial() -> Brush {
 
 fn sweep() -> Brush {
     Brush::SweepGradient {
-        colors: vec![Color::RED],
-        stops: Some(vec![]),
+        colors: vec![Color::RED].into(),
+        stops: Some(vec![].into()),
         center: Point::new(8.0, 9.0),
     }
 }
@@ -660,7 +660,9 @@ fn the_fingerprint_sees_every_stop_the_order_and_the_blend() {
     let Brush::LinearGradient { colors, .. } = brush else {
         unreachable!()
     };
-    colors[1] = Color::WHITE;
+    let mut recoloured = colors.to_vec();
+    recoloured[1] = Color::WHITE;
+    *colors = recoloured.into();
     let recoloured_stop = CommandRecording::from_primitives(primitives);
     assert_ne!(recoloured_stop.fingerprint(), base().fingerprint());
     assert_eq!(
@@ -675,7 +677,7 @@ fn the_fingerprint_sees_every_stop_the_order_and_the_blend() {
     let Brush::LinearGradient { stops, .. } = brush else {
         unreachable!()
     };
-    *stops = Some(vec![0.0, 0.5, 1.0]);
+    *stops = Some(vec![0.0, 0.5, 1.0].into());
     assert_ne!(
         CommandRecording::from_primitives(primitives).fingerprint(),
         base().fingerprint()

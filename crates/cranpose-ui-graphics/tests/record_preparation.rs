@@ -12,8 +12,8 @@ fn primitive(index: usize) -> DrawPrimitive {
     }
     let brush = if index.is_multiple_of(37) {
         Brush::LinearGradient {
-            colors: vec![Color::RED, Color::BLUE],
-            stops: Some(vec![0.125, 0.875]),
+            colors: vec![Color::RED, Color::BLUE].into(),
+            stops: Some(vec![0.125, 0.875].into()),
             start: Point::new(index as f32, 1.0),
             end: Point::new(2.0, 3.0),
             tile_mode: TileMode::Mirror,

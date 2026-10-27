@@ -1342,53 +1342,7 @@ fn color_with_alpha_multiplier(color: Color, alpha_multiplier: f32) -> Color {
 }
 
 fn brush_with_alpha_multiplier(brush: Brush, alpha_multiplier: f32) -> Brush {
-    match brush {
-        Brush::Solid(color) => Brush::solid(color_with_alpha_multiplier(color, alpha_multiplier)),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => Brush::LinearGradient {
-            colors: colors
-                .into_iter()
-                .map(|color| color_with_alpha_multiplier(color, alpha_multiplier))
-                .collect(),
-            stops,
-            start,
-            end,
-            tile_mode,
-        },
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => Brush::RadialGradient {
-            colors: colors
-                .into_iter()
-                .map(|color| color_with_alpha_multiplier(color, alpha_multiplier))
-                .collect(),
-            stops,
-            center,
-            radius,
-            tile_mode,
-        },
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => Brush::SweepGradient {
-            colors: colors
-                .into_iter()
-                .map(|color| color_with_alpha_multiplier(color, alpha_multiplier))
-                .collect(),
-            stops,
-            center,
-        },
-    }
+    brush.map_colors(|color| color_with_alpha_multiplier(color, alpha_multiplier))
 }
 
 fn decoration_brush_for_span(

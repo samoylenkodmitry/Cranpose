@@ -57,52 +57,9 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
         && layer_scale_x(layer) == 1.0
         && layer_scale_y(layer) == 1.0
     {
-        return map_brush_colors(brush, Color::srgb_8bit);
+        return brush.map_colors(Color::srgb_8bit);
     }
-    map_brush_colors(scale_brush_geometry(brush, layer), |color| {
-        apply_layer_to_color(color, layer)
-    })
-}
-
-fn map_brush_colors(brush: Brush, paint: impl Fn(Color) -> Color) -> Brush {
-    match brush {
-        Brush::Solid(color) => Brush::solid(paint(color)),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => Brush::LinearGradient {
-            colors: colors.into_iter().map(paint).collect(),
-            stops,
-            start,
-            end,
-            tile_mode,
-        },
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => Brush::RadialGradient {
-            colors: colors.into_iter().map(paint).collect(),
-            stops,
-            center,
-            radius,
-            tile_mode,
-        },
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => Brush::SweepGradient {
-            colors: colors.into_iter().map(paint).collect(),
-            stops,
-            center,
-        },
-    }
+    scale_brush_geometry(brush, layer).map_colors(|color| apply_layer_to_color(color, layer))
 }
 
 fn scale_brush_geometry(brush: Brush, layer: &GraphicsLayer) -> Brush {

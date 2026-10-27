@@ -4,7 +4,7 @@ fn red_to_blue() -> Vec<Color> {
     vec![Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)]
 }
 
-fn linear_parts(brush: &Brush) -> (&Vec<Color>, &Option<Vec<f32>>, Point, Point, TileMode) {
+fn linear_parts(brush: &Brush) -> (Vec<Color>, Option<Vec<f32>>, Point, Point, TileMode) {
     match brush {
         Brush::LinearGradient {
             colors,
@@ -12,7 +12,13 @@ fn linear_parts(brush: &Brush) -> (&Vec<Color>, &Option<Vec<f32>>, Point, Point,
             start,
             end,
             tile_mode,
-        } => (colors, stops, *start, *end, *tile_mode),
+        } => (
+            colors.to_vec(),
+            stops.as_deref().map(<[f32]>::to_vec),
+            *start,
+            *end,
+            *tile_mode,
+        ),
         other => panic!("expected LinearGradient, got {other:?}"),
     }
 }
@@ -21,7 +27,7 @@ fn linear_parts(brush: &Brush) -> (&Vec<Color>, &Option<Vec<f32>>, Point, Point,
 fn an_axis_gradient_varies_along_its_own_axis_only() {
     let vertical = Brush::vertical_gradient(red_to_blue(), 10.0, 90.0);
     let (colors, stops, start, end, tile_mode) = linear_parts(&vertical);
-    assert_eq!(colors, &red_to_blue());
+    assert_eq!(colors, red_to_blue());
     assert!(stops.is_none());
     assert_eq!(start, Point { x: 0.0, y: 10.0 });
     assert_eq!(end, Point { x: 0.0, y: 90.0 });
@@ -69,7 +75,7 @@ fn explicit_stops_travel_beside_their_colours() {
 
     let vertical = Brush::vertical_gradient_stops(stops_in.clone(), 0.0, 100.0, TileMode::Clamp);
     let (colors, stops, start, end, _) = linear_parts(&vertical);
-    assert_eq!(colors, &expected_colors);
+    assert_eq!(colors, expected_colors);
     assert_eq!(stops.as_ref(), Some(&expected_positions));
     assert_eq!(start, Point { x: 0.0, y: 0.0 });
     assert_eq!(end, Point { x: 0.0, y: 100.0 });
@@ -77,7 +83,7 @@ fn explicit_stops_travel_beside_their_colours() {
     let horizontal =
         Brush::horizontal_gradient_stops(stops_in.clone(), 0.0, 100.0, TileMode::Clamp);
     let (colors, stops, start, end, _) = linear_parts(&horizontal);
-    assert_eq!(colors, &expected_colors);
+    assert_eq!(colors, expected_colors);
     assert_eq!(stops.as_ref(), Some(&expected_positions));
     assert_eq!(start, Point { x: 0.0, y: 0.0 });
     assert_eq!(end, Point { x: 100.0, y: 0.0 });
@@ -91,8 +97,8 @@ fn explicit_stops_travel_beside_their_colours() {
             radius,
             tile_mode,
         } => {
-            assert_eq!(colors, expected_colors);
-            assert_eq!(stops, Some(expected_positions.clone()));
+            assert_eq!(colors.as_ref(), expected_colors.as_slice());
+            assert_eq!(stops.as_deref(), Some(expected_positions.as_slice()));
             assert_eq!(at, center);
             assert_eq!(radius, 20.0);
             assert_eq!(tile_mode, TileMode::Repeated);
@@ -106,8 +112,8 @@ fn explicit_stops_travel_beside_their_colours() {
             stops,
             center: at,
         } => {
-            assert_eq!(colors, expected_colors);
-            assert_eq!(stops, Some(expected_positions));
+            assert_eq!(colors.as_ref(), expected_colors.as_slice());
+            assert_eq!(stops.as_deref(), Some(expected_positions.as_slice()));
             assert_eq!(at, center);
         }
         other => panic!("expected SweepGradient, got {other:?}"),
@@ -125,7 +131,7 @@ fn a_tiled_radial_gradient_carries_its_tile_mode_and_geometry() {
             radius,
             tile_mode,
         } => {
-            assert_eq!(colors, red_to_blue());
+            assert_eq!(colors.as_ref(), red_to_blue().as_slice());
             assert!(stops.is_none());
             assert_eq!(at, center);
             assert_eq!(radius, 7.5);
@@ -146,7 +152,7 @@ fn sweep_gradient_construction() {
             stops,
             center: p,
         } => {
-            assert_eq!(c, colors);
+            assert_eq!(c.as_ref(), colors.as_slice());
             assert_eq!(p, center);
             assert!(stops.is_none());
         }
@@ -173,7 +179,7 @@ fn vertical_gradient_construction() {
             end,
             tile_mode,
         } => {
-            assert_eq!(c, colors);
+            assert_eq!(c.as_ref(), colors.as_slice());
             assert!(stops.is_none());
             assert_eq!(tile_mode, TileMode::Clamp);
             assert_eq!(start, Point { x: 0.0, y: 24.0 });
@@ -212,8 +218,11 @@ fn gradient_color_stops_are_stored() {
             tile_mode,
             ..
         } => {
-            assert_eq!(colors, vec![Color::RED, Color::GREEN, Color::BLUE]);
-            assert_eq!(stops, Some(vec![0.0, 0.6, 1.0]));
+            assert_eq!(
+                colors.as_ref(),
+                vec![Color::RED, Color::GREEN, Color::BLUE].as_slice()
+            );
+            assert_eq!(stops.as_deref(), Some(vec![0.0, 0.6, 1.0].as_slice()));
             assert_eq!(tile_mode, TileMode::Mirror);
         }
         _ => panic!("expected LinearGradient"),

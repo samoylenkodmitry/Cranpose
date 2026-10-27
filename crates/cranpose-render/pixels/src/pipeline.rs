@@ -339,59 +339,7 @@ fn scale_color_alpha(color: Color, alpha: f32) -> Color {
 }
 
 fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
-    match brush {
-        Brush::Solid(color) => Brush::solid(scale_color_alpha(color, alpha)),
-        Brush::LinearGradient {
-            mut colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => {
-            for color in &mut colors {
-                *color = scale_color_alpha(*color, alpha);
-            }
-            Brush::LinearGradient {
-                colors,
-                stops,
-                start,
-                end,
-                tile_mode,
-            }
-        }
-        Brush::RadialGradient {
-            mut colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => {
-            for color in &mut colors {
-                *color = scale_color_alpha(*color, alpha);
-            }
-            Brush::RadialGradient {
-                colors,
-                stops,
-                center,
-                radius,
-                tile_mode,
-            }
-        }
-        Brush::SweepGradient {
-            mut colors,
-            stops,
-            center,
-        } => {
-            for color in &mut colors {
-                *color = scale_color_alpha(*color, alpha);
-            }
-            Brush::SweepGradient {
-                colors,
-                stops,
-                center,
-            }
-        }
-    }
+    brush.map_colors(|color| scale_color_alpha(color, alpha))
 }
 
 fn push_layer_shadow(

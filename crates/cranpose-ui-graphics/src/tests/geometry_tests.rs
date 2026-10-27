@@ -1428,7 +1428,7 @@ fn invisible_text_draws_nothing() {
     scope.draw_text(Brush::solid(Color(1.0, 1.0, 1.0, 0.0)), "AB", &style);
     scope.draw_text(
         Brush::LinearGradient {
-            colors: Vec::new(),
+            colors: Vec::new().into(),
             stops: None,
             start: Point::ZERO,
             end: Point::new(1.0, 1.0),

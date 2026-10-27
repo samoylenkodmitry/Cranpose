@@ -1,6 +1,10 @@
 //! How a recording hands out the primitives and brushes its tables hold.
 
-use super::*;
+use super::{
+    BRUSH_KIND_RADIAL, BRUSH_KIND_SWEEP, BlendMode, Brush, Color, CornerRadii, DrawPrimitive,
+    GradientLists, GroupMarker, Point, RECORD_KIND_ARC, RECORD_KIND_LINE, RECORD_KIND_ROUND_RECT,
+    RecordLane, RecordSegment, RecordingContent, ShapeRecord, ShapeRecorder, TILE_MODES, row_rect,
+};
 
 // Every primitive of a recording's parts in recorded order, content
 // markers included.
@@ -113,18 +117,9 @@ pub(super) fn brush_of(shapes: &ShapeRecorder, record: &ShapeRecord) -> Brush {
             record.color[3],
         ));
     }
-    let tables = &shapes.tables;
-    let brush = &tables.brushes[record.brush as usize - 1];
-    let colors = tables.stops
-        [brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize]
-        .iter()
-        .map(|stop| Color(stop.color[0], stop.color[1], stop.color[2], stop.color[3]))
-        .collect();
-    let stops = (brush.explicit_len != NO_EXPLICIT_STOPS).then(|| {
-        tables.explicit_stops
-            [brush.explicit_start as usize..(brush.explicit_start + brush.explicit_len) as usize]
-            .to_vec()
-    });
+    let index = record.brush as usize - 1;
+    let brush = &shapes.tables.brushes[index];
+    let GradientLists { colors, stops } = shapes.gradient_lists[index].clone();
     let [a, b, c, d] = brush.params;
     let tile_mode = TILE_MODES[brush.tile_mode as usize];
     match brush.kind {
