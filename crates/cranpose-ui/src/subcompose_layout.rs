@@ -22,6 +22,10 @@ use crate::{
     widgets::nodes::{DescendantDirt, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
+mod subcompose_child;
+
+pub(crate) use subcompose_child::SubcomposeChild;
+
 fn subcompose_telemetry_enabled() -> bool {
     cranpose_core::DIAGNOSTICS.subcompose_telemetry.is_set()
 }
@@ -32,57 +36,6 @@ pub(crate) enum RetainedSlotChildren {
         children: Vec<SubcomposeChild>,
         children_match: bool,
     },
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SubcomposeChild {
-    node_id: NodeId,
-    measured_size: Option<Size>,
-}
-
-impl SubcomposeChild {
-    pub fn new(node_id: NodeId) -> Self {
-        Self {
-            node_id,
-            measured_size: None,
-        }
-    }
-
-    pub fn with_size(node_id: NodeId, size: Size) -> Self {
-        Self {
-            node_id,
-            measured_size: Some(size),
-        }
-    }
-
-    pub fn node_id(&self) -> NodeId {
-        self.node_id
-    }
-
-    pub fn size(&self) -> Size {
-        self.measured_size.unwrap_or(Size {
-            width: 0.0,
-            height: 0.0,
-        })
-    }
-
-    pub fn width(&self) -> f32 {
-        self.size().width
-    }
-
-    pub fn height(&self) -> f32 {
-        self.size().height
-    }
-
-    pub fn set_size(&mut self, size: Size) {
-        self.measured_size = Some(size);
-    }
-}
-
-impl PartialEq for SubcomposeChild {
-    fn eq(&self, other: &Self) -> bool {
-        self.node_id == other.node_id
-    }
 }
 
 pub(crate) type SubcomposePlaceable = cranpose_ui_layout::Placeable;
@@ -565,19 +518,19 @@ impl SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'_> {
 
     fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable {
         if self.error.borrow().is_some() {
-            return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
+            return SubcomposePlaceable::value(0.0, 0.0, child.node_id());
         }
 
         let telemetry_start = subcompose_telemetry_enabled().then(Instant::now);
         if !self.ensure_pending_commands_applied() {
-            return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
+            return SubcomposePlaceable::value(0.0, 0.0, child.node_id());
         }
 
-        let placeable = (self.measurer)(child.node_id, constraints);
+        let placeable = (self.measurer)(child.node_id(), constraints);
         if let Some(start) = telemetry_start {
             log::warn!(
                 "[subcompose-telemetry] child={} measure_ms={:.2} size=({:.2},{:.2})",
-                child.node_id,
+                child.node_id(),
                 start.elapsed().as_secs_f64() * 1000.0,
                 placeable.width(),
                 placeable.height()
@@ -672,7 +625,7 @@ impl SubcomposeMeasureScopeImpl<'_> {
         constraints: Constraints,
     ) -> (SubcomposePlaceable, Option<Rc<MeasuredNode>>) {
         let placeable = self.measure(child, constraints);
-        let retained = (self.retained_measure_lookup)(child.node_id);
+        let retained = (self.retained_measure_lookup)(child.node_id());
         (placeable, retained)
     }
 

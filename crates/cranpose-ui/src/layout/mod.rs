@@ -5,6 +5,7 @@ pub(crate) mod flex_box;
 mod frame_layout_arena;
 pub(crate) mod grid;
 mod measure_telemetry;
+mod placed_root_measurements;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
 mod reveal;
@@ -26,12 +27,13 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
-    SemanticsWidgetRole, lazy::LazyItemRoots,
+    SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
+use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
     SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsPlacement, SemanticsRole,
     SemanticsText, SemanticsTree,
@@ -2219,44 +2221,6 @@ impl LayoutBuilderState {
                     runtime_state.child_measurables(),
                 ),
         }
-    }
-}
-
-/// The measurement of each placement a lazy policy made, in order: see
-/// [`crate::subcompose_layout::SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
-struct PlacedRootMeasurements<'a> {
-    items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
-    /// The measurements of the item being placed, one a root; empty for an
-    /// item that holds none.
-    measured: &'a [Rc<MeasuredNode>],
-    /// The item's next root, and how many roots it has.
-    root: usize,
-    roots: usize,
-}
-
-impl<'a> PlacedRootMeasurements<'a> {
-    fn new(items: &'a [Rc<LazyItemRoots>]) -> Self {
-        Self {
-            items: items.iter(),
-            measured: &[],
-            root: 0,
-            roots: 0,
-        }
-    }
-
-    /// The measurement of the next placement; `None` for a root the item
-    /// holds none for, and once every item is placed.
-    fn next_measurement(&mut self) -> Option<&'a MeasuredNode> {
-        while self.root == self.roots {
-            let item = self.items.next()?;
-            self.measured = crate::widgets::lazy_list::root_measurements(item)
-                .map_or(&[], smallvec::SmallVec::as_slice);
-            self.root = 0;
-            self.roots = item.node_ids.len();
-        }
-        let measured = self.measured.get(self.root);
-        self.root += 1;
-        measured.map(|measured| &**measured)
     }
 }
 

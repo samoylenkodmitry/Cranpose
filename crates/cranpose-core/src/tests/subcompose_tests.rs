@@ -1,5 +1,5 @@
 use super::*;
-use crate::TestRuntime;
+use crate::{TestRuntime, collections::map::HashSet};
 
 #[test]
 fn active_slot_for_node_excludes_reusable_and_unknown_nodes() {
