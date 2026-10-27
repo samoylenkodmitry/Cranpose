@@ -782,10 +782,6 @@ impl RecomposeScope {
             })
         })
     }
-
-    pub(crate) fn has_unknown_invalidation_source(&self) -> bool {
-        self.inner.unknown_invalidation_source.get()
-    }
 }
 
 #[cfg(test)]

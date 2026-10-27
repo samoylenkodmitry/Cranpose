@@ -159,21 +159,12 @@ pub fn current_recompose_scope_invalidated_only_by(
     allowed_sources: impl IntoIterator<Item = StateId>,
 ) -> Option<bool> {
     with_current_composer_opt(|composer| {
-        let allowed_sources = allowed_sources.into_iter().collect();
-        let mut scope = composer.current_recompose_scope();
-        let mut saw_unknown_source = false;
-        while let Some(current) = scope {
-            if current.has_unknown_invalidation_source() {
-                saw_unknown_source = true;
-                scope = current.parent_scope();
-                continue;
-            }
-            if let Some(matches) = current.invalidated_only_by(&allowed_sources) {
-                return Some(matches);
-            }
-            scope = current.parent_scope();
-        }
-        saw_unknown_source.then_some(false)
+        // The bodies that run now run because the restarted scope called
+        // them, with the arguments its body worked out: those come from the
+        // states that invalidated it.
+        composer
+            .restarted_scope()?
+            .invalidated_only_by(&allowed_sources.into_iter().collect())
     })
     .flatten()
 }

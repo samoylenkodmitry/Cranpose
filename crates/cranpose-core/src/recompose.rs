@@ -113,21 +113,25 @@ impl Composer {
             let cursor = RecomposeChildCursor::at_first_root(parent_hint, first_root);
             let previous_hint = self.core.recompose_parent_hint.replace(parent_hint);
             self.core.recompose_child_cursor.set(cursor);
+            let previous_restarted = self.core.restarted_scope.replace(Some(scope.clone()));
             struct HintGuard<'a> {
                 core: &'a ComposerCore,
                 previous: Option<NodeId>,
                 previous_cursor: RecomposeChildCursor,
+                previous_restarted: Option<RecomposeScope>,
             }
             impl Drop for HintGuard<'_> {
                 fn drop(&mut self) {
                     self.core.recompose_parent_hint.set(self.previous);
                     self.core.recompose_child_cursor.set(self.previous_cursor);
+                    *self.core.restarted_scope.borrow_mut() = self.previous_restarted.take();
                 }
             }
             let _hint_guard = HintGuard {
                 core: &self.core,
                 previous: previous_hint,
                 previous_cursor,
+                previous_restarted,
             };
             {
                 let mut stack = self.scope_stack();

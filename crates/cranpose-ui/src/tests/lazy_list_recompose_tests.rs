@@ -1726,3 +1726,45 @@ fn a_row_kept_beyond_the_viewport_keeps_its_composition_and_follows_its_state() 
         "the kept row composed again in its own composition"
     );
 }
+
+#[test]
+fn new_content_from_a_parent_lands_in_a_frame_the_list_also_scrolled() {
+    let _app_context = render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let item_count = MutableState::with_runtime(30usize, runtime);
+    let captured_state = Rc::new(RefCell::new(None));
+    let call_count = Rc::new(Cell::new(0));
+
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, {
+            let captured_state = Rc::clone(&captured_state);
+            let call_count = Rc::clone(&call_count);
+            move || {
+                GrowingLazyList(
+                    item_count,
+                    Rc::clone(&captured_state),
+                    Rc::clone(&call_count),
+                );
+            }
+        })
+        .expect("initial render");
+    let root = composition.root().expect("lazy list root");
+    let viewport = Size {
+        width: 320.0,
+        height: 260.0,
+    };
+    measure_root(&mut composition, root, viewport);
+    let list_state = (*captured_state.borrow()).expect("state captured");
+    assert_eq!(list_state.layout_info().total_items_count, 30);
+
+    list_state.scroll_to_item(5, 0.0);
+    measure_root(&mut composition, root, viewport);
+    item_count.set(40);
+    while composition.process_invalid_scopes().expect("recompose") {}
+    measure_root(&mut composition, root, viewport);
+    let texts = render_texts(&mut composition, root);
+    assert!(texts.iter().any(|text| text == "Count 40"), "{texts:?}");
+    assert_eq!(list_state.layout_info().total_items_count, 40);
+}
