@@ -242,6 +242,19 @@ fn color_at_follows_the_tile_mode_past_the_gradient_end() {
 }
 
 #[test]
+fn a_two_color_gradient_gives_its_end_colors_exactly() {
+    // Channels for which `first + (last - first)` misses `last` in f32.
+    let (first, last) = (Color(0.15, 0.9, 0.5, 1.0), Color(0.95, 0.1, 0.5, 1.0));
+    let rect = Rect::from_size(crate::Size::new(100.0, 10.0));
+    let brush = Brush::horizontal_gradient(vec![first, last], 0.0, 100.0);
+    let at = |x: f32| brush.color_at(rect, Point::new(x, 5.0));
+    assert_eq!(at(-10.0), first);
+    assert_eq!(at(0.0), first);
+    assert_eq!(at(100.0), last);
+    assert_eq!(at(150.0), last);
+}
+
+#[test]
 fn sweep_starts_at_three_o_clock_and_turns_clockwise() {
     let rect = Rect::from_size(crate::Size::new(100.0, 100.0));
     let colors = vec![
