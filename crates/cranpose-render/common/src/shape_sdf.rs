@@ -9,6 +9,8 @@
 
 use cranpose_ui_graphics::{ArcGeometry, CornerRadii, Point, Rect, StrokeCap, StrokeJoin};
 
+mod edge_coverage;
+
 const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
 /// Signed distance to a rounded box centered at the origin.
@@ -232,18 +234,14 @@ pub fn coverage_for_distance(distance: f32) -> f32 {
         return 0.0;
     }
     let t = (distance + 0.5).clamp(0.0, 1.0);
-    // Inside and outside the edge's pixel the smoothstep is exactly 0 or 1:
-    // only the edge needs the f64 steps, which a target without a double
-    // precision unit runs in software.
+    // Inside and outside the edge's pixel the smoothstep is exactly 0 or 1.
     if t <= 0.0 {
         return 1.0;
     }
     if t >= 1.0 {
         return 0.0;
     }
-    let t = f64::from(t);
-    let smooth = t * t * (3.0 - 2.0 * t);
-    (1.0 - smooth) as f32
+    edge_coverage::edge_coverage(t)
 }
 
 /// Coverage of `point` by a stroked rect/round-rect whose (already inflated)
