@@ -585,13 +585,13 @@ fn moving_last_reusable_node_transfers_slot_composition() {
 fn reusable_pool_removal_tolerates_missing_slot_count() {
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state.reusable_nodes_untyped.push_back((slot, NodeId(10)));
+    state.pool.push(None, slot, [NodeId(10)]);
     state.reusable_count = 1;
 
     let removed = state.remove_from_reusable_pools(NodeId(10));
 
     assert_eq!(removed, Some(slot));
-    assert!(state.reusable_nodes_untyped.is_empty());
+    assert_eq!(state.pool.untyped_len(), 0);
     assert_eq!(state.reusable_count, 0);
 }
 
@@ -599,17 +599,13 @@ fn reusable_pool_removal_tolerates_missing_slot_count() {
 fn typed_reusable_pool_removal_tolerates_missing_slot_count() {
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
-    state
-        .reusable_by_type
-        .entry(7)
-        .or_default()
-        .push_back((slot, NodeId(10)));
+    state.pool.push(Some(7), slot, [NodeId(10)]);
     state.reusable_count = 1;
 
     let removed = state.remove_from_reusable_pools(NodeId(10));
 
     assert_eq!(removed, Some(slot));
-    assert!(state.reusable_by_type.is_empty());
+    assert_eq!(state.pool.type_count(), 0);
     assert_eq!(state.reusable_count, 0);
 }
 

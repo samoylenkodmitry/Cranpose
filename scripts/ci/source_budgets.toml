@@ -50,7 +50,6 @@ limit = 1000
 "crates/cranpose-core/src/composer.rs" = 2359
 "crates/cranpose-core/src/runtime.rs" = 1808
 "crates/cranpose-core/src/state.rs" = 2294
-"crates/cranpose-core/src/subcompose.rs" = 1076
 "crates/cranpose-foundation/src/lazy/lazy_list_state.rs" = 1139
 "crates/cranpose-foundation/src/modifier.rs" = 2262
 "crates/cranpose-liquid/src/material.rs" = 2198

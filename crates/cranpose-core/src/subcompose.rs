@@ -6,7 +6,7 @@
 //! exact match exists, the [`SlotReusePolicy`] is consulted to determine whether
 //! a node produced for another slot is compatible with the requested slot.
 
-use std::{any::Any, collections::VecDeque, fmt, rc::Rc};
+use std::{any::Any, fmt, rc::Rc};
 
 use smallvec::SmallVec;
 
@@ -14,8 +14,10 @@ use crate::{
     CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost, collections::map::HashMap,
 };
 
+mod reuse_pool;
 mod slot_reuse_policy;
 
+use reuse_pool::ReusePool;
 pub use slot_reuse_policy::{
     ContentTypeReusePolicy, DefaultSlotReusePolicy, SlotReusePolicy, TypedSlot,
 };
@@ -140,15 +142,12 @@ pub struct SubcomposeState {
     /// The running pass, counted from one: a slot activated in it has it as
     /// its `active_pass`.
     pass: u64,
-    reusable_by_type: HashMap<u64, VecDeque<(SlotId, NodeId)>>,
-    reusable_nodes_untyped: VecDeque<(SlotId, NodeId)>,
+    pool: ReusePool,
     precomposed_nodes: HashMap<SlotId, Vec<NodeId>>,
     policy: Box<dyn SlotReusePolicy>,
     pub(crate) current_index: usize,
     pub(crate) reusable_count: usize,
     pub(crate) precomposed_count: usize,
-    max_reusable_per_type: usize,
-    max_reusable_untyped: usize,
     last_slot_reused: Option<bool>,
     content_generation: std::cell::Cell<u64>,
     /// The content generation from which slots compose under changed
@@ -174,8 +173,8 @@ impl fmt::Debug for SubcomposeState {
             .field("slots_count", &self.slots.len())
             .field("node_to_slot", &self.node_to_slot)
             .field("active_order", &self.active_order)
-            .field("reusable_by_type_count", &self.reusable_by_type.len())
-            .field("reusable_untyped_count", &self.reusable_nodes_untyped.len())
+            .field("reusable_by_type_count", &self.pool.type_count())
+            .field("reusable_untyped_count", &self.pool.untyped_len())
             .field("precomposed_nodes", &self.precomposed_nodes)
             .field("current_index", &self.current_index)
             .field("reusable_count", &self.reusable_count)
@@ -190,10 +189,6 @@ impl Default for SubcomposeState {
     }
 }
 
-const DEFAULT_MAX_REUSABLE_PER_TYPE: usize = 5;
-
-const DEFAULT_MAX_REUSABLE_UNTYPED: usize = 10;
-
 impl SubcomposeState {
     /// Creates a new [`SubcomposeState`] using the supplied reuse policy.
     pub fn new(policy: Box<dyn SlotReusePolicy>) -> Self {
@@ -202,15 +197,12 @@ impl SubcomposeState {
             node_to_slot: HashMap::default(),
             active_order: Vec::new(),
             pass: 1,
-            reusable_by_type: HashMap::default(),
-            reusable_nodes_untyped: VecDeque::new(),
+            pool: ReusePool::new(),
             precomposed_nodes: HashMap::default(),
             policy,
             current_index: 0,
             reusable_count: 0,
             precomposed_count: 0,
-            max_reusable_per_type: DEFAULT_MAX_REUSABLE_PER_TYPE,
-            max_reusable_untyped: DEFAULT_MAX_REUSABLE_UNTYPED,
             last_slot_reused: None,
             content_generation: std::cell::Cell::new(0),
             locals_generation: std::cell::Cell::new(0),
@@ -225,8 +217,7 @@ impl SubcomposeState {
     /// Sets how many composed nodes the reusable pool keeps: `per_type` for each content type and
     /// `untyped` for nodes without one. Nodes over a limit are disposed.
     pub fn set_reusable_pool_limits(&mut self, per_type: usize, untyped: usize) {
-        self.max_reusable_per_type = per_type;
-        self.max_reusable_untyped = untyped;
+        self.pool.set_limits(per_type, untyped);
     }
 
     fn record(&mut self, slot_id: SlotId) -> &mut SlotRecord {
@@ -670,92 +661,22 @@ impl SubcomposeState {
         }
 
         let requested = self.typed_slot(slot_id);
-
-        if let Some(content_type) = requested.content_type
-            && let Some((old_slot, node_id)) =
-                self.take_compatible_typed_reusable(content_type, requested)
-        {
-            self.decrement_reusable_slot(old_slot);
-            self.move_node_to_slot(node_id, old_slot, slot_id);
-            return Some((node_id, true));
-        }
-
-        let slots = &self.slots;
-        let policy = &self.policy;
-        let position = self
-            .reusable_nodes_untyped
-            .iter()
-            .position(|(existing_slot, _)| {
-                reusable_for(slots, policy.as_ref(), *existing_slot, requested)
-            });
-
-        if let Some(index) = position
-            && let Some((old_slot, node_id)) = self.reusable_nodes_untyped.remove(index)
-        {
-            self.decrement_reusable_slot(old_slot);
-            self.move_node_to_slot(node_id, old_slot, slot_id);
-            return Some((node_id, true));
-        }
-
-        None
-    }
-
-    fn take_compatible_typed_reusable(
-        &mut self,
-        content_type: u64,
-        requested: TypedSlot,
-    ) -> Option<(SlotId, NodeId)> {
-        let reused = {
-            let slots = &self.slots;
-            let policy = &self.policy;
-            let pool = self.reusable_by_type.get_mut(&content_type)?;
-            let index = pool.iter().position(|(existing_slot, _)| {
-                reusable_for(slots, policy.as_ref(), *existing_slot, requested)
-            })?;
-            pool.remove(index)
-        };
-
-        if self
-            .reusable_by_type
-            .get(&content_type)
-            .is_some_and(VecDeque::is_empty)
-        {
-            self.reusable_by_type.remove(&content_type);
-        }
-
-        reused
+        let (pool, slots, policy) = (&mut self.pool, &self.slots, &self.policy);
+        let accepts = |existing| reusable_for(slots, policy.as_ref(), existing, requested);
+        // A typed slot falls back to the untyped queue.
+        let (old_slot, node_id) = requested
+            .content_type
+            .and_then(|content_type| pool.take(Some(content_type), accepts))
+            .or_else(|| pool.take(None, accepts))?;
+        self.decrement_reusable_slot(old_slot);
+        self.move_node_to_slot(node_id, old_slot, slot_id);
+        Some((node_id, true))
     }
 
     fn remove_from_reusable_pools(&mut self, node_id: NodeId) -> Option<SlotId> {
-        let mut typed_match = None;
-        for (&content_type, pool) in &self.reusable_by_type {
-            if let Some(position) = pool
-                .iter()
-                .position(|(_, pooled_node)| *pooled_node == node_id)
-            {
-                typed_match = Some((content_type, position));
-                break;
-            }
-        }
-        if let Some((content_type, position)) = typed_match {
-            let pool = self.reusable_by_type.get_mut(&content_type)?;
-            let (slot, _) = pool.remove(position)?;
-            if pool.is_empty() {
-                self.reusable_by_type.remove(&content_type);
-            }
-            self.decrement_reusable_slot(slot);
-            return Some(slot);
-        }
-        if let Some(position) = self
-            .reusable_nodes_untyped
-            .iter()
-            .position(|(_, n)| *n == node_id)
-            && let Some((slot, _)) = self.reusable_nodes_untyped.remove(position)
-        {
-            self.decrement_reusable_slot(slot);
-            return Some(slot);
-        }
-        None
+        let slot = self.pool.remove_node(node_id)?;
+        self.decrement_reusable_slot(slot);
+        Some(slot)
     }
 
     fn move_node_to_slot(&mut self, node_id: NodeId, old_slot: SlotId, new_slot: SlotId) {
@@ -801,7 +722,7 @@ impl SubcomposeState {
 
     /// Moves active slots starting from `start_index` to the reusable bucket.
     /// Returns the list of node ids that were DISPOSED (not just moved to reusable).
-    /// Nodes that exceed max_reusable_per_type are disposed instead of cached.
+    /// Nodes past the pool's limits are disposed instead of cached.
     pub fn dispose_or_reuse_starting_from_index(
         &mut self,
         start_index: usize,
@@ -847,34 +768,14 @@ impl SubcomposeState {
         let nodes = record.nodes.as_deref().unwrap_or_default();
         record.reusable_nodes += nodes.len();
         self.reusable_count += nodes.len();
-        let pool = match content_type {
-            Some(content_type) => self.reusable_by_type.entry(content_type).or_default(),
-            None => &mut self.reusable_nodes_untyped,
-        };
-        pool.extend(nodes.iter().map(|&node| (slot, node)));
+        self.pool.push(content_type, slot, nodes.iter().copied());
     }
 
     fn enforce_reusable_pool_limits(&mut self) -> SubcomposeDisposal {
         let mut disposed = SubcomposeDisposal::default();
-        let mut typed_disposals = Vec::new();
-        for pool in self.reusable_by_type.values_mut() {
-            while pool.len() > self.max_reusable_per_type {
-                if let Some((slot, node_id)) = pool.pop_front() {
-                    typed_disposals.push((slot, node_id));
-                }
-            }
-        }
-        for (slot, node_id) in typed_disposals {
+        for (slot, node_id) in self.pool.take_excess() {
             self.dispose_reusable_node(slot, node_id, &mut disposed);
         }
-
-        while self.reusable_nodes_untyped.len() > self.max_reusable_untyped {
-            if let Some((slot, node_id)) = self.reusable_nodes_untyped.pop_front() {
-                self.dispose_reusable_node(slot, node_id, &mut disposed);
-            }
-        }
-
-        self.reusable_by_type.retain(|_, pool| !pool.is_empty());
         disposed
     }
 
@@ -894,13 +795,7 @@ impl SubcomposeState {
 
     /// Returns a snapshot of currently reusable nodes.
     pub fn reusable(&self) -> Vec<NodeId> {
-        let mut nodes: Vec<NodeId> = self
-            .reusable_by_type
-            .values()
-            .flat_map(|pool| pool.iter().map(|(_, n)| *n))
-            .collect();
-        nodes.extend(self.reusable_nodes_untyped.iter().map(|(_, n)| *n));
-        nodes
+        self.pool.nodes().collect()
     }
 
     /// Returns the number of slots currently active (in use during this pass).
