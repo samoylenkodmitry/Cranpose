@@ -101,7 +101,7 @@ pub trait PresentObserver: Send {
 use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
-use frontend::{DevOverlayCache, RendererFrontend};
+use frontend::RendererFrontend;
 pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
 pub use gpu_target::GpuTarget;
 pub use initial_present::{clear_to_background, clear_to_default_background};
@@ -1280,15 +1280,7 @@ impl Renderer for WgpuRenderer {
         const DEV_OVERLAY_NODE_ID: NodeId = NodeId(usize::MAX);
         let key = cranpose_render_common::dev_overlay::DevOverlayKey::new(text, viewport);
         if self.frontend.dev_overlay_graph.is_some()
-            && self
-                .frontend
-                .dev_overlay_cache
-                .as_ref()
-                .is_some_and(|cache| {
-                    cache.text == key.text
-                        && cache.viewport_width_bits == key.viewport_width_bits
-                        && cache.viewport_height_bits == key.viewport_height_bits
-                })
+            && self.frontend.dev_overlay_cache.as_ref() == Some(&key)
         {
             return;
         }
@@ -1299,12 +1291,12 @@ impl Renderer for WgpuRenderer {
                 DEV_OVERLAY_NODE_ID,
             ),
         );
-        self.frontend.dev_overlay_cache = Some(DevOverlayCache {
-            text: key.text,
-            viewport_width_bits: key.viewport_width_bits,
-            viewport_height_bits: key.viewport_height_bits,
-        });
+        self.frontend.dev_overlay_cache = Some(key);
         self.frontend.refresh_dev_overlay();
+    }
+
+    fn note_held_still(&mut self) {
+        self.frontend.held_still = true;
     }
 
     fn set_inspector_overlay(&mut self, graph: Option<RenderGraph>) {

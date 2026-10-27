@@ -4,6 +4,7 @@
 mod focus_reveal;
 mod fps_monitor;
 mod frame_rate_boost;
+mod frame_scheduler;
 mod hit_path_tracker;
 pub mod inspector;
 mod modal_focus;
@@ -18,7 +19,7 @@ mod surface;
 mod touch_router;
 mod wheel;
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     fmt::{Debug, Write},
     rc::Rc,
 };
@@ -44,6 +45,7 @@ pub use cranpose_ui::{Key, KeyEvent, KeyEventType, NativeKeyEvent};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
 pub use frame_rate_boost::FrameRateBoost;
+pub use frame_scheduler::FrameScheduler;
 use shell_frame::Composed;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
@@ -408,42 +410,6 @@ pub trait PlatformFrameDriver {
     fn request_wake_at(&self, deadline: Instant);
     /// Cancels the wake requested by `request_wake_at`.
     fn clear_wake(&self);
-}
-
-/// Stores the latest [`FrameSchedule`] of a surface for the platform code that drives it. A
-/// surface lives on its shell's thread, so the schedule sits in a `Cell`: on ESP-IDF a `Mutex`
-/// is a FreeRTOS mutex, which every frame took.
-#[derive(Debug, Default)]
-pub struct FrameScheduler {
-    latest: Cell<FrameSchedule>,
-}
-
-impl FrameScheduler {
-    /// Stores `schedule` as the latest one. A schedule that needs an update drops its deadline.
-    pub fn record(&self, schedule: FrameSchedule) {
-        self.latest.set(FrameSchedule {
-            next_deadline: if schedule.needs_update {
-                None
-            } else {
-                schedule.next_deadline
-            },
-            ..schedule
-        });
-    }
-
-    /// Stores `schedule` and asks `driver` for the frame or wake it calls for.
-    pub fn schedule<D>(&self, schedule: FrameSchedule, driver: &D)
-    where
-        D: PlatformFrameDriver + ?Sized,
-    {
-        self.record(schedule);
-        schedule.apply_to(driver);
-    }
-
-    /// Returns the latest stored schedule.
-    pub fn snapshot(&self) -> FrameSchedule {
-        self.latest.get()
-    }
 }
 
 impl FrameSchedule {

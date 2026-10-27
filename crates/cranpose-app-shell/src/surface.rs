@@ -222,6 +222,14 @@ impl<R: Renderer> RootSurface<R> {
             && self.hit_path_tracker.has_path(PointerId::PRIMARY)
     }
 
+    // Tells the renderer when the app held still since the surface's last
+    // frame, before the next frame builds its scene.
+    pub(crate) fn pass_on_held_still(&mut self) {
+        if self.frame_scheduler.take_held_still() {
+            self.renderer.note_held_still();
+        }
+    }
+
     pub(crate) fn renderer_warmup_due(&self, app: &ShellApp) -> bool {
         self.renderer.needs_frame_warmup() && !app.composition.runtime().has_frame_callbacks()
     }

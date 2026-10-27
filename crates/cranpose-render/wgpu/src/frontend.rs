@@ -1,6 +1,8 @@
 use std::rc::Weak;
 
-use cranpose_render_common::{graph::RenderGraph, software_text_raster::SoftwareTextFontSet};
+use cranpose_render_common::{
+    dev_overlay::DevOverlayKey, graph::RenderGraph, software_text_raster::SoftwareTextFontSet,
+};
 use web_time::Instant;
 
 use crate::{
@@ -11,13 +13,6 @@ use crate::{
     text_system::TextSystemState,
 };
 
-#[derive(Clone, Debug)]
-pub(crate) struct DevOverlayCache {
-    pub(crate) text: String,
-    pub(crate) viewport_width_bits: u32,
-    pub(crate) viewport_height_bits: u32,
-}
-
 /// The producer side of a frame: owns the scene graph and the text layout
 /// state, and collects each frame into the packet the present stage draws.
 pub(crate) struct RendererFrontend {
@@ -26,7 +21,7 @@ pub(crate) struct RendererFrontend {
     pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) app_context: Option<Weak<cranpose_ui::AppContext>>,
     pub(crate) root_scale: f32,
-    pub(crate) dev_overlay_cache: Option<DevOverlayCache>,
+    pub(crate) dev_overlay_cache: Option<DevOverlayKey>,
     pub(crate) dev_overlay_graph: Option<RenderGraph>,
     pub(crate) fps_overlay_graph: Option<RenderGraph>,
     pub(crate) inspector_overlay_graph: Option<RenderGraph>,
@@ -36,6 +31,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) transparent_background: bool,
+    // Whether the app held still since the last packet; the next one says so.
+    pub(crate) held_still: bool,
 }
 
 impl RendererFrontend {
@@ -77,6 +74,7 @@ impl RendererFrontend {
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             transparent_background: false,
+            held_still: false,
         }
     }
 
@@ -170,6 +168,7 @@ impl RendererFrontend {
             root,
             overlay,
             clear: frame_clear_color(self.transparent_background),
+            held_still: std::mem::take(&mut self.held_still),
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {

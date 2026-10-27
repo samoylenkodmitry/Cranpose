@@ -76,6 +76,9 @@ enum Scene {
     /// Five spots far apart changing colour, one more than the rects a
     /// frame's damage keeps apart.
     FiveSpots,
+    // The page moving for `MOVES` steps, then a shape changing colour over
+    // the page held still.
+    MovedThenStill,
 }
 
 /// A caret near the bottom, far from the spinner.
@@ -112,6 +115,11 @@ const COPY_HOLD_OFF: u32 = 64;
 /// next compares with, then the small changes before the renderer keeps a
 /// copy, the last of which it copies.
 const CLEARED_START_FRAMES: u32 = COPY_HOLD_OFF + 1 + COPY_AFTER;
+
+// The steps `Scene::MovedThenStill` moves the page: enough frames in a row
+// that change most of the window for the back-off to skip 64 frames, on a
+// swapchain too, whose first frames take no summary.
+const MOVES: u32 = 40;
 
 /// The step at which the pane of [`Scene::GlassOnce`] shows: after a
 /// swapchain frame drew a part of the window.
@@ -220,10 +228,10 @@ fn Card(index: usize) {
 
 #[composable]
 fn Cards(scene: Scene, step: MutableState<u32>) {
-    let shift = if scene == Scene::MovedPage {
-        step.get() as f32
-    } else {
-        0.0
+    let shift = match scene {
+        Scene::MovedPage => step.get() as f32,
+        Scene::MovedThenStill => step.get().min(MOVES) as f32,
+        _ => 0.0,
     };
     Column(
         Modifier::empty().offset(4.0, 4.0 - shift),
@@ -300,7 +308,8 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::UnderBlur
         | Scene::UnderBlurUnderBlur
         | Scene::UnderLiquidGlass
-        | Scene::GlassOnce => spot().background(shade(step.get())),
+        | Scene::GlassOnce
+        | Scene::MovedThenStill => spot().background(shade(step.get())),
         Scene::Arc => arc_drawn_again(SPOT, step, 30.0),
         Scene::Gradient => spot().draw_behind(move |scope| gradient(scope, step.get())),
         Scene::Star => spot().draw_behind(move |scope| growing_star(scope, step.get())),
@@ -1403,4 +1412,40 @@ fn an_overlay_appearing_and_going() {
         "a frame that changes nothing reports no damage, not {damage:?}"
     );
     support::assert_same_bytes("still frame", WIDTH, &drawn, &whole);
+}
+
+// Frames that keep changing most of the window make a target skip comparing
+// for a while, and frames in a row keep skipping. Once the app held still, as
+// a TV does between presses of its remote, the next frame summarizes again and
+// the one after it draws a part.
+#[test]
+fn a_pause_ends_the_frames_that_skip_comparing() {
+    for keeper in [Keeper::Composition, Keeper::Swapchain(DIRECT)] {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::MovedThenStill, 1.0, keeper);
+        for step in 1..=MOVES {
+            harness.frame(step);
+        }
+        let in_a_row = [MOVES + 1, MOVES + 2].map(|step| harness.frame(step).stats.damage);
+        assert_eq!(
+            in_a_row,
+            [FrameDamage::Skipped; 2],
+            "{keeper:?}: frames in a row after the moves keep skipping"
+        );
+        let schedule = harness.shell.frame_schedule();
+        assert!(
+            !schedule.needs_frame && !schedule.needs_update,
+            "{keeper:?}: the app holds still, {schedule:?}"
+        );
+        assert_eq!(
+            harness.frame(MOVES + 3).stats.damage,
+            FrameDamage::Full,
+            "{keeper:?}: the frame after the pause summarizes"
+        );
+        let label = format!("{keeper:?}, the second frame after the pause");
+        let after = harness.frame(MOVES + 4).stats;
+        assert_within(&label, after.damage, Scene::MovedThenStill.reach());
+    }
 }
