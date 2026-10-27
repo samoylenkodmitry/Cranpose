@@ -82,21 +82,72 @@ type OwnerLink = Cell<Option<(OwnerKind, Weak<RecomposeScopeInner>)>>;
 /// applier's nodes, which never reach it.
 const NO_PARENT_HINT: NodeId = NodeId(usize::MAX);
 
+// A scope's yes-or-no states. Each takes a bit of `ScopeFlags`.
+#[derive(Clone, Copy)]
+enum ScopeFlag {
+    Invalid,
+    Enqueued,
+    Active,
+    ComposedOnce,
+    PendingRecompose,
+    // The recompose callback is running: it is out of `recompose` meanwhile,
+    // and the scope still recomposes what reads in it.
+    Recomposing,
+    ForceReuse,
+    ForceRecompose,
+    Derivation,
+    // Something other than a state invalidated the scope.
+    UnknownInvalidationSource,
+}
+
+impl ScopeFlag {
+    const fn bit(self) -> u16 {
+        match self {
+            Self::Invalid => 1,
+            Self::Enqueued => 1 << 1,
+            Self::Active => 1 << 2,
+            Self::ComposedOnce => 1 << 3,
+            Self::PendingRecompose => 1 << 4,
+            Self::Recomposing => 1 << 5,
+            Self::ForceReuse => 1 << 6,
+            Self::ForceRecompose => 1 << 7,
+            Self::Derivation => 1 << 8,
+            Self::UnknownInvalidationSource => 1 << 9,
+        }
+    }
+}
+
+// A scope's flags in one cell, a bit each: a `Cell<bool>` each would take a
+// byte of every scope.
+struct ScopeFlags(Cell<u16>);
+
+impl ScopeFlags {
+    fn get(&self, flag: ScopeFlag) -> bool {
+        self.0.get() & flag.bit() != 0
+    }
+
+    fn set(&self, flag: ScopeFlag, on: bool) {
+        let bits = self.0.get();
+        self.0.set(if on {
+            bits | flag.bit()
+        } else {
+            bits & !flag.bit()
+        });
+    }
+
+    // Sets `flag` and says whether it was set.
+    fn replace(&self, flag: ScopeFlag, on: bool) -> bool {
+        let was = self.get(flag);
+        self.set(flag, on);
+        was
+    }
+}
+
 pub(crate) struct RecomposeScopeInner {
     runtime: runtime::ScopeRuntime,
-    invalid: Cell<bool>,
-    enqueued: Cell<bool>,
-    active: Cell<bool>,
+    flags: ScopeFlags,
     active_epoch: Cell<u64>,
     deactivations: Cell<u64>,
-    composed_once: Cell<bool>,
-    pending_recompose: Cell<bool>,
-    /// The recompose callback is running: it is out of `recompose` meanwhile,
-    /// and the scope still recomposes what reads in it.
-    recomposing: Cell<bool>,
-    force_reuse: Cell<bool>,
-    force_recompose: Cell<bool>,
-    derivation: Cell<bool>,
     retention_mode: Cell<RetentionMode>,
     /// [`NO_PARENT_HINT`] for none.
     parent_hint: Cell<NodeId>,
@@ -114,13 +165,12 @@ pub(crate) struct RecomposeScopeInner {
     /// read order.
     state_subscriptions: RefCell<StateIds>,
     /// What the body running now read so far, once it left the order of
-    /// `state_subscriptions`.
-    run_reads: RefCell<StateIds>,
+    /// `state_subscriptions`: none while it reads in order.
+    run_reads: Cell<Option<Box<StateIds>>>,
     /// How many subscriptions the body running now read in order, or
     /// [`DIVERGED`] or [`NOT_READING`].
     read_cursor: Cell<u32>,
     invalidation_sources: Cell<StateIds>,
-    unknown_invalidation_source: Cell<bool>,
 }
 
 type StateIds = SmallVec<[StateId; 2]>;
@@ -163,7 +213,7 @@ impl RecomposeScopeInner {
         if self.active_epoch.get() == epoch {
             return true;
         }
-        if !self.active.get() {
+        if !self.flags.get(ScopeFlag::Active) {
             return false;
         }
         let active = match self.owner() {
@@ -181,17 +231,9 @@ impl RecomposeScopeInner {
         runtime.increment_live_recompose_scope_count();
         Self {
             runtime,
-            invalid: Cell::new(false),
-            enqueued: Cell::new(false),
-            active: Cell::new(true),
+            flags: ScopeFlags(Cell::new(ScopeFlag::Active.bit())),
             active_epoch: Cell::new(0),
             deactivations: Cell::new(0),
-            composed_once: Cell::new(false),
-            pending_recompose: Cell::new(false),
-            recomposing: Cell::new(false),
-            force_reuse: Cell::new(false),
-            force_recompose: Cell::new(false),
-            derivation: Cell::new(false),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(NO_PARENT_HINT),
             group_anchor: Cell::new(AnchorId::INVALID),
@@ -205,10 +247,9 @@ impl RecomposeScopeInner {
             slots_storage_key: Cell::new(0),
             slots_runtime_state: Cell::new(None),
             state_subscriptions: RefCell::new(StateIds::new()),
-            run_reads: RefCell::new(StateIds::new()),
+            run_reads: Cell::new(None),
             read_cursor: Cell::new(NOT_READING),
             invalidation_sources: Cell::new(StateIds::new()),
-            unknown_invalidation_source: Cell::new(false),
         }
     }
 
@@ -229,8 +270,11 @@ impl Drop for RecomposeScopeInner {
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
-        let run_reads = std::mem::take(self.run_reads.get_mut());
-        for state_id in subscriptions.into_iter().chain(run_reads) {
+        let run_reads = self.run_reads.take().map(|reads| *reads);
+        for state_id in subscriptions
+            .into_iter()
+            .chain(run_reads.into_iter().flatten())
+        {
             self.runtime.unregister_state_scope(state_id, id);
         }
         #[cfg(debug_assertions)]
@@ -240,7 +284,7 @@ impl Drop for RecomposeScopeInner {
                 state.scope_invalidation_sources.borrow_mut().remove(&id);
             });
         }
-        if self.enqueued.replace(false) {
+        if self.flags.replace(ScopeFlag::Enqueued, false) {
             self.runtime.mark_scope_recomposed();
         }
     }
@@ -281,11 +325,11 @@ impl RecomposeScope {
     /// it changes nothing a composition shows unless the value it writes
     /// invalidates the scopes that read it.
     pub(crate) fn mark_derivation(&self) {
-        self.inner.derivation.set(true);
+        self.inner.flags.set(ScopeFlag::Derivation, true);
     }
 
     pub(crate) fn is_derivation(&self) -> bool {
-        self.inner.derivation.get()
+        self.inner.flags.get(ScopeFlag::Derivation)
     }
 
     pub(crate) fn new(runtime: RuntimeHandle) -> Self {
@@ -309,16 +353,16 @@ impl RecomposeScope {
 
     /// Returns `true` if state that the scope read has changed since it last recomposed.
     pub fn is_invalid(&self) -> bool {
-        self.inner.invalid.get()
+        self.inner.flags.get(ScopeFlag::Invalid)
     }
 
     pub(crate) fn is_enqueued(&self) -> bool {
-        self.inner.enqueued.get()
+        self.inner.flags.get(ScopeFlag::Enqueued)
     }
 
     /// Returns `false` between `deactivate` and `reactivate`.
     pub fn is_active(&self) -> bool {
-        self.inner.active.get()
+        self.inner.flags.get(ScopeFlag::Active)
     }
 
     /// Total deactivations along this scope's owner chain. A retained slot
@@ -362,10 +406,13 @@ impl RecomposeScope {
             return ScopeRead::NotReading;
         }
         if cursor == DIVERGED {
-            let mut reads = self.inner.run_reads.borrow_mut();
-            if reads.last() != Some(&state_id) {
-                reads.push(state_id);
-            }
+            update_cell(&self.inner.run_reads, |reads| {
+                if let Some(reads) = reads
+                    && reads.last() != Some(&state_id)
+                {
+                    reads.push(state_id);
+                }
+            });
             return ScopeRead::Collected;
         }
         let at = cursor as usize;
@@ -377,10 +424,9 @@ impl RecomposeScope {
         if at > 0 && subscribed[at - 1] == state_id {
             return ScopeRead::Watched;
         }
-        let mut reads = self.inner.run_reads.borrow_mut();
-        reads.clear();
-        reads.extend_from_slice(&subscribed[..at]);
+        let mut reads = StateIds::from_slice(&subscribed[..at]);
         reads.push(state_id);
+        self.inner.run_reads.set(Some(Box::new(reads)));
         self.inner.read_cursor.set(DIVERGED);
         ScopeRead::Collected
     }
@@ -425,29 +471,32 @@ impl RecomposeScope {
             }
             return;
         }
-        let mut reads = self.inner.run_reads.borrow_mut();
+        let Some(reads) = self.inner.run_reads.take() else {
+            return;
+        };
         if ran {
             for &state_id in subscribed.iter() {
                 if !reads.contains(&state_id) {
                     self.inner.runtime.forget_state_scope(state_id, id);
                 }
             }
-            std::mem::swap(&mut *reads, &mut *subscribed);
-            reads.clear();
+            *subscribed = *reads;
         } else {
-            for state_id in reads.drain(..) {
+            for state_id in *reads {
                 push_unique_state_id(&mut subscribed, state_id);
             }
         }
     }
 
     fn record_unknown_invalidation_source(&self) {
-        self.inner.unknown_invalidation_source.set(true);
+        self.inner
+            .flags
+            .set(ScopeFlag::UnknownInvalidationSource, true);
         update_cell(&self.inner.invalidation_sources, StateIds::clear);
     }
 
     fn record_state_invalidation_source(&self, state_id: StateId) {
-        if !self.inner.unknown_invalidation_source.get() {
+        if !self.inner.flags.get(ScopeFlag::UnknownInvalidationSource) {
             update_cell(&self.inner.invalidation_sources, |ids| {
                 push_unique_state_id(ids, state_id);
             });
@@ -455,11 +504,11 @@ impl RecomposeScope {
     }
 
     fn enqueue_invalidation(&self) {
-        self.inner.invalid.set(true);
+        self.inner.flags.set(ScopeFlag::Invalid, true);
         if !self.is_effectively_active() {
             return;
         }
-        if !self.inner.enqueued.replace(true) {
+        if !self.inner.flags.replace(ScopeFlag::Enqueued, true) {
             self.inner.runtime.register_invalid_scope(self.downgrade());
         }
     }
@@ -477,21 +526,23 @@ impl RecomposeScope {
     pub(crate) fn mark_recomposed(&self) {
         // An invalidation notes its source and sets `invalid` together, so a
         // scope nothing invalidated has no source to forget.
-        if self.inner.invalid.replace(false) {
-            self.inner.unknown_invalidation_source.set(false);
+        if self.inner.flags.replace(ScopeFlag::Invalid, false) {
+            self.inner
+                .flags
+                .set(ScopeFlag::UnknownInvalidationSource, false);
             update_cell(&self.inner.invalidation_sources, StateIds::clear);
         }
-        self.inner.force_reuse.set(false);
-        self.inner.force_recompose.set(false);
-        if self.inner.enqueued.replace(false) {
+        self.inner.flags.set(ScopeFlag::ForceReuse, false);
+        self.inner.flags.set(ScopeFlag::ForceRecompose, false);
+        if self.inner.flags.replace(ScopeFlag::Enqueued, false) {
             self.inner.runtime.mark_scope_recomposed();
         }
-        let pending = self.inner.pending_recompose.replace(false);
+        let pending = self.inner.flags.replace(ScopeFlag::PendingRecompose, false);
         if pending {
-            if self.inner.active.get() {
+            if self.inner.flags.get(ScopeFlag::Active) {
                 self.invalidate();
             } else {
-                self.inner.invalid.set(true);
+                self.inner.flags.set(ScopeFlag::Invalid, true);
             }
         }
     }
@@ -546,9 +597,9 @@ impl RecomposeScope {
             return false;
         };
         self.begin_reads();
-        self.inner.recomposing.set(true);
+        self.inner.flags.set(ScopeFlag::Recomposing, true);
         (callback.body)(composer);
-        self.inner.recomposing.set(false);
+        self.inner.flags.set(ScopeFlag::Recomposing, false);
         self.end_reads(BodyRun::Ran);
         // The body may have stored a new callback for the scope while it ran.
         update_cell(&self.inner.recompose, |slot| {
@@ -560,7 +611,8 @@ impl RecomposeScope {
     }
 
     pub(crate) fn has_recompose_callback(&self) -> bool {
-        self.inner.recomposing.get() || read_cell(&self.inner.recompose, Option::is_some)
+        self.inner.flags.get(ScopeFlag::Recomposing)
+            || read_cell(&self.inner.recompose, Option::is_some)
     }
 
     /// How many scopes this one composes under.
@@ -695,20 +747,20 @@ impl RecomposeScope {
     /// Marks the scope inactive, as when its content is retained or held for reuse. An inactive
     /// scope is not queued for recomposition until it is reactivated.
     pub fn deactivate(&self) {
-        if !self.inner.active.replace(false) {
+        if !self.inner.flags.replace(ScopeFlag::Active, false) {
             return;
         }
         note_scope_activity_change();
         self.inner
             .deactivations
             .set(self.inner.deactivations.get() + 1);
-        if self.inner.enqueued.replace(false) {
+        if self.inner.flags.replace(ScopeFlag::Enqueued, false) {
             self.inner.runtime.mark_scope_recomposed();
         }
     }
 
     pub(crate) fn defer_until_reactivated(&self) {
-        if self.inner.enqueued.replace(false) {
+        if self.inner.flags.replace(ScopeFlag::Enqueued, false) {
             self.inner.runtime.mark_scope_recomposed();
         }
     }
@@ -716,10 +768,10 @@ impl RecomposeScope {
     /// Marks the scope active again and queues it for recomposition if it was invalidated while
     /// inactive.
     pub fn reactivate(&self) {
-        self.inner.active.set(true);
-        if self.inner.invalid.get()
+        self.inner.flags.set(ScopeFlag::Active, true);
+        if self.inner.flags.get(ScopeFlag::Invalid)
             && self.is_effectively_active()
-            && !self.inner.enqueued.replace(true)
+            && !self.inner.flags.replace(ScopeFlag::Enqueued, true)
         {
             self.inner.runtime.register_invalid_scope(self.downgrade());
         }
@@ -728,21 +780,21 @@ impl RecomposeScope {
     /// Makes the next `should_recompose` return `false` even if the scope is invalid. Cancels a
     /// pending `force_recompose`.
     pub fn force_reuse(&self) {
-        self.inner.force_reuse.set(true);
-        self.inner.force_recompose.set(false);
-        self.inner.pending_recompose.set(true);
+        self.inner.flags.set(ScopeFlag::ForceReuse, true);
+        self.inner.flags.set(ScopeFlag::ForceRecompose, false);
+        self.inner.flags.set(ScopeFlag::PendingRecompose, true);
     }
 
     pub(crate) fn request_pending_recompose(&self) {
-        self.inner.pending_recompose.set(true);
+        self.inner.flags.set(ScopeFlag::PendingRecompose, true);
     }
 
     /// Makes the next `should_recompose` return `true` even if the scope is not invalid. Cancels a
     /// pending `force_reuse`.
     pub fn force_recompose(&self) {
-        self.inner.force_recompose.set(true);
-        self.inner.force_reuse.set(false);
-        self.inner.pending_recompose.set(false);
+        self.inner.flags.set(ScopeFlag::ForceRecompose, true);
+        self.inner.flags.set(ScopeFlag::ForceReuse, false);
+        self.inner.flags.set(ScopeFlag::PendingRecompose, false);
     }
 
     pub(crate) fn set_retention_mode(&self, mode: RetentionMode) {
@@ -757,11 +809,11 @@ impl RecomposeScope {
     /// the scope is invalid, and `false` after `force_reuse`. A forced answer is used up by the
     /// call.
     pub fn should_recompose(&self) -> bool {
-        if self.inner.force_recompose.replace(false) {
-            self.inner.force_reuse.set(false);
+        if self.inner.flags.replace(ScopeFlag::ForceRecompose, false) {
+            self.inner.flags.set(ScopeFlag::ForceReuse, false);
             return true;
         }
-        if self.inner.force_reuse.replace(false) {
+        if self.inner.flags.replace(ScopeFlag::ForceReuse, false) {
             return false;
         }
         self.is_invalid()
@@ -769,23 +821,23 @@ impl RecomposeScope {
 
     /// Returns `true` once the scope has composed its content at least once.
     pub fn has_composed_once(&self) -> bool {
-        self.inner.composed_once.get()
+        self.inner.flags.get(ScopeFlag::ComposedOnce)
     }
 
     pub(crate) fn mark_composed_once(&self) {
-        self.inner.composed_once.set(true);
+        self.inner.flags.set(ScopeFlag::ComposedOnce, true);
     }
 
     // Whether a change of the state `state_id` alone invalidated the scope.
     pub(crate) fn invalidated_only_by_state(&self, state_id: StateId) -> bool {
-        !self.inner.unknown_invalidation_source.get()
+        !self.inner.flags.get(ScopeFlag::UnknownInvalidationSource)
             && read_cell(&self.inner.invalidation_sources, |sources| {
                 !sources.is_empty() && sources.iter().all(|source| *source == state_id)
             })
     }
 
     pub(crate) fn invalidated_only_by(&self, allowed_sources: &HashSet<StateId>) -> Option<bool> {
-        if self.inner.unknown_invalidation_source.get() {
+        if self.inner.flags.get(ScopeFlag::UnknownInvalidationSource) {
             return None;
         }
         read_cell(&self.inner.invalidation_sources, |sources| {
