@@ -10,8 +10,8 @@
 // texture. Images draw their own vertices through it; turned glyphs, shadows
 // and layer composites lay triangles here while their pipelines compile. It
 // draws what theirs draw, except that a rounded clip cuts as its scissor, a
-// shadow's falloff is taken at the corners of a grid, and a tilted layer's
-// texels follow its corners without perspective. A draw that blends other
+// shadow's falloff runs straight from its edge to its umbra, and a tilted
+// layer's texels follow its corners without perspective. A draw that blends other
 // than source-over waits for its own pipeline. Each draw counts as a
 // stand-in, so the frame after its pipeline lands draws it exactly.
 
@@ -293,6 +293,8 @@ pub(crate) struct InstantTriangles {
     turned_glyphs: Option<u32>,
     // The lines of a shadow part's grid across and down.
     grid: (Vec<f32>, Vec<f32>),
+    // Whether a pass of the frame laid any.
+    laid: bool,
 }
 
 // The pass's instant triangles on the GPU, and where its turned glyphs
@@ -382,12 +384,19 @@ impl InstantGlyphs<'_> {
     }
 }
 
-// Ramp steps a shadow's grid takes across each falloff: the falloff is
-// smooth, and four linear steps keep within a few levels of it.
-const SHADOW_RAMP_STEPS: usize = 4;
-
 impl InstantTriangles {
+    // Opens a frame. Triangles are laid only while pipelines compile, so the
+    // storage left by a frame that laid none is freed: the first frames of a
+    // launch lay a grid for every shadow on screen.
+    pub(crate) fn begin_frame(&mut self) {
+        if !std::mem::take(&mut self.laid) && self.indices.is_empty() {
+            *self = Self::default();
+        }
+    }
+
+    // Empties the triangles for the next pass of the frame.
     pub(crate) fn clear(&mut self) {
+        self.laid |= !self.indices.is_empty();
         self.vertices.clear();
         self.indices.clear();
         self.turned_glyphs = None;
@@ -495,9 +504,8 @@ impl InstantTriangles {
     }
 
     // Lays the shadow parts `parts` gives, each a rect of the shadow it
-    // falls in and that shadow's colour: a grid over the rect, its lines at
-    // the rect's edges, through each falloff and at the hole's edges, each
-    // corner taking the shadow's coverage there.
+    // falls in and that shadow's colour: a grid over the rect (see
+    // `grid_lines`), each corner taking the shadow's coverage there.
     pub(crate) fn lay_shadows(
         &mut self,
         parts: impl Iterator<Item = ([f32; 4], ShadowRRect, [f32; 4])>,
@@ -607,8 +615,11 @@ fn index(count: usize) -> u32 {
 }
 
 // The grid lines across `span` of a shadow part that spans `edges` of its
-// shadow: the span's ends, and the lines within it at each falloff's steps,
-// `umbra` deep, and at the hole, `hole` in from the edges when it has one.
+// shadow: the span's ends, and the lines within it at the edges, at the
+// umbra, `umbra` in from them, and at the hole, `hole` in when it has one.
+// Each falloff runs straight between edge and umbra: on a card's elevation
+// shadow within 4 levels of the shadow pipeline's curve, where four steps
+// across it took five times the vertices.
 fn grid_lines(
     lines: &mut Vec<f32>,
     span: (f32, f32),
@@ -617,10 +628,7 @@ fn grid_lines(
 ) {
     lines.clear();
     lines.extend([span.0, span.1]);
-    for step in 0..=SHADOW_RAMP_STEPS {
-        let depth = umbra * step as f32 / SHADOW_RAMP_STEPS as f32;
-        lines.extend([edges.0 + depth, edges.1 - depth]);
-    }
+    lines.extend([edges.0, edges.0 + umbra, edges.1 - umbra, edges.1]);
     if hole >= 0.0 {
         lines.extend([edges.0 + hole, edges.1 - hole]);
     }

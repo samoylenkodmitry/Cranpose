@@ -23,6 +23,18 @@ const HEIGHT: u32 = 96;
 // straight ones rounds differently.
 const ROUNDING: u8 = 2;
 
+// Levels a pixel of an instant shadow may differ by: its falloff runs
+// straight from its edge to its umbra, where the shadow pipeline's curves.
+const FALLOFF: u8 = 4;
+
+// Where the lifted card's elevation shadow reaches.
+const LIFT_SHADOW: Rect = Rect {
+    x: 96.0,
+    y: 0.0,
+    width: 64.0,
+    height: 44.0,
+};
+
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {
         x,
@@ -158,20 +170,31 @@ fn capture(
 }
 
 // Asserts `first` drew every draw, some through the instant pipelines, and
-// shows within `levels` of `landed`, the frame once their own landed.
-fn assert_stood_in(first: (&[u8], RenderStatsSnapshot), landed: &[u8], levels: u8) {
+// shows within ROUNDING of `landed`, the frame once their own landed, and
+// within FALLOFF where `shadows` reach.
+fn assert_stood_in(first: (&[u8], RenderStatsSnapshot), landed: &[u8], shadows: Option<Rect>) {
     let (pixels, stats) = first;
     assert!(
         stats.instant_draws > 0,
         "the frame stands in for draws whose pipelines compile: {stats:?}"
     );
     assert_eq!(stats.placeholder_draws, 0, "no draw is left out: {stats:?}");
-    let apart = support::pixels_differing_beyond(WIDTH, pixels, landed, levels);
-    assert!(
-        apart.is_empty(),
-        "the instant draws differ from their own pipelines': {}",
-        support::describe_differing(&apart)
-    );
+    let shadowed = |x: usize, y: usize| {
+        shadows.is_some_and(|reach| {
+            let (x, y) = (x as f32, y as f32);
+            x >= reach.x && x < reach.x + reach.width && y >= reach.y && y < reach.y + reach.height
+        })
+    };
+    let mut apart = support::pixels_differing_beyond(WIDTH, pixels, landed, ROUNDING);
+    apart.retain(|&(x, y, _, _)| !shadowed(x, y));
+    let shadow_apart = support::pixels_differing_beyond(WIDTH, pixels, landed, FALLOFF);
+    for apart in [apart, shadow_apart] {
+        assert!(
+            apart.is_empty(),
+            "the instant draws differ from their own pipelines': {}",
+            support::describe_differing(&apart)
+        );
+    }
 }
 
 // The first frame of `graph` on a renderer `before` prepared, once its
@@ -194,7 +217,7 @@ fn first_and_landed(
 fn a_first_frame_draws_images_through_the_instant_pipeline() {
     // The instant tier builds while an app composes its first screen.
     let ((first, stats), landed) = first_and_landed(|_| {}, &page(vec![images()]));
-    assert_stood_in((&first, stats), &landed, ROUNDING);
+    assert_stood_in((&first, stats), &landed, None);
 }
 
 #[test]
@@ -213,5 +236,5 @@ fn a_pass_laying_interiors_first_draws_new_content_through_the_instant_pipeline(
         stats.depth_passes > 0,
         "the new content draws in a pass laying interiors first: {stats:?}"
     );
-    assert_stood_in((&first, stats), &landed, ROUNDING);
+    assert_stood_in((&first, stats), &landed, Some(LIFT_SHADOW));
 }

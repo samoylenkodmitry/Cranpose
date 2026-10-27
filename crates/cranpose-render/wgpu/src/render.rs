@@ -2009,7 +2009,7 @@ impl GpuRenderer {
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.text.begin_text_glyph_run_frame();
-        self.pass_scratch.meshes.begin_frame();
+        self.pass_scratch.begin_frame();
 
         let reads_page = packet.root.contains_backdrop()
             || packet

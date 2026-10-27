@@ -10,7 +10,7 @@ use crate::{
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
-    instant_triangles::{InstantDraw, InstantStandIn, InstantTriangles, LayerTexels},
+    instant_triangles::{InstantDraw, InstantStandIn, LayerTexels},
     lazy_resource::Pending,
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
@@ -36,9 +36,11 @@ use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
+mod pass_scratch;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
+pub(crate) use pass_scratch::PassScratch;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
 /// A render target and its size in pixels.
@@ -779,68 +781,6 @@ impl PassBuffers {
                 chunks: meshes.builder.chunks(),
                 buffers,
             })
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct PassScratch {
-    pub(crate) images: crate::render::ImageBatch,
-    pub(crate) glyph_instances: crate::render::GlyphInstances,
-    glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
-    /// Where a glyph batch's draws of one kind wait while it groups them.
-    glyph_moved: Vec<crate::render::GlyphDrawCmd>,
-    shadow_instances: Vec<ShadowInstance>,
-    arena_draws: Vec<RunDrawCall>,
-    pipelines: PipelineDemand,
-    held: HeldDraws,
-    pub(crate) meshes: crate::mesh_fallback::PassMeshes,
-    instant: InstantTriangles,
-}
-
-/// Where the image draws an item appends start in a pass's scratch.
-#[derive(Clone, Copy)]
-struct ImageMark {
-    vertices: usize,
-    clips: usize,
-    cmds: usize,
-}
-
-impl PassScratch {
-    fn image_mark(&self) -> ImageMark {
-        ImageMark {
-            vertices: self.images.vertices.len(),
-            clips: self.images.clips.len(),
-            cmds: self.images.cmds.len(),
-        }
-    }
-
-    /// Moves the image draws appended since `mark` into a member's binding
-    /// space and keeps them within its slot; a segment of its own keeps
-    /// them as they are.
-    fn place_images(&mut self, mark: ImageMark, run: &SegmentRun<'_, '_>) {
-        if let Some(slot) = run.slot {
-            crate::render::place_image_draws(
-                (
-                    &mut self.images.vertices[mark.vertices..],
-                    &mut self.images.clips[mark.clips..],
-                    &mut self.images.cmds[mark.cmds..],
-                ),
-                run.shift,
-                slot,
-            );
-        }
-    }
-
-    /// Moves the glyph quads appended from `instances` on, for the glyph
-    /// commands from `cmds` on, into a member's binding space and keeps
-    /// the commands within its slot.
-    fn place_glyphs(&mut self, (instances, cmds): (usize, usize), run: &SegmentRun<'_, '_>) {
-        if let Some(slot) = run.slot {
-            self.glyph_instances.shift_plain(instances, run.shift);
-            for cmd in &mut self.glyph_cmds[cmds..] {
-                cmd.confine(slot);
-            }
-        }
     }
 }
 
