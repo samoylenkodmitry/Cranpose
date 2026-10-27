@@ -1,13 +1,18 @@
-use cranpose_foundation::lazy::{LazyListState, LazySettlePolicy};
+use cranpose_foundation::{
+    BringIntoViewSpec,
+    lazy::{LazyListState, LazySettlePolicy},
+};
 use cranpose_ui_layout::Axis;
 
 use crate::bring_into_view_spec::current_bring_into_view_spec;
 
-/// What a screen reader learns about a lazy list. The list has no whole
-/// extent to give, so the first visible item stands in for the position, a
-/// half step marks a list scrolled part way into that item, and one more step
-/// stays ahead while the list can still scroll forward. A reader needs only
-/// the two answers: can it page back, can it page on.
+// What a screen reader learns about a lazy list. The list has no whole
+// extent to give, so the first visible item stands in for the position, a
+// half step marks a list scrolled part way into that item, and one more step
+// stays ahead while the list can still scroll forward. A reader needs only
+// the two answers: can it page back, can it page on. A list that rests by a
+// settle policy, as a pager, brings a child in by the least move, which its
+// settle rounds to whole items: a child it shows whole never turns a page.
 pub(crate) fn lazy_scroll_semantics(
     state: LazyListState,
     axis: Axis,
@@ -24,6 +29,11 @@ pub(crate) fn lazy_scroll_semantics(
             value + 1.0
         } else {
             value
+        };
+        let spec = if state.settle_policy().is_some() {
+            BringIntoViewSpec::Default
+        } else {
+            spec
         };
         let range = cranpose_foundation::ScrollAxisRange::new(value, max_value, reverse_scrolling)
             .with_content_padding(content_padding.0, content_padding.1)
@@ -56,10 +66,12 @@ pub(crate) fn lazy_scroll_semantics(
     }
 }
 
-/// Moves a list whose scroll comes to rest by a settle policy `delta` along
-/// its items, and on to where the policy rests the item that reaches the
-/// start, as a release there would. A reader's page of a pager turns one
-/// page.
+// Moves a list whose scroll comes to rest by a settle policy `delta` along
+// its items, rounded on to the next whole item in its direction, and rests
+// that item where the policy rests an item that reaches the start. A
+// reader's page of a pager turns one page, and a reveal of a child half on
+// the next page turns to that page, as Compose's `PagerBringIntoViewSpec`
+// rounds a pager's reveal to whole pages.
 fn settle_reader_scroll(state: &LazyListState, policy: &LazySettlePolicy, delta: f32) -> bool {
     let can_move = if delta > 0.0 {
         state.can_scroll_forward_non_reactive()
@@ -74,8 +86,19 @@ fn settle_reader_scroll(state: &LazyListState, policy: &LazySettlePolicy, delta:
     let reached =
         (first * size + state.first_visible_item_scroll_offset_non_reactive() + delta).max(0.0);
     let last = state.total_items_count().saturating_sub(1) as f32;
-    let index = (reached / size).floor().min(last);
-    let target = policy(reached - index * size, 0.0);
+    // Half a pixel short of an item's start counts as reaching it.
+    let items = reached / size;
+    let tolerance = 0.5 / size;
+    let index = if delta > 0.0 {
+        (items - tolerance).ceil()
+    } else {
+        (items + tolerance).floor()
+    };
+    let index = index.min(last);
+    // The policy takes and gives offsets from the start of the first visible
+    // item.
+    let from_first = (index - first) * size;
+    let target = policy(from_first, 0.0) - from_first;
     crate::AnimateScroll::animate_scroll_to_item(state, index as usize, target);
     true
 }
