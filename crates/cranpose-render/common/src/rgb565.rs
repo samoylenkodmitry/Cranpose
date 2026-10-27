@@ -1,7 +1,7 @@
 //! Pixels of 16 bits, 5 of red, 6 of green and 5 of blue, as most small
 //! displays take them, stored in either byte order.
 
-use crate::software_text_raster::blend_byte_pixel;
+use crate::byte_blend::blend_byte_pixel;
 
 /// A 16-bit pixel stored with its low byte first.
 #[repr(transparent)]

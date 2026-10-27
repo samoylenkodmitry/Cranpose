@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
 use cranpose_render_common::{
+    byte_blend::blend_byte_pixel,
     graph::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
         RenderNode,
     },
-    software_text_raster::blend_byte_pixel,
 };
 use cranpose_ui::{Brush, text::TextMotion};
 use cranpose_ui_graphics::Color;
