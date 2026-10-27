@@ -194,14 +194,16 @@ fn a_row_that_changes_in_the_frame_the_list_scrolls_shows_its_new_text_and_size(
     screen.scroll_to(1, 6.0);
     let texts = screen.texts();
 
-    let top = |row: &str| {
-        texts.iter().find(|(value, _)| value == row).map_or_else(
-            || panic!("{row} is on the screen, got {texts:?}"),
-            |(_, top)| *top,
-        )
-    };
-    assert_eq!(top("Row 3 grown"), 2.0 * ROW_HEIGHT - 6.0);
-    assert_eq!(top("Row 4"), top("Row 3 grown") + ROW_HEIGHT + 16.0);
+    let row_3_top = 2.0 * ROW_HEIGHT - 6.0;
+    for row in [
+        ("Row 3 grown".to_owned(), row_3_top),
+        ("Row 4".to_owned(), row_3_top + ROW_HEIGHT + 16.0),
+    ] {
+        assert!(
+            texts.contains(&row),
+            "{row:?} is on the screen, got {texts:?}"
+        );
+    }
 }
 
 #[test]
