@@ -7,13 +7,14 @@ use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegis
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, MAX_FLING_VELOCITY, ModifierNode, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D,
-    velocity_tracker::ASSUME_STOPPED_MS,
+    lazy::LazyListState, velocity_tracker::ASSUME_STOPPED_MS,
 };
 use cranpose_ui_layout::Axis;
 use web_time::Instant;
 
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
 use crate::{
+    bring_into_view_spec::current_bring_into_view_spec,
     draggable::{DraggableState, ScrollableState},
     fling_animation::{
         FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
@@ -24,6 +25,7 @@ use crate::{
         ScrollElement, ScrollMotionContext, ScrollMotionContextKey, ScrollSettlePolicy,
         ScrollState, scroll_motion_context_for_key,
     },
+    scroll_semantics::lazy_scroll_semantics,
 };
 
 /// Returns the velocity of the last fling that started in the current app context, in dp per
@@ -1861,13 +1863,15 @@ fn scroll_semantics(
     reverse_scrolling: bool,
     content_padding: (f32, f32),
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
+    let spec = current_bring_into_view_spec();
     move |config| {
         let range = cranpose_foundation::ScrollAxisRange::new(
             state.value(),
             state.max_value(),
             reverse_scrolling,
         )
-        .with_content_padding(content_padding.0, content_padding.1);
+        .with_content_padding(content_padding.0, content_padding.1)
+        .with_bring_into_view_spec(spec);
         if axis.is_vertical() {
             config.vertical_scroll = Some(range);
         } else {
@@ -1881,10 +1885,6 @@ fn scroll_semantics(
         ));
     }
 }
-
-use cranpose_foundation::lazy::LazyListState;
-
-use crate::scroll_semantics::lazy_scroll_semantics;
 
 fn lazy_scroll_impl(
     state: LazyListState,

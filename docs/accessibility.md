@@ -94,8 +94,10 @@ manager, which walks the focus targets in layout order. `FocusDirection::Up`,
 `Down`, `Left` and `Right` pick the nearest target in that direction, measured
 on the laid-out rectangles.
 
-When focus changes, scroll containers reveal the target with the smallest
-necessary movement. This applies to keyboard and programmatic focus, horizontal
+When focus changes, scroll containers reveal the target where their
+`local_bring_into_view_spec()` puts it: by default with the smallest necessary
+movement, and on a TV 30% into the container on every move, as Compose's pivot
+spec does. This applies to keyboard and programmatic focus, horizontal
 and reverse scrolling, and focus traversal through lazy lists. Subsequent manual
 scrolling is preserved until focus changes again. A lazy list keeps the target
 out of its content padding, where a floating bar may cover it; a target taller

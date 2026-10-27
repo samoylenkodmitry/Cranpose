@@ -1,6 +1,7 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod bring_into_view_spec;
 pub mod gesture_constants;
 pub mod lazy;
 pub mod modifier;
@@ -10,6 +11,7 @@ pub mod nodes;
 pub mod text;
 pub mod velocity_tracker;
 
+pub use bring_into_view_spec::BringIntoViewSpec;
 pub use gesture_constants::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, MINIMUM_TOUCH_TARGET_SIZE};
 pub use modifier::*;
 pub use nodes::input::{

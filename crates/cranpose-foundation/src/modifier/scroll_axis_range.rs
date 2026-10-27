@@ -1,3 +1,5 @@
+use crate::BringIntoViewSpec;
+
 /// How far a container has scrolled along one axis and how far it can go.
 ///
 /// This is Compose's `ScrollAxisRange` (`verticalScrollAxisRange`,
@@ -10,6 +12,8 @@
 /// content padding at its top and bottom (or left and right) edges, in layout
 /// pixels. Content scrolls under that padding, where a bar may cover it, so a
 /// control a reader or the keyboard moves to is brought in past it.
+/// `bring_into_view_spec` says where in the space between the paddings that
+/// control comes to rest.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollAxisRange {
     /// The current scroll position, in layout pixels. A lazy list reports the index of its first
@@ -24,11 +28,14 @@ pub struct ScrollAxisRange {
     pub content_padding_start: f32,
     /// The content padding at the end edge of the container, in layout pixels.
     pub content_padding_end: f32,
+    /// Where the container puts a child that takes focus or that a reader
+    /// moves to.
+    pub bring_into_view_spec: BringIntoViewSpec,
 }
 
 impl ScrollAxisRange {
     /// Creates a range for a container at scroll offset `value` that reaches at most `max_value`,
-    /// with no content padding.
+    /// with no content padding and the default [`BringIntoViewSpec`].
     pub fn new(value: f32, max_value: f32, reverse: bool) -> Self {
         Self {
             value,
@@ -36,6 +43,7 @@ impl ScrollAxisRange {
             reverse,
             content_padding_start: 0.0,
             content_padding_end: 0.0,
+            bring_into_view_spec: BringIntoViewSpec::Default,
         }
     }
 
@@ -45,6 +53,14 @@ impl ScrollAxisRange {
         Self {
             content_padding_start: start,
             content_padding_end: end,
+            ..self
+        }
+    }
+
+    /// The same range with the container's [`BringIntoViewSpec`].
+    pub fn with_bring_into_view_spec(self, bring_into_view_spec: BringIntoViewSpec) -> Self {
+        Self {
+            bring_into_view_spec,
             ..self
         }
     }

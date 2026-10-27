@@ -1,6 +1,8 @@
 use cranpose_foundation::lazy::{LazyListState, LazySettlePolicy};
 use cranpose_ui_layout::Axis;
 
+use crate::bring_into_view_spec::current_bring_into_view_spec;
+
 /// What a screen reader learns about a lazy list. The list has no whole
 /// extent to give, so the first visible item stands in for the position, a
 /// half step marks a list scrolled part way into that item, and one more step
@@ -12,6 +14,7 @@ pub(crate) fn lazy_scroll_semantics(
     reverse_scrolling: bool,
     content_padding: (f32, f32),
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
+    let spec = current_bring_into_view_spec();
     move |config| {
         let mut value = state.first_visible_item_index() as f32;
         if state.first_visible_item_scroll_offset() > 0.0 {
@@ -23,7 +26,8 @@ pub(crate) fn lazy_scroll_semantics(
             value
         };
         let range = cranpose_foundation::ScrollAxisRange::new(value, max_value, reverse_scrolling)
-            .with_content_padding(content_padding.0, content_padding.1);
+            .with_content_padding(content_padding.0, content_padding.1)
+            .with_bring_into_view_spec(spec);
         let count = state.total_items_count();
         config.collection = Some(cranpose_foundation::CollectionInfo {
             rows: if axis.is_vertical() { count } else { 1 },
