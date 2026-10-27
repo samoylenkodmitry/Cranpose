@@ -16,17 +16,35 @@ const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// `radii` is ordered exactly like the WGSL `vec4`: top-left, top-right,
 /// bottom-left, bottom-right.
 pub fn sdf_rounded_rect(p: Point, half_size: (f32, f32), radii: [f32; 4]) -> f32 {
-    let radius = match (p.x > 0.0, p.y > 0.0) {
-        (false, false) => radii[0],
-        (true, false) => radii[1],
-        (false, true) => radii[2],
-        (true, true) => radii[3],
-    };
-    let qx = p.x.abs() - half_size.0 + radius;
-    let qy = p.y.abs() - half_size.1 + radius;
-    let inside = qx.max(qy).min(0.0);
-    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
-    inside + outside - radius
+    let reach = RoundedReach::at(p, half_size, radii);
+    reach.inside + reach.outside_squared.sqrt() - reach.radius
+}
+
+// The parts of `sdf_rounded_rect`'s distance at a point: the distance inside
+// the box, the square of the distance outside it and the radius of the
+// corner whose quarter holds the point.
+struct RoundedReach {
+    inside: f32,
+    outside_squared: f32,
+    radius: f32,
+}
+
+impl RoundedReach {
+    fn at(p: Point, half_size: (f32, f32), radii: [f32; 4]) -> Self {
+        let radius = match (p.x > 0.0, p.y > 0.0) {
+            (false, false) => radii[0],
+            (true, false) => radii[1],
+            (false, true) => radii[2],
+            (true, true) => radii[3],
+        };
+        let qx = p.x.abs() - half_size.0 + radius;
+        let qy = p.y.abs() - half_size.1 + radius;
+        Self {
+            inside: qx.max(qy).min(0.0),
+            outside_squared: qx.max(0.0).powi(2) + qy.max(0.0).powi(2),
+            radius,
+        }
+    }
 }
 
 /// Signed distance to the outline of a rounded box stroked with a centered
@@ -41,37 +59,102 @@ pub fn sdf_stroked_rounded_rect(
     half_width: f32,
     join: StrokeJoin,
 ) -> f32 {
-    let hw = half_width.max(0.0);
-    let geom = ((half_size.0 - hw).max(0.0), (half_size.1 - hw).max(0.0));
+    StrokedBox::new(Point::ZERO, half_size, radii, half_width, join).distance(p)
+}
 
-    let mut outer_radii = [radii[0] + hw, radii[1] + hw, radii[2] + hw, radii[3] + hw];
-    if join != StrokeJoin::Round {
-        for (out, r) in outer_radii.iter_mut().zip(radii.iter()) {
-            if *r < 0.0001 {
-                *out = 0.0;
+/// The band a stroke covers around a rounded box, with the sizes and radii
+/// of its two edges worked out once, for the distances of many points.
+pub struct StrokedBox {
+    center: Point,
+    outer: ((f32, f32), [f32; 4]),
+    inner: ((f32, f32), [f32; 4]),
+    // Where a bevel join cuts each corner, along |x| + |y|.
+    bevel: Option<f32>,
+}
+
+impl StrokedBox {
+    /// The band [`sdf_stroked_rounded_rect`] measures, around a box centred
+    /// on `center`.
+    pub fn new(
+        center: Point,
+        half_size: (f32, f32),
+        radii: [f32; 4],
+        half_width: f32,
+        join: StrokeJoin,
+    ) -> Self {
+        let hw = half_width.max(0.0);
+        let geom = ((half_size.0 - hw).max(0.0), (half_size.1 - hw).max(0.0));
+
+        let mut outer_radii = [radii[0] + hw, radii[1] + hw, radii[2] + hw, radii[3] + hw];
+        if join != StrokeJoin::Round {
+            for (out, r) in outer_radii.iter_mut().zip(radii.iter()) {
+                if *r < 0.0001 {
+                    *out = 0.0;
+                }
             }
         }
+        let inner_radii = [
+            (radii[0] - hw).max(0.0),
+            (radii[1] - hw).max(0.0),
+            (radii[2] - hw).max(0.0),
+            (radii[3] - hw).max(0.0),
+        ];
+        Self {
+            center,
+            outer: ((geom.0 + hw, geom.1 + hw), outer_radii),
+            inner: (
+                ((geom.0 - hw).max(0.0), (geom.1 - hw).max(0.0)),
+                inner_radii,
+            ),
+            bevel: (join == StrokeJoin::Bevel).then_some(geom.0 + geom.1 + hw),
+        }
     }
-    let inner_radii = [
-        (radii[0] - hw).max(0.0),
-        (radii[1] - hw).max(0.0),
-        (radii[2] - hw).max(0.0),
-        (radii[3] - hw).max(0.0),
-    ];
 
-    let outer = sdf_rounded_rect(p, (geom.0 + hw, geom.1 + hw), outer_radii);
-    let inner = sdf_rounded_rect(
-        p,
-        ((geom.0 - hw).max(0.0), (geom.1 - hw).max(0.0)),
-        inner_radii,
-    );
-    let mut dist = outer.max(-inner);
-
-    if join == StrokeJoin::Bevel {
-        let chamfer = (p.x.abs() + p.y.abs() - (geom.0 + geom.1 + hw)) * INV_SQRT2;
-        dist = dist.max(chamfer);
+    /// The band of the stroke [`stroked_rect_coverage`] covers.
+    pub fn of_rect(
+        rect: Rect,
+        radii: Option<CornerRadii>,
+        half_width: f32,
+        join: StrokeJoin,
+    ) -> Self {
+        let half_size = (rect.width * 0.5, rect.height * 0.5);
+        let radii = radii.unwrap_or_default();
+        Self::new(
+            Point::new(rect.x + half_size.0, rect.y + half_size.1),
+            half_size,
+            [
+                radii.top_left,
+                radii.top_right,
+                radii.bottom_left,
+                radii.bottom_right,
+            ],
+            half_width,
+            join,
+        )
     }
-    dist
+
+    /// The signed distance from `point` to the edge of the band.
+    pub fn distance(&self, point: Point) -> f32 {
+        let p = Point::new(point.x - self.center.x, point.y - self.center.y);
+        let outer = RoundedReach::at(p, self.outer.0, self.outer.1);
+        let inner = RoundedReach::at(p, self.inner.0, self.inner.1);
+        let outer_outside = outer.outside_squared.sqrt();
+        // Unless a corner's radius is under the band's half width, its two
+        // edges' circles share a centre, and the point lies as far outside
+        // both boxes: one root serves both. Equal bits give an equal root.
+        let inner_outside = if inner.outside_squared.to_bits() == outer.outside_squared.to_bits() {
+            outer_outside
+        } else {
+            inner.outside_squared.sqrt()
+        };
+        let mut dist = (outer.inside + outer_outside - outer.radius)
+            .max(-(inner.inside + inner_outside - inner.radius));
+        if let Some(cut) = self.bevel {
+            let chamfer = (p.x.abs() + p.y.abs() - cut) * INV_SQRT2;
+            dist = dist.max(chamfer);
+        }
+        dist
+    }
 }
 
 /// Signed distance to a circular band limited to an angular sweep — the shape
@@ -172,36 +255,7 @@ pub fn stroked_rect_coverage(
     half_width: f32,
     join: StrokeJoin,
 ) -> f32 {
-    coverage_for_distance(stroked_rect_distance(point, rect, radii, half_width, join))
-}
-
-/// The signed distance from `point` to the edge of the stroke
-/// [`stroked_rect_coverage`] covers.
-pub fn stroked_rect_distance(
-    point: Point,
-    rect: Rect,
-    radii: Option<CornerRadii>,
-    half_width: f32,
-    join: StrokeJoin,
-) -> f32 {
-    let half_size = (rect.width * 0.5, rect.height * 0.5);
-    let local = Point::new(
-        point.x - (rect.x + half_size.0),
-        point.y - (rect.y + half_size.1),
-    );
-    let radii = radii.unwrap_or_default();
-    sdf_stroked_rounded_rect(
-        local,
-        half_size,
-        [
-            radii.top_left,
-            radii.top_right,
-            radii.bottom_left,
-            radii.bottom_right,
-        ],
-        half_width,
-        join,
-    )
+    coverage_for_distance(StrokedBox::of_rect(rect, radii, half_width, join).distance(point))
 }
 
 /// Coverage of `point` by an arc band.
