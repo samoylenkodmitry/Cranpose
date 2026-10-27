@@ -31,6 +31,8 @@ pub(crate) mod host_surface;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod idle_prefetch;
 #[cfg(target_arch = "wasm32")]
+mod keys;
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod lifecycle;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod media;

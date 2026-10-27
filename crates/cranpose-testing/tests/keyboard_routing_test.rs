@@ -236,10 +236,11 @@ fn focused_control_activation_runs_between_preview_and_bubble() {
     });
     focus.request_focus().expect("focus button");
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Spacebar, " ")));
+    assert!(shell.on_key_event(&KeyEvent::key_up(Key::Spacebar)));
     assert_eq!(
         *log.borrow(),
-        ["preview", "activate"],
-        "button consumes activation before bubbling"
+        ["preview", "preview", "activate"],
+        "the press and the click it makes on release run between preview and bubble"
     );
     log.borrow_mut().clear();
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));

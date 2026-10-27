@@ -6,8 +6,10 @@ use cranpose_testing::robot::{RobotTestRule, TestRenderer};
 use cranpose_ui::{Key, KeyEvent};
 use desktop_app::app::{combined_app_with_initial_tab, DemoTab};
 
+// A whole key press, down and up, as a remote sends it.
 fn press(robot: &mut RobotTestRule<TestRenderer>, key: Key) -> bool {
     let taken = robot.shell_mut().on_key_event(&KeyEvent::key_down(key, ""));
+    robot.shell_mut().on_key_event(&KeyEvent::key_up(key));
     robot.wait_for_idle();
     taken
 }

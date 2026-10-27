@@ -54,3 +54,24 @@ fn numpad_enter_is_its_own_key_and_unmapped_codes_are_unknown() {
     assert_eq!(Key::from_dom_code("keya"), Key::Unknown);
     assert_eq!(Key::from_dom_code(""), Key::Unknown);
 }
+
+#[test]
+fn a_tv_browser_remote_reads_by_code_then_key_value_then_back_key_code() {
+    assert_eq!(
+        Key::from_dom_event("ArrowUp", "ArrowUp", 38),
+        Key::DirectionUp
+    );
+    assert_eq!(Key::from_dom_event("", "GoBack", 0), Key::Back);
+    assert_eq!(Key::from_dom_event("", "XF86Back", 10009), Key::Back);
+    assert_eq!(
+        Key::from_dom_event("", "", 461),
+        Key::Back,
+        "webOS sends only the code"
+    );
+    assert_eq!(
+        Key::from_dom_event("", "MediaPlayPause", 0),
+        Key::MediaPlayPause
+    );
+    assert_eq!(Key::from_dom_event("", "ColorF0Red", 0), Key::ProgramRed);
+    assert_eq!(Key::from_dom_event("", "Unidentified", 0), Key::Unknown);
+}

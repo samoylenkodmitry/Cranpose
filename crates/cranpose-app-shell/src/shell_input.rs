@@ -3,11 +3,10 @@ use cranpose_ui::FocusDirection;
 use super::*;
 
 mod dispatch_stop;
-mod key_activation;
+pub(crate) mod key_activation;
 mod key_navigation;
 
 use dispatch_stop::Stop;
-use key_activation::{ActivationTarget, activation_input, activation_target};
 
 impl<R> SurfaceMut<'_, R>
 where
@@ -232,62 +231,6 @@ where
         } else {
             false
         }
-    }
-
-    /// Activates the identified control using its current semantics and geometry.
-    ///
-    /// Hidden, disabled, removed and modal-background controls reject activation.
-    /// `canvas_key` identifies a drawn child of `node_id`. The action bypasses
-    /// overlapping controls and developer overlays without changing pointer capture.
-    pub fn accessibility_activate(&mut self, node_id: NodeId, canvas_key: Option<u64>) -> bool {
-        let event_time = self.shell.app.realtime_pointer_event_time(None);
-        let _event_handler = enter_event_handler_scope();
-        let result = {
-            let _app_context = self.shell.app.app_context.enter_scope();
-            run_in_mutable_snapshot(|| self.activate_node(node_id, canvas_key, event_time))
-                .unwrap_or(false)
-        };
-        if result {
-            self.mark_dirty();
-        }
-        result
-    }
-
-    fn activate_node(
-        &mut self,
-        node_id: NodeId,
-        canvas_key: Option<u64>,
-        event_time: PointerEventTime,
-    ) -> bool {
-        let target = {
-            let (app, surface) = self.parts();
-            surface
-                .semantics_tree_for_input(app)
-                .and_then(|tree| activation_target(tree.root(), node_id, canvas_key))
-        };
-        let (target_id, canvas_bounds) = match target {
-            Some(ActivationTarget::Direct(action)) => {
-                action.invoke();
-                return true;
-            }
-            Some(ActivationTarget::Edit(node_id)) => {
-                self.activate();
-                return cranpose_ui::request_focus_from_platform(node_id);
-            }
-            Some(ActivationTarget::Pointer(node_id, bounds)) => (node_id, bounds),
-            None => return false,
-        };
-        let position =
-            self.with_layout_tree(|tree| activation_input(tree?.root(), target_id, canvas_bounds));
-        let Some((position, local, handlers)) = position else {
-            return false;
-        };
-        for kind in [PointerEventKind::Down, PointerEventKind::Up] {
-            let event = self.pointer_event(kind, local, position, event_time);
-            handlers.dispatch_pointer_event(event.clone());
-            event.finish_post_dispatch();
-        }
-        true
     }
 
     /// Presses the primary pointer button at the position set by `set_cursor`. Returns `true` when

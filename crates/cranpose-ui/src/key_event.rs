@@ -353,6 +353,37 @@ const DOM_KEY_CODES: [(&str, Key); 93] = [
     ("MediaRecord", Key::MediaRecord),
 ];
 
+// W3C `KeyboardEvent.key` values of the keys a TV remote sends, which TV
+// browsers report with no `code`.
+const DOM_KEY_VALUES: [(&str, Key); 23] = [
+    ("GoBack", Key::Back),
+    ("BrowserBack", Key::Back),
+    ("XF86Back", Key::Back),
+    ("Enter", Key::Enter),
+    ("ContextMenu", Key::Menu),
+    ("BrowserSearch", Key::Search),
+    ("Info", Key::Info),
+    ("Guide", Key::Guide),
+    ("Settings", Key::Settings),
+    ("ChannelUp", Key::ChannelUp),
+    ("ChannelDown", Key::ChannelDown),
+    ("ColorF0Red", Key::ProgramRed),
+    ("ColorF1Green", Key::ProgramGreen),
+    ("ColorF2Yellow", Key::ProgramYellow),
+    ("ColorF3Blue", Key::ProgramBlue),
+    ("MediaPlay", Key::MediaPlay),
+    ("MediaPause", Key::MediaPause),
+    ("MediaPlayPause", Key::MediaPlayPause),
+    ("MediaStop", Key::MediaStop),
+    ("MediaTrackNext", Key::MediaNext),
+    ("MediaTrackPrevious", Key::MediaPrevious),
+    ("MediaRewind", Key::MediaRewind),
+    ("MediaFastForward", Key::MediaFastForward),
+];
+
+// The key codes Samsung's Tizen and LG's webOS give their remotes' Back key.
+const TV_BACK_KEY_CODES: [u32; 2] = [10009, 461];
+
 impl Key {
     /// The key a W3C `KeyboardEvent.code` value names, such as `"KeyA"`,
     /// `"ArrowUp"` or `"MediaPlayPause"`. A code with no counterpart here is
@@ -362,6 +393,21 @@ impl Key {
             .iter()
             .find(|(name, _)| *name == code)
             .map_or(Self::Unknown, |(_, key)| *key)
+    }
+
+    /// The key a browser event names, as a TV browser reports a remote: by
+    /// its `code` when it has one, else by its `key` value (`"GoBack"`,
+    /// `"MediaPlayPause"`, `"ChannelUp"`), else by the `keyCode` Tizen
+    /// (10009) and webOS (461) give the Back key.
+    pub fn from_dom_event(code: &str, key: &str, key_code: u32) -> Self {
+        match Self::from_dom_code(code) {
+            Self::Unknown if TV_BACK_KEY_CODES.contains(&key_code) => Self::Back,
+            Self::Unknown => DOM_KEY_VALUES
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map_or(Self::Unknown, |(_, found)| *found),
+            known => known,
+        }
     }
 }
 
@@ -410,6 +456,11 @@ impl KeyEvent {
     /// Creates a key down event with the given key and text.
     pub fn key_down(key: Key, text: impl Into<String>) -> Self {
         Self::new(key, text, Modifiers::NONE, KeyEventType::KeyDown)
+    }
+
+    /// Creates a key up event for `key`.
+    pub fn key_up(key: Key) -> Self {
+        Self::new(key, "", Modifiers::NONE, KeyEventType::KeyUp)
     }
 
     /// Creates a key down event with modifiers.

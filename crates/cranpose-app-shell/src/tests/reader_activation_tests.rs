@@ -239,6 +239,7 @@ fn nested_dialogs_focus_their_controls_and_restore_each_opener() {
             (Key::Escape, "Open preferences"),
         ] {
             assert!(shell.on_key_event(&KeyEvent::key_down(key, "")));
+            shell.on_key_event(&KeyEvent::key_up(key));
             shell.update();
             assert_eq!(focused_description(&mut shell).as_deref(), Some(expected));
         }
@@ -1195,6 +1196,7 @@ fn direct_activation_uses_current_callback_without_pointer_events() {
     assert_eq!(count.get(), 6);
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Enter, "\r")));
+    assert!(shell.on_key_event(&KeyEvent::key_up(Key::Enter)));
     assert_eq!(count.get(), 11);
     for value in 1..=3 {
         mode.set(value);
@@ -1259,9 +1261,11 @@ fn keyboard_activation_targets_focused_control_without_a_screen_reader() {
     assert!(!shell.semantics_active());
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Enter, "\r")));
+    assert!(shell.on_key_event(&KeyEvent::key_up(Key::Enter)));
     assert_eq!(count.get(), 1);
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
     assert!(shell.on_key_event(&KeyEvent::key_down(Key::Spacebar, " ")));
+    assert!(shell.on_key_event(&KeyEvent::key_up(Key::Spacebar)));
     assert_eq!(count.get(), 11);
     assert!(!shell.semantics_active());
 }

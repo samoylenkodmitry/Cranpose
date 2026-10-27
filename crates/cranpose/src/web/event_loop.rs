@@ -131,27 +131,6 @@ pub(crate) fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::
     }
 }
 
-fn web_key_modifiers(event: &web_sys::KeyboardEvent) -> cranpose_app_shell::Modifiers {
-    cranpose_app_shell::Modifiers {
-        shift: event.shift_key(),
-        ctrl: event.ctrl_key(),
-        alt: event.alt_key(),
-        meta: event.meta_key(),
-    }
-}
-
-fn web_key_event_prefix(
-    event: &web_sys::KeyboardEvent,
-) -> Option<(cranpose_app_shell::Key, cranpose_app_shell::Modifiers)> {
-    if event.is_composing() || event.key_code() == 229 {
-        return None;
-    }
-    Some((
-        cranpose_app_shell::Key::from_dom_code(&event.code()),
-        web_key_modifiers(event),
-    ))
-}
-
 fn wheel_uptime_millis() -> u64 {
     crate::thread_state::with(|state| {
         state
@@ -551,7 +530,7 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyEvent, KeyEventType};
 
-            let Some((key, modifiers)) = web_key_event_prefix(&event) else {
+            let Some((key, modifiers)) = super::keys::web_key_event_prefix(&event) else {
                 return;
             };
             let text = {
@@ -563,7 +542,7 @@ pub async fn run(
                 .with_repeat_count(u32::from(event.repeat()));
 
             if let Ok(mut app_mut) = app.try_borrow_mut() {
-                if app_mut.on_key_event(&key_event) {
+                if super::keys::key_down_taken(&mut app_mut, &key_event) {
                     event.prevent_default();
                 }
                 request_frame();
@@ -579,7 +558,7 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyEvent, KeyEventType};
 
-            let Some((key, modifiers)) = web_key_event_prefix(&event) else {
+            let Some((key, modifiers)) = super::keys::web_key_event_prefix(&event) else {
                 return;
             };
 

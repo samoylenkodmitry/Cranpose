@@ -123,6 +123,9 @@ fn floating_button_can_be_reached_and_activated_from_the_keyboard() {
     robot
         .shell_mut()
         .on_key_event(&KeyEvent::key_down(Key::Enter, "\r"));
+    robot
+        .shell_mut()
+        .on_key_event(&KeyEvent::key_up(Key::Enter));
     robot.wait_for_idle();
     assert_eq!(clicks.get(), 1);
 }
