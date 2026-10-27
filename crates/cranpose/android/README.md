@@ -90,6 +90,7 @@ The Gradle `services` set also supports manually maintained app manifests:
 | `network` | HTTP and connectivity state | `INTERNET`, `ACCESS_NETWORK_STATE` |
 | `notifications` | Notification backend | `POST_NOTIFICATIONS` |
 | `overlay` | Surface above other apps | `SYSTEM_ALERT_WINDOW` |
+| `television` | A Leanback launcher entry on `CranposeActivity`; `android.software.leanback` and `android.hardware.touchscreen` optional. The app supplies its 320 by 180 banner as `@drawable/tv_banner` | none |
 | `wearable` | Messages and streams to the app on the paired phone or watch (Wear OS Data Layer, `cranpose_services::wearable`) | none |
 
 `Use::update()` also selects the package installer, its receiver and

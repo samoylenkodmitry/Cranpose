@@ -187,6 +187,7 @@ impl FocusInvalidationState {
         let Some(previous) = previous else {
             return false;
         };
+        crate::render_state::schedule_draw_repass(previous);
         let handles = self.manager.borrow().focus_target_handles(previous);
         for handle in handles {
             handle.set_focus_state(FocusState::Inactive);
@@ -235,6 +236,12 @@ impl FocusInvalidationState {
 
     fn apply_focus_change(&self, node_id: NodeId) {
         let previous = self.manager.borrow_mut().swap_active_focus_target(node_id);
+        // A node draws its focus look, such as `Modifier::focusable`'s ring,
+        // from its focus state, which a draw does not observe.
+        if let Some(previous) = previous {
+            crate::render_state::schedule_draw_repass(previous);
+        }
+        crate::render_state::schedule_draw_repass(node_id);
 
         crate::focus_within::moving_focus(|| {
             if let Some(previous) = previous {
@@ -354,7 +361,16 @@ mod tests;
 /// draws its ring only while this is true. Returns whether the value changed,
 /// so the caller can ask for a redraw.
 pub fn set_keyboard_focus_visible(visible: bool) -> bool {
-    crate::thread_state::cells(|cells| cells.keyboard_focus_visible.replace(visible) != visible)
+    let changed = crate::thread_state::cells(|cells| {
+        cells.keyboard_focus_visible.replace(visible) != visible
+    });
+    if changed
+        && let Some(focused) = crate::render_state::current_app_context()
+            .and_then(|context| context.active_focus_target())
+    {
+        crate::render_state::schedule_draw_repass(focused);
+    }
+    changed
 }
 
 /// Whether the keyboard, and not a pointer, made the last focus move.

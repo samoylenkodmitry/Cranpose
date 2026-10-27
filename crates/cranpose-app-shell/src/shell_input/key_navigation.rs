@@ -41,9 +41,15 @@ where
         moved
     }
 
+    // Presses the focused control with the keys Compose's clickable takes:
+    // Enter, the keypad's Enter, the space bar and a D-pad's center. A held
+    // key presses once.
     pub(super) fn on_activation_key(&mut self, event: &KeyEvent) -> bool {
         if !plain_key_down(event)
-            || !matches!(event.key(), Key::Enter | Key::Spacebar)
+            || !matches!(
+                event.key(),
+                Key::Enter | Key::NumPadEnter | Key::Spacebar | Key::DirectionCenter
+            )
             || cranpose_ui::text_field_focus::has_focused_field()
         {
             return false;
@@ -51,6 +57,9 @@ where
         let Some(focused) = cranpose_ui::active_focus_target() else {
             return false;
         };
+        if event.native_key_event().repeat_count > 0 {
+            return true;
+        }
         let activated = self.accessibility_activate(focused, None);
         self.note_focus_moved_by_keyboard(true);
         activated

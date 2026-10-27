@@ -1,9 +1,9 @@
-use cranpose_app_shell::{AppShell, KeyEvent, PointerSource};
+use cranpose_app_shell::{AppShell, PointerSource};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{PointerButton, PointerId};
 
-use super::keyboard::{AndroidKeyTranslator, is_system_key};
+use super::keyboard::AndroidKeyTranslator;
 
 pub(super) enum PendingInput {
     PointerDown(f32, f32, Option<i64>, PointerSource),
@@ -11,7 +11,6 @@ pub(super) enum PendingInput {
     PointerMove(f32, f32, Option<i64>, PointerSource),
     PointerCancel,
     HoverExit,
-    Key(KeyEvent),
     SecondaryPointerDown(PointerId, f32, f32, Option<i64>),
     SecondaryPointerUp(PointerId, f32, f32, Option<i64>),
     SecondaryPointerMove(PointerId, f32, f32, Option<i64>),
@@ -48,27 +47,37 @@ fn android_pointer_source(
     resolve_pointer_source(tool, source)
 }
 
-fn push_pending_input_from_android_key_event(
+// Hands a key to `shell` at once, after the inputs queued before it, and
+// answers whether Cranpose took it, as Compose's `dispatchKeyEvent` does:
+// a key no handler took goes back to Android, which plays a media key in
+// the media session, changes the volume or leaves the app. A Back that no
+// handler took goes to the `BackHandler`s when one is composed.
+fn dispatch_android_key_event(
+    app: &android_activity::AndroidApp,
     key_event: &android_activity::input::KeyEvent<'_>,
     key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
+    shell: Option<&mut AppShell<WgpuRenderer>>,
 ) -> bool {
-    if key_event.key_code() == android_activity::input::Keycode::Back {
-        if cranpose_services::back_interception_enabled() {
-            if key_event.action() == android_activity::input::KeyAction::Up {
-                cranpose_services::push_back_request();
-            }
-            return true;
+    let consumed = match (shell, key_translator.translate(key_event)) {
+        (Some(shell), Some(event)) => {
+            dispatch_pending_inputs(app, shell, pending_inputs);
+            shell.on_key_event(&event)
         }
-        return false;
-    }
-    if is_system_key(key_event.key_code()) {
-        return false;
-    }
-    let Some(event) = key_translator.translate(key_event) else {
-        return false;
+        _ => false,
     };
-    pending_inputs.push(PendingInput::Key(event));
+    consumed
+        || (key_event.key_code() == android_activity::input::Keycode::Back
+            && take_back_key(key_event))
+}
+
+fn take_back_key(key_event: &android_activity::input::KeyEvent<'_>) -> bool {
+    if !cranpose_services::back_interception_enabled() {
+        return false;
+    }
+    if key_event.action() == android_activity::input::KeyAction::Up {
+        cranpose_services::push_back_request();
+    }
     true
 }
 
@@ -83,20 +92,11 @@ fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> Pointer
 fn push_pending_inputs_from_android_event(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
-    key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
     primary_pointer_id: &mut Option<i32>,
 ) -> bool {
-    let motion_event = match event {
-        android_activity::input::InputEvent::MotionEvent(motion_event) => motion_event,
-        android_activity::input::InputEvent::KeyEvent(key_event) => {
-            return push_pending_input_from_android_key_event(
-                key_event,
-                key_translator,
-                pending_inputs,
-            );
-        }
-        _ => return false,
+    let android_activity::input::InputEvent::MotionEvent(motion_event) = event else {
+        return false;
     };
 
     let time_ms = Some(android_event_time_ms(motion_event.event_time()));
@@ -340,40 +340,78 @@ fn push_rotary_pending_input(
     true
 }
 
-pub(super) fn drain_android_input_events(
-    app: &android_activity::AndroidApp,
-    android_platform: &AndroidPlatform,
-    key_translator: &mut AndroidKeyTranslator,
-    pending_inputs: &mut Vec<PendingInput>,
-    primary_pointer_id: &mut Option<i32>,
-    mouse_buttons: &mut android_activity::input::ButtonState,
-) {
-    let Ok(mut iter) = app.input_events_iter() else {
-        return;
-    };
+// What the loop keeps of Android's input between frames: the pointer input
+// waiting for the frame, and the state that reads key and pointer events.
+pub(super) struct AndroidInput {
+    pub(super) pending: Vec<PendingInput>,
+    key_translator: AndroidKeyTranslator,
+    primary_pointer_id: Option<i32>,
+    mouse_buttons: android_activity::input::ButtonState,
+}
 
-    for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
-        let event_available = iter.next(|event| {
-            if push_mouse_button_inputs(
-                event,
-                android_platform,
-                pending_inputs,
-                primary_pointer_id,
-                mouse_buttons,
-            ) || push_pending_inputs_from_android_event(
-                event,
-                android_platform,
-                key_translator,
-                pending_inputs,
-                primary_pointer_id,
-            ) {
-                android_activity::InputStatus::Handled
-            } else {
-                android_activity::InputStatus::Unhandled
+impl AndroidInput {
+    pub(super) fn new(app: android_activity::AndroidApp) -> Self {
+        Self {
+            pending: Vec::new(),
+            key_translator: AndroidKeyTranslator::new(app),
+            primary_pointer_id: None,
+            mouse_buttons: android_activity::input::ButtonState(0),
+        }
+    }
+
+    // Takes Android's queued input: keys go to `shell` at once, so Android
+    // hears which ones Cranpose took, and pointer input waits in `pending`
+    // for the frame. A key that reached the shell raises the frame rate as
+    // pointer input does.
+    pub(super) fn drain(
+        &mut self,
+        app: &android_activity::AndroidApp,
+        android_platform: &AndroidPlatform,
+        mut shell: Option<&mut AppShell<WgpuRenderer>>,
+        frame_rate_boost: &mut cranpose_app_shell::FrameRateBoost,
+    ) {
+        let Ok(mut iter) = app.input_events_iter() else {
+            return;
+        };
+        for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
+            let event_available = iter.next(|event| {
+                let handled = match event {
+                    android_activity::input::InputEvent::KeyEvent(key_event) => {
+                        if shell.is_some() {
+                            frame_rate_boost.note_input(std::time::Instant::now());
+                        }
+                        dispatch_android_key_event(
+                            app,
+                            key_event,
+                            &mut self.key_translator,
+                            &mut self.pending,
+                            shell.as_deref_mut(),
+                        )
+                    }
+                    _ => {
+                        push_mouse_button_inputs(
+                            event,
+                            android_platform,
+                            &mut self.pending,
+                            &mut self.primary_pointer_id,
+                            &mut self.mouse_buttons,
+                        ) || push_pending_inputs_from_android_event(
+                            event,
+                            android_platform,
+                            &mut self.pending,
+                            &mut self.primary_pointer_id,
+                        )
+                    }
+                };
+                if handled {
+                    android_activity::InputStatus::Handled
+                } else {
+                    android_activity::InputStatus::Unhandled
+                }
+            });
+            if !event_available {
+                break;
             }
-        });
-        if !event_available {
-            break;
         }
     }
 }
@@ -508,9 +546,6 @@ fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInpu
         }
         PendingInput::HoverExit => {
             shell.cancel_gesture_unless_pressed();
-        }
-        PendingInput::Key(event) => {
-            shell.on_key_event(&event);
         }
         PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
             shell.set_pointer_source(PointerSource::Touch);

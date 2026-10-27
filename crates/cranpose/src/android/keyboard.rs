@@ -186,11 +186,7 @@ pub(crate) fn ime_key_event(
         _ => return None,
     };
 
-    let keycode = Keycode::from(key_code.max(0) as u32);
-    if is_system_key(keycode) {
-        return None;
-    }
-    let key = map_keycode(keycode);
+    let key = map_keycode(Keycode::from(key_code.max(0) as u32));
     let modifiers = map_modifiers(MetaState(meta_state.max(0) as u32));
 
     let text = if event_type == KeyEventType::KeyDown {
@@ -302,33 +298,6 @@ impl AndroidKeyTranslator {
             }
         }
     }
-}
-
-pub(crate) fn is_system_key(keycode: Keycode) -> bool {
-    matches!(
-        keycode,
-        Keycode::Back
-            | Keycode::Home
-            | Keycode::Menu
-            | Keycode::AppSwitch
-            | Keycode::Power
-            | Keycode::Camera
-            | Keycode::Call
-            | Keycode::Endcall
-            | Keycode::VolumeUp
-            | Keycode::VolumeDown
-            | Keycode::VolumeMute
-            | Keycode::Mute
-            | Keycode::MediaPlayPause
-            | Keycode::MediaStop
-            | Keycode::MediaNext
-            | Keycode::MediaPrevious
-            | Keycode::MediaRewind
-            | Keycode::MediaFastForward
-            | Keycode::MediaPlay
-            | Keycode::MediaPause
-            | Keycode::MediaRecord
-    )
 }
 
 fn map_modifiers(meta_state: MetaState) -> Modifiers {

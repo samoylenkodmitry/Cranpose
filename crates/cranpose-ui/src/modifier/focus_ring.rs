@@ -59,16 +59,13 @@ impl Modifier {
     pub fn focusable(self) -> Self {
         let focused = Rc::new(Cell::new(false));
         let seen = Rc::clone(&focused);
-        self.on_focus_changed(move |state| {
-            seen.set(state.is_focused());
-            crate::request_render_invalidation();
-        })
-        .draw_with_content(move |scope| {
-            scope.draw_content();
-            if focused.get() && keyboard_focus_visible() {
-                draw_focus_ring(scope);
-            }
-        })
+        self.on_focus_changed(move |state| seen.set(state.is_focused()))
+            .draw_with_content(move |scope| {
+                scope.draw_content();
+                if focused.get() && keyboard_focus_visible() {
+                    draw_focus_ring(scope);
+                }
+            })
     }
 }
 
