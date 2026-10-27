@@ -23,9 +23,9 @@ use super::{
         PendingHostWindowSizeRequest, confirm_android_host_window_request,
         dispatch_android_surface_size_request, dispatch_registered_android_surface_size_request,
     },
-    input::{PendingInput, dispatch_pending_inputs, drain_android_input_events},
+    input::{AndroidInput, PendingInput, dispatch_pending_inputs},
     jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    keyboard::{self, AndroidKeyTranslator, AndroidSoftKeyboard},
+    keyboard::{self, AndroidSoftKeyboard},
     overlay_window,
     surface::{AndroidSurfaceError, create_android_wgpu_surface},
     text_input::{self, AndroidImeEvent},
@@ -1638,11 +1638,8 @@ pub fn run(
 
     let mut gpu_resources: Option<GpuResources> = None;
 
-    let mut pending_inputs: Vec<PendingInput> = Vec::new();
-    let mut primary_pointer_id: Option<i32> = None;
-    let mut mouse_buttons = android_activity::input::ButtonState(0);
+    let mut input = AndroidInput::new(app.clone());
 
-    let mut key_translator = AndroidKeyTranslator::new(app.clone());
     let mut soft_keyboard_installed = false;
     let mut next_offscreen_update: Option<Instant> = None;
 
@@ -1733,7 +1730,7 @@ pub fn run(
             );
         }
 
-        let poll_duration = if !pending_inputs.is_empty() {
+        let poll_duration = if !input.pending.is_empty() {
             Some(Duration::ZERO)
         } else if no_surface {
             match offscreen_pending_ui {
@@ -1989,16 +1986,12 @@ pub fn run(
                         }
                         should_exit.store(true, Ordering::Relaxed);
                     }
-                    MainEvent::InputAvailable => {
-                        drain_android_input_events(
-                            &app,
-                            &android_platform,
-                            &mut key_translator,
-                            &mut pending_inputs,
-                            &mut primary_pointer_id,
-                            &mut mouse_buttons,
-                        );
-                    }
+                    MainEvent::InputAvailable => input.drain(
+                        &app,
+                        &android_platform,
+                        app_shell.as_mut(),
+                        &mut frame_rate_boost,
+                    ),
                     MainEvent::ConfigChanged { .. } => {
                         refresh_android_configuration(&app, &mut app_shell);
                     }
@@ -2107,7 +2100,7 @@ pub fn run(
                     let logical = android_platform.pointer_position(x as f64, y as f64);
                     match action {
                         overlay_window::AndroidOverlayPointerAction::Down => {
-                            pending_inputs.push(PendingInput::PointerDown(
+                            input.pending.push(PendingInput::PointerDown(
                                 logical.x,
                                 logical.y,
                                 None,
@@ -2115,7 +2108,7 @@ pub fn run(
                             ));
                         }
                         overlay_window::AndroidOverlayPointerAction::Up => {
-                            pending_inputs.push(PendingInput::PointerUp(
+                            input.pending.push(PendingInput::PointerUp(
                                 logical.x,
                                 logical.y,
                                 None,
@@ -2123,10 +2116,10 @@ pub fn run(
                             ));
                         }
                         overlay_window::AndroidOverlayPointerAction::Cancel => {
-                            pending_inputs.push(PendingInput::PointerCancel);
+                            input.pending.push(PendingInput::PointerCancel);
                         }
                         overlay_window::AndroidOverlayPointerAction::Move => {
-                            pending_inputs.push(PendingInput::PointerMove(
+                            input.pending.push(PendingInput::PointerMove(
                                 logical.x,
                                 logical.y,
                                 None,
@@ -2177,11 +2170,11 @@ pub fn run(
 
         super::services::apply_pending_platform_signals(get_display_density(&app), &mut app_shell);
 
-        if !pending_inputs.is_empty()
+        if !input.pending.is_empty()
             && let Some(shell) = &mut app_shell
         {
             frame_rate_boost.note_input(Instant::now());
-            dispatch_pending_inputs(&app, shell, &mut pending_inputs);
+            dispatch_pending_inputs(&app, shell, &mut input.pending);
         }
 
         sync_ime_session(&ime_session, app_shell.as_mut(), &android_platform);
