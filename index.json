@@ -79151,6 +79151,121 @@
      }
     }
    }
+  },
+  {
+   "file": "runs/2026-10-27-browser-a162aa07e-EVR-AL00-\u00b7-Chrome-155.json",
+   "kind": "browser",
+   "started_at": "2026-10-27T07:47:12+00:00",
+   "device": "EVR-AL00 \u00b7 Chrome 155",
+   "main": "a162aa07e97a10e850df60ee17f7b0f58229a3de",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.17.2 main a162aa07e",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "compose",
+     "label": "Compose Multiplatform 1.12.2",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.47.8",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.37.0",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/lib.rs"
+    },
+    {
+     "name": "dioxus",
+     "label": "Dioxus 0.7.10",
+     "source": "benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.1.4",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "web",
+     "label": "Web Chrome 155.0.8059.87",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    }
+   ],
+   "duration_s": 258,
+   "protocol": {
+    "run_s": 10.0,
+    "starts": [
+     "first",
+     "second"
+    ],
+    "rounds": 1,
+    "stop_below_fps": 30,
+    "stop_seconds_in_a_row": 5
+   },
+   "scenarios": {
+    "gauntlet": {
+     "legs": 0,
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {},
+        "compose": {},
+        "flutter": {},
+        "egui": {},
+        "slint": {},
+        "iced": {},
+        "dioxus": {},
+        "avalonia": {},
+        "web": {}
+       },
+       "verdicts": {},
+       "failures": {
+        "web": "no \"PERF first_frame\" within 0 s",
+        "avalonia": "no \"PERF first_frame\" within 0 s",
+        "dioxus": "no \"PERF first_frame\" within 0 s",
+        "iced": "no \"PERF first_frame\" within 0 s",
+        "slint": "no \"PERF first_frame\" within 0 s",
+        "egui": "no \"PERF first_frame\" within 0 s",
+        "flutter": "no \"PERF first_frame\" within 0 s",
+        "compose": "no \"PERF first_frame\" within 0 s",
+        "cranpose": "no \"PERF first_frame\" within 0 s"
+       },
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {},
+        "compose": {},
+        "flutter": {},
+        "egui": {},
+        "slint": {},
+        "iced": {},
+        "dioxus": {},
+        "avalonia": {},
+        "web": {}
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    }
+   }
   }
  ]
 }
