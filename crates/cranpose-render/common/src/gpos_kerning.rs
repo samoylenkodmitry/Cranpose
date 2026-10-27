@@ -555,6 +555,10 @@ impl KernedFont {
         })
     }
 
+    pub(crate) fn as_font(&self) -> &FontArc {
+        &self.font
+    }
+
     pub(crate) fn has_substitutions(&self) -> bool {
         self.substitutions.is_some()
     }

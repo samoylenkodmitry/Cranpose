@@ -1540,6 +1540,7 @@ dependencies = [
  "hyphenation",
  "portable-atomic",
  "rustybuzz",
+ "self_cell",
  "smallvec",
  "stats_alloc",
  "thiserror 2.0.21",
