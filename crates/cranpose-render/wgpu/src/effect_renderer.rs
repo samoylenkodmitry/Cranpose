@@ -1125,7 +1125,7 @@ impl EffectRenderer {
             offscreen_pool: OffscreenPool::new(device, surface_format),
             shader_cache: ShaderPipelineCache::new(
                 device,
-                compiler.clone(),
+                compiler.paced(adapter_backend),
                 pipeline_cache.clone(),
                 adapter_backend,
                 surface_format,
