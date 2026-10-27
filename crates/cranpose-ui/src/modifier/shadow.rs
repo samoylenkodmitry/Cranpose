@@ -261,51 +261,5 @@ fn primitive_for_shape(shape: LayerShape, rect: Rect, brush: Brush) -> Option<Dr
 
 fn alpha_modulated_brush(brush: Brush, alpha: f32) -> Brush {
     let alpha = alpha.clamp(0.0, 1.0);
-    match brush {
-        Brush::Solid(color) => Brush::Solid(color.with_alpha(color.a() * alpha)),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => Brush::LinearGradient {
-            colors: colors
-                .into_iter()
-                .map(|color| color.with_alpha(color.a() * alpha))
-                .collect(),
-            stops,
-            start,
-            end,
-            tile_mode,
-        },
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => Brush::RadialGradient {
-            colors: colors
-                .into_iter()
-                .map(|color| color.with_alpha(color.a() * alpha))
-                .collect(),
-            stops,
-            center,
-            radius,
-            tile_mode,
-        },
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => Brush::SweepGradient {
-            colors: colors
-                .into_iter()
-                .map(|color| color.with_alpha(color.a() * alpha))
-                .collect(),
-            stops,
-            center,
-        },
-    }
+    brush.map_colors(|color| color.with_alpha(color.a() * alpha))
 }
