@@ -521,7 +521,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                 .string("tab")
                 .and_then(DemoTab::from_startup_name)
         })
-        .unwrap_or(DEFAULT_INITIAL_TAB);
+        .unwrap_or_else(demo_tab::launch_tab);
     let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
