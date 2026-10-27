@@ -2992,7 +2992,7 @@ impl App {
         };
         let frame_owed = surface.take_frame_owed();
         let present_required =
-            surface_present_required(native.surface_dirty, frame_owed, surface.needs_redraw());
+            surface_present_required(native.surface_dirty, frame_owed, &mut surface);
         pace_after_empty_redraw(
             &mut native.last_frame_start_time,
             &mut native.last_redraw_empty,
@@ -5633,7 +5633,7 @@ impl ApplicationHandler for App {
                 let present_required = surface_present_required(
                     primary_surface_dirty_before_update || robot_surface_dirty_before_update,
                     frame_owed,
-                    app.needs_redraw(),
+                    &mut app.primary(),
                 );
                 pace_after_empty_redraw(
                     &mut self.last_frame_start_time,

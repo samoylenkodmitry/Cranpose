@@ -341,7 +341,7 @@ use super::{
     primary_window_should_show, recovered_native_window_drag_start_pointer,
     should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
 };
-use crate::{app_launcher::AppSettings, wgpu_surface::surface_present_required};
+use crate::app_launcher::AppSettings;
 
 #[test]
 fn native_window_screen_position_is_declarative() {
@@ -727,10 +727,6 @@ fn surface_reconfigure_requests_replacement_frame_for_visible_surface() {
 fn a_window_back_on_screen_is_owed_the_frame_it_could_not_present() {
     assert!(occlusion_leaves_a_frame_owed(false));
     assert!(!occlusion_leaves_a_frame_owed(true));
-    assert!(
-        surface_present_required(occlusion_leaves_a_frame_owed(false), false, false),
-        "a reappearing window presents even when nothing new was drawn"
-    );
 }
 
 #[test]

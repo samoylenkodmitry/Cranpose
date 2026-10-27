@@ -357,7 +357,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         if !surface_present_required(
             dirty_before,
             update_result.visual_changed,
-            shell.needs_redraw(),
+            &mut shell.primary(),
         ) {
             return false;
         }

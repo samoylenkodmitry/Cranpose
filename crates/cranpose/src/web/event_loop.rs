@@ -772,7 +772,7 @@ pub async fn run(
         let present_required = surface_present_required(
             surface_dirty.get(),
             update_result.visual_changed,
-            app.borrow().needs_redraw(),
+            &mut app.borrow_mut().primary(),
         );
         device_loss.recover(&recovery);
         if present_required && !device_loss.paused() && presenter.present(&app, frame_started_at) {

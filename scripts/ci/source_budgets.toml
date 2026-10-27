@@ -11,7 +11,7 @@ source_text_checks = 341
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 128
+"bool-parameter" = 127
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 11
 "get-prefix" = 133
@@ -97,7 +97,7 @@ limit = 1000
 "crates/cranpose-ui/src/widgets/nodes/layout_node.rs" = 1438
 "crates/cranpose-ui/src/widgets/wear/scaling_list.rs" = 1648
 "crates/cranpose/src/accessibility.rs" = 2281
-"crates/cranpose/src/android/event_loop.rs" = 2240
+"crates/cranpose/src/android/event_loop.rs" = 2235
 "crates/cranpose/src/app_launcher.rs" = 1472
 "crates/cranpose/src/desktop/accessibility.rs" = 1237
 "crates/cranpose/src/desktop/event_loop.rs" = 6200

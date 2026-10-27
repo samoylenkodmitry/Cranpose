@@ -1,3 +1,6 @@
+use cranpose_app_shell::SurfaceMut;
+use cranpose_render_wgpu::WgpuRenderer;
+
 pub(crate) enum SurfaceFrame {
     Ready(wgpu::SurfaceTexture),
     Reconfigure,
@@ -77,7 +80,7 @@ pub(crate) fn root_surface_config(
 // Draws the app into the surface `frame` through a view in the display
 // format of the surface's `format`, at `width` by `height` pixels.
 pub(crate) fn render_surface_frame(
-    renderer: &mut cranpose_render_wgpu::WgpuRenderer,
+    renderer: &mut WgpuRenderer,
     frame: &wgpu::SurfaceTexture,
     format: wgpu::TextureFormat,
     (width, height): (u32, u32),
@@ -151,12 +154,35 @@ pub(crate) fn present_initial_placeholder_frame_cleared_to(
     true
 }
 
+// What a platform asks of a surface of the app before a frame takes an image.
+pub(crate) trait PresentSurface {
+    // Whether the surface still owes the display a frame.
+    fn needs_redraw(&self) -> bool;
+    // Whether the surface already shows the app's scene at its buffer size
+    // (`WgpuRenderer::shows_scene`).
+    fn shows_scene(&mut self) -> bool;
+}
+
+impl PresentSurface for SurfaceMut<'_, WgpuRenderer> {
+    fn needs_redraw(&self) -> bool {
+        Self::needs_redraw(self)
+    }
+
+    fn shows_scene(&mut self) -> bool {
+        let (width, height) = self.buffer_size();
+        self.renderer().shows_scene(width, height)
+    }
+}
+
+// Whether a frame takes an image: the surface was dirtied, or the update
+// changed what it draws or the surface still owes a frame, and the surface
+// does not show the scene yet.
 pub(crate) fn surface_present_required(
     surface_dirty: bool,
     update_visual_changed: bool,
-    app_needs_redraw: bool,
+    surface: &mut impl PresentSurface,
 ) -> bool {
-    surface_dirty || update_visual_changed || app_needs_redraw
+    surface_dirty || (update_visual_changed || surface.needs_redraw()) && !surface.shows_scene()
 }
 
 #[cfg(test)]
