@@ -2,7 +2,10 @@
 //!
 //! The software (pixels) renderer rasterizes the *same* shapes as the GPU. Both
 //! evaluate these formulas, so a stroked rect or an arc looks the same on either
-//! backend instead of the CPU path quietly degrading to a filled box.
+//! backend instead of the CPU path quietly degrading to a filled box. The arc
+//! band bounds the same shape another way: the GPU measures a point from the
+//! sweep's middle, the CPU from the end it lies near, so a sweep that changes
+//! leaves the pixels away from its moving end.
 //!
 //! Angle convention (shared with `cranpose_ui_graphics::stroke`): radians, `0`
 //! along +X, increasing clockwise on screen (y-down device space).
@@ -165,31 +168,55 @@ pub fn sdf_arc_band(p: Point, arc: &ArcGeometry) -> f32 {
     ArcBand::new(arc).distance(p)
 }
 
-/// An arc's band with the sines and cosines of its sweep worked out once,
-/// for the distances of many points.
+/// An arc's band with the directions of its two ends worked out once, for
+/// the distances of many points. A point's distance reads only the end it
+/// lies near: an arc whose sweep changes keeps the distance of every point
+/// away from the end that moved, so the pixels there keep their colour.
 pub struct ArcBand {
     center: Point,
     mid_radius: f32,
     half_thickness: f32,
-    // The sine and cosine of the angle halfway along the sweep.
-    mid: (f32, f32),
-    // The sine, not below zero, and the cosine of half the sweep.
-    half_sweep: (f32, f32),
+    // The unit vectors from the centre along the angles the sweep starts and
+    // ends at.
+    start: Point,
+    end: Point,
+    span: Span,
     cap: StrokeCap,
+}
+
+// How much of a turn a sweep spans, which decides how its two ends bound it.
+#[derive(Clone, Copy)]
+enum Span {
+    // Up to half a turn: a point lies in the sweep when it lies after the
+    // start and before the end.
+    Narrow,
+    // Over half a turn: when it lies after the start or before the end.
+    Wide,
+    // A whole turn: every point does.
+    Full,
 }
 
 impl ArcBand {
     /// The band of `arc`.
     pub fn new(arc: &ArcGeometry) -> Self {
         let sweep = arc.sweep_angle.clamp(0.0, cranpose_ui_graphics::TAU);
-        let half_sweep = sweep * 0.5;
-        let mid = arc.start_angle + half_sweep;
+        let direction = |angle: f32| {
+            let (sin, cos) = angle.sin_cos();
+            Point::new(cos, sin)
+        };
         Self {
             center: arc.center,
             mid_radius: arc.mid_radius(),
             half_thickness: arc.half_thickness().max(0.0),
-            mid: mid.sin_cos(),
-            half_sweep: (half_sweep.sin().max(0.0), half_sweep.cos()),
+            start: direction(arc.start_angle),
+            end: direction(arc.start_angle + sweep),
+            span: if sweep >= cranpose_ui_graphics::TAU {
+                Span::Full
+            } else if sweep > std::f32::consts::PI {
+                Span::Wide
+            } else {
+                Span::Narrow
+            },
             cap: arc.cap,
         }
     }
@@ -198,32 +225,59 @@ impl ArcBand {
     pub fn distance(&self, p: Point) -> f32 {
         let ra = self.mid_radius;
         let rb = self.half_thickness;
-        let (sm, cm) = self.mid;
         let dx = p.x - self.center.x;
         let dy = p.y - self.center.y;
-        let qx = (-sm * dx + cm * dy).abs();
-        let qy = cm * dx + sm * dy;
-
-        let sc = self.half_sweep;
-
-        let mut dist = if sc.1 * qx > sc.0 * qy {
-            ((qx - sc.0 * ra).powi(2) + (qy - sc.1 * ra).powi(2)).sqrt() - rb
-        } else {
-            ((qx * qx + qy * qy).sqrt() - ra).abs() - rb
+        // How far the point lies past each end's line, away from the sweep;
+        // negative on the sweep's side.
+        let past_start = self.start.y * dx - self.start.x * dy;
+        let past_end = self.end.x * dy - self.end.y * dx;
+        let inside = match self.span {
+            Span::Narrow => past_start <= 0.0 && past_end <= 0.0,
+            Span::Wide => past_start <= 0.0 || past_end <= 0.0,
+            Span::Full => true,
         };
-
-        let plane = sc.1 * qx - sc.0 * qy;
-        match self.cap {
-            StrokeCap::Butt => dist = dist.max(plane),
-            StrokeCap::Square => dist = dist.max(plane - rb),
-            StrokeCap::Round => {}
+        if inside {
+            let band = ((dx * dx + dy * dy).sqrt() - ra).abs() - rb;
+            return match self.cap {
+                StrokeCap::Butt => band
+                    .max(butt_cut(self.start, past_start, dx, dy))
+                    .max(butt_cut(self.end, past_end, dx, dy)),
+                StrokeCap::Round | StrokeCap::Square => band,
+            };
         }
-        dist
+        // Past the sweep, the cap of the nearer end.
+        let cap = |end: Point, past: f32| {
+            let round = ((dx - ra * end.x).powi(2) + (dy - ra * end.y).powi(2)).sqrt() - rb;
+            match self.cap {
+                StrokeCap::Butt => round.max(past),
+                StrokeCap::Square => round.max(past - rb),
+                StrokeCap::Round => round,
+            }
+        };
+        match (self.cap, past_start > 0.0, past_end > 0.0) {
+            // A butt end bounds only the points past its own line; a round
+            // or a square cap reaches back past the other end's line on a
+            // short sweep.
+            (StrokeCap::Butt, true, false) => cap(self.start, past_start),
+            (StrokeCap::Butt, false, true) => cap(self.end, past_end),
+            _ => cap(self.start, past_start).min(cap(self.end, past_end)),
+        }
     }
 
     /// The antialiased coverage of `p`, as [`arc_coverage`] gives it.
     pub fn coverage(&self, p: Point) -> f32 {
         coverage_for_distance(self.distance(p))
+    }
+}
+
+// The distance a butt end's line cuts a point of the sweep by: the point's
+// distance before the line, for a point within a quarter turn of the end.
+// Further round the circle the line no longer bounds the band.
+fn butt_cut(end: Point, past: f32, dx: f32, dy: f32) -> f32 {
+    if past <= 0.0 && end.x * dx + end.y * dy > 0.0 {
+        past
+    } else {
+        f32::NEG_INFINITY
     }
 }
 
