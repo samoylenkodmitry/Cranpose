@@ -565,7 +565,10 @@ tab bar, a radio group, a segmented control and a menu, the arrows move along
 the group and wrap at its ends. With nothing focused, Down and Right enter
 at the top left and Up and Left at the bottom right. When the focused
 control goes away, the next arrow goes to the control that took its place.
-A held key moves focus once a frame. In a window a D-pad drives
+A held key moves focus once a frame. An arrow that finds no control that
+way scrolls the nearest scroll container around the focused control by half
+its viewport, as Android's ScrollView does, so a page of text scrolls with
+the keys. In a window a D-pad drives
 (`AppShell::set_dpad_navigation`, which the Android host sets on a TV), a
 target takes focus after each layout that leaves none focused, the arrows
 move focus onto and out of a text field without opening the software

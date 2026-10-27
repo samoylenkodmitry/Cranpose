@@ -566,3 +566,49 @@ fn a_dpad_window_gives_focus_to_a_target_after_each_layout() {
         "the target that took the removed one's place takes focus"
     );
 }
+
+#[test]
+fn an_arrow_with_no_target_that_way_scrolls_the_page_by_half() {
+    use std::cell::Cell;
+
+    use cranpose_ui::ScrollState;
+
+    let held: Rc<Cell<Option<ScrollState>>> = Rc::default();
+    let keep = Rc::clone(&held);
+    let mut screen = Screen::new(move |focused| {
+        let focused = Rc::clone(focused);
+        let scroll = remember(|| ScrollState::new(0.0)).with(|scroll| *scroll);
+        keep.set(Some(scroll));
+        Column(
+            Modifier::empty()
+                .size(Size::new(400.0, 400.0))
+                .vertical_scroll(scroll, false),
+            ColumnSpec::default(),
+            move || {
+                cell("top", &focused);
+                // A long text with nothing to focus.
+                Box(
+                    Modifier::empty().size(Size::new(400.0, 1200.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+    let scroll = held.get().expect("the page composed");
+    assert!(screen.press(Key::DirectionDown));
+    assert_eq!(screen.focused(), Some("top"));
+    assert!(screen.press(Key::DirectionDown), "Down scrolls the page");
+    assert_eq!(scroll.value(), 200.0, "by half the 400 high viewport");
+    for _ in 0..4 {
+        screen.press(Key::DirectionDown);
+    }
+    assert_eq!(scroll.value(), 840.0, "to the end of the 1240 high content");
+    assert!(
+        !screen.press(Key::DirectionDown),
+        "at the end Down has nothing to do"
+    );
+    assert!(screen.press(Key::DirectionUp), "Up scrolls back");
+    assert_eq!(scroll.value(), 640.0);
+    assert_eq!(screen.focused(), Some("top"), "focus stays where it was");
+}

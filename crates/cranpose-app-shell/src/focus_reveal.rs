@@ -107,7 +107,7 @@ where
     }
 }
 
-fn scroll_ancestors(node: &SemanticsNode, target: NodeId) -> Option<Vec<NodeId>> {
+pub(crate) fn scroll_ancestors(node: &SemanticsNode, target: NodeId) -> Option<Vec<NodeId>> {
     if node.hidden || !node.enabled {
         return None;
     }
@@ -124,7 +124,7 @@ fn scroll_ancestors(node: &SemanticsNode, target: NodeId) -> Option<Vec<NodeId>>
     Some(path)
 }
 
-fn semantics_of(node: &SemanticsNode, target: NodeId) -> Option<&SemanticsNode> {
+pub(crate) fn semantics_of(node: &SemanticsNode, target: NodeId) -> Option<&SemanticsNode> {
     if node.node_id == target {
         return Some(node);
     }
@@ -133,7 +133,7 @@ fn semantics_of(node: &SemanticsNode, target: NodeId) -> Option<&SemanticsNode> 
         .find_map(|node| semantics_of(node, target))
 }
 
-fn bounds_of(node: &LayoutBox, target: NodeId) -> Option<Rect> {
+pub(crate) fn bounds_of(node: &LayoutBox, target: NodeId) -> Option<Rect> {
     if node.node_id == target {
         return Some(node.rect);
     }
