@@ -306,6 +306,10 @@ pub(crate) struct ComposerCore {
     pub(crate) phase: Cell<crate::Phase>,
     pub(crate) recompose_parent_hint: Cell<Option<NodeId>>,
     pub(crate) recompose_child_cursor: Cell<crate::recompose::RecomposeChildCursor>,
+    // The scope whose body runs again from its own invalidation: the bodies
+    // that run below it run because it called them, with the arguments it
+    // worked out.
+    pub(crate) restarted_scope: RefCell<Option<RecomposeScope>>,
     pub(crate) root_render_requested: Cell<bool>,
     /// Whether a static composition local provided around what composes
     /// now changed: every group opened meanwhile runs its body.
@@ -418,6 +422,7 @@ impl ComposerCore {
             phase: Cell::new(crate::Phase::Compose),
             recompose_parent_hint: Cell::new(None),
             recompose_child_cursor: Cell::new(crate::recompose::RecomposeChildCursor::Unknown),
+            restarted_scope: RefCell::new(None),
             root_render_requested: Cell::new(false),
             locals_changed: Cell::new(false),
             _not_send: PhantomData,
@@ -460,6 +465,7 @@ impl ComposerCore {
             phase,
             recompose_parent_hint,
             recompose_child_cursor,
+            restarted_scope,
             root_render_requested,
             locals_changed,
             _not_send: _,
@@ -489,6 +495,7 @@ impl ComposerCore {
         phase.set(crate::Phase::Compose);
         recompose_parent_hint.set(None);
         recompose_child_cursor.set(crate::recompose::RecomposeChildCursor::Unknown);
+        *restarted_scope.get_mut() = None;
         root_render_requested.set(false);
         locals_changed.set(false);
     }
@@ -2041,6 +2048,12 @@ impl Composer {
     /// Returns the recompose scope being composed, or `None` outside any scope.
     pub fn current_recompose_scope(&self) -> Option<RecomposeScope> {
         self.core.scope_stack.borrow().last().cloned()
+    }
+
+    // The scope whose body runs again from its own invalidation and calls
+    // the bodies that run now; `None` outside a recomposition.
+    pub(crate) fn restarted_scope(&self) -> Option<RecomposeScope> {
+        self.core.restarted_scope.borrow().clone()
     }
 
     /// Notes a read of `state_id` in the scope that the read recomposes: the
