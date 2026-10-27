@@ -11,7 +11,7 @@ mod snapshot;
 pub(crate) use snapshot::SlicesSnapshot;
 pub use snapshot::{collect_modifier_slices, collect_slices_from_modifier};
 
-use super::{ModifierChainHandle, Point, coordinator_geometry::CoordinatorRect};
+use super::{ModifierChainHandle, Point, coordinator_rect::CoordinatorRect};
 use crate::{
     draw::DrawCommand,
     text::{TextLayoutOptions, TextStyle},

@@ -1,10 +1,12 @@
-//! What a node's layout shares: its layout state, measurement cache, runtime
-//! state and coordinator rects, in one allocation.
+//! What a node's layout shares: its layout state, measurement cache and
+//! runtime state, in one allocation.
 
 use std::cell::RefCell;
 
+use cranpose_ui_graphics::{Rect, Size};
+
 use super::{LayoutState, NodeCache};
-use crate::{layout::LayoutRuntimeState, modifier::CoordinatorGeometry};
+use crate::layout::LayoutRuntimeState;
 
 // What layout reaches of a node without the applier, and what its parent's
 // record of it, its kept measurement and its draws' coordinator rects share:
@@ -13,7 +15,6 @@ pub(crate) struct LayoutParts {
     cache: NodeCache,
     layout_state: RefCell<LayoutState>,
     runtime_state: RefCell<LayoutRuntimeState>,
-    coordinator_geometry: CoordinatorGeometry,
 }
 
 impl LayoutParts {
@@ -22,7 +23,6 @@ impl LayoutParts {
             cache: NodeCache::default(),
             layout_state: RefCell::default(),
             runtime_state: RefCell::new(runtime_state),
-            coordinator_geometry: CoordinatorGeometry::default(),
         }
     }
 
@@ -46,7 +46,12 @@ impl LayoutParts {
         &self.runtime_state
     }
 
-    pub(crate) fn coordinator_geometry(&self) -> &CoordinatorGeometry {
-        &self.coordinator_geometry
+    // Where the last measure placed the coordinator `ordinal` of a node of
+    // `node_size`, as `CoordinatorRect` names it; `None` before layout placed
+    // it.
+    pub(crate) fn placed_coordinator_rect(&self, ordinal: usize, node_size: Size) -> Option<Rect> {
+        self.runtime_state
+            .borrow()
+            .placed_coordinator_rect(ordinal, node_size)
     }
 }
