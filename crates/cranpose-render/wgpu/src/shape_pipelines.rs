@@ -68,6 +68,7 @@ pub(crate) struct ShapePipelines<B: KeyedBuild = ShapePipelineFactory> {
     /// its draws take fallback triangles, instead of the frame building it.
     draws_when_ready: bool,
     // Whether the base tier waits for the first frame: see `begin_frame`.
+    #[cfg(not(target_arch = "wasm32"))]
     base_pending: bool,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
@@ -92,6 +93,7 @@ impl<B: KeyedBuild> ShapePipelines<B> {
             stands_in: backend == wgpu::Backend::BrowserWebGpu,
             background_builds: false,
             draws_when_ready: compiler.is_active(),
+            #[cfg(not(target_arch = "wasm32"))]
             base_pending: compiler.is_active(),
             recorder,
         }
@@ -117,6 +119,7 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     // fallback triangles, and nothing asks to draw it again.
     pub(crate) fn begin_frame(&mut self) {
         self.slots.begin_frame();
+        #[cfg(not(target_arch = "wasm32"))]
         if self.base_pending && self.recorder.frame_drawn() {
             self.base_pending = false;
             for key in ShapePipelineKey::base_tier() {

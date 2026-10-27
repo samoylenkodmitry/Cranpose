@@ -400,6 +400,7 @@ impl ShapePipelineKey {
     // pipelines of source-over draws, under a rect clip or a rounded one.
     // Every source-over shape draws through one of them, the bytes its
     // specialization draws, while that compiles.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn base_tier() -> [Self; 2] {
         let rounded = Self {
             variant: ShapeVariant {
@@ -411,6 +412,7 @@ impl ShapePipelineKey {
         [Self::general_for_base().universal(), rounded.universal()]
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn general_for_base() -> Self {
         Self {
             blend_mode: BlendMode::SrcOver,
