@@ -31,3 +31,16 @@ impl MemoryReport {
         }
     }
 }
+
+// The bytes the heap that takes the app's allocations has free and in all:
+// internal RAM, and PSRAM where the chip has it.
+pub(crate) fn heap_bytes() -> (usize, usize) {
+    // SAFETY: as in `MemoryReport::now`, the queries read only the heap's own
+    // state under its lock.
+    unsafe {
+        (
+            sys::heap_caps_get_free_size(sys::MALLOC_CAP_DEFAULT),
+            sys::heap_caps_get_total_size(sys::MALLOC_CAP_DEFAULT),
+        )
+    }
+}

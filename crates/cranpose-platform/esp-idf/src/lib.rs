@@ -284,6 +284,8 @@ impl Screen<'_, '_> {
             return Ok(());
         }
         self.last_tick = Some(now);
+        let (free, total) = memory::heap_bytes();
+        self.framebuffer.report_memory(free, total);
         let elapsed = now.duration_since(self.start).as_nanos();
         if !self
             .framebuffer

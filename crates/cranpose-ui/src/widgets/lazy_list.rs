@@ -25,7 +25,7 @@ use web_time::Instant;
 
 use super::PaddingValues;
 use crate::{
-    composable,
+    MemoryHeadroom, composable,
     layout::MeasuredNode,
     layout_direction::LayoutDirection,
     modifier::{Modifier, Size},
@@ -38,6 +38,9 @@ use crate::{
 };
 
 const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
+// With little memory left, the pool keeps the item that left last: a scroll
+// gives it to the item that comes next.
+const TIGHT_RETAINED_REUSABLE_SLOTS: usize = 1;
 const IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS: usize = 2;
 const IDLE_PREFETCH_ITEMS_PER_PASS: usize = 1;
 /// Where idle prefetch passes run, a scrolling frame composes the new items
@@ -181,12 +184,14 @@ struct LazyListLayoutConfig {
     grid: Option<grid::CellLayout>,
 }
 
+mod focused_item;
 mod frame;
 mod grid;
 mod item_cache;
 mod retained;
 mod staggered;
 
+use focused_item::{focused_lazy_item, measure_focused_lazy_item, place_focused_lazy_item};
 use frame::LazyFrame;
 pub use grid::{
     GridCells, LazyGridState, LazyHorizontalGrid, LazyHorizontalGridSpec, LazyVerticalGrid,
@@ -630,7 +635,10 @@ fn measure_lazy_list_internal(
     context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
     let frame = LazyFrame::new(constraints, axis, context.config);
-    let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
+    let retained_reusable_slots = match crate::current_memory_headroom() {
+        MemoryHeadroom::Ample => EXPENSIVE_RETAINED_REUSABLE_SLOTS,
+        MemoryHeadroom::Tight => TIGHT_RETAINED_REUSABLE_SLOTS,
+    };
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
     let (result, count) = match &context.config.grid {
         Some(grid::CellLayout::Grid(grid)) => {
@@ -889,6 +897,11 @@ fn beyond_composition(
     scroll_delta: f32,
     place_beyond: bool,
 ) -> Option<BeyondBoundsComposition> {
+    // With little memory left a list keeps only the items it shows, unless
+    // it holds the focus and places their neighbours for a focus search.
+    if !place_beyond && crate::current_memory_headroom() == MemoryHeadroom::Tight {
+        return Some(BeyondBoundsComposition::viewport_only());
+    }
     if crate::lazy_prefetch::in_lazy_prefetch_pass() {
         state.hold_scroll_window();
         return Some(BeyondBoundsComposition::new(true, f32::INFINITY));
@@ -949,6 +962,8 @@ struct BeyondBoundsComposition {
     /// [`REACH_FRAMES`] frames, none at rest: the passes compose the rest.
     reach: f32,
     wants_prefetch: bool,
+    // `Tight` admits no item, composed or not.
+    memory: MemoryHeadroom,
 }
 
 impl BeyondBoundsComposition {
@@ -963,10 +978,23 @@ impl BeyondBoundsComposition {
             },
             reach,
             wants_prefetch: false,
+            memory: MemoryHeadroom::Ample,
+        }
+    }
+
+    // A composition that keeps nothing beyond the viewport, and leaves
+    // nothing there for an idle prefetch pass.
+    fn viewport_only() -> Self {
+        Self {
+            memory: MemoryHeadroom::Tight,
+            ..Self::new(false, 0.0)
         }
     }
 
     fn admits(&mut self, composed: bool, distance: f32) -> bool {
+        if self.memory == MemoryHeadroom::Tight {
+            return false;
+        }
         if composed {
             self.ready += 1;
             return true;
@@ -981,76 +1009,6 @@ impl BeyondBoundsComposition {
         self.ready += 1;
         true
     }
-}
-
-fn measure_focused_lazy_item(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    inputs: &LazyListItemMeasureInputs<'_>,
-) -> Option<LazyListMeasuredItem> {
-    let index = focused_lazy_item(scope, inputs)?;
-    Some(measure_lazy_list_item(scope, index, inputs))
-}
-
-/// The index of the item that holds the focus. Focus in an item the
-/// content no longer has is cleared.
-fn focused_lazy_item(
-    scope: &SubcomposeMeasureScopeImpl<'_>,
-    inputs: &LazyListItemMeasureInputs<'_>,
-) -> Option<usize> {
-    let slot = scope.focused_slot()?.raw();
-    let content = inputs.content;
-    let last_measured = inputs.measured_item_cache.borrow().focused_index(slot);
-    let found = last_measured
-        .filter(|&index| {
-            index < content.item_count() && content.get_key(index).to_slot_id() == slot
-        })
-        .or_else(|| content.get_index_by_slot_id_in_range(slot, inputs.state.nearest_range()))
-        .or_else(|| content.get_index_by_slot_id(slot));
-    let Some(index) = found else {
-        let _ = cranpose_core::run_in_mutable_snapshot(|| crate::FocusManager.clear_focus());
-        return None;
-    };
-    inputs
-        .measured_item_cache
-        .borrow_mut()
-        .remember_focused(slot, index);
-    Some(index)
-}
-
-/// Places the focused `item` where the pass left it out, as far from the
-/// first visible item as the items between take: `known` sizes, the first
-/// visible item's size for the others.
-fn place_focused_lazy_item(
-    result: &mut LazyListMeasureResult,
-    mut item: LazyListMeasuredItem,
-    known: impl IntoIterator<Item = (usize, f32)>,
-    spacing: f32,
-) {
-    let Err(position) = result
-        .visible_items
-        .binary_search_by_key(&item.index, |entry| entry.index)
-    else {
-        return;
-    };
-    let Some(anchor) = result.visible_items.first() else {
-        return;
-    };
-    let start = item.index.min(anchor.index);
-    let end = item.index.max(anchor.index);
-    let estimate = anchor.main_axis_size;
-    let mut distance = (end - start) as f32 * (estimate + spacing);
-    for (index, size) in known {
-        if (start..end).contains(&index) {
-            distance += size - estimate;
-        }
-    }
-    item.offset = anchor.offset
-        + if item.index < anchor.index {
-            -distance
-        } else {
-            distance
-        };
-    result.visible_items.insert(position, item);
 }
 
 /// Holds the sticky header of the first visible item at the start of the

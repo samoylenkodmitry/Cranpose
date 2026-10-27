@@ -25,6 +25,7 @@ mod ui_text;
 pub use ui_text::UiText;
 #[cfg(feature = "localization")]
 mod language_preferences;
+mod memory_headroom;
 #[cfg(feature = "localization")]
 pub use language_preferences::{
     LocalizationController, ProvideLanguagePreferences, local_localization,
@@ -207,6 +208,7 @@ pub use lazy_prefetch::{
     drain_lazy_prefetch_requests, has_lazy_prefetch_requests, lazy_prefetch_pass_cost,
     set_idle_prefetch_passes, warm_prefetched_slices, with_lazy_prefetch_pass,
 };
+pub use memory_headroom::{MemoryHeadroom, current_memory_headroom, set_memory_headroom};
 pub use modal::{
     ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };

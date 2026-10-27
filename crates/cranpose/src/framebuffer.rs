@@ -19,7 +19,7 @@ use cranpose_services::{
     SystemTheme,
     host::{LifecycleState, dispatch_lifecycle_state},
 };
-use cranpose_ui::EdgeInsets;
+use cranpose_ui::{EdgeInsets, current_memory_headroom, set_memory_headroom};
 
 use crate::platform_env::PlatformEnvironment;
 
@@ -124,6 +124,16 @@ impl Framebuffer {
             drawn_picture: None,
             environment,
         })
+    }
+
+    /// Reports the memory the device has left, `free` of `total` bytes of the
+    /// heap the app allocates from. Lazy layouts read it on their next
+    /// measure: with little left they keep only the items they show. A host
+    /// reports once a frame; one that never reports has ample memory.
+    pub fn report_memory(&mut self, free: usize, total: usize) {
+        self.shell.app_context().enter(|| {
+            set_memory_headroom(current_memory_headroom().of_heap(free, total));
+        });
     }
 
     /// Applies the display's safe area in points: the edges the system draws
