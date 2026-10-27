@@ -637,18 +637,22 @@ impl LazyListState {
     }
 
     pub(crate) fn begin_measure_pass(&self) -> LazyListMeasureStateSnapshot {
+        let snapshot = self.measure_pass_snapshot();
+        self.consume_measure_pass();
+        snapshot
+    }
+
+    // What a measure pass starts from. The state keeps the scroll it holds
+    // until `consume_measure_pass`, for a pass that may give up.
+    pub(crate) fn measure_pass_snapshot(&self) -> LazyListMeasureStateSnapshot {
         let (pending_scroll_delta, window_scroll_delta, pending_scroll_to, average_item_size) =
             self.inner
                 .try_with(|cell| {
-                    let mut inner = cell.borrow_mut();
-                    let pending_scroll_to = inner.pending_scroll_to_index.take();
+                    let inner = cell.borrow();
                     let pending_scroll_delta = inner.scroll_to_be_consumed;
-                    inner.scroll_to_be_consumed = 0.0;
-                    let held = std::mem::take(&mut inner.hold_scroll_window);
                     let window_scroll_delta = if pending_scroll_delta.abs() > 0.001 {
-                        inner.last_scroll_delta = pending_scroll_delta;
                         pending_scroll_delta
-                    } else if held {
+                    } else if inner.hold_scroll_window {
                         inner.last_scroll_delta
                     } else {
                         0.0
@@ -656,7 +660,7 @@ impl LazyListState {
                     (
                         pending_scroll_delta,
                         window_scroll_delta,
-                        pending_scroll_to,
+                        inner.pending_scroll_to_index,
                         inner.average_item_size,
                     )
                 })
@@ -672,6 +676,20 @@ impl LazyListState {
             pending_scroll_to,
             average_item_size,
         }
+    }
+
+    // Takes the scroll a measure pass applied: the pending delta, the item
+    // asked for and the held scroll window.
+    pub(crate) fn consume_measure_pass(&self) {
+        self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
+            inner.pending_scroll_to_index = None;
+            inner.hold_scroll_window = false;
+            let pending_scroll_delta = std::mem::take(&mut inner.scroll_to_be_consumed);
+            if pending_scroll_delta.abs() > 0.001 {
+                inner.last_scroll_delta = pending_scroll_delta;
+            }
+        });
     }
 
     pub(crate) fn next_measure_cycle_id(&self) -> u64 {
@@ -830,6 +848,16 @@ impl LazyListState {
     {
         self.scroll_position
             .update_if_first_item_moved(new_item_count, get_index_by_key)
+    }
+
+    /// Whether [`Self::update_scroll_position_if_item_moved`] would move the
+    /// scroll position.
+    pub fn first_visible_item_moved<F>(&self, new_item_count: usize, get_index_by_key: F) -> bool
+    where
+        F: Fn(u64) -> Option<usize>,
+    {
+        self.scroll_position
+            .first_item_moved(new_item_count, get_index_by_key)
     }
 
     pub(crate) fn update_layout_info(&self, mut info: LazyListLayoutInfo) {

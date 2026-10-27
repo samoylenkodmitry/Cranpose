@@ -18,6 +18,7 @@ mod inline_widgets;
 mod inspector_and_insets;
 mod lazy_content_padding;
 mod lazy_retained_many_roots;
+mod lazy_scroll_from_retained;
 #[cfg(feature = "localization")]
 mod localization;
 mod parent_data_order;

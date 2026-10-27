@@ -8,6 +8,7 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
+    convert::Infallible,
     rc::Rc,
 };
 
@@ -18,9 +19,7 @@ use cranpose_foundation::lazy::{
     measure_lazy_list_with_beyond_bounds_policy,
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
-use cranpose_ui_layout::{
-    Axis, Constraints, LinearArrangement, MeasureResult, MeasureScope as _, round_to_px,
-};
+use cranpose_ui_layout::{Axis, Constraints, LinearArrangement, MeasureResult, round_to_px};
 use smallvec::SmallVec;
 use web_time::Instant;
 
@@ -32,8 +31,9 @@ use crate::{
     modifier::{Modifier, Size},
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
-        MeasurePolicy, Placement, RetainedSlotChildren, SubcomposeChild, SubcomposeLayoutNode,
-        SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
+        MeasurePolicy, PlacedRootsScope, Placement, RetainedMeasurePolicy, RetainedMeasureScope,
+        RetainedSlotChildren, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
+        SubcomposeMeasureScopeImpl,
     },
 };
 
@@ -183,6 +183,7 @@ struct LazyListLayoutConfig {
 
 mod grid;
 mod item_cache;
+mod retained;
 mod staggered;
 
 pub use grid::{
@@ -559,6 +560,62 @@ struct LazyListMeasureContext<'a> {
     overscroll: &'a OverscrollEffect,
 }
 
+// What a list's measure policies read: its state, configuration, content,
+// measured items and overscroll.
+struct LazyListPolicyInputs {
+    state: LazyListState,
+    axis: Axis,
+    config: Rc<RefCell<LazyListLayoutConfig>>,
+    content: Rc<RefCell<LazyListContentHandle>>,
+    measured_item_cache: Rc<RefCell<LazyMeasuredItemCache>>,
+    overscroll: OverscrollEffect,
+}
+
+impl LazyListPolicyInputs {
+    // The list's measure policy and its retained measure policy.
+    fn policies(self) -> (Rc<MeasurePolicy>, Rc<RetainedMeasurePolicy>) {
+        let inputs = Rc::new(self);
+        let retained_inputs = Rc::clone(&inputs);
+        (
+            Rc::new(
+                move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
+                    let content = inputs.content.borrow();
+                    let config = inputs.config.borrow();
+                    measure_lazy_list_internal(
+                        scope,
+                        constraints,
+                        inputs.axis,
+                        content.content(),
+                        inputs.context(&config),
+                    )
+                },
+            ),
+            Rc::new(
+                move |scope: &mut RetainedMeasureScope<'_>, constraints: Constraints| {
+                    let content = retained_inputs.content.borrow();
+                    let config = retained_inputs.config.borrow();
+                    retained::measure_lazy_list_retained(
+                        scope,
+                        constraints,
+                        retained_inputs.axis,
+                        content.content(),
+                        retained_inputs.context(&config),
+                    )
+                },
+            ),
+        )
+    }
+
+    fn context<'a>(&'a self, config: &'a LazyListLayoutConfig) -> LazyListMeasureContext<'a> {
+        LazyListMeasureContext {
+            state: &self.state,
+            config,
+            measured_item_cache: &self.measured_item_cache,
+            overscroll: &self.overscroll,
+        }
+    }
+}
+
 /// The constraint-derived sizes a measure pass works with.
 struct LazyFrame {
     axis: Axis,
@@ -625,7 +682,9 @@ fn measure_list_viewport(
     let items_count = content.item_count();
     measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, frame.axis, frame.item_cross_axis_size);
+        .begin_pass(frame.axis, frame.item_cross_axis_size, |slot| {
+            scope.slot_is_retained(slot)
+        });
     let near = state.nearest_range();
     if items_count > 0 {
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
@@ -677,7 +736,7 @@ fn measure_list_viewport(
 /// Sizes the list from what it measured and places the items of `result`,
 /// `count` lines of them.
 fn place_lazy_list(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    scope: &mut impl PlacedRootsScope,
     constraints: Constraints,
     result: &LazyListMeasureResult,
     count: usize,
@@ -792,13 +851,12 @@ impl LazyListItems<'_, '_, '_> {
         if composed {
             keep_lazy_list_item(self.scope, index, &self.inputs);
         } else {
-            self.measure(index);
+            self.item(index);
         }
     }
-}
 
-impl LazyItemSource for LazyListItems<'_, '_, '_> {
-    fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
+    // Composes and measures the item at `index`.
+    fn item(&mut self, index: usize) -> LazyListMeasuredItem {
         if !self.skipped_slots_recycled
             && recycle_forward_skipped_active_slots(
                 self.scope,
@@ -820,17 +878,25 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
         }
         item
     }
+}
 
-    fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem {
+impl LazyItemSource for LazyListItems<'_, '_, '_> {
+    type Refusal = Infallible;
+
+    fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
+        Ok(self.item(index))
+    }
+
+    fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Infallible> {
         let composed = self.composed(index);
         if !self.admits(composed, distance) {
-            return BeyondItem::Declined;
+            return Ok(BeyondItem::Declined);
         }
         if self.place_beyond {
-            return BeyondItem::Placed(self.measure(index));
+            return Ok(BeyondItem::Placed(self.item(index)));
         }
         self.keep(index, composed);
-        BeyondItem::Kept
+        Ok(BeyondItem::Kept)
     }
 }
 
@@ -838,16 +904,20 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
 /// scrolls, and in an idle prefetch pass, they compose as
 /// [`BeyondBoundsComposition`] decides; so do they at rest where the shell
 /// runs idle prefetch passes, unless the list holds the focus and places them.
-fn beyond_composition(items: &LazyListItems<'_, '_, '_>) -> Option<BeyondBoundsComposition> {
+fn beyond_composition(
+    state: &LazyListState,
+    scroll_delta: f32,
+    place_beyond: bool,
+) -> Option<BeyondBoundsComposition> {
     if crate::lazy_prefetch::in_lazy_prefetch_pass() {
-        items.inputs.state.hold_scroll_window();
+        state.hold_scroll_window();
         return Some(BeyondBoundsComposition::new(true, f32::INFINITY));
     }
-    let scrolling = items.scroll_delta.abs() > 0.001;
+    let scrolling = scroll_delta.abs() > 0.001;
     let passes_run = crate::lazy_prefetch::idle_prefetch_passes_run();
-    (scrolling || (passes_run && !items.place_beyond)).then(|| {
+    (scrolling || (passes_run && !place_beyond)).then(|| {
         let reach = if passes_run {
-            items.scroll_delta.abs() * REACH_FRAMES
+            scroll_delta.abs() * REACH_FRAMES
         } else {
             f32::INFINITY
         };
@@ -871,7 +941,7 @@ fn measure_lazy_viewport(
     viewport_size: f32,
     node_id: NodeId,
 ) -> LazyListMeasureResult {
-    items.beyond = beyond_composition(&items);
+    items.beyond = beyond_composition(items.inputs.state, items.scroll_delta, items.place_beyond);
     let inputs = items.inputs;
     let result = measure_lazy_list_with_beyond_bounds_policy(
         inputs.content.item_count(),
@@ -1350,34 +1420,16 @@ fn LazyColumnImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    let measured_item_cache_for_policy = Rc::clone(&measured_item_cache);
-    let overscroll_for_policy = overscroll.clone();
-    let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
-        let config_ref = Rc::clone(&config_cell);
-        let content_ref = Rc::clone(&content_cell);
-        let measured_item_cache = Rc::clone(&measured_item_cache_for_policy);
-        let overscroll = overscroll_for_policy.clone();
-        let policy: Rc<MeasurePolicy> = Rc::new(
-            move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
-                let content = content_ref.borrow();
-                let config = config_ref.borrow();
-                measure_lazy_list_internal(
-                    scope,
-                    constraints,
-                    Axis::Vertical,
-                    content.content(),
-                    LazyListMeasureContext {
-                        state: &state,
-                        config: &config,
-                        measured_item_cache: &measured_item_cache,
-                        overscroll: &overscroll,
-                    },
-                )
-            },
-        );
-        policy
-    })
-    .with(|p| Rc::clone(p));
+    let inputs = LazyListPolicyInputs {
+        state,
+        axis: Axis::Vertical,
+        config: config_cell,
+        content: content_cell,
+        measured_item_cache: Rc::clone(&measured_item_cache),
+        overscroll: overscroll.clone(),
+    };
+    let (policy, retained_policy) = cranpose_core::remember(move || inputs.policies())
+        .with(|(policy, retained)| (Rc::clone(policy), Rc::clone(retained)));
     let list_state_id = lazy_list_state_identity(&state);
 
     let scroll_modifier = grid::grid_semantics(
@@ -1409,6 +1461,7 @@ fn LazyColumnImpl(
             node.set_modifier(scroll_modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));
+        node.set_retained_measure_policy(Rc::clone(&retained_policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
         node.set_layout_direction(direction);
@@ -1495,34 +1548,16 @@ fn LazyRowImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    let measured_item_cache_for_policy = Rc::clone(&measured_item_cache);
-    let overscroll_for_policy = overscroll.clone();
-    let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
-        let config_ref = Rc::clone(&config_cell);
-        let content_ref = Rc::clone(&content_cell);
-        let measured_item_cache = Rc::clone(&measured_item_cache_for_policy);
-        let overscroll = overscroll_for_policy.clone();
-        let policy: Rc<MeasurePolicy> = Rc::new(
-            move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
-                let content = content_ref.borrow();
-                let config = config_ref.borrow();
-                measure_lazy_list_internal(
-                    scope,
-                    constraints,
-                    Axis::Horizontal,
-                    content.content(),
-                    LazyListMeasureContext {
-                        state: &state,
-                        config: &config,
-                        measured_item_cache: &measured_item_cache,
-                        overscroll: &overscroll,
-                    },
-                )
-            },
-        );
-        policy
-    })
-    .with(|p| Rc::clone(p));
+    let inputs = LazyListPolicyInputs {
+        state,
+        axis: Axis::Horizontal,
+        config: config_cell,
+        content: content_cell,
+        measured_item_cache: Rc::clone(&measured_item_cache),
+        overscroll: overscroll.clone(),
+    };
+    let (policy, retained_policy) = cranpose_core::remember(move || inputs.policies())
+        .with(|(policy, retained)| (Rc::clone(policy), Rc::clone(retained)));
     let list_state_id = lazy_list_state_identity(&state);
 
     let scroll_modifier = grid::grid_semantics(
@@ -1556,6 +1591,7 @@ fn LazyRowImpl(
             node.set_modifier(scroll_modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));
+        node.set_retained_measure_policy(Rc::clone(&retained_policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
         node.set_layout_direction(direction);

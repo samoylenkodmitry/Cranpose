@@ -154,24 +154,13 @@ impl LazyListScrollPosition {
     where
         F: Fn(u64) -> Option<usize>,
     {
-        if !self.index.is_alive() {
-            return 0;
-        }
-        let Some(cell) = self.inner.try_get() else {
+        let Some((current_index, new_index)) = self.first_item_index(new_item_count, find_by_key)
+        else {
             return 0;
         };
-        let (current_index, last_key) = {
-            let inner = cell.borrow();
-            (inner.current_index, inner.last_known_first_item_key)
-        };
-
-        let new_index = match last_key {
-            None => current_index.min(new_item_count.saturating_sub(1)),
-            Some(key) => find_by_key(key)
-                .unwrap_or_else(|| current_index.min(new_item_count.saturating_sub(1))),
-        };
-
-        if current_index != new_index {
+        if current_index != new_index
+            && let Some(cell) = self.inner.try_get()
+        {
             {
                 let mut inner = cell.borrow_mut();
                 inner.current_index = new_index;
@@ -180,6 +169,36 @@ impl LazyListScrollPosition {
             self.index.set(new_index);
         }
         new_index
+    }
+
+    // Whether `update_if_first_item_moved` would move the position.
+    pub(crate) fn first_item_moved<F>(&self, new_item_count: usize, find_by_key: F) -> bool
+    where
+        F: Fn(u64) -> Option<usize>,
+    {
+        self.first_item_index(new_item_count, find_by_key)
+            .is_some_and(|(current_index, new_index)| current_index != new_index)
+    }
+
+    // The index of the first visible item and the one it has among
+    // `new_item_count` items, found by its key.
+    fn first_item_index<F>(&self, new_item_count: usize, find_by_key: F) -> Option<(usize, usize)>
+    where
+        F: Fn(u64) -> Option<usize>,
+    {
+        if !self.index.is_alive() {
+            return None;
+        }
+        let (current_index, last_key) = self.inner.try_with(|cell| {
+            let inner = cell.borrow();
+            (inner.current_index, inner.last_known_first_item_key)
+        })?;
+        let new_index = match last_key {
+            None => current_index.min(new_item_count.saturating_sub(1)),
+            Some(key) => find_by_key(key)
+                .unwrap_or_else(|| current_index.min(new_item_count.saturating_sub(1))),
+        };
+        Some((current_index, new_index))
     }
 
     /// Returns the nearest range for optimized key lookups.

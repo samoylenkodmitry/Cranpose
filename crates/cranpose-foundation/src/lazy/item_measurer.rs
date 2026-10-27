@@ -91,7 +91,7 @@ where
         &mut self,
         first_item_index: usize,
         first_item_scroll_offset: f32,
-    ) -> ItemMeasurePass {
+    ) -> Result<ItemMeasurePass, S::Refusal> {
         let start_time = Instant::now();
         let leading_padding = if first_item_index == 0 {
             self.config.before_content_padding
@@ -104,7 +104,7 @@ where
             (self.effective_viewport_size - self.config.after_content_padding).max(0.0);
 
         let (mut visible_items, current_index, current_offset) =
-            self.measure_visible(first_item_index, start_offset, viewport_end, start_time);
+            self.measure_visible(first_item_index, start_offset, viewport_end, start_time)?;
         let measured_visible_items = visible_items.len();
         let hit_time_budget = start_time.elapsed() > DEFAULT_TIME_BUDGET;
 
@@ -115,7 +115,7 @@ where
                 current_offset,
                 content_end,
                 first_item_index,
-            )
+            )?
             .unwrap_or(first_item_index);
         let backfilled = effective_first_index != first_item_index;
 
@@ -124,14 +124,17 @@ where
             current_offset,
             &mut visible_items,
             start_time,
-        );
+        )?;
 
         if self.include_before_beyond_bounds
             && effective_first_index > 0
             && !visible_items.is_empty()
         {
-            let placed_before =
-                self.keep_beyond_before(effective_first_index, visible_items[0].offset, start_time);
+            let placed_before = self.keep_beyond_before(
+                effective_first_index,
+                visible_items[0].offset,
+                start_time,
+            )?;
             if !placed_before.is_empty() {
                 let mut combined = placed_before;
                 combined.append(&mut visible_items);
@@ -166,7 +169,7 @@ where
                 start_time.elapsed().as_secs_f64() * 1000.0
             );
         }
-        pass
+        Ok(pass)
     }
 
     fn fill_end_gap(
@@ -176,13 +179,13 @@ where
         current_offset: f32,
         viewport_end: f32,
         first_item_index: usize,
-    ) -> Option<usize> {
+    ) -> Result<Option<usize>, S::Refusal> {
         if current_index < self.items_count || first_item_index == 0 || visible_items.is_empty() {
-            return None;
+            return Ok(None);
         }
         let spare = viewport_end - current_offset;
         if spare <= 0.5 {
-            return None;
+            return Ok(None);
         }
         for item in visible_items.iter_mut() {
             item.offset += spare;
@@ -194,9 +197,7 @@ where
             && visible_items.len() < MAX_VISIBLE_ITEMS_SAFETY
         {
             idx -= 1;
-            let mut item = self
-                .take_pre_measured(idx)
-                .unwrap_or_else(|| self.source.measure(idx));
+            let mut item = self.item(idx)?;
             top -= item.main_axis_size + self.config.spacing;
             item.offset = top;
             visible_items.insert(0, item);
@@ -208,7 +209,7 @@ where
                 item.offset -= adjustment;
             }
         }
-        Some(visible_items[0].index)
+        Ok(Some(visible_items[0].index))
     }
 
     fn measure_visible(
@@ -217,7 +218,7 @@ where
         start_offset: f32,
         viewport_end: f32,
         _start_time: Instant,
-    ) -> (Vec<LazyListMeasuredItem>, usize, f32) {
+    ) -> Result<(Vec<LazyListMeasuredItem>, usize, f32), S::Refusal> {
         let mut items = Vec::with_capacity(self.estimated_measure_capacity(
             start_index,
             start_offset,
@@ -230,9 +231,7 @@ where
             && current_offset < viewport_end
             && items.len() < MAX_VISIBLE_ITEMS_SAFETY
         {
-            let mut item = self
-                .take_pre_measured(current_index)
-                .unwrap_or_else(|| self.source.measure(current_index));
+            let mut item = self.item(current_index)?;
             item.offset = current_offset;
             current_offset += item.main_axis_size + self.config.spacing;
             items.push(item);
@@ -248,7 +247,7 @@ where
             );
         }
 
-        (items, current_index, current_offset)
+        Ok((items, current_index, current_offset))
     }
 
     fn keep_beyond_after(
@@ -257,7 +256,7 @@ where
         mut current_offset: f32,
         items: &mut Vec<LazyListMeasuredItem>,
         start_time: Instant,
-    ) {
+    ) -> Result<(), S::Refusal> {
         let after_count = self
             .beyond_bounds_item_count
             .min(self.items_count - current_index);
@@ -269,7 +268,7 @@ where
             {
                 break;
             }
-            match self.source.keep_beyond(current_index, distance) {
+            match self.source.keep_beyond(current_index, distance)? {
                 BeyondItem::Declined => break,
                 BeyondItem::Kept => distance += self.estimated_item_extent(),
                 BeyondItem::Placed(mut item) => {
@@ -282,6 +281,7 @@ where
             }
             current_index += 1;
         }
+        Ok(())
     }
 
     fn keep_beyond_before(
@@ -289,7 +289,7 @@ where
         first_index: usize,
         first_offset: f32,
         start_time: Instant,
-    ) -> Vec<LazyListMeasuredItem> {
+    ) -> Result<Vec<LazyListMeasuredItem>, S::Refusal> {
         let before_count = self.beyond_bounds_item_count.min(first_index);
         let mut placed = Vec::new();
         let mut before_offset = first_offset;
@@ -303,7 +303,7 @@ where
             }
             match self
                 .source
-                .keep_beyond(first_index - 1 - kept_before, distance)
+                .keep_beyond(first_index - 1 - kept_before, distance)?
             {
                 BeyondItem::Declined => break,
                 BeyondItem::Kept => distance += self.estimated_item_extent(),
@@ -317,7 +317,7 @@ where
             }
         }
         placed.reverse();
-        placed
+        Ok(placed)
     }
 
     fn estimated_measure_capacity(
@@ -353,6 +353,14 @@ where
             DEFAULT_ITEM_SIZE_ESTIMATE
         };
         (item_size + self.config.spacing.max(0.0)).max(MIN_ESTIMATED_ITEM_EXTENT)
+    }
+
+    // The item at `index`: measured before the pass, or now by the source.
+    fn item(&mut self, index: usize) -> Result<LazyListMeasuredItem, S::Refusal> {
+        match self.take_pre_measured(index) {
+            Some(item) => Ok(item),
+            None => self.source.measure(index),
+        }
     }
 
     fn take_pre_measured(&mut self, index: usize) -> Option<LazyListMeasuredItem> {

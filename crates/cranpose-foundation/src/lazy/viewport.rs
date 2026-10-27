@@ -12,7 +12,7 @@ const INFINITE_VIEWPORT_ITEM_COUNT: f32 = 20.0;
 
 impl ViewportHandler {
     pub(super) fn new(viewport_size: f32, average_item_size: f32, spacing: f32) -> Self {
-        let is_infinite = viewport_size.is_infinite() || viewport_size > MAX_REASONABLE_VIEWPORT;
+        let is_infinite = Self::is_unbounded(viewport_size);
 
         let effective_size = if is_infinite {
             let avg_size = average_item_size.max(DEFAULT_ITEM_SIZE_ESTIMATE);
@@ -35,6 +35,12 @@ impl ViewportHandler {
     #[inline]
     pub(super) fn effective_size(&self) -> f32 {
         self.effective_size
+    }
+
+    // Whether a viewport of `viewport_size` sets no bound to the items it
+    // shows, so the list composes all of them.
+    pub(super) fn is_unbounded(viewport_size: f32) -> bool {
+        viewport_size.is_infinite() || viewport_size > MAX_REASONABLE_VIEWPORT
     }
 
     #[inline]

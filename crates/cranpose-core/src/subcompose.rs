@@ -388,6 +388,26 @@ impl SubcomposeState {
             .clone()
     }
 
+    /// The root nodes of `slot_id` when it is the active slot at `position`
+    /// in [`Self::active_slots`] and the next pass would activate it there
+    /// as it is. A measure pass that keeps the slots of the last one checks
+    /// them in that order without starting a pass.
+    pub fn kept_slot_nodes_at(&self, position: usize, slot_id: SlotId) -> Option<&[NodeId]> {
+        if self.active_order.get(position) != Some(&slot_id) {
+            return None;
+        }
+        let record = self.slots.get(&slot_id)?;
+        if record.exact_reactivation || record.reusable_nodes > 0 || record.has_stale_scopes() {
+            return None;
+        }
+        record.nodes.as_deref()
+    }
+
+    /// The active slots, in the order the last pass activated them.
+    pub fn active_slots(&self) -> &[SlotId] {
+        &self.active_order
+    }
+
     #[doc(hidden)]
     pub fn activate_current_active_slot(&mut self, slot_id: SlotId) -> Option<&[NodeId]> {
         if !self.activate_current_active_slot_at_cursor(slot_id) {

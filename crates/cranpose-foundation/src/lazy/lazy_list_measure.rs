@@ -4,7 +4,7 @@
 //! which items should be composed and measured based on the current scroll
 //! position and viewport size.
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, convert::Infallible};
 
 use cranpose_ui_layout::Axis;
 
@@ -13,7 +13,7 @@ use super::{
     diagnostics,
     item_measurer::ItemMeasurer,
     lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem},
-    lazy_list_state::{LazyListLayoutInfo, LazyListState},
+    lazy_list_state::{LazyListLayoutInfo, LazyListMeasureStateSnapshot, LazyListState},
     scroll_position_resolver::ScrollPositionResolver,
     viewport::ViewportHandler,
 };
@@ -93,16 +93,26 @@ pub enum BeyondItem {
 
 /// Where a lazy list measure pass gets its items.
 pub trait LazyItemSource {
+    /// Why the source gives no item: [`Infallible`] for a source that
+    /// composes every item it is asked for, [`NeedsComposition`] for one
+    /// that only keeps the items of the last pass.
+    type Refusal;
+
     /// Composes and measures the item at `index`, which the pass places.
-    fn measure(&mut self, index: usize) -> LazyListMeasuredItem;
+    fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Self::Refusal>;
 
     /// Keeps the item at `index`, which lies beyond the viewport, composed
     /// ahead of a scroll. `distance` says how far past the viewport's edge
     /// the item starts: measured for the items between, estimated from the
     /// average item size for the ones kept unplaced. A source places either
     /// every beyond item it keeps in a pass or none.
-    fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem;
+    fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Self::Refusal>;
 }
+
+/// An item that a pass from the last pass's items cannot take as it is: it
+/// needs a composition or a measure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeedsComposition;
 
 struct MeasureEveryItem<F>(F);
 
@@ -110,13 +120,15 @@ impl<F> LazyItemSource for MeasureEveryItem<F>
 where
     F: FnMut(usize) -> LazyListMeasuredItem,
 {
-    fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
-        (self.0)(index)
+    type Refusal = Infallible;
+
+    fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
+        Ok((self.0)(index))
     }
 
-    fn keep_beyond(&mut self, index: usize, _distance: f32) -> BeyondItem {
+    fn keep_beyond(&mut self, index: usize, _distance: f32) -> Result<BeyondItem, Infallible> {
         (self.0)(index);
-        BeyondItem::Kept
+        Ok(BeyondItem::Kept)
     }
 }
 
@@ -172,9 +184,8 @@ pub fn measure_lazy_list_with_beyond_bounds_policy<S>(
     source: &mut S,
 ) -> LazyListMeasureResult
 where
-    S: LazyItemSource,
+    S: LazyItemSource<Refusal = Infallible>,
 {
-    let raw_viewport_size = viewport_size;
     if items_count == 0 || viewport_size <= 0.0 {
         return publish_without_items(state, items_count, viewport_size, config);
     }
@@ -187,10 +198,150 @@ where
         config.spacing,
     );
     if viewport.is_infinite() {
-        return measure_unbounded_lazy_list(items_count, state, raw_viewport_size, config, source);
+        let Ok(result) =
+            measure_unbounded_lazy_list(items_count, state, viewport_size, config, source);
+        return result;
     }
-    let effective_viewport_size = viewport.effective_size();
-    let is_infinite_viewport = viewport.is_infinite();
+    let Ok(list) = measure_items(
+        items_count,
+        state,
+        (viewport_size, viewport.effective_size()),
+        config,
+        measure_state,
+        source,
+    );
+    list.commit(state)
+}
+
+/// Measures a lazy list as [`measure_lazy_list_with_beyond_bounds_policy`]
+/// does, from the items `source` keeps of its last pass, and leaves `state`
+/// as it was: [`MeasuredLazyList::publish`] gives the state the pass. Refuses
+/// where the source refuses an item, and a list with no items or with no
+/// bounded viewport.
+pub fn measure_lazy_list_from_retained<S>(
+    items_count: usize,
+    state: &LazyListState,
+    viewport_size: f32,
+    config: &LazyListMeasureConfig,
+    source: &mut S,
+) -> Result<MeasuredLazyList, NeedsComposition>
+where
+    S: LazyItemSource<Refusal = NeedsComposition>,
+{
+    if items_count == 0 || viewport_size <= 0.0 || ViewportHandler::is_unbounded(viewport_size) {
+        return Err(NeedsComposition);
+    }
+    let measure_state = state.measure_pass_snapshot();
+    let viewport = ViewportHandler::new(
+        viewport_size,
+        measure_state.average_item_size,
+        config.spacing,
+    );
+    measure_items(
+        items_count,
+        state,
+        (viewport_size, viewport.effective_size()),
+        config,
+        measure_state,
+        source,
+    )
+}
+
+/// A measured lazy list whose scroll position and layout info its state does
+/// not hold yet.
+#[must_use]
+pub struct MeasuredLazyList {
+    result: LazyListMeasureResult,
+    // The key of the first visible item, which the scroll position follows
+    // to where the item moves: none where the pass placed no item.
+    first_key: Option<u64>,
+    items_count: usize,
+    raw_viewport_size: f32,
+    padding: (f32, f32),
+    spacing: f32,
+    reverse_layout: bool,
+    // The telemetry line of the pass, without its cycle number.
+    telemetry: Option<String>,
+}
+
+impl MeasuredLazyList {
+    /// Gives `state` the scroll position, the layout info and the scroll
+    /// bounds of the pass, and takes the scroll the pass applied.
+    pub fn publish(self, state: &LazyListState) -> LazyListMeasureResult {
+        state.consume_measure_pass();
+        self.commit(state)
+    }
+
+    fn commit(self, state: &LazyListState) -> LazyListMeasureResult {
+        let result = self.result;
+        let (first_index, first_offset) = (
+            result.first_visible_item_index,
+            result.first_visible_item_scroll_offset,
+        );
+        match self.first_key {
+            Some(key) => state.update_scroll_position_with_key(first_index, first_offset, key),
+            None => state.update_scroll_position(first_index, first_offset),
+        }
+        if let Some(line) = self.telemetry {
+            let cycle_id = state.next_measure_cycle_id();
+            log::warn!("[lazy-measure-telemetry] cycle={cycle_id} {line}");
+        }
+        let viewport_end = result.viewport_size;
+        let mut visible_items_info = state.spare_items_info();
+        visible_items_info.extend(
+            result
+                .visible_items
+                .iter()
+                .filter(|item| {
+                    let item_end = item_end_with_spacing(item, self.items_count, self.spacing);
+                    item_end > 0.0 && item.offset < viewport_end
+                })
+                .map(LazyListMeasuredItem::to_item_info),
+        );
+        state.update_layout_info(LazyListLayoutInfo {
+            visible_items_info,
+            total_items_count: self.items_count,
+            raw_viewport_size: self.raw_viewport_size,
+            is_infinite_viewport: false,
+            viewport_size: result.viewport_size,
+            viewport_start_offset: 0.0,
+            viewport_end_offset: viewport_end,
+            before_content_padding: self.padding.0,
+            after_content_padding: self.padding.1,
+            main_axis_item_spacing: self.spacing,
+            snap_anchor_offset: 0.0,
+            reverse_layout: self.reverse_layout,
+        });
+
+        state.update_scroll_bounds();
+        result
+    }
+}
+
+// Where an item ends, with the spacing after it unless it is the last.
+fn item_end_with_spacing(item: &LazyListMeasuredItem, items_count: usize, spacing: f32) -> f32 {
+    let spacing_after = if item.index + 1 < items_count {
+        spacing
+    } else {
+        0.0
+    };
+    item.offset + item.main_axis_size + spacing_after
+}
+
+// Measures the items of a list with a bounded viewport, `viewport_sizes`
+// as given and as the pass sees it, from `measure_state`.
+fn measure_items<S>(
+    items_count: usize,
+    state: &LazyListState,
+    viewport_sizes: (f32, f32),
+    config: &LazyListMeasureConfig,
+    measure_state: LazyListMeasureStateSnapshot,
+    source: &mut S,
+) -> Result<MeasuredLazyList, S::Refusal>
+where
+    S: LazyItemSource,
+{
+    let (raw_viewport_size, effective_viewport_size) = viewport_sizes;
 
     let pending_scroll_delta = measure_state.pending_scroll_delta;
     let window_scroll_delta = measure_state.window_scroll_delta;
@@ -209,7 +360,7 @@ where
         (first_index, first_offset) = resolver.normalize_backward_jump(first_index, first_offset);
         while first_offset < 0.0 && first_index > 0 {
             first_index -= 1;
-            let item = source.measure(first_index);
+            let item = source.measure(first_index)?;
             first_offset += item.main_axis_size + config.spacing;
             if first_index == 0 {
                 first_offset += config.before_content_padding;
@@ -240,7 +391,7 @@ where
         .is_some_and(|size| first_offset + 0.001 < item_extent_at(first_index, size));
 
     if !offset_known_within_current_item && first_offset > 0.0 && first_index < items_count {
-        let item = source.measure(first_index);
+        let item = source.measure(first_index)?;
         let item_extent = item_extent_at(first_index, item.main_axis_size);
 
         if first_offset + 0.001 < item_extent {
@@ -273,7 +424,7 @@ where
     .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
     .with_include_before_beyond_bounds(window_scroll_delta >= -0.001)
     .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
-    let measurement_pass = measurer.measure_all(first_index, first_offset);
+    let measurement_pass = measurer.measure_all(first_index, first_offset)?;
     let measurement_start_index = measurement_pass.start_index;
     let measurement_start_offset = measurement_pass.start_offset;
     let measurement_next_index = measurement_pass.next_index;
@@ -293,19 +444,10 @@ where
         measure_state.average_item_size,
     );
 
-    let viewport_start = 0.0;
     let viewport_end = effective_viewport_size;
-    let item_end_with_spacing = |item: &LazyListMeasuredItem| {
-        let spacing_after = if item.index + 1 < items_count {
-            config.spacing
-        } else {
-            0.0
-        };
-        item.offset + item.main_axis_size + spacing_after
-    };
     let actual_first_visible = visible_items
         .iter()
-        .find(|item| item_end_with_spacing(item) > viewport_start);
+        .find(|item| item_end_with_spacing(item, items_count, config.spacing) > 0.0);
 
     let unresolved_pass = measurement_hit_time_budget
         && !measurement_viewport_filled
@@ -348,23 +490,17 @@ where
         (0, 0.0)
     };
 
-    if let Some(first) = actual_first_visible {
-        state.update_scroll_position_with_key(final_first_index, final_scroll_offset, first.key);
-    } else if !visible_items.is_empty() && !unresolved_pass {
-        state.update_scroll_position_with_key(
-            final_first_index,
-            final_scroll_offset,
-            visible_items[0].key,
-        );
-    } else {
-        state.update_scroll_position(final_first_index, final_scroll_offset);
-    }
+    let first_key = match actual_first_visible {
+        Some(first) => Some(first.key),
+        None => visible_items
+            .first()
+            .filter(|_| !unresolved_pass)
+            .map(|item| item.key),
+    };
 
-    if telemetry_enabled {
-        let cycle_id = state.next_measure_cycle_id();
-        log::warn!(
-            "[lazy-measure-telemetry] cycle={} items_count={} average_item_size={:.2} viewport_size={:.2} total_content_size={:.2} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
-            cycle_id,
+    let telemetry = telemetry_enabled.then(|| {
+        format!(
+            "items_count={} average_item_size={:.2} viewport_size={:.2} total_content_size={:.2} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
             items_count,
             measure_state.average_item_size,
             effective_viewport_size,
@@ -385,34 +521,8 @@ where
             actual_first_visible.is_some(),
             measurement_hit_time_budget,
             measurement_viewport_filled
-        );
-    }
-    let mut visible_items_info = state.spare_items_info();
-    visible_items_info.extend(
-        visible_items
-            .iter()
-            .filter(|item| {
-                let item_end = item_end_with_spacing(item);
-                item_end > viewport_start && item.offset < viewport_end
-            })
-            .map(LazyListMeasuredItem::to_item_info),
-    );
-    state.update_layout_info(LazyListLayoutInfo {
-        visible_items_info,
-        total_items_count: items_count,
-        raw_viewport_size,
-        is_infinite_viewport,
-        viewport_size: effective_viewport_size,
-        viewport_start_offset: viewport_start,
-        viewport_end_offset: viewport_end,
-        before_content_padding: config.before_content_padding,
-        after_content_padding: config.after_content_padding,
-        main_axis_item_spacing: config.spacing,
-        snap_anchor_offset: 0.0,
-        reverse_layout: config.reverse_layout,
+        )
     });
-
-    state.update_scroll_bounds();
 
     let can_scroll_backward = final_first_index > 0 || final_scroll_offset > 0.0;
     let can_scroll_forward = if let Some(last) = visible_items.last() {
@@ -421,15 +531,24 @@ where
         false
     };
 
-    LazyListMeasureResult {
-        visible_items,
-        first_visible_item_index: final_first_index,
-        first_visible_item_scroll_offset: final_scroll_offset,
-        viewport_size: effective_viewport_size,
-        total_content_size,
-        can_scroll_forward,
-        can_scroll_backward,
-    }
+    Ok(MeasuredLazyList {
+        result: LazyListMeasureResult {
+            visible_items,
+            first_visible_item_index: final_first_index,
+            first_visible_item_scroll_offset: final_scroll_offset,
+            viewport_size: effective_viewport_size,
+            total_content_size,
+            can_scroll_forward,
+            can_scroll_backward,
+        },
+        first_key,
+        items_count,
+        raw_viewport_size,
+        padding: (config.before_content_padding, config.after_content_padding),
+        spacing: config.spacing,
+        reverse_layout: config.reverse_layout,
+        telemetry,
+    })
 }
 
 /// Publishes a pass that places no item, of a list with none or of a
@@ -480,7 +599,7 @@ fn measure_unbounded_lazy_list<S>(
     raw_viewport_size: f32,
     config: &LazyListMeasureConfig,
     source: &mut S,
-) -> LazyListMeasureResult
+) -> Result<LazyListMeasureResult, S::Refusal>
 where
     S: LazyItemSource,
 {
@@ -495,7 +614,7 @@ where
     let mut visible_items = Vec::with_capacity(realized_count);
     let mut offset = config.before_content_padding;
     for index in 0..realized_count {
-        let mut item = source.measure(index);
+        let mut item = source.measure(index)?;
         item.offset = offset;
         offset += item.main_axis_size;
         if index + 1 < items_count {
@@ -525,7 +644,7 @@ where
     state.update_scroll_bounds();
 
     let can_scroll_forward = realized_count < items_count;
-    LazyListMeasureResult {
+    Ok(LazyListMeasureResult {
         visible_items,
         first_visible_item_index: 0,
         first_visible_item_scroll_offset: 0.0,
@@ -533,7 +652,7 @@ where
         total_content_size: content_extent,
         can_scroll_forward,
         can_scroll_backward: false,
-    }
+    })
 }
 
 /// Estimates total content size based on measured items.

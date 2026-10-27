@@ -28,6 +28,7 @@ pub(crate) struct ThreadCells {
     pub(crate) next_app_context_id: Cell<NonZeroU64>,
     pub(crate) keyboard_focus_visible: Cell<bool>,
     pub(crate) clean_slot_skips: Cell<u64>,
+    pub(crate) retained_measures: Cell<u64>,
     /// The last take of a moved-node list on this thread
     /// ([`crate::render_state`]'s `MovedSceneNodes`).
     pub(crate) moved_scene_node_takes: Cell<u64>,
@@ -50,6 +51,7 @@ impl ThreadCells {
             next_app_context_id: Cell::new(NonZeroU64::MIN),
             keyboard_focus_visible: Cell::new(false),
             clean_slot_skips: Cell::new(0),
+            retained_measures: Cell::new(0),
             moved_scene_node_takes: Cell::new(0),
             last_modifier_revision: Cell::new(0),
             modal_counting_contexts: Cell::new(0),

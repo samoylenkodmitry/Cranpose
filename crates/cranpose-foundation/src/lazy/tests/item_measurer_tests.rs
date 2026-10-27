@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, convert::Infallible};
 
 use super::*;
 
@@ -24,16 +24,18 @@ where
     M: FnMut(usize) -> LazyListMeasuredItem,
     K: FnMut(usize) -> bool,
 {
-    fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
-        (self.measure)(index)
+    type Refusal = Infallible;
+
+    fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
+        Ok((self.measure)(index))
     }
 
-    fn keep_beyond(&mut self, index: usize, _distance: f32) -> BeyondItem {
-        if (self.keep)(index) {
+    fn keep_beyond(&mut self, index: usize, _distance: f32) -> Result<BeyondItem, Infallible> {
+        Ok(if (self.keep)(index) {
             BeyondItem::Kept
         } else {
             BeyondItem::Declined
-        }
+        })
     }
 }
 
@@ -78,7 +80,7 @@ fn visible_measurement_fills_viewport_even_when_item_work_exceeds_budget() {
     let mut source = slow_first_item(&mut kept);
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 120.0, 40.0, VecDeque::new());
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
 
     assert!(
         pass.viewport_filled,
@@ -110,7 +112,7 @@ fn fill_end_gap_backfills_fully_even_when_item_measurement_is_slow() {
     let mut measurer = ItemMeasurer::new(&mut source, &config, 20, 500.0, 40.0, VecDeque::new())
         .with_include_before_beyond_bounds(false);
 
-    let pass = measurer.measure_all(15, 0.0);
+    let Ok(pass) = measurer.measure_all(15, 0.0);
 
     assert_eq!(
         pass.start_index, 7,
@@ -138,7 +140,7 @@ fn adaptive_extra_beyond_bounds_is_budgeted_after_configured_window() {
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 120.0, 40.0, VecDeque::new())
         .with_beyond_bounds_item_count(6);
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
 
     assert_eq!(
         pass.items.iter().map(|item| item.index).collect::<Vec<_>>(),
@@ -168,7 +170,7 @@ fn declined_beyond_items_never_block_visible_measurement() {
     };
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 120.0, 40.0, VecDeque::new());
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
 
     assert!(pass.viewport_filled);
     assert_eq!(pass.measured_visible_items, 3);
@@ -195,7 +197,7 @@ fn beyond_items_are_kept_until_the_first_one_declined() {
     };
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 80.0, 40.0, VecDeque::new());
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
 
     assert_eq!(pass.measured_visible_items, 2);
     assert_eq!(
@@ -212,7 +214,7 @@ fn test_measure_fills_viewport() {
     let mut source = sized(50.0);
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 200.0, 50.0, VecDeque::new());
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
     let items = pass.items;
 
     assert!(items.len() >= 4);
@@ -233,7 +235,7 @@ fn test_measure_with_offset() {
     };
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 200.0, 50.0, VecDeque::new());
 
-    let pass = measurer.measure_all(5, 25.0);
+    let Ok(pass) = measurer.measure_all(5, 25.0);
 
     assert_eq!(
         pass.items.iter().map(|item| item.index).collect::<Vec<_>>(),
@@ -260,7 +262,7 @@ fn forward_scroll_measurement_can_skip_before_beyond_bounds() {
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 200.0, 50.0, VecDeque::new())
         .with_include_before_beyond_bounds(false);
 
-    measurer.measure_all(5, 25.0);
+    let Ok(_) = measurer.measure_all(5, 25.0);
     reached.extend(kept);
 
     assert!(
@@ -275,7 +277,7 @@ fn test_measure_respects_items_count() {
     let mut source = sized(50.0);
     let mut measurer = ItemMeasurer::new(&mut source, &config, 3, 1000.0, 50.0, VecDeque::new());
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
     let items = pass.items;
 
     assert_eq!(items.len(), 3);
@@ -290,7 +292,7 @@ fn test_measure_with_spacing() {
     let mut source = sized(50.0);
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 200.0, 50.0, VecDeque::new());
 
-    let pass = measurer.measure_all(0, 0.0);
+    let Ok(pass) = measurer.measure_all(0, 0.0);
     let items = pass.items;
 
     assert_eq!(items[0].offset, 0.0);
@@ -301,12 +303,14 @@ fn test_measure_with_spacing() {
 fn placed_beyond_items_sit_on_both_sides_of_the_viewport_items() {
     struct PlaceAll;
     impl LazyItemSource for PlaceAll {
-        fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
-            create_test_item(index, 50.0)
+        type Refusal = Infallible;
+
+        fn measure(&mut self, index: usize) -> Result<LazyListMeasuredItem, Infallible> {
+            Ok(create_test_item(index, 50.0))
         }
 
-        fn keep_beyond(&mut self, index: usize, _distance: f32) -> BeyondItem {
-            BeyondItem::Placed(create_test_item(index, 50.0))
+        fn keep_beyond(&mut self, index: usize, _distance: f32) -> Result<BeyondItem, Infallible> {
+            Ok(BeyondItem::Placed(create_test_item(index, 50.0)))
         }
     }
     let config = LazyListMeasureConfig {
@@ -316,7 +320,7 @@ fn placed_beyond_items_sit_on_both_sides_of_the_viewport_items() {
     let mut source = PlaceAll;
     let mut measurer = ItemMeasurer::new(&mut source, &config, 100, 100.0, 50.0, VecDeque::new());
 
-    let pass = measurer.measure_all(5, 0.0);
+    let Ok(pass) = measurer.measure_all(5, 0.0);
 
     assert_eq!(
         pass.items

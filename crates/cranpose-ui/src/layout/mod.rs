@@ -1509,37 +1509,42 @@ impl LayoutBuilderState {
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
 
-        let measure_result = node_handle.measure_with_callbacks(
-            &applier_host,
-            &runtime_handle,
-            node_id,
-            inner_constraints,
-            MeasureCallbacks {
-                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
-                    match self.measure_node(child_id, child_constraints) {
-                        Ok(measured) => {
-                            measured_children
-                                .borrow_mut()
-                                .insert(child_id, Rc::clone(&measured));
-                            let size = measured.size_for_parent();
-                            Placeable::value(size.width, size.height, child_id)
-                                .with_alignment_lines(measured.alignment_lines_for_parent())
-                        }
-                        Err(err) => {
-                            let mut slot = measure_error.borrow_mut();
-                            if slot.is_none() {
-                                *slot = Some(err);
+        let retained = node_handle.measure_retained(&*applier_host, node_id, inner_constraints);
+        let measure_result =
+            match retained {
+                Some(result) => result,
+                None => node_handle.measure_with_callbacks(
+                    &applier_host,
+                    &runtime_handle,
+                    node_id,
+                    inner_constraints,
+                    MeasureCallbacks {
+                        measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
+                            match self.measure_node(child_id, child_constraints) {
+                                Ok(measured) => {
+                                    measured_children
+                                        .borrow_mut()
+                                        .insert(child_id, Rc::clone(&measured));
+                                    let size = measured.size_for_parent();
+                                    Placeable::value(size.width, size.height, child_id)
+                                        .with_alignment_lines(measured.alignment_lines_for_parent())
+                                }
+                                Err(err) => {
+                                    let mut slot = measure_error.borrow_mut();
+                                    if slot.is_none() {
+                                        *slot = Some(err);
+                                    }
+                                    Placeable::value(0.0, 0.0, child_id)
+                                }
                             }
-                            Placeable::value(0.0, 0.0, child_id)
-                        }
-                    }
-                }),
-                retained_measure_lookup: Box::new(|child_id| {
-                    measured_children.borrow().get(&child_id).cloned()
-                }),
-                error: &measure_error,
-            },
-        )?;
+                        }),
+                        retained_measure_lookup: Box::new(|child_id| {
+                            measured_children.borrow().get(&child_id).cloned()
+                        }),
+                        error: &measure_error,
+                    },
+                )?,
+            };
 
         if let Some(err) = measure_error.borrow_mut().take() {
             return Err(err);

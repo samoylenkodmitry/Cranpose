@@ -7,7 +7,6 @@ use cranpose_foundation::lazy::{LazyListMeasureResult, LazyListMeasuredItem, Sma
 use cranpose_ui_layout::Axis;
 
 use super::LazyItemMeasureContext;
-use crate::subcompose_layout::SubcomposeMeasureScopeImpl;
 
 #[derive(Default)]
 pub(super) struct LazyMeasuredItemCache {
@@ -80,15 +79,15 @@ impl LazyMeasuredItemCache {
 
     /// Drops what a new measure pass cannot reuse: everything, when the
     /// list's axis or cross size changed, and otherwise the items whose slots
-    /// `scope` no longer holds.
+    /// are not `retained`.
     pub(super) fn begin_pass(
         &mut self,
-        scope: &SubcomposeMeasureScopeImpl<'_>,
         axis: Axis,
         cross_axis_size: f32,
+        retained: impl Fn(SlotId) -> bool,
     ) {
         self.retain_constraint_scope(axis, cross_axis_size);
-        self.retain_retained_slots(|slot_id| scope.slot_is_retained(slot_id));
+        self.retain_retained_slots(retained);
     }
 
     /// Keeps only the items whose slots the subcompose state still holds.
@@ -163,6 +162,13 @@ impl LazyMeasuredItemCache {
 
     fn take_telemetry(&mut self) -> LazyCacheTelemetry {
         std::mem::take(&mut self.telemetry)
+    }
+
+    // Records `count` items a pass kept as they were measured, as the
+    // composing pass records each one it reuses.
+    pub(super) fn record_retained_reuses(&mut self, count: usize) {
+        self.telemetry.candidate_hits += count;
+        self.telemetry.exact_reuses += count;
     }
 
     pub(super) fn record_uncached_measure(&mut self) {

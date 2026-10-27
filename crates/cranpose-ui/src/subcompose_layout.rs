@@ -22,8 +22,10 @@ use crate::{
     widgets::nodes::{DescendantDirt, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
+mod retained_measure_scope;
 mod subcompose_child;
 
+pub(crate) use retained_measure_scope::RetainedMeasureScope;
 pub(crate) use subcompose_child::SubcomposeChild;
 
 fn subcompose_telemetry_enabled() -> bool {
@@ -50,6 +52,36 @@ pub(crate) struct MeasureScratch {
     /// The roots the policy placed, each with its measurement, in the order
     /// of the placements, where it placed lazy items: empty otherwise.
     placed_roots: Vec<Rc<LazyItemRoots>>,
+}
+
+impl MeasureScratch {
+    fn layout_with_placed_roots(
+        &mut self,
+        width: f32,
+        height: f32,
+        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
+    ) -> MeasureResult {
+        self.placements.clear();
+        self.placed_roots.clear();
+        build(&mut self.placements, &mut self.placed_roots);
+        MeasureResult::new(Size { width, height }, std::mem::take(&mut self.placements))
+    }
+}
+
+// A measure scope that lays out lazy items' roots with their measurements:
+// the scope of a pass that composes, and of one that keeps the slots of the
+// last pass.
+pub(crate) trait PlacedRootsScope: cranpose_ui_layout::MeasureScope {
+    // How many slots wait in the reuse pools.
+    fn reusable_slots_count(&self) -> usize;
+
+    // See `SubcomposeMeasureScopeImpl::layout_with_placed_roots`.
+    fn layout_with_placed_roots(
+        &mut self,
+        width: f32,
+        height: f32,
+        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
+    ) -> MeasureResult;
 }
 
 pub(crate) struct MeasureCallbacks<'a> {
@@ -154,6 +186,14 @@ pub fn clean_slot_skip_count() -> u64 {
     crate::thread_state::cells(|cells| cells.clean_slot_skips.get())
 }
 
+/// Number of subcompose measure passes on this thread that kept the slots of
+/// their last pass as they were and composed nothing, as a lazy list's pass
+/// for a scroll that keeps its items. Diagnostic surface for tests and
+/// telemetry.
+pub fn retained_measure_count() -> u64 {
+    crate::thread_state::cells(|cells| cells.retained_measures.get())
+}
+
 struct SubcomposeMeasureScopeInit<'a> {
     composer: Composer,
     density: crate::density::Density,
@@ -219,13 +259,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         height: f32,
         build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
     ) -> MeasureResult {
-        self.scratch.placements.clear();
-        self.scratch.placed_roots.clear();
-        build(&mut self.scratch.placements, &mut self.scratch.placed_roots);
-        MeasureResult::new(
-            Size { width, height },
-            std::mem::take(&mut self.scratch.placements),
-        )
+        self.scratch.layout_with_placed_roots(width, height, build)
     }
 
     fn record_error(&self, err: NodeError) {
@@ -493,6 +527,21 @@ impl cranpose_ui_layout::MeasureScope for SubcomposeMeasureScopeImpl<'_> {
     }
 }
 
+impl PlacedRootsScope for SubcomposeMeasureScopeImpl<'_> {
+    fn reusable_slots_count(&self) -> usize {
+        self.state.reusable_slots_count()
+    }
+
+    fn layout_with_placed_roots(
+        &mut self,
+        width: f32,
+        height: f32,
+        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
+    ) -> MeasureResult {
+        SubcomposeMeasureScopeImpl::layout_with_placed_roots(self, width, height, build)
+    }
+}
+
 impl SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'_> {
     fn subcompose<K, Content>(
         &mut self,
@@ -654,6 +703,12 @@ fn compose_subcompose_slot_content(holder: cranpose_core::CallbackHolder) {
 pub(crate) type MeasurePolicy =
     dyn for<'scope> Fn(&mut SubcomposeMeasureScopeImpl<'scope>, Constraints) -> MeasureResult;
 
+// Measures a subcompose node from the slots its last pass kept, composing
+// nothing: `None` where the node needs a composition, which its
+// `MeasurePolicy` runs.
+pub(crate) type RetainedMeasurePolicy =
+    dyn for<'scope> Fn(&mut RetainedMeasureScope<'scope>, Constraints) -> Option<MeasureResult>;
+
 /// Node responsible for orchestrating measure-time subcomposition.
 pub struct SubcomposeLayoutNode {
     inner: Rc<RefCell<SubcomposeLayoutNodeInner>>,
@@ -775,6 +830,13 @@ impl SubcomposeLayoutNode {
         inner.set_measure_policy(policy);
         drop(inner);
         self.invalidate_subcomposition();
+    }
+
+    // Gives the node a policy that measures it from the slots of its last
+    // pass, which a pass tries before the measure policy. A new measure
+    // policy drops it.
+    pub(crate) fn set_retained_measure_policy(&mut self, policy: Rc<RetainedMeasurePolicy>) {
+        self.inner.borrow_mut().retained_measure_policy = Some(policy);
     }
 
     /// Records the source composition context for measure-time subcomposition.
@@ -1397,6 +1459,56 @@ impl SubcomposeLayoutNodeHandle {
         self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
+    // Measures the node with its retained measure policy, from the slots of
+    // its last pass: `None` where it has no such policy or the policy needs
+    // a composition.
+    pub(crate) fn measure_retained(
+        &self,
+        applier: &dyn ApplierHost,
+        node_id: NodeId,
+        constraints: Constraints,
+    ) -> Option<MeasureResult> {
+        let (policy, state, mut scratch, density, owner_epoch) = {
+            let mut inner = self.inner.borrow_mut();
+            let policy = Rc::clone(inner.retained_measure_policy.as_ref()?);
+            let owner_epoch = inner.captured_context.as_ref().map_or(
+                0,
+                CapturedCompositionContext::owner_chain_deactivation_epoch,
+            );
+            (
+                policy,
+                std::mem::take(&mut inner.state),
+                std::mem::take(&mut inner.measure_scratch),
+                inner.density,
+                owner_epoch,
+            )
+        };
+        let result = policy(
+            &mut RetainedMeasureScope::new(
+                &state,
+                applier,
+                node_id,
+                (density, owner_epoch),
+                &mut scratch,
+            ),
+            constraints,
+        );
+        let mut inner = self.inner.borrow_mut();
+        inner.state = state;
+        inner.measure_scratch = scratch;
+        if let Some(result) = &result {
+            inner.replace_placed_children(
+                result.placements.iter().map(|placement| placement.node_id),
+            );
+            crate::thread_state::cells(|cells| {
+                cells
+                    .retained_measures
+                    .set(cells.retained_measures.get() + 1);
+            });
+        }
+        result
+    }
+
     pub(crate) fn measure_with_callbacks(
         &self,
         applier: &Rc<dyn ApplierHost>,
@@ -1516,6 +1628,7 @@ struct SubcomposeLayoutNodeInner {
     modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
+    retained_measure_policy: Option<Rc<RetainedMeasurePolicy>>,
     children: Vec<NodeId>,
     slots: Rc<SlotsHost>,
     debug_modifiers: bool,
@@ -1577,6 +1690,7 @@ impl SubcomposeLayoutNodeInner {
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
+            retained_measure_policy: None,
             children: Vec::new(),
             slots: Rc::new(SlotsHost::new(SlotTable::default())),
             debug_modifiers: false,
@@ -1591,6 +1705,7 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_measure_policy(&mut self, policy: Rc<MeasurePolicy>) {
         self.measure_policy = policy;
+        self.retained_measure_policy = None;
         if let Err(err) = self.slots.reset() {
             log::error!(
                 "failed to reset root measurement slots after measure policy update: {err}"
