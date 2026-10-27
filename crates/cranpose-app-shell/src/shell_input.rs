@@ -1230,7 +1230,7 @@ where
     }
 
     fn on_focus_key(&mut self, event: &KeyEvent) -> bool {
-        if !plain_key_down(event) || event.key_code != KeyCode::Tab {
+        if !plain_key_down(event) || event.key() != Key::Tab {
             return false;
         }
         self.on_group_navigation_key(event)
@@ -1239,12 +1239,7 @@ where
     fn on_group_navigation_key(&mut self, event: &KeyEvent) -> bool {
         let focused = cranpose_ui::active_focus_target();
         let target = self.with_layout_tree(|tree| {
-            cranpose_ui::keyboard_focus_target(
-                tree?,
-                focused,
-                event.key_code,
-                event.modifiers.shift,
-            )
+            cranpose_ui::keyboard_focus_target(tree?, focused, event.key(), event.modifiers().shift)
         });
         let Some(target) = target else {
             return false;
@@ -1256,7 +1251,7 @@ where
             self.mark_dirty();
             self.note_focus_moved_by_keyboard(true);
             if target.activate {
-                self.on_activation_key(&KeyEvent::key_down(KeyCode::Space, " "));
+                self.on_activation_key(&KeyEvent::key_down(Key::Spacebar, " "));
             }
         }
         moved
@@ -1264,7 +1259,7 @@ where
 
     fn on_activation_key(&mut self, event: &KeyEvent) -> bool {
         if !plain_key_down(event)
-            || !matches!(event.key_code, KeyCode::Enter | KeyCode::Space)
+            || !matches!(event.key(), Key::Enter | Key::Spacebar)
             || cranpose_ui::text_field_focus::has_focused_field()
         {
             return false;
@@ -1284,11 +1279,11 @@ where
         if self.on_group_navigation_key(event) {
             return true;
         }
-        let direction = match event.key_code {
-            KeyCode::ArrowLeft => FocusDirection::Left,
-            KeyCode::ArrowRight => FocusDirection::Right,
-            KeyCode::ArrowUp => FocusDirection::Up,
-            KeyCode::ArrowDown => FocusDirection::Down,
+        let direction = match event.key() {
+            Key::DirectionLeft => FocusDirection::Left,
+            Key::DirectionRight => FocusDirection::Right,
+            Key::DirectionUp => FocusDirection::Up,
+            Key::DirectionDown => FocusDirection::Down,
             _ => return false,
         };
         let Some(focused) = cranpose_ui::active_focus_target() else {
@@ -1310,7 +1305,7 @@ where
     }
 
     fn on_escape_key(&mut self, event: &KeyEvent) -> bool {
-        if event.event_type != KeyEventType::KeyDown || event.key_code != KeyCode::Escape {
+        if event.type_() != KeyEventType::KeyDown || event.key() != Key::Escape {
             return false;
         }
         self.dismiss_top_modal_in_context()
@@ -1458,7 +1453,7 @@ where
     fn on_focused_key_event(&mut self, event: &KeyEvent) -> bool {
         use KeyEventType::KeyDown;
 
-        if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
+        if event.type_() == KeyDown && event.modifiers().command_or_ctrl() {
             #[cfg(all(
                 feature = "clipboard-native",
                 not(target_arch = "wasm32"),
@@ -1466,14 +1461,14 @@ where
                 not(target_os = "ios")
             ))]
             {
-                match event.key_code {
-                    KeyCode::C => {
+                match event.key() {
+                    Key::C => {
                         if let Some(text) = self.on_copy_inner() {
                             cranpose_ui::clipboard_session::clipboard_write_text(&text);
                             return true;
                         }
                     }
-                    KeyCode::X => {
+                    Key::X => {
                         if let Some(text) = self.on_cut_inner() {
                             cranpose_ui::clipboard_session::clipboard_write_text(&text);
                             self.mark_dirty();
@@ -1481,7 +1476,7 @@ where
                             return true;
                         }
                     }
-                    KeyCode::V => {
+                    Key::V => {
                         if let Some(text) = cranpose_ui::clipboard_session::clipboard_read_text()
                             && self.on_paste_inner(&text)
                         {

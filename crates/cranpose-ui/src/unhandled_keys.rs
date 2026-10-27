@@ -17,12 +17,12 @@ pub(crate) type KeyHandler = Rc<RefCell<Rc<dyn Fn(&KeyEvent) -> bool>>>;
 ///
 /// ```ignore
 /// UnhandledKeyEvents(move |event| {
-///     if event.event_type != KeyEventType::KeyDown {
+///     if event.type_() != KeyEventType::KeyDown {
 ///         return false;
 ///     }
-///     match event.key_code {
-///         KeyCode::X => { play(); true }
-///         KeyCode::V => { stop(); true }
+///     match event.key() {
+///         Key::X => { play(); true }
+///         Key::V => { stop(); true }
 ///         _ => false,
 ///     }
 /// });

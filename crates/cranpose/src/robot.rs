@@ -5,7 +5,7 @@ use std::{
 };
 
 use cranpose_app_shell::{
-    AppShell, KeyCode, KeyEventType, Modifiers, PointerSource, RuntimeLeakDebugStats,
+    AppShell, Key, KeyEventType, Modifiers, PointerSource, RuntimeLeakDebugStats,
 };
 use cranpose_render_common::{
     RenderScene, Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
@@ -1459,19 +1459,19 @@ pub(crate) fn robot_wait_for_idle_animation_loop_only(
 
 /// The keys [`Robot::send_key`] names that are not a lowercase letter, with
 /// the text each types.
-const NAMED_KEYS: [(&str, KeyCode, &str); 12] = [
-    ("Up", KeyCode::ArrowUp, ""),
-    ("Down", KeyCode::ArrowDown, ""),
-    ("Left", KeyCode::ArrowLeft, ""),
-    ("Right", KeyCode::ArrowRight, ""),
-    ("Home", KeyCode::Home, ""),
-    ("End", KeyCode::End, ""),
-    ("Return", KeyCode::Enter, "\n"),
-    ("BackSpace", KeyCode::Backspace, ""),
-    ("Delete", KeyCode::Delete, ""),
-    ("Tab", KeyCode::Tab, "\t"),
-    ("Escape", KeyCode::Escape, ""),
-    ("space", KeyCode::Space, " "),
+const NAMED_KEYS: [(&str, Key, &str); 12] = [
+    ("Up", Key::DirectionUp, ""),
+    ("Down", Key::DirectionDown, ""),
+    ("Left", Key::DirectionLeft, ""),
+    ("Right", Key::DirectionRight, ""),
+    ("Home", Key::MoveHome, ""),
+    ("End", Key::MoveEnd, ""),
+    ("Return", Key::Enter, "\n"),
+    ("BackSpace", Key::Backspace, ""),
+    ("Delete", Key::Delete, ""),
+    ("Tab", Key::Tab, "\t"),
+    ("Escape", Key::Escape, ""),
+    ("space", Key::Spacebar, " "),
 ];
 
 /// The key event a robot sends for `key`: its press, or its release.
@@ -1484,7 +1484,7 @@ pub(crate) fn robot_key_event(
     cranpose_app_shell::KeyEvent::new(key_code, text, modifiers, event_type)
 }
 
-fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
+fn robot_key_code_and_text(key: &str) -> (Key, String) {
     if let Some((_, code, text)) = NAMED_KEYS.iter().find(|(name, ..)| *name == key) {
         return (*code, (*text).to_owned());
     }
@@ -1493,50 +1493,50 @@ fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
         (Some(letter), None) if letter.is_ascii_lowercase() => {
             (char_to_key_code(letter), key.to_owned())
         }
-        _ => (KeyCode::Unknown, String::new()),
+        _ => (Key::Unknown, String::new()),
     }
 }
 
-pub(crate) fn char_to_key_code(ch: char) -> KeyCode {
+pub(crate) fn char_to_key_code(ch: char) -> Key {
     match ch.to_ascii_lowercase() {
-        'a' => KeyCode::A,
-        'b' => KeyCode::B,
-        'c' => KeyCode::C,
-        'd' => KeyCode::D,
-        'e' => KeyCode::E,
-        'f' => KeyCode::F,
-        'g' => KeyCode::G,
-        'h' => KeyCode::H,
-        'i' => KeyCode::I,
-        'j' => KeyCode::J,
-        'k' => KeyCode::K,
-        'l' => KeyCode::L,
-        'm' => KeyCode::M,
-        'n' => KeyCode::N,
-        'o' => KeyCode::O,
-        'p' => KeyCode::P,
-        'q' => KeyCode::Q,
-        'r' => KeyCode::R,
-        's' => KeyCode::S,
-        't' => KeyCode::T,
-        'u' => KeyCode::U,
-        'v' => KeyCode::V,
-        'w' => KeyCode::W,
-        'x' => KeyCode::X,
-        'y' => KeyCode::Y,
-        'z' => KeyCode::Z,
-        '0' => KeyCode::Digit0,
-        '1' => KeyCode::Digit1,
-        '2' => KeyCode::Digit2,
-        '3' => KeyCode::Digit3,
-        '4' => KeyCode::Digit4,
-        '5' => KeyCode::Digit5,
-        '6' => KeyCode::Digit6,
-        '7' => KeyCode::Digit7,
-        '8' => KeyCode::Digit8,
-        '9' => KeyCode::Digit9,
-        ' ' => KeyCode::Space,
-        _ => KeyCode::Unknown,
+        'a' => Key::A,
+        'b' => Key::B,
+        'c' => Key::C,
+        'd' => Key::D,
+        'e' => Key::E,
+        'f' => Key::F,
+        'g' => Key::G,
+        'h' => Key::H,
+        'i' => Key::I,
+        'j' => Key::J,
+        'k' => Key::K,
+        'l' => Key::L,
+        'm' => Key::M,
+        'n' => Key::N,
+        'o' => Key::O,
+        'p' => Key::P,
+        'q' => Key::Q,
+        'r' => Key::R,
+        's' => Key::S,
+        't' => Key::T,
+        'u' => Key::U,
+        'v' => Key::V,
+        'w' => Key::W,
+        'x' => Key::X,
+        'y' => Key::Y,
+        'z' => Key::Z,
+        '0' => Key::Zero,
+        '1' => Key::One,
+        '2' => Key::Two,
+        '3' => Key::Three,
+        '4' => Key::Four,
+        '5' => Key::Five,
+        '6' => Key::Six,
+        '7' => Key::Seven,
+        '8' => Key::Eight,
+        '9' => Key::Nine,
+        ' ' => Key::Spacebar,
+        _ => Key::Unknown,
     }
 }
 

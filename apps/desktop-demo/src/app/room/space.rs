@@ -7,7 +7,7 @@ use cranpose_core::{mutableStateOf, remember, MutableState, NodeId};
 use cranpose_ui::{
     composable,
     space::{Camera, EyePose, Light, Mat4, Scene3d, Vec3},
-    Eye, FocusRequester, KeyCode, KeyEvent, KeyEventType, Point, PointerButton, PointerEventKind,
+    Eye, FocusRequester, Key, KeyEvent, KeyEventType, Point, PointerButton, PointerEventKind,
     PointerInputScope, Size,
 };
 
@@ -334,20 +334,20 @@ impl RoomState {
         if !self.entered.get() {
             return false;
         }
-        let pressed = event.event_type == KeyEventType::KeyDown;
-        let bit = match event.key_code {
-            KeyCode::Escape => {
+        let pressed = event.type_() == KeyEventType::KeyDown;
+        let bit = match event.key() {
+            Key::Escape => {
                 if pressed {
                     self.focus.request_focus().ok();
                 }
                 return true;
             }
-            KeyCode::W | KeyCode::ArrowUp => FORWARD,
-            KeyCode::S | KeyCode::ArrowDown => BACK,
-            KeyCode::A => LEFT,
-            KeyCode::D => RIGHT,
-            KeyCode::Q | KeyCode::ArrowLeft => TURN_LEFT,
-            KeyCode::E | KeyCode::ArrowRight => TURN_RIGHT,
+            Key::W | Key::DirectionUp => FORWARD,
+            Key::S | Key::DirectionDown => BACK,
+            Key::A => LEFT,
+            Key::D => RIGHT,
+            Key::Q | Key::DirectionLeft => TURN_LEFT,
+            Key::E | Key::DirectionRight => TURN_RIGHT,
             _ => return false,
         };
         self.held.update(|held| {

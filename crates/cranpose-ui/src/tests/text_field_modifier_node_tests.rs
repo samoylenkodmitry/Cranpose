@@ -573,7 +573,7 @@ fn a_focus_requester_makes_the_text_field_receive_keyboard_input() {
     use cranpose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
 
     use crate::{
-        key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers},
+        key_event::{Key, KeyEvent, KeyEventType, Modifiers},
         modifier::{FocusRequester, FocusRequesterElement},
     };
 
@@ -606,7 +606,7 @@ fn a_focus_requester_makes_the_text_field_receive_keyboard_input() {
 
         assert!(crate::text_field_focus::has_focused_field());
 
-        let key_down = KeyEvent::new(KeyCode::H, "h", Modifiers::NONE, KeyEventType::KeyDown);
+        let key_down = KeyEvent::new(Key::H, "h", Modifiers::NONE, KeyEventType::KeyDown);
         assert!(
             crate::text_field_focus::dispatch_key_event(&key_down),
             "the field must consume a key event once focused programmatically"

@@ -5,7 +5,7 @@ use cranpose_liquid::prelude::*;
 use cranpose_testing::{
     RobotTestRule, TestRenderer, create_headless_robot_test, placed_semantics_from_shell,
 };
-use cranpose_ui::{KeyCode, KeyEvent, Modifier};
+use cranpose_ui::{Key, KeyEvent, Modifier};
 
 fn button() -> (RobotTestRule<TestRenderer>, Rc<Cell<usize>>) {
     let clicks = Rc::new(Cell::new(0));
@@ -118,11 +118,11 @@ fn floating_button_can_be_reached_and_activated_from_the_keyboard() {
     assert_eq!(buttons[0].role, cranpose_ui::layout::SemanticsRole::Button);
     robot
         .shell_mut()
-        .on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t"));
+        .on_key_event(&KeyEvent::key_down(Key::Tab, "\t"));
     robot.wait_for_idle();
     robot
         .shell_mut()
-        .on_key_event(&KeyEvent::key_down(KeyCode::Enter, "\r"));
+        .on_key_event(&KeyEvent::key_down(Key::Enter, "\r"));
     robot.wait_for_idle();
     assert_eq!(clicks.get(), 1);
 }

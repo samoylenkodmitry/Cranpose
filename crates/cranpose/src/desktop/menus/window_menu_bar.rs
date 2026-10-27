@@ -10,7 +10,7 @@ use std::{
 
 use cranpose_core::{LaunchedEffect, MutableState, SideEffect, remember, rememberMutableStateOf};
 use cranpose_ui::{
-    Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester, IntrinsicSize, KeyCode, KeyEvent,
+    Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester, IntrinsicSize, Key, KeyEvent,
     KeyEventType, Modifier, Point, Rect, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
     UnhandledKeyEvents, VerticalAlignment, composable, rememberMutableInteractionSource,
     text::SpanStyle, widgets::PopupDismissable,
@@ -83,8 +83,8 @@ pub(super) fn bar_frame(menus: Rc<Vec<Menu>>, content: impl FnMut() + 'static) {
 
 /// Closes the open menus on Escape.
 fn close_on_escape(open: OpenPath, event: &KeyEvent) -> bool {
-    let closes = event.event_type == KeyEventType::KeyDown
-        && event.key_code == KeyCode::Escape
+    let closes = event.type_() == KeyEventType::KeyDown
+        && event.key() == Key::Escape
         && open.with(|path| !path.is_empty());
     if closes {
         open.set(Vec::new());
@@ -94,10 +94,10 @@ fn close_on_escape(open: OpenPath, event: &KeyEvent) -> bool {
 
 /// Runs the enabled item whose shortcut a key press matches.
 fn run_shortcut(menus: &[Menu], open: OpenPath, event: &KeyEvent) -> bool {
-    if event.event_type != KeyEventType::KeyDown {
+    if event.type_() != KeyEventType::KeyDown {
         return false;
     }
-    let pressed = KeyShortcut::new(event.key_code, event.modifiers);
+    let pressed = KeyShortcut::new(event.key(), event.modifiers());
     let Some(action) = menus
         .iter()
         .find_map(|menu| shortcut_action(&menu.entries, pressed))

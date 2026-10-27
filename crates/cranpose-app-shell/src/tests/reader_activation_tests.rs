@@ -232,11 +232,11 @@ fn nested_dialogs_focus_their_controls_and_restore_each_opener() {
         shell.set_semantics_enabled(reader);
         shell.update();
         for (key, expected) in [
-            (KeyCode::Tab, "Open preferences"),
-            (KeyCode::Enter, "Open confirmation"),
-            (KeyCode::Enter, "Finish"),
-            (KeyCode::Enter, "Open confirmation"),
-            (KeyCode::Escape, "Open preferences"),
+            (Key::Tab, "Open preferences"),
+            (Key::Enter, "Open confirmation"),
+            (Key::Enter, "Finish"),
+            (Key::Enter, "Open confirmation"),
+            (Key::Escape, "Open preferences"),
         ] {
             assert!(shell.on_key_event(&KeyEvent::key_down(key, "")));
             shell.update();
@@ -378,7 +378,7 @@ fn native_snapshot_revision_survives_an_earlier_semantics_read() {
     shell.update();
     shell.semantics_tree().expect("initial semantics");
     let before = shell.semantics_snapshot_revision();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
     shell.update();
     shell
         .semantics_tree()
@@ -392,10 +392,10 @@ fn keyboard_focus_reveals_an_offscreen_control() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
         for reverse in [false, true] {
             let (mut shell, scroll) = scrolling_controls(axis, reverse);
-            assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+            assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
             shell.update();
             assert_control_visible(&mut shell, "First", axis);
-            assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+            assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
             shell.update();
             assert_control_visible(&mut shell, "Add page", axis);
             let scroll = scroll.borrow().expect("scroll state");
@@ -442,7 +442,7 @@ fn keyboard_reaches_every_item_in_a_lazy_list() {
         );
         shell.update();
         for index in 0..10 {
-            assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+            assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
             shell.update();
             let focused = shell.app_context().enter(cranpose_ui::active_focus_target);
             let label = format!("Receipt {index}");
@@ -793,11 +793,7 @@ fn lazy_list_keeps_the_active_editor_when_the_reader_scrolls_away() {
                 "Receipt"
             );
             assert!(fixture.shell.on_ime_set_selection(7, 7));
-            assert!(
-                fixture
-                    .shell
-                    .on_key_event(&KeyEvent::key_down(KeyCode::Q, "Q"))
-            );
+            assert!(fixture.shell.on_key_event(&KeyEvent::key_down(Key::Q, "Q")));
             assert!(fixture.shell.on_ime_set_selection(8, 8));
             assert!(fixture.shell.on_paste("Q"));
             fixture.shell.update();
@@ -1197,8 +1193,8 @@ fn direct_activation_uses_current_callback_without_pointer_events() {
     shell.update();
     assert!(shell.accessibility_activate(node_id, None));
     assert_eq!(count.get(), 6);
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "\r")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Enter, "\r")));
     assert_eq!(count.get(), 11);
     for value in 1..=3 {
         mode.set(value);
@@ -1261,11 +1257,11 @@ fn keyboard_activation_targets_focused_control_without_a_screen_reader() {
     let (mut shell, count) = overlapping_shell();
     shell.update();
     assert!(!shell.semantics_active());
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "\r")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Enter, "\r")));
     assert_eq!(count.get(), 1);
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Space, " ")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Spacebar, " ")));
     assert_eq!(count.get(), 11);
     assert!(!shell.semantics_active());
 }

@@ -7,7 +7,7 @@
 use cranpose::{CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use cranpose_ui::{ImageBitmap, KeyCode, Modifier, Modifiers, Text, TextStyle};
+use cranpose_ui::{ImageBitmap, Key, Modifier, Modifiers, Text, TextStyle};
 
 use crate::{robot_exit, robot_launch, text_input_robot_helpers};
 
@@ -92,7 +92,7 @@ pub(crate) fn main() {
             };
             MenuBar(vec![
                 Menu::new("Tools")
-                    .item(MenuItem::new("Count", count).shortcut(KeyShortcut::new(KeyCode::K, command)))
+                    .item(MenuItem::new("Count", count).shortcut(KeyShortcut::new(Key::K, command)))
                     .separator()
                     .submenu(Menu::new("Options").check(CheckItem::new(
                         "Mark",

@@ -3,7 +3,7 @@
 //! the public shell input path.
 
 use cranpose_ui::{
-    BasicSecureTextField, KeyCode, KeyboardType, SecureTextFieldOptions, TextObfuscationMode,
+    BasicSecureTextField, Key, KeyboardType, SecureTextFieldOptions, TextObfuscationMode,
 };
 
 use crate::support_text_field::{COMMAND, FocusedField};
@@ -35,7 +35,7 @@ fn the_last_typed_character_shows_until_the_next_one() {
     assert_eq!(field.shown_text(), format!("{}x", dots(2)));
     field.type_text("y");
     assert_eq!(field.shown_text(), format!("{}y", dots(3)));
-    field.press(KeyCode::Backspace, cranpose_ui::Modifiers::NONE);
+    field.press(Key::Backspace, cranpose_ui::Modifiers::NONE);
     assert_eq!(field.shown_text(), dots(3), "a deletion reveals nothing");
     assert_eq!(field.text(), "pwx");
 }
@@ -54,7 +54,7 @@ fn hidden_and_visible_fields_show_dots_or_the_text() {
 #[test]
 fn copy_and_cut_leave_the_secret_alone() {
     let mut field = secure("secret", TextObfuscationMode::Hidden);
-    field.press(KeyCode::A, COMMAND);
+    field.press(Key::A, COMMAND);
     assert_eq!(field.selection(), (0, 6));
     assert_eq!(field.shell.on_copy(), None);
     assert_eq!(field.shell.on_cut(), None);

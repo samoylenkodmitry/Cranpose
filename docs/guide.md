@@ -2349,7 +2349,7 @@ fn Menus(icon: ImageBitmap) {
     let command = Modifiers { ctrl: true, ..Modifiers::NONE };
     MenuBar(vec![
         Menu::new("View")
-            .item(MenuItem::new("Refresh", refresh).shortcut(KeyShortcut::new(KeyCode::R, command)))
+            .item(MenuItem::new("Refresh", refresh).shortcut(KeyShortcut::new(Key::R, command)))
             .separator()
             .check(CheckItem::new("Dark", dark.get(), move |checked| dark.set(checked))),
     ]);

@@ -66,15 +66,12 @@ fn check_keyboard_focus(decorated: bool, show_keyboard_on_focus: bool) {
     );
     assert!(
         shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
-            cranpose_ui::KeyCode::End,
+            cranpose_ui::Key::MoveEnd,
             ""
         )),
         "the focused field must accept physical keyboard input"
     );
-    assert!(shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
-        cranpose_ui::KeyCode::A,
-        "a"
-    )));
+    assert!(shell.on_key_event(&cranpose_ui::KeyEvent::key_down(cranpose_ui::Key::A, "a")));
     let editor = shell.ime_editor_state().expect("focused editable field");
     assert_eq!(
         editor.text, "Searcha",

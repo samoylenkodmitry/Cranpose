@@ -765,14 +765,14 @@ impl SelectionGesture {
         if !event.is_key_down() || !self.is_active() {
             return false;
         }
-        let command = event.modifiers.command_or_ctrl();
-        match event.key_code {
-            crate::KeyCode::C if command => self.copy(),
-            crate::KeyCode::A if command => {
+        let command = event.modifiers().command_or_ctrl();
+        match event.key() {
+            crate::Key::C if command => self.copy(),
+            crate::Key::A if command => {
                 self.registrar.select_all();
                 true
             }
-            crate::KeyCode::Escape if self.registrar.selection().is_some() => {
+            crate::Key::Escape if self.registrar.selection().is_some() => {
                 self.dismiss();
                 true
             }

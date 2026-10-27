@@ -10,7 +10,7 @@ use android_activity::{
     input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState},
 };
 use cranpose_app_shell::{
-    ImeEditorState, KeyCode, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
+    ImeEditorState, Key, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
 };
 
 use super::text_input::{
@@ -190,7 +190,7 @@ pub(crate) fn ime_key_event(
     if is_system_key(keycode) {
         return None;
     }
-    let key_code = map_keycode(keycode);
+    let key = map_keycode(keycode);
     let modifiers = map_modifiers(MetaState(meta_state.max(0) as u32));
 
     let text = if event_type == KeyEventType::KeyDown {
@@ -204,11 +204,11 @@ pub(crate) fn ime_key_event(
         String::new()
     };
 
-    if key_code == KeyCode::Unknown && text.is_empty() {
+    if key == Key::Unknown && text.is_empty() {
         return None;
     }
 
-    Some(KeyEvent::new(key_code, text, modifiers, event_type))
+    Some(KeyEvent::new(key, text, modifiers, event_type))
 }
 
 pub(crate) struct AndroidKeyTranslator {
@@ -236,7 +236,7 @@ impl AndroidKeyTranslator {
             _ => return None,
         };
 
-        let key_code = map_keycode(event.key_code());
+        let key = map_keycode(event.key_code());
         let modifiers = map_modifiers(event.meta_state());
 
         let text = if event_type == KeyEventType::KeyDown {
@@ -245,11 +245,12 @@ impl AndroidKeyTranslator {
             String::new()
         };
 
-        if key_code == KeyCode::Unknown && text.is_empty() {
+        if key == Key::Unknown && text.is_empty() {
             return None;
         }
 
-        Some(KeyEvent::new(key_code, text, modifiers, event_type))
+        let repeat_count = u32::try_from(event.repeat_count()).unwrap_or(0);
+        Some(KeyEvent::new(key, text, modifiers, event_type).with_repeat_count(repeat_count))
     }
 
     fn key_character(&mut self, event: &android_activity::input::KeyEvent<'_>) -> String {
@@ -339,56 +340,122 @@ fn map_modifiers(meta_state: MetaState) -> Modifiers {
     }
 }
 
-fn map_keycode(keycode: Keycode) -> KeyCode {
-    match keycode {
-        Keycode::A => KeyCode::A,
-        Keycode::B => KeyCode::B,
-        Keycode::C => KeyCode::C,
-        Keycode::D => KeyCode::D,
-        Keycode::E => KeyCode::E,
-        Keycode::F => KeyCode::F,
-        Keycode::G => KeyCode::G,
-        Keycode::H => KeyCode::H,
-        Keycode::I => KeyCode::I,
-        Keycode::J => KeyCode::J,
-        Keycode::K => KeyCode::K,
-        Keycode::L => KeyCode::L,
-        Keycode::M => KeyCode::M,
-        Keycode::N => KeyCode::N,
-        Keycode::O => KeyCode::O,
-        Keycode::P => KeyCode::P,
-        Keycode::Q => KeyCode::Q,
-        Keycode::R => KeyCode::R,
-        Keycode::S => KeyCode::S,
-        Keycode::T => KeyCode::T,
-        Keycode::U => KeyCode::U,
-        Keycode::V => KeyCode::V,
-        Keycode::W => KeyCode::W,
-        Keycode::X => KeyCode::X,
-        Keycode::Y => KeyCode::Y,
-        Keycode::Z => KeyCode::Z,
-        Keycode::Keycode0 => KeyCode::Digit0,
-        Keycode::Keycode1 => KeyCode::Digit1,
-        Keycode::Keycode2 => KeyCode::Digit2,
-        Keycode::Keycode3 => KeyCode::Digit3,
-        Keycode::Keycode4 => KeyCode::Digit4,
-        Keycode::Keycode5 => KeyCode::Digit5,
-        Keycode::Keycode6 => KeyCode::Digit6,
-        Keycode::Keycode7 => KeyCode::Digit7,
-        Keycode::Keycode8 => KeyCode::Digit8,
-        Keycode::Keycode9 => KeyCode::Digit9,
-        Keycode::Del => KeyCode::Backspace,
-        Keycode::ForwardDel => KeyCode::Delete,
-        Keycode::Enter | Keycode::NumpadEnter => KeyCode::Enter,
-        Keycode::Tab => KeyCode::Tab,
-        Keycode::Space => KeyCode::Space,
-        Keycode::Escape => KeyCode::Escape,
-        Keycode::DpadUp => KeyCode::ArrowUp,
-        Keycode::DpadDown => KeyCode::ArrowDown,
-        Keycode::DpadLeft => KeyCode::ArrowLeft,
-        Keycode::DpadRight => KeyCode::ArrowRight,
-        Keycode::MoveHome => KeyCode::Home,
-        Keycode::MoveEnd => KeyCode::End,
-        _ => KeyCode::Unknown,
-    }
+const ANDROID_KEYS: [(Keycode, Key); 110] = [
+    (Keycode::A, Key::A),
+    (Keycode::B, Key::B),
+    (Keycode::C, Key::C),
+    (Keycode::D, Key::D),
+    (Keycode::E, Key::E),
+    (Keycode::F, Key::F),
+    (Keycode::G, Key::G),
+    (Keycode::H, Key::H),
+    (Keycode::I, Key::I),
+    (Keycode::J, Key::J),
+    (Keycode::K, Key::K),
+    (Keycode::L, Key::L),
+    (Keycode::M, Key::M),
+    (Keycode::N, Key::N),
+    (Keycode::O, Key::O),
+    (Keycode::P, Key::P),
+    (Keycode::Q, Key::Q),
+    (Keycode::R, Key::R),
+    (Keycode::S, Key::S),
+    (Keycode::T, Key::T),
+    (Keycode::U, Key::U),
+    (Keycode::V, Key::V),
+    (Keycode::W, Key::W),
+    (Keycode::X, Key::X),
+    (Keycode::Y, Key::Y),
+    (Keycode::Z, Key::Z),
+    (Keycode::Keycode0, Key::Zero),
+    (Keycode::Keycode1, Key::One),
+    (Keycode::Keycode2, Key::Two),
+    (Keycode::Keycode3, Key::Three),
+    (Keycode::Keycode4, Key::Four),
+    (Keycode::Keycode5, Key::Five),
+    (Keycode::Keycode6, Key::Six),
+    (Keycode::Keycode7, Key::Seven),
+    (Keycode::Keycode8, Key::Eight),
+    (Keycode::Keycode9, Key::Nine),
+    (Keycode::F1, Key::F1),
+    (Keycode::F2, Key::F2),
+    (Keycode::F3, Key::F3),
+    (Keycode::F4, Key::F4),
+    (Keycode::F5, Key::F5),
+    (Keycode::F6, Key::F6),
+    (Keycode::F7, Key::F7),
+    (Keycode::F8, Key::F8),
+    (Keycode::F9, Key::F9),
+    (Keycode::F10, Key::F10),
+    (Keycode::F11, Key::F11),
+    (Keycode::F12, Key::F12),
+    (Keycode::Del, Key::Backspace),
+    (Keycode::ForwardDel, Key::Delete),
+    (Keycode::Enter, Key::Enter),
+    (Keycode::NumpadEnter, Key::NumPadEnter),
+    (Keycode::Tab, Key::Tab),
+    (Keycode::Space, Key::Spacebar),
+    (Keycode::Escape, Key::Escape),
+    (Keycode::ShiftLeft, Key::ShiftLeft),
+    (Keycode::ShiftRight, Key::ShiftRight),
+    (Keycode::CtrlLeft, Key::CtrlLeft),
+    (Keycode::CtrlRight, Key::CtrlRight),
+    (Keycode::AltLeft, Key::AltLeft),
+    (Keycode::AltRight, Key::AltRight),
+    (Keycode::MetaLeft, Key::MetaLeft),
+    (Keycode::MetaRight, Key::MetaRight),
+    (Keycode::Minus, Key::Minus),
+    (Keycode::Equals, Key::Equals),
+    (Keycode::LeftBracket, Key::LeftBracket),
+    (Keycode::RightBracket, Key::RightBracket),
+    (Keycode::Backslash, Key::Backslash),
+    (Keycode::Semicolon, Key::Semicolon),
+    (Keycode::Apostrophe, Key::Apostrophe),
+    (Keycode::Comma, Key::Comma),
+    (Keycode::Period, Key::Period),
+    (Keycode::Slash, Key::Slash),
+    (Keycode::Grave, Key::Grave),
+    (Keycode::DpadUp, Key::DirectionUp),
+    (Keycode::DpadDown, Key::DirectionDown),
+    (Keycode::DpadLeft, Key::DirectionLeft),
+    (Keycode::DpadRight, Key::DirectionRight),
+    (Keycode::DpadCenter, Key::DirectionCenter),
+    (Keycode::MoveHome, Key::MoveHome),
+    (Keycode::MoveEnd, Key::MoveEnd),
+    (Keycode::PageUp, Key::PageUp),
+    (Keycode::PageDown, Key::PageDown),
+    (Keycode::Back, Key::Back),
+    (Keycode::Menu, Key::Menu),
+    (Keycode::Search, Key::Search),
+    (Keycode::Info, Key::Info),
+    (Keycode::Guide, Key::Guide),
+    (Keycode::Settings, Key::Settings),
+    (Keycode::ChannelUp, Key::ChannelUp),
+    (Keycode::ChannelDown, Key::ChannelDown),
+    (Keycode::ProgRed, Key::ProgramRed),
+    (Keycode::ProgGreen, Key::ProgramGreen),
+    (Keycode::ProgYellow, Key::ProgramYellow),
+    (Keycode::ProgBlue, Key::ProgramBlue),
+    (Keycode::MediaPlay, Key::MediaPlay),
+    (Keycode::MediaPause, Key::MediaPause),
+    (Keycode::MediaPlayPause, Key::MediaPlayPause),
+    (Keycode::MediaStop, Key::MediaStop),
+    (Keycode::MediaNext, Key::MediaNext),
+    (Keycode::MediaPrevious, Key::MediaPrevious),
+    (Keycode::MediaRewind, Key::MediaRewind),
+    (Keycode::MediaFastForward, Key::MediaFastForward),
+    (Keycode::MediaRecord, Key::MediaRecord),
+    (Keycode::ButtonA, Key::ButtonA),
+    (Keycode::ButtonB, Key::ButtonB),
+    (Keycode::ButtonX, Key::ButtonX),
+    (Keycode::ButtonY, Key::ButtonY),
+    (Keycode::ButtonSelect, Key::ButtonSelect),
+    (Keycode::ButtonStart, Key::ButtonStart),
+];
+
+fn map_keycode(keycode: Keycode) -> Key {
+    ANDROID_KEYS
+        .iter()
+        .find(|(code, _)| *code == keycode)
+        .map_or(Key::Unknown, |(_, key)| *key)
 }

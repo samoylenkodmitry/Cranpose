@@ -4,7 +4,7 @@ use cranpose_foundation::text::{
 };
 
 use crate::{
-    key_event::{KeyCode, KeyEvent},
+    key_event::{Key, KeyEvent},
     text::{
         AnnotatedString, ResolvedTextDirection, TextLayoutOptions, TextStyle,
         get_offset_for_position, measure_text, resolve_text_direction, wrapped_line_ranges,
@@ -29,8 +29,8 @@ pub(crate) fn handle_key_event_impl(
     input: &KeyInput<'_>,
 ) -> bool {
     let transformation = input.transformation;
-    match event.key_code {
-        KeyCode::Enter => {
+    match event.key() {
+        Key::Enter | Key::NumPadEnter => {
             if input.line_limits.is_single_line() {
                 false
             } else {
@@ -40,34 +40,34 @@ pub(crate) fn handle_key_event_impl(
             }
         }
 
-        _ if !event.text.is_empty() && !event.modifiers.command_or_ctrl() => {
-            state.edit_as_user(transformation, |buffer| buffer.insert(&event.text));
+        _ if !event.text().is_empty() && !event.modifiers().command_or_ctrl() => {
+            state.edit_as_user(transformation, |buffer| buffer.insert(event.text()));
             state.set_desired_x(None);
             true
         }
 
-        KeyCode::Backspace => {
+        Key::Backspace => {
             state.edit_as_user(transformation, TextFieldBuffer::delete_before_cursor);
             state.set_desired_x(None);
             true
         }
 
-        KeyCode::Delete => {
+        Key::Delete => {
             state.edit_as_user(transformation, TextFieldBuffer::delete_after_cursor);
             state.set_desired_x(None);
             true
         }
 
-        KeyCode::ArrowLeft | KeyCode::ArrowRight => {
+        Key::DirectionLeft | Key::DirectionRight => {
             state.set_desired_x(None);
             let direction = input.style.paragraph_style.text_direction;
             state.edit(|buffer| {
                 // Left goes back in a left-to-right paragraph and forward in a
                 // right-to-left one, as Compose's `moveCursorLeft` does.
                 let rtl = paragraph_is_rtl(buffer.text(), buffer.selection().end, direction);
-                let back = (event.key_code == KeyCode::ArrowLeft) != rtl;
-                let by_word = event.modifiers.command_or_ctrl() && !event.modifiers.shift;
-                match (back, by_word, event.modifiers.shift) {
+                let back = (event.key() == Key::DirectionLeft) != rtl;
+                let by_word = event.modifiers().command_or_ctrl() && !event.modifiers().shift;
+                match (back, by_word, event.modifiers().shift) {
                     (true, true, _) => {
                         let target = find_word_start(buffer.text(), buffer.selection().start);
                         buffer.place_cursor_before_char(target);
@@ -85,20 +85,20 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        KeyCode::ArrowUp => {
-            move_line(state, event.modifiers.shift, LineStep::Up, input);
+        Key::DirectionUp => {
+            move_line(state, event.modifiers().shift, LineStep::Up, input);
             true
         }
 
-        KeyCode::ArrowDown => {
-            move_line(state, event.modifiers.shift, LineStep::Down, input);
+        Key::DirectionDown => {
+            move_line(state, event.modifiers().shift, LineStep::Down, input);
             true
         }
 
-        KeyCode::Home | KeyCode::End => {
+        Key::MoveHome | Key::MoveEnd => {
             state.set_desired_x(None);
-            let to_start = event.key_code == KeyCode::Home;
-            if event.modifiers.command_or_ctrl() {
+            let to_start = event.key() == Key::MoveHome;
+            if event.modifiers().command_or_ctrl() {
                 state.edit(if to_start {
                     TextFieldBuffer::place_cursor_at_start
                 } else {
@@ -114,21 +114,21 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        KeyCode::A if event.modifiers.command_or_ctrl() => {
+        Key::A if event.modifiers().command_or_ctrl() => {
             state.edit(TextFieldBuffer::select_all);
             true
         }
 
-        KeyCode::Z if event.modifiers.command_or_ctrl() && !event.modifiers.shift => {
+        Key::Z if event.modifiers().command_or_ctrl() && !event.modifiers().shift => {
             state.undo();
             true
         }
 
-        KeyCode::Z if event.modifiers.command_or_ctrl() && event.modifiers.shift => {
+        Key::Z if event.modifiers().command_or_ctrl() && event.modifiers().shift => {
             state.redo();
             true
         }
-        KeyCode::Y if event.modifiers.command_or_ctrl() => {
+        Key::Y if event.modifiers().command_or_ctrl() => {
             state.redo();
             true
         }

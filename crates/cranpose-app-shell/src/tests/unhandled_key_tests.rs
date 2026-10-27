@@ -10,17 +10,13 @@ fn key_logging_shell(
         move || {
             let outer = Rc::clone(&log);
             cranpose_ui::UnhandledKeyEvents(move |event| {
-                outer
-                    .borrow_mut()
-                    .push(format!("outer {:?}", event.key_code));
+                outer.borrow_mut().push(format!("outer {:?}", event.key()));
                 true
             });
             let inner = Rc::clone(&log);
             cranpose_ui::UnhandledKeyEvents(move |event| {
-                inner
-                    .borrow_mut()
-                    .push(format!("inner {:?}", event.key_code));
-                event.key_code == KeyCode::X
+                inner.borrow_mut().push(format!("inner {:?}", event.key()));
+                event.key() == Key::X
             });
             if with_field {
                 let field = cranpose_core::remember(|| {
@@ -46,11 +42,11 @@ fn a_key_no_control_takes_goes_to_the_handler_composed_last_first() {
     let mut shell = key_logging_shell(Rc::clone(&log), false);
     shell.update();
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::X, "x")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::X, "x")));
     assert_eq!(*log.borrow(), vec!["inner X".to_string()]);
 
     log.borrow_mut().clear();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Z, "z")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Z, "z")));
     assert_eq!(
         *log.borrow(),
         vec!["inner Z".to_string(), "outer Z".to_string()],
@@ -74,7 +70,7 @@ fn a_key_typed_into_a_text_field_never_reaches_the_handlers() {
     assert!(shell.accessibility_activate(field.node_id, None));
     shell.update();
 
-    shell.on_key_event(&KeyEvent::key_down(KeyCode::X, "x"));
+    shell.on_key_event(&KeyEvent::key_down(Key::X, "x"));
     assert!(
         log.borrow().is_empty(),
         "typing an x into a field must not press the play key: {:?}",
@@ -98,17 +94,17 @@ fn a_handler_that_left_composition_is_no_longer_asked() {
             if visible.get() {
                 let log = Rc::clone(&content_log);
                 cranpose_ui::UnhandledKeyEvents(move |event| {
-                    log.borrow_mut().push(format!("{:?}", event.key_code));
+                    log.borrow_mut().push(format!("{:?}", event.key()));
                     true
                 });
             }
         },
     );
     shell.update();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::B, "b")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::B, "b")));
 
     shown.borrow().expect("visibility state").set(false);
     shell.update();
-    assert!(!shell.on_key_event(&KeyEvent::key_down(KeyCode::B, "b")));
+    assert!(!shell.on_key_event(&KeyEvent::key_down(Key::B, "b")));
     assert_eq!(*log.borrow(), vec!["B".to_string()]);
 }

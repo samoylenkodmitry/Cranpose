@@ -4,7 +4,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, location_key, remember, rememberMutableStateOf};
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
-    BasicTextField, Column, ColumnSpec, FocusRequester, KeyCode, KeyEvent, Modifier, TextFieldState,
+    BasicTextField, Column, ColumnSpec, FocusRequester, Key, KeyEvent, Modifier, TextFieldState,
 };
 
 type EventLog = Rc<RefCell<Vec<&'static str>>>;
@@ -65,8 +65,8 @@ fn ancestor_preview_consumes_shortcuts_before_the_focused_editor() {
         let focus = content_focus.clone();
         Column(
             Modifier::empty().on_preview_key_event(move |event| {
-                seen.borrow_mut().push(event.key_code);
-                event.key_code == KeyCode::Q
+                seen.borrow_mut().push(event.key());
+                event.key() == Key::Q
             }),
             ColumnSpec::default(),
             move || {
@@ -75,19 +75,19 @@ fn ancestor_preview_consumes_shortcuts_before_the_focused_editor() {
         );
     });
     focus.request_focus().expect("focus editor");
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Q, "q")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Q, "q")));
     assert_eq!(
         shell.ime_editor_state().expect("focused editor").text,
         "",
         "consumed shortcut must not edit text"
     );
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
     assert_eq!(
         shell.ime_editor_state().expect("focused editor").text,
         "a",
         "unconsumed key must reach editor"
     );
-    assert_eq!(*seen.borrow(), [KeyCode::Q, KeyCode::A]);
+    assert_eq!(*seen.borrow(), [Key::Q, Key::A]);
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn keys_follow_nested_and_same_component_order_without_visiting_siblings() {
         );
     });
     focus.request_focus().expect("focus child");
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
     assert_eq!(
         *log.borrow(),
         [
@@ -166,7 +166,7 @@ fn updated_and_removed_handlers_take_effect_on_the_next_key() {
     for value in 0..4 {
         version.borrow().expect("composed version").set(value);
         shell.update();
-        assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+        assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
     }
     assert_eq!(*log.borrow(), ["old", "new"]);
     assert_eq!(shell.ime_editor_state().expect("focused editor").text, "aa");
@@ -200,7 +200,7 @@ fn moving_focus_during_preview_does_not_type_into_the_new_editor() {
         });
     });
     first.request_focus().expect("focus first editor");
-    shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a"));
+    shell.on_key_event(&KeyEvent::key_down(Key::A, "a"));
     assert_eq!(
         shell.ime_editor_state().expect("newly focused editor").text,
         "second"
@@ -235,14 +235,14 @@ fn focused_control_activation_runs_between_preview_and_bubble() {
         );
     });
     focus.request_focus().expect("focus button");
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Space, " ")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Spacebar, " ")));
     assert_eq!(
         *log.borrow(),
         ["preview", "activate"],
         "button consumes activation before bubbling"
     );
     log.borrow_mut().clear();
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
     assert_eq!(*log.borrow(), ["preview", "bubble"]);
 }
 
@@ -267,10 +267,10 @@ fn preview_can_remove_its_focused_editor() {
         }
     });
     focus.request_focus().expect("focus editor");
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Q, "q")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Q, "q")));
     shell.update();
     assert!(shell.ime_editor_state().is_none());
-    assert!(!shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+    assert!(!shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn modal_keys_do_not_reach_the_surrounding_page() {
         );
     });
     focus.request_focus().expect("focus modal editor");
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
     assert_eq!(*log.borrow(), ["modal"]);
     assert_eq!(shell.ime_editor_state().expect("modal editor").text, "a");
 }
@@ -367,7 +367,7 @@ fn empty_secondary_surface_cannot_receive_primary_input() {
     let mut empty = shell
         .surface(cranpose_app_shell::RootId::Window(NodeId(usize::MAX)))
         .expect("empty surface");
-    assert!(!empty.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
+    assert!(!empty.on_key_event(&KeyEvent::key_down(Key::A, "a")));
     assert!(!empty.on_paste("wrong"));
     assert!(empty.ime_editor_state().is_none());
     assert_eq!(
@@ -417,14 +417,14 @@ fn window_keys_stay_on_the_receiving_surface() {
     assert!(
         !shell
             .primary()
-            .on_key_event(&KeyEvent::key_down(KeyCode::Q, "q")),
+            .on_key_event(&KeyEvent::key_down(Key::Q, "q")),
         "primary must not edit a secondary window"
     );
     assert!(
         shell
             .surface(cranpose_app_shell::RootId::Window(window))
             .expect("secondary window")
-            .on_key_event(&KeyEvent::key_down(KeyCode::A, "a"))
+            .on_key_event(&KeyEvent::key_down(Key::A, "a"))
     );
     assert_eq!(*log.borrow(), ["window"]);
     assert_eq!(

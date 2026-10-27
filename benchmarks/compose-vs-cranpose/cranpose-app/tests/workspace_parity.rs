@@ -3,7 +3,7 @@ use cranpose_render_pixels::PixelsRenderer;
 use cranpose_testing::robot_assertions::{
     find_semantics_node as find, semantics_contain_text as contains_text,
 };
-use cranpose_ui::{SemanticsRole, SemanticsTree};
+use cranpose_ui::{SemanticsRole, SemanticsTree, ToggleableState};
 use perf_compare::{WorkspaceFrame, WorkspaceMode};
 
 struct WorkspaceHarness {
@@ -88,14 +88,14 @@ impl WorkspaceHarness {
 
 #[test]
 fn workspace_shortcuts_control_the_workspace_while_search_has_focus() {
-    use cranpose_ui::{KeyCode, KeyEvent};
+    use cranpose_ui::{Key, KeyEvent};
     let mut app = WorkspaceHarness::new();
     app.click("Search symbols");
     assert!(app.shell.on_paste("AAPL"));
     for (key, text, label) in [
-        (KeyCode::Digit2, "2", "Auto-scroll Sidebar"),
-        (KeyCode::Digit6, "6", "Auto-scroll Watchlist"),
-        (KeyCode::Digit1, "1", "Auto-scroll Off"),
+        (Key::Two, "2", "Auto-scroll Sidebar"),
+        (Key::Six, "6", "Auto-scroll Watchlist"),
+        (Key::One, "1", "Auto-scroll Off"),
     ] {
         assert!(app.shell.on_key_event(&KeyEvent::key_down(key, text)));
         let tree = app.semantics();
@@ -106,13 +106,13 @@ fn workspace_shortcuts_control_the_workspace_while_search_has_focus() {
         assert_eq!(control.selected, Some(true));
     }
     for enabled in [true, false] {
-        assert!(app.shell.on_key_event(&KeyEvent::key_down(KeyCode::Q, "q")));
+        assert!(app.shell.on_key_event(&KeyEvent::key_down(Key::Q, "q")));
         let tree = app.semantics();
         let control = find(tree.root(), &|node| {
             node.description.as_deref() == Some("Stream quotes") && node.toggled.is_some()
         })
         .expect("stream control");
-        assert_eq!(control.toggled, Some(enabled));
+        assert_eq!(control.toggled, Some(ToggleableState::from(enabled)));
     }
     app.assert_search_text("AAPL");
 }
@@ -161,7 +161,7 @@ fn workspace_controls_expose_their_current_state() {
         node.description.as_deref() == Some("Stream quotes") && node.toggled.is_some()
     })
     .expect("quote stream switch");
-    assert_eq!(streaming.toggled, Some(false));
+    assert_eq!(streaming.toggled, Some(ToggleableState::Off));
     app.click("Auto-scroll Watchlist");
     let scrolling = app.semantics();
     let watchlist = find(scrolling.root(), &|node| {

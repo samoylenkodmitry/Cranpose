@@ -62,7 +62,7 @@ fn reader_activation_bypasses_picking_and_cancel_releases_inspector_capture() {
             .iter()
             .any(|text| text == "Counter: 0")
     );
-    shell.on_key_event(&KeyEvent::key_down(KeyCode::P, "p"));
+    shell.on_key_event(&KeyEvent::key_down(Key::P, "p"));
     let node_id = reader_control_id(&mut shell, "Increment");
     assert!(shell.accessibility_activate(node_id, None));
     shell.update();
@@ -156,7 +156,7 @@ fn floating_control_and_navigation_preserve_app_focus() {
     shell.set_inspector_projector(Some(project));
     shell.update();
     let event = KeyEvent::key_down_with_modifiers(
-        KeyCode::I,
+        Key::I,
         "",
         Modifiers {
             ctrl: true,
@@ -170,8 +170,8 @@ fn floating_control_and_navigation_preserve_app_focus() {
     assert!(!shell.inspector_state().open);
     press(&mut shell, InspectorAction::Toggle);
     assert!(shell.inspector_state().open);
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::A, "a")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Tab, "\t")));
     assert!(shell.on_paste("not for the app"));
     assert!(shell.on_ime_preedit("not for the app", None));
     assert!(shell.on_ime_set_selection(0, 1));
@@ -184,7 +184,7 @@ fn floating_control_and_navigation_preserve_app_focus() {
         shell.debug_enter_app_context(cranpose_ui::active_focus_target),
         focus
     );
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Escape, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::Escape, "")));
     shell.update();
     assert!(!shell.inspector_state().open);
 }

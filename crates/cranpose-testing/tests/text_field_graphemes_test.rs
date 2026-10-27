@@ -2,7 +2,7 @@
 //! (extended grapheme clusters), as Compose's `BreakIterator` character
 //! instance does, through the public shell input path.
 
-use cranpose_ui::{BasicTextFieldOptions, KeyCode, Modifiers};
+use cranpose_ui::{BasicTextFieldOptions, Key, Modifiers};
 
 use crate::support_text_field::{COMMAND, FocusedField, SHIFT};
 
@@ -22,7 +22,7 @@ fn backspace_deletes_the_whole_character_before_the_caret() {
     for cluster in [FLAG, TECHNOLOGIST, THUMB_WITH_TONE, E_ACUTE, NI] {
         let text: &'static str = format!("a{cluster}").leak();
         let mut field = focused(text);
-        field.press(KeyCode::Backspace, Modifiers::NONE);
+        field.press(Key::Backspace, Modifiers::NONE);
         assert_eq!(field.text(), "a", "{cluster:?}");
     }
 }
@@ -33,8 +33,8 @@ fn delete_removes_the_whole_character_after_the_caret() {
         let text: &'static str = format!("{cluster}b").leak();
         let mut field = focused(text);
         field
-            .press(KeyCode::Home, Modifiers::NONE)
-            .press(KeyCode::Delete, Modifiers::NONE);
+            .press(Key::MoveHome, Modifiers::NONE)
+            .press(Key::Delete, Modifiers::NONE);
         assert_eq!(field.text(), "b", "{cluster:?}");
     }
 }
@@ -46,13 +46,13 @@ fn arrows_step_over_whole_characters() {
     let after_flag = 1 + FLAG.len();
     let after_technologist = after_flag + TECHNOLOGIST.len();
 
-    field.press(KeyCode::ArrowLeft, Modifiers::NONE);
+    field.press(Key::DirectionLeft, Modifiers::NONE);
     assert_eq!(field.selection(), (after_technologist, after_technologist));
-    field.press(KeyCode::ArrowLeft, Modifiers::NONE);
+    field.press(Key::DirectionLeft, Modifiers::NONE);
     assert_eq!(field.selection(), (after_flag, after_flag));
-    field.press(KeyCode::ArrowLeft, Modifiers::NONE);
+    field.press(Key::DirectionLeft, Modifiers::NONE);
     assert_eq!(field.selection(), (1, 1));
-    field.press(KeyCode::ArrowRight, Modifiers::NONE);
+    field.press(Key::DirectionRight, Modifiers::NONE);
     assert_eq!(field.selection(), (after_flag, after_flag));
 }
 
@@ -62,13 +62,13 @@ fn shift_arrows_select_whole_characters() {
     let end = text.len();
     let mut field = focused(text);
 
-    field.press(KeyCode::ArrowLeft, SHIFT);
+    field.press(Key::DirectionLeft, SHIFT);
     assert_eq!(field.selection(), (end - E_ACUTE.len(), end));
-    field.press(KeyCode::ArrowLeft, SHIFT);
+    field.press(Key::DirectionLeft, SHIFT);
     assert_eq!(field.selection(), (1, end));
-    field.press(KeyCode::ArrowRight, SHIFT);
+    field.press(Key::DirectionRight, SHIFT);
     assert_eq!(field.selection(), (1 + THUMB_WITH_TONE.len(), end));
-    field.press(KeyCode::Backspace, Modifiers::NONE);
+    field.press(Key::Backspace, Modifiers::NONE);
     assert_eq!(field.text(), format!("a{THUMB_WITH_TONE}"));
 }
 
@@ -79,12 +79,12 @@ fn word_moves_keep_combining_marks_with_their_letter() {
     let word_end = 3 + E_ACUTE.len();
 
     field
-        .press(KeyCode::Home, Modifiers::NONE)
-        .press(KeyCode::ArrowRight, COMMAND);
+        .press(Key::MoveHome, Modifiers::NONE)
+        .press(Key::DirectionRight, COMMAND);
     assert_eq!(field.selection(), (word_end, word_end));
-    field.press(KeyCode::ArrowRight, COMMAND);
+    field.press(Key::DirectionRight, COMMAND);
     assert_eq!(field.selection(), (text.len(), text.len()));
-    field.press(KeyCode::ArrowLeft, COMMAND);
+    field.press(Key::DirectionLeft, COMMAND);
     assert_eq!(field.selection(), (word_end + 1, word_end + 1));
 }
 
@@ -92,27 +92,27 @@ fn word_moves_keep_combining_marks_with_their_letter() {
 fn vertical_moves_keep_the_caret_on_character_boundaries() {
     let mut field = focused("ab\n\u{65E5}\u{672C}\nxy");
     field
-        .press(KeyCode::Home, COMMAND)
-        .press(KeyCode::ArrowRight, Modifiers::NONE)
-        .press(KeyCode::ArrowDown, Modifiers::NONE);
+        .press(Key::MoveHome, COMMAND)
+        .press(Key::DirectionRight, Modifiers::NONE)
+        .press(Key::DirectionDown, Modifiers::NONE);
     let (second, _) = field.selection();
     assert!(
         [3, 6, 9].contains(&second),
         "the caret landed between characters of the second line, at {second}"
     );
-    field.press(KeyCode::ArrowDown, Modifiers::NONE);
+    field.press(Key::DirectionDown, Modifiers::NONE);
     let (third, _) = field.selection();
     assert!((10..=12).contains(&third), "the third line, at {third}");
     field
-        .press(KeyCode::ArrowUp, Modifiers::NONE)
-        .press(KeyCode::ArrowUp, Modifiers::NONE);
+        .press(Key::DirectionUp, Modifiers::NONE)
+        .press(Key::DirectionUp, Modifiers::NONE);
     assert_eq!(field.selection(), (1, 1), "back to the first column");
 
     let mut field = focused("ab\n\u{1F1F7}\u{1F1F8}x");
     field
-        .press(KeyCode::Home, COMMAND)
-        .press(KeyCode::ArrowRight, Modifiers::NONE)
-        .press(KeyCode::ArrowDown, Modifiers::NONE);
+        .press(Key::MoveHome, COMMAND)
+        .press(Key::DirectionRight, Modifiers::NONE)
+        .press(Key::DirectionDown, Modifiers::NONE);
     let (below, _) = field.selection();
     assert!(
         [3, 11, 12].contains(&below),

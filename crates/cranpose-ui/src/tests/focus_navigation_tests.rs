@@ -69,13 +69,13 @@ fn tabs_keep_selection_when_arrows_wrap_and_leave_in_one_step() {
         ],
     ));
     for (current, key, shift, expected) in [
-        (None, KeyCode::Tab, false, 4),
-        (Some(4), KeyCode::ArrowRight, false, 3),
-        (Some(3), KeyCode::ArrowLeft, false, 4),
-        (Some(3), KeyCode::End, false, 4),
-        (Some(4), KeyCode::Home, false, 3),
-        (Some(3), KeyCode::Tab, false, 6),
-        (Some(6), KeyCode::Tab, true, 4),
+        (None, Key::Tab, false, 4),
+        (Some(4), Key::DirectionRight, false, 3),
+        (Some(3), Key::DirectionLeft, false, 4),
+        (Some(3), Key::MoveEnd, false, 4),
+        (Some(4), Key::MoveHome, false, 3),
+        (Some(3), Key::Tab, false, 6),
+        (Some(6), Key::Tab, true, 4),
     ] {
         assert_eq!(
             keyboard_focus_target(&tree, current.map(NodeId), key, shift),
@@ -86,11 +86,11 @@ fn tabs_keep_selection_when_arrows_wrap_and_leave_in_one_step() {
         );
     }
     assert_eq!(
-        keyboard_focus_target(&tree, Some(NodeId(4)), KeyCode::ArrowDown, false),
+        keyboard_focus_target(&tree, Some(NodeId(4)), Key::DirectionDown, false),
         None
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(NodeId(6)), KeyCode::Home, false),
+        keyboard_focus_target(&tree, Some(NodeId(6)), Key::MoveHome, false),
         None
     );
 }
@@ -130,25 +130,25 @@ fn nested_groups_hidden_content_and_modals_have_separate_focus_scopes() {
         ],
     ));
     assert_eq!(
-        keyboard_focus_target(&tree, None, KeyCode::Tab, false)
+        keyboard_focus_target(&tree, None, Key::Tab, false)
             .unwrap()
             .node_id,
         NodeId(7)
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(NodeId(7)), KeyCode::End, false)
+        keyboard_focus_target(&tree, Some(NodeId(7)), Key::MoveEnd, false)
             .unwrap()
             .node_id,
         NodeId(8)
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(NodeId(9)), KeyCode::ArrowLeft, false)
+        keyboard_focus_target(&tree, Some(NodeId(9)), Key::DirectionLeft, false)
             .unwrap()
             .node_id,
         NodeId(5)
     );
     assert_eq!(
-        keyboard_focus_target(&tree, Some(NodeId(9)), KeyCode::Tab, false)
+        keyboard_focus_target(&tree, Some(NodeId(9)), Key::Tab, false)
             .unwrap()
             .node_id,
         NodeId(7)
@@ -167,7 +167,7 @@ fn keyboard_navigation_publishes_the_order_for_programmatic_focus() {
             node(NodeId(3), Modifier::empty(), Vec::new()),
         ],
     ));
-    assert!(keyboard_focus_target(&tree, None, KeyCode::Tab, false).is_some());
+    assert!(keyboard_focus_target(&tree, None, Key::Tab, false).is_some());
     assert_eq!(crate::focus_order_len(), 2);
     assert!(crate::FocusManager.move_focus(crate::FocusDirection::Next));
     assert_eq!(crate::active_focus_target(), Some(NodeId(2)));

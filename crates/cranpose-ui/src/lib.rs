@@ -8,8 +8,8 @@ use std::{
     rc::Rc,
 };
 
+pub use cranpose_core::Composition;
 use cranpose_core::{ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle, location_key};
-pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
 #[cfg(feature = "localization")]
 pub use cranpose_macros::{message, tr, translation_messages, translations};
@@ -170,7 +170,7 @@ pub use interaction::{
     PressInteractionRelease, collect_is_hovered_as_state, collect_is_pressed_as_state,
     rememberMutableInteractionSource,
 };
-pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+pub use key_event::{Key, KeyEvent, KeyEventType, Modifiers, NativeKeyEvent};
 pub use keyboard_options::{
     ContentType, ImeAction, KeyboardActionHandler, KeyboardActionScope, KeyboardCapitalization,
     KeyboardOptions, KeyboardType,
@@ -329,7 +329,7 @@ pub struct TestComposition {
     composition: Composition<MemoryApplier>,
     /// The root content and its key, which a root render composes again, as
     /// a host's reconcile does.
-    root_content: Option<(Key, Box<dyn FnMut()>)>,
+    root_content: Option<(cranpose_core::Key, Box<dyn FnMut()>)>,
 }
 
 impl TestComposition {
@@ -375,7 +375,7 @@ impl TestComposition {
     /// scopes. Later recompositions compose `content` again when the root needs it.
     pub fn render(
         &mut self,
-        root_key: Key,
+        root_key: cranpose_core::Key,
         content: impl FnMut() + 'static,
     ) -> Result<(), NodeError> {
         let (key, content) = self.root_content.insert((root_key, Box::new(content)));

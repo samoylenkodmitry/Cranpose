@@ -5,7 +5,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_ui::{
-    Box, BoxSpec, BoxWithConstraints, FocusRequester, KeyCode, KeyEvent, Modifier, Size,
+    Box, BoxSpec, BoxWithConstraints, FocusRequester, Key, KeyEvent, Modifier, Size,
 };
 
 mod support;
@@ -13,7 +13,7 @@ use support::checking_shell;
 
 #[test]
 fn a_key_handler_on_box_with_constraints_takes_keys_while_it_is_focused() {
-    let pressed: Rc<RefCell<Vec<KeyCode>>> = Rc::default();
+    let pressed: Rc<RefCell<Vec<Key>>> = Rc::default();
     let focus = FocusRequester::new();
     let (sink, requester) = (Rc::clone(&pressed), focus.clone());
     let (mut shell, _) = checking_shell(false, move || {
@@ -24,7 +24,7 @@ fn a_key_handler_on_box_with_constraints_takes_keys_while_it_is_focused() {
                 .focus_requester(&requester)
                 .focus_target()
                 .on_key_event(move |event| {
-                    sink.borrow_mut().push(event.key_code);
+                    sink.borrow_mut().push(event.key());
                     true
                 }),
             |_| {
@@ -43,6 +43,6 @@ fn a_key_handler_on_box_with_constraints_takes_keys_while_it_is_focused() {
         .expect("the box takes focus");
     shell.update();
 
-    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::W, "w")));
-    assert_eq!(*pressed.borrow(), vec![KeyCode::W]);
+    assert!(shell.on_key_event(&KeyEvent::key_down(Key::W, "w")));
+    assert_eq!(*pressed.borrow(), vec![Key::W]);
 }

@@ -4,7 +4,7 @@ use cranpose_core::{DefaultScheduler, Runtime};
 
 use super::*;
 use crate::{
-    key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers},
+    key_event::{Key, KeyEvent, KeyEventType, Modifiers},
     text_field_focus,
 };
 
@@ -13,7 +13,7 @@ fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-fn key_down(key_code: KeyCode, text: &str) -> KeyEvent {
+fn key_down(key_code: Key, text: &str) -> KeyEvent {
     KeyEvent::new(key_code, text, Modifiers::NONE, KeyEventType::KeyDown)
 }
 
@@ -90,32 +90,26 @@ fn android_style_key_events_commit_text() {
             },
         );
 
+        assert!(text_field_focus::dispatch_key_event(&key_down(Key::H, "h")));
+        assert!(text_field_focus::dispatch_key_event(&key_down(Key::I, "i")));
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::H,
-            "h"
-        )));
-        assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::I,
-            "i"
-        )));
-        assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::Unknown,
+            Key::Unknown,
             "\u{00f6}"
         )));
         assert_eq!(state.text(), "hi\u{00f6}");
 
-        let key_up = KeyEvent::new(KeyCode::H, "h", Modifiers::NONE, KeyEventType::KeyUp);
+        let key_up = KeyEvent::new(Key::H, "h", Modifiers::NONE, KeyEventType::KeyUp);
         assert!(!text_field_focus::dispatch_key_event(&key_up));
         assert_eq!(state.text(), "hi\u{00f6}");
 
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::Backspace,
+            Key::Backspace,
             ""
         )));
         assert_eq!(state.text(), "hi");
 
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::Enter,
+            Key::Enter,
             ""
         )));
         assert_eq!(state.text(), "hi\n");
@@ -159,18 +153,18 @@ fn spacebar_swipe_arrow_keys_scrub_caret() {
         assert_eq!(state.selection(), TextRange::new(5, 5));
 
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::ArrowLeft,
+            Key::DirectionLeft,
             ""
         )));
         assert_eq!(state.selection(), TextRange::new(4, 4));
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::ArrowLeft,
+            Key::DirectionLeft,
             ""
         )));
         assert_eq!(state.selection(), TextRange::new(3, 3));
 
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::ArrowRight,
+            Key::DirectionRight,
             ""
         )));
         assert_eq!(state.selection(), TextRange::new(4, 4));
@@ -338,7 +332,7 @@ fn enter_on_single_line_field_runs_its_action_without_a_new_line() {
         let (state, _focus) = focused_state("abc", TextFieldLineLimits::SingleLine);
 
         assert!(text_field_focus::dispatch_key_event(&key_down(
-            KeyCode::Enter,
+            Key::Enter,
             ""
         )));
         assert_eq!(state.text(), "abc");

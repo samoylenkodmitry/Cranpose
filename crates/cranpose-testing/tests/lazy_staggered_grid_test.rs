@@ -351,7 +351,7 @@ fn tab_moves_the_focus_into_the_item_below_the_viewport_and_reveals_it() {
     grid.shell.update();
     assert_eq!(focused(&mut grid).as_deref(), Some("item 7"));
     assert!(grid.shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
-        cranpose_ui::KeyCode::Tab,
+        cranpose_ui::Key::Tab,
         "\t"
     )));
     grid.shell.update();
