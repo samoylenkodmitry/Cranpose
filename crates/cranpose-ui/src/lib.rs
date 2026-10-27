@@ -81,6 +81,7 @@ pub mod round_scaling_list;
 pub mod round_scroll_indicator;
 pub mod safe_area;
 pub mod scroll;
+mod scroll_semantics;
 pub mod scrollbar;
 pub mod selection_container;
 mod semantics_dispatch;
