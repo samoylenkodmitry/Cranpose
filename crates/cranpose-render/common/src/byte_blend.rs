@@ -9,16 +9,17 @@ pub fn blend_byte_pixel(dst: &mut [u8; 4], src: [u8; 4]) {
         0 => {}
         255 => *dst = src,
         _ => {
-            let keep = 255 - alpha;
-            let mix = |source: u8, under: u8| {
-                ((u32::from(source) * alpha + u32::from(under) * keep + 127) / 255) as u8
-            };
             *dst = [
-                mix(src[0], dst[0]),
-                mix(src[1], dst[1]),
-                mix(src[2], dst[2]),
-                mix(255, dst[3]),
+                mix_byte(src[0], dst[0], alpha),
+                mix_byte(src[1], dst[1], alpha),
+                mix_byte(src[2], dst[2], alpha),
+                mix_byte(255, dst[3], alpha),
             ];
         }
     }
+}
+
+// One channel of `blend_byte_pixel`: `source` at `alpha` over `under`.
+pub(crate) fn mix_byte(source: u8, under: u8, alpha: u32) -> u8 {
+    ((u32::from(source) * alpha + u32::from(under) * (255 - alpha) + 127) / 255) as u8
 }

@@ -1,7 +1,7 @@
 //! Pixels of 16 bits, 5 of red, 6 of green and 5 of blue, as most small
 //! displays take them, stored in either byte order.
 
-use crate::byte_blend::blend_byte_pixel;
+use crate::byte_blend::{blend_byte_pixel, mix_byte};
 
 /// A 16-bit pixel stored with its low byte first.
 #[repr(transparent)]
@@ -82,26 +82,35 @@ impl GlyphPixel for [u8; 4] {
     }
 }
 
-// A 16-bit pixel blends as its bytes would, then keeps their high bits.
+// A 16-bit pixel blends as its bytes would, then keeps their high bits. It
+// has no alpha, so the blend leaves the alpha byte out.
+#[inline]
 fn blend_bytes_565<P: Rgb565>(pixel: &mut P, src: [u8; 4]) {
     match src[3] {
         0 => {}
         255 => *pixel = P::from_rgb(src),
-        _ => {
-            let mut rgba = pixel.to_rgba();
-            blend_byte_pixel(&mut rgba, src);
-            *pixel = P::from_rgb(rgba);
+        alpha => {
+            let under = pixel.to_rgba();
+            let alpha = u32::from(alpha);
+            *pixel = P::from_rgb([
+                mix_byte(src[0], under[0], alpha),
+                mix_byte(src[1], under[1], alpha),
+                mix_byte(src[2], under[2], alpha),
+                255,
+            ]);
         }
     }
 }
 
 impl GlyphPixel for Rgb565Le {
+    #[inline]
     fn blend_bytes(&mut self, src: [u8; 4]) {
         blend_bytes_565(self, src);
     }
 }
 
 impl GlyphPixel for Rgb565Be {
+    #[inline]
     fn blend_bytes(&mut self, src: [u8; 4]) {
         blend_bytes_565(self, src);
     }
