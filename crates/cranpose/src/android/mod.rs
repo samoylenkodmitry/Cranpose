@@ -61,6 +61,8 @@ pub(crate) mod perf_hint;
 #[cfg(target_os = "android")]
 pub(crate) mod permissions;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod pipeline_cache;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod pipeline_update;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod pointer_icon;
@@ -98,3 +100,5 @@ pub(crate) mod writable_folder;
 
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub use event_loop::*;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) use pipeline_cache::{keep_pipeline_cache_in, name_pipeline_cache_file};

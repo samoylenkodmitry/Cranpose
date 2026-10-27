@@ -1068,21 +1068,6 @@ struct FrameDraw<'a> {
     repaint: Repaint,
 }
 
-fn frame_damage(damage: Option<Damage>) -> gpu_stats::FrameDamage {
-    match damage {
-        None => gpu_stats::FrameDamage::Untracked,
-        Some(Damage::Skipped) => gpu_stats::FrameDamage::Skipped,
-        Some(Damage::Full) => gpu_stats::FrameDamage::Full,
-        Some(Damage::Part(rects)) => {
-            let mut window = gpu_stats::WindowRects::default();
-            for rect in rects.as_slice() {
-                window.push([rect.x, rect.y, rect.width, rect.height].map(|value| value as u32));
-            }
-            gpu_stats::FrameDamage::Part(window)
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 enum OutputMode {
     Display,
@@ -2374,6 +2359,17 @@ impl GpuRenderer {
         }
     }
 
+    // Whether `packet` draws what the surface shows, so it takes no image and
+    // no present; the frame then closes as drawn for the renderer's warm-up.
+    pub(crate) fn shows(&mut self, packet: &FramePacket, viewport: (u32, u32)) -> bool {
+        let frame = self.frame_window(packet, viewport);
+        let shown = self.swapchain.shows(&frame, &mut self.window_damage);
+        if shown {
+            self.history.skip_frame();
+        }
+        shown
+    }
+
     fn frame_window<'p>(&self, packet: &'p FramePacket, viewport: (u32, u32)) -> FrameWindow<'p> {
         FrameWindow {
             packet,
@@ -2387,7 +2383,9 @@ impl GpuRenderer {
     fn count_damage(&self, plan: Option<FrameDamagePlan>, viewport: (u32, u32)) -> Repaint {
         self.frame_stats
             .damage
-            .set(frame_damage(plan.map(|plan| plan.damage)));
+            .set(plan.map_or(gpu_stats::FrameDamage::Untracked, |plan| {
+                plan.damage.stats()
+            }));
         let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
         self.frame_stats
             .repainted_pixels

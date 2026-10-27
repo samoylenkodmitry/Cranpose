@@ -21,6 +21,7 @@ use crate::{
     draw_pass::op_draw_bounds,
     frame_packet::FramePacket,
     geometry::snap_delta_for_anchor,
+    gpu_stats::{FrameDamage, WindowRects},
     render::shadow_draw_bounds,
     scene::{
         BackdropLayer, ClipRounding, CompositorScene, DrawOp, DrawOpKind, EffectLayer, ImageDraw,
@@ -28,6 +29,9 @@ use crate::{
     },
 };
 
+#[path = "window_damage/cleared_images.rs"]
+mod cleared_images;
+pub(crate) use cleared_images::ClearedImages;
 #[path = "window_damage/swapchain_history.rs"]
 mod swapchain_history;
 pub(crate) use swapchain_history::SwapchainHistory;
@@ -112,6 +116,22 @@ impl Damage {
             Self::Skipped | Self::Full => Repaint::Whole,
             Self::Part(rects) if rects.is_empty() => Repaint::Nothing,
             Self::Part(rects) => Repaint::Window(rects),
+        }
+    }
+
+    // The damage as a frame's statistics report it.
+    pub(crate) fn stats(self) -> FrameDamage {
+        match self {
+            Self::Skipped => FrameDamage::Skipped,
+            Self::Full => FrameDamage::Full,
+            Self::Part(rects) => {
+                let mut window = WindowRects::default();
+                for rect in rects.as_slice() {
+                    window
+                        .push([rect.x, rect.y, rect.width, rect.height].map(|value| value as u32));
+                }
+                FrameDamage::Part(window)
+            }
         }
     }
 }
@@ -358,69 +378,6 @@ impl ImageContent {
     }
 }
 
-/// The frames drawn into presentable images that come cleared. While a page
-/// whose items cover the window more than twice changes a small part of it,
-/// the composition target keeps the frame, draws only what changes, and is
-/// copied whole into each image; the first frame that changes most of the
-/// window draws straight into its image again and lets the target go. The
-/// images summarize first after [`COPY_HOLD_OFF`] frames.
-#[derive(Default)]
-pub(crate) struct ClearedImages {
-    /// The summary of the frame drawn straight into an image last.
-    pub(crate) kept: KeptWindow,
-    /// The frames in a row drawn straight into an image that changed a
-    /// small part of the window.
-    small_frames: u32,
-    /// Whether these images took a frame yet.
-    started: bool,
-    /// Whether the composition target keeps the frame for these images.
-    pub(crate) copied: bool,
-}
-
-impl ClearedImages {
-    /// What `frame`, drawn straight into an image, changes against the frame
-    /// before, summarized by `summaries`; and whether the composition target
-    /// is to keep a copy of it.
-    pub(crate) fn damage(
-        &mut self,
-        summaries: &mut WindowDamage,
-        frame: &FrameWindow<'_>,
-    ) -> (Damage, bool) {
-        if !self.started {
-            self.started = true;
-            summaries.hold_off(COPY_HOLD_OFF);
-        }
-        let damage = summaries.begin_as(frame, &mut self.kept, Summaries::COPIED);
-        if !matches!(damage, Damage::Part(_)) {
-            self.small_frames = 0;
-            return (damage, false);
-        }
-        self.small_frames += 1;
-        let keeps = self.small_frames >= COPY_AFTER;
-        if keeps {
-            self.small_frames = 0;
-        }
-        (damage, keeps)
-    }
-
-    /// Hands the summary of the frame just copied into the composition
-    /// target to the target's `kept`. A frame that drew a stand-in leaves no
-    /// summary, so the next frame draws whole and the target goes.
-    pub(crate) fn hand_over(&mut self, target: &mut KeptWindow) {
-        std::mem::swap(&mut self.kept, target);
-        self.kept.forget();
-        self.copied = true;
-    }
-
-    /// Takes back the summary of the frame the composition target kept,
-    /// which goes: frames draw straight into their images again.
-    pub(crate) fn take_back(&mut self, target: &mut KeptWindow) {
-        std::mem::swap(&mut self.kept, target);
-        self.copied = false;
-        self.small_frames = 0;
-    }
-}
-
 /// What a frame draws into the window.
 pub(crate) struct FrameWindow<'a> {
     pub(crate) packet: &'a FramePacket,
@@ -448,9 +405,28 @@ pub(crate) struct WindowDamage {
     full_frames: u32,
     events: Vec<(usize, u8, usize)>,
     open: Vec<OpenEffect>,
+    // The frame `shows` summarized into `next`, and whether the summary
+    // describes it, for that frame's `begin` to take instead of summarizing
+    // again.
+    summarized_ahead: Option<(u64, bool)>,
 }
 
 impl WindowDamage {
+    // Whether `frame` draws what `kept` holds: no run of skips, a kept frame,
+    // and no item that differs from it.
+    pub(crate) fn shows(&mut self, frame: &FrameWindow<'_>, kept: &KeptWindow) -> bool {
+        if self.skipped > 0 || !kept.valid {
+            return false;
+        }
+        let complete = self.summarize(frame);
+        self.summarized_ahead = Some((frame.packet.frame_id, complete));
+        complete
+            && matches!(
+                compare(&kept.summary, &self.next, frame.viewport),
+                Damage::Part(changed) if changed.is_empty()
+            )
+    }
+
     /// Summarizes `frame` and compares it with `kept`.
     pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &mut KeptWindow) -> Damage {
         if frame.packet.held_still {
@@ -494,7 +470,10 @@ impl WindowDamage {
             self.baseline = self.skipped == 0;
             return Damage::Skipped;
         }
-        self.summarized = self.summarize(frame);
+        self.summarized = match self.summarized_ahead.take() {
+            Some((frame_id, complete)) if frame_id == frame.packet.frame_id => complete,
+            _ => self.summarize(frame),
+        };
         let baseline = std::mem::take(&mut self.baseline);
         let damage = if self.summarized && kept.valid {
             match compare(&kept.summary, &self.next, frame.viewport) {

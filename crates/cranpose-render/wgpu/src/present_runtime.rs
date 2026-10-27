@@ -11,7 +11,9 @@ use std::{
 };
 
 use crate::{
-    frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
+    frame_packet::{
+        CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, PresentTimings, RenderReturns,
+    },
     render::{FrameOutput, FrameSubmit, GpuRenderer, GpuRendererInit},
 };
 
@@ -87,6 +89,7 @@ pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> 
         PresentOutcome::Cancelled(CancelReason::Viewport) => 4,
         PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable) => 5,
         PresentOutcome::Cancelled(CancelReason::DeviceError) => 6,
+        PresentOutcome::Unchanged => 7,
     };
     (frame_id << 8) | code
 }
@@ -307,6 +310,18 @@ impl PresentState {
     }
 
     fn render_to_surface(&mut self, packet: FramePacket, width: u32, height: u32) {
+        if self.gpu_renderer.shows(&packet, (width, height)) {
+            self.finish_returns(RenderReturns {
+                scene: Some(FrameSceneStorage {
+                    root: packet.root,
+                    overlay: packet.overlay,
+                }),
+                frame_id: packet.frame_id,
+                outcome: PresentOutcome::Unchanged,
+                ..RenderReturns::default()
+            });
+            return;
+        }
         let Some(frame) = self.acquire_with_one_retry() else {
             self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
             return;

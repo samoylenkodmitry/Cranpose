@@ -7,7 +7,7 @@ use web_time::Instant;
 
 use crate::{
     collect::{LayerMotion, LayerSceneRecycler, collect_overlay, collect_root},
-    frame_packet::{FramePacket, MAX_FRAMES_IN_FLIGHT, RenderReturns},
+    frame_packet::{FramePacket, FrameSceneStorage, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
     text_system::TextSystemState,
@@ -33,10 +33,16 @@ pub(crate) struct RendererFrontend {
     pub(crate) transparent_background: bool,
     // Whether the app held still since the last packet; the next one says so.
     pub(crate) held_still: bool,
+    // The packet a surface did not show yet, kept by `keep_packet` with the
+    // scene update it was built from, for the frame drawn next.
+    kept_packet: Option<(u64, FramePacket)>,
 }
 
 impl RendererFrontend {
     pub(crate) fn refresh_dev_overlay(&mut self) {
+        if let Some((_, packet)) = self.kept_packet.take() {
+            self.recycle(packet);
+        }
         self.dev_overlay_graph = self.fps_overlay_graph.clone();
         if let Some(inspector) = &self.inspector_overlay_graph {
             let graph = self.dev_overlay_graph.get_or_insert_with(|| {
@@ -75,6 +81,7 @@ impl RendererFrontend {
             frame_sequence: 0,
             transparent_background: false,
             held_still: false,
+            kept_packet: None,
         }
     }
 
@@ -178,6 +185,48 @@ impl RendererFrontend {
             );
         }
         Some(packet)
+    }
+
+    // The packet of the current scene at `width` by `height`: the one kept
+    // by `keep_packet` while the scene and the frame's setting stay as they
+    // were, else a new one.
+    pub(crate) fn take_packet(
+        &mut self,
+        width: u32,
+        height: u32,
+        renderer_epoch: u64,
+        surface_epoch: u64,
+    ) -> Option<FramePacket> {
+        let update = self.scene.graph.as_ref()?.update;
+        if let Some((built_at, packet)) = self.kept_packet.take() {
+            if built_at == update
+                && packet.viewport == (width, height)
+                && (packet.renderer_epoch, packet.surface_epoch) == (renderer_epoch, surface_epoch)
+                && packet.root_scale == self.root_scale
+                && packet.clear == frame_clear_color(self.transparent_background)
+            {
+                return Some(packet);
+            }
+            self.recycle(packet);
+        }
+        self.build_frame_packet(width, height, renderer_epoch, surface_epoch)
+    }
+
+    // Keeps `packet`, which no surface showed yet, for the next `take_packet`.
+    pub(crate) fn keep_packet(&mut self, packet: FramePacket) {
+        let update = self.scene.graph.as_ref().map_or(0, |graph| graph.update);
+        self.kept_packet = Some((update, packet));
+    }
+
+    // Gives the scene of a packet nothing drew back to the recyclers.
+    pub(crate) fn recycle(&mut self, packet: FramePacket) {
+        self.apply_returns(RenderReturns {
+            scene: Some(FrameSceneStorage {
+                root: packet.root,
+                overlay: packet.overlay,
+            }),
+            ..RenderReturns::default()
+        });
     }
 
     pub(crate) fn apply_returns(&mut self, returns: RenderReturns) {
