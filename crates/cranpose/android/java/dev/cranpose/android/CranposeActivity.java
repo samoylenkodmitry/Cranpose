@@ -1602,7 +1602,11 @@ public class CranposeActivity extends NativeActivity {
          * not by a virtual id.
          */
         private void send(int id, AccessibilityEvent event) {
-            if (!host.isShown()) return;
+            // A service that just stopped can still have the view root move
+            // its accessibility focus, and sending then throws.
+            AccessibilityManager manager = (AccessibilityManager)
+                    host.getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+            if (!host.isShown() || !manager.isEnabled()) return;
             event.setPackageName(host.getContext().getPackageName());
             if (id == HOST_ID) {
                 event.setSource(host);
