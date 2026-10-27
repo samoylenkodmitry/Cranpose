@@ -2,9 +2,12 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_services::{SystemTheme, set_platform_system_theme};
 use cranpose_ui::{
-    Configuration, EdgeInsets, composable, local_configuration, local_ime_insets,
+    Configuration, EdgeInsets, UiModeType, composable, local_configuration, local_ime_insets,
     local_safe_area_insets,
 };
+
+const TV_OVERSCAN_SIDE: f32 = 48.0;
+const TV_OVERSCAN_EDGE: f32 = 27.0;
 
 #[cfg(feature = "localization")]
 #[path = "platform_languages.rs"]
@@ -31,17 +34,29 @@ impl PlatformEnvironment {
         self.languages.refresh()
     }
 
-    /// The window's edges the system draws on.
-    #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios")),
-        expect(dead_code, reason = "only Android and iOS report a safe area")
-    )]
+    // The window's edges the system draws on. A TV keeps content inside the
+    // overscan margins the Android TV design guide names, 48 dp at the sides
+    // and 27 dp at the top and bottom, as tvOS reports in its safe area.
     pub(crate) fn safe_area(&self) -> EdgeInsets {
-        self.safe_area.get()
+        let insets = self.safe_area.get();
+        if self.configuration.get().ui_mode_type != UiModeType::Television {
+            return insets;
+        }
+        EdgeInsets {
+            left: insets.left.max(TV_OVERSCAN_SIDE),
+            top: insets.top.max(TV_OVERSCAN_EDGE),
+            right: insets.right.max(TV_OVERSCAN_SIDE),
+            bottom: insets.bottom.max(TV_OVERSCAN_EDGE),
+        }
     }
 
     #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios", feature = "framebuffer")),
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            feature = "framebuffer",
+            test
+        )),
         expect(
             dead_code,
             reason = "only Android, iOS and the framebuffer backend report a safe area"
@@ -64,7 +79,7 @@ impl PlatformEnvironment {
     }
 
     #[cfg_attr(
-        not(any(target_os = "android", feature = "watchos")),
+        not(any(target_os = "android", feature = "watchos", test)),
         expect(dead_code, reason = "only Android and watchOS report a device kind")
     )]
     pub(crate) fn set_configuration(&self, configuration: Configuration) -> bool {
@@ -84,7 +99,7 @@ impl PlatformEnvironment {
         let launch_args = cranpose_services::launch_args();
         cranpose_core::CompositionLocalProvider(
             [
-                local_safe_area_insets().provides(self.safe_area.get()),
+                local_safe_area_insets().provides(self.safe_area()),
                 local_ime_insets().provides(self.ime_insets.get()),
                 local_configuration().provides(self.configuration.get()),
                 cranpose_services::local_system_theme().provides(theme),
@@ -121,3 +136,7 @@ fn RootBackHandler() {
         }
     });
 }
+
+#[cfg(test)]
+#[path = "tests/platform_env_tests.rs"]
+mod tests;
