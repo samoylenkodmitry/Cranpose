@@ -423,7 +423,8 @@ impl RendererPipelines {
     }
 
     // Whether a pass with a depth buffer or not draws its turned glyphs with
-    // their own pipeline, as `shadows_ready` tells for shadows.
+    // their own pipeline, built or in the driver's cache; when it does not,
+    // the pipeline is queued on the demand lane.
     pub(crate) fn turned_glyphs_ready(&self, depth: PassDepth) -> bool {
         self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Turned)
             .ready_or_queue(&self.compiler, self.adapter_backend, || {
