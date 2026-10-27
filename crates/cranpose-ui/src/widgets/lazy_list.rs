@@ -546,10 +546,14 @@ fn recycle_forward_skipped_active_slots(
         return false;
     }
 
+    // The focused item's slot stays: the pass places it after the viewport,
+    // and an item that took its node would take the focus.
+    let focused = scope.focused_slot();
     scope.recycle_active_slots_where(|slot_id| {
-        content
-            .get_index_by_slot_id_in_range(slot_id.raw(), near.clone())
-            .is_some_and(|index| index < first_measured_index)
+        Some(slot_id) != focused
+            && content
+                .get_index_by_slot_id_in_range(slot_id.raw(), near.clone())
+                .is_some_and(|index| index < first_measured_index)
     });
     true
 }
