@@ -393,7 +393,7 @@ fn combined_app_starting_on_async_does_not_grow_slots_across_cycle() {
 #[test]
 fn lazy_list_tab_uses_internal_scroll_container() {
     assert!(
-        !tab_requires_scroll(DemoTab::LazyList),
+        !tab_content::tab_requires_scroll(DemoTab::LazyList),
         "Lazy List tab owns an internal lazy list and must not be wrapped in ScrollableTab"
     );
 }
@@ -401,7 +401,7 @@ fn lazy_list_tab_uses_internal_scroll_container() {
 #[test]
 fn markdown_tab_uses_internal_scroll_container() {
     assert!(
-        !tab_requires_scroll(DemoTab::MarkdownViewer),
+        !tab_content::tab_requires_scroll(DemoTab::MarkdownViewer),
         "Markdown tab owns an internal lazy list + scrollbar and must not be wrapped in ScrollableTab"
     );
 }

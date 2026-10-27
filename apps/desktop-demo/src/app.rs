@@ -61,6 +61,7 @@ mod source_view;
 mod tab_content;
 mod text_showcase;
 pub mod tool_windows;
+mod tv;
 mod url_resolve;
 pub mod wear;
 mod web_fetch;
@@ -69,7 +70,6 @@ mod window_snap;
 mod wsz;
 mod xkcd;
 
-use animations::AnimationsTab;
 pub use chrome_tabs::chrome_tabs_app;
 use controls_ui::ControlsUiTab;
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -79,19 +79,13 @@ pub use demo_tab::{
     DEMO_TABS, DEMO_TAB_INFO,
 };
 pub use flame_window::flame_window_app;
-use floating_windows::FloatingWindowsTab;
-use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;
-use glass_tiles::GlassTilesTab;
 pub use glass_tiles::{
     tile_description as glass_tile_description, TileSpec as GlassTileSpec, TILES as GLASS_TILES,
 };
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
-use images::images_tab;
-use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
-use liquid_ui::LiquidUiTab;
 pub use liquid_ui::{
     set_tab_swipe_reference_page, LiquidReferenceFixture, LiquidReferenceFixtureCase,
     LIQUID_SCROLL_VIEWPORT_TAG, TAB_SWIPE_REFERENCE_STAGE_HEIGHT, TAB_SWIPE_REFERENCE_STAGE_WIDTH,
@@ -102,19 +96,11 @@ use markdown::{
     MarkdownScrollStressFixtureTabWithState,
 };
 pub use pet::pet_app;
-use recomposition_lab::RecompositionLabTab;
 use recursive_layout::recursive_layout_node;
-use rotary::rotary_tab;
-use shader_rect::ShaderRectTab;
 pub use shaders::ShaderSection;
-use shaders::ShadersTab;
-use tab_content::{render_active_tab, tab_requires_scroll};
-use text_showcase::TextShowcaseTab;
 pub use tool_windows::tool_windows_app;
-use web_fetch::web_fetch_example;
 pub use wsz::WszStandaloneApp;
 use wsz::{remember_wsz_tab_state, WszTab, WszTabState};
-use xkcd::xkcd_tab;
 
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
@@ -491,10 +477,12 @@ fn TabContent(
                 source_view::SourcePanel(active);
             } else {
                 cranpose_core::with_key(&active, || {
-                    if tab_requires_scroll(active) {
-                        ScrollableTab(move || render_active_tab(active, startup, wsz_tab_state));
+                    if tab_content::tab_requires_scroll(active) {
+                        ScrollableTab(move || {
+                            tab_content::render_active_tab(active, startup, wsz_tab_state);
+                        });
                     } else {
-                        render_active_tab(active, startup, wsz_tab_state);
+                        tab_content::render_active_tab(active, startup, wsz_tab_state);
                     }
                 });
             }

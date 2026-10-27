@@ -36,6 +36,7 @@ pub enum DemoTab {
     Rotary,
     Wear,
     Room,
+    Tv,
 }
 
 pub const DEFAULT_INITIAL_TAB: DemoTab = DemoTab::Guide;
@@ -48,7 +49,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 33] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 34] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -280,6 +281,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 33] = [
         source_path: "apps/desktop-demo/src/app/room.rs",
         startup_aliases: &["spatial"],
     },
+    DemoTabInfo {
+        tab: DemoTab::Tv,
+        label: "TV",
+        slug: "tv",
+        source_path: "apps/desktop-demo/src/app/tv.rs",
+        startup_aliases: &["television"],
+    },
 ];
 
 impl DemoTab {
@@ -347,11 +355,12 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 33] = [
+pub const DEMO_TABS: [DemoTab; 34] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
     DemoTab::Room,
+    DemoTab::Tv,
     DemoTab::Gauntlet,
     DemoTab::Counter,
     DemoTab::CompositionLocal,

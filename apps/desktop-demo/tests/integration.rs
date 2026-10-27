@@ -33,6 +33,7 @@ mod scroll_repro_tests;
 mod source_hygiene_aliases;
 mod tab_switch_regression_support;
 mod text_wrap_repro_tests;
+mod tv_tab;
 mod variable_font_instancing;
 mod web_release_bundle;
 mod wsz_tab_integration_test;
