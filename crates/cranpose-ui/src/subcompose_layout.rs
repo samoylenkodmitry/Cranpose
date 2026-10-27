@@ -44,6 +44,9 @@ pub(crate) type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
 type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode>> + 'a>;
 
+// The children a pass that composes measured, by node.
+pub(crate) type MeasuredChildren = RefCell<HashMap<NodeId, Rc<MeasuredNode>>>;
+
 /// The buffers a measure pass of a subcompose node fills, kept on the node
 /// between passes.
 #[derive(Default)]
@@ -75,13 +78,22 @@ pub(crate) trait PlacedRootsScope: cranpose_ui_layout::MeasureScope {
     // How many slots wait in the reuse pools.
     fn reusable_slots_count(&self) -> usize;
 
-    // See `SubcomposeMeasureScopeImpl::layout_with_placed_roots`.
+    // The buffers the pass lays out into.
+    fn scratch(&mut self) -> &mut MeasureScratch;
+
+    // Like `SubcomposeMeasureScopeImpl::layout_with_placement_builder`, for a
+    // policy that places lazy items: `build` pushes the placements of the
+    // items' roots, in order, and the items' roots, whose measurements the
+    // pass places the roots with instead of looking them up.
     fn layout_with_placed_roots(
         &mut self,
         width: f32,
         height: f32,
         build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
-    ) -> MeasureResult;
+    ) -> MeasureResult {
+        self.scratch()
+            .layout_with_placed_roots(width, height, build)
+    }
 }
 
 pub(crate) struct MeasureCallbacks<'a> {
@@ -247,19 +259,6 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             Size { width, height },
             std::mem::take(&mut self.scratch.placements),
         )
-    }
-
-    /// Like [`Self::layout_with_placement_builder`], for a policy that places
-    /// lazy items: `build` pushes the placements of the items' roots, in
-    /// order, and the items' roots, whose measurements the pass places the
-    /// roots with instead of looking them up.
-    pub(crate) fn layout_with_placed_roots(
-        &mut self,
-        width: f32,
-        height: f32,
-        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
-    ) -> MeasureResult {
-        self.scratch.layout_with_placed_roots(width, height, build)
     }
 
     fn record_error(&self, err: NodeError) {
@@ -532,13 +531,8 @@ impl PlacedRootsScope for SubcomposeMeasureScopeImpl<'_> {
         self.state.reusable_slots_count()
     }
 
-    fn layout_with_placed_roots(
-        &mut self,
-        width: f32,
-        height: f32,
-        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
-    ) -> MeasureResult {
-        SubcomposeMeasureScopeImpl::layout_with_placed_roots(self, width, height, build)
+    fn scratch(&mut self) -> &mut MeasureScratch {
+        &mut self.scratch
     }
 }
 
@@ -1399,9 +1393,7 @@ impl SubcomposeLayoutNodeHandle {
         inner.slots.note_nested_host(slot_host);
     }
 
-    pub(crate) fn measured_children_scratch(
-        &self,
-    ) -> Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>> {
+    pub(crate) fn measured_children_scratch(&self) -> Rc<MeasuredChildren> {
         let scratch = {
             let inner = self.inner.borrow();
             Rc::clone(&inner.measured_children_scratch)
@@ -1600,7 +1592,7 @@ impl SubcomposeLayoutNodeHandle {
 
     /// The lazy items' roots the last pass placed, in the order of its
     /// placements, or none: see
-    /// [`SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
+    /// [`PlacedRootsScope::layout_with_placed_roots`].
     /// [`Self::recycle_placed_roots`] gives the storage back.
     pub(crate) fn take_placed_roots(&self) -> Vec<Rc<LazyItemRoots>> {
         std::mem::take(&mut self.inner.borrow_mut().measure_scratch.placed_roots)

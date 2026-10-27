@@ -1,12 +1,9 @@
 // A measure pass of a subcompose node that keeps the slots of its last pass
 // as they are and composes nothing.
 
-use std::rc::Rc;
-
 use cranpose_core::{ApplierHost, Node, NodeId, SlotId, SubcomposeState};
-use cranpose_foundation::lazy::LazyItemRoots;
 
-use super::{MeasureResult, MeasureScratch, PlacedRootsScope, Placement, record_clean_slot_skip};
+use super::{MeasureScratch, PlacedRootsScope, record_clean_slot_skip};
 use crate::density::{Density, DensityMeasureScope};
 
 // What a retained measure policy reads of its node: the slots its last pass
@@ -159,12 +156,7 @@ impl PlacedRootsScope for RetainedMeasureScope<'_> {
         self.state.reusable_slots_count()
     }
 
-    fn layout_with_placed_roots(
-        &mut self,
-        width: f32,
-        height: f32,
-        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
-    ) -> MeasureResult {
-        self.scratch.layout_with_placed_roots(width, height, build)
+    fn scratch(&mut self) -> &mut MeasureScratch {
+        self.scratch
     }
 }

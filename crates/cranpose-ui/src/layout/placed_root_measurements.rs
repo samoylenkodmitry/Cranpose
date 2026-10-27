@@ -7,7 +7,7 @@ use cranpose_foundation::lazy::LazyItemRoots;
 use super::MeasuredNode;
 
 /// The measurement of each placement a lazy policy made, in order: see
-/// [`crate::subcompose_layout::SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
+/// [`crate::subcompose_layout::PlacedRootsScope::layout_with_placed_roots`].
 pub(super) struct PlacedRootMeasurements<'a> {
     items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
     /// The measurements of the item being placed, one a root; empty for an

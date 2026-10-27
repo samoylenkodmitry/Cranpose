@@ -11,7 +11,7 @@ use cranpose_ui_layout::Axis;
 use super::{
     bounds_adjuster::BoundsAdjuster,
     diagnostics,
-    item_measurer::ItemMeasurer,
+    item_measurer::{ItemMeasurePass, ItemMeasurer},
     lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem},
     lazy_list_state::{LazyListLayoutInfo, LazyListMeasureStateSnapshot, LazyListState},
     scroll_position_resolver::ScrollPositionResolver,
@@ -352,8 +352,104 @@ where
         items_count,
         effective_viewport_size,
     );
-    let (mut first_index, mut first_offset) = resolver.apply_pending_scroll_delta();
+    let (first_index, first_offset, pre_measured) =
+        resolve_start(&resolver, state, config, items_count, source)?;
 
+    let telemetry_enabled = diagnostics::telemetry_enabled();
+    let adaptive_beyond_bounds = adaptive_scroll_beyond_bounds_item_count(
+        config,
+        window_scroll_delta,
+        measure_state.average_item_size,
+    );
+    let guaranteed_beyond_bounds = adaptive_beyond_bounds;
+    let mut measurer = ItemMeasurer::new(
+        source,
+        config,
+        items_count,
+        effective_viewport_size,
+        measure_state.average_item_size,
+        VecDeque::from(pre_measured),
+    )
+    .with_beyond_bounds_item_count(adaptive_beyond_bounds)
+    .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
+    .with_include_before_beyond_bounds(window_scroll_delta >= -0.001)
+    .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
+    let mut measurement_pass = measurer.measure_all(first_index, first_offset)?;
+    let mut visible_items = std::mem::take(&mut measurement_pass.items);
+
+    let adjuster = BoundsAdjuster::new(config, items_count, effective_viewport_size);
+    adjuster.clamp(&mut visible_items);
+
+    let total_content_size = estimate_total_content_size(
+        items_count,
+        &visible_items,
+        config,
+        measure_state.average_item_size,
+    );
+
+    let position = final_position(
+        &visible_items,
+        &measurement_pass,
+        config,
+        items_count,
+        pending_scroll_delta,
+    );
+    let telemetry = telemetry_enabled.then(|| {
+        format!(
+            "items_count={} average_item_size={:.2} viewport_size={:.2} total_content_size={:.2} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
+            items_count,
+            measure_state.average_item_size,
+            effective_viewport_size,
+            total_content_size,
+            first_index,
+            first_offset,
+            measurement_pass.start_index,
+            if measurement_pass.start_index == 0 {
+                config.before_content_padding - measurement_pass.start_offset
+            } else {
+                -measurement_pass.start_offset
+            },
+            position.index,
+            position.offset,
+            measurement_pass.measured_visible_items,
+            visible_items.len(),
+            position.unresolved,
+            position.found,
+            measurement_pass.hit_time_budget,
+            measurement_pass.viewport_filled
+        )
+    });
+    Ok(position.into_list(
+        (visible_items, items_count),
+        (raw_viewport_size, effective_viewport_size),
+        total_content_size,
+        config,
+        telemetry,
+    ))
+}
+
+// The content padding before the item at `index`: the list's for its first.
+fn leading_padding(config: &LazyListMeasureConfig, index: usize) -> f32 {
+    if index == 0 {
+        config.before_content_padding
+    } else {
+        0.0
+    }
+}
+
+// Where a pass starts measuring: the first item and how far it is scrolled
+// once the pending scroll applies, with the items measured to find them.
+fn resolve_start<S>(
+    resolver: &ScrollPositionResolver<'_>,
+    state: &LazyListState,
+    config: &LazyListMeasureConfig,
+    items_count: usize,
+    source: &mut S,
+) -> Result<(usize, f32, Vec<LazyListMeasuredItem>), S::Refusal>
+where
+    S: LazyItemSource,
+{
+    let (mut first_index, mut first_offset) = resolver.apply_pending_scroll_delta();
     let mut pre_measured = Vec::new();
 
     if first_offset < 0.0 && first_index > 0 {
@@ -374,17 +470,12 @@ where
     first_offset = first_offset.max(0.0);
     (first_index, first_offset) = resolver.normalize_forward_with_cache(first_index, first_offset);
     let item_extent_at = |index: usize, item_size: f32| {
-        let leading_padding = if index == 0 {
-            config.before_content_padding
-        } else {
-            0.0
-        };
         let spacing_after = if index + 1 < items_count {
             config.spacing
         } else {
             0.0
         };
-        leading_padding + item_size + spacing_after
+        leading_padding(config, index) + item_size + spacing_after
     };
     let mut offset_known_within_current_item = state
         .get_cached_size(first_index)
@@ -403,84 +494,84 @@ where
     if !offset_known_within_current_item {
         (first_index, first_offset) = resolver.normalize_forward(first_index, first_offset);
     }
+    Ok((first_index, first_offset, pre_measured))
+}
 
-    let pre_measured_queue = VecDeque::from(pre_measured);
-    let telemetry_enabled = diagnostics::telemetry_enabled();
-    let adaptive_beyond_bounds = adaptive_scroll_beyond_bounds_item_count(
-        config,
-        window_scroll_delta,
-        measure_state.average_item_size,
-    );
-    let guaranteed_beyond_bounds = adaptive_beyond_bounds;
-    let mut measurer = ItemMeasurer::new(
-        source,
-        config,
-        items_count,
-        effective_viewport_size,
-        measure_state.average_item_size,
-        pre_measured_queue,
-    )
-    .with_beyond_bounds_item_count(adaptive_beyond_bounds)
-    .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
-    .with_include_before_beyond_bounds(window_scroll_delta >= -0.001)
-    .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
-    let measurement_pass = measurer.measure_all(first_index, first_offset)?;
-    let measurement_start_index = measurement_pass.start_index;
-    let measurement_start_offset = measurement_pass.start_offset;
-    let measurement_next_index = measurement_pass.next_index;
-    let measurement_next_offset = measurement_pass.next_offset;
-    let measurement_measured_visible_items = measurement_pass.measured_visible_items;
-    let measurement_hit_time_budget = measurement_pass.hit_time_budget;
-    let measurement_viewport_filled = measurement_pass.viewport_filled;
-    let mut visible_items = measurement_pass.items;
+// Where a pass leaves the list: its first visible item, how far it is
+// scrolled and the key the position follows.
+struct FinalPosition {
+    index: usize,
+    offset: f32,
+    key: Option<u64>,
+    // An item ends in the viewport.
+    found: bool,
+    // The pass ran out of time before it found one or filled the viewport.
+    unresolved: bool,
+}
 
-    let adjuster = BoundsAdjuster::new(config, items_count, effective_viewport_size);
-    adjuster.clamp(&mut visible_items);
+impl FinalPosition {
+    // The list of `items_count` items a pass with `visible_items` leaves at
+    // this position.
+    fn into_list(
+        self,
+        (visible_items, items_count): (Vec<LazyListMeasuredItem>, usize),
+        (raw_viewport_size, viewport_size): (f32, f32),
+        total_content_size: f32,
+        config: &LazyListMeasureConfig,
+        telemetry: Option<String>,
+    ) -> MeasuredLazyList {
+        let can_scroll_backward = self.index > 0 || self.offset > 0.0;
+        let can_scroll_forward = visible_items.last().is_some_and(|last| {
+            last.index < items_count - 1 || (last.offset + last.main_axis_size) > viewport_size
+        });
+        MeasuredLazyList {
+            result: LazyListMeasureResult {
+                visible_items,
+                first_visible_item_index: self.index,
+                first_visible_item_scroll_offset: self.offset,
+                viewport_size,
+                total_content_size,
+                can_scroll_forward,
+                can_scroll_backward,
+            },
+            first_key: self.key,
+            items_count,
+            raw_viewport_size,
+            padding: (config.before_content_padding, config.after_content_padding),
+            spacing: config.spacing,
+            reverse_layout: config.reverse_layout,
+            telemetry,
+        }
+    }
+}
 
-    let total_content_size = estimate_total_content_size(
-        items_count,
-        &visible_items,
-        config,
-        measure_state.average_item_size,
-    );
-
-    let viewport_end = effective_viewport_size;
+fn final_position(
+    visible_items: &[LazyListMeasuredItem],
+    pass: &ItemMeasurePass,
+    config: &LazyListMeasureConfig,
+    items_count: usize,
+    pending_scroll_delta: f32,
+) -> FinalPosition {
     let actual_first_visible = visible_items
         .iter()
         .find(|item| item_end_with_spacing(item, items_count, config.spacing) > 0.0);
+    let unresolved =
+        pass.hit_time_budget && !pass.viewport_filled && actual_first_visible.is_none();
 
-    let unresolved_pass = measurement_hit_time_budget
-        && !measurement_viewport_filled
-        && actual_first_visible.is_none();
-
-    let (final_first_index, final_scroll_offset) = if let Some(first) = actual_first_visible {
-        let leading_padding = if first.index == 0 {
-            config.before_content_padding
-        } else {
-            0.0
-        };
-        let offset = leading_padding - first.offset;
+    let (index, offset) = if let Some(first) = actual_first_visible {
+        let offset = leading_padding(config, first.index) - first.offset;
         (first.index, offset.max(0.0))
-    } else if unresolved_pass {
+    } else if unresolved {
         if pending_scroll_delta > 0.001 {
-            let leading_padding = if measurement_start_index == 0 {
-                config.before_content_padding
-            } else {
-                0.0
-            };
-            let preserved_offset = (leading_padding - measurement_start_offset).max(0.0);
-            (measurement_start_index, preserved_offset)
+            let preserved_offset =
+                (leading_padding(config, pass.start_index) - pass.start_offset).max(0.0);
+            (pass.start_index, preserved_offset)
         } else {
-            let next_index = measurement_next_index.min(items_count.saturating_sub(1));
+            let next_index = pass.next_index.min(items_count.saturating_sub(1));
             if next_index + 1 >= items_count {
                 (next_index, 0.0)
             } else {
-                let leading_padding = if next_index == 0 {
-                    config.before_content_padding
-                } else {
-                    0.0
-                };
-                let next_offset = (leading_padding - measurement_next_offset).max(0.0);
+                let next_offset = (leading_padding(config, next_index) - pass.next_offset).max(0.0);
                 (next_index, next_offset)
             }
         }
@@ -490,65 +581,20 @@ where
         (0, 0.0)
     };
 
-    let first_key = match actual_first_visible {
+    let key = match actual_first_visible {
         Some(first) => Some(first.key),
         None => visible_items
             .first()
-            .filter(|_| !unresolved_pass)
+            .filter(|_| !unresolved)
             .map(|item| item.key),
     };
-
-    let telemetry = telemetry_enabled.then(|| {
-        format!(
-            "items_count={} average_item_size={:.2} viewport_size={:.2} total_content_size={:.2} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
-            items_count,
-            measure_state.average_item_size,
-            effective_viewport_size,
-            total_content_size,
-            first_index,
-            first_offset,
-            measurement_start_index,
-            if measurement_start_index == 0 {
-                config.before_content_padding - measurement_start_offset
-            } else {
-                -measurement_start_offset
-            },
-            final_first_index,
-            final_scroll_offset,
-            measurement_measured_visible_items,
-            visible_items.len(),
-            unresolved_pass,
-            actual_first_visible.is_some(),
-            measurement_hit_time_budget,
-            measurement_viewport_filled
-        )
-    });
-
-    let can_scroll_backward = final_first_index > 0 || final_scroll_offset > 0.0;
-    let can_scroll_forward = if let Some(last) = visible_items.last() {
-        last.index < items_count - 1 || (last.offset + last.main_axis_size) > viewport_end
-    } else {
-        false
-    };
-
-    Ok(MeasuredLazyList {
-        result: LazyListMeasureResult {
-            visible_items,
-            first_visible_item_index: final_first_index,
-            first_visible_item_scroll_offset: final_scroll_offset,
-            viewport_size: effective_viewport_size,
-            total_content_size,
-            can_scroll_forward,
-            can_scroll_backward,
-        },
-        first_key,
-        items_count,
-        raw_viewport_size,
-        padding: (config.before_content_padding, config.after_content_padding),
-        spacing: config.spacing,
-        reverse_layout: config.reverse_layout,
-        telemetry,
-    })
+    FinalPosition {
+        index,
+        offset,
+        key,
+        found: actual_first_visible.is_some(),
+        unresolved,
+    }
 }
 
 /// Publishes a pass that places no item, of a list with none or of a

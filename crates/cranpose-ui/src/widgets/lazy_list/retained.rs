@@ -27,7 +27,7 @@ pub(super) fn measure_lazy_list_retained(
     constraints: Constraints,
     axis: Axis,
     content: &LazyListIntervalContent,
-    context: LazyListMeasureContext<'_>,
+    context: &LazyListMeasureContext<'_>,
 ) -> Option<MeasureResult> {
     if context.config.grid.is_some()
         || crate::lazy_prefetch::in_lazy_prefetch_pass()
@@ -92,7 +92,7 @@ pub(super) fn measure_lazy_list_retained(
         constraints,
         &result,
         items_count,
-        &context,
+        context,
         &frame,
     ))
 }

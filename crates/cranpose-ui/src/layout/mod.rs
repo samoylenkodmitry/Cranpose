@@ -64,7 +64,9 @@ use crate::{
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
     render_state::AppContext,
-    subcompose_layout::{MeasureCallbacks, SubcomposeLayoutNode},
+    subcompose_layout::{
+        MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNode, SubcomposeLayoutNodeHandle,
+    },
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
@@ -1478,19 +1480,6 @@ impl LayoutBuilderState {
             }
         };
 
-        let runtime_handle = {
-            let mut runtime_handle = self.runtime_handle.borrow_mut();
-            if runtime_handle.is_none()
-                && let Ok(applier) = self.applier.try_borrow_typed()
-            {
-                *runtime_handle = applier.runtime_handle();
-            }
-            runtime_handle.clone().ok_or(NodeError::MissingContext {
-                id: node_id,
-                reason: "runtime handle required for subcomposition",
-            })?
-        };
-
         let props = resolved_modifiers.layout_properties();
         let padding = resolved_modifiers.padding();
         let offset = resolved_modifiers.offset();
@@ -1507,46 +1496,15 @@ impl LayoutBuilderState {
             inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
         }
 
-        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
-
-        let retained = node_handle.measure_retained(&*applier_host, node_id, inner_constraints);
-        let measure_result =
-            match retained {
-                Some(result) => result,
-                None => node_handle.measure_with_callbacks(
-                    &applier_host,
-                    &runtime_handle,
-                    node_id,
-                    inner_constraints,
-                    MeasureCallbacks {
-                        measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
-                            match self.measure_node(child_id, child_constraints) {
-                                Ok(measured) => {
-                                    measured_children
-                                        .borrow_mut()
-                                        .insert(child_id, Rc::clone(&measured));
-                                    let size = measured.size_for_parent();
-                                    Placeable::value(size.width, size.height, child_id)
-                                        .with_alignment_lines(measured.alignment_lines_for_parent())
-                                }
-                                Err(err) => {
-                                    let mut slot = measure_error.borrow_mut();
-                                    if slot.is_none() {
-                                        *slot = Some(err);
-                                    }
-                                    Placeable::value(0.0, 0.0, child_id)
-                                }
-                            }
-                        }),
-                        retained_measure_lookup: Box::new(|child_id| {
-                            measured_children.borrow().get(&child_id).cloned()
-                        }),
-                        error: &measure_error,
-                    },
-                )?,
-            };
+        let measure_result = self.subcompose_policy_result(
+            &node_handle,
+            node_id,
+            inner_constraints,
+            &measured_children,
+            &measure_error,
+        )?;
 
         if let Some(err) = measure_error.borrow_mut().take() {
             return Err(err);
@@ -1665,6 +1623,67 @@ impl LayoutBuilderState {
             )
             .into_rc(spare),
         ))
+    }
+
+    // The result of `node_handle`'s policy at `constraints`: from the slots
+    // of its last pass where its retained measure policy keeps them, else
+    // from a pass that composes, which puts the children it measures in
+    // `measured_children` and its first failure in `measure_error`.
+    fn subcompose_policy_result(
+        self: &Rc<Self>,
+        node_handle: &SubcomposeLayoutNodeHandle,
+        node_id: NodeId,
+        constraints: Constraints,
+        measured_children: &MeasuredChildren,
+        measure_error: &RefCell<Option<NodeError>>,
+    ) -> Result<cranpose_ui_layout::MeasureResult, NodeError> {
+        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
+        if let Some(result) = node_handle.measure_retained(&*applier_host, node_id, constraints) {
+            return Ok(result);
+        }
+        let runtime_handle = {
+            let mut runtime_handle = self.runtime_handle.borrow_mut();
+            if runtime_handle.is_none()
+                && let Ok(applier) = self.applier.try_borrow_typed()
+            {
+                *runtime_handle = applier.runtime_handle();
+            }
+            runtime_handle.clone().ok_or(NodeError::MissingContext {
+                id: node_id,
+                reason: "runtime handle required for subcomposition",
+            })?
+        };
+        node_handle.measure_with_callbacks(
+            &applier_host,
+            &runtime_handle,
+            node_id,
+            constraints,
+            MeasureCallbacks {
+                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
+                    match self.measure_node(child_id, child_constraints) {
+                        Ok(measured) => {
+                            measured_children
+                                .borrow_mut()
+                                .insert(child_id, Rc::clone(&measured));
+                            let size = measured.size_for_parent();
+                            Placeable::value(size.width, size.height, child_id)
+                                .with_alignment_lines(measured.alignment_lines_for_parent())
+                        }
+                        Err(err) => {
+                            let mut slot = measure_error.borrow_mut();
+                            if slot.is_none() {
+                                *slot = Some(err);
+                            }
+                            Placeable::value(0.0, 0.0, child_id)
+                        }
+                    }
+                }),
+                retained_measure_lookup: Box::new(|child_id| {
+                    measured_children.borrow().get(&child_id).cloned()
+                }),
+                error: measure_error,
+            },
+        )
     }
 
     fn measure_layout_node(

@@ -12,26 +12,19 @@ const ROW_HEIGHT: f32 = 24.0;
 
 type LiveRows = Rc<RefCell<BTreeSet<usize>>>;
 
-// Fifty rows; row 3 shows `version` and grows with it. A row is in `live`
-// while its effects run.
+// Fifty rows of `list`; row 3 grows by 16 px while `grown`. A row is in
+// `live` while its effects run.
 #[composable]
-fn Rows(version: MutableState<u32>, live: LiveRows, captured: Rc<RefCell<Option<LazyListState>>>) {
-    let list = rememberLazyListState();
-    *captured.borrow_mut() = Some(list);
+fn Rows(grown: MutableState<bool>, live: LiveRows, list: LazyListState) {
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list,
         LazyColumnSpec::default(),
         move |scope| {
-            scope.items(LazyItems::new(50).key(|index| index as u64), move |index| {
-                let (text, height) = if index == 3 {
-                    let version = version.value();
-                    (
-                        format!("Row 3 v{version}"),
-                        ROW_HEIGHT + 16.0 * version as f32,
-                    )
-                } else {
-                    (format!("Row {index}"), ROW_HEIGHT)
+            scope.items(LazyItems::new(50), move |index| {
+                let (text, height) = match index {
+                    3 if grown.value() => ("Row 3 grown".to_owned(), ROW_HEIGHT + 16.0),
+                    _ => (format!("Row {index}"), ROW_HEIGHT),
                 };
                 Text(text, Modifier::empty().height(height), TextStyle::default());
                 let live = Rc::clone(&live);
@@ -50,7 +43,7 @@ struct Screen {
     context: Rc<AppContext>,
     composition: Composition<MemoryApplier>,
     list: LazyListState,
-    version: MutableState<u32>,
+    grown: MutableState<bool>,
     live: LiveRows,
 }
 
@@ -58,7 +51,8 @@ impl Screen {
     fn new() -> Self {
         let context = AppContext::new();
         let mut composition = Composition::new(MemoryApplier::new());
-        let version = context.enter(|| MutableState::with_runtime(0, composition.runtime_handle()));
+        let grown =
+            context.enter(|| MutableState::with_runtime(false, composition.runtime_handle()));
         let captured = Rc::new(RefCell::new(None));
         let capture = Rc::clone(&captured);
         let live = LiveRows::default();
@@ -66,7 +60,9 @@ impl Screen {
         context
             .enter(|| {
                 composition.render(location_key(file!(), line!(), column!()), move || {
-                    Rows(version, Rc::clone(&rows_live), Rc::clone(&capture));
+                    let list = rememberLazyListState();
+                    *capture.borrow_mut() = Some(list);
+                    Rows(grown, Rc::clone(&rows_live), list);
                 })
             })
             .expect("initial composition");
@@ -79,7 +75,7 @@ impl Screen {
             context,
             composition,
             list,
-            version,
+            grown,
             live,
         }
     }
@@ -151,10 +147,12 @@ fn a_list_scrolled_a_little_at_a_time_draws_each_frame_as_a_list_shown_there_at_
     screen.texts();
     let retained_before = retained_measure_count();
     let mut frames = 0u64;
+    // From 50 px on, 2.5 px a frame, counted in half pixels.
     for step in 0..40u16 {
-        let scroll = 50.0 + f32::from(step) * 2.5;
-        let index = (scroll / ROW_HEIGHT) as usize;
-        let offset = scroll % ROW_HEIGHT;
+        let half_pixels = 100 + 5 * step;
+        let scroll = f32::from(half_pixels) / 2.0;
+        let index = usize::from(half_pixels / 48);
+        let offset = f32::from(half_pixels % 48) / 2.0;
         screen.scroll_to(index, offset);
         let texts = screen.texts();
         let mut fresh = Screen::at(index, offset);
@@ -192,7 +190,7 @@ fn a_row_that_changes_in_the_frame_the_list_scrolls_shows_its_new_text_and_size(
     screen.scroll_to(1, 4.0);
     screen.texts();
 
-    screen.context.enter(|| screen.version.set(1));
+    screen.context.enter(|| screen.grown.set(true));
     screen.scroll_to(1, 6.0);
     let texts = screen.texts();
 
@@ -202,8 +200,8 @@ fn a_row_that_changes_in_the_frame_the_list_scrolls_shows_its_new_text_and_size(
             |(_, top)| *top,
         )
     };
-    assert_eq!(top("Row 3 v1"), 2.0 * ROW_HEIGHT - 6.0);
-    assert_eq!(top("Row 4"), top("Row 3 v1") + ROW_HEIGHT + 16.0);
+    assert_eq!(top("Row 3 grown"), 2.0 * ROW_HEIGHT - 6.0);
+    assert_eq!(top("Row 4"), top("Row 3 grown") + ROW_HEIGHT + 16.0);
 }
 
 #[test]

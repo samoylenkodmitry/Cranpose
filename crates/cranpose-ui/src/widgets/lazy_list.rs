@@ -599,7 +599,7 @@ impl LazyListPolicyInputs {
                         constraints,
                         retained_inputs.axis,
                         content.content(),
-                        retained_inputs.context(&config),
+                        &retained_inputs.context(&config),
                     )
                 },
             ),
