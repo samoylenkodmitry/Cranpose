@@ -108,6 +108,19 @@ fn invalid_surface_and_input_are_rejected() {
 }
 
 #[test]
+fn content_reads_that_it_runs_on_a_watch() {
+    let seen = Rc::new(Cell::new(UiModeType::Normal));
+    let sink = Rc::clone(&seen);
+    let mut app = Application::new(100, 100, 2.0, move || {
+        sink.set(local_configuration().current().ui_mode_type);
+    })
+    .expect("valid surface");
+    app.set_active(true);
+    app.tick(1);
+    assert_eq!(seen.get(), UiModeType::Watch);
+}
+
+#[test]
 fn the_safe_area_reaches_content() {
     let seen = Rc::new(Cell::new(EdgeInsets::default()));
     let sink = Rc::clone(&seen);
