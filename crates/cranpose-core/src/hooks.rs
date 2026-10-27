@@ -351,7 +351,14 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
                     let derived = match slot.take() {
                         Some(derived) => {
                             derived.set_compute(compute);
-                            derived.recompute();
+                            if restarted_for(composer, &derived) {
+                                // The derivation keeps the states it read.
+                                if let Some(scope) = &derivation {
+                                    scope.keep_reads();
+                                }
+                            } else {
+                                derived.recompute();
+                            }
                             derived
                         }
                         None => DerivedState::new(runtime, compute, derivation.as_ref()),
@@ -365,4 +372,17 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
             state
         })
     })
+}
+
+// Whether the scope whose body runs again from its own invalidation runs
+// only because `derived` took a new value. The bodies it runs see the
+// inputs they saw before, and the closure the owner passes derives what the
+// one before did: the value stays.
+fn restarted_for<T: Clone + PartialEq + 'static>(
+    composer: &crate::Composer,
+    derived: &DerivedState<T>,
+) -> bool {
+    composer
+        .restarted_scope()
+        .is_some_and(|scope| scope.invalidated_only_by_state(derived.state_id()))
 }

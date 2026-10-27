@@ -677,3 +677,139 @@ fn effects_written_once_in_a_loop_each_keep_their_place() {
         "only the effect that left stops; the others keep running"
     );
 }
+
+// A reader of `derivedStateOf(source / 10)` that counts the derivations,
+// spelled out as `#[composable]` expands it.
+fn counting_derived_reader(
+    source: cranpose_core::MutableState<u32>,
+    derives: &Rc<Cell<u32>>,
+    seen: &Rc<RefCell<Vec<u32>>>,
+) {
+    fn body(
+        source: cranpose_core::MutableState<u32>,
+        derives: &Rc<Cell<u32>>,
+        seen: &Rc<RefCell<Vec<u32>>>,
+    ) {
+        let derives_in = Rc::clone(derives);
+        let tens = derivedStateOf(move || {
+            derives_in.set(derives_in.get() + 1);
+            source.get() / 10
+        });
+        seen.borrow_mut().push(tens.get());
+    }
+    let key = location_key(file!(), line!(), column!());
+    cranpose_core::with_current_composer(|composer| {
+        composer.with_group(key, |composer| {
+            let (again_derives, again_seen) = (Rc::clone(derives), Rc::clone(seen));
+            composer.set_recompose_callback(move |_| body(source, &again_derives, &again_seen));
+            body(source, derives, seen);
+        });
+    });
+}
+
+#[test]
+fn a_reader_that_recomposes_for_a_new_derived_value_derives_it_once() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let source = mutableStateOf(5u32);
+    let derives = Rc::new(Cell::new(0u32));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    {
+        let (derives, seen) = (Rc::clone(&derives), Rc::clone(&seen));
+        composition
+            .render(key, move || {
+                counting_derived_reader(source, &derives, &seen);
+            })
+            .expect("render succeeds");
+    }
+    assert_eq!(derives.get(), 1);
+
+    for value in [15, 25] {
+        source.set(value);
+        while composition
+            .process_invalid_scopes()
+            .expect("recomposition succeeds")
+        {}
+    }
+    assert_eq!(
+        *seen.borrow(),
+        vec![0, 1, 2],
+        "the derivation keeps the states it read"
+    );
+    assert_eq!(
+        derives.get(),
+        3,
+        "the reader that runs again for the new value passes the same closure: one derivation a change"
+    );
+}
+
+// A parent that reads `offset` and passes it to a child whose
+// `derivedStateOf` captures it, spelled out as `#[composable]` expands
+// both.
+fn offset_parent(
+    offset: cranpose_core::MutableState<u32>,
+    source: cranpose_core::MutableState<u32>,
+    seen: &Rc<RefCell<Vec<u32>>>,
+) {
+    fn child(offset: u32, source: cranpose_core::MutableState<u32>, seen: &Rc<RefCell<Vec<u32>>>) {
+        fn body(
+            offset: u32,
+            source: cranpose_core::MutableState<u32>,
+            seen: &Rc<RefCell<Vec<u32>>>,
+        ) {
+            let shifted = derivedStateOf(move || source.get() / 10 + offset);
+            seen.borrow_mut().push(shifted.get());
+        }
+        let key = location_key(file!(), line!(), column!());
+        cranpose_core::with_current_composer(|composer| {
+            composer.with_group(key, |composer| {
+                let again_seen = Rc::clone(seen);
+                composer.set_recompose_callback(move |_| body(offset, source, &again_seen));
+                body(offset, source, seen);
+            });
+        });
+    }
+    fn body(
+        offset: cranpose_core::MutableState<u32>,
+        source: cranpose_core::MutableState<u32>,
+        seen: &Rc<RefCell<Vec<u32>>>,
+    ) {
+        child(offset.get(), source, seen);
+    }
+    let key = location_key(file!(), line!(), column!());
+    cranpose_core::with_current_composer(|composer| {
+        composer.with_group(key, |composer| {
+            let again_seen = Rc::clone(seen);
+            composer.set_recompose_callback(move |_| body(offset, source, &again_seen));
+            body(offset, source, seen);
+        });
+    });
+}
+
+#[test]
+fn a_derived_state_takes_the_argument_its_parent_passes_in_the_frame_its_value_changed() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let (offset, source) = (mutableStateOf(0u32), mutableStateOf(5u32));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    {
+        let seen = Rc::clone(&seen);
+        composition
+            .render(key, move || offset_parent(offset, source, &seen))
+            .expect("render succeeds");
+    }
+    assert_eq!(*seen.borrow(), vec![0]);
+
+    source.set(15);
+    offset.set(100);
+    while composition
+        .process_invalid_scopes()
+        .expect("recomposition succeeds")
+    {}
+    assert_eq!(
+        seen.borrow().last(),
+        Some(&101),
+        "the child's new closure, with the offset its parent passed, derives the value: {:?}",
+        seen.borrow()
+    );
+}
