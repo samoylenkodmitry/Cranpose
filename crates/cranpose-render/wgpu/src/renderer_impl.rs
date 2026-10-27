@@ -37,7 +37,8 @@ impl Renderer for WgpuRenderer {
         if attached {
             install_text_measurer(app_context, &fonts);
         }
-        self.frontend.text_state = text_system::TextSystemState::from_font_set(fonts.clone());
+        self.frontend.text_state =
+            crate::text_system::TextSystemState::from_font_set(fonts.clone());
         self.frontend.text_fonts = fonts;
     }
 
