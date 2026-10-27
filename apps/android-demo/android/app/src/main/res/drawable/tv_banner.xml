@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The demo's Android TV launcher banner, 320 by 180 pixels at xhdpi: the
+    icon's tile gradient with its mark in the middle, as the `television`
+    service asks.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:endColor="#151b23"
+                android:startColor="#382f26" />
+        </shape>
+    </item>
+    <item
+        android:width="135dp"
+        android:height="135dp"
+        android:drawable="@mipmap/ic_launcher_foreground"
+        android:gravity="center" />
+</layer-list>

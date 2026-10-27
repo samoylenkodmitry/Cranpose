@@ -18,10 +18,11 @@ cranpose {
     cargoPackage.set(demoProperty("cranposeCargoPackage", "desktop-app-platform"))
     libraryName.set(demoProperty("cranposeLibraryName", "desktop_app"))
     label.set(demoProperty("cranposeLabel", "Compose Demo"))
-    // The demo draws an overlay window and plays designed haptics, and nothing
-    // else optional. It posts no notifications, so it does not ask to.
+    // The demo draws an overlay window, plays designed haptics and runs on TVs,
+    // and needs nothing else optional. It posts no notifications, so it does
+    // not ask to.
     services.addAll(
-        demoProperty("cranposeServices", "haptics,overlay,network").split(",").filter { it.isNotBlank() }
+        demoProperty("cranposeServices", "haptics,overlay,network,television").split(",").filter { it.isNotBlank() }
     )
     // This repository declares `release-fast` in its own Cargo.toml, so its
     // demos may ask for it: a local release check builds quicker and keeps the

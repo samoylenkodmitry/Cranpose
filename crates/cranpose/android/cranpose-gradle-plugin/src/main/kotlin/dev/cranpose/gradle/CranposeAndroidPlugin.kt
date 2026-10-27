@@ -587,6 +587,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "network",
             "notifications",
             "overlay",
+            "television",
             "wearable",
         )
 
