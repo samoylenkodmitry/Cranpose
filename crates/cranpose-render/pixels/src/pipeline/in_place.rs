@@ -6,7 +6,8 @@
 //! spliced in, and what follows it moves. A layer whose child layers no
 //! longer match its records pushes its whole subtree again. The walk to the
 //! changed layers reads one record a layer and pushes nothing for the layers
-//! above them.
+//! above them. Each subtree takes its place as soon as it is pushed, so the
+//! scratch scene holds one subtree at a time.
 
 use cranpose_render_common::{
     graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode, for_each_in_draw_order},
@@ -18,19 +19,32 @@ use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, sce
 use crate::{
     damage::{RunReach, add_changed_runs, merge_areas},
     draw::{ClipBounds, TextRaster},
-    scene::RasterScene,
+    scene::{RasterScene, SubtreeExtent},
 };
 
-/// What a walk that pushes changed layers again shares.
+// What a walk that pushes changed layers again shares.
 struct Repush<'a> {
-    scene: &'a RasterScene,
+    scene: &'a mut RasterScene,
+    reach: &'a mut [Option<ClipBounds>],
+    // Whether `reach` still holds where each item of `scene` reaches: a
+    // splice moves the items after it.
+    held: bool,
     scratch: &'a mut RasterScene,
-    /// For each layer pushed again, its record in `scene` and in `scratch`.
-    pushed: &'a mut Vec<(usize, usize)>,
+    window: ClipBounds,
+    areas: &'a mut Vec<ClipBounds>,
     diagnostics: &'a RenderDiagnostics,
     light: ShadowLight,
     scale: f32,
     text: &'a TextRaster,
+}
+
+// Why a walk to a layer stopped.
+enum Stop {
+    // The record holds another layer: the parent pushes its subtree again.
+    OtherLayer,
+    // A subtree's entries of what its layers passed down lie apart: the
+    // scene is built again.
+    Rebuild,
 }
 
 // Whether the scene's reach list still holds where each item reaches.
@@ -43,20 +57,20 @@ pub(crate) enum UpdatedReach {
 }
 
 // A scene to bring up to its graph in place, where each of its items
-// reaches, and the storage the update borrows: a scene for the layers it
-// pushes again, and its list of them.
+// reaches, and the storage the update borrows: a scene for the layer it
+// pushes again.
 pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
     pub reach: &'a mut [Option<ClipBounds>],
     pub scratch: &'a mut RasterScene,
-    pub pushed: &'a mut Vec<(usize, usize)>,
 }
 
 impl InPlaceUpdate<'_> {
     /// Brings the scene, the one `graph` gave last at `scale`, up to `graph`
-    /// and puts into `areas` the parts of `window` it changed. `None`, with
-    /// the scene as it was, when the scale, the light or the root layer
-    /// changed: the caller builds the scene again.
+    /// and puts into `areas` the parts of `window` it changed. `None` when
+    /// the scale, the light or the root layer changed, with the scene as it
+    /// was, or when a subtree's records lie apart, with the areas the layers
+    /// it updated before changed: the caller builds the scene again.
     pub(crate) fn run(
         self,
         graph: &RenderGraph,
@@ -70,128 +84,70 @@ impl InPlaceUpdate<'_> {
             scene,
             reach,
             scratch,
-            pushed,
         } = self;
-        update(
-            (scene, reach),
-            scratch,
-            pushed,
-            graph,
-            (diagnostics, text),
-            scale,
-            window,
-            areas,
-        )
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the parts of `InPlaceUpdate::run`, taken apart to borrow each alone"
-)]
-fn update(
-    (scene, reach): (&mut RasterScene, &mut [Option<ClipBounds>]),
-    scratch: &mut RasterScene,
-    pushed: &mut Vec<(usize, usize)>,
-    graph: &RenderGraph,
-    (diagnostics, text): (&RenderDiagnostics, &TextRaster),
-    scale: f32,
-    window: ClipBounds,
-    areas: &mut Vec<ClipBounds>,
-) -> Option<UpdatedReach> {
-    let light = scene_light(graph, scale);
-    if scene.start != Some((scale, light)) {
-        return None;
-    }
-    scratch.clear();
-    scratch.start = scene.start;
-    pushed.clear();
-    let mut repush = Repush {
-        scene,
-        scratch,
-        pushed,
-        diagnostics,
-        light,
-        scale,
-        text,
-    };
-    repush.visit(&graph.root, 0, None)?;
-    // Each pair's subtrees keep their passed-down entries in one run, or the
-    // scene is built again before anything changed.
-    let mut same_extents = true;
-    for &(old, new) in pushed.iter() {
-        let extents = (scene.subtree_extent(old)?, scratch.subtree_extent(new)?);
-        same_extents &= extents.0 == extents.1;
-    }
-    areas.clear();
-    // Where the items of the old scene reach, when the list holds them.
-    let held = reach.len() == scene.order.len();
-    for &(old, new) in pushed.iter() {
-        let (old_record, new_record) = (&scene.subtrees[old], &scratch.subtrees[new]);
-        let order = old_record.start.order..old_record.stop.order;
-        let run_reach = match reach.get_mut(order.clone()) {
-            Some(run) if held && same_extents => RunReach::Replaced(run),
-            Some(run) if held => RunReach::Kept(run),
-            _ => RunReach::Unknown,
-        };
-        add_changed_runs(
-            (scene, &scene.order[order]),
-            (
-                scratch,
-                &scratch.order[new_record.start.order..new_record.stop.order],
-            ),
-            run_reach,
-            window,
-            areas,
-        );
-    }
-    // From the last subtree back, so a splice moves no subtree still to come.
-    for &(old, new) in pushed.iter().rev() {
-        if same_extents {
-            scene.replace_subtree(old, scratch, new);
-        } else {
-            scene.splice_subtree(old, scratch, new);
+        areas.clear();
+        let light = scene_light(graph, scale);
+        if scene.start != Some((scale, light)) {
+            return None;
         }
+        scratch.clear();
+        let held = reach.len() == scene.order.len();
+        let mut repush = Repush {
+            scene,
+            reach,
+            held,
+            scratch,
+            window,
+            areas,
+            diagnostics,
+            light,
+            scale,
+            text,
+        };
+        let walked = repush.visit(&graph.root, 0, None);
+        let held = repush.held;
+        merge_areas(areas);
+        walked.ok()?;
+        Some(if held {
+            UpdatedReach::Held
+        } else {
+            UpdatedReach::Lost
+        })
     }
-    merge_areas(areas);
-    Some(if same_extents && held {
-        UpdatedReach::Held
-    } else {
-        UpdatedReach::Lost
-    })
 }
 
 impl Repush<'_> {
     /// Walks `layer`, whose old record is `record` and whose parent passed
-    /// down what the old scene holds at `parent`, the root's start for
-    /// `None`. `None` when the layer is not the one the record holds.
-    fn visit(&mut self, layer: &LayerNode, record: usize, parent: Option<usize>) -> Option<()> {
-        let scene = self.scene;
-        let old = scene.subtrees.get(record)?;
+    /// down what the scene holds at `parent`, the root's start for `None`.
+    fn visit(
+        &mut self,
+        layer: &LayerNode,
+        record: usize,
+        parent: Option<usize>,
+    ) -> Result<(), Stop> {
+        let old = self.scene.subtrees.get(record).ok_or(Stop::OtherLayer)?;
         if old.identity != (layer.node_id, layer.wraps) {
-            return None;
+            return Err(Stop::OtherLayer);
         }
         let placed_as_before = old.transform == layer.transform_to_parent;
         if old.change == layer.change && placed_as_before {
-            return Some(());
+            return Ok(());
         }
         // A layer that changed itself, moved, or drew its subtree without
         // records of its children, as a surface or nothing, pushes it all.
         if old.own_change != layer.own_change || !placed_as_before || old.end == record + 1 {
-            self.push_again(layer, record, parent);
-            return Some(());
+            return self.push_again(layer, record, parent);
         }
-        let end = old.end;
         let Some(passed) = old.passed_down else {
-            self.push_again(layer, record, parent);
-            return Some(());
+            return self.push_again(layer, record, parent);
         };
-        let (pushed, mark) = (self.pushed.len(), self.scratch.mark());
         let mut next = record + 1;
-        let mut found = Some(());
+        let mut walked = Ok(());
         for_each_in_draw_order(&layer.children, |child| {
-            if let (Some(()), RenderNode::Layer(child)) = (found, child) {
-                found = self.visit(child, next, Some(passed));
+            if walked.is_ok()
+                && let RenderNode::Layer(child) = child
+            {
+                walked = self.visit(child, next, Some(passed));
                 next = self
                     .scene
                     .subtrees
@@ -199,19 +155,27 @@ impl Repush<'_> {
                     .map_or(usize::MAX, |at| at.end);
             }
         });
-        if found.is_none() || next != end {
+        match walked {
+            Err(Stop::Rebuild) => Err(Stop::Rebuild),
+            // A child pushed again with more or fewer records moved where
+            // the layer ends.
+            Ok(()) if next == self.scene.subtrees[record].end => Ok(()),
             // The child layers no longer match the records: the layer pushes
             // its whole subtree again in place of what they pushed.
-            self.pushed.truncate(pushed);
-            self.scratch.truncate(mark);
-            self.push_again(layer, record, parent);
+            Ok(()) | Err(Stop::OtherLayer) => self.push_again(layer, record, parent),
         }
-        Some(())
     }
 
     /// Pushes `layer`'s subtree into the scratch scene as the full walk
-    /// would, from what its parent passed down in the old scene.
-    fn push_again(&mut self, layer: &LayerNode, record: usize, parent: Option<usize>) {
+    /// would, from what its parent passed down in the scene, adds the areas
+    /// it changes and puts it in place of its old subtree, `record`.
+    fn push_again(
+        &mut self,
+        layer: &LayerNode,
+        record: usize,
+        parent: Option<usize>,
+    ) -> Result<(), Stop> {
+        let old_extent = self.scene.subtree_extent(record).ok_or(Stop::Rebuild)?;
         let passed = parent.and_then(|at| self.scene.passed_down.get(at));
         let transform = passed.map_or_else(
             || ProjectiveTransform::uniform_scale(self.scale),
@@ -221,7 +185,7 @@ impl Repush<'_> {
             alpha: passed.alpha,
             color_filter: passed.color_filter.clone(),
         });
-        let from = self.scratch.subtrees.len();
+        self.scratch.start = self.scene.start;
         populate_draws_from_graph(
             layer,
             self.scratch,
@@ -244,6 +208,39 @@ impl Repush<'_> {
             },
             &mut None,
         );
-        self.pushed.push((record, from));
+        self.put_in_place(record, old_extent)
+    }
+
+    // Adds the areas the subtree the scratch scene holds changes and puts
+    // it in place of the old subtree, `record`, of `old_extent`. Out of
+    // line, so the walk that pushes stays small where the boards keep it in
+    // fast RAM.
+    #[inline(never)]
+    fn put_in_place(&mut self, record: usize, old_extent: SubtreeExtent) -> Result<(), Stop> {
+        let new_extent = self.scratch.subtree_extent(0).ok_or(Stop::Rebuild)?;
+        let replaces = old_extent == new_extent;
+        let (scene, scratch) = (&mut *self.scene, &mut *self.scratch);
+        let (old, new) = (&scene.subtrees[record], &scratch.subtrees[0]);
+        let order = old.start.order..old.stop.order;
+        let reach = match self.reach.get_mut(order.clone()) {
+            Some(run) if self.held && replaces => RunReach::Replaced(run),
+            Some(run) if self.held => RunReach::Kept(run),
+            _ => RunReach::Unknown,
+        };
+        add_changed_runs(
+            (scene, &scene.order[order]),
+            (scratch, &scratch.order[new.start.order..new.stop.order]),
+            reach,
+            self.window,
+            self.areas,
+        );
+        if replaces {
+            scene.replace_subtree(record, scratch, 0);
+        } else {
+            scene.splice_subtree(record, scratch, 0);
+            self.held = false;
+        }
+        scratch.clear();
+        Ok(())
     }
 }

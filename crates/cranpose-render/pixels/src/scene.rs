@@ -246,15 +246,6 @@ pub(crate) struct SubtreeExtent {
     passed_down: usize,
 }
 
-// The lengths of a scene's lists, which [`RasterScene::truncate`] cuts the
-// scene back to.
-#[derive(Clone, Copy)]
-pub(crate) struct SceneMark {
-    items: ItemCounts,
-    records: usize,
-    passed_down: usize,
-}
-
 /// What a layer passes down to the walks of its child layers.
 #[derive(Clone, PartialEq)]
 pub(crate) struct PassedDown {
@@ -345,26 +336,6 @@ impl RasterScene {
             texts: self.texts.len(),
             shadows: self.shadows.len(),
         }
-    }
-
-    // Where the scene's lists end now.
-    pub(crate) fn mark(&self) -> SceneMark {
-        SceneMark {
-            items: self.counts(),
-            records: self.subtrees.len(),
-            passed_down: self.passed_down.len(),
-        }
-    }
-
-    // Drops what was pushed after `mark`.
-    pub(crate) fn truncate(&mut self, mark: SceneMark) {
-        self.shapes.truncate(mark.items.shapes);
-        self.images.truncate(mark.items.images);
-        self.texts.truncate(mark.items.texts);
-        self.shadows.truncate(mark.items.shadows);
-        self.order.truncate(mark.items.order);
-        self.subtrees.truncate(mark.records);
-        self.passed_down.truncate(mark.passed_down);
     }
 
     /// Opens the record of `layer`'s subtree, whose items come next, and

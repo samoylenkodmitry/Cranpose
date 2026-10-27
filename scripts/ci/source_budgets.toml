@@ -3,8 +3,8 @@
 # removes the cause (`just source-budgets-lower`).
 
 [counts]
-too_many_arguments = 11
-private_docs = 13733
+too_many_arguments = 10
+private_docs = 13731
 for_test_fns = 40
 cranpose_env_names = 78
 source_text_checks = 341
