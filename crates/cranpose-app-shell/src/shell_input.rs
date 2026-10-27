@@ -7,7 +7,7 @@ mod key_activation;
 mod key_navigation;
 
 use dispatch_stop::Stop;
-use key_activation::{ActivationTarget, activation_input, activation_target, plain_key_down};
+use key_activation::{ActivationTarget, activation_input, activation_target};
 
 impl<R> SurfaceMut<'_, R>
 where

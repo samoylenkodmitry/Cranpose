@@ -1,6 +1,11 @@
-use cranpose_ui::FocusDirection;
+use std::fmt::Debug;
 
-use super::*;
+use cranpose_core::{enter_event_handler_scope, run_in_mutable_snapshot};
+use cranpose_render_common::Renderer;
+use cranpose_ui::{FocusDirection, Key, KeyEvent, KeyEventType, request_render_invalidation};
+
+use super::key_activation::plain_key_down;
+use crate::SurfaceMut;
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> SurfaceMut<'_, R>

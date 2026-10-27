@@ -159,14 +159,17 @@ fn major_axis_distance_to_far_edge(rect: Edges, focused: Edges, arrow: Arrow) ->
     distance.max(1.0)
 }
 
-fn weighted_distance(rect: Edges, focused: Edges, arrow: Arrow) -> u64 {
-    let major = major_axis_distance(rect, focused, arrow) as u64;
-    let minor = if arrow.is_horizontal() {
+// Compose takes both distances as whole pixels; f64 holds their squares
+// exactly at any screen size.
+fn weighted_distance(rect: Edges, focused: Edges, arrow: Arrow) -> f64 {
+    let major = f64::from(major_axis_distance(rect, focused, arrow)).trunc();
+    let minor = f64::from(if arrow.is_horizontal() {
         (focused.center_y() - rect.center_y()).abs()
     } else {
         (focused.center_x() - rect.center_x()).abs()
-    } as u64;
-    13 * major * major + minor * minor
+    })
+    .trunc();
+    13.0 * major * major + minor * minor
 }
 
 fn is_better_candidate(proposed: Edges, current: Edges, focused: Edges, arrow: Arrow) -> bool {
