@@ -202,7 +202,7 @@ impl RendererFrontend {
             if built_at == update
                 && packet.viewport == (width, height)
                 && (packet.renderer_epoch, packet.surface_epoch) == (renderer_epoch, surface_epoch)
-                && packet.root_scale == self.root_scale
+                && packet.root_scale.to_bits() == self.root_scale.to_bits()
                 && packet.clear == frame_clear_color(self.transparent_background)
             {
                 return Some(packet);
