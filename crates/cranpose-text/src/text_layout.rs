@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use cranpose_ui_graphics::Rect;
+
 use crate::{bidi_level::BidiLevel, glyph_id::GlyphId, shaper::ShapedGlyph, typeface::Typeface};
 
 /// A paragraph laid out in lines: glyph runs placed for drawing, and the
@@ -31,10 +33,74 @@ pub(crate) struct LineRun {
     pub(crate) scale: f32,
     // Extra width of each cluster, half on each side.
     pub(crate) spacing: f32,
+    // Extra width of each space of a justified line, and the face's space.
+    pub(crate) word_spacing: f32,
+    pub(crate) space: Option<GlyphId>,
+    // How far the run's baseline sits above the line's.
+    pub(crate) baseline_shift: f32,
     pub(crate) level: BidiLevel,
     // The left edge from the line's left edge.
     pub(crate) x: f32,
     pub(crate) width: f32,
+}
+
+// One cluster of a run, left to right: the offset its text starts at, its
+// glyphs within the run and its width with the run's spacing.
+struct Cluster {
+    offset: usize,
+    glyphs: Range<usize>,
+    width: f32,
+}
+
+impl LineRun {
+    // The run's clusters left to right.
+    fn clusters<'a>(&'a self, glyphs: &'a [ShapedGlyph]) -> impl Iterator<Item = Cluster> + 'a {
+        let mut at = 0;
+        std::iter::from_fn(move || {
+            let first = glyphs.get(at)?;
+            let start = at;
+            let mut width = self.spacing;
+            while let Some(glyph) = glyphs
+                .get(at)
+                .filter(|glyph| glyph.cluster == first.cluster)
+            {
+                width += font_units(glyph.advance) * self.scale;
+                if self.space == Some(glyph.id) {
+                    width += self.word_spacing;
+                }
+                at += 1;
+            }
+            Some(Cluster {
+                offset: first.text_offset(),
+                glyphs: start..at,
+                width,
+            })
+        })
+    }
+
+    // The run's clusters left to right, each with its left edge from the
+    // run's left edge and the offset where its text ends: where the next
+    // cluster in text order starts.
+    fn cluster_spans<'a>(
+        &'a self,
+        glyphs: &'a [ShapedGlyph],
+    ) -> impl Iterator<Item = (f32, Cluster, usize)> + 'a {
+        let mut clusters = self.clusters(glyphs).peekable();
+        let mut left = 0.0;
+        let mut previous = None;
+        std::iter::from_fn(move || {
+            let cluster = clusters.next()?;
+            let end = if self.level.is_rtl() {
+                previous.unwrap_or(self.text.end)
+            } else {
+                clusters.peek().map_or(self.text.end, |next| next.offset)
+            };
+            previous = Some(cluster.offset);
+            let at = left;
+            left += cluster.width;
+            Some((at, cluster, end))
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -72,8 +138,7 @@ pub struct GlyphRun<'a> {
     /// The font size in pixels.
     pub size: f32,
     glyphs: &'a [ShapedGlyph],
-    scale: f32,
-    spacing: f32,
+    run: &'a LineRun,
     pen: f32,
     baseline: f32,
 }
@@ -82,24 +147,21 @@ impl GlyphRun<'_> {
     /// Each glyph with the position of its origin in the layout, left to
     /// right.
     pub fn positions(&self) -> impl Iterator<Item = (GlyphId, f32, f32)> + '_ {
+        let run = self.run;
+        let baseline = self.baseline - run.baseline_shift;
         let mut pen = self.pen;
-        let mut cluster = None;
-        self.glyphs.iter().map(move |glyph| {
-            if cluster != Some(glyph.cluster) {
-                pen += if cluster.is_some() {
-                    self.spacing
-                } else {
-                    self.spacing / 2.0
-                };
-                cluster = Some(glyph.cluster);
-            }
-            let x = pen + font_units(glyph.x_offset) * self.scale;
-            pen += font_units(glyph.advance) * self.scale;
-            (
-                glyph.id,
-                x,
-                self.baseline - font_units(glyph.y_offset) * self.scale,
-            )
+        run.clusters(self.glyphs).flat_map(move |cluster| {
+            let mut x = pen + run.spacing / 2.0;
+            pen += cluster.width;
+            self.glyphs[cluster.glyphs].iter().map(move |glyph| {
+                let at = x + font_units(glyph.x_offset) * run.scale;
+                x += font_units(glyph.advance) * run.scale;
+                (
+                    glyph.id,
+                    at,
+                    baseline - font_units(glyph.y_offset) * run.scale,
+                )
+            })
         })
     }
 }
@@ -264,27 +326,87 @@ impl TextLayout {
                 typeface: &self.faces[run.face],
                 size: run.size,
                 glyphs: &self.glyphs[run.glyphs.clone()],
-                scale: run.scale,
-                spacing: run.spacing,
+                run,
                 pen: line.left + run.x,
                 baseline: line.baseline,
             })
     }
 
-    // The caret x of `offset` inside `run`, from the line's left edge.
-    fn caret_in_run(&self, run: &LineRun, offset: usize) -> f32 {
-        let mut before = 0.0;
-        let mut cluster = None;
-        for glyph in &self.glyphs[run.glyphs.clone()] {
-            if glyph.text_offset() >= offset {
+    /// The box of the character at `offset`, across its line: Compose's
+    /// `getBoundingBox`. A zero-width box at the caret for an offset with no
+    /// character, such as the end of the text.
+    pub fn bounding_box(&self, offset: usize) -> Rect {
+        let line = &self.lines[self.line_for_offset(offset)];
+        let found = self.runs[line.runs.clone()].iter().find_map(|run| {
+            run.cluster_spans(&self.glyphs[run.glyphs.clone()])
+                .find(|(_, cluster, end)| (cluster.offset..*end).contains(&offset))
+                .map(|(left, cluster, _)| (run.x + left, cluster.width))
+        });
+        let (x, width) = found.unwrap_or_else(|| {
+            (
+                self.horizontal_position(offset, CaretDirection::Primary) - line.left,
+                0.0,
+            )
+        });
+        Rect {
+            x: line.left + x,
+            y: line.top,
+            width,
+            height: line.bottom - line.top,
+        }
+    }
+
+    /// The caret at `offset` as a zero-width rectangle across its line:
+    /// Compose's `getCursorRect`.
+    pub fn cursor_rect(&self, offset: usize) -> Rect {
+        let line = &self.lines[self.line_for_offset(offset)];
+        Rect {
+            x: self.horizontal_position(offset, CaretDirection::Primary),
+            y: line.top,
+            width: 0.0,
+            height: line.bottom - line.top,
+        }
+    }
+
+    /// Pushes onto `rects` the rectangles that cover the text from `start`
+    /// to `end` line by line, one for each stretch of it that runs in one
+    /// direction: Compose's `getPathForRange` as rectangles.
+    pub fn selection_rects(&self, start: usize, end: usize, rects: &mut Vec<Rect>) {
+        for line in &self.lines {
+            if line.text.end <= start || line.text.start >= end {
                 continue;
             }
-            if cluster != Some(glyph.cluster) {
-                before += run.spacing;
-                cluster = Some(glyph.cluster);
+            let mut open: Option<(f32, f32)> = None;
+            for run in &self.runs[line.runs.clone()] {
+                for (left, cluster, cluster_end) in
+                    run.cluster_spans(&self.glyphs[run.glyphs.clone()])
+                {
+                    let x = run.x + left;
+                    let covered = cluster.offset < end && cluster_end > start;
+                    match (covered, open) {
+                        (true, Some((from, _))) => open = Some((from, x + cluster.width)),
+                        (true, None) => open = Some((x, x + cluster.width)),
+                        (false, Some(span)) => {
+                            push_span(rects, line, span);
+                            open = None;
+                        }
+                        (false, None) => {}
+                    }
+                }
             }
-            before += font_units(glyph.advance) * run.scale;
+            if let Some(span) = open {
+                push_span(rects, line, span);
+            }
         }
+    }
+
+    // The caret x of `offset` inside `run`, from the line's left edge.
+    fn caret_in_run(&self, run: &LineRun, offset: usize) -> f32 {
+        let before: f32 = run
+            .clusters(&self.glyphs[run.glyphs.clone()])
+            .filter(|cluster| cluster.offset < offset)
+            .map(|cluster| cluster.width)
+            .sum();
         if run.level.is_rtl() {
             run.x + run.width - before
         } else {
@@ -295,41 +417,32 @@ impl TextLayout {
     // The offset nearest to `x` pixels from the left edge of `run`: each
     // cluster's left half gives the offset on its left.
     fn offset_in_run(&self, run: &LineRun, x: f32) -> usize {
-        let glyphs = &self.glyphs[run.glyphs.clone()];
-        let rtl = run.level.is_rtl();
-        let mut left = 0.0;
-        let mut at = 0;
-        while at < glyphs.len() {
-            let cluster = glyphs[at].cluster;
-            let mut width = run.spacing;
-            let mut end = at;
-            while end < glyphs.len() && glyphs[end].cluster == cluster {
-                width += font_units(glyphs[end].advance) * run.scale;
-                end += 1;
-            }
-            if x < left + width / 2.0 {
-                return if rtl {
-                    logical_end(glyphs, at, run.text.end)
+        for (left, cluster, end) in run.cluster_spans(&self.glyphs[run.glyphs.clone()]) {
+            if x < left + cluster.width / 2.0 {
+                return if run.level.is_rtl() {
+                    end
                 } else {
-                    glyphs[at].text_offset()
+                    cluster.offset
                 };
             }
-            left += width;
-            at = end;
         }
-        if rtl { run.text.start } else { run.text.end }
+        if run.level.is_rtl() {
+            run.text.start
+        } else {
+            run.text.end
+        }
     }
 }
 
-// The offset where the cluster drawn at `at` ends in the text, in a run drawn
-// right to left: the cluster drawn just left of it starts later in the text.
-fn logical_end(glyphs: &[ShapedGlyph], at: usize, run_end: usize) -> usize {
-    glyphs[..at]
-        .iter()
-        .rev()
-        .map(ShapedGlyph::text_offset)
-        .find(|&cluster| cluster != glyphs[at].text_offset())
-        .unwrap_or(run_end)
+// Adds the rectangle of `line` from `left` to `right`, from the line's left
+// edge.
+fn push_span(rects: &mut Vec<Rect>, line: &LayoutLine, (left, right): (f32, f32)) {
+    rects.push(Rect {
+        x: line.left + left,
+        y: line.top,
+        width: right - left,
+        height: line.bottom - line.top,
+    });
 }
 
 // A distance in font design units as a float. Shaped values lie far inside

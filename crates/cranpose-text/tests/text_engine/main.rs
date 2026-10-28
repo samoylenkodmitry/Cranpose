@@ -8,5 +8,6 @@ mod paragraph_lengths;
 mod shaper;
 mod text_layout;
 mod text_overflow;
+mod text_queries;
 mod typeface;
 mod word_cache;

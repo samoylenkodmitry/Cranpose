@@ -42,6 +42,8 @@ pub mod text_layouter;
 pub mod typeface;
 /// Text size units: scaled pixels and multiples of the font size.
 pub mod unit;
+/// The words of a text.
+pub mod word_boundary;
 mod word_cache;
 mod word_split;
 
@@ -78,3 +80,4 @@ pub use text_layout::{CaretDirection, GlyphRun, TextLayout};
 pub use text_layouter::{LayoutInput, ParagraphLengths, TextLayouter};
 pub use typeface::{FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError};
 pub use unit::TextUnit;
+pub use word_boundary::word_boundary;

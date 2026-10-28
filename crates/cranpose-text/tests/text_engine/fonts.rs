@@ -43,5 +43,6 @@ pub(crate) fn span(range: Range<usize>, family: &FontFamily, weight: u16) -> Sha
         features: &[],
         language: None,
         letter_spacing: 0.0,
+        baseline_shift: 0.0,
     }
 }

@@ -4,6 +4,7 @@ use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     cluster_widths::ClusterWidths,
     font_family_resolver::FontFamilyResolver,
+    glyph_id::GlyphId,
     itemizer::{Itemizer, TextItem},
     layout_options::{TextLayoutOptions, TextOverflow},
     line_box::{FontExtent, paragraph_line_box},
@@ -99,6 +100,7 @@ struct Piece {
     size: f32,
     scale: f32,
     spacing: f32,
+    baseline_shift: f32,
     level: BidiLevel,
     width: f32,
 }
@@ -294,15 +296,7 @@ impl TextLayouter {
         };
         layout.height = top;
         layout.did_overflow_width = widest > layout.width;
-        let align = input.paragraph.text_align;
-        for line in &mut layout.lines {
-            let indent = line.left;
-            let free = layout.width - indent - line.width;
-            line.left = align_fraction(align, line.level) * free;
-            if !line.level.is_rtl() {
-                line.left += indent;
-            }
-        }
+        align_lines(input, layout);
     }
 
     // Puts the line's pieces, already in visual order, into runs from its
@@ -324,6 +318,9 @@ impl TextLayouter {
                 size: piece.size,
                 scale: piece.scale,
                 spacing: piece.spacing,
+                word_spacing: 0.0,
+                space: None,
+                baseline_shift: piece.baseline_shift,
                 level: piece.level,
                 x,
                 width: piece.width,
@@ -428,6 +425,7 @@ impl TextLayouter {
             size: style.size,
             scale,
             spacing: 0.0,
+            baseline_shift: style.baseline_shift,
             level,
         })
     }
@@ -473,6 +471,7 @@ impl TextLayouter {
                     size: input.spans[item.span].size,
                     scale,
                     spacing: item.spacing,
+                    baseline_shift: input.spans[item.span].baseline_shift,
                     level,
                 });
             }
@@ -622,6 +621,74 @@ fn face_index(faces: &mut Vec<Typeface>, face: &Typeface) -> usize {
             faces.push(face.clone());
             faces.len() - 1
         })
+}
+
+// Places each line across the layout's width as the paragraph aligns it,
+// stretching justified lines to the width.
+fn align_lines(input: &LayoutInput<'_>, layout: &mut TextLayout) {
+    let align = input.paragraph.text_align;
+    for index in 0..layout.lines.len() {
+        let line = &layout.lines[index];
+        let indent = line.left;
+        let free = layout.width - indent - line.width;
+        // Justified text stretches the spaces of each line but the last
+        // of its paragraph, as Android's inter-word justification does.
+        let justified = align == TextAlign::Justify
+            && free > 0.0
+            && !line.ellipsized
+            && layout
+                .lines
+                .get(index + 1)
+                .is_some_and(|next| !starts_paragraph(input.text, next.text.start));
+        let stretched = justified && justify(layout, index, free);
+        let line = &mut layout.lines[index];
+        line.left = if stretched {
+            0.0
+        } else {
+            align_fraction(align, line.level) * free
+        };
+        if !line.level.is_rtl() {
+            line.left += indent;
+        }
+    }
+}
+
+// Spreads `free` width over the spaces of the visible text of line `index`;
+// false when the line has none.
+fn justify(layout: &mut TextLayout, index: usize, free: f32) -> bool {
+    let line = &layout.lines[index];
+    let visible = line.visible_end;
+    let runs = line.runs.clone();
+    let spaces_of = |layout: &TextLayout, run: &LineRun| -> (Option<GlyphId>, u16) {
+        let space = layout.faces[run.face].glyph(' ');
+        let count = layout.glyphs[run.glyphs.clone()]
+            .iter()
+            .filter(|glyph| Some(glyph.id) == space && glyph.text_offset() < visible)
+            .count();
+        (space, u16::try_from(count).unwrap_or(u16::MAX))
+    };
+    let total: u32 = layout.runs[runs.clone()]
+        .iter()
+        .map(|run| u32::from(spaces_of(layout, run).1))
+        .sum();
+    if total == 0 {
+        return false;
+    }
+    let per_space = free / f32::from(u16::try_from(total).unwrap_or(u16::MAX));
+    let mut x = layout.runs[runs.start].x;
+    for at in runs {
+        let (space, count) = spaces_of(layout, &layout.runs[at]);
+        let run = &mut layout.runs[at];
+        run.x = x;
+        if count > 0 {
+            run.word_spacing = per_space;
+            run.space = space;
+            run.width += per_space * f32::from(count);
+        }
+        x += run.width;
+    }
+    layout.lines[index].width += free;
+    true
 }
 
 // The width of `glyphs` at `scale`, each of their clusters `spacing` wider.

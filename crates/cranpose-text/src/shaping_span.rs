@@ -23,4 +23,7 @@ pub struct ShapingSpan<'a> {
     /// Extra space after each character in pixels: Compose's
     /// `letterSpacing`. Scripts whose letters join take none, as on Android.
     pub letter_spacing: f32,
+    /// How far above the line's baseline the span's baseline sits, in
+    /// pixels: Compose's `baselineShift` times the span's ascent.
+    pub baseline_shift: f32,
 }
