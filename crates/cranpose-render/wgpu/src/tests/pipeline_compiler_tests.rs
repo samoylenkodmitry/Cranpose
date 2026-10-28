@@ -299,15 +299,28 @@ fn a_metal_compiler_runs_more_warm_ups_side_by_side() {
 #[test]
 fn a_paced_build_waits_for_the_frame_before_it_and_not_longer() {
     let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Paced landing frame"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
     let landing = PacedLanding::default();
     assert!(landing.may_build());
     landing.built();
-    queue.submit([]);
+    // The frame that ran the build, submitted and done.
+    crate::frame_graph::read_test_texture(&device, &queue, &texture);
     landing.watch(&queue);
     assert!(!landing.may_build());
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("the frame finishes");
-    queue.submit([]);
+    // The next frame's submit.
+    crate::frame_graph::read_test_texture(&device, &queue, &texture);
     assert!(landing.may_build());
 }
