@@ -394,7 +394,10 @@ impl TextLayoutHandle {
 
 impl PartialEq for TextLayoutHandle {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::addr_eq(std::sync::Arc::as_ptr(&self.0), std::sync::Arc::as_ptr(&other.0))
+        std::ptr::addr_eq(
+            std::sync::Arc::as_ptr(&self.0),
+            std::sync::Arc::as_ptr(&other.0),
+        )
     }
 }
 

@@ -7,6 +7,8 @@ mod layout_input;
 pub mod measure;
 pub(crate) mod shared_plain_text;
 mod shared_text;
+#[cfg(any(test, feature = "test-helpers"))]
+mod test_fonts;
 
 pub use annotated_string::{
     AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,
@@ -39,6 +41,8 @@ pub use style::{
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
     text_align_fraction,
 };
+#[cfg(any(test, feature = "test-helpers"))]
+pub use test_fonts::test_fonts;
 pub use unit::TextUnit;
 
 pub use crate::text_layout_result::TextLayoutResult;

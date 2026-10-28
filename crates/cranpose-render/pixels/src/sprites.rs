@@ -624,7 +624,9 @@ fn hash_text(hasher: &mut FxHasher, draw: &TextDraw) {
     hasher.write_u8(b't');
     hash_rect(hasher, *rect);
     hash_floats(hasher, &[layout.width(), layout.height()]);
-    hasher.write_u8(u8::from(*ink == cranpose_render_common::text_raster::GlyphInk::Hidden));
+    hasher.write_u8(u8::from(
+        *ink == cranpose_render_common::text_raster::GlyphInk::Hidden,
+    ));
     hash_point(hasher, *snap_anchor);
     hasher.write_u64(text.render_hash());
     hash_color(hasher, *color);

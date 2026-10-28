@@ -723,9 +723,15 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     let text_scale = layer_uniform_scale(content_layer);
     let transformed_text_rect = apply_layer_to_rect(text_rect, rect, content_layer);
     // A box or a line of the text, in layout pixels, where the node draws it.
-    let placed =
-        |part: Rect| apply_layer_to_rect(part.translate(text_rect.x, text_rect.y), rect, content_layer);
-    let styled: cranpose_render_common::text_glyphs::StyledTextRef<'_> = render_text.as_ref().into();
+    let placed = |part: Rect| {
+        apply_layer_to_rect(
+            part.translate(text_rect.x, text_rect.y),
+            rect,
+            content_layer,
+        )
+    };
+    let styled: cranpose_render_common::text_glyphs::StyledTextRef<'_> =
+        render_text.as_ref().into();
     visit_text_backgrounds(layout, styled, text_style, |part, brush| {
         sink.push_shape(
             DrawPrimitive::Rect {
@@ -790,7 +796,11 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         sink,
         node,
         &placement,
-        (transformed_text_rect, &transformed_text_style, transformed_text_color),
+        (
+            transformed_text_rect,
+            &transformed_text_style,
+            transformed_text_color,
+        ),
     );
 
     visit_text_lines(layout, styled, text_style, text_color, |part, brush| {

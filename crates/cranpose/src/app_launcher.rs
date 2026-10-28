@@ -5,7 +5,9 @@ use std::{marker::PhantomData, path::Path};
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use cranpose_app_shell::FramePacingMode;
 use cranpose_render_common::{
-    font_source::{ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, FontRegistry},
+    font_source::{
+        ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, FontRegistry,
+    },
     text_fonts::{TextFonts, default_typeface},
 };
 use cranpose_text::{FontBytes, Typeface};

@@ -183,10 +183,7 @@ impl TextPreparedLayoutOwner {
 
     /// The size of the layout the cache holds for `widths` and the max widths
     /// that keep it; `None` when the cache holds none.
-    fn cached_widths(
-        &self,
-        widths: (f32, f32),
-    ) -> Option<(Size, cranpose_ui_layout::BoundRange)> {
+    fn cached_widths(&self, widths: (f32, f32)) -> Option<(Size, cranpose_ui_layout::BoundRange)> {
         let stamp = crate::render_state::text_layout_stamp();
         let cache = self.cache.borrow();
         let entry = cache.iter().find(|entry| entry.keeps(widths, stamp))?;

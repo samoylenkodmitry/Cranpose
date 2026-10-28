@@ -89,7 +89,9 @@ pub(crate) fn visit_span_styles(
             .span_styles
             .iter()
             .filter(|span| span.range.start <= range.start && range.end <= span.range.end)
-            .fold(style.span_style.clone(), |merged, span| merged.merge(&span.item));
+            .fold(style.span_style.clone(), |merged, span| {
+                merged.merge(&span.item)
+            });
         visit(range, &merged);
     }
 }
@@ -152,7 +154,11 @@ impl SpanPaint {
             } else {
                 0.0
             },
-            skew: if synthesis.italic { FAKE_ITALIC_SKEW } else { 0.0 },
+            skew: if synthesis.italic {
+                FAKE_ITALIC_SKEW
+            } else {
+                0.0
+            },
         }
     }
 }

@@ -44,7 +44,6 @@ pub(super) const TEXT_GLYPH_GPU_RUN_IDLE_FRAMES: u64 = 8;
 /// shared quads each frame, where consecutive runs share a draw.
 pub(super) const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
 
-
 fn text_atlas_fallback_diag_enabled() -> bool {
     cranpose_core::DIAGNOSTICS.text_atlas_fallback_diag.is_set()
 }
@@ -247,7 +246,6 @@ pub(super) struct CachedGpuTextGlyphRun {
     /// [`TEXT_GLYPH_GPU_RUN_IDLE_FRAMES`] gives its quads back.
     pub(super) last_frame: Cell<u64>,
 }
-
 
 pub(super) fn cached_text_glyph_quad(
     glyph: &RunGlyphBox,

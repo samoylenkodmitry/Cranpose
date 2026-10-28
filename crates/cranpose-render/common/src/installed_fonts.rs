@@ -61,9 +61,7 @@ fn install(
 ) -> Result<(), TypefaceError> {
     let faces = weights
         .iter()
-        .map(|&weight| {
-            Typeface::from_registered(family, weight, FontStyle::Normal, bytes, &[])
-        })
+        .map(|&weight| Typeface::from_registered(family, weight, FontStyle::Normal, bytes, &[]))
         .collect::<Result<Vec<_>, _>>()?;
     let mut installed = INSTALLED.lock().unwrap_or_else(PoisonError::into_inner);
     for face in faces {

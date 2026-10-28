@@ -166,7 +166,11 @@ fn stroked_mask(outline: &GlyphOutline, width: f32, kind: StrokeKind) -> Option<
         ..Stroke::default()
     };
     pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    let alpha: Arc<[u8]> = pixmap.data().chunks_exact(4).map(|pixel| pixel[3]).collect();
+    let alpha: Arc<[u8]> = pixmap
+        .data()
+        .chunks_exact(4)
+        .map(|pixel| pixel[3])
+        .collect();
     Some(GlyphMask {
         alpha,
         width: usize_of(raster_width),

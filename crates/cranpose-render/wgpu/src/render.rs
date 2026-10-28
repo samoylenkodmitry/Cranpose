@@ -8,9 +8,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
-use cranpose_render_common::{
-    geometry::blur_reach, graph::quad_bounds,
-};
+use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds};
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
 };
@@ -3825,12 +3823,6 @@ pub(crate) use frame_uploads::{DrawParts, FrameUploads};
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
 mod shape_pipeline;
-#[cfg(test)]
-pub(crate) use shape_pipeline::ShapeVariant;
-pub(crate) use shape_pipeline::{
-    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
-};
-
 use glyph_atlas::{
     GlyphAtlasEntry, GlyphAtlasSlotKey, GlyphSamplers, RunAtlasEntries, TEXT_GLYPH_ATLAS_MIN_SIZE,
     TextGlyphAtlas, create_glyph_atlas_pipeline, glyph_atlas_uv_rect,
@@ -3848,13 +3840,18 @@ use shadow_cache::{
     ShadowSurfaces, device_pixel_bounds, shadow_scene, shape_shadow_surface_cache_key,
     skip_shadow_draws,
 };
+#[cfg(test)]
+pub(crate) use shape_pipeline::ShapeVariant;
 use shape_pipeline::{LINE_KINDS, shape_shader_code};
+pub(crate) use shape_pipeline::{
+    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
+};
 use text_glyph_cache::{
     CachedGpuTextGlyphRun, GlyphRunBounds, GlyphRunQuads, MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
-    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
-    TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
-    TextGlyphRunLookup, cached_text_glyph_instance, cached_text_glyph_quad_is_visible_in_viewport,
-    log_text_atlas_fallback,
+    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
+    RETAINED_TEXT_GLYPH_RUN_MIN_QUADS, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES,
+    TextGlyphRunDraw, TextGlyphRunLookup, cached_text_glyph_instance,
+    cached_text_glyph_quad_is_visible_in_viewport, log_text_atlas_fallback,
 };
 
 #[cfg(test)]

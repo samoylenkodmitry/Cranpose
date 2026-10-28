@@ -26,8 +26,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates, graph::RenderGraph, graph_scene::Scene,
+    text_fonts::TextFonts,
 };
-use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{Point, Rect, Size};
 

@@ -158,11 +158,12 @@ impl FontRegistry {
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
         let bytes = read_font_file(path)?;
-        let face = Typeface::from_registered(family, weight, style, bytes, variations)
-        .map_err(|source| FontLoadError::Parse {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        let face = Typeface::from_registered(family, weight, style, bytes, variations).map_err(
+            |source| FontLoadError::Parse {
+                path: path.to_path_buf(),
+                source,
+            },
+        )?;
         self.faces.push(face);
         Ok(())
     }
@@ -211,7 +212,7 @@ impl FontRegistry {
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
         let face = Typeface::from_registered(family, weight, style, bytes, variations)
-        .map_err(|source| FontLoadError::ParseBytes { source })?;
+            .map_err(|source| FontLoadError::ParseBytes { source })?;
         self.faces.push(face);
         Ok(())
     }
@@ -224,8 +225,8 @@ impl FontRegistry {
         &mut self,
         bytes: impl Into<FontBytes>,
     ) -> Result<(), FontLoadError> {
-        let face = Typeface::from_bytes(bytes)
-            .map_err(|source| FontLoadError::ParseBytes { source })?;
+        let face =
+            Typeface::from_bytes(bytes).map_err(|source| FontLoadError::ParseBytes { source })?;
         self.faces.push(face);
         Ok(())
     }

@@ -59,7 +59,8 @@ pub fn collect_solid_text_atlas_run(
                 return;
             };
             let key = GlyphMaskKey::of(glyph.typeface, glyph.glyph, glyph.size, glyph.raster);
-            let Some(mask) = glyph_cache.mask(glyph.typeface, glyph.glyph, glyph.size, glyph.raster)
+            let Some(mask) =
+                glyph_cache.mask(glyph.typeface, glyph.glyph, glyph.size, glyph.raster)
             else {
                 return;
             };

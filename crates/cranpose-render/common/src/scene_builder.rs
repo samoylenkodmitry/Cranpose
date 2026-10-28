@@ -3023,7 +3023,6 @@ pub fn expand_text_bounds_for_baseline_shift(
     }
 }
 
-
 #[cfg(test)]
 #[path = "tests/scene_builder_tests.rs"]
 mod tests;

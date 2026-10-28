@@ -1056,13 +1056,8 @@ fn isolated_child(
         settings: &content_settings,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
-    let has_pixel_sensitive_subtree = collect_into(
-        layer,
-        motion,
-        content_context,
-        &mut content,
-        recycler,
-    );
+    let has_pixel_sensitive_subtree =
+        collect_into(layer, motion, content_context, &mut content, recycler);
     content.scene.flush_loose();
     content.refresh_backdrop_summary();
     let transform = layer
@@ -1274,24 +1269,14 @@ fn collect_into(
         settings: context.settings,
     };
     if context.settings.in_space || layer.graphics_layer.space.is_some() {
-        return collect_space_children(
-            layer,
-            motion,
-            (child_context, &content),
-            out,
-            recycler,
-        );
+        return collect_space_children(layer, motion, (child_context, &content), out, recycler);
     }
     let mut has_pixel_sensitive_subtree = false;
     for_each_in_draw_order(&layer.children, |child| {
         has_pixel_sensitive_subtree |= match child {
-            RenderNode::Layer(child_layer) => collect_child(
-                child_layer,
-                motion,
-                child_context,
-                out,
-                recycler,
-            ),
+            RenderNode::Layer(child_layer) => {
+                collect_child(child_layer, motion, child_context, out, recycler)
+            }
             _ => {
                 push_content(out, child, &content);
                 node_is_pixel_sensitive(child)
@@ -1396,11 +1381,7 @@ fn boundary_anchor(
     )
 }
 
-fn push_content(
-    out: &mut LayerScene,
-    node: &RenderNode,
-    content: &ContentContext<'_>,
-) {
+fn push_content(out: &mut LayerScene, node: &RenderNode, content: &ContentContext<'_>) {
     match node {
         RenderNode::Primitive(entry) => push_primitive(out, entry, content),
         RenderNode::DrawRun(run) => push_draw_run(out, run, content),
@@ -1423,14 +1404,7 @@ fn collect_child(
         Placement::Direct(translation) => (translation, None),
         Placement::DirectRounded(translation, radius) => (translation, Some(radius)),
         Placement::Isolated => {
-            return collect_isolated_child(
-                child,
-                motion,
-                context,
-                None,
-                out,
-                recycler,
-            );
+            return collect_isolated_child(child, motion, context, None, out, recycler);
         }
     };
     let child_offset = Point::new(
@@ -1543,14 +1517,8 @@ fn collect_isolated_child(
         shadow_clip,
         context.settings.light,
     );
-    let (isolated, has_pixel_sensitive_subtree) = isolated_child(
-        child,
-        motion,
-        context,
-        mesh,
-        &mut out.scene,
-        recycler,
-    );
+    let (isolated, has_pixel_sensitive_subtree) =
+        isolated_child(child, motion, context, mesh, &mut out.scene, recycler);
     let mut isolated = with_backdrop_in_own_space(isolated, recycler);
     assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
     detach_flat_backdrop(&mut isolated, &mut out.scene);
@@ -1648,11 +1616,7 @@ pub(crate) fn assign_snap_anchor_since(
     }
 }
 
-fn push_primitive(
-    out: &mut LayerScene,
-    entry: &PrimitiveEntry,
-    content: &ContentContext<'_>,
-) {
+fn push_primitive(out: &mut LayerScene, entry: &PrimitiveEntry, content: &ContentContext<'_>) {
     let ContentContext {
         layer_bounds,
         local_layer,

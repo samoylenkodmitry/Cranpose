@@ -20,11 +20,9 @@ use super::{
     DrawSpace, FrameUploads, GlyphAtlasSlotKey, GlyphDrawCmd, GlyphExtent, GlyphInstances,
     GlyphQuads, GlyphRunBounds, GlyphRunQuads, GlyphSamplers, ImageBatch, ImageTextures,
     MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS, MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
-    MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
-    RETAINED_TEXT_GLYPH_RUN_MIN_QUADS, RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES,
-    TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw, TextGlyphRunLookup,
-    TurnedGlyph, ViewportUniformParams, evict_idle,
-    for_each_visible_glyph,
+    MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
+    RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
+    TextGlyphRunLookup, TurnedGlyph, ViewportUniformParams, evict_idle, for_each_visible_glyph,
     glyph_atlas::{GlyphAtlasEntry, TextGlyphAtlas},
     glyph_cut_edges, glyph_rect_aligned, hash_text_draw_for_cache,
     hash_text_raster_geometry_for_cache, log_text_atlas_fallback, sampling_under,
@@ -223,7 +221,8 @@ impl TextResources {
             log_text_atlas_fallback(text_draw);
             return None;
         }
-        let Some(glyphs) = RunGlyphs::of(collected_run.iter().copied(), &mut self.run_glyph_scratch)
+        let Some(glyphs) =
+            RunGlyphs::of(collected_run.iter().copied(), &mut self.run_glyph_scratch)
         else {
             log_text_atlas_fallback(text_draw);
             return None;

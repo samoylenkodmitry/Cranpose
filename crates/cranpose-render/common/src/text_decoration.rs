@@ -22,7 +22,10 @@ pub fn visit_text_backgrounds(
 ) {
     if text.is_empty()
         || !(style.span_style.background.is_some()
-            || text.span_styles.iter().any(|span| span.item.background.is_some()))
+            || text
+                .span_styles
+                .iter()
+                .any(|span| span.item.background.is_some()))
     {
         return;
     }
@@ -63,7 +66,9 @@ pub fn visit_text_lines(
     }
     let mut rects = Vec::new();
     visit_span_styles(text, style, |range, merged| {
-        let Some(decoration) = merged.text_decoration.filter(|line| *line != TextDecoration::NONE)
+        let Some(decoration) = merged
+            .text_decoration
+            .filter(|line| *line != TextDecoration::NONE)
         else {
             return;
         };

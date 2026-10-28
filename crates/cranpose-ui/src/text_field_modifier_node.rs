@@ -1252,8 +1252,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     &crate::text::AnnotatedString::from(&text[line_start..pos]),
                     &style,
                     pos - line_start,
-                )
-                    - pan;
+                ) - pan;
                 let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
                 let cursor_y = line_index as f32 * line_height + box_off;
 

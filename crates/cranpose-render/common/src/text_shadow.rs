@@ -82,12 +82,7 @@ pub(crate) fn shadow_blur_sigma(blur_radius: f32) -> f32 {
     }
 }
 
-fn gaussian_blur_alpha(
-    src: &[f32],
-    width: usize,
-    height: usize,
-    sigma: f32,
-) -> Vec<f32> {
+fn gaussian_blur_alpha(src: &[f32], width: usize, height: usize, sigma: f32) -> Vec<f32> {
     let kernel = gaussian_kernel_1d(sigma);
     if kernel.len() == 1 {
         return src.to_vec();

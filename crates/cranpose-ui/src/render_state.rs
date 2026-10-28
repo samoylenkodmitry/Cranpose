@@ -18,9 +18,7 @@ pub use display_scale::{
     MAX_FONT_SCALE, MIN_FONT_SCALE, current_density, current_font_scale, current_font_scale_curve,
     scale_sp, set_density, set_font_scale, set_font_scale_curve,
 };
-pub(crate) use display_scale::{
-    current_host_density, text_layout_stamp,
-};
+pub(crate) use display_scale::{current_host_density, text_layout_stamp};
 use draw_observation::new_draw_observer;
 pub(crate) use draw_observation::{
     DrawObservationScope, clear_draw_observations_for_node, observe_draw_reads,

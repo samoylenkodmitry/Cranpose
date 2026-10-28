@@ -127,23 +127,18 @@ impl Selectable {
     fn lines(&self, line_height: f32) -> Vec<SelectableLine> {
         let width = self.geometry.content_size.get().width;
         let fraction = text_align_fraction(&self.style, &self.text.text);
-        wrapped_line_ranges(
-            &self.text,
-            &self.style,
-            self.options,
-            self.wrap_width(),
-        )
-        .into_iter()
-        .enumerate()
-        .map(|(index, range)| {
-            let line_width = self.prefix_width(range.start, range.end);
-            SelectableLine {
-                left: (width - line_width).max(0.0) * fraction,
-                top: index as f32 * line_height,
-                range,
-            }
-        })
-        .collect()
+        wrapped_line_ranges(&self.text, &self.style, self.options, self.wrap_width())
+            .into_iter()
+            .enumerate()
+            .map(|(index, range)| {
+                let line_width = self.prefix_width(range.start, range.end);
+                SelectableLine {
+                    left: (width - line_width).max(0.0) * fraction,
+                    top: index as f32 * line_height,
+                    range,
+                }
+            })
+            .collect()
     }
 
     fn prefix_width(&self, start: usize, end: usize) -> f32 {

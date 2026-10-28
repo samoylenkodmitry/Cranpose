@@ -7,8 +7,8 @@ use std::{
 
 use cranpose_core::{NodeId, collections::pass_aged::PassAgedCache};
 use cranpose_text::{
-    CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle,
-    FontWeight, LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
+    CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
+    LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
 use smallvec::SmallVec;
 
@@ -217,7 +217,9 @@ impl LayoutSource<'_> {
 
     fn shared(&self) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
         match self {
-            Self::Borrowed { text, style } => (Rc::new((*text).clone()), Arc::new((*style).clone())),
+            Self::Borrowed { text, style } => {
+                (Rc::new((*text).clone()), Arc::new((*style).clone()))
+            }
             Self::Shared { text, style } => (Rc::clone(text), Arc::clone(style)),
         }
     }
@@ -271,7 +273,7 @@ impl TextService {
         Self {
             generation: Cell::new(1),
             pass_owed: Cell::new(false),
-            fonts: RefCell::new(FontFamilyResolver::new([])),
+            fonts: RefCell::new(default_fonts()),
             layouter: RefCell::new(TextLayouter::default()),
             prepared: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_PREPARED_CACHE_CAPACITY,
@@ -327,7 +329,12 @@ impl TextService {
 
     // A cached layout of `key` that breaks into the same lines in `frame`,
     // aligned to its widths.
-    fn held(&self, key: TextKey, frame: TextFrame, style: &TextStyle) -> Option<Rc<PreparedTextLayout>> {
+    fn held(
+        &self,
+        key: TextKey,
+        frame: TextFrame,
+        style: &TextStyle,
+    ) -> Option<Rc<PreparedTextLayout>> {
         let mut cache = self.prepared.borrow_mut();
         let widths = cache.get_mut(&key)?;
         let held = widths
@@ -374,7 +381,8 @@ impl TextService {
             },
             ..frame
         };
-        let fits = |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
+        let fits =
+            |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
         let full = self.layout(&text, &style, frame, units);
         let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
@@ -433,8 +441,18 @@ impl TextService {
     }
 
     // The intrinsic widths of `text` in `style`, with sizes in `units`.
-    fn intrinsics(&self, text: &AnnotatedString, style: &TextStyle, units: TextUnits) -> ParagraphIntrinsics {
-        let key = TextKey::of(text, style.measurement_hash(), TextLayoutOptions::default(), units);
+    fn intrinsics(
+        &self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        units: TextUnits,
+    ) -> ParagraphIntrinsics {
+        let key = TextKey::of(
+            text,
+            style.measurement_hash(),
+            TextLayoutOptions::default(),
+            units,
+        );
         if let Some(key) = key
             && let Some(found) = self.intrinsics.borrow_mut().get(&key).copied()
         {
@@ -520,6 +538,19 @@ impl TextService {
     }
 }
 
+// The fonts text lays out with before a renderer hands the app its own:
+// none, and Cranpose Test Mono in tests.
+fn default_fonts() -> FontFamilyResolver {
+    #[cfg(any(test, feature = "test-helpers"))]
+    {
+        super::test_fonts()
+    }
+    #[cfg(not(any(test, feature = "test-helpers")))]
+    {
+        FontFamilyResolver::new([])
+    }
+}
+
 // Puts `prepared` first among the layouts of one text, keeping the newest.
 fn remember(
     widths: &mut SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>,
@@ -577,7 +608,10 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
 
 /// `text` laid out in `style` with lines ending only at its line breaks,
 /// `style`'s sizes taken as stated, not scaled by the system font scale.
-pub(crate) fn prepare_resolved(text: &AnnotatedString, style: &TextStyle) -> Rc<PreparedTextLayout> {
+pub(crate) fn prepare_resolved(
+    text: &AnnotatedString,
+    style: &TextStyle,
+) -> Rc<PreparedTextLayout> {
     prepare_borrowed(
         text,
         style,
@@ -781,7 +815,10 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
     crate::render_state::with_text_service(|service| {
         let extent = service.extent(style, units)?;
         let line_box = service.line_box(style, units)?;
-        Some((line_box.baseline - extent.ascent, extent.ascent + extent.descent))
+        Some((
+            line_box.baseline - extent.ascent,
+            extent.ascent + extent.descent,
+        ))
     })
     .map_or((0.0, line_height), |(top, height)| {
         (top.clamp(0.0, line_height), height.min(line_height))
