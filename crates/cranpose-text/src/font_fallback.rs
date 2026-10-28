@@ -114,7 +114,9 @@ impl Split<'_, '_> {
         if links[run.link].coverage.contains(ch) || needs_no_glyph(ch) {
             return;
         }
-        let cluster = &text[self.cluster_start..at + ch.len_utf8()];
+        let Some(cluster) = text.get(self.cluster_start..at + ch.len_utf8()) else {
+            return;
+        };
         let needed: SmallVec<[char; 8]> =
             cluster.chars().filter(|&ch| !needs_no_glyph(ch)).collect();
         if let Some(moved) = self.chain.pick(&needed, wants_color(cluster))

@@ -25,7 +25,10 @@ fn runs<'a>(
 ) -> Vec<(&'a str, String)> {
     let mut runs = Vec::new();
     resolver.runs(text, request, |range, typeface| {
-        runs.push((&text[range], typeface.family_names()[0].clone()));
+        runs.push((
+            text.get(range).expect("runs end on character boundaries"),
+            typeface.family_names()[0].clone(),
+        ));
     });
     runs
 }
