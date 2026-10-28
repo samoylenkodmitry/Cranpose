@@ -93,12 +93,12 @@ impl<'a> TextRasterRequest<'a> {
             || !self.scale.is_finite()
     }
 
-    // Whether the glyphs keep to whole device pixels.
-    pub(crate) fn static_motion(&self) -> bool {
+    // How the glyphs move: kept to whole device pixels when static.
+    pub(crate) fn motion(&self) -> TextMotion {
         self.style
             .paragraph_style
             .text_motion
-            .is_none_or(|motion| motion == TextMotion::Static)
+            .unwrap_or(TextMotion::Static)
     }
 
     // The box a brush is sampled across: the whole layout.
@@ -126,11 +126,12 @@ pub fn rasterize_text(
         && paints.all(|paint| paint.solid_color().is_some() && paint.shadow.is_none());
     let width = whole::to_i32(whole::ceil(request.rect.width)).max(1);
     let height = whole::to_i32(whole::ceil(request.rect.height)).max(1);
-    let mut canvas = TextCanvas::new(
-        u32::try_from(width).ok()?,
-        u32::try_from(height).ok()?,
-        solid,
-    );
+    let (width, height) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+    let mut canvas = if solid {
+        TextCanvas::solid(width, height)
+    } else {
+        TextCanvas::blended(width, height)
+    };
     paint_glyphs(request, &paints, glyph_cache, &mut canvas);
     canvas.into_pixels()
 }
@@ -148,7 +149,7 @@ pub fn paint_text(
         return true;
     }
     let paints = SpanPaints::of(request.text, request.style, request.fallback_color);
-    if !request.static_motion()
+    if request.motion() != TextMotion::Static
         || request.ink == GlyphInk::Hidden
         || !paints.all(|paint| paint.solid_color().is_some() && paint.shadow.is_none())
     {
@@ -172,7 +173,7 @@ fn paint_glyphs(
         Some(cache) => cache,
         None => scratch.insert(GlyphMaskCache::with_capacity_at_least_one(SCRATCH_MASKS)),
     };
-    let static_motion = request.static_motion();
+    let motion = request.motion();
     let (rect, scale) = (request.rect, request.scale);
     let ink = match request.ink {
         GlyphInk::Painted => 1.0,
@@ -184,7 +185,7 @@ fn paint_glyphs(
         request.layout,
         paints,
         (request.origin, scale),
-        static_motion,
+        motion,
         |glyph| {
             let Some(mask) = cache.mask(glyph.typeface, glyph.glyph, glyph.size, glyph.raster)
             else {
@@ -210,7 +211,7 @@ fn paint_glyphs(
                 brush_rect,
                 canvas_origin: Point::new(rect.x, rect.y),
                 scale,
-                static_motion,
+                static_motion: motion == TextMotion::Static,
             };
             canvas.paint(placed, &paint);
         },

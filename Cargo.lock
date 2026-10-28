@@ -1540,12 +1540,10 @@ dependencies = [
  "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
- "portable-atomic",
  "smallvec",
  "stats_alloc",
  "thiserror 2.0.21",
  "tiny-skia",
- "unicode-segmentation",
  "web-time",
 ]
 

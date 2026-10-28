@@ -1,7 +1,7 @@
 //! A laid-out text's glyphs for a renderer that draws solid glyphs from an
 //! atlas of their masks.
 
-use cranpose_ui::Color;
+use cranpose_ui::{Color, text::TextMotion};
 use cranpose_ui_graphics::whole;
 
 use crate::{
@@ -41,7 +41,7 @@ pub fn collect_solid_text_atlas_run(
         return Some(());
     }
     let paints = SpanPaints::of(request.text, request.style, request.fallback_color);
-    if !request.static_motion()
+    if request.motion() != TextMotion::Static
         || !paints.all(|paint| {
             paint.solid_color().is_some() && paint.shadow.is_none() && paint.stroke.is_none()
         })
@@ -53,7 +53,7 @@ pub fn collect_solid_text_atlas_run(
         request.layout,
         &paints,
         (origin, request.scale),
-        true,
+        TextMotion::Static,
         |glyph| {
             let Some(color) = glyph.paint.solid_color() else {
                 return;

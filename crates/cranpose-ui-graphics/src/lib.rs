@@ -68,6 +68,7 @@ pub mod transform;
 mod typography;
 pub mod unit;
 mod vector_path;
+mod vector_path_mask;
 mod vertex_gradient;
 pub mod whole;
 

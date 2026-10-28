@@ -7,12 +7,12 @@ use std::{
 use crate::{
     ContentPool,
     accessibility::AccessibilityOptions,
-    geometry::VectorPathMaskCache,
     liquid_glass::{GLASS_SPECIALIZATION_CACHE_CAPACITY, GlassCacheKey},
     path::PathBuffers,
     path_fill::PathSlicer,
     record::ShapeRecorder,
     render_effect::ShaderSpecializationCache,
+    vector_path_mask::VectorPathMaskCache,
 };
 
 pub(crate) struct GraphicsThreadState {

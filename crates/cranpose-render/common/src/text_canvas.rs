@@ -92,18 +92,23 @@ pub(crate) struct TextCanvas<'a> {
 }
 
 impl TextCanvas<'static> {
-    // An image of its own, `width` by `height`, of bytes when every glyph
-    // paints `solid`ly and of floats when a gradient or a shadow blends.
-    pub(crate) fn new(width: u32, height: u32, solid: bool) -> Self {
-        let len = width as usize * height as usize;
+    // An image of its own, `width` by `height`, of bytes, for a text whose
+    // glyphs all paint solid colors.
+    pub(crate) fn solid(width: u32, height: u32) -> Self {
         Self {
             width,
             height,
-            pixels: if solid {
-                CanvasPixels::Solid(vec![0; len * 4])
-            } else {
-                CanvasPixels::Blended(vec![[0.0; 4]; len])
-            },
+            pixels: CanvasPixels::Solid(vec![0; width as usize * height as usize * 4]),
+        }
+    }
+
+    // An image of its own, `width` by `height`, of floats, for a text where a
+    // gradient or a shadow blends.
+    pub(crate) fn blended(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            pixels: CanvasPixels::Blended(vec![[0.0; 4]; width as usize * height as usize]),
         }
     }
 }

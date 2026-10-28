@@ -380,12 +380,13 @@ pub trait DrawTextMeasurer {
 #[derive(Clone)]
 pub struct TextLayoutHandle(std::sync::Arc<dyn std::any::Any + Send + Sync>);
 
-impl TextLayoutHandle {
-    /// A handle on `layout`.
-    pub fn new<T: std::any::Any + Send + Sync>(layout: std::sync::Arc<T>) -> Self {
+impl<T: std::any::Any + Send + Sync> From<std::sync::Arc<T>> for TextLayoutHandle {
+    fn from(layout: std::sync::Arc<T>) -> Self {
         Self(layout)
     }
+}
 
+impl TextLayoutHandle {
     /// The layout as a `T`, `None` when it is of another type.
     pub fn downcast<T: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<T>> {
         std::sync::Arc::clone(&self.0).downcast::<T>().ok()

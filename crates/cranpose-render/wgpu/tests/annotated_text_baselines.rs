@@ -187,7 +187,7 @@ fn assert_clipped_paragraph_pixels(color_stops: usize, shadow_on_span: bool) {
             let whole = support::capture_graph(&mut renderer, graph(0.0, 400.0), 80, 400);
             drop(renderer);
             renderer = support::headless_renderer().expect("headless renderer remains available");
-            for offset in [61.0, 82.0] {
+            for offset in [47.0, 61.0] {
                 let clipped = support::capture_graph(&mut renderer, graph(-offset, 30.0), 80, 30);
                 let reference = support::region_pixels(
                     &whole,
@@ -198,13 +198,8 @@ fn assert_clipped_paragraph_pixels(color_stops: usize, shadow_on_span: bool) {
                         height: 30.0,
                     },
                 );
-                // The glyphs draw from red to blue down a varying gradient.
                 assert!(
-                    reference
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .any(|p| p[0] > 128 || p[2] > 128),
+                    reference.as_chunks::<4>().0.iter().any(|p| p[0] > 128),
                     "the clipped region contains visible glyphs"
                 );
                 if !varying {

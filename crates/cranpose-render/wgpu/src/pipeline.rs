@@ -722,26 +722,21 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     let (node_id, font_size, options) = (*node_id, *font_size, *options);
     let text_scale = layer_uniform_scale(content_layer);
     let transformed_text_rect = apply_layer_to_rect(text_rect, rect, content_layer);
-    // A box or a line of the text, in layout pixels, where the node draws it.
-    let placed = |part: Rect| {
-        apply_layer_to_rect(
+    // A box or a line of the text, in layout pixels, filled with `brush`
+    // where the node draws it.
+    let filled = |part: Rect, brush: &Brush| DrawPrimitive::Rect {
+        rect: apply_layer_to_rect(
             part.translate(text_rect.x, text_rect.y),
             rect,
             content_layer,
-        )
+        ),
+        brush: apply_layer_to_brush(brush.clone(), content_layer),
+        stroke: None,
     };
     let styled: cranpose_render_common::text_glyphs::StyledTextRef<'_> =
         render_text.as_ref().into();
     visit_text_backgrounds(layout, styled, text_style, |part, brush| {
-        sink.push_shape(
-            DrawPrimitive::Rect {
-                rect: placed(part),
-                brush: apply_layer_to_brush(brush.clone(), content_layer),
-                stroke: None,
-            },
-            text_clip,
-            snap_anchor,
-        );
+        sink.push_shape(filled(part, brush), text_clip, snap_anchor);
     });
 
     let text_color =
@@ -804,15 +799,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     );
 
     visit_text_lines(layout, styled, text_style, text_color, |part, brush| {
-        sink.push_shape(
-            DrawPrimitive::Rect {
-                rect: placed(part),
-                brush: apply_layer_to_brush(brush.clone(), content_layer),
-                stroke: None,
-            },
-            text_clip,
-            snap_anchor,
-        );
+        sink.push_shape(filled(part, brush), text_clip, snap_anchor);
     });
 }
 
@@ -953,9 +940,6 @@ pub(crate) fn estimate_text_style_draw_bounds(
     emit_text_style_draws(&mut collector, node, placement);
     collector.bounds
 }
-
-#[cfg(test)]
-use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = NodeId(0);
 

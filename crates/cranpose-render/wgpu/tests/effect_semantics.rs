@@ -17,7 +17,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
-    ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive,
+    ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive, Size,
 };
 use support::{brush_rect, solid_rect};
 
@@ -3386,11 +3386,6 @@ fn crisp_icon_bitmap() -> ImageBitmap {
 
 fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
     let icon = crisp_icon_bitmap();
-    let text_style = TextStyle::from_span_style(SpanStyle {
-        color: Some(Color::WHITE),
-        font_size: TextUnit::Sp(15.0),
-        ..Default::default()
-    });
     let icon_leaf = layer(
         Rect {
             x: 0.0,
@@ -3429,26 +3424,12 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         },
         ProjectiveTransform::translation(47.0, 12.0),
         GraphicsLayer::default(),
-        vec![RenderNode::Primitive(PrimitiveEntry {
-            phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
-                node_id: NodeId(104),
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 44.0,
-                    height: 22.0,
-                },
-                text: cranpose_ui::text::shared_plain_annotated_string("Meta"),
-                render_text: cranpose_ui::text::shared_plain_render_string("Meta"),
-                text_style: std::sync::Arc::new(text_style),
-                font_size: 15.0,
-                layout_options: TextLayoutOptions::default(),
-                clip: None,
-                paint: Default::default(),
-                layout: Default::default(),
-            }))),
-        })],
+        vec![support::text_node(
+            104,
+            "Meta",
+            Rect::from_size(Size::new(44.0, 22.0)),
+            15.0,
+        )],
     );
     let alpha_surface = layer(
         Rect {

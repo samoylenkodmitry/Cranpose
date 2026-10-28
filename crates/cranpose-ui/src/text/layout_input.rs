@@ -172,7 +172,8 @@ impl<'a> ParagraphSpans<'a> {
         font: FontRequest<'_>,
         stretch: &ShapingStyle<'_>,
     ) -> f32 {
-        if stretch.baseline_shift == 0.0 {
+        // No shift, or none a number states.
+        if !stretch.baseline_shift.is_normal() {
             return 0.0;
         }
         let Some(typeface) = resolver.resolve(font) else {

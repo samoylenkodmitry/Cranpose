@@ -4,7 +4,7 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, Size};
 
@@ -28,14 +28,13 @@ fn page(texts: Vec<RenderNode>) -> RenderGraph {
     ))
 }
 
-fn text_frame(text: &str, rect_width: f32) -> RenderGraph {
-    let rect = Rect {
+fn text_rect(width: f32) -> Rect {
+    Rect {
         x: 8.0,
         y: 8.0,
-        width: rect_width,
+        width,
         height: 24.0,
-    };
-    page(vec![text_node(7, text, rect, 16.0)])
+    }
 }
 
 /// `count` distinct labels in a grid of 2 by 2 point cells.
@@ -76,8 +75,8 @@ fn a_text_drawn_again_in_a_narrower_rect_reuses_its_glyph_run() {
             return;
         }
     };
-    let mut draw = |text: &str, rect_width: f32| {
-        renderer.scene_mut().graph = Some(text_frame(text, rect_width));
+    let mut draw = |text: RenderNode| {
+        renderer.scene_mut().graph = Some(page(vec![text]));
         let pixels = renderer
             .capture_frame_with_scale(WIDTH, HEIGHT, 1.0)
             .expect("frame renders")
@@ -89,12 +88,21 @@ fn a_text_drawn_again_in_a_narrower_rect_reuses_its_glyph_run() {
         (pixels, collected)
     };
 
-    let (wide, collected) = draw("Ticker 123.45", 200.0);
+    let wide = text_node(7, "Ticker 123.45", text_rect(200.0), 16.0);
+    // The same layout in a narrower rect, as a text keeps its layout while
+    // its width moves without breaking it otherwise.
+    let mut narrow = wide.clone();
+    if let RenderNode::Primitive(entry) = &mut narrow
+        && let PrimitiveNode::Text(text) = &mut entry.node
+    {
+        text.rect = text_rect(150.0);
+    }
+    let (wide, collected) = draw(wide);
     assert_eq!(collected, 1, "the first frame lays the text's run out");
-    let (narrow, collected) = draw("Ticker 123.45", 150.0);
+    let (narrow, collected) = draw(narrow);
     assert_eq!(collected, 0, "a narrower rect takes the run from the cache");
     assert!(wide == narrow, "the text paints the same pixels");
-    let (_, collected) = draw("Ticker 123.46", 150.0);
+    let (_, collected) = draw(text_node(7, "Ticker 123.46", text_rect(150.0), 16.0));
     assert_eq!(collected, 1, "a changed text lays its run out again");
 }
 

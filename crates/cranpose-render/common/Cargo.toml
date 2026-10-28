@@ -30,8 +30,6 @@ tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "
 ab_glyph_rasterizer = "0.1.10"
 thiserror = "2.0.21"
 smallvec = "1.16.3"
-unicode-segmentation = { workspace = true }
-portable-atomic.workspace = true
 bytemuck = { workspace = true }
 
 [dev-dependencies]

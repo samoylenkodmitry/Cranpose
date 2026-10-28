@@ -39,8 +39,8 @@ fn explicit_axes_change_measurement_rasterization_and_cache_identity() {
     let mut style = TextStyle::default();
     style.span_style.font_size = TextUnit::Sp(20.0);
     let measure = |font: &Typeface| {
-        let layout = laid_out(font, &style).layout.clone();
-        layout.line_right(0) - layout.line_left(0)
+        let prepared = laid_out(font, &style);
+        prepared.layout.line_right(0) - prepared.layout.line_left(0)
     };
     assert!(measure(&wide) > measure(&normal));
     assert_ne!(normal.content_hash(), wide.content_hash());

@@ -15,7 +15,7 @@ fn tracked() -> Typeface {
     let mut tracked = font[..directory_end].to_vec();
     tracked[4..6].copy_from_slice(&(tables + 1).to_be_bytes());
     // Every table moves down by the new record.
-    for record in tracked[12..].chunks_exact_mut(16) {
+    for record in tracked[12..].as_chunks_mut::<16>().0 {
         let offset = u32::from_be_bytes([record[8], record[9], record[10], record[11]]);
         record[8..12].copy_from_slice(&(offset + 16).to_be_bytes());
     }

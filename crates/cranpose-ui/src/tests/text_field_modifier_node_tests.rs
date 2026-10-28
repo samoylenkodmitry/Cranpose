@@ -757,7 +757,7 @@ fn a_padded_field_draws_its_selection_and_caret_once_inside_the_padding() {
         // Cranpose Test Mono advances 0.6 em: five characters at 14 px.
         let hello = 5.0 * 0.6 * 14.0;
         assert!(
-            (caret[0].x - (12.0 + hello)).abs() < 1e-3 && caret[0].y.floor() == 12.0,
+            (caret[0].x - (12.0 + hello)).abs() < 1e-3 && (caret[0].y.floor() - 12.0).abs() < 1e-3,
             "the caret sits after `hello`, inside the padding once: {caret:?}"
         );
     });

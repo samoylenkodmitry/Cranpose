@@ -1,6 +1,6 @@
 use cranpose_text::{
     CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle,
-    TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
+    ShapingSpan, TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
 };
 
 use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, lay_out, span, typeface};
@@ -316,4 +316,39 @@ fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
             assert_eq!(reused.line_end(line), fresh.line_end(line));
         }
     }
+}
+
+#[test]
+fn a_line_grows_to_hold_text_shifted_off_its_baseline() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let family = FontFamily::Default;
+    let laid_with_shift = |shift: f32| {
+        let spans = [
+            span(0..5, &family, 400),
+            ShapingSpan {
+                baseline_shift: shift,
+                ..span(5..10, &family, 400)
+            },
+        ];
+        TextLayouter::default().layout(
+            &LayoutInput {
+                text: "plainmoved",
+                spans: &spans,
+                paragraph: &ParagraphStyle::default(),
+                lengths: ParagraphLengths::default(),
+                min_width: 0.0,
+                max_width: f32::INFINITY,
+                options: TextLayoutOptions::default(),
+            },
+            &resolver,
+        )
+    };
+    let plain = laid_with_shift(0.0);
+    let raised = laid_with_shift(6.0);
+    let lowered = laid_with_shift(-6.0);
+
+    assert!((raised.height() - plain.height() - 6.0).abs() < 0.01);
+    assert!((raised.line_baseline(0) - plain.line_baseline(0) - 6.0).abs() < 0.01);
+    assert!((lowered.height() - plain.height() - 6.0).abs() < 0.01);
+    assert!((lowered.line_baseline(0) - plain.line_baseline(0)).abs() < 0.01);
 }

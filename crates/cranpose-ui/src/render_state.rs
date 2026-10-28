@@ -682,13 +682,6 @@ pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextSer
     f(&context.text)
 }
 
-pub(crate) fn set_current_text_fonts(fonts: cranpose_text::FontFamilyResolver) {
-    let Some(context) = current_app_context() else {
-        panic!("set_text_fonts requires an active AppContext");
-    };
-    context.set_text_fonts(fonts);
-}
-
 pub(crate) fn set_modifier_chain_trace(callback: Arc<ModifierChainTraceCallback>) -> AppContextId {
     let context = require_current_app_context("modifier chain trace installation");
     *context.modifier_chain_trace.borrow_mut() = Some(callback);

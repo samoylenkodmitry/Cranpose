@@ -341,7 +341,8 @@ impl TextService {
             .iter()
             .find(|prepared| prepared.layout.holds(frame.min_width, frame.max_width))
             .map(Rc::clone)?;
-        if held.layout.width_between(frame.min_width, frame.max_width) == held.layout.width() {
+        let width = held.layout.width_between(frame.min_width, frame.max_width);
+        if width.to_bits() == held.layout.width().to_bits() {
             return Some(held);
         }
         let mut layout = TextLayout::clone(&held.layout);
@@ -634,7 +635,10 @@ fn prepare_borrowed(
 /// Lays text out with `fonts` in the active app context from now on. Panics
 /// when no app context is active.
 pub fn set_text_fonts(fonts: FontFamilyResolver) {
-    crate::render_state::set_current_text_fonts(fonts);
+    let Some(context) = crate::render_state::current_app_context() else {
+        panic!("set_text_fonts requires an active AppContext");
+    };
+    context.set_text_fonts(fonts);
 }
 
 /// Measures `text` in `style` with line breaks only at its line breaks, at

@@ -497,9 +497,6 @@ fn push_text_style_draws(
     );
 }
 
-#[cfg(test)]
-use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
-
 pub(crate) fn build_raster_scene(
     graph: &RenderGraph,
     diagnostics: &RenderDiagnostics,

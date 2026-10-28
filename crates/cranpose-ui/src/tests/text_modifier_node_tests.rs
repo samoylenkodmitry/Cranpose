@@ -35,8 +35,10 @@ fn sized(font_size: f32) -> TextStyle {
     }
 }
 
-// The text, left and right edge of each line of `layout`.
-fn lines(layout: &crate::text::PreparedTextLayout) -> Vec<(String, f32, f32)> {
+// The text, left and right edge of each line of a layout.
+type Lines = Vec<(String, f32, f32)>;
+
+fn lines(layout: &crate::text::PreparedTextLayout) -> Lines {
     let text = &layout.text.text;
     (0..layout.layout.line_count())
         .map(|line| {
@@ -145,7 +147,7 @@ fn lines_at(
     text: &'static str,
     options: TextLayoutOptions,
     widths: &'static [f32],
-) -> Vec<(Vec<(String, f32, f32)>, Vec<(String, f32, f32)>)> {
+) -> Vec<(Lines, Lines)> {
     in_app(move || {
         let node = text_node(text, TextStyle::default(), options);
         widths

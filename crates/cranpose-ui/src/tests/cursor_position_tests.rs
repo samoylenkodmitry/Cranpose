@@ -136,7 +136,7 @@ fn cursor_x_position_matches_text_width() {
         assert_eq!(state.selection().start, 5);
 
         let style = TextStyle::default();
-        let chain = focused_text_field_chain(state, style.clone());
+        let chain = focused_text_field_chain(state, style);
 
         let slices = collect_modifier_slices(&chain);
 

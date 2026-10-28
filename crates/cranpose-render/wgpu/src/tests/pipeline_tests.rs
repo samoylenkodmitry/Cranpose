@@ -284,30 +284,6 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
 }
 
 #[test]
-fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
-    let style = TextStyle {
-        span_style: cranpose_ui::text::SpanStyle {
-            baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let text_bounds = Rect {
-        x: 20.0,
-        y: 20.0,
-        width: 50.0,
-        height: 18.0,
-    };
-    let expanded = expand_text_bounds_for_baseline_shift(text_bounds, &style, 20.0);
-    assert!(expanded.y < text_bounds.y);
-    assert!(expanded.height > text_bounds.height);
-    assert_eq!(
-        expanded.y + expanded.height,
-        text_bounds.y + text_bounds.height
-    );
-}
-
-#[test]
 fn push_text_style_draws_emits_background_shadow_and_main_text() {
     let mut scene = Scene::new();
     let style = TextStyle {

@@ -848,13 +848,16 @@ impl TextLayouter {
                 })
                 .unwrap_or_else(|| FontExtent::new(0.0, 0.0, 0.0));
         }
+        // A span shifted up reaches higher above the line's baseline, and one
+        // shifted down lower, as Android widens a run's metrics by its shift.
         self.pieces
             .iter()
             .fold(FontExtent::new(0.0, 0.0, 0.0), |line, piece| {
                 let face = extent(&layout.faces[piece.face], piece.scale);
+                let shift = piece.baseline_shift;
                 FontExtent::new(
-                    line.ascent.max(face.ascent),
-                    line.descent.max(face.descent),
+                    line.ascent.max(face.ascent + shift.max(0.0)),
+                    line.descent.max(face.descent - shift.min(0.0)),
                     line.line_gap.max(face.line_gap),
                 )
             })

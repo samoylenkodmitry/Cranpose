@@ -46,5 +46,5 @@ fn a_word_too_long_for_a_line_breaks_where_its_language_hyphenates() {
 #[cfg(not(feature = "text-hyphenation"))]
 #[test]
 fn a_word_too_long_for_a_line_breaks_between_characters_without_dictionaries() {
-    assert_eq!(hyphenated_lines("Transformation"), ["Transfor", "mation"]);
+    assert_eq!(hyphenated_lines("Abcdefghijklmn"), ["Abcdefgh", "ijklmn"]);
 }

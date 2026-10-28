@@ -8,7 +8,7 @@ use std::{
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
-    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
+    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver,
 };
 use cranpose_ui_graphics::{
     CompositingStrategy, CornerRadii, DrawPlacement, GraphicsLayer, LayerShape, RoundedCornerShape,
@@ -2796,12 +2796,10 @@ fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
         ..text_rect
     };
     let font_size = visual_style.resolve_font_size(14.0);
-    let expanded_bounds =
-        expand_text_bounds_for_baseline_shift(text_bounds, visual_style, font_size);
     let clip = if options.overflow == TextOverflow::Visible && !pans_horizontally {
         None
     } else {
-        Some(pad_clip_rect(expanded_bounds))
+        Some(pad_clip_rect(text_bounds))
     };
 
     Some(TextPrimitiveNode {
@@ -2986,40 +2984,6 @@ fn pad_clip_rect(rect: Rect) -> Rect {
         y: rect.y - TEXT_CLIP_PAD,
         width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
         height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
-    }
-}
-
-/// Grows `text_bounds` in the direction of the style's baseline shift, by the shift in pixels at
-/// `font_size`, so a clip does not cut the shifted glyphs. Returns the bounds unchanged when
-/// there is no baseline shift.
-pub fn expand_text_bounds_for_baseline_shift(
-    text_bounds: Rect,
-    text_style: &TextStyle,
-    font_size: f32,
-) -> Rect {
-    let baseline_shift_px = text_style
-        .span_style
-        .baseline_shift
-        .filter(|shift| shift.is_specified())
-        .map_or(0.0, |shift| -(shift.0 * font_size));
-    if baseline_shift_px == 0.0 {
-        return text_bounds;
-    }
-
-    if baseline_shift_px < 0.0 {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y + baseline_shift_px,
-            width: text_bounds.width,
-            height: (text_bounds.height - baseline_shift_px).max(0.0),
-        }
-    } else {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y,
-            width: text_bounds.width,
-            height: (text_bounds.height + baseline_shift_px).max(0.0),
-        }
     }
 }
 

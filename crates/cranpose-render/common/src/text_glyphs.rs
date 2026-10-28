@@ -8,7 +8,7 @@ use cranpose_ui::{
     Brush, Color,
     text::{
         FontStyle, FontWeight, RangeStyle, RenderString, Shadow, SpanBoundaries, SpanStyle,
-        TextDrawStyle, TextStyle,
+        TextDrawStyle, TextMotion, TextStyle,
     },
 };
 use cranpose_ui_graphics::{Point, whole};
@@ -228,15 +228,12 @@ pub(crate) fn visit_placed_glyphs<'a>(
     layout: &'a TextLayout,
     paints: &'a SpanPaints,
     (origin, scale): (Point, f32),
-    static_motion: bool,
+    motion: TextMotion,
     mut visit: impl FnMut(PlacedGlyph<'a>),
 ) {
-    let place = |value: f32, from: f32| {
-        if static_motion {
-            whole::round(from + value * scale)
-        } else {
-            from + whole::round(value * scale)
-        }
+    let place = |value: f32, from: f32| match motion {
+        TextMotion::Static => whole::round(from + value * scale),
+        TextMotion::Animated => from + whole::round(value * scale),
     };
     for line in 0..layout.line_count() {
         for run in layout.glyph_runs(line) {

@@ -154,11 +154,10 @@ impl RendererFrontend {
         );
         self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
-        let overlay = if let Some(overlay) = &self.dev_overlay_graph {
-            Some(collect_overlay(&overlay.root, root_scale, recycler))
-        } else {
-            None
-        };
+        let overlay = self
+            .dev_overlay_graph
+            .as_ref()
+            .map(|overlay| collect_overlay(&overlay.root, root_scale, recycler));
         recycler.clear();
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
         let packet = FramePacket {

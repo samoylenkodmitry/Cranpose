@@ -124,7 +124,7 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
 
     fn layout_text(&self, text: &str, style: &DrawTextStyle) -> Option<TextLayoutHandle> {
         crate::render_state::current_app_context()?;
-        Some(TextLayoutHandle::new(Arc::clone(
+        Some(TextLayoutHandle::from(Arc::clone(
             &prepare_draw_text(text, style).layout,
         )))
     }

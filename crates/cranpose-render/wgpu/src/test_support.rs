@@ -19,19 +19,12 @@ pub(crate) fn layer_node(
     }
 }
 
-thread_local! {
-    // One app context lays out the tests' text, its text service keeping
-    // what it laid out before as an app's does, with the font a renderer
-    // without app fonts draws with.
-    static LAYOUT_CONTEXT: std::rc::Rc<cranpose_ui::AppContext> = {
-        let context = cranpose_ui::AppContext::new();
-        context.set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
-        context
-    };
-}
-
+// Runs `block` in an app context whose text lays out with the font a
+// renderer without app fonts draws with.
 fn in_layout_context<R>(block: impl FnOnce() -> R) -> R {
-    LAYOUT_CONTEXT.with(|context| context.enter(block))
+    let context = cranpose_ui::AppContext::new();
+    context.set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
+    context.enter(block)
 }
 
 // `node` with its text laid out in its style as wide as its rect.
