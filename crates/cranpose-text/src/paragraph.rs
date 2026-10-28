@@ -1,6 +1,6 @@
 use icu_properties::{CodePointMapData, props::BidiClass};
 
-use crate::text::unit::TextUnit;
+use crate::unit::TextUnit;
 
 /// Horizontal alignment of the lines of a paragraph within its width.
 /// Compose's `TextAlign`.

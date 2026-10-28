@@ -1,0 +1,28 @@
+[package]
+name = "cranpose-text"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Text styles, annotated strings, fonts and paragraph settings for Cranpose"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cranpose-ui-graphics = { workspace = true }
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
+smallvec = "1.16"
+
+[dev-dependencies]
+web-time = { workspace = true }

@@ -1654,6 +1654,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranpose-text"
+version = "0.17.2"
+dependencies = [
+ "cranpose-ui-graphics",
+ "icu_properties",
+ "smallvec",
+ "web-time",
+]
+
+[[package]]
 name = "cranpose-ui"
 version = "0.17.2"
 dependencies = [
@@ -1662,6 +1672,7 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-localization",
  "cranpose-macros",
+ "cranpose-text",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "criterion",

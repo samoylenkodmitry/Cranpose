@@ -19,7 +19,7 @@ use crate::{
     modifier::{Modifier, ModifierNodeSlices},
     render_state::{AppContext, AppContextId},
     selection_container::RegistrarInner,
-    text::{TextStyle, annotated_string::SharedPlainText},
+    text::{TextStyle, shared_plain_text::SharedPlainText},
     unhandled_keys::KeyHandler,
 };
 

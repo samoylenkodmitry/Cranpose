@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    modifier::Brush,
-    text::{FontFamily, TextDirection},
-};
+use crate::{FontFamily, TextDirection};
 
 #[test]
 fn baseline_shift_reports_specified() {
@@ -295,9 +292,9 @@ fn font_feature_settings_reach_every_text_cache_hash() {
         ..Default::default()
     };
     let plain = SpanStyle::default();
-    let spanned = |span: SpanStyle| crate::text::AnnotatedString {
+    let spanned = |span: SpanStyle| crate::AnnotatedString {
         text: "0123".to_owned(),
-        span_styles: vec![crate::text::RangeStyle {
+        span_styles: vec![crate::RangeStyle {
             item: span,
             range: 0..2,
         }],
@@ -329,7 +326,7 @@ fn span_style_render_hash_changes_for_visual_attributes() {
     let decorated = SpanStyle {
         shadow: Some(Shadow {
             color: Color(1.0, 0.0, 0.0, 0.5),
-            offset: crate::modifier::Point::new(2.0, 3.0),
+            offset: cranpose_ui_graphics::Point::new(2.0, 3.0),
             blur_radius: 4.0,
         }),
         draw_style: Some(TextDrawStyle::Stroke { width: 2.0 }),
@@ -426,9 +423,9 @@ fn text_alignment_respects_physical_edges_and_paragraph_direction() {
 
 #[test]
 fn span_measurement_hash_ignores_paint_and_follows_metrics() {
-    let spanned = |span: SpanStyle| crate::text::AnnotatedString {
+    let spanned = |span: SpanStyle| crate::AnnotatedString {
         text: "0123".to_owned(),
-        span_styles: vec![crate::text::RangeStyle {
+        span_styles: vec![crate::RangeStyle {
             item: span,
             range: 0..2,
         }],
