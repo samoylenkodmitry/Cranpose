@@ -1,5 +1,6 @@
-use std::{collections::HashSet, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
+use cranpose_core::collections::map::HashSet;
 use cranpose_ui::text::{AnnotatedString, TextStyle, font::FontWeight};
 
 use super::*;
