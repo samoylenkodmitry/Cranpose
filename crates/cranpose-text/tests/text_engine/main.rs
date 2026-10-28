@@ -6,6 +6,7 @@ mod fonts;
 mod glyph_outline;
 #[cfg(feature = "hyphenation-embedded")]
 mod hyphenation;
+mod intrinsics;
 mod itemizer;
 mod line_break;
 mod paragraph_lengths;

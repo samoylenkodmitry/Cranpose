@@ -8,8 +8,8 @@ use crate::{
     layout_options::{TextLayoutOptions, TextOverflow},
     line_box::{FontExtent, paragraph_line_box},
     line_breaker::{
-        BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
-        break_lines, has_hard_break, starts_paragraph, visible_end,
+        BreakKind, BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths,
+        Wrapping, break_lines, has_hard_break, starts_paragraph, visible_end,
     },
     paragraph::{LineBreak, ResolvedTextDirection},
     script::Script,
@@ -26,7 +26,6 @@ use crate::{
 #[cfg(feature = "hyphenation")]
 use crate::{
     hyphenator::Hyphenator,
-    line_breaker::BreakKind,
     paragraph::{Hyphens, TextAlign},
 };
 
@@ -86,6 +85,8 @@ pub struct TextLayouter {
     breaks: Vec<BreakOpportunity>,
     lines: Vec<BrokenLine>,
     pieces: Vec<Piece>,
+    // The glyphs of a text measured for its intrinsic widths.
+    measured: TextLayout,
     #[cfg(feature = "hyphenation")]
     hyphenator: Hyphenator,
     // The opportunities with the hyphenation points among them, swapped
@@ -94,6 +95,18 @@ pub struct TextLayouter {
     hyphenated: Vec<BreakOpportunity>,
     #[cfg(feature = "hyphenation")]
     points: Vec<usize>,
+}
+
+/// The widths of a paragraph that do not depend on the width it is laid
+/// out at: Compose's `ParagraphIntrinsics`. Each includes the indent of the
+/// line it is measured on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParagraphIntrinsics {
+    /// The widest word, the narrowest width no line breaks inside a word at.
+    pub min_intrinsic_width: f32,
+    /// The widest paragraph laid out on one line, the narrowest width no
+    /// paragraph wraps at.
+    pub max_intrinsic_width: f32,
 }
 
 // A line's text, the end of its visible text and its indent.
@@ -200,6 +213,50 @@ impl TextLayouter {
         layout.did_overflow_height = self.lines.len() > options.max_lines;
         self.lines.truncate(options.max_lines.max(1));
         self.build_lines(input, &options, resolver, layout);
+    }
+
+    /// The intrinsic widths of `input`, laid out with the typefaces of
+    /// `resolver`; its width and options do not count.
+    pub fn intrinsics(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+    ) -> ParagraphIntrinsics {
+        let mut measured = std::mem::take(&mut self.measured);
+        measured.clear();
+        self.shape(input, resolver, &mut measured);
+        self.measure_clusters(input, &measured);
+        self.measured = measured;
+        let text = input.text;
+        self.breaker
+            .opportunities(text, input.paragraph.line_break, &mut self.breaks);
+        let first_indent = input.lengths.first_line_indent;
+        // An empty text, or one that ends with a line break, ends with an
+        // empty line.
+        let empty_last = self
+            .breaks
+            .last()
+            .is_none_or(|opportunity| opportunity.kind == BreakKind::Hard);
+        let mut widest = ParagraphIntrinsics {
+            min_intrinsic_width: if empty_last { first_indent } else { 0.0 },
+            max_intrinsic_width: if empty_last { first_indent } else { 0.0 },
+        };
+        let (mut word, mut paragraph) = (0, 0);
+        for opportunity in &self.breaks {
+            let end = opportunity.offset;
+            let width = self.widths.width(word, visible_end(text, word, end));
+            widest.min_intrinsic_width =
+                widest.min_intrinsic_width.max(width + indent(input, word));
+            if opportunity.kind == BreakKind::Hard || end == text.len() {
+                let width = self
+                    .widths
+                    .width(paragraph, visible_end(text, paragraph, end));
+                widest.max_intrinsic_width = widest.max_intrinsic_width.max(width + first_indent);
+                paragraph = end;
+            }
+            word = end;
+        }
+        widest
     }
 
     /// The dictionaries `Hyphens.Auto` hyphenates words by.

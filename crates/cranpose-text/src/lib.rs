@@ -85,7 +85,7 @@ pub use style::{
     text_align_fraction,
 };
 pub use text_layout::{CaretDirection, GlyphRun, TextLayout};
-pub use text_layouter::{LayoutInput, ParagraphLengths, TextLayouter};
+pub use text_layouter::{LayoutInput, ParagraphIntrinsics, ParagraphLengths, TextLayouter};
 pub use typeface::{FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError};
 pub use unit::TextUnit;
 pub use word_boundary::word_boundary;
