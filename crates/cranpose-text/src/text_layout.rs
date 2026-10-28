@@ -12,6 +12,8 @@ pub struct TextLayout {
     pub(crate) lines: Vec<LayoutLine>,
     pub(crate) width: f32,
     pub(crate) height: f32,
+    pub(crate) did_overflow_height: bool,
+    pub(crate) did_overflow_width: bool,
 }
 
 // A run of one typeface, size and bidi level inside a line, in visual order.
@@ -43,6 +45,7 @@ pub(crate) struct LayoutLine {
     pub(crate) width: f32,
     // The level of the paragraph the line is in.
     pub(crate) level: BidiLevel,
+    pub(crate) ellipsized: bool,
 }
 
 /// Which of its two places a caret takes where the text before and after it
@@ -100,6 +103,23 @@ impl TextLayout {
     /// The number of lines, at least one.
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Whether the text had more lines than the line limit: Compose's
+    /// `didOverflowHeight` of a layout the line limit cut.
+    pub fn did_overflow_height(&self) -> bool {
+        self.did_overflow_height
+    }
+
+    /// Whether a line is wider than the layout: Compose's
+    /// `didOverflowWidth`.
+    pub fn did_overflow_width(&self) -> bool {
+        self.did_overflow_width
+    }
+
+    /// Whether `line` shows an ellipsis in place of text.
+    pub fn is_line_ellipsized(&self, line: usize) -> bool {
+        self.lines[line].ellipsized
     }
 
     /// The offset where `line` starts. Panics when `line` is out of range, as

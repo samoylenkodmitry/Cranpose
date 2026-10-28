@@ -6,4 +6,5 @@ mod fonts;
 mod itemizer;
 mod shaper;
 mod text_layout;
+mod text_overflow;
 mod typeface;

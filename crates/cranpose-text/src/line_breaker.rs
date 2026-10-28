@@ -1,7 +1,11 @@
+use std::ops::Range;
+
 use icu_segmenter::{
     LineSegmenter, LineSegmenterBorrowed,
     options::{LineBreakOptions, LineBreakStrictness},
 };
+
+use crate::cluster_widths::ClusterWidths;
 
 // A place a line may end: the byte offset where the next line starts, and
 // whether a line must end there, after a hard break such as a line feed.
@@ -48,6 +52,59 @@ impl LineBreaker {
                 }),
         );
     }
+}
+
+// Greedy line breaking: each line of `text` takes as many of `breaks` as fit
+// `width` without its trailing whitespace, which hangs past the line's end,
+// and a word wider than `width` breaks between clusters, one at least per
+// line. Replaces `lines` with the line ranges; a text that is empty or ends
+// with a hard break gets an empty last line.
+pub(crate) fn break_lines(
+    text: &str,
+    widths: &ClusterWidths,
+    breaks: &[BreakOpportunity],
+    width: f32,
+    lines: &mut Vec<Range<usize>>,
+) {
+    lines.clear();
+    let mut start = 0;
+    let mut fit = None;
+    let mut index = 0;
+    while let Some(&opportunity) = breaks.get(index) {
+        if widths.width(start, visible_end(text, start, opportunity.offset)) <= width {
+            if opportunity.mandatory {
+                lines.push(start..opportunity.offset);
+                start = opportunity.offset;
+                fit = None;
+            } else {
+                fit = Some(opportunity.offset);
+            }
+            index += 1;
+        } else {
+            let end = fit.take().unwrap_or_else(|| {
+                let cut = widths.last_fitting(start, opportunity.offset, width);
+                if cut > start {
+                    cut
+                } else {
+                    widths.next_boundary(start).unwrap_or(opportunity.offset)
+                }
+            });
+            lines.push(start..end);
+            start = end;
+        }
+    }
+    let ends_with_break = breaks
+        .last()
+        .is_some_and(|opportunity| opportunity.mandatory);
+    if start < text.len() || lines.is_empty() || ends_with_break {
+        lines.push(start..text.len());
+    }
+}
+
+// The end of the text from `start` to `end` before its trailing whitespace.
+pub(crate) fn visible_end(text: &str, start: usize, end: usize) -> usize {
+    text.get(start..end)
+        .map_or(end, |part| start + part.trim_end().len())
 }
 
 // The characters after which UAX #14 ends a line: the classes BK, CR, LF and

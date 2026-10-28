@@ -1,6 +1,6 @@
 use cranpose_text::{
     CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, TextAlign, TextDirection,
-    TextLayout, TextLayouter,
+    TextLayout, TextLayoutOptions, TextLayouter,
 };
 
 use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, span, typeface};
@@ -21,6 +21,7 @@ fn layout(
             direction,
             align,
             width,
+            options: TextLayoutOptions::default(),
         },
         resolver,
     )

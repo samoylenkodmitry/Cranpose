@@ -2,9 +2,11 @@ use std::ops::Range;
 
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
+    cluster_widths::ClusterWidths,
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
-    line_breaker::{BreakOpportunity, LineBreaker},
+    layout_options::{TextLayoutOptions, TextOverflow},
+    line_breaker::{BreakOpportunity, LineBreaker, break_lines, visible_end},
     paragraph::{ResolvedTextDirection, TextAlign, TextDirection},
     script::Script,
     shaper::{ShapedGlyph, Shaper},
@@ -24,9 +26,11 @@ pub struct LayoutInput<'a> {
     pub direction: TextDirection,
     /// Where each line sits across the layout's width.
     pub align: TextAlign,
-    /// The width lines wrap at, in pixels; infinite for lines that end only
-    /// at line breaks.
+    /// The width lines wrap at and ellipses cut to, in pixels; infinite for
+    /// lines that end only at line breaks.
     pub width: f32,
+    /// Soft wrapping, the line limits and what shows where text overflows.
+    pub options: TextLayoutOptions,
 }
 
 /// Lays paragraphs out. Keeps its itemizer, shaper, line breaker and scratch
@@ -37,9 +41,7 @@ pub struct TextLayouter {
     shaper: Shaper,
     breaker: LineBreaker,
     items: Vec<ShapedItem>,
-    // The start of each cluster in text order, with the width of the text
-    // before it; the last entry is the end of the text.
-    clusters: Vec<(usize, f32)>,
+    widths: ClusterWidths,
     breaks: Vec<BreakOpportunity>,
     line_ranges: Vec<Range<usize>>,
     pieces: Vec<Piece>,
@@ -56,7 +58,7 @@ struct ShapedItem {
     script: Script,
 }
 
-// The part of an item inside one line, at one bidi level.
+// The part of an item inside one line, at one bidi level, or an ellipsis.
 #[derive(Clone, Debug)]
 struct Piece {
     text: Range<usize>,
@@ -68,9 +70,20 @@ struct Piece {
     width: f32,
 }
 
+// Where a line that does not fit shows an ellipsis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EllipsisAt {
+    Start,
+    Middle,
+    End,
+}
+
+const ELLIPSIS: &str = "\u{2026}";
+
 impl TextLayouter {
     /// Lays `input` out with the typefaces of `resolver`.
     pub fn layout(&mut self, input: &LayoutInput<'_>, resolver: &FontFamilyResolver) -> TextLayout {
+        let options = input.options.normalized();
         let mut layout = TextLayout {
             faces: Vec::new(),
             glyphs: Vec::new(),
@@ -78,12 +91,27 @@ impl TextLayouter {
             lines: Vec::new(),
             width: 0.0,
             height: 0.0,
+            did_overflow_height: false,
+            did_overflow_width: false,
         };
         self.shape(input, resolver, &mut layout);
         self.measure_clusters(input, &layout);
         self.breaker.opportunities(input.text, &mut self.breaks);
-        self.break_lines(input.text, input.width);
-        self.build_lines(input, resolver, &mut layout);
+        let wrap = if options.soft_wrap {
+            input.width
+        } else {
+            f32::INFINITY
+        };
+        break_lines(
+            input.text,
+            &self.widths,
+            &self.breaks,
+            wrap,
+            &mut self.line_ranges,
+        );
+        layout.did_overflow_height = self.line_ranges.len() > options.max_lines;
+        self.line_ranges.truncate(options.max_lines.max(1));
+        self.build_lines(input, &options, resolver, &mut layout);
         layout
     }
 
@@ -119,17 +147,13 @@ impl TextLayouter {
     }
 
     fn measure_clusters(&mut self, input: &LayoutInput<'_>, layout: &TextLayout) {
-        self.clusters.clear();
-        let mut total = 0.0;
+        self.widths.clear();
         for item in &self.items {
             let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
             let glyphs = &layout.glyphs[item.glyphs.clone()];
             let mut add = |glyph: &ShapedGlyph| {
-                let start = glyph.text_offset();
-                if self.clusters.last().is_none_or(|&(last, _)| last != start) {
-                    self.clusters.push((start, total));
-                }
-                total += font_units(glyph.advance) * scale;
+                self.widths
+                    .push(glyph.text_offset(), font_units(glyph.advance) * scale);
             };
             if item.level.is_rtl() {
                 glyphs.iter().rev().for_each(&mut add);
@@ -137,130 +161,56 @@ impl TextLayouter {
                 glyphs.iter().for_each(&mut add);
             }
         }
-        self.clusters.push((input.text.len(), total));
-    }
-
-    // The width of the text from `start` to `end`.
-    fn width(&self, start: usize, end: usize) -> f32 {
-        self.width_before(end) - self.width_before(start)
-    }
-
-    fn width_before(&self, offset: usize) -> f32 {
-        let at = self.clusters.partition_point(|&(start, _)| start < offset);
-        self.clusters.get(at).map_or(0.0, |&(_, width)| width)
-    }
-
-    // The width of the text from `start` to `end` without its trailing
-    // whitespace, which hangs past the line's end.
-    fn visible_width(&self, text: &str, start: usize, end: usize) -> f32 {
-        self.width(start, visible_end(text, start, end))
-    }
-
-    // Greedy line breaking: each line takes as many break opportunities as
-    // fit `width`, and a word wider than `width` breaks between clusters.
-    fn break_lines(&mut self, text: &str, width: f32) {
-        self.line_ranges.clear();
-        let mut start = 0;
-        let mut fit = None;
-        let mut index = 0;
-        while let Some(&opportunity) = self.breaks.get(index) {
-            if self.visible_width(text, start, opportunity.offset) <= width {
-                if opportunity.mandatory {
-                    self.line_ranges.push(start..opportunity.offset);
-                    start = opportunity.offset;
-                    fit = None;
-                } else {
-                    fit = Some(opportunity.offset);
-                }
-                index += 1;
-            } else {
-                let end = fit
-                    .take()
-                    .unwrap_or_else(|| self.cluster_break(start, opportunity.offset, width));
-                self.line_ranges.push(start..end);
-                start = end;
-            }
-        }
-        let ends_with_break = self
-            .breaks
-            .last()
-            .is_some_and(|opportunity| opportunity.mandatory);
-        if start < text.len() || self.line_ranges.is_empty() || ends_with_break {
-            self.line_ranges.push(start..text.len());
-        }
-    }
-
-    // Where a line from `start` that cannot reach the opportunity at `end`
-    // breaks: after the clusters that fit `width`, and after one at least.
-    fn cluster_break(&self, start: usize, end: usize, width: f32) -> usize {
-        let first = self
-            .clusters
-            .partition_point(|&(cluster, _)| cluster <= start);
-        let mut cut = self
-            .clusters
-            .get(first)
-            .map_or(end, |&(cluster, _)| cluster.min(end));
-        for &(cluster, _) in &self.clusters[first..] {
-            if cluster >= end || self.width(start, cluster) > width {
-                break;
-            }
-            cut = cut.max(cluster);
-        }
-        cut
+        self.widths.finish(input.text.len());
     }
 
     fn build_lines(
         &mut self,
         input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
         resolver: &FontFamilyResolver,
         layout: &mut TextLayout,
     ) {
         let mut top = 0.0;
         let mut widest: f32 = 0.0;
-        for index in 0..self.line_ranges.len() {
+        let last = self.line_ranges.len() - 1;
+        for index in 0..=last {
             let range = self.line_ranges[index].clone();
             let visible = visible_end(input.text, range.start, range.end);
-            self.collect_pieces(input, range.clone(), visible, layout);
+            let overflows = self.widths.width(range.start, visible) > input.width;
+            let ellipsis = ellipsis_at(options, index == last)
+                .filter(|_| overflows || (index == last && layout.did_overflow_height));
+            self.pieces.clear();
+            let ellipsized = match ellipsis {
+                Some(at) => self.ellipsize(input, resolver, at, range.clone(), visible, layout),
+                None => false,
+            };
+            if !ellipsized {
+                self.collect_pieces(input, range.clone(), visible, layout);
+            }
             reorder_visually(&mut self.pieces, |piece| piece.level);
-            let first_run = layout.runs.len();
-            let mut x = 0.0;
-            let mut visible_left = None;
-            let mut width = 0.0;
-            for piece in &self.pieces {
-                if piece.text.start < visible {
-                    visible_left.get_or_insert(x);
-                    width += piece.width;
-                }
-                layout.runs.push(LineRun {
-                    text: piece.text.clone(),
-                    glyphs: piece.glyphs.clone(),
-                    face: piece.face,
-                    size: piece.size,
-                    scale: piece.scale,
-                    level: piece.level,
-                    x,
-                    width: piece.width,
-                });
-                x += piece.width;
-            }
-            for run in &mut layout.runs[first_run..] {
-                run.x -= visible_left.unwrap_or(0.0);
-            }
+            let (runs, width) = self.place_runs(visible, layout);
             let (ascent, descent) = self.line_extent(input, resolver, layout, range.start);
             let baseline = top + ascent;
             layout.lines.push(LayoutLine {
                 level: self.paragraph_level(input, range.start),
                 text: range,
                 visible_end: visible,
-                runs: first_run..layout.runs.len(),
+                runs,
                 top,
                 baseline,
                 bottom: baseline + descent,
                 left: 0.0,
                 width,
+                ellipsized,
             });
             top = baseline + descent;
             widest = widest.max(width);
+        }
+        if layout.lines.len() < options.min_lines {
+            let first = &layout.lines[0];
+            let missing = options.min_lines - layout.lines.len();
+            top += (first.bottom - first.top) * lines_f32(missing);
         }
         layout.width = if input.width.is_finite() {
             input.width
@@ -268,18 +218,147 @@ impl TextLayouter {
             widest
         };
         layout.height = top;
+        layout.did_overflow_width = widest > layout.width;
         for line in &mut layout.lines {
             line.left = align_fraction(input.align, line.level) * (layout.width - line.width);
         }
     }
 
-    // The parts of the items inside the line `range`, in text order, the
-    // trailing whitespace from `visible` on at the paragraph's level (rule L1
-    // of UAX #9).
+    // Puts the line's pieces, already in visual order, into runs from its
+    // visible text's left edge; returns the runs and the visible width.
+    fn place_runs(&self, visible: usize, layout: &mut TextLayout) -> (Range<usize>, f32) {
+        let first = layout.runs.len();
+        let mut x = 0.0;
+        let mut visible_left = None;
+        let mut width = 0.0;
+        for piece in &self.pieces {
+            if piece.text.start < visible || piece.text.is_empty() {
+                visible_left.get_or_insert(x);
+                width += piece.width;
+            }
+            layout.runs.push(LineRun {
+                text: piece.text.clone(),
+                glyphs: piece.glyphs.clone(),
+                face: piece.face,
+                size: piece.size,
+                scale: piece.scale,
+                level: piece.level,
+                x,
+                width: piece.width,
+            });
+            x += piece.width;
+        }
+        for run in &mut layout.runs[first..] {
+            run.x -= visible_left.unwrap_or(0.0);
+        }
+        (first..layout.runs.len(), width)
+    }
+
+    // Collects the pieces of a line that does not fit with an ellipsis where
+    // `at` says, cutting its text at cluster boundaries so the rest and the
+    // ellipsis fit the width. False when no typeface draws an ellipsis.
+    fn ellipsize(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        at: EllipsisAt,
+        range: Range<usize>,
+        visible: usize,
+        layout: &mut TextLayout,
+    ) -> bool {
+        let span = input
+            .spans
+            .iter()
+            .position(|span| {
+                span.range
+                    .contains(&visible.saturating_sub(1).max(range.start))
+            })
+            .unwrap_or(0);
+        let level = self.paragraph_level(input, range.start);
+        let Some(mut ellipsis) = self.ellipsis_piece(input, resolver, span, level, layout) else {
+            return false;
+        };
+        let room = (input.width - ellipsis.width).max(0.0);
+        let text = input.text;
+        let (head, tail) = match at {
+            EllipsisAt::End => {
+                let cut = self.widths.last_fitting(range.start, visible, room);
+                (visible_end(text, range.start, cut), range.end)
+            }
+            EllipsisAt::Start => (
+                range.start,
+                self.widths.first_fitting(range.start, visible, room),
+            ),
+            EllipsisAt::Middle => {
+                let head = self.widths.last_fitting(range.start, visible, room / 2.0);
+                let used = self.widths.width(range.start, head);
+                (head, self.widths.first_fitting(head, visible, room - used))
+            }
+        };
+        set_cluster(&mut layout.glyphs[ellipsis.glyphs.clone()], head);
+        ellipsis.text = head..head;
+        self.collect_pieces(input, range.start..head, visible, layout);
+        self.pieces.push(ellipsis);
+        if tail < range.end {
+            self.collect_pieces(input, tail..range.end, visible, layout);
+        }
+        true
+    }
+
+    // The ellipsis in the typeface that `span` resolves it to, at `level`.
+    fn ellipsis_piece(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        span: usize,
+        level: BidiLevel,
+        layout: &mut TextLayout,
+    ) -> Option<Piece> {
+        let style = &input.spans[span];
+        let mut typeface = None;
+        resolver.typeface_runs(ELLIPSIS, style.font, |_, face| {
+            typeface.get_or_insert(face);
+        });
+        let typeface = &resolver.typefaces()[typeface?];
+        let start = layout.glyphs.len();
+        let item = TextItem {
+            range: 0..ELLIPSIS.len(),
+            level,
+            paragraph_level: level,
+            script: Script::COMMON,
+            typeface,
+            span,
+        };
+        self.shaper.shape(
+            ELLIPSIS,
+            &item,
+            style,
+            0..ELLIPSIS.len(),
+            &mut layout.glyphs,
+        );
+        let scale = scale(style, typeface);
+        let glyphs = start..layout.glyphs.len();
+        Some(Piece {
+            width: layout.glyphs[glyphs.clone()]
+                .iter()
+                .map(|glyph| font_units(glyph.advance) * scale)
+                .sum(),
+            text: 0..0,
+            glyphs,
+            face: face_index(&mut layout.faces, typeface),
+            size: style.size,
+            scale,
+            level,
+        })
+    }
+
+    // Adds the parts of the items inside `part` of a line, in text order,
+    // the trailing whitespace from `visible` on at the paragraph's level
+    // (rule L1 of UAX #9).
     fn collect_pieces(
         &mut self,
         input: &LayoutInput<'_>,
-        range: Range<usize>,
+        part: Range<usize>,
         visible: usize,
         layout: &mut TextLayout,
     ) {
@@ -289,30 +368,29 @@ impl TextLayouter {
             pieces,
             ..
         } = self;
-        pieces.clear();
-        let first = items.partition_point(|item| item.text.end <= range.start);
+        let first = items.partition_point(|item| item.text.end <= part.start);
         for item in &items[first..] {
-            if item.text.start >= range.end {
+            if item.text.start >= part.end {
                 break;
             }
-            let start = item.text.start.max(range.start);
-            let end = item.text.end.min(range.end);
+            let start = item.text.start.max(part.start);
+            let end = item.text.end.min(part.end);
             let middle = visible.clamp(start, end);
-            for (part, level) in [
+            for (sub, level) in [
                 (start..middle, item.level),
                 (middle..end, item.paragraph_level),
             ] {
-                if part.is_empty() {
+                if sub.is_empty() {
                     continue;
                 }
-                let glyphs = part_glyphs(shaper, input, item, part.clone(), range.clone(), layout);
+                let glyphs = part_glyphs(shaper, input, item, sub.clone(), part.clone(), layout);
                 let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
                 pieces.push(Piece {
                     width: layout.glyphs[glyphs.clone()]
                         .iter()
                         .map(|glyph| font_units(glyph.advance) * scale)
                         .sum(),
-                    text: part,
+                    text: sub,
                     glyphs,
                     face: item.face,
                     size: input.spans[item.span].size,
@@ -375,18 +453,37 @@ impl TextLayouter {
     }
 }
 
-// The glyphs of `part` of `item` in the line `line`: a slice of the item's
-// glyphs, or the part shaped again without the text across the line's
-// edge when the item's shapes change at a break there.
+// Where the last line, or a line on its own, shows an ellipsis: a start or
+// middle ellipsis only on a single line, as Android lays them out.
+fn ellipsis_at(options: &TextLayoutOptions, last: bool) -> Option<EllipsisAt> {
+    match options.overflow {
+        TextOverflow::Ellipsis if last => Some(EllipsisAt::End),
+        TextOverflow::StartEllipsis if last && options.max_lines == 1 => Some(EllipsisAt::Start),
+        TextOverflow::MiddleEllipsis if last && options.max_lines == 1 => Some(EllipsisAt::Middle),
+        TextOverflow::StartEllipsis | TextOverflow::MiddleEllipsis if last => Some(EllipsisAt::End),
+        _ => None,
+    }
+}
+
+// Gives the glyphs of an ellipsis the text offset it stands at.
+fn set_cluster(glyphs: &mut [ShapedGlyph], offset: usize) {
+    let cluster = u32::try_from(offset).unwrap_or(u32::MAX);
+    for glyph in glyphs {
+        glyph.cluster = cluster;
+    }
+}
+
+// The glyphs of `sub` of `item` inside `part` of a line: a slice of the
+// item's glyphs, or `sub` shaped again without the text outside `part` when
+// the item's shapes change across an edge of `part` inside it.
 fn part_glyphs(
     shaper: &mut Shaper,
     input: &LayoutInput<'_>,
     item: &ShapedItem,
+    sub: Range<usize>,
     part: Range<usize>,
-    line: Range<usize>,
     layout: &mut TextLayout,
 ) -> Range<usize> {
-    let rtl = item.level.is_rtl();
     let glyphs = &layout.glyphs[item.glyphs.clone()];
     let cut_unsafe = |cut: usize| {
         let at = cluster_index(glyphs, cut, item.level);
@@ -394,26 +491,26 @@ fn part_glyphs(
             .get(at)
             .is_none_or(|glyph| glyph.unsafe_to_break || glyph.text_offset() != cut)
     };
-    let breaks_inside =
-        (part.start == line.start && line.start > item.text.start && cut_unsafe(line.start))
-            || (part.end == line.end && line.end < item.text.end && cut_unsafe(line.end));
-    if !breaks_inside {
-        let (low, high) = if rtl {
+    let cut_inside =
+        (sub.start == part.start && part.start > item.text.start && cut_unsafe(part.start))
+            || (sub.end == part.end && part.end < item.text.end && cut_unsafe(part.end));
+    if !cut_inside {
+        let (low, high) = if item.level.is_rtl() {
             (
-                glyphs.partition_point(|glyph| glyph.text_offset() >= part.end),
-                glyphs.partition_point(|glyph| glyph.text_offset() >= part.start),
+                glyphs.partition_point(|glyph| glyph.text_offset() >= sub.end),
+                glyphs.partition_point(|glyph| glyph.text_offset() >= sub.start),
             )
         } else {
             (
-                glyphs.partition_point(|glyph| glyph.text_offset() < part.start),
-                glyphs.partition_point(|glyph| glyph.text_offset() < part.end),
+                glyphs.partition_point(|glyph| glyph.text_offset() < sub.start),
+                glyphs.partition_point(|glyph| glyph.text_offset() < sub.end),
             )
         };
         return item.glyphs.start + low..item.glyphs.start + high;
     }
     let start = layout.glyphs.len();
     let reshaped = TextItem {
-        range: part,
+        range: sub,
         level: item.level,
         paragraph_level: item.paragraph_level,
         script: item.script,
@@ -424,7 +521,7 @@ fn part_glyphs(
         input.text,
         &reshaped,
         &input.spans[item.span],
-        line,
+        part,
         &mut layout.glyphs,
     );
     start..layout.glyphs.len()
@@ -446,14 +543,13 @@ fn scale(span: &ShapingSpan<'_>, face: &Typeface) -> f32 {
     span.size / f32::from(face.units_per_em())
 }
 
-// The end of the text from `start` to `end` before its trailing whitespace.
-fn visible_end(text: &str, start: usize, end: usize) -> usize {
-    text.get(start..end)
-        .map_or(end, |part| start + part.trim_end().len())
+// A line count as a float; counts beyond `u16` saturate.
+fn lines_f32(count: usize) -> f32 {
+    f32::from(u16::try_from(count).unwrap_or(u16::MAX))
 }
 
-// The index of the first glyph of the cluster at `offset` in an item's glyphs,
-// drawn right to left when `rtl`.
+// The index of the first glyph of the cluster at `offset` in an item's
+// glyphs, which run right to left at an odd `level`.
 fn cluster_index(glyphs: &[ShapedGlyph], offset: usize, level: BidiLevel) -> usize {
     if level.is_rtl() {
         glyphs.partition_point(|glyph| glyph.text_offset() > offset)
