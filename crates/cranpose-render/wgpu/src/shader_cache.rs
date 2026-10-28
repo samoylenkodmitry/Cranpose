@@ -801,17 +801,19 @@ fn create_runtime_shader_module(
     source_hash: u64,
     backend: wgpu::Backend,
 ) -> Option<RuntimeShaderModule> {
+    // The framework's own shaders take no validation on the page: their tests
+    // validate them for every backend, and the page's naga took ~100 ms of a
+    // Galaxy Tab S7+'s first glass on WebGPU, where the browser parses the
+    // WGSL again itself. Each one declares its position independence where it
+    // is built, so the analysis is not needed for them either.
     #[cfg(target_arch = "wasm32")]
-    if let Some(&(_, position_independent)) = FRAMEWORK_RUNTIME_SHADERS
-        .iter()
-        .find(|&&(wgsl, _)| wgsl == source)
-    {
+    if crate::effect_renderer::framework_shader_sources().any(|wgsl| wgsl == source) {
         return Some(RuntimeShaderModule {
             module: device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("RuntimeShader Effect"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
             }),
-            position_independent,
+            position_independent: false,
         });
     }
     let (parsed, position_independent) = match validate_runtime_shader_source(source, backend) {
@@ -905,8 +907,6 @@ fn create_app_shader_module(
     }
 }
 mod validation;
-#[cfg(any(target_arch = "wasm32", test))]
-use validation::FRAMEWORK_RUNTIME_SHADERS;
 use validation::{validate_runtime_shader_source, validate_shader_source};
 
 #[cfg(test)]

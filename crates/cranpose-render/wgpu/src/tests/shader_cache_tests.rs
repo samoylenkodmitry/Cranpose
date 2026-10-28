@@ -1,18 +1,14 @@
 use std::sync::atomic::Ordering;
 
-use cranpose_ui_graphics::{
-    GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL, LIQUID_GLASS_WGSL,
-    ROUNDED_ALPHA_MASK_WGSL, RuntimeShader,
-};
+use cranpose_ui_graphics::RuntimeShader;
 use web_time::{Duration, Instant};
 
 use super::{
-    FRAMEWORK_RUNTIME_SHADERS, RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
+    RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
     validate_runtime_shader_source,
 };
 use crate::{
-    effect_renderer::EffectRenderer,
-    pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
+    effect_renderer::{EffectRenderer, framework_shader_sources},
     pipeline_compiler::{CompileLane, PipelineCompiler, tests::hold_warm_ups},
     pipeline_records::ShaderPipelineRecord,
 };
@@ -353,42 +349,18 @@ return vec4<f32>(x, y, 0.0, 1.0);
     assert!(validate_runtime_shader_source(missing_effect_fs, wgpu::Backend::Vulkan).is_err());
 }
 
+// The web hands the framework's shaders to the browser unvalidated.
 #[test]
-fn validator_accepts_gl_portable_builtin_runtime_shaders() {
-    for (name, source) in [
-        ("gradient_blur", GRADIENT_BLUR_WGSL),
-        ("gradient_cut_mask", GRADIENT_CUT_MASK_WGSL),
-        ("rounded_alpha_mask", ROUNDED_ALPHA_MASK_WGSL),
-        ("gradient_fade_dst_out", GRADIENT_FADE_DST_OUT_WGSL),
-        ("liquid_glass", LIQUID_GLASS_WGSL),
-        ("gpu_text_brush_effect", GPU_TEXT_BRUSH_EFFECT_SHADER),
-    ] {
-        let result = validate_runtime_shader_source(source, wgpu::Backend::Gl);
-        assert!(
-            result.is_ok(),
-            "{name} should remain GL-portable: {}",
-            result.err().unwrap_or_default()
-        );
-    }
-}
-
-// The framework's runtime shaders validate for every backend, and each one's
-// listed position independence is what the analysis finds: the web skips
-// both for these sources.
-#[test]
-fn framework_runtime_shaders_validate_as_listed() {
-    for (index, &(source, listed)) in FRAMEWORK_RUNTIME_SHADERS.iter().enumerate() {
+fn framework_runtime_shaders_validate_for_every_backend() {
+    for (index, source) in framework_shader_sources().enumerate() {
         for backend in [
             wgpu::Backend::Gl,
             wgpu::Backend::BrowserWebGpu,
             wgpu::Backend::Vulkan,
         ] {
-            let (_, position_independent) = validate_runtime_shader_source(source, backend)
-                .unwrap_or_else(|error| panic!("shader {index} on {backend:?}: {error}"));
-            assert_eq!(
-                position_independent, listed,
-                "shader {index} on {backend:?}"
-            );
+            if let Err(error) = validate_runtime_shader_source(source, backend) {
+                panic!("framework shader {index} on {backend:?}: {error}");
+            }
         }
     }
 }
