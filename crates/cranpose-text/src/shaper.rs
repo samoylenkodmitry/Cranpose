@@ -350,7 +350,7 @@ impl WordShaping<'_> {
             self.context.clone(),
             glyphs,
         );
-        if keeps {
+        if keeps && self.words.admits(self.key, word_text) {
             let shaped: SmallVec<[ShapedGlyph; 16]> = glyphs[first..]
                 .iter()
                 .map(|glyph| ShapedGlyph {

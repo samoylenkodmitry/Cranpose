@@ -219,3 +219,44 @@ fn an_arabic_word_broken_across_lines_takes_its_end_and_start_forms() {
     rejoined.sort_unstable();
     assert_ne!(rejoined, unbroken, "the letters at the break change form");
 }
+
+#[test]
+fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
+    let family = FontFamily::Default;
+    let paragraph = ParagraphStyle::default();
+    let mut layouter = TextLayouter::default();
+    let mut reused = TextLayout::default();
+    let texts = [
+        "The quick brown fox jumps over the lazy dog",
+        "مرحبا بالعالم",
+        "a\nb",
+    ];
+    for text in texts {
+        let spans = [span(0..text.len(), &family, 400)];
+        let layout_input = LayoutInput {
+            text,
+            spans: &spans,
+            paragraph: &paragraph,
+            lengths: ParagraphLengths::default(),
+            width: 120.0,
+            options: TextLayoutOptions::default(),
+        };
+        layouter.layout_into(&layout_input, &resolver, &mut reused);
+        let fresh = TextLayouter::default().layout(&layout_input, &resolver);
+        assert_eq!(reused.line_count(), fresh.line_count(), "{text}");
+        for line in 0..fresh.line_count() {
+            let glyphs = |laid: &TextLayout| -> Vec<(u32, u32, u32)> {
+                laid.glyph_runs(line)
+                    .flat_map(|run| {
+                        run.positions()
+                            .map(|(id, x, y)| (id.0, x.to_bits(), y.to_bits()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            };
+            assert_eq!(glyphs(&reused), glyphs(&fresh), "{text} line {line}");
+            assert_eq!(reused.line_end(line), fresh.line_end(line));
+        }
+    }
+}

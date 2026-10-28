@@ -85,8 +85,11 @@ fn words_shaped_apart_join_back_as_the_whole_run_shapes() {
 #[test]
 fn kept_words_shape_new_text_as_the_whole_run_shapes() {
     let mut shaper = Shaper::default();
-    for (path, text) in CASES {
-        compare(&mut shaper, path, text);
+    // A word is kept the second time it is shaped.
+    for _ in 0..2 {
+        for (path, text) in CASES {
+            compare(&mut shaper, path, text);
+        }
     }
     for (path, text) in CASES {
         let reordered: String = text.split(' ').rev().collect::<Vec<_>>().join(" ");

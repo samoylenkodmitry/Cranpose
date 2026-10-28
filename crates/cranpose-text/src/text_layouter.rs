@@ -116,19 +116,24 @@ const ELLIPSIS: &str = "\u{2026}";
 impl TextLayouter {
     /// Lays `input` out with the typefaces of `resolver`.
     pub fn layout(&mut self, input: &LayoutInput<'_>, resolver: &FontFamilyResolver) -> TextLayout {
+        let mut layout = TextLayout::default();
+        self.layout_into(input, resolver, &mut layout);
+        layout
+    }
+
+    /// Lays `input` out into `layout` in place of what it held, reusing its
+    /// storage: text that changes every frame lays out without allocating
+    /// once the storage has grown to fit it.
+    pub fn layout_into(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        layout: &mut TextLayout,
+    ) {
         let options = input.options.normalized();
-        let mut layout = TextLayout {
-            faces: Vec::new(),
-            glyphs: Vec::new(),
-            runs: Vec::new(),
-            lines: Vec::new(),
-            width: 0.0,
-            height: 0.0,
-            did_overflow_height: false,
-            did_overflow_width: false,
-        };
-        self.shape(input, resolver, &mut layout);
-        self.measure_clusters(input, &layout);
+        layout.clear();
+        self.shape(input, resolver, layout);
+        self.measure_clusters(input, layout);
         let lengths = input.lengths;
         let wrap = if options.soft_wrap {
             WrapWidths {
@@ -160,8 +165,7 @@ impl TextLayouter {
         }
         layout.did_overflow_height = self.line_ranges.len() > options.max_lines;
         self.line_ranges.truncate(options.max_lines.max(1));
-        self.build_lines(input, &options, resolver, &mut layout);
-        layout
+        self.build_lines(input, &options, resolver, layout);
     }
 
     fn shape(

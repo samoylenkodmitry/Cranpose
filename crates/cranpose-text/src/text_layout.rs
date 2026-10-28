@@ -4,7 +4,11 @@ use crate::{bidi_level::BidiLevel, glyph_id::GlyphId, shaper::ShapedGlyph, typef
 
 /// A paragraph laid out in lines: glyph runs placed for drawing, and the
 /// queries of Compose's `TextLayoutResult`. Distances are in pixels from the
-/// layout's top left corner; offsets are byte offsets in the text.
+/// layout's top left corner; offsets are byte offsets in the text. The
+/// default is empty, ready for [`TextLayouter::layout_into`].
+///
+/// [`TextLayouter::layout_into`]: crate::TextLayouter::layout_into
+#[derive(Default)]
 pub struct TextLayout {
     pub(crate) faces: Vec<Typeface>,
     pub(crate) glyphs: Vec<ShapedGlyph>,
@@ -101,6 +105,18 @@ impl GlyphRun<'_> {
 }
 
 impl TextLayout {
+    // Empties the layout, keeping its storage.
+    pub(crate) fn clear(&mut self) {
+        self.faces.clear();
+        self.glyphs.clear();
+        self.runs.clear();
+        self.lines.clear();
+        self.width = 0.0;
+        self.height = 0.0;
+        self.did_overflow_height = false;
+        self.did_overflow_width = false;
+    }
+
     /// The width the lines were laid out in: the wrap width, or the widest
     /// line when lines do not wrap.
     pub fn width(&self) -> f32 {
