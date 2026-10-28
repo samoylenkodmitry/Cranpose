@@ -138,6 +138,8 @@ impl TextLayouter {
     ) {
         let options = input.options.normalized();
         layout.clear();
+        // A glyph takes at least a byte of text, so the glyphs grow once.
+        layout.glyphs.reserve(input.text.len());
         self.shape(input, resolver, layout);
         self.measure_clusters(input, layout);
         let lengths = input.lengths;

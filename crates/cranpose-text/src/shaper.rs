@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// One glyph a shaper placed, in font design units.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShapedGlyph {
     /// The glyph.
     pub id: GlyphId,
