@@ -56,7 +56,8 @@ impl Sizing {
         } else {
             f32::INFINITY
         };
-        if min_width == max_width {
+        // Equal ends fix the width; a min past the max leaves the max.
+        if min_width >= max_width {
             max_width
         } else {
             self.content_width.max(min_width).min(max_width)
@@ -322,7 +323,7 @@ impl TextLayout {
     /// out again.
     pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
         let width = self.sizing.width(min_width, max_width);
-        width == self.width
+        (width - self.width).abs() < HOLD_MARGIN
             || self.hold.is_some_and(|hold| {
                 hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
             })

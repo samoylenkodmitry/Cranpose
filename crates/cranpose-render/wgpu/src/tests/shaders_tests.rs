@@ -343,3 +343,85 @@ fn shapes_glyphs_and_images_share_one_depth_step() {
         );
     }
 }
+
+// A feature the way the liquid glass shader gates one: its strength fixed
+// through a small function by an override, scaled at run time, and tested
+// beside a runtime condition in a short-circuit `&&` or `||`.
+const GATED_FEATURE_WGSL: &str = r"
+override FEATURE_OFF: bool = false;
+@group(0) @binding(0) var<uniform> inputs: vec4<f32>;
+
+fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
+    return select(value, fixed, is_fixed);
+}
+
+fn feature_color() -> vec4<f32> {
+    return vec4<f32>(inputs.w, 0.5, 0.75, 1.0);
+}
+
+@fragment
+fn and_gate() -> @location(0) vec4<f32> {
+    let strength = fixed_or(inputs.x, 0.0, FEATURE_OFF) * inputs.y;
+    var color = vec4<f32>(0.0);
+    if inputs.z > 0.5 && strength > 0.0 {
+        color = feature_color();
+    }
+    return color;
+}
+
+@fragment
+fn or_gate() -> @location(0) vec4<f32> {
+    let strength = fixed_or(inputs.x, 0.0, FEATURE_OFF) * inputs.y;
+    var color = vec4<f32>(0.0);
+    if inputs.z > 0.5 || strength > 0.0 {
+        color = feature_color();
+    }
+    return color;
+}
+";
+
+fn gated_feature_glsl(entry_point: &str, feature_off: bool) -> String {
+    let constants = naga::back::PipelineConstants::from_iter([(
+        "FEATURE_OFF".to_string(),
+        f64::from(u8::from(feature_off)),
+    )]);
+    ParsedShader::new(GATED_FEATURE_WGSL)
+        .and_then(|shader| shader.lower_to_gles(entry_point, ShaderStage::Fragment, &constants))
+        .unwrap_or_else(|error| panic!("{entry_point}: {error}"))
+}
+
+#[test]
+fn webgl_drops_the_code_of_a_feature_its_override_turns_off() {
+    assert!(gated_feature_glsl("and_gate", false).contains("feature_color"));
+    assert!(!gated_feature_glsl("and_gate", true).contains("feature_color"));
+}
+
+#[test]
+fn webgl_keeps_a_branch_a_runtime_condition_can_still_take() {
+    assert!(gated_feature_glsl("or_gate", true).contains("feature_color"));
+}
+
+#[test]
+fn liquid_glass_validates_for_webgl_with_every_feature_off() {
+    let source = cranpose_ui_graphics::LIQUID_GLASS_WGSL;
+    let constants = naga::back::PipelineConstants::from_iter(
+        source
+            .lines()
+            .filter_map(|line| line.strip_prefix("override "))
+            .filter_map(|rest| rest.split(':').next())
+            .filter(|name| name.ends_with("_OFF"))
+            .map(|name| (name.to_string(), 1.0)),
+    );
+    assert!(
+        constants.len() > 20,
+        "{} feature overrides",
+        constants.len()
+    );
+    validate_glsl_portability_with_constants(
+        source,
+        "effect_fs",
+        ShaderStage::Fragment,
+        &constants,
+    )
+    .unwrap();
+}
