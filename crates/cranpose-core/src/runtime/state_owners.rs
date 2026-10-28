@@ -29,19 +29,27 @@ impl Drop for StateOwnerFrame {
 /// states to whoever is building the value puts them back on the object's
 /// lifetime: the slot drops the value, the value drops the states.
 pub(crate) fn collecting_states<T>(build: impl FnOnce() -> T) -> (T, Vec<Rc<StateHandleLease>>) {
-    thread_state::runtimes(|state| state.state_owners.borrow_mut().push(Vec::new()));
+    thread_state::runtimes(push_state_owner);
     let frame = StateOwnerFrame;
     let value = build();
-    let states = thread_state::runtimes(|state| {
-        state
-            .state_owners
-            .borrow_mut()
-            .last_mut()
-            .map(std::mem::take)
-            .unwrap_or_default()
-    });
+    let states = thread_state::runtimes(take_owned_states);
     drop(frame);
     (value, states)
+}
+
+// Outside `collecting_states`, so each type it builds makes no thread state
+// access of its own.
+fn push_state_owner(state: &thread_state::RuntimeThreadState) {
+    state.state_owners.borrow_mut().push(Vec::new());
+}
+
+fn take_owned_states(state: &thread_state::RuntimeThreadState) -> Vec<Rc<StateHandleLease>> {
+    state
+        .state_owners
+        .borrow_mut()
+        .last_mut()
+        .map(std::mem::take)
+        .unwrap_or_default()
 }
 
 pub(super) fn hand_to_current_owner(lease: &Rc<StateHandleLease>) -> bool {

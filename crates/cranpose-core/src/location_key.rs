@@ -361,19 +361,27 @@ const CONSTANT_SLOTS: usize = 128;
 #[doc(hidden)]
 pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
     let slot = (key.0 as usize) & (CONSTANT_SLOTS - 1);
-    let kept = thread_state::try_runtimes(|state| {
-        let constants = state.constants.try_borrow().ok()?;
-        let (kept_key, value) = constants.get(slot)?.as_ref()?;
-        (*kept_key == key)
-            .then(|| value.downcast_ref::<T>().cloned())
-            .flatten()
-    })
-    .flatten();
-    if let Some(value) = kept {
+    if let Some(value) = kept_constant(key, slot).and_then(|kept| kept.downcast_ref::<T>().cloned())
+    {
         return value;
     }
     let value = make();
-    let stored: Rc<dyn Any> = Rc::new(value.clone());
+    keep_constant(key, slot, Rc::new(value.clone()));
+    value
+}
+
+// The value kept for `key` in `slot`, outside `__constant` so its callers'
+// types make no thread state access each.
+fn kept_constant(key: Key, slot: usize) -> Option<Rc<dyn Any>> {
+    thread_state::try_runtimes(|state| {
+        let constants = state.constants.try_borrow().ok()?;
+        let (kept_key, value) = constants.get(slot)?.as_ref()?;
+        (*kept_key == key).then(|| Rc::clone(value))
+    })
+    .flatten()
+}
+
+fn keep_constant(key: Key, slot: usize, stored: Rc<dyn Any>) {
     thread_state::try_runtimes(|state| {
         let Ok(mut constants) = state.constants.try_borrow_mut() else {
             return;
@@ -385,5 +393,4 @@ pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
             *entry = Some((key, stored));
         }
     });
-    value
 }
