@@ -3,7 +3,7 @@ use cranpose_text::{
     TextDirection, font_feature_settings,
 };
 
-use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, span, typeface};
+use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, ROBOTO, span, typeface};
 
 // How the spans of a test shape.
 #[derive(Clone, Copy)]
@@ -60,6 +60,29 @@ fn a_ligature_forms_unless_its_feature_is_off() {
 
     assert_eq!(shape(&resolver, "fi", &[], style(400, &[], None)).len(), 1);
     assert_eq!(shape(&resolver, "fi", &[], style(400, &off, None)).len(), 2);
+}
+
+// How far the glyphs of `text` move the pen, in font units.
+fn advance(resolver: &FontFamilyResolver, text: &str, features: &[FontFeature]) -> i32 {
+    shape(resolver, text, &[], style(400, features, None))
+        .iter()
+        .map(|glyph| glyph.advance)
+        .sum()
+}
+
+#[test]
+fn a_kerned_pair_moves_the_pen_less_than_its_glyphs_apart_unless_kerning_is_off() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let off: Vec<FontFeature> = font_feature_settings("kern 0").collect();
+    let apart = advance(&resolver, "A", &[]) + advance(&resolver, "V", &[]);
+
+    assert!(advance(&resolver, "AV", &[]) < apart);
+    assert_eq!(advance(&resolver, "AV", &off), apart);
+    assert_eq!(
+        advance(&resolver, "nn", &[]),
+        2 * advance(&resolver, "n", &[]),
+        "a pair the font does not kern"
+    );
 }
 
 #[test]

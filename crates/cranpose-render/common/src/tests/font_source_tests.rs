@@ -1,21 +1,31 @@
 use std::io::Cursor;
 
-use cranpose_ui::text::{SpanStyle, TextStyle};
+use cranpose_text::{FontFamilyKey, FontFamilyResolver, FontRequest};
 
 use super::*;
 
 const REGULAR: &[u8] = include_bytes!("../../assets/NotoSansMerged.ttf");
 const BOLD: &[u8] = include_bytes!("../../assets/NotoSansBold.ttf");
 
-fn style_for(family: &FontFamily, weight: FontWeight) -> TextStyle {
-    TextStyle {
-        span_style: SpanStyle {
-            font_family: Some(family.clone()),
-            font_weight: Some(weight),
-            ..Default::default()
-        },
-        ..Default::default()
+fn request(family: &FontFamily, weight: FontWeight) -> FontRequest<'_> {
+    FontRequest {
+        family,
+        weight,
+        style: FontStyle::Normal,
     }
+}
+
+// What text lays out with: the registry's faces, then `fallbacks`.
+fn fonts_of(registry: FontRegistry, fallbacks: &[&'static [u8]]) -> FontFamilyResolver {
+    FontFamilyResolver::new(registry.into_typefaces(fallbacks))
+}
+
+fn has_registered(fonts: &FontFamilyResolver, family: &FontFamily) -> bool {
+    let key = FontFamilyKey::of(family);
+    fonts
+        .typefaces()
+        .iter()
+        .any(|face| face.registered_family() == Some(key))
 }
 
 struct ScratchDir(PathBuf);
@@ -58,15 +68,15 @@ fn register_family_picks_the_face_matching_the_requested_weight() {
     ])
     .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry.register_family(&family).expect("family loads");
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
 
     let resolved_regular = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
+        .resolve(request(&family, FontWeight::NORMAL))
         .expect("regular face");
     let resolved_bold = fonts
-        .resolve(&style_for(&family, FontWeight::BOLD))
+        .resolve(request(&family, FontWeight::BOLD))
         .expect("bold face");
 
     assert_eq!(resolved_regular.weight(), FontWeight::NORMAL);
@@ -87,12 +97,12 @@ fn register_family_honours_a_declared_weight_over_the_face_header() {
     ])
     .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry.register_family(&family).expect("family loads");
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
 
     let resolved = fonts
-        .resolve(&style_for(&family, FontWeight::MEDIUM))
+        .resolve(request(&family, FontWeight::MEDIUM))
         .expect("declared face");
     assert_eq!(resolved.weight(), FontWeight::MEDIUM);
 }
@@ -105,7 +115,7 @@ fn register_family_reports_a_missing_file_without_panicking() {
     )])
     .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     let error = registry
         .register_family(&family)
         .expect_err("a missing file cannot register");
@@ -120,7 +130,7 @@ fn register_family_reports_a_corrupt_file_without_panicking() {
     let family = FontFamily::file_backed(vec![FontFile::new(path.to_string_lossy().into_owned())])
         .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     let error = registry
         .register_family(&family)
         .expect_err("a corrupt file cannot register");
@@ -136,16 +146,20 @@ fn a_family_that_failed_to_load_falls_back_to_another_app_face() {
     )])
     .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     let _ = registry.register_family(&family);
-    let fonts = registry.into_font_set(&[REGULAR]);
+    let fonts = fonts_of(registry, &[REGULAR]);
 
     let resolved = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
+        .resolve(request(&family, FontWeight::NORMAL))
         .expect("fallback face");
     assert_eq!(
         resolved.content_hash(),
-        fonts.default_font().expect("default face").content_hash()
+        fonts
+            .typefaces()
+            .first()
+            .expect("default face")
+            .content_hash()
     );
 }
 
@@ -160,7 +174,7 @@ fn a_partly_loadable_family_keeps_the_faces_that_did_load() {
     ])
     .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry
         .register_family(&family)
         .expect("one readable face is enough");
@@ -170,7 +184,7 @@ fn a_partly_loadable_family_keeps_the_faces_that_did_load() {
 #[test]
 fn register_face_reader_accepts_a_font_that_is_not_a_file() {
     let family = FontFamily::named("Bundled");
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry
         .register_face_reader(
             &family,
@@ -180,12 +194,12 @@ fn register_face_reader_accepts_a_font_that_is_not_a_file() {
         )
         .expect("streamed face loads");
 
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
     let resolved = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
+        .resolve(request(&family, FontWeight::NORMAL))
         .expect("streamed face");
     assert_eq!(resolved.registered_family(), {
-        let mut expected = SoftwareTextFontRegistry::new();
+        let mut expected = FontRegistry::new();
         expected
             .register_face_bytes(
                 &family,
@@ -200,12 +214,16 @@ fn register_face_reader_accepts_a_font_that_is_not_a_file() {
 
 #[test]
 fn an_empty_registry_leaves_the_embedded_face_to_the_launcher() {
-    let fonts = SoftwareTextFontRegistry::new().into_font_set(&[]);
+    let fonts = fonts_of(FontRegistry::new(), &[]);
     assert!(
-        fonts.faces().is_empty(),
+        fonts.typefaces().is_empty(),
         "a registry must not reference the embedded face, or no binary can drop it"
     );
-    assert!(fonts.resolve(&TextStyle::default()).is_none());
+    assert!(
+        fonts
+            .resolve(request(&FontFamily::Default, FontWeight::NORMAL))
+            .is_none()
+    );
 }
 
 #[test]
@@ -269,7 +287,7 @@ fn register_system_family_binds_the_generic_alias_to_the_platform_face() {
     dir.write("Roboto-Regular.ttf", REGULAR);
     dir.write("Roboto-Bold.ttf", BOLD);
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry
         .register_system_family(
             dir.path(),
@@ -277,16 +295,16 @@ fn register_system_family_binds_the_generic_alias_to_the_platform_face() {
             DEFAULT_SYSTEM_FAMILY_WEIGHTS,
         )
         .expect("system family loads");
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
 
-    assert!(fonts.has_registered_family(&FontFamily::SansSerif));
+    assert!(has_registered(&fonts, &FontFamily::SansSerif));
     let bold = fonts
-        .resolve(&style_for(&FontFamily::SansSerif, FontWeight::BOLD))
+        .resolve(request(&FontFamily::SansSerif, FontWeight::BOLD))
         .expect("bold system face");
     assert_eq!(bold.weight(), FontWeight::BOLD);
     assert_eq!(bold.registered_family(), {
         fonts
-            .resolve(&style_for(&FontFamily::SansSerif, FontWeight::NORMAL))
+            .resolve(request(&FontFamily::SansSerif, FontWeight::NORMAL))
             .expect("regular system face")
             .registered_family()
     });
@@ -294,7 +312,7 @@ fn register_system_family_binds_the_generic_alias_to_the_platform_face() {
 
 #[test]
 fn register_system_family_reports_an_absent_font_directory() {
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     let error = registry
         .register_system_family(
             Path::new("/definitely/not/a/font/directory"),
@@ -366,7 +384,7 @@ fn a_family_with_no_system_files_keeps_the_weight_it_was_given() {
 fn explicit_system_axes_reject_invalid_registration_without_poisoning_retry() {
     let dir = ScratchDir::new("system-explicit-axes");
     dir.write("Roboto-Regular.ttf", REGULAR);
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     assert!(matches!(
         registry.register_system_face_with_variations(
             dir.path(),
@@ -376,7 +394,7 @@ fn explicit_system_axes_reject_invalid_registration_without_poisoning_retry() {
             &[(*b"opsz", 17.0)],
         ),
         Err(FontLoadError::Parse {
-            source: SoftwareTextFontError::InvalidVariation { .. },
+            source: TypefaceError::InvalidVariation { .. },
             ..
         })
     ));
@@ -395,7 +413,7 @@ fn explicit_system_axes_reject_invalid_registration_without_poisoning_retry() {
 
 #[test]
 fn explicit_byte_axes_reject_unknown_axis_without_registering() {
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     assert!(
         registry
             .register_face_bytes_with_variations(
@@ -425,7 +443,7 @@ fn register_system_face_registers_the_declared_weight_not_the_requested_one() {
     let dir = ScratchDir::new("system-undeclared-weight");
     dir.write("Roboto-Regular.ttf", REGULAR);
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry
         .register_system_face(
             dir.path(),
@@ -434,10 +452,10 @@ fn register_system_face_registers_the_declared_weight_not_the_requested_one() {
             FontStyle::Normal,
         )
         .expect("system face loads");
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
 
     let resolved = fonts
-        .resolve(&style_for(&FontFamily::SansSerif, FontWeight(450)))
+        .resolve(request(&FontFamily::SansSerif, FontWeight(450)))
         .expect("a face for the off-grid request");
     assert_eq!(
         resolved.weight(),
@@ -445,7 +463,7 @@ fn register_system_face_registers_the_declared_weight_not_the_requested_one() {
         "450 must land on the 400 entry Android's matcher returns"
     );
 
-    let mut declared = SoftwareTextFontRegistry::new();
+    let mut declared = FontRegistry::new();
     declared
         .register_system_face(
             dir.path(),
@@ -454,11 +472,11 @@ fn register_system_face_registers_the_declared_weight_not_the_requested_one() {
             FontStyle::Normal,
         )
         .expect("system face loads");
-    let declared = declared.into_font_set(&[]);
+    let declared = fonts_of(declared, &[]);
     assert_eq!(
         resolved.content_hash(),
         declared
-            .resolve(&style_for(&FontFamily::SansSerif, FontWeight::NORMAL))
+            .resolve(request(&FontFamily::SansSerif, FontWeight::NORMAL))
             .expect("the 400 face")
             .content_hash(),
         "the off-grid request must produce the very same face, glyph masks included"
@@ -470,7 +488,7 @@ fn system_requests_that_resolve_alike_register_one_face() {
     let dir = ScratchDir::new("system-dedupe");
     dir.write("Roboto-Regular.ttf", REGULAR);
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     for weight in [400u16, 450, 499] {
         registry
             .register_system_face(
@@ -498,13 +516,13 @@ fn an_app_registered_face_keeps_the_weight_it_declares() {
     ])
     .expect("file-backed family");
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry.register_family(&family).expect("family loads");
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
 
     assert_eq!(
         fonts
-            .resolve(&style_for(&family, FontWeight(450)))
+            .resolve(request(&family, FontWeight(450)))
             .expect("app face")
             .weight(),
         FontWeight(450)
@@ -513,7 +531,7 @@ fn an_app_registered_face_keeps_the_weight_it_declares() {
 
 #[test]
 fn register_family_rejects_a_family_that_names_no_files() {
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     let error = registry
         .register_family(&FontFamily::named("Roboto"))
         .expect_err("a named family has nothing to read");
@@ -526,14 +544,14 @@ fn loaded_typeface_families_register_their_single_file() {
     let path = dir.write("Test-Regular.ttf", REGULAR);
     let family = FontFamily::loaded_typeface_path(path.to_string_lossy().into_owned());
 
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry.register_family(&family).expect("typeface loads");
-    let fonts = registry.into_font_set(&[]);
+    let fonts = fonts_of(registry, &[]);
 
-    assert!(fonts.has_registered_family(&family));
+    assert!(has_registered(&fonts, &family));
     assert!(
         fonts
-            .resolve(&style_for(&family, FontWeight::NORMAL))
+            .resolve(request(&family, FontWeight::NORMAL))
             .is_some_and(|font| font.registered_family().is_some())
     );
 }

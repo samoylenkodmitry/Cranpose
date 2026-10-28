@@ -649,7 +649,7 @@ fn plain_layout(text: &str, size: f32) -> std::sync::Arc<cranpose_text::TextLayo
         size,
         features: &[],
         language: None,
-        letter_spacing: 0.0,
+        letter_spacing: None,
         baseline_shift: 0.0,
     }];
     let input = cranpose_text::LayoutInput {

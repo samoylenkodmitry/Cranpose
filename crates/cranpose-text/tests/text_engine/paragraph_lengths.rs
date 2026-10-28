@@ -18,7 +18,7 @@ fn layout(
 ) -> TextLayout {
     let family = FontFamily::Default;
     let spans = [ShapingSpan {
-        letter_spacing,
+        letter_spacing: Some(letter_spacing),
         ..span(0..text.len(), &family, 400)
     }];
     TextLayouter::default().layout(

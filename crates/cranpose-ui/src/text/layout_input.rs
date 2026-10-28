@@ -153,9 +153,9 @@ impl<'a> ParagraphSpans<'a> {
                     features: &self.features[features.clone()],
                     language: stretch.language,
                     letter_spacing: match stretch.letter_spacing {
-                        TextUnit::Sp(sp) if sp.is_finite() => self.units.sp(sp),
-                        TextUnit::Em(em) if em.is_finite() => em * stretch.size,
-                        _ => 0.0,
+                        TextUnit::Sp(sp) if sp.is_finite() => Some(self.units.sp(sp)),
+                        TextUnit::Em(em) if em.is_finite() => Some(em * stretch.size),
+                        _ => None,
                     },
                     baseline_shift: self.baseline_shift(resolver, font, stretch),
                 }

@@ -35,6 +35,8 @@ portable-atomic.workspace = true
 bytemuck = { workspace = true }
 
 [dev-dependencies]
+# Tests lay text out with Cranpose Test Mono.
+cranpose-ui = { workspace = true, features = ["test-helpers"] }
 stats_alloc = "0.1.10"
 web-time = "1.1.0"
 

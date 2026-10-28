@@ -116,10 +116,12 @@ pub struct ParagraphIntrinsics {
     pub max_intrinsic_width: f32,
 }
 
-// A line's text, the end of its visible text and its indent.
+// A line's text, the end of its visible text, the end of the text it draws,
+// before the hard break that ends it, which draws nothing, and its indent.
 struct LineText {
     range: Range<usize>,
     visible: usize,
+    drawn: usize,
     indent: f32,
 }
 
@@ -446,7 +448,9 @@ impl TextLayouter {
                     paragraph_level: item.paragraph_level,
                     script: item.script,
                     spacing: if item.script.takes_letter_spacing() {
-                        input.spans[item.span].letter_spacing
+                        let span = &input.spans[item.span];
+                        span.letter_spacing
+                            .unwrap_or_else(|| item.typeface.tracking(span.size))
                     } else {
                         0.0
                     },
@@ -488,6 +492,7 @@ impl TextLayouter {
             let range = self.lines[index].text.clone();
             let line = LineText {
                 visible: visible_end(input.text, range.start, range.end),
+                drawn: before_hard_break(input.text, range.start, range.end),
                 indent: indent(input, range.start),
                 range,
             };
@@ -568,7 +573,7 @@ impl TextLayouter {
             None => false,
         };
         if !ellipsized {
-            self.collect_pieces(input, line.range.clone(), line.visible, layout);
+            self.collect_pieces(input, line.range.start..line.drawn, line.visible, layout);
             if self.lines[index].end == LineEnd::Hyphen {
                 self.push_hyphen(input, line.range.end, layout);
             }
@@ -688,8 +693,8 @@ impl TextLayouter {
         ellipsis.text = head..head;
         self.collect_pieces(input, range.start..head, visible, layout);
         self.pieces.push(ellipsis);
-        if tail < range.end {
-            self.collect_pieces(input, tail..range.end, visible, layout);
+        if tail < line.drawn {
+            self.collect_pieces(input, tail..line.drawn, visible, layout);
         }
         true
     }
@@ -892,6 +897,13 @@ fn take_rest_of_paragraph(lines: &mut [BrokenLine], text: &str, last: usize) {
         .last()
         .map_or(lines[last].text.end, |line| line.text.end);
     lines[last] = BrokenLine::plain(lines[last].text.start..end);
+}
+
+// The end of the text from `start` to `end` before the hard break that ends
+// it, if one does.
+fn before_hard_break(text: &str, start: usize, end: usize) -> usize {
+    text.get(start..end)
+        .map_or(end, |part| start + part.trim_end_matches(hard_break).len())
 }
 
 // The indent of the line starting at `offset`.

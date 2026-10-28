@@ -1,24 +1,30 @@
-use ab_glyph::{Font, FontRef};
+use std::rc::Rc;
+
 use cranpose_render_common::{
     brush_sampling::sample_brush_rgba,
-    font_source::SoftwareTextFontRegistry,
-    software_text_raster::{
-        SoftwareGlyphRasterCache, SoftwareTextFontSet, SoftwareTextMeasurer, TextPixels,
-        TextRasterRequest, collect_solid_text_atlas_run, rasterize_text,
-    },
+    font_source::FontRegistry,
+    glyph_mask::{GlyphMaskCache, GlyphMaskKey},
+    text_atlas::{AtlasGlyph, collect_solid_text_atlas_run},
+    text_canvas::TextPixels,
+    text_fonts::TextFonts,
+    text_raster::{TextRasterRequest, rasterize_text},
 };
-use cranpose_ui::text::{
-    AnnotatedString, FontFamily, FontStyle, FontWeight, RangeStyle, SpanStyle, TextMeasurer,
-    TextStyle, TextUnit,
+use cranpose_text::{CaretDirection, Typeface};
+use cranpose_ui::{
+    PreparedTextLayout,
+    text::{
+        AnnotatedString, FontFamily, FontStyle, FontWeight, RangeStyle, SpanStyle,
+        TextLayoutOptions, TextStyle, TextUnit,
+    },
 };
 use cranpose_ui_graphics::{Brush, BrushSampler, Color, Point, Rect};
 
 const REGULAR: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/NotoSansBold.ttf");
 
-fn font_set() -> (SoftwareTextFontSet, FontFamily, FontFamily) {
+fn font_set() -> (TextFonts, FontFamily, FontFamily) {
     let family = FontFamily::named("Glyph fallback");
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry
         .register_face_bytes(&family, FontWeight::NORMAL, FontStyle::Normal, REGULAR)
         .expect("regular test font");
@@ -34,7 +40,11 @@ fn font_set() -> (SoftwareTextFontSet, FontFamily, FontFamily) {
             REGULAR,
         )
         .expect("reference regular test font");
-    (registry.into_font_set(&[]), family, regular_only)
+    (
+        TextFonts::new(registry.into_typefaces(&[])),
+        family,
+        regular_only,
+    )
 }
 
 fn style(family: &FontFamily, weight: FontWeight) -> SpanStyle {
@@ -46,32 +56,36 @@ fn style(family: &FontFamily, weight: FontWeight) -> SpanStyle {
     }
 }
 
+// `text` in `style` laid out with `fonts`, as wide as it is.
+fn prepare(text: &AnnotatedString, style: &TextStyle, fonts: &TextFonts) -> Rc<PreparedTextLayout> {
+    cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(fonts.resolver());
+        cranpose_ui::text::prepare_text_layout(text, style, TextLayoutOptions::default(), None)
+    })
+}
+
 fn render_at_scale(
     text: &AnnotatedString,
     style: &TextStyle,
-    fonts: &SoftwareTextFontSet,
+    fonts: &TextFonts,
     scale: f32,
 ) -> Vec<u8> {
-    let width = 180.0 * scale;
-    let height = 48.0 * scale;
+    let prepared = prepare(text, style, fonts);
     rasterize_text(
         TextRasterRequest::new(
+            &prepared.layout,
             text,
             Rect {
                 x: 0.0,
                 y: 0.0,
-                width,
-                height,
+                width: 180.0 * scale,
+                height: 48.0 * scale,
             },
             style,
             Color::BLACK,
-            28.0,
             scale,
         ),
-        fonts,
-        Some(&mut SoftwareGlyphRasterCache::with_capacity_at_least_one(
-            64,
-        )),
+        Some(&mut GlyphMaskCache::with_capacity_at_least_one(64)),
     )
     .and_then(TextPixels::into_image)
     .expect("test text produces a raster")
@@ -79,7 +93,7 @@ fn render_at_scale(
     .to_vec()
 }
 
-fn render(text: &AnnotatedString, style: &TextStyle, fonts: &SoftwareTextFontSet) -> Vec<u8> {
+fn render(text: &AnnotatedString, style: &TextStyle, fonts: &TextFonts) -> Vec<u8> {
     render_at_scale(text, style, fonts, 1.0)
 }
 
@@ -105,11 +119,13 @@ fn assert_same_pixels(actual: &[u8], expected: &[u8]) {
 fn atlas_placements(
     text: &AnnotatedString,
     style: &TextStyle,
-    fonts: &SoftwareTextFontSet,
-) -> Vec<(u64, u32, i32, i32, usize, usize)> {
+    fonts: &TextFonts,
+) -> Vec<AtlasGlyph> {
+    let prepared = prepare(text, style, fonts);
     let mut glyphs = Vec::new();
     collect_solid_text_atlas_run(
         TextRasterRequest::new(
+            &prepared.layout,
             text,
             Rect {
                 x: 0.0,
@@ -119,28 +135,13 @@ fn atlas_placements(
             },
             style,
             Color::BLACK,
-            28.0,
             1.0,
         ),
-        fonts,
-        &mut SoftwareGlyphRasterCache::with_capacity_at_least_one(64),
+        &mut GlyphMaskCache::with_capacity_at_least_one(64),
         &mut glyphs,
     )
     .expect("test text produces atlas glyphs");
     glyphs
-        .iter()
-        .map(|glyph| {
-            let placement = glyph.placement();
-            (
-                placement.key.font_hash,
-                placement.key.glyph_id,
-                placement.x,
-                placement.y,
-                placement.width,
-                placement.height,
-            )
-        })
-        .collect()
 }
 
 fn explicit_reference(bold: &SpanStyle, regular: &SpanStyle) -> AnnotatedString {
@@ -166,7 +167,7 @@ fn assert_matches_reference(
     actual: &AnnotatedString,
     expected: &AnnotatedString,
     style: &TextStyle,
-    fonts: &SoftwareTextFontSet,
+    fonts: &TextFonts,
 ) {
     assert_same_pixels(
         &render(actual, style, fonts),
@@ -178,25 +179,22 @@ fn assert_matches_reference(
         "the glyph-atlas path should use the same fallback face and advances"
     );
 
-    let measurer = SoftwareTextMeasurer::from_font_set(fonts.clone(), 16);
-    let actual_metrics = measurer.measure(actual, style);
-    let expected_metrics = measurer.measure(expected, style);
-    assert_eq!(actual_metrics.width, expected_metrics.width);
-    assert_eq!(actual_metrics.height, expected_metrics.height);
-    assert_eq!(actual_metrics.line_height, expected_metrics.line_height);
-    let actual_layout = measurer.layout(actual, style);
-    let expected_layout = measurer.layout(expected, style);
-    assert_eq!(actual_layout.width, expected_layout.width);
-    assert_eq!(actual_layout.height, expected_layout.height);
+    let actual_layout = prepare(actual, style, fonts);
+    let expected_layout = prepare(expected, style, fonts);
+    assert_eq!(actual_layout.metrics, expected_layout.metrics);
+    assert_eq!(actual_layout.layout.width(), expected_layout.layout.width());
+    assert_eq!(
+        actual_layout.layout.height(),
+        expected_layout.layout.height()
+    );
     for byte_offset in [0, 1, 4, 5] {
         assert_eq!(
-            measurer.get_cursor_x_for_offset(actual, style, byte_offset),
-            measurer.get_cursor_x_for_offset(expected, style, byte_offset),
-            "measured cursor position at byte offset {byte_offset}"
-        );
-        assert_eq!(
-            actual_layout.get_cursor_x(byte_offset),
-            expected_layout.get_cursor_x(byte_offset),
+            actual_layout
+                .layout
+                .horizontal_position(byte_offset, CaretDirection::Primary),
+            expected_layout
+                .layout
+                .horizontal_position(byte_offset, CaretDirection::Primary),
             "cursor position at byte offset {byte_offset}"
         );
     }
@@ -219,7 +217,7 @@ fn gradient_brush(origin_x: f32, width: f32) -> Brush {
 fn check_global_gradient(
     text: &AnnotatedString,
     style: &TextStyle,
-    fonts: &SoftwareTextFontSet,
+    fonts: &TextFonts,
     scale: f32,
 ) -> Result<(), String> {
     let width = 180.0 * scale;
@@ -294,11 +292,7 @@ fn check_global_gradient(
     Ok(())
 }
 
-fn assert_global_gradient_at_scales(
-    text: &AnnotatedString,
-    style: &TextStyle,
-    fonts: &SoftwareTextFontSet,
-) {
+fn assert_global_gradient_at_scales(text: &AnnotatedString, style: &TextStyle, fonts: &TextFonts) {
     let failures = [1.0, 2.75]
         .into_iter()
         .filter_map(|scale| check_global_gradient(text, style, fonts, scale).err())
@@ -364,18 +358,9 @@ fn plain_bold_fallback_keeps_one_gradient_extent_across_font_runs() {
 #[test]
 fn ascii_text_falls_back_for_letters_the_requested_face_lacks() {
     const EMOJI: &[u8] = include_bytes!("../assets/TwemojiMozilla.ttf");
-    let emoji_face = FontRef::try_from_slice(EMOJI).expect("emoji test font");
-    assert_eq!(emoji_face.glyph_id('H').0, 0, "the emoji face has no H");
-    let latin = FontFamily::named("Latin");
-    let emoji = FontFamily::named("Emoji only");
-    let mut registry = SoftwareTextFontRegistry::new();
-    registry
-        .register_face_bytes(&latin, FontWeight::NORMAL, FontStyle::Normal, REGULAR)
-        .expect("Latin test font");
-    registry
-        .register_face_bytes(&emoji, FontWeight::NORMAL, FontStyle::Normal, EMOJI)
-        .expect("emoji test font");
-    let fonts = registry.into_font_set(&[]);
+    let emoji_face = Typeface::from_bytes(EMOJI).expect("emoji test font");
+    assert!(emoji_face.glyph('H').is_none(), "the emoji face has no H");
+    let fonts = latin_and_emoji(EMOJI);
     let text = AnnotatedString::from("Hi");
     let glyphs = |family: &FontFamily| {
         let style = TextStyle {
@@ -384,52 +369,54 @@ fn ascii_text_falls_back_for_letters_the_requested_face_lacks() {
         };
         atlas_placements(&text, &style, &fonts)
             .into_iter()
-            .map(|(font_hash, glyph_id, ..)| (font_hash, glyph_id))
-            .collect::<Vec<_>>()
+            .map(|glyph| glyph.key)
+            .collect::<Vec<GlyphMaskKey>>()
     };
 
-    assert_eq!(glyphs(&emoji), glyphs(&latin));
+    assert_eq!(glyphs(&emoji()), glyphs(&latin()));
+}
+
+fn latin() -> FontFamily {
+    FontFamily::named("Latin")
+}
+
+fn emoji() -> FontFamily {
+    FontFamily::named("Emoji only")
+}
+
+// A Latin family and an emoji family that has no Latin letters.
+fn latin_and_emoji(emoji_bytes: &'static [u8]) -> TextFonts {
+    let mut registry = FontRegistry::new();
+    registry
+        .register_face_bytes(&latin(), FontWeight::NORMAL, FontStyle::Normal, REGULAR)
+        .expect("Latin test font");
+    registry
+        .register_face_bytes(&emoji(), FontWeight::NORMAL, FontStyle::Normal, emoji_bytes)
+        .expect("emoji test font");
+    TextFonts::new(registry.into_typefaces(&[]))
 }
 
 #[test]
 fn a_prepared_text_takes_the_line_height_of_the_faces_it_draws_in() {
     const EMOJI: &[u8] = include_bytes!("../assets/TwemojiMozilla.ttf");
-    let latin = FontFamily::named("Latin");
-    let emoji = FontFamily::named("Emoji only");
-    let mut registry = SoftwareTextFontRegistry::new();
-    registry
-        .register_face_bytes(&latin, FontWeight::NORMAL, FontStyle::Normal, REGULAR)
-        .expect("Latin test font");
-    registry
-        .register_face_bytes(&emoji, FontWeight::NORMAL, FontStyle::Normal, EMOJI)
-        .expect("emoji test font");
-    let fonts = registry.into_font_set(&[]);
-    let measurer = SoftwareTextMeasurer::from_font_set(fonts.clone(), 16);
-    for family in [&latin, &emoji] {
+    let fonts = latin_and_emoji(EMOJI);
+    let text = AnnotatedString::from("Hi");
+    let prepared = |family: &FontFamily| {
         let base_style = TextStyle {
             span_style: style(family, FontWeight::NORMAL),
             ..Default::default()
         };
-        let style_box = measurer.line_box(&base_style).expect("line box");
-        let text = AnnotatedString::from("Hi");
-        let prepared = cranpose_ui::AppContext::new().enter(|| {
-            cranpose_ui::set_text_measurer(SoftwareTextMeasurer::from_font_set(fonts.clone(), 16));
-            cranpose_ui::prepare_text_layout(
-                &text,
-                &base_style,
-                cranpose_ui::TextLayoutOptions::default(),
-                None,
-            )
-        });
-        assert_eq!(
-            prepared.metrics.line_height,
-            measurer.line_height(&text, &base_style),
-            "{family:?}"
-        );
-        assert_eq!(
-            prepared.alignment_lines.first_baseline(),
-            Some(style_box.first_baseline()),
-            "{family:?}"
-        );
-    }
+        prepare(&text, &base_style, &fonts)
+    };
+    let in_latin = prepared(&latin());
+    let falling_back = prepared(&emoji());
+
+    assert_eq!(
+        falling_back.metrics.line_height, in_latin.metrics.line_height,
+        "letters the emoji face lacks draw in the Latin face, whose line they take"
+    );
+    assert_eq!(
+        falling_back.alignment_lines.first_baseline(),
+        in_latin.alignment_lines.first_baseline()
+    );
 }

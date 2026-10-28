@@ -1,5 +1,6 @@
 // The text engine on the repository's fonts.
 
+mod default_tracking;
 mod font_family_resolver;
 mod font_feature;
 mod fonts;

@@ -128,6 +128,9 @@ impl Shaper {
         let script = ShapingScript::from_iso15924_tag(Tag::new(&item.script.tag()));
         let language = span.language.and_then(|tag| tag.parse::<Language>().ok());
         self.features.clear();
+        // The layouter spaces letters by the font's `trak` table itself, at
+        // each span's size, so shaped words keep to every size.
+        self.features.push(Feature::new(Tag::new(b"trak"), 0, ..));
         self.features.extend(
             span.features
                 .iter()

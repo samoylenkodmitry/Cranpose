@@ -7,7 +7,7 @@ use foldhash::fast::FixedState;
 use read_fonts::{
     FontRef, TableProvider,
     model::{Blob, Font, Source, Variation, attribute::Style, name::NameId},
-    types::{GlyphId as FontGlyphId, Tag},
+    types::{Fixed, GlyphId as FontGlyphId, Tag},
 };
 use smallvec::SmallVec;
 
@@ -118,6 +118,9 @@ struct Loaded {
     variations: Box<[([u8; 4], f32)]>,
     content_hash: u64,
     coverage: OnceLock<Coverage>,
+    // The normal track of the font's `trak` table: the tracking in ems at
+    // each point size it lists, ascending; empty without one.
+    tracking: Box<[(f32, f32)]>,
 }
 
 impl Typeface {
@@ -155,6 +158,7 @@ impl Typeface {
             variations: Box::default(),
             content_hash,
             coverage: OnceLock::new(),
+            tracking: normal_track(&font),
             font,
         })))
     }
@@ -213,6 +217,7 @@ impl Typeface {
             variations: applied.into_boxed_slice(),
             content_hash,
             coverage: OnceLock::new(),
+            tracking: normal_track(&font),
             font,
         })))
     }
@@ -343,6 +348,28 @@ impl Typeface {
         }
     }
 
+    // The font's default tracking at `size` pixels per em, in pixels: its
+    // normal track interpolated between the point sizes it lists, held at
+    // either end; zero for a font without a `trak` table.
+    pub(crate) fn tracking(&self, size: f32) -> f32 {
+        let track = &self.0.tracking;
+        if track.is_empty() || !size.is_finite() || size <= 0.0 {
+            return 0.0;
+        }
+        let above = track.partition_point(|&(point_size, _)| point_size < size);
+        let em = match (
+            above.checked_sub(1).map(|below| track[below]),
+            track.get(above),
+        ) {
+            (Some((low_size, low)), Some(&(high_size, high))) => {
+                low + (high - low) * (size - low_size) / (high_size - low_size)
+            }
+            (Some((_, em)), None) | (None, Some(&(_, em))) => em,
+            (None, None) => 0.0,
+        };
+        em * size
+    }
+
     /// The glyph the font maps `ch` to, `None` when it has none.
     pub fn glyph(&self, ch: char) -> Option<GlyphId> {
         self.0
@@ -441,6 +468,34 @@ fn blob(bytes: FontBytes) -> Blob {
         FontBytes::Static(bytes) => Blob::from(bytes),
         FontBytes::Owned(bytes) => Blob::from(bytes),
     }
+}
+
+// The normal track of `font`'s `trak` table, the tracking in ems at each
+// point size it lists; empty for a font without one or with sizes out of
+// order.
+fn normal_track(font: &Font) -> Box<[(f32, f32)]> {
+    let read = || {
+        let trak = font.tables().trak().ok()?;
+        let data = trak.horiz()?.ok()?;
+        let offset_data = trak.offset_data();
+        let normal = data
+            .track_table()
+            .iter()
+            .find(|track| track.track() == Fixed::ZERO)?;
+        let values = normal.per_size_values(offset_data, data.n_sizes())?;
+        let sizes = data.size_table(offset_data)?;
+        let em = f32::from(font.units_per_em());
+        let mut points = Vec::with_capacity(sizes.len());
+        for (size, value) in sizes.iter().zip(values) {
+            let size = size.get().to_f32();
+            if size <= 0.0 || points.last().is_some_and(|&(previous, _)| size <= previous) {
+                return None;
+            }
+            points.push((size, f32::from(value.get()) / em));
+        }
+        Some(points.into_boxed_slice())
+    };
+    read().unwrap_or_default()
 }
 
 // The model's tables expose no color tables, so this reads the table

@@ -77,6 +77,23 @@ fn hard_breaks_end_lines_and_a_final_break_adds_an_empty_line() {
 }
 
 #[test]
+fn a_line_break_draws_no_glyph() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    for text in ["A\nB", "A \r\nB", "A\u{2029}B"] {
+        let laid = unwrapped(&resolver, text);
+        let glyphs: Vec<_> = (0..laid.line_count())
+            .flat_map(|line| {
+                laid.glyph_runs(line)
+                    .flat_map(|run| run.positions().map(|glyph| glyph.id.0).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(!glyphs.contains(&0), "{text:?}: {glyphs:?}");
+        assert_eq!(laid.line_count(), 2, "{text:?}");
+    }
+}
+
+#[test]
 fn a_word_wider_than_the_line_breaks_between_characters() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let text = "Pneumonoultramicroscopic";
