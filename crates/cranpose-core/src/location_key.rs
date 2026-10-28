@@ -134,13 +134,29 @@ pub fn caller_location_key() -> Key {
 }
 
 /// The key of a call site, made from its `Location`'s contents, so two
-/// statics for one location give the same key. The file's hash comes from
-/// the table [`static_file_location_hash`] keeps; the position takes a word
-/// and the finalizer.
+/// statics for one location give the same key. The thread keeps the key by
+/// the `Location`'s address, so a call site it has seen costs a load and a
+/// compare; [`static_file_location_hash`] and the finalizer make a new one.
 fn call_site_key(caller: &'static std::panic::Location<'static>) -> Key {
-    let file = caller.file();
-    let file_hash = thread_state::cells(|cells| static_file_location_hash(cells, file));
-    registered_location_key(file_hash, file, caller.line(), caller.column())
+    let address = std::ptr::from_ref(caller) as usize;
+    thread_state::cells(|cells| {
+        let slot = address / size_of::<std::panic::Location<'static>>()
+            % thread_state::CALL_SITE_KEY_SLOTS;
+        let cached = &cells.call_site_keys[slot];
+        let (cached_address, cached_key) = cached.get();
+        if cached_address == address {
+            return cached_key;
+        }
+        let file = caller.file();
+        let key = registered_location_key(
+            static_file_location_hash(cells, file),
+            file,
+            caller.line(),
+            caller.column(),
+        );
+        cached.set((address, key));
+        key
+    })
 }
 
 #[derive(Clone, Copy)]
