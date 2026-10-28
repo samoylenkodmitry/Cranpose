@@ -88,17 +88,25 @@ const fn lane_hash(seed: u64, bytes: &[u8]) -> u64 {
     hash ^ (hash >> 29)
 }
 
+// The hash modulo BUCKETS, read from its low byte: BUCKETS divides 256.
 const fn bucket_of(hash: u64) -> usize {
-    (hash % BUCKETS as u64) as usize
+    hash.to_le_bytes()[0] as usize % BUCKETS
 }
+const _: () = assert!(256 % BUCKETS == 0, "a hash's low byte holds its bucket");
 
 // The slot a key of `hash` takes with `pilot`: the top seven bits of the
 // hash mixed with the pilot.
 const fn slot_of(hash: u64, pilot: u8) -> usize {
     let mixed = (hash ^ (pilot as u64).wrapping_mul(0x94d0_49bb_1331_11eb))
         .wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    (mixed >> (64 - SLOTS.trailing_zeros())) as usize
+    // The top bits, read from the top byte: SLOTS is at most 256.
+    (mixed.to_be_bytes()[0] >> (8 - SLOTS.trailing_zeros())) as usize
 }
+const _: () = assert!(
+    SLOTS.is_power_of_two() && SLOTS <= 256,
+    "a hash's top byte holds its slot"
+);
+const _: () = assert!(MAX_KEYS < 256, "a key's index fits its slot's byte");
 
 // Every key's slot under `seed`: each bucket, the fullest first, takes the
 // first pilot that gives its keys free slots. `None` when a bucket finds
@@ -147,7 +155,8 @@ const fn place_bucket<const N: usize>(
             let mut key = 0;
             while key < N {
                 if bucket_of(hashes[key]) == bucket {
-                    slots[slot_of(hashes[key], pilot)] = key as u8;
+                    // A key's index is its low byte: N is at most MAX_KEYS, below 256.
+                    slots[slot_of(hashes[key], pilot)] = key.to_le_bytes()[0];
                 }
                 key += 1;
             }

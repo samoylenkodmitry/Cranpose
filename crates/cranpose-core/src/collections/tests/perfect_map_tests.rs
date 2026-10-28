@@ -53,5 +53,5 @@ fn the_most_keys_a_map_holds_all_find_their_values() {
 #[test]
 #[should_panic(expected = "no seed places these keys")]
 fn a_key_given_twice_is_refused() {
-    let _ = PerfectMap::new([("one", 1), ("two", 2), ("one", 3)]);
+    let _: PerfectMap<i32, 3> = PerfectMap::new([("one", 1), ("two", 2), ("one", 3)]);
 }
