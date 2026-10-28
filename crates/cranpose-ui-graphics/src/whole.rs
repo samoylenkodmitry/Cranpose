@@ -72,3 +72,16 @@ pub fn round(value: f32) -> f32 {
         None => value,
     }
 }
+
+/// `value` as a whole number, its fraction dropped toward zero: what a
+/// pixel position or count rounded with [`floor`], [`ceil`] or [`round`]
+/// holds. Saturates at the ends of `i32`; 0 for NaN.
+#[inline(always)]
+pub fn to_i32(value: f32) -> i32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the conversion saturates, which is what a pixel position wants"
+    )]
+    let whole = value as i32;
+    whole
+}

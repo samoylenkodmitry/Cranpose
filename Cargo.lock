@@ -1212,6 +1212,7 @@ dependencies = [
  "cranpose-runtime-std",
  "cranpose-services",
  "cranpose-storekit",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
@@ -1285,6 +1286,7 @@ dependencies = [
  "cranpose-macros",
  "cranpose-render-common",
  "cranpose-runtime-std",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
@@ -1531,22 +1533,18 @@ dependencies = [
 name = "cranpose-render-common"
 version = "0.17.2"
 dependencies = [
- "ab_glyph",
+ "ab_glyph_rasterizer",
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
- "harfrust",
  "portable-atomic",
  "smallvec",
  "stats_alloc",
  "thiserror 2.0.21",
  "tiny-skia",
- "ttf-parser",
- "unicode-bidi",
- "unicode-script",
  "unicode-segmentation",
  "web-time",
 ]
@@ -1560,6 +1558,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-macros",
  "cranpose-render-common",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "log",
@@ -1577,6 +1576,7 @@ dependencies = [
  "cranpose-liquid",
  "cranpose-macros",
  "cranpose-render-common",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-wgpu",
@@ -1686,8 +1686,6 @@ dependencies = [
  "cranpose-ui-layout",
  "criterion",
  "futures-task",
- "icu_properties",
- "icu_segmenter",
  "log",
  "portable-atomic",
  "smallvec",
@@ -6937,12 +6935,6 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
-
-[[package]]
-name = "unicode-script"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
 
 [[package]]
 name = "unicode-segmentation"

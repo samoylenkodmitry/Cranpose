@@ -1,12 +1,11 @@
-use std::{cell::Cell, hash::Hash, rc::Rc, sync::Arc};
+use std::{cell::Cell, hash::Hash, rc::Rc};
 
-use cranpose_core::collections::bounded_lru::BoundedLruCache;
-use cranpose_render_common::software_text_raster::SoftwareGlyphAtlasPlacement;
+use cranpose_render_common::text_atlas::AtlasGlyph;
 use cranpose_ui_graphics::{ImageBitmap, Rect};
 
 use super::{
     GlyphAtlasEntry, GlyphInstance, ImageUvRect, ViewportUniformParams,
-    draw_rect_is_visible_in_viewport, glyph_atlas_uv_rect, line_start_offsets,
+    draw_rect_is_visible_in_viewport, glyph_atlas_uv_rect,
 };
 use crate::{
     glyph_run::{RunGlyphBox, RunGlyphs},
@@ -45,7 +44,6 @@ pub(super) const TEXT_GLYPH_GPU_RUN_IDLE_FRAMES: u64 = 8;
 /// shared quads each frame, where consecutive runs share a draw.
 pub(super) const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
 
-pub(super) const MAX_TEXT_LINE_INDEX_CACHE_ITEMS: usize = 512;
 
 fn text_atlas_fallback_diag_enabled() -> bool {
     cranpose_core::DIAGNOSTICS.text_atlas_fallback_diag.is_set()
@@ -105,7 +103,7 @@ pub(super) struct GlyphRunBounds {
 }
 
 impl GlyphRunBounds {
-    pub(crate) fn of(glyphs: impl IntoIterator<Item = SoftwareGlyphAtlasPlacement>) -> Self {
+    pub(crate) fn of(glyphs: impl IntoIterator<Item = AtlasGlyph>) -> Self {
         let mut bounds = Self {
             min: [i32::MAX; 2],
             max: [i32::MIN; 2],
@@ -250,53 +248,6 @@ pub(super) struct CachedGpuTextGlyphRun {
     pub(super) last_frame: Cell<u64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TextLineIndexCacheKey(pub(super) usize);
-
-struct CachedTextLineIndex {
-    text: std::sync::Weak<cranpose_ui::text::RenderString>,
-    len: usize,
-    starts: Rc<[usize]>,
-}
-
-pub(super) struct TextLineIndexCache {
-    entries: BoundedLruCache<TextLineIndexCacheKey, CachedTextLineIndex>,
-}
-
-impl TextLineIndexCache {
-    pub(super) fn new(capacity: usize) -> Self {
-        Self {
-            entries: BoundedLruCache::with_capacity_at_least_one(capacity),
-        }
-    }
-
-    pub(super) fn line_starts(
-        &mut self,
-        text: &Arc<cranpose_ui::text::RenderString>,
-    ) -> Rc<[usize]> {
-        let key = TextLineIndexCacheKey(Arc::as_ptr(text) as usize);
-        if let Some(cached) = self.entries.get(&key)
-            && cached.len == text.text().len()
-            && cached
-                .text
-                .upgrade()
-                .is_some_and(|cached_text| Arc::ptr_eq(&cached_text, text))
-        {
-            return Rc::clone(&cached.starts);
-        }
-
-        let starts = Rc::<[usize]>::from(line_start_offsets(text.text()));
-        self.entries.put(
-            key,
-            CachedTextLineIndex {
-                text: Arc::downgrade(text),
-                len: text.text().len(),
-                starts: Rc::clone(&starts),
-            },
-        );
-        starts
-    }
-}
 
 pub(super) fn cached_text_glyph_quad(
     glyph: &RunGlyphBox,

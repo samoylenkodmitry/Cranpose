@@ -19,7 +19,6 @@ pub(crate) struct KeyInput<'a> {
     pub line_limits: TextFieldLineLimits,
     pub transformation: Option<&'a InputTransformation>,
     pub style: &'a TextStyle,
-    pub node_id: Option<cranpose_core::NodeId>,
     pub wrap_width: Option<f32>,
 }
 
@@ -156,7 +155,6 @@ struct LaidOutLines<'a> {
 impl<'a> LaidOutLines<'a> {
     fn of(text: &'a str, input: &KeyInput<'a>) -> Self {
         let ranges = wrapped_line_ranges(
-            input.node_id,
             &AnnotatedString::from(text),
             input.style,
             TextLayoutOptions::default(),

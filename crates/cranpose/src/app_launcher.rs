@@ -5,14 +5,10 @@ use std::{marker::PhantomData, path::Path};
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use cranpose_app_shell::FramePacingMode;
 use cranpose_render_common::{
-    font_source::{
-        ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError,
-        SoftwareTextFontRegistry,
-    },
-    software_text_raster::{
-        FontBytes, SoftwareTextFont, SoftwareTextFontSet, default_software_text_font,
-    },
+    font_source::{ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, FontRegistry},
+    text_fonts::{TextFonts, default_typeface},
 };
+use cranpose_text::{FontBytes, Typeface};
 use cranpose_ui::{
     ImageBitmap,
     text::{FontFamily, FontStyle, FontWeight},
@@ -126,14 +122,14 @@ pub struct AppSettings {
     /// disk, platform system fonts, APK assets. Faces registered here carry the
     /// `FontFamily` an app names them by, so a `TextStyle` asking for that
     /// family resolves to them for both measurement and drawing.
-    pub font_registry: SoftwareTextFontRegistry,
+    pub font_registry: FontRegistry,
     /// Whether to register the platform's generic families on Android
     /// (default: false).
     pub android_system_fonts: bool,
     /// The face text draws in when the app supplied none. Only a launcher
     /// the app gave no fonts sets it, so an app that did has no reference to
     /// the embedded face and its binary leaves the bytes out.
-    pub(crate) default_face: fn() -> Option<SoftwareTextFont>,
+    pub(crate) default_face: fn() -> Option<Typeface>,
     /// Graphics API selected for the Android WGPU renderer.
     pub android_gpu_backend: AndroidGpuBackend,
     /// The tag this application's log lines carry.
@@ -210,7 +206,7 @@ impl Default for AppSettings {
             web_accessibility_on_start: false,
             custom_cursor_size: CustomCursorSize::FollowSystem,
             fonts: None,
-            font_registry: SoftwareTextFontRegistry::new(),
+            font_registry: FontRegistry::new(),
             android_system_fonts: false,
             default_face: || None,
             android_gpu_backend: AndroidGpuBackend::default(),
@@ -258,13 +254,13 @@ impl AppSettings {
         }
     }
 
-    /// The font set every platform entry point hands its renderer.
+    /// The fonts every platform entry point hands its renderer, which the
+    /// app's text lays out and draws with.
     ///
-    /// One definition so the platforms cannot drift, and so the measurer and
-    /// the rasterizer are built from the same faces: app-registered families
+    /// One definition so the platforms cannot drift: app-registered families
     /// first, then the static `with_fonts()` slices as unnamed fallbacks. A
     /// launcher the app gave no fonts serves the embedded default face.
-    pub fn resolve_font_set(&self) -> SoftwareTextFontSet {
+    pub fn resolve_fonts(&self) -> TextFonts {
         let mut registry = self.font_registry.clone();
         if cfg!(target_os = "android") && self.android_system_fonts {
             for family in [
@@ -281,18 +277,17 @@ impl AppSettings {
                 }
             }
         }
-        let mut fonts = registry.into_font_set(self.fonts.unwrap_or(&[]));
-        if fonts.faces().is_empty() {
+        let mut faces = registry.into_typefaces(self.fonts.unwrap_or(&[]));
+        if faces.is_empty() {
             match (self.default_face)() {
-                Some(face) => fonts = SoftwareTextFontSet::from_font(face),
+                Some(face) => faces.push(face),
                 None => log::error!("no text font loaded; text will not draw"),
             }
         }
         log::info!(
             "Text fonts: {} face(s) [{}]",
-            fonts.faces().len(),
-            fonts
-                .faces()
+            faces.len(),
+            faces
                 .iter()
                 .map(|face| format!(
                     "{} {}{}",
@@ -307,7 +302,7 @@ impl AppSettings {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        fonts
+        TextFonts::new(faces)
     }
 }
 
@@ -429,7 +424,7 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 /// still references the bytes, and the linker keeps what is referenced.
 pub trait LauncherFonts: launcher_fonts::Sealed {
     /// The face text draws in when the app supplied none.
-    fn default_face() -> Option<SoftwareTextFont>;
+    fn default_face() -> Option<Typeface>;
 }
 
 mod launcher_fonts {
@@ -443,8 +438,8 @@ mod launcher_fonts {
 pub struct DefaultFont;
 
 impl LauncherFonts for DefaultFont {
-    fn default_face() -> Option<SoftwareTextFont> {
-        default_software_text_font()
+    fn default_face() -> Option<Typeface> {
+        default_typeface()
     }
 }
 
@@ -453,7 +448,7 @@ impl LauncherFonts for DefaultFont {
 pub struct AppFonts;
 
 impl LauncherFonts for AppFonts {
-    fn default_face() -> Option<SoftwareTextFont> {
+    fn default_face() -> Option<Typeface> {
         None
     }
 }
@@ -1067,7 +1062,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// per-face `Result` rather than a logged warning.
     pub fn with_fonts_from(
         self,
-        register: impl FnOnce(&mut SoftwareTextFontRegistry) -> Result<(), FontLoadError>,
+        register: impl FnOnce(&mut FontRegistry) -> Result<(), FontLoadError>,
     ) -> AppLauncher<AppFonts> {
         let mut launcher = self.supplying_fonts();
         if let Err(error) = register(&mut launcher.settings.font_registry) {

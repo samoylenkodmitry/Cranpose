@@ -624,6 +624,7 @@ fn text_node_with_style(
             rect,
             text: cranpose_ui::text::shared_plain_annotated_string(text),
             render_text: cranpose_ui::text::shared_plain_render_string(text),
+            layout: plain_layout(text, 14.0),
             text_style: std::sync::Arc::new(text_style),
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),
@@ -631,6 +632,36 @@ fn text_node_with_style(
             paint: Default::default(),
         })),
     })
+}
+
+// `text` laid out on one line at `size` pixels in the default font, as a
+// fixture draws it without an app's fonts.
+fn plain_layout(text: &str, size: f32) -> std::sync::Arc<cranpose_text::TextLayout> {
+    let fonts = crate::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver();
+    let family = cranpose_text::FontFamily::Default;
+    let spans = [cranpose_text::ShapingSpan {
+        range: 0..text.len(),
+        font: cranpose_text::FontRequest {
+            family: &family,
+            weight: cranpose_text::FontWeight::NORMAL,
+            style: cranpose_text::FontStyle::Normal,
+        },
+        size,
+        features: &[],
+        language: None,
+        letter_spacing: 0.0,
+        baseline_shift: 0.0,
+    }];
+    let input = cranpose_text::LayoutInput {
+        text,
+        spans: &spans,
+        paragraph: &cranpose_text::ParagraphStyle::default(),
+        lengths: cranpose_text::ParagraphLengths::default(),
+        min_width: 0.0,
+        max_width: f32::INFINITY,
+        options: TextLayoutOptions::default(),
+    };
+    std::sync::Arc::new(cranpose_text::TextLayouter::default().layout(&input, &fonts))
 }
 
 fn stroked_round_rect_fixture() -> RenderFixture {

@@ -5,7 +5,7 @@
 use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     rgb565::{GlyphPixel, Rgb565, Rgb565Be, Rgb565Le},
-    software_text_raster::TextPixelRows,
+    text_canvas::TextPixelRows,
 };
 use cranpose_ui_graphics::BlendMode;
 

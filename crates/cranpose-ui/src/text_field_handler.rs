@@ -128,7 +128,6 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
                 line_limits: self.line_limits,
                 transformation: self.input.transformation.borrow().as_ref(),
                 style: &self.geometry.style,
-                node_id: self.node_id,
                 wrap_width: self.geometry.wrap_width.get(),
             },
         );
@@ -290,7 +289,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         let caret_xs = self.state.with_text(|text| {
             std::iter::once(0)
                 .chain(text.char_indices().map(|(index, ch)| index + ch.len_utf8()))
-                .map(|offset| base_x + layout.get_cursor_x(presentation.to_shown(offset)))
+                .map(|offset| {
+                    base_x
+                        + layout.layout().horizontal_position(
+                            presentation.to_shown(offset),
+                            cranpose_text::CaretDirection::Primary,
+                        )
+                })
                 .collect()
         });
         Some(ImeCaretGeometry {

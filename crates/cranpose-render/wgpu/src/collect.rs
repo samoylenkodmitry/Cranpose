@@ -23,8 +23,8 @@ use cranpose_ui_graphics::{
 
 use crate::{
     pipeline::{
-        TextLayoutResolver, TextPlacement, layer_casts_shadow, push_draw_primitive,
-        push_layer_shadow, push_text_style_draws,
+        TextPlacement, layer_casts_shadow, push_draw_primitive, push_layer_shadow,
+        push_text_style_draws,
     },
     scene::{
         BackdropLayer, ClipRounding, CompositorScene, ContentContext, LayerRoundedClip,
@@ -900,7 +900,6 @@ fn takes_rounded_clip(primitive: &DrawPrimitive) -> bool {
 pub(crate) fn collect_root(
     root: &LayerNode,
     update: u64,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
     root_scale: f32,
@@ -927,7 +926,7 @@ pub(crate) fn collect_root(
         translated: false,
         settings: &settings,
     };
-    collect_child(root, text_layout, motion, context, &mut out, recycler);
+    collect_child(root, motion, context, &mut out, recycler);
     out.scene.flush_loose();
     out.refresh_backdrop_summary();
     motion.end_frame();
@@ -936,14 +935,12 @@ pub(crate) fn collect_root(
 
 pub(crate) fn collect_overlay(
     root: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
 ) -> Box<LayerScene> {
     collect_root(
         root,
         0,
-        text_layout,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         root_scale,
@@ -1020,7 +1017,6 @@ fn content_key(layer: &LayerNode, update: u64) -> u64 {
 
 fn isolated_child(
     layer: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     mesh: Option<Arc<MeshChild>>,
@@ -1062,7 +1058,6 @@ fn isolated_child(
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
         layer,
-        text_layout,
         motion,
         content_context,
         &mut content,
@@ -1231,7 +1226,6 @@ fn detach_flat_backdrop(child: &mut ChildLayer, scene: &mut CompositorScene) {
 
 fn collect_into(
     layer: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
@@ -1282,7 +1276,6 @@ fn collect_into(
     if context.settings.in_space || layer.graphics_layer.space.is_some() {
         return collect_space_children(
             layer,
-            text_layout,
             motion,
             (child_context, &content),
             out,
@@ -1294,14 +1287,13 @@ fn collect_into(
         has_pixel_sensitive_subtree |= match child {
             RenderNode::Layer(child_layer) => collect_child(
                 child_layer,
-                text_layout,
                 motion,
                 child_context,
                 out,
                 recycler,
             ),
             _ => {
-                push_content(out, text_layout, child, &content);
+                push_content(out, child, &content);
                 node_is_pixel_sensitive(child)
             }
         };
@@ -1318,7 +1310,6 @@ fn collect_into(
 #[inline(never)]
 fn collect_space_children(
     layer: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     (context, content): (WalkContext<'_>, &ContentContext<'_>),
     out: &mut LayerScene,
@@ -1343,13 +1334,13 @@ fn collect_space_children(
         has_pixel_sensitive_subtree |= match child {
             RenderNode::Layer(child_layer) => {
                 if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
-                    collect_seen_surfaces(&draw, view, text_layout, motion, context, out, recycler);
+                    collect_seen_surfaces(&draw, view, motion, context, out, recycler);
                 }
                 !(in_space && child_layer.graphics_layer.space.is_some())
-                    && collect_child(child_layer, text_layout, motion, context, out, recycler)
+                    && collect_child(child_layer, motion, context, out, recycler)
             }
             _ => {
-                push_content(out, text_layout, child, content);
+                push_content(out, child, content);
                 node_is_pixel_sensitive(child)
             }
         };
@@ -1362,7 +1353,6 @@ fn collect_space_children(
 fn collect_seen_surfaces(
     draw: &Arc<SceneDraw>,
     view: EyeView<'_>,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
@@ -1377,7 +1367,6 @@ fn collect_seen_surfaces(
         };
         collect_isolated_child(
             seen.layer,
-            text_layout,
             motion,
             context,
             Some(Arc::new(mesh)),
@@ -1409,12 +1398,11 @@ fn boundary_anchor(
 
 fn push_content(
     out: &mut LayerScene,
-    text_layout: &mut impl TextLayoutResolver,
     node: &RenderNode,
     content: &ContentContext<'_>,
 ) {
     match node {
-        RenderNode::Primitive(entry) => push_primitive(out, text_layout, entry, content),
+        RenderNode::Primitive(entry) => push_primitive(out, entry, content),
         RenderNode::DrawRun(run) => push_draw_run(out, run, content),
         RenderNode::Layer(_) => {}
     }
@@ -1422,7 +1410,6 @@ fn push_content(
 
 fn collect_child(
     child: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
@@ -1438,7 +1425,6 @@ fn collect_child(
         Placement::Isolated => {
             return collect_isolated_child(
                 child,
-                text_layout,
                 motion,
                 context,
                 None,
@@ -1497,7 +1483,7 @@ fn collect_child(
     if child.backdrop().is_some() {
         push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
     }
-    collect_into(child, text_layout, motion, child_context, out, recycler)
+    collect_into(child, motion, child_context, out, recycler)
 }
 
 #[inline(never)]
@@ -1529,7 +1515,6 @@ fn push_direct_layer_shadow(
 #[inline(never)]
 fn collect_isolated_child(
     child: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     mesh: Option<Arc<MeshChild>>,
@@ -1560,7 +1545,6 @@ fn collect_isolated_child(
     );
     let (isolated, has_pixel_sensitive_subtree) = isolated_child(
         child,
-        text_layout,
         motion,
         context,
         mesh,
@@ -1666,7 +1650,6 @@ pub(crate) fn assign_snap_anchor_since(
 
 fn push_primitive(
     out: &mut LayerScene,
-    text_layout: &mut impl TextLayoutResolver,
     entry: &PrimitiveEntry,
     content: &ContentContext<'_>,
 ) {
@@ -1717,7 +1700,6 @@ fn push_primitive(
             }
             push_text_style_draws(
                 &mut out.scene,
-                text_layout,
                 text,
                 TextPlacement {
                     bounds: layer_bounds,

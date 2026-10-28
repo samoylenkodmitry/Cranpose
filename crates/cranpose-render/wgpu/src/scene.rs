@@ -5,7 +5,7 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    graph::DrawCommandId, layer_shadow::ShadowRRect, software_text_raster::TextRasterRequest,
+    graph::DrawCommandId, layer_shadow::ShadowRRect, text_raster::TextRasterRequest,
     text_paint::TextPaint,
 };
 use cranpose_ui::{TextLayoutOptions, TextStyle, text::RenderString};
@@ -311,6 +311,8 @@ pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<SnapAnchor>,
     pub text: DrawnText,
+    /// The lines and glyphs, from `rect`'s top left corner.
+    pub layout: Arc<cranpose_text::TextLayout>,
     pub color: Color,
     pub text_style: Arc<TextStyle>,
     /// `text_style`'s [`TextStyle::render_hash`], hashed once per text.
@@ -325,11 +327,11 @@ impl TextDraw {
     // The text laid out in `rect` at `scale` device pixels per logical pixel.
     pub(crate) fn raster_request(&self, rect: Rect, scale: f32) -> TextRasterRequest<'_> {
         TextRasterRequest::new(
+            &self.layout,
             self.text.string().as_ref(),
             rect,
             &self.text_style,
             self.color,
-            self.font_size,
             scale,
         )
     }

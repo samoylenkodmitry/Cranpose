@@ -2,19 +2,18 @@
 //!
 //! [`FontFamily::FileBacked`] and [`FontFamily::LoadedTypeface`] name faces by
 //! file rather than by a name inside the font, so something has to read those
-//! files and hand the bytes to the rasterizer. That is this module: it parses
-//! each face exactly once, at registration, and produces an immutable
-//! [`SoftwareTextFontSet`] that measurement and rasterization then share.
-//! The process keeps one copy of each font file's contents, shared by every
-//! face instanced from it and by later reads that find the file unchanged.
+//! files and hand the bytes to the text engine. That is this module: it
+//! parses each face exactly once, at registration, into the typefaces text
+//! lays out and draws with. The process keeps one copy of each font file's
+//! contents, shared by every face instanced from it and by later reads that
+//! find the file unchanged.
 //!
-//! Nothing here runs per frame or per string. A registry is built at startup,
-//! consumed into a font set, and the font set is cloned (it is `Arc`-backed)
-//! into every measurer and rasterizer that needs it.
+//! Nothing here runs per frame or per string. A registry is built at startup
+//! and consumed into typefaces, which are `Arc`-backed.
 //!
 //! Fonts that are not files on disk come in through
-//! [`SoftwareTextFontRegistry::register_face_reader`] or
-//! [`SoftwareTextFontRegistry::register_face_bytes`]: an APK asset opened with
+//! [`FontRegistry::register_face_reader`] or
+//! [`FontRegistry::register_face_bytes`]: an APK asset opened with
 //! `AndroidApp::asset_manager()`, or anything `cranpose-assets` resolved out of
 //! a desktop bundle. `cranpose-assets` is a filesystem path resolver, so it
 //! covers bundles but not APK entries, which are not filesystem paths.
@@ -25,16 +24,13 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
+use cranpose_text::{FontBytes, FontFamilyKey, Typeface, TypefaceError};
 use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
-
-use crate::software_text_raster::{
-    FontBytes, FontFamilyKey, SoftwareTextFont, SoftwareTextFontError, SoftwareTextFontSet,
-};
 
 /// Directory Android keeps its system font files in.
 pub const ANDROID_SYSTEM_FONT_DIR: &str = "/system/fonts";
 
-/// The weights [`SoftwareTextFontRegistry::register_system_family`] registers
+/// The weights [`FontRegistry::register_system_family`] registers
 /// when an app does not name its own: Compose's Regular/Medium/Bold set.
 pub const DEFAULT_SYSTEM_FAMILY_WEIGHTS: &[FontWeight] =
     &[FontWeight::NORMAL, FontWeight::MEDIUM, FontWeight::BOLD];
@@ -74,25 +70,26 @@ pub enum FontLoadError {
         path: PathBuf,
         /// The parse failure from the font parser.
         #[source]
-        source: SoftwareTextFontError,
+        source: TypefaceError,
     },
     /// The supplied bytes are not a parsable font, or the variation axes are invalid.
     #[error("failed to parse font bytes: {source}")]
     ParseBytes {
         /// The parse failure from the font parser.
         #[source]
-        source: SoftwareTextFontError,
+        source: TypefaceError,
     },
 }
 
-/// Parsed app-supplied faces, on their way to a [`SoftwareTextFontSet`].
+/// Parsed app-supplied faces, on their way to the typefaces text lays out
+/// with.
 ///
 /// Register everything an app needs once at startup, then call
-/// [`SoftwareTextFontRegistry::into_font_set`]. Registration is
-/// where files are read and faces parsed; nothing after it touches the disk.
+/// [`FontRegistry::into_typefaces`]. Registration is where files are read
+/// and faces parsed; nothing after it touches the disk.
 #[derive(Clone, Default)]
-pub struct SoftwareTextFontRegistry {
-    faces: Vec<SoftwareTextFont>,
+pub struct FontRegistry {
+    faces: Vec<Typeface>,
     system_faces: Vec<(FontFamilyKey, FontWeight, FontStyle)>,
 }
 
@@ -118,7 +115,7 @@ impl TolerantLoad {
     }
 }
 
-impl SoftwareTextFontRegistry {
+impl FontRegistry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
@@ -161,9 +158,7 @@ impl SoftwareTextFontRegistry {
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
         let bytes = read_font_file(path)?;
-        let face = SoftwareTextFont::from_registered_bytes_with_variations(
-            family, weight, style, bytes, variations,
-        )
+        let face = Typeface::from_registered(family, weight, style, bytes, variations)
         .map_err(|source| FontLoadError::Parse {
             path: path.to_path_buf(),
             source,
@@ -176,8 +171,7 @@ impl SoftwareTextFontRegistry {
     ///
     /// This is the seam for fonts that are not files on disk — an APK asset
     /// opened through `AndroidApp::asset_manager()`, an archive entry, a
-    /// download cache. It mirrors
-    /// `SoftwareTextMeasurer::register_hyphenation_dictionary_reader`.
+    /// download cache.
     pub fn register_face_reader(
         &mut self,
         family: &FontFamily,
@@ -216,9 +210,7 @@ impl SoftwareTextFontRegistry {
         bytes: impl Into<FontBytes>,
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
-        let face = SoftwareTextFont::from_registered_bytes_with_variations(
-            family, weight, style, bytes, variations,
-        )
+        let face = Typeface::from_registered(family, weight, style, bytes, variations)
         .map_err(|source| FontLoadError::ParseBytes { source })?;
         self.faces.push(face);
         Ok(())
@@ -232,7 +224,7 @@ impl SoftwareTextFontRegistry {
         &mut self,
         bytes: impl Into<FontBytes>,
     ) -> Result<(), FontLoadError> {
-        let face = SoftwareTextFont::from_bytes(bytes)
+        let face = Typeface::from_bytes(bytes)
             .map_err(|source| FontLoadError::ParseBytes { source })?;
         self.faces.push(face);
         Ok(())
@@ -252,7 +244,7 @@ impl SoftwareTextFontRegistry {
     /// than a `wght` position Android cannot reach. Faces are registered in
     /// `FontStyle::Normal`; an app that
     /// wants a real italic rather than a synthesized slant should call
-    /// [`SoftwareTextFontRegistry::register_system_face`] for it.
+    /// [`FontRegistry::register_system_face`] for it.
     pub fn register_system_family(
         &mut self,
         directory: impl AsRef<Path>,
@@ -333,7 +325,7 @@ impl SoftwareTextFontRegistry {
     }
 
     /// The faces registered so far.
-    pub fn faces(&self) -> &[SoftwareTextFont] {
+    pub fn faces(&self) -> &[Typeface] {
         &self.faces
     }
 
@@ -345,16 +337,16 @@ impl SoftwareTextFontRegistry {
     /// Finish, folding in the static byte slices from `AppLauncher::with_fonts`
     /// as unregistered fallbacks.
     ///
-    /// Registered faces come first, so when a request names no family and the
-    /// scores tie, a face the app declared wins over one it merely handed over
-    /// as bytes. The set holds only what the app supplied; whether the
-    /// embedded face serves an app that supplied nothing is the launcher's
-    /// decision, made where the binary can leave the face out.
-    pub fn into_font_set(mut self, fonts: &[&'static [u8]]) -> SoftwareTextFontSet {
+    /// Registered faces come first, so when a request names no family, a
+    /// face the app declared wins over one it merely handed over as bytes.
+    /// The typefaces are only what the app supplied; whether the embedded
+    /// face serves an app that supplied nothing is the launcher's decision,
+    /// made where the binary can leave the face out.
+    pub fn into_typefaces(mut self, fonts: &[&'static [u8]]) -> Vec<Typeface> {
         for bytes in fonts {
             let _ = self.register_fallback_bytes(*bytes);
         }
-        SoftwareTextFontSet::from_faces(self.faces)
+        self.faces
     }
 }
 
@@ -366,13 +358,10 @@ struct ReadFontFile {
 static READ_FONT_FILES: Mutex<Vec<ReadFontFile>> = Mutex::new(Vec::new());
 
 pub(crate) fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError> {
-    let mut read = std::fs::read(path).map_err(|source| FontLoadError::Read {
+    let read = std::fs::read(path).map_err(|source| FontLoadError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    // Shortened here, while the bytes are still ours, the faces read them in
-    // place with no copy.
-    crate::full_glyph_count::fit_glyph_tables(&mut read);
     let mut files = READ_FONT_FILES
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -425,7 +414,7 @@ pub(crate) fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError
 ///
 /// A slant mismatch costs 2, i.e. 200 weight units, which is why `style` never
 /// competes with `weight` here: this resolves within one slant, as
-/// [`SoftwareTextFontRegistry::register_system_face`] registers one.
+/// [`FontRegistry::register_system_face`] registers one.
 ///
 /// Families this crate knows no system files for resolve to `weight` unchanged;
 /// there is no declared set to honour, and nothing will register for them.

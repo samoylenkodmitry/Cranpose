@@ -2256,7 +2256,6 @@ fn write_node_content(
     if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
         text_rect: slices.text_content_rect(size),
-        text_style: slices.text_style().as_deref(),
         text_layout_options: slices.text_layout_options(),
         text_pan: slices.text_pan_resolver(),
         measured_layout: slices.measured_text_layout(),
@@ -2753,34 +2752,24 @@ fn layer_identity(layer: &LayerNode) -> Option<NodeId> {
     layer.node_id.or(layer.wraps)
 }
 
-struct TextNodeParts<'a> {
+struct TextNodeParts {
     node_id: NodeId,
     /// Where the text node was placed in its layout node.
     text_rect: Rect,
-    text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     text_pan: Option<TextPanResolver>,
     measured_layout: Option<Rc<PreparedTextLayout>>,
 }
 
-fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
+fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
     let TextNodeParts {
         node_id,
         text_rect,
-        text_style,
         text_layout_options,
         text_pan,
         measured_layout,
     } = parts;
     let prepared = measured_layout?;
-    let default_text_style;
-    let text_style = match text_style {
-        Some(style) => style,
-        None => {
-            default_text_style = TextStyle::default();
-            &default_text_style
-        }
-    };
     let options = text_layout_options.unwrap_or_default().normalized();
     let content_width = text_rect.width.max(0.0);
     if content_width <= 0.0 {
@@ -2793,22 +2782,12 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     let pans_horizontally = text_pan.is_some();
 
     let visual_style = &prepared.visual_style;
-    let measured_draw_width = prepared.metrics.width.max(0.0);
-    let draw_width = if options.overflow == TextOverflow::Visible || pans_horizontally {
-        measured_draw_width
-    } else {
-        measured_draw_width.min(content_width)
-    };
-    let alignment_offset = resolve_text_horizontal_offset(
-        text_style,
-        prepared.text.text.as_str(),
-        content_width,
-        prepared.metrics.width,
-    );
+    // The layout aligns its lines across its own width; it draws from the
+    // content's corner.
     let rect = Rect {
-        x: text_rect.x + alignment_offset - pan_offset,
+        x: text_rect.x - pan_offset,
         y: text_rect.y,
-        width: draw_width,
+        width: prepared.layout.width(),
         height: prepared.metrics.height,
     };
     let text_bounds = Rect {
@@ -2830,6 +2809,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         rect,
         text: Rc::clone(&prepared.text),
         render_text: prepared.render_text(),
+        layout: std::sync::Arc::clone(&prepared.layout),
         text_style: std::sync::Arc::clone(visual_style),
         font_size,
         layout_options: options,
@@ -3043,18 +3023,6 @@ pub fn expand_text_bounds_for_baseline_shift(
     }
 }
 
-fn resolve_text_horizontal_offset(
-    text_style: &TextStyle,
-    text: &str,
-    content_width: f32,
-    measured_width: f32,
-) -> f32 {
-    let remaining = (content_width - measured_width).max(0.0);
-    if remaining == 0.0 {
-        return 0.0;
-    }
-    remaining * cranpose_ui::text::text_align_fraction(text_style, text)
-}
 
 #[cfg(test)]
 #[path = "tests/scene_builder_tests.rs"]

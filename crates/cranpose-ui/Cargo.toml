@@ -31,8 +31,6 @@ cranpose-text = { workspace = true }
 smallvec = "1.16"
 unicode-segmentation = { workspace = true }
 futures-task = "0.3"
-icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
-icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 # WASM-compatible time - web-time is what winit uses internally
 web-time = { workspace = true }
 log = "0.4"
@@ -52,7 +50,11 @@ localization = ["dep:cranpose-localization", "cranpose-macros/localization"]
 localization-formatting = ["localization", "cranpose-localization/formatting"]
 # Wrap Thai, Lao, Khmer and Burmese lines between words, which these scripts
 # write without spaces. Adds ICU's word dictionaries for them.
-southeast-asian-line-breaks = ["dep:icu_segmenter"]
+southeast-asian-line-breaks = ["cranpose-text/southeast-asian-line-breaks"]
+# `Hyphens.Auto` with the dictionaries an app registers.
+text-hyphenation = ["cranpose-text/hyphenation"]
+# `Hyphens.Auto` with the dictionaries of every language built in.
+text-hyphenation-embedded = ["text-hyphenation", "cranpose-text/hyphenation-embedded"]
 
 [dev-dependencies]
 criterion = "0.8"

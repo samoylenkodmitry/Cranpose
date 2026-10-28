@@ -52,8 +52,8 @@ impl GuestView {
     ) -> Result<Self, GuestViewError> {
         let max_dimension = gpu.device.limits().max_texture_dimension_2d;
         validate_size(width, height, density, max_dimension)?;
-        let mut renderer = WgpuRenderer::with_text_system(WgpuTextSystem::from_font_set(
-            settings.resolve_font_set(),
+        let mut renderer = WgpuRenderer::with_text_system(WgpuTextSystem::from_text_fonts(
+            settings.resolve_fonts(),
         ));
         renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
             &gpu.adapter,

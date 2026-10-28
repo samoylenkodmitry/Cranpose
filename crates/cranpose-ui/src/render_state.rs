@@ -19,7 +19,7 @@ pub use display_scale::{
     scale_sp, set_density, set_font_scale, set_font_scale_curve,
 };
 pub(crate) use display_scale::{
-    current_host_density, current_scaling_font_scale_curve, text_layout_stamp,
+    current_host_density, text_layout_stamp,
 };
 use draw_observation::new_draw_observer;
 pub(crate) use draw_observation::{
@@ -253,12 +253,9 @@ impl AppContext {
         AppContextScope
     }
 
-    pub fn set_text_measurer<M: crate::text::TextMeasurer>(&self, measurer: M) {
-        self.set_text_measurer_rc(Rc::new(measurer));
-    }
-
-    pub fn set_text_measurer_rc(&self, measurer: Rc<dyn crate::text::TextMeasurer>) {
-        self.text.set_measurer(measurer);
+    /// Lays this app's text out with `fonts` from now on.
+    pub fn set_text_fonts(&self, fonts: cranpose_text::FontFamilyResolver) {
+        self.text.set_fonts(fonts);
         self.invalidate_layout_caches();
         self.state.layout_invalidated.set(true);
         self.state.render_invalidated.set(true);
@@ -681,11 +678,6 @@ fn with_render_state<R>(f: impl FnOnce(&RenderState) -> R) -> R {
     f(&context.state)
 }
 
-pub(crate) fn with_text_measurer<R>(f: impl FnOnce(&dyn crate::text::TextMeasurer) -> R) -> R {
-    let context = require_current_app_context("text measurer access");
-    context.text.with_measurer(f)
-}
-
 /// Tells the current app context's text service, and its measurer, a
 /// layout pass starts. Outside an app context there is neither to tell.
 #[cfg(test)]
@@ -701,11 +693,11 @@ pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextSer
     f(&context.text)
 }
 
-pub(crate) fn set_current_text_measurer(measurer: Rc<dyn crate::text::TextMeasurer>) {
+pub(crate) fn set_current_text_fonts(fonts: cranpose_text::FontFamilyResolver) {
     let Some(context) = current_app_context() else {
-        panic!("set_text_measurer requires an active AppContext");
+        panic!("set_text_fonts requires an active AppContext");
     };
-    context.set_text_measurer_rc(measurer);
+    context.set_text_fonts(fonts);
 }
 
 pub(crate) fn set_modifier_chain_trace(callback: Arc<ModifierChainTraceCallback>) -> AppContextId {

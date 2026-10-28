@@ -2,11 +2,11 @@ pub use cranpose_text::{
     annotated_string, decoration, font, layout_options, line_box, paragraph, style, unit,
 };
 pub mod draw_scope_text;
+mod layout_input;
 /// Text measurement, line wrapping and cursor hit testing.
 pub mod measure;
 pub(crate) mod shared_plain_text;
 mod shared_text;
-mod word_breaks;
 
 pub use annotated_string::{
     AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,
@@ -21,11 +21,11 @@ pub use font::{
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox};
 pub use measure::{
-    PreparedTextLayout, TextLinePrefixWidths, TextMeasurer, TextMetrics, first_baseline,
-    get_cursor_x_for_offset, get_offset_for_position, glyph_line_box, layout_text, measure_text,
-    measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
-    offset_for_position_wrapped, prepare_text_layout, prepare_text_layout_for_node,
-    set_text_measurer, text_line_box, wrapped_line_ranges,
+    PreparedTextLayout, TextMetrics, first_baseline, get_cursor_x_for_offset,
+    get_offset_for_position, glyph_line_box, layout_text, measure_text, measure_text_for_node,
+    measure_text_with_options, measure_text_with_options_for_node, offset_for_position_wrapped,
+    prepare_text_layout, prepare_text_layout_for_node, set_text_fonts, text_line_box,
+    wrapped_line_ranges,
 };
 pub use paragraph::{
     Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection, TextIndent,

@@ -57,10 +57,20 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        self.get_mut(key).map(|value| &*value)
+    }
+
+    /// The value under `key` to change in place, marked used in the current
+    /// pass.
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let pass = self.pass;
         let used = self.entries.get_mut(key)?;
         used.pass = pass;
-        Some(&used.value)
+        Some(&mut used.value)
     }
 
     /// Stores `value` under `key`, returning the entry it replaced or the

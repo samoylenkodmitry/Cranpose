@@ -1,4 +1,7 @@
-use std::ops::Range;
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use cranpose_ui_graphics::Rect;
 
@@ -13,7 +16,7 @@ use crate::{
 /// default is empty, ready for [`TextLayouter::layout_into`].
 ///
 /// [`TextLayouter::layout_into`]: crate::TextLayouter::layout_into
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextLayout {
     pub(crate) faces: Vec<Typeface>,
     pub(crate) glyphs: Vec<ShapedGlyph>,
@@ -29,7 +32,11 @@ pub struct TextLayout {
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
     pub(crate) sizing: Sizing,
+    id: u32,
 }
+
+// The id the next layout made or aligned takes.
+static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 // What the paragraph's width follows: its max intrinsic width rounded up to
 // whole device pixels, and whether the widest it may be counts, which it
@@ -82,7 +89,7 @@ impl WidthRange {
 const HOLD_MARGIN: f32 = 1e-3;
 
 // A run of one typeface, size and bidi level inside a line, in visual order.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LineRun {
     pub(crate) text: Range<usize>,
     pub(crate) glyphs: Range<usize>,
@@ -177,7 +184,7 @@ impl LineRun {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LayoutLine {
     pub(crate) text: Range<usize>,
     // The end of the text before the line's trailing whitespace.
@@ -297,6 +304,18 @@ impl TextLayout {
         self.sizing = Sizing::default();
     }
 
+    /// A number this layout's glyphs and positions go by: a layout laid out
+    /// or aligned again takes a new one, so a renderer keys what it drew of
+    /// a layout by it; a clone keeps it.
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    // Gives the layout a new id, its glyphs or positions changed.
+    pub(crate) fn renew_id(&mut self) {
+        self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1);
+    }
+
     /// Whether the text laid out again between `min_width` and `max_width`,
     /// with the rest of its input the same, breaks into the same lines:
     /// [`TextLayout::align`] then gives that layout without laying the text
@@ -337,6 +356,7 @@ impl TextLayout {
         self.width = self.sizing.width(min_width, max_width);
         self.did_overflow_width = self.widest > self.width || self.width > max_width;
         self.align_lines(align);
+        self.renew_id();
     }
 
     // Places each line across the layout's width as `align` says,

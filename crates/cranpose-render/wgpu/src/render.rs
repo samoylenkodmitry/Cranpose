@@ -9,7 +9,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
 use cranpose_render_common::{
-    geometry::blur_reach, graph::quad_bounds, software_text_raster::SoftwareTextFontSet,
+    geometry::blur_reach, graph::quad_bounds,
 };
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
@@ -263,6 +263,7 @@ fn hash_text_draw_for_cache<H: Hasher>(
     state: &mut H,
 ) {
     text_draw.text.render_hash().hash(state);
+    text_draw.layout.id().hash(state);
     text_draw.style_hash.hash(state);
     text_draw.color.render_hash().hash(state);
     hash_text_gradient_phase_for_cache(text_draw, raster_rect, state);
@@ -1117,7 +1118,6 @@ pub(crate) struct GpuRendererInit {
     pub(crate) surface_format: wgpu::TextureFormat,
     pub(crate) adapter_backend: wgpu::Backend,
     pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
-    pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) renderer_epoch: u64,
     pub(crate) pipeline_compilation: PipelineCompilation,
     pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
@@ -1132,7 +1132,6 @@ impl GpuRenderer {
             surface_format: display_format,
             adapter_backend,
             adapter_downlevel,
-            text_fonts,
             renderer_epoch,
             pipeline_compilation,
             on_device_lost,
@@ -1356,7 +1355,7 @@ impl GpuRenderer {
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
-            text: TextResources::new(text_fonts, text_glyph_atlas, copy_free),
+            text: TextResources::new(text_glyph_atlas, copy_free),
             viewport_uniforms,
             run_store,
             images: ImageTextures::new(),
@@ -3831,7 +3830,6 @@ pub(crate) use shape_pipeline::ShapeVariant;
 pub(crate) use shape_pipeline::{
     RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
 };
-mod text_raster_source;
 
 use glyph_atlas::{
     GlyphAtlasEntry, GlyphAtlasSlotKey, GlyphSamplers, RunAtlasEntries, TEXT_GLYPH_ATLAS_MIN_SIZE,
@@ -3853,14 +3851,10 @@ use shadow_cache::{
 use shape_pipeline::{LINE_KINDS, shape_shader_code};
 use text_glyph_cache::{
     CachedGpuTextGlyphRun, GlyphRunBounds, GlyphRunQuads, MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
-    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MAX_TEXT_LINE_INDEX_CACHE_ITEMS,
-    MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
+    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
     TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
     TextGlyphRunLookup, cached_text_glyph_instance, cached_text_glyph_quad_is_visible_in_viewport,
     log_text_atlas_fallback,
-};
-use text_raster_source::{
-    TextRasterSource, clipped_text_raster_source_with_line_starts, line_start_offsets,
 };
 
 #[cfg(test)]

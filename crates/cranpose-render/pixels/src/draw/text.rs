@@ -1,6 +1,7 @@
 use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
-    software_text_raster::{self, TextPixelWindow, TextPixels, TextRasterRequest, paint_text},
+    text_canvas::{TextPixelWindow, TextPixels},
+    text_raster::{self, TextRasterRequest, paint_text},
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{Point, Rect};
@@ -79,7 +80,6 @@ fn paint_text_over_target<P: Pixel>(
     };
     paint_text(
         raster_request(draw, covered, raster_rect),
-        text.resources.fonts(),
         glyphs.as_deref_mut(),
         window,
     )
@@ -87,14 +87,15 @@ fn paint_text_over_target<P: Pixel>(
 
 fn raster_request(draw: &TextDraw, part: Rect, raster_rect: Rect) -> TextRasterRequest<'_> {
     TextRasterRequest::new(
+        &draw.layout,
         draw.text.as_ref(),
         part,
         &draw.text_style,
         draw.color,
-        draw.font_size,
         draw.scale,
     )
     .with_origin(Point::new(raster_rect.x, raster_rect.y))
+    .with_ink(draw.ink)
 }
 
 /// `draw` rasterized into an image of its own, straight alpha, and the
@@ -113,9 +114,8 @@ pub(super) fn rasterize_text_part(
     text: &TextRaster,
 ) -> Option<(TextPixels, Rect)> {
     let mut glyphs = text.glyphs.try_borrow_mut().ok();
-    let pixels = software_text_raster::rasterize_text(
+    let pixels = text_raster::rasterize_text(
         raster_request(draw, part, raster_rect),
-        text.resources.fonts(),
         glyphs.as_deref_mut(),
     )?;
     let rect = Rect {

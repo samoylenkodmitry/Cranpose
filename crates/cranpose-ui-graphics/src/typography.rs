@@ -364,6 +364,44 @@ impl TextMeasurement {
 pub trait DrawTextMeasurer {
     /// Returns the size and line metrics of `text` laid out in `style`.
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement;
+
+    /// The layout of `text` in `style` that [`DrawTextMeasurer::measure_text`]
+    /// measured, which a draw scope hands its renderer so the glyphs drawn
+    /// are the ones measured. `None` from a measurer with no layouts.
+    fn layout_text(&self, text: &str, style: &DrawTextStyle) -> Option<TextLayoutHandle> {
+        let _ = (text, style);
+        None
+    }
+}
+
+/// The layout the text system made of a text. It is opaque here, below the
+/// text system; a renderer reads it back as the text system's layout type.
+/// Two handles are equal when they hold the same layout.
+#[derive(Clone)]
+pub struct TextLayoutHandle(std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl TextLayoutHandle {
+    /// A handle on `layout`.
+    pub fn new<T: std::any::Any + Send + Sync>(layout: std::sync::Arc<T>) -> Self {
+        Self(layout)
+    }
+
+    /// The layout as a `T`, `None` when it is of another type.
+    pub fn downcast<T: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<T>> {
+        std::sync::Arc::clone(&self.0).downcast::<T>().ok()
+    }
+}
+
+impl PartialEq for TextLayoutHandle {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(std::sync::Arc::as_ptr(&self.0), std::sync::Arc::as_ptr(&other.0))
+    }
+}
+
+impl std::fmt::Debug for TextLayoutHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TextLayoutHandle")
+    }
 }
 
 /// Font-free estimate used when no [`DrawTextMeasurer`] is installed.

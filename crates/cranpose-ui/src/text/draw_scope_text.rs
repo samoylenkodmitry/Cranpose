@@ -9,11 +9,11 @@
 //! and the same string rasterized by the renderer are described identically,
 //! down to the cache key.
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
-    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, Size, TextMeasurement,
-    estimate_text_measurement,
+    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, Size, TextLayoutHandle,
+    TextMeasurement, estimate_text_measurement,
 };
 
 use super::{
@@ -80,9 +80,9 @@ pub fn draw_style_line_box(style: &DrawTextStyle) -> Option<LineBox> {
 
 /// Measures draw-scope text against the app's fonts.
 ///
-/// Every call lands in `super::measure::measure_resolved_text`, backed by the
-/// app context's metrics cache — so measuring an unchanged string every frame
-/// is a hash lookup, not a shaping pass.
+/// Every call lands in the app context's layout cache, so measuring an
+/// unchanged string every frame is a hash lookup, not a shaping pass, and the
+/// layout drawn is the one measured.
 ///
 /// "Resolved" is the whole point: a [`DrawTextStyle`] states final sizes, and a
 /// scene lowers a text primitive with `style.resolved_font_size()` untouched,
@@ -107,35 +107,35 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
         if crate::render_state::current_app_context().is_none() {
             return estimate_text_measurement(text, style);
         }
-
-        let text_style = text_style_for_draw_style(style);
-        let annotated = super::shared_plain_annotated_string(text);
-        let metrics = super::measure::measure_resolved_text(&annotated, &text_style);
-        let line_height = if metrics.line_height.is_finite() && metrics.line_height > 0.0 {
-            metrics.line_height
-        } else {
-            estimate_text_measurement(text, style).line_height
-        };
-        let edges = super::measure::resolved_line_box(&text_style).unwrap_or_else(|| {
-            let baseline = super::measure::resolved_first_baseline(&text_style)
-                .unwrap_or_else(|| estimate_text_measurement(text, style).first_baseline);
-            LineBox::untrimmed(line_height, baseline)
-        });
-        let first_baseline = edges.first_baseline();
-
+        let prepared = prepare_draw_text(text, style);
+        let layout = &prepared.layout;
+        let line_height = layout.line_bottom(0) - layout.line_top(0);
+        let first_baseline = layout.line_baseline(0);
         if text.is_empty() {
             return TextMeasurement::empty(line_height, first_baseline);
         }
-
-        let line_count = metrics.line_count.max(1);
-        let height = line_count as f32 * line_height - edges.trim_top - edges.trim_bottom;
         TextMeasurement {
-            size: Size::new(metrics.width.max(0.0), height.max(0.0)),
+            size: Size::new(prepared.metrics.width, prepared.metrics.height),
             line_height,
             first_baseline,
-            line_count,
+            line_count: prepared.metrics.line_count,
         }
     }
+
+    fn layout_text(&self, text: &str, style: &DrawTextStyle) -> Option<TextLayoutHandle> {
+        crate::render_state::current_app_context()?;
+        Some(TextLayoutHandle::new(Arc::clone(
+            &prepare_draw_text(text, style).layout,
+        )))
+    }
+}
+
+// `text` in a draw scope's `style` laid out with the app's fonts, its sizes
+// taken as stated.
+fn prepare_draw_text(text: &str, style: &DrawTextStyle) -> Rc<super::PreparedTextLayout> {
+    let text_style = text_style_for_draw_style(style);
+    let annotated = super::shared_plain_annotated_string(text);
+    super::measure::prepare_resolved(&annotated, &text_style)
 }
 
 #[cfg(test)]

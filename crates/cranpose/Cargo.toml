@@ -39,9 +39,8 @@ installed-fonts = [
     "cranpose-render-wgpu?/installed-fonts",
     "cranpose-render-pixels?/installed-fonts",
 ]
-localization = ["cranpose-ui/localization", "cranpose-liquid/localization", "cranpose-services/localization", "dep:sys-locale", "text-shaping"]
+localization = ["cranpose-ui/localization", "cranpose-liquid/localization", "cranpose-services/localization", "dep:sys-locale"]
 localization-formatting = ["localization", "cranpose-ui/localization-formatting"]
-text-shaping = ["cranpose-render-common/text-shaping"]
 default = ["embedded-default-font"]
 # Compiles every crate's debug and trace log calls out of release builds.
 # The logger this crate installs on Android passes Info and above, so there
@@ -263,6 +262,7 @@ cranpose-core = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-media = { workspace = true, optional = true }
 cranpose-ui = { workspace = true }
+cranpose-text = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 cranpose-platform-desktop-winit = { workspace = true, optional = true }
 cranpose-platform-android = { workspace = true, optional = true }

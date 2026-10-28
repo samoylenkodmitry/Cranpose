@@ -531,6 +531,7 @@ impl TextLayouter {
         layout.height = top;
         layout.align_lines(input.paragraph.text_align);
         layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
+        layout.renew_id();
     }
 
     // Collects the pieces of line `index`, with an ellipsis where it does

@@ -28,7 +28,7 @@ use crate::{
     },
     modifier::Modifier,
     safe_area::local_ime_insets,
-    text::{AnnotatedString, TextStyle, measure_text},
+    text::{AnnotatedString, TextStyle},
     text_field_decorator_node::TextFieldDecoratorElement,
     text_field_focus::{dispatch_copy, dispatch_cut, dispatch_select_all},
     text_field_modifier_node::{
@@ -148,12 +148,15 @@ fn handle_tip_local_pos(
     let (line_index, line_start) = crate::text_field_modifier_node::caret_visual_line_for_offset(
         text,
         style,
-        None,
         metrics.wrap_width,
         offset,
         affinity,
     );
-    let caret_x = measure_text(&AnnotatedString::from(&text[line_start..offset]), style).width;
+    let caret_x = crate::text::get_cursor_x_for_offset(
+        &AnnotatedString::from(&text[line_start..offset]),
+        style,
+        offset - line_start,
+    );
     Point {
         x: metrics.padding_left + caret_x - metrics.scroll_offset,
         y: metrics.padding_top
@@ -202,15 +205,7 @@ fn window_pos_to_offset(
     });
     let local_x = (local.x - metrics.padding_left + metrics.scroll_offset).max(0.0);
     let local_y = (local.y - 0.5 * metrics.line_height - metrics.padding_top).max(0.0);
-    crate::text::offset_for_position_wrapped(
-        text,
-        style,
-        None,
-        metrics.wrap_width,
-        metrics.line_height,
-        local_x,
-        local_y,
-    )
+    crate::text::offset_for_position_wrapped(text, style, metrics.wrap_width, local_x, local_y)
 }
 /// Edits text through a retained [`TextFieldState`]. `modifier` controls the
 /// field bounds and input, and `style` controls the text. Use

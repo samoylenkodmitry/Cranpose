@@ -1,15 +1,10 @@
-#[cfg(test)]
-use cranpose_render_common::text_measure::{
-    fallback_char_width, fallback_cursor_x_for_byte_offset, fallback_line_height,
-    fallback_text_metrics,
-};
 use cranpose_render_common::{
     brush_sampling::{DitherAxis, DitheredLine, color_to_rgba, sample_brush_rgba},
+    glyph_mask::GlyphMaskCache,
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
-    software_text_raster::SoftwareGlyphRasterCache,
-    text_measure::SoftwareTextResources,
+    text_fonts::TextFonts,
 };
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, BrushSampler, CornerRadii, LineGeometry, Point, Rect,
@@ -40,18 +35,19 @@ use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
 /// Glyph masks a renderer keeps between frames.
 const GLYPH_MASKS: usize = 256;
 
-/// What drawing text needs: the fonts, and the masks of the glyphs drawn
-/// before, so a text that changes rasterizes only glyphs it did not show yet.
+/// What drawing text needs: the fonts the app's text lays out with, and the
+/// masks of the glyphs drawn before, so a text that changes rasterizes only
+/// glyphs it did not show yet.
 pub(crate) struct TextRaster {
-    pub(crate) resources: SoftwareTextResources,
-    glyphs: std::cell::RefCell<SoftwareGlyphRasterCache>,
+    pub(crate) fonts: TextFonts,
+    glyphs: std::cell::RefCell<GlyphMaskCache>,
 }
 
 impl TextRaster {
-    pub(crate) fn new(resources: SoftwareTextResources) -> Self {
+    pub(crate) fn new(fonts: TextFonts) -> Self {
         Self {
-            resources,
-            glyphs: std::cell::RefCell::new(SoftwareGlyphRasterCache::with_capacity_at_least_one(
+            fonts,
+            glyphs: std::cell::RefCell::new(GlyphMaskCache::with_capacity_at_least_one(
                 GLYPH_MASKS,
             )),
         }
@@ -218,9 +214,9 @@ pub(crate) fn clip_rect_to_window(
 }
 
 /// Draws `scene` into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device pixel
-/// per logical pixel and with the default font resources.
+/// per logical pixel. Its texts draw the glyphs of the typefaces they were laid out in.
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
-    let text = TextRaster::new(SoftwareTextResources::default());
+    let text = TextRaster::new(TextFonts::default());
     draw_scene_scaled(frame, width, height, scene, &text, 1.0);
 }
 

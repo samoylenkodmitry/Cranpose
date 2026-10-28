@@ -1,126 +1,106 @@
 use std::{
-    borrow::Cow,
-    cell::{Cell, RefCell},
-    hash::Hash,
+    cell::{Cell, OnceCell, RefCell},
     ops::Range,
     rc::Rc,
     sync::Arc,
 };
 
 use cranpose_core::{NodeId, collections::pass_aged::PassAgedCache};
-use web_time::Instant;
+use cranpose_text::{
+    CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle,
+    FontWeight, LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
+};
+use smallvec::SmallVec;
 
 use super::{
+    AnnotatedString, LineBox, RenderString,
+    layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
-    paragraph::{Hyphens, LineBreak},
     style::TextStyle,
 };
-use crate::{font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
+use crate::{density::Density, font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
 
-const ELLIPSIS: &str = "\u{2026}";
-const DEFAULT_FONT_SIZE_SP: f32 = 14.0;
-const WRAP_EPSILON: f32 = 0.5;
-const SCALE_DOWN_SEARCH_STEPS: usize = 14;
-const AUTO_HYPHEN_MIN_SEGMENT_CHARS: usize = 2;
-const AUTO_HYPHEN_MIN_TRAILING_CHARS: usize = 3;
-const AUTO_HYPHEN_PREFERRED_TRAILING_CHARS: usize = 4;
-const TEXT_SERVICE_CACHE_CAPACITY: usize = 8192;
 /// Prepared layouts kept across nodes. Each node keeps its own, so this
-/// serves the items a list composes again, a few screens of them; an entry
-/// holds a whole visual style, and a screen laid out again at a new width
-/// every frame fills every entry with widths it never asks for again.
+/// serves the items a list composes again, a few screens of them.
 const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
-fn text_layout_telemetry_enabled() -> bool {
-    cranpose_core::DIAGNOSTICS.text_layout_telemetry.is_set()
-}
+const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
+// Layouts kept for one text at different widths.
+const WIDTHS_PER_TEXT: usize = 2;
+const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextMetrics {
-    /// Width of the widest line.
+    /// The paragraph's width, within the widths it was laid out between.
     pub width: f32,
     /// Height of all lines together.
     pub height: f32,
-    /// Height of a single line of text
+    /// Height of the first line.
     pub line_height: f32,
-    /// Number of lines in the text
+    /// Number of lines, at least the minimum the options ask for.
     pub line_count: usize,
 }
 
-/// A text laid out for a width: the display text with its wrapping and overflow applied,
-/// and the size it measures.
+/// A text laid out between two widths: its glyphs and lines, which every
+/// query, measurement and renderer reads, and the size it measures.
 #[derive(Clone, Debug)]
 pub struct PreparedTextLayout {
-    /// Shared display text after wrapping and overflow have been resolved.
-    pub text: Rc<crate::text::AnnotatedString>,
+    /// The text that was laid out.
+    pub text: Rc<AnnotatedString>,
     /// The style the text draws in, shared with every render node drawn
     /// from this layout.
     pub visual_style: Arc<TextStyle>,
-    /// Size and line count of `text`.
+    /// The lines and glyphs.
+    pub layout: Arc<TextLayout>,
+    /// Size and line count.
     pub metrics: TextMetrics,
-    /// The first and last drawn baselines, excluding blank height added by `min_lines`.
+    /// The first and last baselines.
     pub alignment_lines: cranpose_ui_layout::AlignmentLines,
-    /// True when the text did not fit: it had more lines than the line limit, or a line wider
-    /// than the width limit.
+    /// True when the text did not fit: it had more lines than the line limit,
+    /// or was wider than the widest it could be.
     pub did_overflow: bool,
     /// `text` as a renderer draws it, and its
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
     /// converted on first use: see [`PreparedTextLayout::render_text`].
-    pub render_text: std::cell::OnceCell<(Arc<crate::text::RenderString>, u64)>,
-    pub(crate) visual_style_hash: std::cell::OnceCell<u64>,
-    /// The max widths the layout's greedy wrap breaks the same lines at and
-    /// cuts its ellipsis at the same character, when it wrapped: `None` when
-    /// it did not, broke lines another way, or a line overflowed its width.
-    pub(crate) wrap_hold: Option<WrapHold>,
-}
-
-/// The max widths a greedy wrap breaks a text's lines the same at: every
-/// width `w` with `fits <= w + WRAP_EPSILON < pulls_up`. Below `fits` a break
-/// no longer fits; from `pulls_up` a line takes up its next word.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct WrapHold {
-    fits: f32,
-    pulls_up: f32,
-}
-
-impl WrapHold {
-    /// Every width, before any line narrows it.
-    const ANY: Self = Self {
-        fits: f32::NEG_INFINITY,
-        pulls_up: f32::INFINITY,
-    };
-
-    fn narrow(&mut self, fits: f32, pulls_up: f32) {
-        self.fits = self.fits.max(fits);
-        self.pulls_up = self.pulls_up.min(pulls_up);
-    }
-
-    fn holds(self, width: f32) -> bool {
-        self.fits <= width + WRAP_EPSILON && width + WRAP_EPSILON < self.pulls_up
-    }
-
-    /// Narrows `hold` to the widths a line `width` wide fits whole at.
-    fn fit_whole(hold: &mut Option<Self>, width: f32) {
-        if let Some(hold) = hold {
-            hold.narrow(width, f32::INFINITY);
-        }
-    }
-
-    /// `hold` narrowed to the widths its layout reports `measured_width` at,
-    /// and kept only when it holds `max_width`, the width it was made at: a
-    /// layout wider than its limit reports the limit.
-    fn settle(hold: Option<Self>, measured_width: f32, max_width: Option<f32>) -> Option<Self> {
-        let mut hold = hold?;
-        hold.narrow(measured_width + WRAP_EPSILON, f32::INFINITY);
-        max_width.filter(|width| hold.holds(*width)).map(|_| hold)
-    }
+    pub render_text: OnceCell<(Arc<RenderString>, u64)>,
+    pub(crate) visual_style_hash: OnceCell<u64>,
 }
 
 impl PreparedTextLayout {
+    // The prepared layout of `text` in `style` laid out as `layout`, `max_width`
+    // the widest it could be.
+    fn new(
+        text: Rc<AnnotatedString>,
+        style: Arc<TextStyle>,
+        layout: TextLayout,
+        (max_width, min_lines): (f32, usize),
+    ) -> Self {
+        let last = layout.line_count() - 1;
+        let metrics = TextMetrics {
+            width: layout.width().min(max_width),
+            height: layout.height(),
+            line_height: layout.line_bottom(0) - layout.line_top(0),
+            line_count: layout.line_count().max(min_lines),
+        };
+        Self {
+            alignment_lines: cranpose_ui_layout::AlignmentLines::new(
+                Some(layout.line_baseline(0)),
+                Some(layout.line_baseline(last)),
+            ),
+            did_overflow: layout.did_overflow_height() || layout.did_overflow_width(),
+            metrics,
+            text,
+            visual_style: style,
+            layout: Arc::new(layout),
+            render_text: OnceCell::new(),
+            visual_style_hash: OnceCell::new(),
+        }
+    }
+
     /// The display text as a renderer draws it. Converted once for the layout
     /// and shared after, so every frame and scene rebuild drawing this layout
     /// hands over the same allocation.
-    pub fn render_text(&self) -> Arc<crate::text::RenderString> {
+    pub fn render_text(&self) -> Arc<RenderString> {
         if let Some((converted, _)) = self.render_text.get() {
             return Arc::clone(converted);
         }
@@ -137,7 +117,7 @@ impl PreparedTextLayout {
         self.convert_render_text().1
     }
 
-    fn convert_render_text(&self) -> (Arc<crate::text::RenderString>, u64) {
+    fn convert_render_text(&self) -> (Arc<RenderString>, u64) {
         let converted = Arc::new(self.text.render_string());
         let hash = converted.render_hash();
         let _ = self.render_text.set((Arc::clone(&converted), hash));
@@ -154,6 +134,11 @@ impl PreparedTextLayout {
         let _ = self.visual_style_hash.set(hash);
         hash
     }
+
+    /// The layout's queries, as Compose's `TextLayoutResult` gives them.
+    pub fn result(&self) -> TextLayoutResult {
+        TextLayoutResult::new(Arc::clone(&self.layout))
+    }
 }
 
 impl PartialEq for PreparedTextLayout {
@@ -166,732 +151,358 @@ impl PartialEq for PreparedTextLayout {
     }
 }
 
-/// The width of every prefix of one line of text. It answers how wide any range of
-/// characters is without measuring again. Copies and suffixes share one table, so a
-/// measurer can keep a line's widths and hand them out for every layout of the line.
-#[derive(Clone, Debug)]
-pub struct TextLinePrefixWidths {
-    table: Rc<PrefixWidthTable>,
-    /// The character of the table this one starts at.
-    first: usize,
-}
-
-#[derive(Debug)]
-struct PrefixWidthTable {
-    prefix_widths: Vec<f32>,
-    separator_before: Vec<f32>,
-    non_empty_overhang: f32,
-}
-
-impl PartialEq for TextLinePrefixWidths {
-    fn eq(&self, other: &Self) -> bool {
-        self.table.prefix_widths[self.first..] == other.table.prefix_widths[other.first..]
-            && self.table.separator_before[self.first..]
-                == other.table.separator_before[other.first..]
-            && self.table.non_empty_overhang == other.table.non_empty_overhang
-    }
-}
-
-impl TextLinePrefixWidths {
-    /// Builds the table. `prefix_widths` holds the width of the first 0, 1, 2 and so on
-    /// characters, so one more value than the line has characters. `separator_before` holds one
-    /// value for each character: the part of the width before it that is dropped when a range
-    /// starts at that character. A range of at least one character also gains
-    /// `non_empty_overhang`, and a negative overhang counts as 0.0. Returns `None` when the
-    /// lengths do not match or a value is not finite.
-    pub fn from_parts(
-        prefix_widths: Vec<f32>,
-        separator_before: Vec<f32>,
-        non_empty_overhang: f32,
-    ) -> Option<Self> {
-        if prefix_widths.is_empty() || prefix_widths.len() != separator_before.len() + 1 {
-            return None;
-        }
-        if prefix_widths
-            .iter()
-            .chain(separator_before.iter())
-            .any(|value| !value.is_finite())
-        {
-            return None;
-        }
-        let non_empty_overhang = non_empty_overhang.max(0.0);
-        if !non_empty_overhang.is_finite() {
-            return None;
-        }
-        Some(Self {
-            table: Rc::new(PrefixWidthTable {
-                prefix_widths,
-                separator_before,
-                non_empty_overhang,
-            }),
-            first: 0,
-        })
-    }
-
-    /// Builds a table for `char_count` characters of width `char_width` that each add
-    /// `letter_spacing`. Negative values count as 0.0. Returns `None` when a value is not
-    /// finite.
-    pub fn monospaced(char_count: usize, char_width: f32, letter_spacing: f32) -> Option<Self> {
-        if !char_width.is_finite() || !letter_spacing.is_finite() {
-            return None;
-        }
-        let char_width = char_width.max(0.0);
-        let letter_spacing = letter_spacing.max(0.0);
-        let mut prefix_widths = Vec::with_capacity(char_count + 1);
-        let mut separator_before = Vec::with_capacity(char_count);
-        let mut width = 0.0f32;
-        prefix_widths.push(width);
-        for _ in 0..char_count {
-            separator_before.push(0.0);
-            width += char_width + letter_spacing;
-            prefix_widths.push(width);
-        }
-        Self::from_parts(prefix_widths, separator_before, 0.0)
-    }
-
-    /// Number of characters the table covers.
-    pub fn char_count(&self) -> usize {
-        self.table.separator_before.len() - self.first
-    }
-
-    /// The table of the characters from index `first` on, read from this
-    /// one: a range of them is as wide as the same range here.
-    fn suffix(&self, first: usize) -> Option<Self> {
-        (first <= self.char_count()).then(|| Self {
-            table: Rc::clone(&self.table),
-            first: self.first + first,
-        })
-    }
-
-    /// Width of the characters from index `start` up to but not including `end`. Indices count
-    /// characters, not bytes. Returns `None` when the range is reversed or ends past the line.
-    /// An empty range has width 0.0.
-    pub fn width_for_char_range(&self, start: usize, end: usize) -> Option<f32> {
-        if start > end || end > self.char_count() {
-            return None;
-        }
-        if start == end {
-            return Some(0.0);
-        }
-        let table = &*self.table;
-        let (start, end) = (self.first + start, self.first + end);
-        let separator = table.separator_before.get(start).copied().unwrap_or(0.0);
-        Some(
-            (table.prefix_widths[end] - table.prefix_widths[start] - separator).max(0.0)
-                + table.non_empty_overhang,
-        )
-    }
-}
-
-/// Measures and lays out text for the layout system. A renderer installs an implementation
-/// with [`set_text_measurer`]. Distances are in logical pixels.
-///
-/// `measure`, `get_offset_for_position`, `get_cursor_x_for_offset` and `layout` must be
-/// implemented. The other methods have defaults built on them, which an implementation
-/// overrides when it can answer faster or more exactly.
-pub trait TextMeasurer: 'static {
-    /// Measures `text` in `style` with line breaks only at `\n`.
-    fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics;
-
-    /// Called as each layout pass starts. A measurer that caches
-    /// measurements can age them by passes and drop the ones recent passes
-    /// did not use.
-    fn begin_layout_pass(&self) {}
-
-    /// Like [`TextMeasurer::measure`] for the text of node `node_id`, so that an implementation
-    /// can keep a cache for each node. The default ignores the node.
-    fn measure_for_node(
-        &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> TextMetrics {
-        let _ = node_id;
-        self.measure(text, style)
-    }
-
-    /// Measures the bytes of `text` in `range`. The default measures a copy of that slice.
-    fn measure_subsequence(
-        &self,
-        text: &crate::text::AnnotatedString,
-        range: Range<usize>,
-        style: &TextStyle,
-    ) -> TextMetrics {
-        self.measure(&text.subsequence(range), style)
-    }
-
-    /// Like [`TextMeasurer::measure_subsequence`] for the text of node `node_id`. The default
-    /// ignores the node.
-    fn measure_subsequence_for_node(
-        &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        range: Range<usize>,
-        style: &TextStyle,
-    ) -> TextMetrics {
-        let _ = node_id;
-        self.measure_subsequence(text, range, style)
-    }
-
-    /// The widths of every prefix of one line.
-    fn measure_line_prefix_widths(
-        &self,
-        text: &crate::text::AnnotatedString,
-        line_range: Range<usize>,
-        style: &TextStyle,
-    ) -> Option<TextLinePrefixWidths> {
-        let _ = text;
-        let _ = line_range;
-        let _ = style;
-        None
-    }
-
-    /// Width of the bytes of `text` in `line_range` laid out as one line, or `None` when the
-    /// measurer cannot tell. The default returns `None`.
-    fn measure_line_width(
-        &self,
-        text: &crate::text::AnnotatedString,
-        line_range: Range<usize>,
-        style: &TextStyle,
-    ) -> Option<f32> {
-        let _ = text;
-        let _ = line_range;
-        let _ = style;
-        None
-    }
-
-    /// Height of one line of `text` in `style`. The default reads it from `measure`.
-    fn line_height(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> f32 {
-        self.measure(text, style).line_height
-    }
-
-    /// The tight glyph box of a text line inside its `line_height` slot:
-    /// `(top_offset, height)` in logical units, where `height` is the font's
-    /// natural ascent+descent extent and `top_offset` positions it within the
-    /// slot (glyph rows are vertically centered). Selection chrome — the
-    /// highlight, the caret and the finger handles — anchors to THIS box,
-    /// not the full slot: with a paragraph line height above the natural one
-    /// the reference shows gaps between highlighted lines and handles riding
-    /// the glyphs. `None` means the box fills the slot.
-    fn glyph_line_box(&self, style: &TextStyle) -> Option<(f32, f32)> {
-        let _ = style;
-        None
-    }
-
-    /// Distance from the top of a line slot down to that line's baseline, in
-    /// logical units — the number the rasterizer places glyph origins at.
-    ///
-    /// Callers that position text by baseline (rather than by its box) need
-    /// this; `None` means the measurer has no font metrics to answer with.
-    fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
-        let _ = style;
-        None
-    }
-
-    /// One line's whole box for a style: its advance, its baseline and what a
-    /// paragraph of it gives back at its edges, with no string to measure.
-    ///
-    /// A layout that stacks rows of a known style needs the row pitch before it
-    /// has any text to put in them, and a paragraph's height and first baseline
-    /// both depend on the edges. `None` when the measurer has no font metrics.
-    fn line_box(&self, style: &TextStyle) -> Option<crate::text::LineBox> {
-        let _ = style;
-        None
-    }
-
-    /// Visits each displayed line's resolved font box, including styled spans.
-    /// The text must already contain its wrapping newlines. Returns `None` when
-    /// the measurer does not provide these metrics; no callbacks run in that case.
-    /// The default handles plain text and defers annotated spans to `line_height`.
-    fn visit_line_boxes(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        visit: &mut dyn FnMut(crate::text::LineBox),
-    ) -> Option<()> {
-        if !text.span_styles.is_empty() {
-            return None;
-        }
-        let line_box = self.line_box(style)?;
-        for _ in text.text.split('\n') {
-            visit(line_box);
-        }
-        Some(())
-    }
-
-    /// Like [`TextMeasurer::line_height`] for the text of node `node_id`. The default ignores
-    /// the node.
-    fn line_height_for_node(
-        &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> f32 {
-        let _ = node_id;
-        self.line_height(text, style)
-    }
-
-    /// [`TextMeasurer::line_box`] of `style` and
-    /// [`TextMeasurer::line_height_for_node`] of `text` in it, together: a
-    /// measurer that finds both in one font lookup answers them at once.
-    fn line_box_and_height(
-        &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> (Option<crate::text::LineBox>, f32) {
-        (
-            self.line_box(style),
-            self.line_height_for_node(node_id, text, style),
-        )
-    }
-
-    /// Returns the byte offset of the character boundary nearest to the point (`x`, `y`) of
-    /// `text` drawn in `style`. Coordinates are in logical pixels from the top left of the text.
-    fn get_offset_for_position(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        x: f32,
-        y: f32,
-    ) -> usize;
-
-    /// Returns the x position, in logical pixels, of the cursor at byte `offset` of `text`
-    /// drawn in `style`.
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        offset: usize,
-    ) -> f32;
-
-    /// Lays `text` out in `style` and returns the glyph and line positions.
-    fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult;
-
-    /// Returns an alternate break boundary for `Hyphens::Auto` when a greedy break
-    /// split lands in the middle of a word.
-    ///
-    /// `segment_start_char` and `measured_break_char` are character-boundary indices
-    /// in `line` (not byte offsets). Return `None` to delegate to fallback behavior.
-    fn choose_auto_hyphen_break(
-        &self,
-        _line: &str,
-        _style: &TextStyle,
-        _segment_start_char: usize,
-        _measured_break_char: usize,
-    ) -> Option<usize> {
-        None
-    }
-
-    /// Measures `text` wrapped to `max_width` under `options`. `None` means no width limit.
-    /// The default reads the metrics from `prepare_with_options`.
-    fn measure_with_options(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> TextMetrics {
-        self.prepare_with_options(text, style, options, max_width)
-            .metrics
-    }
-
-    /// Like [`TextMeasurer::measure_with_options`] for the text of node `node_id`.
-    fn measure_with_options_for_node(
-        &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> TextMetrics {
-        prepare_text_layout_with_measurer_for_node(self, node_id, text, style, options, max_width)
-            .metrics
-    }
-
-    /// Lays `text` out wrapped to `max_width` under `options` and returns the display text with
-    /// its metrics. `None` means no width limit.
-    fn prepare_with_options(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> PreparedTextLayout {
-        self.prepare_with_options_fallback(text, style, options, max_width)
-    }
-
-    /// Lays `text` out in `style` for a node that holds both: a layout that
-    /// leaves them as they are shares them instead of copying them.
-    fn prepare_with_options_for_node(
-        &self,
-        node_id: Option<NodeId>,
-        text: &Rc<crate::text::AnnotatedString>,
-        style: &Arc<TextStyle>,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> PreparedTextLayout {
-        prepare_layout(
-            self,
-            node_id,
-            LayoutSource::Shared { text, style },
-            options,
-            max_width,
-        )
-    }
-
-    /// The layout built from the measuring methods of this trait, which is also the default of
-    /// `prepare_with_options`. An implementation that overrides `prepare_with_options` can call
-    /// it for the cases it does not handle.
-    fn prepare_with_options_fallback(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> PreparedTextLayout {
-        prepare_text_layout_fallback(self, text, style, options, max_width)
-    }
-}
-
-#[derive(Default)]
-struct MonospacedTextMeasurer;
-
-impl MonospacedTextMeasurer {
-    const DEFAULT_SIZE: f32 = 14.0;
-    const CHAR_WIDTH_RATIO: f32 = 0.6;
-
-    fn get_metrics(style: &TextStyle) -> (f32, f32) {
-        let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
-        let line_height = style.resolve_line_height(Self::DEFAULT_SIZE, font_size);
-        let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE).max(0.0);
-        (
-            (font_size * Self::CHAR_WIDTH_RATIO) + letter_spacing,
-            line_height,
-        )
-    }
-}
-
-impl TextMeasurer for MonospacedTextMeasurer {
-    fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-        let (char_width, line_height) = Self::get_metrics(style);
-
-        let lines: Vec<&str> = text.text.split('\n').collect();
-        let line_count = lines.len().max(1);
-
-        let width = lines
-            .iter()
-            .map(|line| line.chars().count() as f32 * char_width)
-            .fold(0.0_f32, f32::max);
-
-        TextMetrics {
-            width,
-            height: line_count as f32 * line_height,
-            line_height,
-            line_count,
-        }
-    }
-
-    fn measure_subsequence(
-        &self,
-        text: &crate::text::AnnotatedString,
-        range: Range<usize>,
-        style: &TextStyle,
-    ) -> TextMetrics {
-        let (char_width, line_height) = Self::get_metrics(style);
-        let slice = &text.text[range];
-        let line_count = slice.split('\n').count().max(1);
-        let width = slice
-            .split('\n')
-            .map(|line| line.chars().count() as f32 * char_width)
-            .fold(0.0_f32, f32::max);
-
-        TextMetrics {
-            width,
-            height: line_count as f32 * line_height,
-            line_height,
-            line_count,
-        }
-    }
-
-    fn measure_line_prefix_widths(
-        &self,
-        text: &crate::text::AnnotatedString,
-        line_range: Range<usize>,
-        style: &TextStyle,
-    ) -> Option<TextLinePrefixWidths> {
-        let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
-        let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE);
-        TextLinePrefixWidths::monospaced(
-            text.text[line_range].chars().count(),
-            font_size * Self::CHAR_WIDTH_RATIO,
-            letter_spacing,
-        )
-    }
-
-    fn measure_line_width(
-        &self,
-        text: &crate::text::AnnotatedString,
-        line_range: Range<usize>,
-        style: &TextStyle,
-    ) -> Option<f32> {
-        Some(self.measure_subsequence(text, line_range, style).width)
-    }
-
-    fn line_height(&self, _text: &crate::text::AnnotatedString, style: &TextStyle) -> f32 {
-        let (_, line_height) = Self::get_metrics(style);
-        line_height
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        x: f32,
-        y: f32,
-    ) -> usize {
-        let (char_width, line_height) = Self::get_metrics(style);
-
-        if text.text.is_empty() {
-            return 0;
-        }
-
-        let line_index = (y / line_height).floor().max(0.0) as usize;
-        let lines: Vec<&str> = text.text.split('\n').collect();
-        let target_line = line_index.min(lines.len().saturating_sub(1));
-
-        let mut line_start_byte = 0;
-        for line in lines.iter().take(target_line) {
-            line_start_byte += line.len() + 1;
-        }
-
-        let line_text = lines.get(target_line).unwrap_or(&"");
-        let char_index = (x / char_width).round() as usize;
-        let line_char_count = line_text.chars().count();
-        let clamped_index = char_index.min(line_char_count);
-
-        let offset_in_line = line_text
-            .char_indices()
-            .nth(clamped_index)
-            .map_or(line_text.len(), |(i, _)| i);
-
-        line_start_byte + offset_in_line
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        offset: usize,
-    ) -> f32 {
-        let (char_width, _) = Self::get_metrics(style);
-
-        let clamped_offset = offset.min(text.text.len());
-        let char_count = text.text[..clamped_offset].chars().count();
-        char_count as f32 * char_width
-    }
-
-    fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-        let (char_width, line_height) = Self::get_metrics(style);
-        TextLayoutResult::monospaced(&text.text, char_width, line_height)
-    }
-}
-
+// What a layout is cached by: the text and style hashes, the options and the
+// units its sizes became pixels in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TextBaseCacheKey {
+struct TextKey {
     text_hash: u64,
     style_hash: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TextOptionsCacheKey {
-    base: TextBaseCacheKey,
     options: TextLayoutOptions,
-    max_width_bits: Option<u32>,
+    // The density's bits, the font scale curve's fingerprint and the size
+    // factor's bits.
+    units: (u32, u32, u32),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TextPreparedCacheKey {
-    base: TextOptionsCacheKey,
-    visual_hash: u64,
+impl TextKey {
+    // The key of `text` in `style` by `style_hash`; `None` for a text with
+    // annotations, which a layout of another text with the same look must
+    // not stand in for.
+    fn of(
+        text: &AnnotatedString,
+        style_hash: u64,
+        options: TextLayoutOptions,
+        units: TextUnits,
+    ) -> Option<Self> {
+        (text.string_annotations.is_empty() && text.link_annotations.is_empty()).then(|| Self {
+            text_hash: text.render_hash(),
+            style_hash,
+            options: options.normalized(),
+            units: (
+                units.density.density().to_bits(),
+                units.density.font_scale_curve().fingerprint(),
+                units.factor.to_bits(),
+            ),
+        })
+    }
 }
 
+/// The text and style a layout is prepared from: borrowed, which the layout
+/// copies, or shared with the node that holds them.
+#[derive(Clone, Copy)]
+enum LayoutSource<'a> {
+    Borrowed {
+        text: &'a AnnotatedString,
+        style: &'a TextStyle,
+    },
+    Shared {
+        text: &'a Rc<AnnotatedString>,
+        style: &'a Arc<TextStyle>,
+    },
+}
+
+impl LayoutSource<'_> {
+    fn text(&self) -> &AnnotatedString {
+        match self {
+            Self::Borrowed { text, .. } => text,
+            Self::Shared { text, .. } => text,
+        }
+    }
+
+    fn style(&self) -> &TextStyle {
+        match self {
+            Self::Borrowed { style, .. } => style,
+            Self::Shared { style, .. } => style,
+        }
+    }
+
+    fn shared(&self) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
+        match self {
+            Self::Borrowed { text, style } => (Rc::new((*text).clone()), Arc::new((*style).clone())),
+            Self::Shared { text, style } => (Rc::clone(text), Arc::clone(style)),
+        }
+    }
+}
+
+/// The widths a text lays out between, and its options.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TextFrame {
+    pub(crate) min_width: f32,
+    pub(crate) max_width: f32,
+    pub(crate) options: TextLayoutOptions,
+}
+
+impl TextFrame {
+    // No width limit, lines ending only at line breaks.
+    fn unbounded(options: TextLayoutOptions) -> Self {
+        Self {
+            min_width: 0.0,
+            max_width: f32::INFINITY,
+            options,
+        }
+    }
+
+    // From zero up to `max_width`; `None`, and a width that is not positive
+    // and finite, is no limit.
+    fn up_to(max_width: Option<f32>, options: TextLayoutOptions) -> Self {
+        Self {
+            max_width: max_width
+                .filter(|width| width.is_finite() && *width > 0.0)
+                .unwrap_or(f32::INFINITY),
+            ..Self::unbounded(options)
+        }
+    }
+}
+
+/// The app's fonts and the text engine its text lays out with, and the
+/// layouts and intrinsic widths recent passes used.
 pub(crate) struct TextService {
     generation: Cell<u64>,
     /// Whether a frame started since the last pass began: the first use of
     /// the service outside a layout pass then begins one.
     pass_owed: Cell<bool>,
-    measurer: RefCell<Rc<dyn TextMeasurer>>,
-    metrics_cache: RefCell<PassAgedCache<TextBaseCacheKey, TextMetrics>>,
-    options_metrics_cache: RefCell<PassAgedCache<TextOptionsCacheKey, TextMetrics>>,
-    prepared_cache: RefCell<PassAgedCache<TextPreparedCacheKey, Rc<PreparedTextLayout>>>,
-    layout_cache: RefCell<PassAgedCache<TextBaseCacheKey, TextLayoutResult>>,
+    fonts: RefCell<FontFamilyResolver>,
+    layouter: RefCell<TextLayouter>,
+    prepared: RefCell<PassAgedCache<TextKey, SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>>>,
+    intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
 }
 
 impl TextService {
     pub(crate) fn new() -> Self {
-        Self::from_measurer(Rc::new(MonospacedTextMeasurer))
-    }
-
-    pub(crate) fn from_measurer(measurer: Rc<dyn TextMeasurer>) -> Self {
         Self {
             generation: Cell::new(1),
             pass_owed: Cell::new(false),
-            measurer: RefCell::new(measurer),
-            metrics_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
-                TEXT_SERVICE_CACHE_CAPACITY,
-            )),
-            options_metrics_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
-                TEXT_SERVICE_CACHE_CAPACITY,
-            )),
-            prepared_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
+            fonts: RefCell::new(FontFamilyResolver::new([])),
+            layouter: RefCell::new(TextLayouter::default()),
+            prepared: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_PREPARED_CACHE_CAPACITY,
             )),
-            layout_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
-                TEXT_SERVICE_CACHE_CAPACITY,
+            intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
+                TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
         }
     }
 
-    pub(crate) fn set_measurer(&self, measurer: Rc<dyn TextMeasurer>) {
-        *self.measurer.borrow_mut() = measurer;
-        self.clear_caches();
+    /// Lays text out with `fonts` from now on.
+    pub(crate) fn set_fonts(&self, fonts: FontFamilyResolver) {
+        *self.fonts.borrow_mut() = fonts;
+        self.generation
+            .set(self.generation.get().wrapping_add(1).max(1));
+        self.prepared.borrow_mut().clear();
+        self.intrinsics.borrow_mut().clear();
     }
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation.get()
     }
 
-    pub(crate) fn current_measurer(&self) -> Rc<dyn TextMeasurer> {
-        Rc::clone(&self.measurer.borrow())
-    }
-
-    pub(crate) fn with_measurer<R>(&self, f: impl FnOnce(&dyn TextMeasurer) -> R) -> R {
-        let measurer = self.current_measurer();
-        f(&*measurer)
-    }
-
-    pub(crate) fn measure(
+    // The layout of `source` in `frame` with sizes in `units`: a cached one
+    // that breaks into the same lines, aligned to the frame's widths, or a
+    // new one.
+    fn prepare(
         &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> TextMetrics {
-        let key = text_base_cache_key(text, style);
-        if let Some(key) = key
-            && let Some(metrics) = self.metrics_cache.borrow_mut().get(&key).copied()
-        {
-            return metrics;
-        }
-        let metrics = self.with_measurer(|m| m.measure_for_node(node_id, text, style));
-        if let Some(key) = key {
-            self.metrics_cache.borrow_mut().push(key, metrics);
-        }
-        metrics
-    }
-
-    pub(crate) fn measure_with_options(
-        &self,
-        node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> TextMetrics {
-        let key = text_options_cache_key(text, style, options.normalized(), max_width);
-        if let Some(key) = key {
-            if let Some(metrics) = self.options_metrics_cache.borrow_mut().get(&key).copied() {
-                return metrics;
-            }
-            let prepared_key = TextPreparedCacheKey {
-                base: key,
-                visual_hash: style.render_hash(),
-            };
-            if let Some(prepared) = self.prepared_cache.borrow_mut().get(&prepared_key) {
-                return prepared.metrics;
-            }
-        }
-        let metrics = self.with_measurer(|m| {
-            m.measure_with_options_for_node(node_id, text, style, options.normalized(), max_width)
-        });
-        if let Some(key) = key {
-            self.options_metrics_cache.borrow_mut().push(key, metrics);
-        }
-        metrics
-    }
-
-    /// The layout of `text` at `max_width`, shared with the cache: a layout
-    /// animated through widths misses on every frame, and copying each one
-    /// into and out of the cache cost more than laying it out.
-    pub(crate) fn prepare_with_options(
-        &self,
-        node_id: Option<NodeId>,
-        text: &Rc<crate::text::AnnotatedString>,
-        style: &Arc<TextStyle>,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
+        source: LayoutSource<'_>,
+        frame: TextFrame,
+        units: TextUnits,
     ) -> Rc<PreparedTextLayout> {
-        let key =
-            text_options_cache_key(text, style, options.normalized(), max_width).map(|base| {
-                TextPreparedCacheKey {
-                    base,
-                    visual_hash: style.render_hash(),
-                }
-            });
+        let (text, style) = (source.text(), source.style());
+        let key = TextKey::of(text, style.render_hash(), frame.options, units);
         if let Some(key) = key
-            && let Some(prepared) = self.prepared_cache.borrow_mut().get(&key).map(Rc::clone)
+            && let Some(prepared) = self.held(key, frame, style)
         {
             return prepared;
         }
-        let prepared = self.prepare_unshared(node_id, text, style, options, max_width);
+        let (text, style) = source.shared();
+        let prepared = Rc::new(self.lay_out(text, style, frame, units));
         if let Some(key) = key {
-            self.prepared_cache
-                .borrow_mut()
-                .push(key, Rc::clone(&prepared));
+            let mut cache = self.prepared.borrow_mut();
+            match cache.get_mut(&key) {
+                Some(widths) => remember(widths, &prepared),
+                None => {
+                    cache.push(key, SmallVec::from_elem(Rc::clone(&prepared), 1));
+                }
+            }
         }
         prepared
     }
 
-    pub(crate) fn prepare_unshared(
-        &self,
-        node_id: Option<NodeId>,
-        text: &Rc<crate::text::AnnotatedString>,
-        style: &Arc<TextStyle>,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> Rc<PreparedTextLayout> {
-        Rc::new(self.with_measurer(|m| {
-            m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
-        }))
+    // A cached layout of `key` that breaks into the same lines in `frame`,
+    // aligned to its widths.
+    fn held(&self, key: TextKey, frame: TextFrame, style: &TextStyle) -> Option<Rc<PreparedTextLayout>> {
+        let mut cache = self.prepared.borrow_mut();
+        let widths = cache.get_mut(&key)?;
+        let held = widths
+            .iter()
+            .find(|prepared| prepared.layout.holds(frame.min_width, frame.max_width))
+            .map(Rc::clone)?;
+        if held.layout.width_between(frame.min_width, frame.max_width) == held.layout.width() {
+            return Some(held);
+        }
+        let mut layout = TextLayout::clone(&held.layout);
+        layout.align(
+            frame.min_width,
+            frame.max_width,
+            style.paragraph_style.text_align,
+        );
+        let aligned = Rc::new(PreparedTextLayout::new(
+            Rc::clone(&held.text),
+            Arc::clone(&held.visual_style),
+            layout,
+            (frame.max_width, frame.options.normalized().min_lines),
+        ));
+        remember(widths, &aligned);
+        Some(aligned)
     }
 
-    pub(crate) fn layout(
+    // Lays `text` out in `style`, auto-sizing it when its options ask.
+    fn lay_out(
         &self,
-        text: &crate::text::AnnotatedString,
+        text: Rc<AnnotatedString>,
+        style: Arc<TextStyle>,
+        frame: TextFrame,
+        units: TextUnits,
+    ) -> PreparedTextLayout {
+        let options = frame.options.normalized();
+        let min_lines = options.min_lines;
+        let Some(min_font_size_sp) = options.overflow.scale_down_min_font_size_sp() else {
+            let layout = self.layout(&text, &style, frame, units);
+            return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
+        };
+        let frame = TextFrame {
+            options: TextLayoutOptions {
+                overflow: TextOverflow::Clip,
+                ..options
+            },
+            ..frame
+        };
+        let fits = |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
+        let full = self.layout(&text, &style, frame, units);
+        let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
+        let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
+        if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
+            return PreparedTextLayout::new(text, style, full, (frame.max_width, min_lines));
+        }
+        let at = |factor: f32| {
+            self.layout(
+                &text,
+                &style,
+                frame,
+                TextUnits {
+                    factor: units.factor * factor,
+                    ..units
+                },
+            )
+        };
+        let mut best = at(min_factor);
+        if fits(&best) {
+            let (mut low, mut high) = (min_factor, 1.0);
+            for _ in 0..SCALE_DOWN_SEARCH_STEPS {
+                let mid = (low + high) * 0.5;
+                let candidate = at(mid);
+                if fits(&candidate) {
+                    low = mid;
+                    best = candidate;
+                } else {
+                    high = mid;
+                }
+            }
+        }
+        PreparedTextLayout::new(text, style, best, (frame.max_width, min_lines))
+    }
+
+    // One layout of `text` in `style` in `frame`, with sizes in `units`.
+    fn layout(
+        &self,
+        text: &AnnotatedString,
         style: &TextStyle,
-    ) -> TextLayoutResult {
-        let key = text_base_cache_key(text, style);
-        if let Some(key) = key
-            && let Some(layout) = self.layout_cache.borrow_mut().get(&key).cloned()
-        {
-            return layout;
-        }
-        let layout = self.with_measurer(|m| m.layout(text, style));
-        if let Some(key) = key {
-            self.layout_cache.borrow_mut().push(key, layout.clone());
-        }
-        layout
+        frame: TextFrame,
+        units: TextUnits,
+    ) -> TextLayout {
+        let paragraph = ParagraphSpans::new(text, style, units);
+        let fonts = self.fonts.borrow();
+        let spans = paragraph.spans(&fonts);
+        let input = LayoutInput {
+            text: &text.text,
+            spans: &spans,
+            paragraph: &style.paragraph_style,
+            lengths: paragraph.lengths,
+            min_width: frame.min_width,
+            max_width: frame.max_width,
+            options: frame.options,
+        };
+        self.layouter.borrow_mut().layout(&input, &fonts)
     }
 
-    /// Starts a layout pass: the measurer and these caches drop what recent
-    /// passes did not use.
+    // The intrinsic widths of `text` in `style`, with sizes in `units`.
+    fn intrinsics(&self, text: &AnnotatedString, style: &TextStyle, units: TextUnits) -> ParagraphIntrinsics {
+        let key = TextKey::of(text, style.measurement_hash(), TextLayoutOptions::default(), units);
+        if let Some(key) = key
+            && let Some(found) = self.intrinsics.borrow_mut().get(&key).copied()
+        {
+            return found;
+        }
+        let paragraph = ParagraphSpans::new(text, style, units);
+        let fonts = self.fonts.borrow();
+        let spans = paragraph.spans(&fonts);
+        let input = LayoutInput {
+            text: &text.text,
+            spans: &spans,
+            paragraph: &style.paragraph_style,
+            lengths: paragraph.lengths,
+            min_width: 0.0,
+            max_width: f32::INFINITY,
+            options: TextLayoutOptions::default(),
+        };
+        let found = self.layouter.borrow_mut().intrinsics(&input, &fonts);
+        if let Some(key) = key {
+            self.intrinsics.borrow_mut().push(key, found);
+        }
+        found
+    }
+
+    // The extent of `style`'s own font with sizes in `units`: its ascent,
+    // descent and line gap in pixels. `None` with no font.
+    fn extent(&self, style: &TextStyle, units: TextUnits) -> Option<FontExtent> {
+        let span = &style.span_style;
+        let size = units
+            .density
+            .font_scale_curve()
+            .sp_to_dp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP))
+            * units.factor;
+        let fonts = self.fonts.borrow();
+        let typeface = fonts.resolve(FontRequest {
+            family: span.font_family.as_ref().unwrap_or(&FontFamily::Default),
+            weight: span.font_weight.unwrap_or(FontWeight::NORMAL),
+            style: span.font_style.unwrap_or(FontStyle::Normal),
+        })?;
+        let scale = size / f32::from(typeface.units_per_em());
+        let metrics = typeface.line_metrics();
+        Some(FontExtent::new(
+            metrics.ascent * scale,
+            -metrics.descent * scale,
+            metrics.line_gap * scale,
+        ))
+    }
+
+    // The box of a line of `style`'s own font with sizes in `units`, before
+    // any text: its advance, baseline and edges. `None` with no font.
+    fn line_box(&self, style: &TextStyle, units: TextUnits) -> Option<LineBox> {
+        let extent = self.extent(style, units)?;
+        let empty = AnnotatedString::from("");
+        let paragraph = ParagraphSpans::new(&empty, style, units);
+        let asked = paragraph.lengths.line_height.unwrap_or(f32::NAN);
+        Some(paragraph_line_box(
+            &style.paragraph_style,
+            extent,
+            asked,
+            units.density.density(),
+        ))
+    }
+
+    /// Starts a layout pass: the caches drop what recent passes did not use.
     pub(crate) fn begin_layout_pass(&self) {
         self.pass_owed.set(false);
-        self.with_measurer(TextMeasurer::begin_layout_pass);
-        self.metrics_cache.borrow_mut().begin_pass(drop);
-        self.options_metrics_cache.borrow_mut().begin_pass(drop);
-        self.prepared_cache.borrow_mut().begin_pass(drop);
-        self.layout_cache.borrow_mut().begin_pass(drop);
+        self.prepared.borrow_mut().begin_pass(drop);
+        self.intrinsics.borrow_mut().begin_pass(drop);
     }
 
     /// A frame starts: the first use of the service in it outside a layout
@@ -907,2156 +518,272 @@ impl TextService {
             self.begin_layout_pass();
         }
     }
+}
 
-    fn clear_caches(&self) {
-        self.generation
-            .set(self.generation.get().wrapping_add(1).max(1));
-        self.metrics_cache.borrow_mut().clear();
-        self.options_metrics_cache.borrow_mut().clear();
-        self.prepared_cache.borrow_mut().clear();
-        self.layout_cache.borrow_mut().clear();
+// Puts `prepared` first among the layouts of one text, keeping the newest.
+fn remember(
+    widths: &mut SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>,
+    prepared: &Rc<PreparedTextLayout>,
+) {
+    widths.insert(0, Rc::clone(prepared));
+    widths.truncate(WIDTHS_PER_TEXT);
+}
+
+// Text sizes at the host's density and font scale.
+fn host_units() -> TextUnits {
+    TextUnits {
+        density: Density::from_host(),
+        factor: 1.0,
     }
 }
 
-fn text_base_cache_key(
-    text: &crate::text::AnnotatedString,
+// Text sizes taken as stated, on the host's pixel grid: a draw scope's text
+// style has its sizes resolved already.
+fn resolved_units() -> TextUnits {
+    TextUnits {
+        density: Density::with_curve(Density::from_host().density(), FontScaleCurve::linear(1.0)),
+        factor: 1.0,
+    }
+}
+
+fn prepare_borrowed(
+    text: &AnnotatedString,
     style: &TextStyle,
-) -> Option<TextBaseCacheKey> {
-    (text.string_annotations.is_empty() && text.link_annotations.is_empty()).then(|| {
-        TextBaseCacheKey {
-            text_hash: text.render_hash(),
-            style_hash: style.measurement_hash(),
-        }
-    })
-}
-
-fn text_options_cache_key(
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> Option<TextOptionsCacheKey> {
-    Some(TextOptionsCacheKey {
-        base: text_base_cache_key(text, style)?,
-        options: options.normalized(),
-        max_width_bits: normalize_max_width(max_width).map(f32::to_bits),
-    })
-}
-
-/// Installs `measurer` in the active app context. The measuring functions of this module use
-/// it. Panics when no app context is active.
-pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
-    crate::render_state::set_current_text_measurer(Rc::new(measurer));
-}
-
-/// Measures `text` in `style` with line breaks only at `\n`. Uses the installed measurer
-/// and the system font scale.
-pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| service.measure(None, text, style))
-    })
-}
-
-pub(crate) fn measure_resolved_text(
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-) -> TextMetrics {
-    crate::render_state::with_text_service(|service| service.measure(None, text, style))
-}
-
-pub(crate) fn resolved_first_baseline(style: &TextStyle) -> Option<f32> {
+    frame: TextFrame,
+    units: TextUnits,
+) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
-        service.with_measurer(|m| m.first_baseline(style))
+        service.prepare(LayoutSource::Borrowed { text, style }, frame, units)
     })
 }
 
-pub(crate) fn resolved_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
-    crate::render_state::current_app_context()?;
-    crate::render_state::with_text_service(|service| service.with_measurer(|m| m.line_box(style)))
+/// Lays text out with `fonts` in the active app context from now on. Panics
+/// when no app context is active.
+pub fn set_text_fonts(fonts: FontFamilyResolver) {
+    crate::render_state::set_current_text_fonts(fonts);
 }
 
-/// The tight glyph box `(top_offset, height)` of a `style` text line inside
-/// its line slot (see [`TextMeasurer::glyph_line_box`]). Falls back to the
-/// full slot when the active measurer has no font metrics.
-pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
-    let style = system_scaled_style(style);
-    crate::render_state::with_text_service(|service| {
-        service.with_measurer(|m| m.glyph_line_box(&style))
-    })
-    .map_or((0.0, line_height), |(off, h)| {
-        (off.min(line_height), h.min(line_height))
-    })
+/// Measures `text` in `style` with line breaks only at its line breaks, at
+/// the system font scale.
+pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
+    prepare_borrowed(
+        text,
+        style,
+        TextFrame::unbounded(TextLayoutOptions::default()),
+        host_units(),
+    )
+    .metrics
 }
 
-/// The paragraph line box of `style` (see [`TextMeasurer::line_box`]): its
-/// advance, its baseline and what a paragraph gives back at its edges. `None`
-/// when the active measurer carries no font metrics.
-pub fn text_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
-    let style = system_scaled_style(style);
-    crate::render_state::with_text_service(|service| service.with_measurer(|m| m.line_box(&style)))
+/// `text` laid out in `style` with lines ending only at its line breaks,
+/// `style`'s sizes taken as stated, not scaled by the system font scale.
+pub(crate) fn prepare_resolved(text: &AnnotatedString, style: &TextStyle) -> Rc<PreparedTextLayout> {
+    prepare_borrowed(
+        text,
+        style,
+        TextFrame::unbounded(TextLayoutOptions::default()),
+        resolved_units(),
+    )
 }
 
-/// Distance from the top of a `style` line slot down to its baseline (see
-/// [`TextMeasurer::first_baseline`]). `None` when the active measurer carries
-/// no font metrics.
-pub fn first_baseline(style: &TextStyle) -> Option<f32> {
-    let style = system_scaled_style(style);
-    crate::render_state::with_text_service(|service| {
-        service.with_measurer(|m| m.first_baseline(&style))
-    })
-}
-
-/// Like [`measure_text`] for the text of node `node_id`, so that the measurer can keep a
-/// cache for the node.
+/// Like [`measure_text`] for the text of node `node_id`.
 pub fn measure_text_for_node(
     node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
+    text: &AnnotatedString,
     style: &TextStyle,
 ) -> TextMetrics {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| service.measure(node_id, text, style))
-    })
+    let _ = node_id;
+    measure_text(text, style)
 }
 
-/// Measures `text` wrapped to `max_width` under `options`. `None` and widths that are not
-/// positive and finite mean no width limit.
+/// Measures `text` wrapped to `max_width` under `options`. `None` and widths
+/// that are not positive and finite mean no width limit.
 pub fn measure_text_with_options(
-    text: &crate::text::AnnotatedString,
+    text: &AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextMetrics {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| {
-            service.measure_with_options(None, text, style, options.normalized(), max_width)
-        })
-    })
+    prepare_borrowed(
+        text,
+        style,
+        TextFrame::up_to(max_width, options),
+        host_units(),
+    )
+    .metrics
 }
 
-/// Like [`measure_text_with_options`] for the text of node `node_id`, so that the measurer
-/// can keep a cache for the node.
+/// Like [`measure_text_with_options`] for the text of node `node_id`.
 pub fn measure_text_with_options_for_node(
     node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
+    text: &AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextMetrics {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| {
-            service.measure_with_options(node_id, text, style, options.normalized(), max_width)
-        })
-    })
+    let _ = node_id;
+    measure_text_with_options(text, style, options, max_width)
 }
 
-/// Lays `text` out in `style` wrapped to `max_width` under `options`. Returns the display
-/// text, which has the wrapping and overflow applied, with its metrics.
+/// Lays `text` out in `style` wrapped to `max_width` under `options`.
 pub fn prepare_text_layout(
-    text: &crate::text::AnnotatedString,
+    text: &AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
-    Rc::unwrap_or_clone(prepare_text_layout_for_node(
-        None,
-        &Rc::new(text.clone()),
-        &Arc::new(style.clone()),
-        options,
-        max_width,
+    Rc::unwrap_or_clone(prepare_borrowed(
+        text,
+        style,
+        TextFrame::up_to(max_width, options),
+        host_units(),
     ))
 }
 
-/// Lays out `text` in `style` for `node_id`. The layout shares the text and
-/// style when it leaves them as they are.
+/// Lays out `text` in `style` for `node_id` up to `max_width`. The layout
+/// shares the text and style.
 pub fn prepare_text_layout_for_node(
     node_id: Option<NodeId>,
-    text: &Rc<crate::text::AnnotatedString>,
+    text: &Rc<AnnotatedString>,
     style: &Arc<TextStyle>,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> Rc<PreparedTextLayout> {
-    with_font_scaled(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| {
-            service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
-        })
-    })
+    let _ = node_id;
+    prepare_shared(text, style, TextFrame::up_to(max_width, options))
 }
 
-pub(crate) fn prepare_unshared_text_layout_for_node(
-    node_id: Option<NodeId>,
-    text: &Rc<crate::text::AnnotatedString>,
+/// Lays out `text` in `style` between the widths of `frame`, sharing them.
+pub(crate) fn prepare_shared(
+    text: &Rc<AnnotatedString>,
     style: &Arc<TextStyle>,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
+    frame: TextFrame,
 ) -> Rc<PreparedTextLayout> {
-    with_font_scaled(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| {
-            service.prepare_unshared(node_id, text, style, options, max_width)
-        })
+    crate::render_state::with_text_service(|service| {
+        service.prepare(LayoutSource::Shared { text, style }, frame, host_units())
     })
 }
 
-fn with_font_scaled<R>(
-    text: &Rc<crate::text::AnnotatedString>,
-    style: &Arc<TextStyle>,
-    prepare: impl FnOnce(&Rc<crate::text::AnnotatedString>, &Arc<TextStyle>) -> R,
-) -> R {
-    let Some(curve) = crate::render_state::current_scaling_font_scale_curve() else {
-        return prepare(text, style);
-    };
-    let scaled_text = match scale_annotated_font_sizes(text, curve) {
-        Cow::Borrowed(_) => Rc::clone(text),
-        Cow::Owned(scaled) => Rc::new(scaled),
-    };
-    prepare(
-        &scaled_text,
-        &Arc::new(scale_text_style_font_sizes(style, curve).into_owned()),
+/// The byte offset of the caret nearest to the point (`x`, `y`) of `text`
+/// laid out in `style` with lines ending only at its line breaks, in logical
+/// pixels from its top left corner.
+pub fn get_offset_for_position(text: &AnnotatedString, style: &TextStyle, x: f32, y: f32) -> usize {
+    prepare_borrowed(
+        text,
+        style,
+        TextFrame::unbounded(TextLayoutOptions::default()),
+        host_units(),
     )
+    .layout
+    .offset_for_position(x, y)
 }
 
-/// Returns the byte offset of the character boundary nearest to the point (`x`, `y`) of
-/// `text` drawn in `style`, in logical pixels from the top left of the text. Lines are
-/// the ones that `\n` makes; see [`offset_for_position_wrapped`] for wrapped text.
-pub fn get_offset_for_position(
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    x: f32,
-    y: f32,
-) -> usize {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_measurer(|m| m.get_offset_for_position(text, style, x, y))
-    })
-}
-
-/// Byte offset nearest the local content position (`x`, `y`), **wrap-aware** —
-/// the single hit-test every editable-text pointer path uses (tap-to-place,
-/// drag-select, and selection-handle drag).
-///
-/// It is the inverse of the drawn caret and [`wrapped_line_ranges`]: `y` selects
-/// the VISUAL (wrapped) line (`floor(y / line_height)`), then `x` picks the
-/// nearest char boundary WITHIN that line (delegated to the measurer with `y`
-/// forced to 0). `x`/`y` must already be in text space (padding- and
-/// pan-adjusted). The plain [`get_offset_for_position`] maps `y` through the
-/// measurer's logical `\n` layout, so on wrapped text it lands on the wrong line
-/// (an error that grows with each wrapped line above the finger). With
-/// `wrap_width == None` (single-line fields) this reduces to the one logical
-/// line.
+/// The byte offset of the caret nearest to the point (`x`, `y`) of `text`
+/// laid out in `style` and wrapped to `wrap_width`: the hit test of every
+/// editable text's pointer path. `x` and `y` are in text space, padding and
+/// scrolling taken off.
 pub fn offset_for_position_wrapped(
     text: &str,
     style: &TextStyle,
-    node_id: Option<NodeId>,
     wrap_width: Option<f32>,
-    line_height: f32,
     x: f32,
     y: f32,
 ) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-    let annotated = crate::text::AnnotatedString::from(text);
-    let line_ranges = wrapped_line_ranges(
-        node_id,
-        &annotated,
+    prepare_borrowed(
+        &AnnotatedString::from(text),
         style,
-        TextLayoutOptions::default(),
-        wrap_width,
-    );
-    if line_ranges.is_empty() {
-        return 0;
-    }
-    let line_idx = if line_height > 0.0 {
-        (y / line_height).floor().max(0.0) as usize
-    } else {
-        0
-    }
-    .min(line_ranges.len() - 1);
-    let range = &line_ranges[line_idx];
-    let line = &text[range.start..range.end];
-    let within = get_offset_for_position(&crate::text::AnnotatedString::from(line), style, x, 0.0);
-    range.start + within.min(line.len())
+        TextFrame::up_to(wrap_width, TextLayoutOptions::default()),
+        host_units(),
+    )
+    .layout
+    .offset_for_position(x, y)
 }
 
-/// Returns the x position, in logical pixels, of the cursor at byte `offset` of `text`
-/// drawn in `style`.
-pub fn get_cursor_x_for_offset(
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    offset: usize,
-) -> f32 {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_measurer(|m| m.get_cursor_x_for_offset(text, style, offset))
-    })
+/// The x of the caret at byte `offset` of `text` laid out in `style` with
+/// lines ending only at its line breaks.
+pub fn get_cursor_x_for_offset(text: &AnnotatedString, style: &TextStyle, offset: usize) -> f32 {
+    prepare_borrowed(
+        text,
+        style,
+        TextFrame::unbounded(TextLayoutOptions::default()),
+        host_units(),
+    )
+    .layout
+    .horizontal_position(offset, CaretDirection::Primary)
 }
 
-/// Lays `text` out in `style` and returns the glyph and line positions.
-pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| service.layout(text, style))
-    })
+/// Lays `text` out in `style` with lines ending only at its line breaks.
+pub fn layout_text(text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
+    prepare_borrowed(
+        text,
+        style,
+        TextFrame::unbounded(TextLayoutOptions::default()),
+        host_units(),
+    )
+    .result()
 }
 
-/// Returns the source-text byte range covered by each **visual** (wrapped) line
-/// when `text` is laid out at `max_width` with `options`, matching the wrapping
-/// the renderer performs. Each range excludes the trailing `\n`. With
-/// `max_width == None` (or soft-wrap disabled) this is just the logical
-/// `\n`-delimited lines.
-///
-/// The text field uses this to place its caret and selection handles on the
-/// correct visual line for wrapped text: the in-content caret otherwise counts
-/// only logical `\n` lines, so a caret on a wrapped line's second visual line is
-/// drawn on the first (and its x, being the whole logical-line prefix width,
-/// runs off the right edge and is clipped), while typing and the magnifier land
-/// on the correct spot.
+/// The byte range of each line of `text` laid out at `max_width` with
+/// `options`, without its line break.
 pub fn wrapped_line_ranges(
-    node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
+    text: &AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> Vec<Range<usize>> {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_measurer(|m| {
-            wrapped_line_ranges_with_measurer(m, node_id, text, style, options, max_width)
+    let prepared = prepare_borrowed(
+        text,
+        style,
+        TextFrame::up_to(max_width, options),
+        host_units(),
+    );
+    let layout = &prepared.layout;
+    (0..layout.line_count())
+        .map(|line| {
+            let (start, end) = (layout.line_start(line), layout.line_end(line));
+            let line_text = text.text.get(start..end).unwrap_or_default();
+            let without_break = line_text.trim_end_matches(['\n', '\r', '\u{2028}', '\u{2029}']);
+            start..start + without_break.len()
         })
+        .collect()
+}
+
+/// The widest word of `text` in `style`: Compose's
+/// `ParagraphIntrinsics.minIntrinsicWidth`.
+pub(crate) fn min_intrinsic_text_width(text: &AnnotatedString, style: &TextStyle) -> f32 {
+    crate::render_state::with_text_service(|service| service.intrinsics(text, style, host_units()))
+        .min_intrinsic_width
+}
+
+/// The line box of `style`'s own font: its advance, its baseline and what a
+/// paragraph gives back at its edges. `None` with no font.
+pub fn text_line_box(style: &TextStyle) -> Option<LineBox> {
+    crate::render_state::with_text_service(|service| service.line_box(style, host_units()))
+}
+
+/// Like [`text_line_box`] with `style`'s sizes taken as stated.
+pub(crate) fn resolved_line_box(style: &TextStyle) -> Option<LineBox> {
+    crate::render_state::current_app_context()?;
+    crate::render_state::with_text_service(|service| service.line_box(style, resolved_units()))
+}
+
+/// Distance from the top of a `style` paragraph down to its first baseline.
+/// `None` with no font.
+pub fn first_baseline(style: &TextStyle) -> Option<f32> {
+    text_line_box(style).map(LineBox::first_baseline)
+}
+
+/// The glyph box `(top_offset, height)` of a `style` line inside a line
+/// `line_height` tall: the font's ascent and descent under the line's
+/// baseline. The whole line with no font.
+pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
+    let units = host_units();
+    crate::render_state::with_text_service(|service| {
+        let extent = service.extent(style, units)?;
+        let line_box = service.line_box(style, units)?;
+        Some((line_box.baseline - extent.ascent, extent.ascent + extent.descent))
+    })
+    .map_or((0.0, line_height), |(top, height)| {
+        (top.clamp(0.0, line_height), height.min(line_height))
     })
 }
-
-fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    _node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> Vec<Range<usize>> {
-    let opts = options.normalized();
-    let max_width = normalize_max_width(max_width);
-    let wrap_width = (opts.soft_wrap && opts.overflow != TextOverflow::Visible)
-        .then_some(max_width)
-        .flatten();
-    let line_break_mode = style
-        .paragraph_style
-        .line_break
-        .take_or_else(|| LineBreak::Simple);
-    let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
-
-    let line_ranges = split_line_ranges(text.text.as_str());
-    let Some(width_limit) = wrap_width else {
-        return line_ranges.into_vec();
-    };
-    let mut lines = DisplayLines::with_capacity(line_ranges.len());
-    for line_range in line_ranges {
-        wrap_line_to_width(
-            measurer,
-            text,
-            line_range,
-            style,
-            (width_limit, LineLimit::NONE, &mut None),
-            (line_break_mode, hyphens_mode),
-            &mut lines,
-        );
-    }
-    lines.into_iter().map(|line| line.source_range).collect()
-}
-
-/// The widest stretch of `text` between two places where a line may wrap,
-/// its trailing spaces left out: below that width a word has to break.
-/// Compose's `ParagraphIntrinsics.minIntrinsicWidth`.
-pub(crate) fn min_intrinsic_text_width(
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-) -> f32 {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_measurer(|measurer| {
-            widest_unbreakable_width(measurer, text, style)
-        })
-    })
-}
-
-fn widest_unbreakable_width<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-) -> f32 {
-    let mut widest = 0.0_f32;
-    for line_range in split_line_ranges(text.text.as_str()) {
-        let line_text = &text.text[line_range.clone()];
-        if line_text.is_empty() {
-            continue;
-        }
-        let boundaries = cluster_boundaries(line_text);
-        let end = boundaries.len() - 1;
-        let context = LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
-        let breaks = LineBreaks::new(line_text, &boundaries);
-        let mut start = 0;
-        for idx in 1..=end {
-            if idx < end && !breaks.before(idx) {
-                continue;
-            }
-            let mut word_end = idx;
-            while word_end > start && breaks.is_space(word_end - 1) {
-                word_end -= 1;
-            }
-            if word_end > start {
-                widest = widest.max(context.measure_char_range(&boundaries, start, word_end));
-            }
-            start = idx;
-        }
-    }
-    widest
-}
-
-fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> PreparedTextLayout {
-    prepare_text_layout_with_measurer_for_node(measurer, None, text, style, options, max_width)
-}
-
-/// Like [`prepare_text_layout`] with an explicit `measurer` in place of the installed one.
-/// The system font scale is not applied.
-pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> PreparedTextLayout {
-    prepare_layout(
-        measurer,
-        node_id,
-        LayoutSource::Borrowed { text, style },
-        options,
-        max_width,
-    )
-}
-
-/// The text and style a layout is prepared from: borrowed, which the layout
-/// copies, or shared with the node that holds them.
-#[derive(Clone, Copy)]
-enum LayoutSource<'a> {
-    Borrowed {
-        text: &'a crate::text::AnnotatedString,
-        style: &'a TextStyle,
-    },
-    Shared {
-        text: &'a Rc<crate::text::AnnotatedString>,
-        style: &'a Arc<TextStyle>,
-    },
-}
-
-impl LayoutSource<'_> {
-    fn text(&self) -> &crate::text::AnnotatedString {
-        match self {
-            Self::Borrowed { text, .. } => text,
-            Self::Shared { text, .. } => text,
-        }
-    }
-
-    fn style(&self) -> &TextStyle {
-        match self {
-            Self::Borrowed { style, .. } => style,
-            Self::Shared { style, .. } => style,
-        }
-    }
-
-    /// The source text as the layout's display text, when the layout left it
-    /// as it is: shared, or built from `lines` when it cannot be shared.
-    fn display_text(
-        &self,
-        lines: &[DisplayLine],
-        unchanged: bool,
-    ) -> Rc<crate::text::AnnotatedString> {
-        match self {
-            Self::Shared { text, .. } if unchanged => Rc::clone(text),
-            _ => Rc::new(build_display_annotated(self.text(), lines)),
-        }
-    }
-
-    fn visual_style(&self) -> Arc<TextStyle> {
-        match self {
-            Self::Borrowed { style, .. } => Arc::new((*style).clone()),
-            Self::Shared { style, .. } => Arc::clone(style),
-        }
-    }
-}
-
-#[expect(clippy::print_stderr, reason = "layout telemetry, when switched on")]
-fn prepare_layout<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    source: LayoutSource<'_>,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> PreparedTextLayout {
-    let (text, style) = (source.text(), source.style());
-    let telemetry = text_layout_telemetry_enabled();
-    let total_start = telemetry.then(Instant::now);
-    let opts = options.normalized();
-    let max_width = normalize_max_width(max_width);
-    if let Some(min_font_size_sp) = opts.overflow.scale_down_min_font_size_sp() {
-        return prepare_scale_down_text_layout(
-            measurer,
-            node_id,
-            text,
-            style,
-            opts,
-            max_width,
-            min_font_size_sp,
-        );
-    }
-
-    let wrap_width = (opts.soft_wrap && opts.overflow != TextOverflow::Visible)
-        .then_some(max_width)
-        .flatten();
-    let line_break_mode = style
-        .paragraph_style
-        .line_break
-        .take_or_else(|| LineBreak::Simple);
-    let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
-
-    let wrap_start = telemetry.then(Instant::now);
-    let line_ranges = split_line_ranges(text.text.as_str());
-    let source_line_count = line_ranges.len();
-    let mut visible_lines: DisplayLines;
-    let mut wrap_hold = None;
-    let mut cut_line = None;
-    if let Some(width_limit) = wrap_width {
-        (visible_lines, wrap_hold, cut_line) = wrap_lines(
-            measurer,
-            text,
-            line_ranges,
-            style,
-            (width_limit, LineLimit::of(opts)),
-            (line_break_mode, hyphens_mode),
-        );
-    } else {
-        visible_lines = line_ranges
-            .into_iter()
-            .map(DisplayLine::from_source_range)
-            .collect();
-    }
-    let wrap_ms = wrap_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
-
-    let overflow_start = telemetry.then(Instant::now);
-    let did_overflow = apply_overflow(
-        measurer,
-        node_id,
-        (text, style),
-        opts,
-        max_width,
-        (&mut visible_lines, &mut wrap_hold, cut_line.as_ref()),
-    );
-    let overflow_ms = overflow_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
-
-    let build_start = telemetry.then(Instant::now);
-    // No line wrapped, was cut or elided: the display text is the source.
-    let unchanged = !did_overflow
-        && visible_lines.len() == source_line_count
-        && visible_lines
-            .iter()
-            .all(|line| matches!(line.text, DisplayLineText::Source));
-    let display_annotated = source.display_text(&visible_lines, unchanged);
-    debug_assert_eq!(
-        display_annotated.text,
-        join_display_line_text(text, &visible_lines)
-    );
-    let build_ms = build_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
-
-    let metrics_start = telemetry.then(Instant::now);
-    let display_line_count = visible_lines.len().max(1);
-    let layout_line_count = display_line_count.max(opts.min_lines);
-
-    let measured_width = if visible_lines.is_empty() {
-        0.0
-    } else {
-        visible_lines
-            .iter_mut()
-            .map(|line| line.measure_width(measurer, node_id, text, style))
-            .fold(0.0_f32, f32::max)
-    };
-    let metrics_ms = metrics_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
-    let width = if opts.overflow == TextOverflow::Visible {
-        measured_width
-    } else if let Some(width_limit) = max_width {
-        measured_width.min(width_limit)
-    } else {
-        measured_width
-    };
-    let wrap_hold = WrapHold::settle(wrap_hold, measured_width, wrap_width);
-
-    let vertical = prepared_line_metrics(
-        measurer,
-        node_id,
-        text,
-        &display_annotated,
-        style,
-        opts.min_lines,
-    );
-    let prepared = PreparedTextLayout {
-        text: display_annotated,
-        visual_style: source.visual_style(),
-        alignment_lines: vertical.alignment_lines,
-        metrics: TextMetrics {
-            width,
-            height: vertical.height,
-            line_height: vertical.line_height,
-            line_count: layout_line_count,
-        },
-        did_overflow,
-        render_text: Default::default(),
-        visual_style_hash: Default::default(),
-        wrap_hold,
-    };
-
-    if let Some(start) = total_start {
-        eprintln!(
-            "[text-layout-telemetry] bytes={} spans={} source_lines={} display_lines={} wrap={} max_width={:?} wrap_ms={:.2} overflow_ms={:.2} build_ms={:.2} metrics_ms={:.2} total_ms={:.2}",
-            text.text.len(),
-            text.span_styles.len(),
-            source_line_count,
-            display_line_count,
-            wrap_width.is_some(),
-            max_width,
-            wrap_ms.unwrap_or(0.0),
-            overflow_ms.unwrap_or(0.0),
-            build_ms.unwrap_or(0.0),
-            metrics_ms.unwrap_or(0.0),
-            start.elapsed().as_secs_f64() * 1000.0,
-        );
-    }
-
-    prepared
-}
-
-struct PreparedLineMetrics {
-    height: f32,
-    line_height: f32,
-    alignment_lines: cranpose_ui_layout::AlignmentLines,
-}
-
-fn prepared_line_metrics<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    source: &crate::text::AnnotatedString,
-    display: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    min_lines: usize,
-) -> PreparedLineMetrics {
-    let mut span_base_box = None;
-    if !display.span_styles.is_empty() {
-        let base_box = measurer.line_box(style);
-        span_base_box = Some(base_box);
-        let mut top = 0.0;
-        let mut trim_bottom = 0.0;
-        let mut first = None;
-        let mut last = None;
-        let mut line_height = 0.0_f32;
-        let resolved = measurer.visit_line_boxes(display, style, &mut |line| {
-            if first.is_none() {
-                top = -line.trim_top;
-                first = Some(top + line.baseline);
-            }
-            last = Some(top + line.baseline);
-            top += line.height;
-            trim_bottom = line.trim_bottom;
-            line_height = line_height.max(line.height);
-        });
-        if resolved.is_some() {
-            let min_height = if min_lines > 1 {
-                base_box.map_or(0.0, |line| line.block_height(min_lines))
-            } else {
-                0.0
-            };
-            return PreparedLineMetrics {
-                height: (top - trim_bottom).max(min_height),
-                line_height,
-                alignment_lines: cranpose_ui_layout::AlignmentLines::new(first, last),
-            };
-        }
-    }
-    let measured_text = if source.span_styles.is_empty() {
-        source
-    } else {
-        display
-    };
-    let (base_box, line_height) = match span_base_box {
-        Some(base_box) => (
-            base_box,
-            measurer.line_height_for_node(node_id, measured_text, style),
-        ),
-        None => measurer.line_box_and_height(node_id, measured_text, style),
-    };
-    let line_height = line_height.max(0.0);
-    let first = base_box
-        .map(crate::text::LineBox::first_baseline)
-        .or_else(|| measurer.first_baseline(style));
-    let displayed_lines = display.text.split('\n').count().max(1);
-    let layout_line_count = displayed_lines.max(min_lines);
-    let edges = base_box.unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
-    PreparedLineMetrics {
-        height: (layout_line_count as f32 * line_height - edges.trim_top - edges.trim_bottom)
-            .max(0.0),
-        line_height,
-        alignment_lines: cranpose_ui_layout::AlignmentLines::new(
-            first,
-            first.map(|first| first + (displayed_lines - 1) as f32 * line_height),
-        ),
-    }
-}
-
-fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-    min_font_size_sp: f32,
-) -> PreparedTextLayout {
-    let clipped_options = TextLayoutOptions {
-        overflow: TextOverflow::Clip,
-        ..options
-    }
-    .normalized();
-
-    let full_size = prepare_scaled_text_layout(
-        measurer,
-        node_id,
-        text,
-        style,
-        clipped_options,
-        max_width,
-        FontScaleCurve::linear(1.0),
-    );
-    let Some(width_limit) = max_width else {
-        return full_size;
-    };
-    if !full_size.did_overflow {
-        return full_size;
-    }
-
-    let base_font_size = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
-    if !base_font_size.is_finite() || base_font_size <= 0.0 {
-        return full_size;
-    }
-    let min_scale = (min_font_size_sp.min(base_font_size) / base_font_size).clamp(0.0, 1.0);
-    if min_scale >= 1.0 {
-        return full_size;
-    }
-
-    let min_size = prepare_scaled_text_layout(
-        measurer,
-        node_id,
-        text,
-        style,
-        clipped_options,
-        Some(width_limit),
-        FontScaleCurve::linear(min_scale),
-    );
-    if min_size.did_overflow {
-        return min_size;
-    }
-
-    let mut low = min_scale;
-    let mut high = 1.0;
-    let mut best = min_size;
-    for _ in 0..SCALE_DOWN_SEARCH_STEPS {
-        let mid = (low + high) * 0.5;
-        let candidate = prepare_scaled_text_layout(
-            measurer,
-            node_id,
-            text,
-            style,
-            clipped_options,
-            Some(width_limit),
-            FontScaleCurve::linear(mid),
-        );
-        if candidate.did_overflow {
-            high = mid;
-        } else {
-            low = mid;
-            best = candidate;
-        }
-    }
-
-    best
-}
-
-fn prepare_scaled_text_layout<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-    shrink: FontScaleCurve,
-) -> PreparedTextLayout {
-    let visual_style = scale_text_style_font_sizes(style, shrink);
-    let visual_text = scale_annotated_font_sizes(text, shrink);
-    prepare_text_layout_with_measurer_for_node(
-        measurer,
-        node_id,
-        visual_text.as_ref(),
-        &visual_style,
-        options,
-        max_width,
-    )
-}
-
-fn scale_annotated_font_sizes(
-    text: &crate::text::AnnotatedString,
-    curve: FontScaleCurve,
-) -> Cow<'_, crate::text::AnnotatedString> {
-    if curve.is_identity() || !annotated_text_needs_scaling(text) {
-        return Cow::Borrowed(text);
-    }
-
-    let mut scaled = text.clone();
-    for span in &mut scaled.span_styles {
-        scale_span_style_font_sizes(&mut span.item, curve, None);
-    }
-    Cow::Owned(scaled)
-}
-
-fn scale_text_style_font_sizes(style: &TextStyle, curve: FontScaleCurve) -> Cow<'_, TextStyle> {
-    if curve.is_identity() {
-        return Cow::Borrowed(style);
-    }
-
-    let mut scaled = style.clone();
-    scale_span_style_font_sizes(&mut scaled.span_style, curve, Some(DEFAULT_FONT_SIZE_SP));
-    scaled.paragraph_style.line_height =
-        scale_text_unit_sp(scaled.paragraph_style.line_height, curve);
-    if let Some(mut indent) = scaled.paragraph_style.text_indent {
-        indent.first_line = scale_text_unit_sp(indent.first_line, curve);
-        indent.rest_line = scale_text_unit_sp(indent.rest_line, curve);
-        scaled.paragraph_style.text_indent = Some(indent);
-    }
-    Cow::Owned(scaled)
-}
-
-/// `style` at the running app's font scale.
-fn system_scaled_style(style: &TextStyle) -> Cow<'_, TextStyle> {
-    match crate::render_state::current_scaling_font_scale_curve() {
-        Some(curve) => scale_text_style_font_sizes(style, curve),
-        None => Cow::Borrowed(style),
-    }
-}
-
-fn with_system_font_scale<R>(
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-    block: impl FnOnce(&crate::text::AnnotatedString, &TextStyle) -> R,
-) -> R {
-    let Some(curve) = crate::render_state::current_scaling_font_scale_curve() else {
-        return block(text, style);
-    };
-    let visual_style = scale_text_style_font_sizes(style, curve);
-    let visual_text = scale_annotated_font_sizes(text, curve);
-    block(visual_text.as_ref(), &visual_style)
-}
-
-/// Scales `scaled`'s sizes in place by `curve`.
-fn scale_span_style_font_sizes(
-    scaled: &mut crate::text::SpanStyle,
-    curve: FontScaleCurve,
-    default_font_size_sp: Option<f32>,
-) {
-    let factor = curve.scale();
-    scaled.font_size = match (scaled.font_size, default_font_size_sp) {
-        (crate::text::TextUnit::Unspecified, Some(default_size)) => {
-            crate::text::TextUnit::Sp(curve.sp_to_dp(default_size))
-        }
-        (unit, Some(_)) => scale_text_unit_sp_and_em(unit, curve),
-        (unit, None) => scale_text_unit_sp(unit, curve),
-    };
-    scaled.letter_spacing = scale_text_unit_sp(scaled.letter_spacing, curve);
-    if let Some(mut shadow) = scaled.shadow {
-        shadow.offset.x = scale_finite_dimension(shadow.offset.x, factor);
-        shadow.offset.y = scale_finite_dimension(shadow.offset.y, factor);
-        shadow.blur_radius = scale_finite_dimension(shadow.blur_radius, factor);
-        scaled.shadow = Some(shadow);
-    }
-    if let Some(crate::text::TextDrawStyle::Stroke { width }) = scaled.draw_style {
-        scaled.draw_style = Some(crate::text::TextDrawStyle::Stroke {
-            width: width * factor,
-        });
-    }
-}
-
-fn annotated_text_needs_scaling(text: &crate::text::AnnotatedString) -> bool {
-    text.span_styles
-        .iter()
-        .any(|span| span_style_needs_scaling(&span.item))
-}
-
-fn span_style_needs_scaling(style: &crate::text::SpanStyle) -> bool {
-    matches!(style.font_size, crate::text::TextUnit::Sp(value) if value.is_finite())
-        || matches!(style.letter_spacing, crate::text::TextUnit::Sp(value) if value.is_finite())
-        || matches!(
-            style.draw_style,
-            Some(crate::text::TextDrawStyle::Stroke { .. })
-        )
-        || style.shadow.is_some()
-}
-
-fn scale_text_unit_sp(unit: crate::text::TextUnit, curve: FontScaleCurve) -> crate::text::TextUnit {
-    match unit {
-        crate::text::TextUnit::Sp(value) if value.is_finite() => {
-            crate::text::TextUnit::Sp(curve.sp_to_dp(value))
-        }
-        other => other,
-    }
-}
-
-fn scale_text_unit_sp_and_em(
-    unit: crate::text::TextUnit,
-    curve: FontScaleCurve,
-) -> crate::text::TextUnit {
-    match unit {
-        crate::text::TextUnit::Sp(_) => scale_text_unit_sp(unit, curve),
-        crate::text::TextUnit::Em(value) if value.is_finite() => {
-            crate::text::TextUnit::Em(value * curve.scale())
-        }
-        other => other,
-    }
-}
-
-fn scale_finite_dimension(value: f32, factor: f32) -> f32 {
-    if value.is_finite() {
-        value * factor
-    } else {
-        value
-    }
-}
-
-#[derive(Clone, Debug)]
-enum DisplayLineText {
-    Source,
-    Ellipsized(crate::text::AnnotatedString),
-}
-
-#[derive(Clone, Debug)]
-struct DisplayLine {
-    source_range: Range<usize>,
-    text: DisplayLineText,
-    measured_width: Option<f32>,
-}
-
-impl DisplayLine {
-    fn from_source_range(source_range: Range<usize>) -> Self {
-        Self {
-            source_range,
-            text: DisplayLineText::Source,
-            measured_width: None,
-        }
-    }
-
-    fn from_measured_source_range(source_range: Range<usize>, measured_width: f32) -> Self {
-        Self {
-            source_range,
-            text: DisplayLineText::Source,
-            measured_width: measured_width
-                .is_finite()
-                .then_some(measured_width.max(0.0)),
-        }
-    }
-
-    fn display_text<'a>(&'a self, source: &'a crate::text::AnnotatedString) -> &'a str {
-        match &self.text {
-            DisplayLineText::Source => &source.text[self.source_range.clone()],
-            DisplayLineText::Ellipsized(annotated) => annotated.text.as_str(),
-        }
-    }
-
-    /// The line's width, measured once and kept.
-    fn measure_width<M: TextMeasurer + ?Sized>(
-        &mut self,
-        measurer: &M,
-        node_id: Option<NodeId>,
-        source: &crate::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> f32 {
-        *self.measured_width.get_or_insert_with(|| match &self.text {
-            DisplayLineText::Source => {
-                measurer
-                    .measure_subsequence_for_node(node_id, source, self.source_range.clone(), style)
-                    .width
-            }
-            DisplayLineText::Ellipsized(annotated) => {
-                measurer.measure_for_node(node_id, annotated, style).width
-            }
-        })
-    }
-
-    fn extend_to_paragraph_end(&mut self, source: &crate::text::AnnotatedString) {
-        let start = self.source_range.start;
-        let end = source.text[start..]
-            .find('\n')
-            .map_or(source.text.len(), |offset| start + offset);
-        self.source_range = start..end;
-        self.text = DisplayLineText::Source;
-        self.measured_width = None;
-    }
-
-    /// Elides the line to fit `max_width` and returns the widths that cut
-    /// it at the same character.
-    fn ellipsize<M: TextMeasurer + ?Sized>(
-        &mut self,
-        measurer: &M,
-        node_id: Option<NodeId>,
-        (source, style): (&crate::text::AnnotatedString, &TextStyle),
-        (max_width, placement): (Option<f32>, EllipsisPlacement),
-        cut_line: Option<&MeasuredSourceLine>,
-    ) -> WrapHold {
-        let (line, cut) = fit_ellipsis(
-            measurer,
-            node_id,
-            (source, self.source_range.clone()),
-            style,
-            (max_width, placement),
-            cut_line,
-        );
-        *self = line;
-        cut
-    }
-}
-
-/// A text's lines, which for most texts is one, kept without an allocation.
-type LineRanges = smallvec::SmallVec<[Range<usize>; 1]>;
-/// A layout's display lines, kept without an allocation for one line.
-type DisplayLines = smallvec::SmallVec<[DisplayLine; 1]>;
-
-fn split_line_ranges(text: &str) -> LineRanges {
-    if text.is_empty() {
-        return smallvec::smallvec![0..0];
-    }
-
-    // `\n` is one byte that no other character's encoding contains, so the
-    // bytes find it without decoding the characters.
-    let mut ranges = LineRanges::new();
-    let mut start = 0usize;
-    for (idx, byte) in text.bytes().enumerate() {
-        if byte == b'\n' {
-            ranges.push(start..idx);
-            start = idx + 1;
-        }
-    }
-    ranges.push(start..text.len());
-    ranges
-}
-
-fn build_display_annotated(
-    source: &crate::text::AnnotatedString,
-    lines: &[DisplayLine],
-) -> crate::text::AnnotatedString {
-    if lines.is_empty() {
-        return crate::text::AnnotatedString::from("");
-    }
-
-    let mut builder = crate::text::AnnotatedString::builder();
-    for (idx, line) in lines.iter().enumerate() {
-        builder = match &line.text {
-            DisplayLineText::Source => {
-                builder.append_annotated_subsequence(source, line.source_range.clone())
-            }
-            DisplayLineText::Ellipsized(annotated) => builder.append_annotated(annotated),
-        };
-        if idx + 1 < lines.len() {
-            builder = builder.append("\n");
-        }
-    }
-    builder.to_annotated_string()
-}
-
-fn join_display_line_text(source: &crate::text::AnnotatedString, lines: &[DisplayLine]) -> String {
-    let mut text = String::new();
-    for (idx, line) in lines.iter().enumerate() {
-        text.push_str(line.display_text(source));
-        if idx + 1 < lines.len() {
-            text.push('\n');
-        }
-    }
-    text
-}
-
-fn trim_segment_end_whitespace(line: &str, start: usize, mut end: usize) -> usize {
-    while end > start {
-        let Some((idx, ch)) = line[start..end].char_indices().next_back() else {
-            break;
-        };
-        if ch.is_whitespace() {
-            end = start + idx;
-        } else {
-            break;
-        }
-    }
-    end
-}
-
-/// The max widths a prepared layout comes out the same for, so a node whose
-/// width moves can keep one layout instead of preparing it again.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum PreparedWidths {
-    /// Only the width it was prepared at; `None` is unconstrained.
-    Exact(Option<u32>),
-    /// No line wrapped or overflowed: unconstrained, and every width from
-    /// its measured width up. A narrower width may wrap, so it is not held.
-    AtLeast(f32),
-    /// Lines wrapped greedily, and every width that breaks them and cuts the
-    /// last kept line's ellipsis the same.
-    Wrapped(WrapHold),
-}
-
-impl PreparedWidths {
-    /// The widths `prepared`, made from `text` at `max_width`, holds for.
-    pub(crate) fn of(
-        text: &crate::text::AnnotatedString,
-        options: TextLayoutOptions,
-        max_width: Option<f32>,
-        prepared: &PreparedTextLayout,
-    ) -> Self {
-        let max_width = normalize_max_width(max_width);
-        let exact = Self::Exact(max_width.map(f32::to_bits));
-        let wrapped = prepared.text.text.matches('\n').count() != text.text.matches('\n').count();
-        // A line's trailing spaces count when it is fitted but not in the
-        // width it reports, so such a line may wrap at its own width.
-        let trailing_space = text
-            .text
-            .split('\n')
-            .any(|line| line.ends_with(char::is_whitespace));
-        if options
-            .normalized()
-            .overflow
-            .scale_down_min_font_size_sp()
-            .is_some()
-            || trailing_space
-        {
-            return exact;
-        }
-        if wrapped || prepared.did_overflow {
-            return match (prepared.wrap_hold, max_width) {
-                (Some(hold), Some(width)) if hold.holds(width) => Self::Wrapped(hold),
-                _ => exact,
-            };
-        }
-        match max_width {
-            Some(width) if prepared.metrics.width >= width => exact,
-            _ => Self::AtLeast(prepared.metrics.width),
-        }
-    }
-
-    /// The max widths of constraints this layout comes out the same for,
-    /// as a range: an unbounded max is infinite. Each end steps in from the
-    /// edge [`Self::hold`] draws, so a width the range holds never rounds
-    /// to the other side of it.
-    pub(crate) fn max_width_range(self) -> cranpose_ui_layout::BoundRange {
-        match self {
-            Self::Exact(None) => cranpose_ui_layout::BoundRange::exactly(f32::INFINITY),
-            Self::Exact(Some(bits)) => {
-                cranpose_ui_layout::BoundRange::exactly(f32::from_bits(bits))
-            }
-            Self::AtLeast(min) => cranpose_ui_layout::BoundRange::from(min.next_up()),
-            Self::Wrapped(hold) => cranpose_ui_layout::BoundRange {
-                low: (hold.fits - WRAP_EPSILON).next_up(),
-                high: (hold.pulls_up - WRAP_EPSILON).next_down().next_down(),
-            },
-        }
-    }
-
-    /// Whether preparing at `max_width` gives the same layout.
-    pub(crate) fn hold(self, max_width: Option<f32>) -> bool {
-        let max_width = normalize_max_width(max_width);
-        match self {
-            Self::Exact(bits) => max_width.map(f32::to_bits) == bits,
-            Self::AtLeast(min) => max_width.is_none_or(|width| width >= min),
-            Self::Wrapped(hold) => max_width.is_some_and(|width| hold.holds(width)),
-        }
-    }
-}
-
-fn normalize_max_width(max_width: Option<f32>) -> Option<f32> {
-    match max_width {
-        Some(width) if width.is_finite() && width > 0.0 => Some(width),
-        _ => None,
-    }
-}
-
-fn absolute_range_from_start(base_start: usize, relative: Range<usize>) -> Range<usize> {
-    (base_start + relative.start)..(base_start + relative.end)
-}
-
-fn boundary_index_for_byte(boundaries: &[usize], byte_offset: usize) -> usize {
-    boundaries
-        .binary_search(&byte_offset)
-        .unwrap_or_else(|index| index.min(boundaries.len().saturating_sub(1)))
-}
-
-struct LineMeasureContext<'a, M: TextMeasurer + ?Sized> {
-    measurer: &'a M,
-    text: &'a crate::text::AnnotatedString,
-    style: &'a TextStyle,
-    line_start: usize,
-    prefix_widths: Option<TextLinePrefixWidths>,
-}
-
-impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {
-    fn new(
-        measurer: &'a M,
-        text: &'a crate::text::AnnotatedString,
-        line_range: &Range<usize>,
-        style: &'a TextStyle,
-        boundary_count: usize,
-    ) -> Self {
-        let expected_chars = boundary_count.saturating_sub(1);
-        let prefix_widths = measurer
-            .measure_line_prefix_widths(text, line_range.clone(), style)
-            .filter(|widths| widths.char_count() == expected_chars);
-        Self {
-            measurer,
-            text,
-            style,
-            line_start: line_range.start,
-            prefix_widths,
-        }
-    }
-
-    fn measure_char_range(&self, boundaries: &[usize], start_idx: usize, end_idx: usize) -> f32 {
-        if let Some(width) = self.prefix_width_for_char_range(start_idx, end_idx) {
-            return width;
-        }
-        let segment_range =
-            absolute_range_from_start(self.line_start, boundaries[start_idx]..boundaries[end_idx]);
-        self.measurer
-            .measure_subsequence(self.text, segment_range, self.style)
-            .width
-    }
-
-    fn prefix_width_for_char_range(&self, start_idx: usize, end_idx: usize) -> Option<f32> {
-        if let Some(prefix_widths) = &self.prefix_widths
-            && let Some(width) = prefix_widths.width_for_char_range(start_idx, end_idx)
-        {
-            return Some(width);
-        }
-        None
-    }
-
-    fn display_line_for_char_range(
-        &self,
-        boundaries: &[usize],
-        start_idx: usize,
-        end_idx: usize,
-    ) -> DisplayLine {
-        let source_range =
-            absolute_range_from_start(self.line_start, boundaries[start_idx]..boundaries[end_idx]);
-        let measured_width = self.measure_char_range(boundaries, start_idx, end_idx);
-        DisplayLine::from_measured_source_range(source_range, measured_width)
-    }
-}
-
-/// The display lines `line_ranges` wrap into at `max_width`, and when any
-/// wrapped greedily, the widths that wrap them the same.
-/// How many lines a wrap keeps, and whether the last kept line runs on to
-/// its paragraph's end to be elided when text is cut after it.
-#[derive(Clone, Copy, Debug)]
-struct LineLimit {
-    lines: usize,
-    elides_last: bool,
-}
-
-impl LineLimit {
-    const NONE: Self = Self {
-        lines: usize::MAX,
-        elides_last: false,
-    };
-
-    fn of(options: TextLayoutOptions) -> Self {
-        Self {
-            lines: options.max_lines,
-            elides_last: EllipsisPlacement::for_options(options).is_some(),
-        }
-    }
-
-    /// Whether a wrap with `lines` lines so far has reached the limit: it
-    /// then ends with one line that stands for all the cut text.
-    fn reached(self, lines: usize) -> bool {
-        lines >= self.lines
-    }
-
-    /// Whether the next line after `lines` lines is the last kept line and
-    /// is elided, so where it breaks does not change the layout.
-    fn elides_next(self, lines: usize) -> bool {
-        self.elides_last && lines + 1 == self.lines
-    }
-}
-
-fn wrap_lines<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    text: &crate::text::AnnotatedString,
-    line_ranges: LineRanges,
-    style: &TextStyle,
-    (max_width, limit): (f32, LineLimit),
-    modes: (LineBreak, Hyphens),
-) -> (DisplayLines, Option<WrapHold>, Option<MeasuredSourceLine>) {
-    let source_lines = line_ranges.len();
-    let mut lines = DisplayLines::with_capacity(source_lines.min(limit.lines.saturating_add(1)));
-    let mut hold = Some(WrapHold::ANY);
-    let mut cut_line = None;
-    for line_range in line_ranges {
-        if limit.reached(lines.len()) {
-            if lines.len() == limit.lines {
-                lines.push(DisplayLine::from_source_range(line_range));
-            }
-            break;
-        }
-        cut_line = wrap_line_to_width(
-            measurer,
-            text,
-            line_range,
-            style,
-            (max_width, limit, &mut hold),
-            modes,
-            &mut lines,
-        );
-    }
-    let wrapped = lines.len() != source_lines;
-    (lines, hold.filter(|_| wrapped), cut_line)
-}
-
-/// Appends the display lines `line_range` wraps into at `max_width` to
-/// `out`: most lines fit whole, and take no allocation of their own. Narrows
-/// `hold` to the widths that wrap it the same, or clears it when the wrap is
-/// not greedy.
-fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    text: &crate::text::AnnotatedString,
-    line_range: Range<usize>,
-    style: &TextStyle,
-    (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
-    (line_break, hyphens): (LineBreak, Hyphens),
-    out: &mut DisplayLines,
-) -> Option<MeasuredSourceLine> {
-    let line_text = &text.text[line_range.clone()];
-    if line_text.is_empty() {
-        out.push(DisplayLine::from_source_range(
-            line_range.start..line_range.start,
-        ));
-        return None;
-    }
-
-    if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style)
-        && measured_width <= max_width + WRAP_EPSILON
-    {
-        WrapHold::fit_whole(hold, measured_width);
-        out.push(DisplayLine::from_measured_source_range(
-            line_range,
-            measured_width,
-        ));
-        return None;
-    }
-
-    if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
-        && line_text.chars().any(char::is_whitespace)
-        && wrap_line_with_word_balance(
-            measurer,
-            text,
-            line_range.clone(),
-            style,
-            max_width,
-            line_break,
-            out,
-        )
-    {
-        *hold = None;
-        return None;
-    }
-
-    wrap_line_greedy(
-        measurer,
-        text,
-        line_range,
-        style,
-        (max_width, limit, hold),
-        (line_break, hyphens),
-        out,
-    )
-}
-
-fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    text: &crate::text::AnnotatedString,
-    line_range: Range<usize>,
-    style: &TextStyle,
-    (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
-    (line_break, hyphens): (LineBreak, Hyphens),
-    out: &mut DisplayLines,
-) -> Option<MeasuredSourceLine> {
-    let line_text = &text.text[line_range.clone()];
-    let boundaries = cluster_boundaries(line_text);
-    let mut measure_context =
-        LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
-    if let Some(measured_width) =
-        measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
-        && measured_width <= max_width + WRAP_EPSILON
-    {
-        WrapHold::fit_whole(hold, measured_width);
-        out.push(DisplayLine::from_measured_source_range(
-            line_range,
-            measured_width,
-        ));
-        return None;
-    }
-    let first = out.len();
-    let breaks = LineBreaks::new(line_text, &boundaries);
-    let mut start_idx = 0usize;
-
-    while start_idx < boundaries.len() - 1 {
-        if limit.reached(out.len()) {
-            out.push(DisplayLine::from_source_range(
-                line_range.start + boundaries[start_idx]..line_range.end,
-            ));
-            // The ellipsis that cuts the last line kept reads this line's
-            // measurements instead of taking them again.
-            return Some(MeasuredSourceLine {
-                start: line_range.start,
-                prefix_widths: measure_context.prefix_widths.take(),
-                boundaries,
-            });
-        }
-        let mut low = start_idx + 1;
-        let mut high = boundaries.len() - 1;
-        let mut best = start_idx + 1;
-
-        while low <= high {
-            let mid = (low + high) / 2;
-            let width = measure_context.measure_char_range(&boundaries, start_idx, mid);
-            if width <= max_width + WRAP_EPSILON || mid == start_idx + 1 {
-                best = mid;
-                low = mid + 1;
-            } else {
-                if mid == 0 {
-                    break;
-                }
-                high = mid - 1;
-            }
-        }
-
-        let wrap_idx = choose_wrap_break(&breaks, start_idx, best, line_break);
-        let mut effective_wrap_idx = wrap_idx;
-        let can_hyphenate = hyphens == Hyphens::Auto
-            && wrap_idx == best
-            && best < boundaries.len() - 1
-            && is_break_inside_word(&breaks, wrap_idx);
-        narrow_to_break(
-            hold,
-            &measure_context,
-            &breaks,
-            (start_idx, best),
-            (can_hyphenate, limit.elides_next(out.len())),
-        );
-        if can_hyphenate {
-            effective_wrap_idx =
-                resolve_auto_hyphen_break(measurer, style, &breaks, start_idx, wrap_idx);
-        }
-
-        let broke_at_word_boundary = breaks.ends_at_space(start_idx, effective_wrap_idx);
-        let segment_start = boundaries[start_idx];
-        let mut segment_end = boundaries[effective_wrap_idx];
-        if wrap_idx != best || broke_at_word_boundary {
-            segment_end = trim_segment_end_whitespace(line_text, segment_start, segment_end);
-        }
-        let segment_end_idx = boundary_index_for_byte(&boundaries, segment_end);
-        out.push(measure_context.display_line_for_char_range(
-            &boundaries,
-            start_idx,
-            segment_end_idx,
-        ));
-
-        start_idx = if wrap_idx != best || broke_at_word_boundary {
-            skip_leading_whitespace(line_text, &boundaries, wrap_idx)
-        } else {
-            effective_wrap_idx
-        };
-    }
-
-    if out.len() == first {
-        out.push(DisplayLine::from_source_range(
-            line_range.start..line_range.start,
-        ));
-    }
-    None
-}
-
-/// A source line the wrap measured and the line limit cut: its grapheme
-/// boundaries, from its start, and its prefix widths.
-struct MeasuredSourceLine {
-    start: usize,
-    boundaries: Vec<usize>,
-    prefix_widths: Option<TextLinePrefixWidths>,
-}
-
-impl MeasuredSourceLine {
-    /// The boundaries, from its start, and the prefix widths of `range`, a
-    /// stretch of this line from one of its boundaries to its end: the
-    /// boundaries a measure of `range` alone finds, since a boundary is a
-    /// character that does not combine with the one before it.
-    fn suffix(&self, range: &Range<usize>) -> Option<(Vec<usize>, Option<TextLinePrefixWidths>)> {
-        let offset = range.start.checked_sub(self.start)?;
-        if self.start + *self.boundaries.last()? != range.end {
-            return None;
-        }
-        let first = self.boundaries.binary_search(&offset).ok()?;
-        let boundaries = self.boundaries[first..]
-            .iter()
-            .map(|boundary| boundary - offset)
-            .collect();
-        let widths = self
-            .prefix_widths
-            .as_ref()
-            .and_then(|widths| widths.suffix(first));
-        Some((boundaries, widths))
-    }
-}
-
-/// Appends the word-balanced lines of `line_range` to `out` and returns
-/// whether it could balance them; when it cannot, `out` is left as it was.
-fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    text: &crate::text::AnnotatedString,
-    line_range: Range<usize>,
-    style: &TextStyle,
-    max_width: f32,
-    line_break: LineBreak,
-    out: &mut DisplayLines,
-) -> bool {
-    let line_text = &text.text[line_range.clone()];
-    let boundaries = cluster_boundaries(line_text);
-    let measure_context =
-        LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
-    if let Some(measured_width) =
-        measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
-        && measured_width <= max_width + WRAP_EPSILON
-    {
-        out.push(DisplayLine::from_measured_source_range(
-            line_range,
-            measured_width,
-        ));
-        return true;
-    }
-    let breakpoints = collect_word_breakpoints(&LineBreaks::new(line_text, &boundaries));
-    if breakpoints.len() <= 2 {
-        return false;
-    }
-
-    let node_count = breakpoints.len();
-    let mut best_cost = vec![f32::INFINITY; node_count];
-    let mut next_index = vec![None; node_count];
-    best_cost[node_count - 1] = 0.0;
-
-    for start in (0..node_count - 1).rev() {
-        for end in start + 1..node_count {
-            let start_byte = boundaries[breakpoints[start]];
-            let end_byte = boundaries[breakpoints[end]];
-            let trimmed_end = trim_segment_end_whitespace(line_text, start_byte, end_byte);
-            if trimmed_end <= start_byte {
-                continue;
-            }
-            let segment_start_idx = breakpoints[start];
-            let segment_end_idx = boundary_index_for_byte(&boundaries, trimmed_end);
-            let segment_width =
-                measure_context.measure_char_range(&boundaries, segment_start_idx, segment_end_idx);
-            if segment_width > max_width + WRAP_EPSILON {
-                continue;
-            }
-            if !best_cost[end].is_finite() {
-                continue;
-            }
-            let slack = (max_width - segment_width).max(0.0);
-            let is_last = end == node_count - 1;
-            let segment_cost = match line_break {
-                LineBreak::Heading => slack * slack,
-                LineBreak::Paragraph => {
-                    if is_last {
-                        slack * slack * 0.16
-                    } else {
-                        slack * slack
-                    }
-                }
-                LineBreak::Simple | LineBreak::Unspecified => slack * slack,
-            };
-            let candidate = segment_cost + best_cost[end];
-            if candidate < best_cost[start] {
-                best_cost[start] = candidate;
-                next_index[start] = Some(end);
-            }
-        }
-    }
-
-    let first = out.len();
-    let mut current = 0usize;
-    while current < node_count - 1 {
-        let Some(next) = next_index[current] else {
-            out.truncate(first);
-            return false;
-        };
-        let start_byte = boundaries[breakpoints[current]];
-        let end_byte = boundaries[breakpoints[next]];
-        let trimmed_end = trim_segment_end_whitespace(line_text, start_byte, end_byte);
-        if trimmed_end <= start_byte {
-            out.truncate(first);
-            return false;
-        }
-        let segment_start_idx = breakpoints[current];
-        let segment_end_idx = boundary_index_for_byte(&boundaries, trimmed_end);
-        out.push(measure_context.display_line_for_char_range(
-            &boundaries,
-            segment_start_idx,
-            segment_end_idx,
-        ));
-        current = next;
-    }
-    out.len() > first
-}
-
-/// Where a line may wrap: after whitespace and, in Thai and the other scripts
-/// written without spaces between words, between its words.
-struct LineBreaks<'a> {
-    line: &'a str,
-    boundaries: &'a [usize],
-    /// Character indexes inside words of a script written without spaces
-    /// before which the line may wrap, ascending. Empty for other text.
-    words: Vec<usize>,
-}
-
-impl<'a> LineBreaks<'a> {
-    fn new(line: &'a str, boundaries: &'a [usize]) -> Self {
-        Self {
-            line,
-            boundaries,
-            words: super::word_breaks::unspaced_word_breaks(line, boundaries),
-        }
-    }
-
-    /// Whether character `idx` is whitespace.
-    fn is_space(&self, idx: usize) -> bool {
-        self.line[self.boundaries[idx]..self.boundaries[idx + 1]]
-            .chars()
-            .all(char::is_whitespace)
-    }
-
-    /// Whether a line from character `start` that ends before character
-    /// `end` ends next to a space: at a word, so the spaces after it hang at
-    /// its end and the next line starts after them.
-    fn ends_at_space(&self, start: usize, end: usize) -> bool {
-        (end > start && self.is_space(end - 1))
-            || (end < self.boundaries.len() - 1 && self.is_space(end))
-    }
-
-    /// Whether the line may wrap before character `idx`, which is not the
-    /// first.
-    fn before(&self, idx: usize) -> bool {
-        self.is_space(idx - 1) || self.words.binary_search(&idx).is_ok()
-    }
-}
-
-fn collect_word_breakpoints(breaks: &LineBreaks<'_>) -> Vec<usize> {
-    let boundaries = breaks.boundaries;
-    let mut points = vec![0usize];
-    for idx in 1..boundaries.len() - 1 {
-        if breaks.before(idx) && !breaks.is_space(idx) {
-            points.push(idx);
-        }
-    }
-    let end = boundaries.len() - 1;
-    if points.last().copied() != Some(end) {
-        points.push(end);
-    }
-    points
-}
-
-fn choose_wrap_break(
-    breaks: &LineBreaks<'_>,
-    start_idx: usize,
-    best: usize,
-    _line_break: LineBreak,
-) -> usize {
-    if best >= breaks.boundaries.len() - 1 {
-        return best;
-    }
-
-    if best <= start_idx + 1 {
-        return best;
-    }
-
-    (start_idx + 1..=best)
-        .rev()
-        .find(|&idx| breaks.before(idx))
-        .unwrap_or(best)
-}
-
-/// Narrows `hold` to the widths a line from `start_idx` breaks the same at
-/// as it does where `best` characters fit, or clears it when the break was
-/// hyphenated, which no width range describes.
-/// Narrows `hold` to the widths that break the line from `start_idx` at
-/// `best` the same. A line that runs on to be elided holds while the rest of
-/// its paragraph does not fit on it, wherever it breaks.
-fn narrow_to_break<M: TextMeasurer + ?Sized>(
-    hold: &mut Option<WrapHold>,
-    measure_context: &LineMeasureContext<'_, M>,
-    breaks: &LineBreaks<'_>,
-    (start_idx, best): (usize, usize),
-    (hyphenated, elided): (bool, bool),
-) {
-    let boundaries = breaks.boundaries;
-    let end = boundaries.len() - 1;
-    if elided && best < end {
-        if let Some(hold) = hold {
-            let rest = measure_context.measure_char_range(boundaries, start_idx, end);
-            hold.narrow(f32::NEG_INFINITY, rest);
-        }
-        return;
-    }
-    if hyphenated {
-        *hold = None;
-    }
-    let Some(hold) = hold else {
-        return;
-    };
-    let (fits, pulls_up) = wrap_break_widths(breaks, start_idx, best);
-    let width = |idx| measure_context.measure_char_range(boundaries, start_idx, idx);
-    hold.narrow(
-        fits.map_or(f32::NEG_INFINITY, width),
-        pulls_up.map_or(f32::INFINITY, width),
-    );
-}
-
-/// The character counts, from `start_idx`, whose widths bound the widths
-/// [`choose_wrap_break`] picks the same break at as it does for `best`: the
-/// first a line must fit to keep its break (`None` when any width does),
-/// and the first that would take the break past it (`None` when none
-/// would).
-fn wrap_break_widths(
-    breaks: &LineBreaks<'_>,
-    start_idx: usize,
-    best: usize,
-) -> (Option<usize>, Option<usize>) {
-    let end = breaks.boundaries.len() - 1;
-    // A line takes its first character whether it fits or not.
-    if best <= start_idx + 1 {
-        return (None, (best < end).then_some(best + 1));
-    }
-    if best >= end {
-        return (Some(end), None);
-    }
-    match (start_idx + 1..=best).rev().find(|&idx| breaks.before(idx)) {
-        Some(wrap_idx) => {
-            let next = (best + 1..end)
-                .find(|&idx| breaks.before(idx))
-                .unwrap_or(end);
-            (Some(wrap_idx), Some(next))
-        }
-        None => (Some(best), Some(best + 1)),
-    }
-}
-
-fn is_break_inside_word(breaks: &LineBreaks<'_>, break_idx: usize) -> bool {
-    if break_idx == 0 || break_idx >= breaks.boundaries.len() - 1 {
-        return false;
-    }
-    !breaks.before(break_idx) && !breaks.is_space(break_idx)
-}
-
-fn resolve_auto_hyphen_break<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    style: &TextStyle,
-    breaks: &LineBreaks<'_>,
-    start_idx: usize,
-    break_idx: usize,
-) -> usize {
-    let boundaries = breaks.boundaries;
-    if let Some(candidate) =
-        measurer.choose_auto_hyphen_break(breaks.line, style, start_idx, break_idx)
-        && is_valid_auto_hyphen_break(breaks, start_idx, break_idx, candidate)
-    {
-        return candidate;
-    }
-    choose_auto_hyphen_break_fallback(boundaries, start_idx, break_idx)
-}
-
-fn is_valid_auto_hyphen_break(
-    breaks: &LineBreaks<'_>,
-    start_idx: usize,
-    break_idx: usize,
-    candidate_idx: usize,
-) -> bool {
-    let end_idx = breaks.boundaries.len().saturating_sub(1);
-    candidate_idx > start_idx
-        && candidate_idx < end_idx
-        && candidate_idx <= break_idx
-        && candidate_idx >= start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS
-        && is_break_inside_word(breaks, candidate_idx)
-}
-
-fn choose_auto_hyphen_break_fallback(
-    boundaries: &[usize],
-    start_idx: usize,
-    break_idx: usize,
-) -> usize {
-    let end_idx = boundaries.len().saturating_sub(1);
-    if break_idx >= end_idx {
-        return break_idx;
-    }
-    let trailing_len = end_idx.saturating_sub(break_idx);
-    if trailing_len > 2 || break_idx <= start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS {
-        return break_idx;
-    }
-
-    let min_break = start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS;
-    let max_break = break_idx.saturating_sub(1);
-    if min_break > max_break {
-        return break_idx;
-    }
-
-    let mut best_break = break_idx;
-    let mut best_penalty = usize::MAX;
-    for idx in min_break..=max_break {
-        let candidate_trailing_len = end_idx.saturating_sub(idx);
-        let candidate_prefix_len = idx.saturating_sub(start_idx);
-        if candidate_prefix_len < AUTO_HYPHEN_MIN_SEGMENT_CHARS
-            || candidate_trailing_len < AUTO_HYPHEN_MIN_TRAILING_CHARS
-        {
-            continue;
-        }
-
-        let penalty = candidate_trailing_len.abs_diff(AUTO_HYPHEN_PREFERRED_TRAILING_CHARS);
-        if penalty < best_penalty {
-            best_penalty = penalty;
-            best_break = idx;
-            if penalty == 0 {
-                break;
-            }
-        }
-    }
-    best_break
-}
-
-fn skip_leading_whitespace(line: &str, boundaries: &[usize], mut idx: usize) -> usize {
-    while idx < boundaries.len() - 1 {
-        let ch = &line[boundaries[idx]..boundaries[idx + 1]];
-        if !ch.chars().all(char::is_whitespace) {
-            break;
-        }
-        idx += 1;
-    }
-    idx
-}
-
-/// Cuts `visible_lines` to the options' line limit and elides what does not
-/// fit, and returns whether anything did not. Narrows `hold` to the widths
-/// that cut the ellipsis at the same character, or clears it when a line
-/// overflows its width.
-fn apply_overflow<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    (text, style): (&crate::text::AnnotatedString, &TextStyle),
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-    (visible_lines, hold, cut_line): (
-        &mut DisplayLines,
-        &mut Option<WrapHold>,
-        Option<&MeasuredSourceLine>,
-    ),
-) -> bool {
-    if options.overflow == TextOverflow::Visible {
-        return false;
-    }
-    let ellipsis = EllipsisPlacement::for_options(options);
-    let mut did_overflow = false;
-    if visible_lines.len() > options.max_lines {
-        did_overflow = true;
-        visible_lines.truncate(options.max_lines);
-        if let (Some(placement), Some(last_line)) = (ellipsis, visible_lines.last_mut()) {
-            last_line.extend_to_paragraph_end(text);
-            let cut = last_line.ellipsize(
-                measurer,
-                node_id,
-                (text, style),
-                (max_width, placement),
-                cut_line,
-            );
-            if let Some(hold) = hold {
-                hold.narrow(cut.fits, cut.pulls_up);
-            }
-        }
-    }
-
-    let Some(width_limit) = max_width else {
-        return did_overflow;
-    };
-    let visible_len = visible_lines.len();
-    for (line_index, line) in visible_lines.iter_mut().enumerate() {
-        if line.measure_width(measurer, node_id, text, style) <= width_limit + WRAP_EPSILON {
-            continue;
-        }
-        did_overflow = true;
-        *hold = None;
-        if line_index + 1 == visible_len
-            && let Some(placement) = ellipsis
-        {
-            line.ellipsize(
-                measurer,
-                node_id,
-                (text, style),
-                (max_width, placement),
-                cut_line,
-            );
-        }
-    }
-    did_overflow
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EllipsisPlacement {
-    End,
-    Start,
-    Middle,
-}
-
-impl EllipsisPlacement {
-    /// How many of `kept_chars` stay before the ellipsis and how many after.
-    fn split(self, kept_chars: usize) -> (usize, usize) {
-        match self {
-            Self::End => (kept_chars, 0),
-            Self::Start => (0, kept_chars),
-            Self::Middle => (kept_chars.div_ceil(2), kept_chars / 2),
-        }
-    }
-
-    /// The most characters an elided line can keep within `width_limit`,
-    /// estimated from the line's prefix widths and the ellipsis's width
-    /// without measuring any elided string. Shaping across the cut can move
-    /// the real width a little either way, so callers confirm it.
-    fn estimated_kept_chars(
-        self,
-        prefix_widths: &TextLinePrefixWidths,
-        ellipsis_width: f32,
-        width_limit: f32,
-    ) -> Option<usize> {
-        let char_count = prefix_widths.char_count();
-        let width = |kept_chars: usize| {
-            let (head_chars, tail_chars) = self.split(kept_chars);
-            Some(
-                prefix_widths.width_for_char_range(0, head_chars)?
-                    + ellipsis_width
-                    + prefix_widths.width_for_char_range(char_count - tail_chars, char_count)?,
-            )
-        };
-        let (mut fitting, mut overflowing) = (0usize, char_count + 1);
-        while fitting + 1 < overflowing {
-            let kept_chars = fitting + (overflowing - fitting) / 2;
-            if width(kept_chars)? <= width_limit + WRAP_EPSILON {
-                fitting = kept_chars;
-            } else {
-                overflowing = kept_chars;
-            }
-        }
-        Some(fitting)
-    }
-
-    fn for_options(options: TextLayoutOptions) -> Option<Self> {
-        let single_line = options.max_lines == 1;
-        match options.overflow {
-            TextOverflow::Ellipsis => Some(Self::End),
-            TextOverflow::StartEllipsis if single_line => Some(Self::Start),
-            TextOverflow::MiddleEllipsis if single_line => Some(Self::Middle),
-            TextOverflow::StartEllipsis
-            | TextOverflow::MiddleEllipsis
-            | TextOverflow::Clip
-            | TextOverflow::Visible
-            | TextOverflow::ScaleDown { .. } => None,
-        }
-    }
-
-    fn elide(
-        self,
-        source: &crate::text::AnnotatedString,
-        source_range: Range<usize>,
-        boundaries: &[usize],
-        kept_chars: usize,
-    ) -> crate::text::AnnotatedString {
-        let char_count = boundaries.len() - 1;
-        let (head_chars, tail_chars) = self.split(kept_chars);
-        let head_end = source_range.start + boundaries[head_chars];
-        let tail_start = source_range.start + boundaries[char_count - tail_chars];
-        crate::text::AnnotatedString::builder()
-            .append_annotated_subsequence(source, source_range.start..head_end)
-            .append(ELLIPSIS)
-            .append_annotated_subsequence(source, tail_start..source_range.end)
-            .to_annotated_string()
-    }
-}
-
-/// The line `source_range` elided at `placement` to fit `max_width`, and the
-/// widths the same elision fits: from its own width up to the width of the
-/// elision keeping one character more.
-fn fit_ellipsis<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    node_id: Option<NodeId>,
-    (source, source_range): (&crate::text::AnnotatedString, Range<usize>),
-    style: &TextStyle,
-    (max_width, placement): (Option<f32>, EllipsisPlacement),
-    cut_line: Option<&MeasuredSourceLine>,
-) -> (DisplayLine, WrapHold) {
-    let width_limit = max_width.unwrap_or(f32::INFINITY);
-    // The line when it fits, or the width it overflows at.
-    let fitting_line = |text: DisplayLineText| {
-        let mut line = DisplayLine {
-            source_range: source_range.clone(),
-            text,
-            measured_width: None,
-        };
-        let width = line.measure_width(measurer, node_id, source, style);
-        if width <= width_limit + WRAP_EPSILON {
-            Ok(line)
-        } else {
-            Err(width)
-        }
-    };
-    // Keeping every character elides nothing, so the whole line bounds the
-    // widths an elision holds.
-    let whole = if placement == EllipsisPlacement::End {
-        f32::INFINITY
-    } else {
-        match fitting_line(DisplayLineText::Source) {
-            Ok(line) => return ElisionSearch::found(line, f32::INFINITY),
-            Err(width) => width,
-        }
-    };
-
-    let (boundaries, known_widths) = elided_line_measures(source, &source_range, cut_line);
-    let elided_line = |kept_chars: usize| {
-        fitting_line(DisplayLineText::Ellipsized(placement.elide(
-            source,
-            source_range.clone(),
-            &boundaries,
-            kept_chars,
-        )))
-    };
-    let best = match elided_line(0) {
-        Ok(line) => line,
-        Err(ellipsis_width) => {
-            let empty = DisplayLine {
-                source_range: source_range.clone(),
-                text: DisplayLineText::Ellipsized(crate::text::AnnotatedString::default()),
-                measured_width: None,
-            };
-            return ElisionSearch::found(empty, ellipsis_width);
-        }
-    };
-
-    // The line's prefix widths place the cut without measuring an elided
-    // string per guess; measuring the guess and the one past it confirms it,
-    // and the search below only runs when shaping across the cut moved it.
-    let guess = best.measured_width.and_then(|ellipsis_width| {
-        known_widths
-            .or_else(|| measurer.measure_line_prefix_widths(source, source_range.clone(), style))
-            .filter(|widths| widths.char_count() + 1 == boundaries.len())
-            .and_then(|widths| placement.estimated_kept_chars(&widths, ellipsis_width, width_limit))
-    });
-    let mut search = ElisionSearch {
-        best,
-        fitting: 0,
-        overflowing: boundaries.len(),
-        overflow_width: whole,
-    };
-    if let Some(guess) = guess.filter(|guess| *guess > 0) {
-        for kept_chars in [guess, guess + 1] {
-            if kept_chars <= search.fitting || kept_chars >= search.overflowing {
-                break;
-            }
-            search.probe(kept_chars, elided_line(kept_chars));
-        }
-    }
-    while search.fitting + 1 < search.overflowing {
-        let kept_chars = search.fitting + (search.overflowing - search.fitting) / 2;
-        search.probe(kept_chars, elided_line(kept_chars));
-    }
-    ElisionSearch::found(search.best, search.overflow_width)
-}
-
-/// The grapheme boundaries of `range`, from its start, and its prefix
-/// widths when the wrap measured them: a line the wrap cut, `cut_line`,
-/// was measured there, and its boundaries and widths from the stretch's own
-/// start are the ones a measure of the stretch would find.
-fn elided_line_measures(
-    source: &crate::text::AnnotatedString,
-    range: &Range<usize>,
-    cut_line: Option<&MeasuredSourceLine>,
-) -> (Vec<usize>, Option<TextLinePrefixWidths>) {
-    cut_line
-        .and_then(|line| line.suffix(range))
-        .unwrap_or_else(|| (cluster_boundaries(&source.text[range.clone()]), None))
-}
-
-/// The most characters an elision was found to keep within the width, and
-/// the fewest it was found to overflow at.
-struct ElisionSearch {
-    best: DisplayLine,
-    fitting: usize,
-    overflowing: usize,
-    overflow_width: f32,
-}
-
-impl ElisionSearch {
-    fn probe(&mut self, kept_chars: usize, line: Result<DisplayLine, f32>) {
-        match line {
-            Ok(line) => (self.fitting, self.best) = (kept_chars, line),
-            Err(width) => (self.overflowing, self.overflow_width) = (kept_chars, width),
-        }
-    }
-
-    /// `line`, and the widths it fits while the next wider elision, which is
-    /// `overflow_width` wide, does not.
-    fn found(line: DisplayLine, overflow_width: f32) -> (DisplayLine, WrapHold) {
-        let cut = WrapHold {
-            fits: line.measured_width.unwrap_or(f32::NEG_INFINITY),
-            pulls_up: overflow_width,
-        };
-        (line, cut)
-    }
-}
-
-/// The byte offsets a line may split `text` at: before each character but
-/// the combining marks, which stay with the letter they sit on (a Thai vowel
-/// or tone mark, a Devanagari vowel sign, an accent), and at its end.
-fn cluster_boundaries(text: &str) -> Vec<usize> {
-    let mut out = Vec::with_capacity(text.chars().count() + 1);
-    out.push(0);
-    for (idx, ch) in text.char_indices() {
-        if idx != 0 && !is_combining_mark(ch) {
-            out.push(idx);
-        }
-    }
-    out.push(text.len());
-    out
-}
-
-/// Whether `ch` combines with the character before it.
-fn is_combining_mark(ch: char) -> bool {
-    use icu_properties::{
-        CodePointMapData,
-        props::{GeneralCategory, GeneralCategoryGroup},
-    };
-    // No character before the combining diacritics block is a mark.
-    ch >= '\u{300}'
-        && GeneralCategoryGroup::Mark.contains(CodePointMapData::<GeneralCategory>::new().get(ch))
-}
-
-#[cfg(test)]
-#[path = "tests/measure_tests.rs"]
-mod tests;

@@ -893,6 +893,9 @@ pub struct TextPrimitive {
     /// Paint for the glyphs: a solid colour, or a gradient laid over the
     /// text block, as Compose's `drawText(brush)` lays it over the layout.
     pub brush: Brush,
+    /// The layout the text was measured in, which the renderer draws.
+    /// `None` when no text system measured it.
+    pub layout: Option<crate::TextLayoutHandle>,
 }
 
 /// Returns a shared `Rc<str>` for `text`, reusing the copy made on an earlier
@@ -2243,12 +2246,17 @@ impl DrawScope for DrawScopeDefault<'_> {
         if !origin.x.is_finite() || !origin.y.is_finite() {
             return;
         }
+        let layout = self
+            .text_measurer
+            .as_ref()
+            .and_then(|measurer| measurer.layout_text(text, style));
         self.recording
             .push_other(DrawPrimitive::Text(Box::new(TextPrimitive {
                 rect: Rect::from_origin_size(origin, measurement.size),
                 text: shared_text_str(text),
                 style: style.clone(),
                 brush,
+                layout,
             })));
     }
 

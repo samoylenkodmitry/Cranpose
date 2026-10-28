@@ -2,23 +2,21 @@
 
 use std::rc::Rc;
 
-use cranpose_render_common::software_text_raster::{
-    SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
-};
+use cranpose_render_common::{glyph_mask::GlyphMaskKey, text_atlas::AtlasGlyph};
 use cranpose_ui_graphics::Color;
 
 /// What the glyphs of one segment of a run share: face, size and synthesis
 /// (an atlas key but for its glyph id) and color.
 #[derive(Clone, Copy, PartialEq)]
 struct RunFace {
-    key: SoftwareGlyphAtlasKey,
+    key: GlyphMaskKey,
     color: Color,
 }
 
 impl RunFace {
-    fn of(glyph: &SoftwareGlyphAtlasPlacement) -> Self {
+    fn of(glyph: &AtlasGlyph) -> Self {
         Self {
-            key: SoftwareGlyphAtlasKey {
+            key: GlyphMaskKey {
                 glyph_id: 0,
                 ..glyph.key
             },
@@ -40,7 +38,7 @@ struct RunGlyph {
 }
 
 impl RunGlyph {
-    fn of(glyph: &SoftwareGlyphAtlasPlacement, face: usize) -> Option<Self> {
+    fn of(glyph: &AtlasGlyph, face: usize) -> Option<Self> {
         Some(Self {
             x: glyph.x,
             y: glyph.y,
@@ -87,7 +85,7 @@ impl RunGlyphs {
     /// glyph has no compact form: a glyph id or a mask side past 65535, or
     /// as many faces.
     pub(crate) fn of(
-        placements: impl Iterator<Item = SoftwareGlyphAtlasPlacement>,
+        placements: impl Iterator<Item = AtlasGlyph>,
         scratch: &mut RunGlyphScratch,
     ) -> Option<Self> {
         scratch.faces.clear();
@@ -121,11 +119,11 @@ impl RunGlyphs {
     }
 
     /// Each glyph as the placement it was made from.
-    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = SoftwareGlyphAtlasPlacement> + '_ {
+    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = AtlasGlyph> + '_ {
         self.glyphs.iter().map(|glyph| {
             let face = self.faces[usize::from(glyph.face)];
-            SoftwareGlyphAtlasPlacement {
-                key: SoftwareGlyphAtlasKey {
+            AtlasGlyph {
+                key: GlyphMaskKey {
                     glyph_id: u32::from(glyph.glyph_id),
                     ..face.key
                 },

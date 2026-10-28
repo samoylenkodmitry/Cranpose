@@ -1,11 +1,11 @@
 //! Font files an app installs while it runs, such as a font pack it
 //! downloaded after launch.
 //!
-//! A font set built before an install keeps drawing with its own faces. Its
-//! holder asks [`SoftwareTextFontSet::with_installed_faces`] once a frame and,
-//! after an install, gets the set with the installed faces after its own.
+//! Fonts made before an install keep laying out with their own faces. Their
+//! holder asks [`TextFonts::with_installed_faces`] once a frame and, after an
+//! install, gets the fonts with the installed faces after their own.
 //!
-//! [`SoftwareTextFontSet::with_installed_faces`]: crate::software_text_raster::SoftwareTextFontSet::with_installed_faces
+//! [`TextFonts::with_installed_faces`]: crate::text_fonts::TextFonts::with_installed_faces
 
 use std::{
     path::Path,
@@ -15,14 +15,12 @@ use std::{
     },
 };
 
+use cranpose_text::{Typeface, TypefaceError};
 use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
 
-use crate::{
-    font_source::{FontLoadError, read_font_file},
-    software_text_raster::{SoftwareTextFont, SoftwareTextFontError},
-};
+use crate::font_source::{FontLoadError, read_font_file};
 
-static INSTALLED: Mutex<Vec<SoftwareTextFont>> = Mutex::new(Vec::new());
+static INSTALLED: Mutex<Vec<Typeface>> = Mutex::new(Vec::new());
 /// How many faces `INSTALLED` holds, read without its lock every frame.
 static INSTALLED_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -60,11 +58,11 @@ fn install(
     family: &FontFamily,
     bytes: &'static [u8],
     weights: &[FontWeight],
-) -> Result<(), SoftwareTextFontError> {
+) -> Result<(), TypefaceError> {
     let faces = weights
         .iter()
         .map(|&weight| {
-            SoftwareTextFont::from_registered_bytes(family, weight, FontStyle::Normal, bytes)
+            Typeface::from_registered(family, weight, FontStyle::Normal, bytes, &[])
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut installed = INSTALLED.lock().unwrap_or_else(PoisonError::into_inner);
@@ -88,7 +86,7 @@ pub fn installed_font_generation() -> usize {
     INSTALLED_COUNT.load(Ordering::Acquire)
 }
 
-pub(crate) fn installed_faces() -> Vec<SoftwareTextFont> {
+pub(crate) fn installed_faces() -> Vec<Typeface> {
     INSTALLED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

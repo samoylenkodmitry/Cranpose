@@ -6,7 +6,7 @@ pub static DEMO_FONTS: &[&[u8]] = &[
 
 /// Registers the system font variations used by the native Liquid comparison fixtures.
 pub fn register_liquid_reference_fonts(
-    registry: &mut cranpose::SoftwareTextFontRegistry,
+    registry: &mut cranpose::FontRegistry,
 ) -> Result<(), cranpose::FontLoadError> {
     let Some(directory) = cranpose::system_font_directory() else {
         return Ok(());

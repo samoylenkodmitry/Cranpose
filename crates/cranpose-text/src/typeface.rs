@@ -13,7 +13,7 @@ use smallvec::SmallVec;
 
 use crate::{
     coverage::Coverage,
-    font::{FontFamily, FontStyle, FontWeight},
+    font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
 };
 
@@ -87,9 +87,16 @@ pub enum TypefaceError {
 
 /// A font loaded for text at one location in its design space, with the
 /// family names, weight and style text chooses it by: Compose's `Typeface`.
-/// Clones share one load.
+/// Clones share one load; two typefaces are equal when they draw the same
+/// glyphs, from the same bytes at the same axis positions.
 #[derive(Clone)]
 pub struct Typeface(Arc<Loaded>);
+
+impl PartialEq for Typeface {
+    fn eq(&self, other: &Self) -> bool {
+        self.same(other) || self.0.content_hash == other.0.content_hash
+    }
+}
 
 struct Loaded {
     font: Font,
@@ -238,6 +245,27 @@ impl Typeface {
         self.0.is_color
     }
 
+    /// What Compose synthesizes for text in `weight` and `style` drawn with
+    /// this typeface, as `synthesis` allows: a bold for a weight of 600 or
+    /// more when the typeface draws none that heavy, and an italic when it
+    /// draws none.
+    pub fn synthesis(
+        &self,
+        weight: FontWeight,
+        style: FontStyle,
+        synthesis: FontSynthesis,
+    ) -> Synthesis {
+        const BOLD: u16 = 600;
+        Synthesis {
+            bold: matches!(synthesis, FontSynthesis::All | FontSynthesis::Weight)
+                && weight.value() >= BOLD
+                && self.0.weights.1 < f32::from(BOLD),
+            italic: matches!(synthesis, FontSynthesis::All | FontSynthesis::Style)
+                && style == FontStyle::Italic
+                && !self.draws(FontStyle::Italic),
+        }
+    }
+
     // The weights the typeface draws, lowest and highest.
     pub(crate) fn weights(&self) -> (f32, f32) {
         self.0.weights
@@ -370,6 +398,16 @@ impl std::fmt::Debug for Typeface {
             .field("variations", &self.0.variations)
             .finish_non_exhaustive()
     }
+}
+
+/// What a typeface lacks for a text's weight and style that is drawn in its
+/// place.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Synthesis {
+    /// A bold the typeface lacks.
+    pub bold: bool,
+    /// An italic the typeface lacks.
+    pub italic: bool,
 }
 
 /// Where a font draws an underline and a line through its text, in design

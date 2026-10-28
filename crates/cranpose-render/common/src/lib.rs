@@ -1,13 +1,10 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
-mod annotated_text;
-mod ascii_glyphs;
 /// Source-over blending of straight-alpha byte pixels.
 pub mod byte_blend;
 /// Debug switches read from environment variables, with programmatic overrides.
 pub mod dev_overlay;
-mod direct_mapped_cache;
 
 /// The frame background every renderer clears to (linear values; sRGB
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends
@@ -15,15 +12,11 @@ mod direct_mapped_cache;
 pub const FRAME_CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
 /// CPU sampling of brushes at a point, for the software renderers.
 pub mod brush_sampling;
-mod font_features;
-/// Glyph layout and vertical metrics of a font at one pixel size.
-pub mod font_layout;
 pub mod font_source;
-mod font_tracking;
-mod full_glyph_count;
 /// Blur kernel and rectangle helpers shared by the renderers.
 pub mod geometry;
-pub mod gpos_kerning;
+/// Glyph masks and the cache renderers keep them in.
+pub mod glyph_mask;
 /// The render graph: the layers and primitives that a scene builds for a renderer to draw.
 pub mod graph;
 mod graph_hash;
@@ -54,21 +47,26 @@ pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
 pub mod scene_pick;
 pub mod shape_sdf;
-/// CPU text rasterization: fonts, glyph layout and glyph masks.
-pub mod software_text_raster;
 /// Where a window's scenes put their 3D layers: frames, spaces, doorways
 /// and what the eye sees.
 pub mod space;
 /// Colors, brushes and corner radii resolved against the properties of a graphics layer.
 pub mod style_shared;
-mod text_cache_key;
-/// Automatic hyphenation of text, using dictionaries that the app registers.
-pub mod text_hyphenation;
+/// A laid-out text's glyphs placed for a renderer that draws from an atlas.
+pub mod text_atlas;
+/// The pixels a text's glyph masks are painted into.
+pub mod text_canvas;
+/// Span backgrounds and the lines under and through a text.
+pub mod text_decoration;
+/// The typefaces a renderer hands the app its text lays out with.
+pub mod text_fonts;
+/// The glyphs of a laid-out text placed on pixels with their paints.
+pub mod text_glyphs;
 pub mod text_mask_gamma;
-pub mod text_measure;
 pub mod text_paint;
-#[cfg(feature = "text-shaping")]
-mod text_shaping;
+/// A laid-out text's glyphs rasterized into pixels.
+pub mod text_raster;
+mod text_shadow;
 mod thread_state;
 
 #[cfg(test)]
@@ -336,10 +334,11 @@ pub trait Renderer {
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.
     ///
     /// This is called after rebuild_scene when dev options are enabled.
-    /// The text is drawn directly by the renderer without affecting composition.
+    /// The text, laid out in `overlay`, is drawn directly by the renderer
+    /// without affecting composition.
     ///
     /// Default implementation does nothing.
-    fn draw_dev_overlay(&mut self, _text: &str, _viewport: Size) {}
+    fn draw_dev_overlay(&mut self, _overlay: &cranpose_ui::PreparedTextLayout, _viewport: Size) {}
 
     /// Replaces the developer inspector graph outside the application scene.
     ///

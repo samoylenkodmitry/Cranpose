@@ -128,7 +128,6 @@ impl Selectable {
         let width = self.geometry.content_size.get().width;
         let fraction = text_align_fraction(&self.style, &self.text.text);
         wrapped_line_ranges(
-            None,
             &self.text,
             &self.style,
             self.options,

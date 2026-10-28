@@ -269,7 +269,7 @@ impl EmbeddedHost {
         content: impl FnMut() + 'static,
         size: SurfaceSize,
     ) -> Self {
-        let text_system = WgpuTextSystem::from_font_set(settings.resolve_font_set());
+        let text_system = WgpuTextSystem::from_text_fonts(settings.resolve_fonts());
         let renderer = renderer_for(&text_system, &gpu, size.scale, false);
         let registry = Rc::new(NativeWindowRegistry::default());
         let env_for_content = Rc::clone(&platform_env);

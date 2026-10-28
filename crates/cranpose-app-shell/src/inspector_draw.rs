@@ -82,15 +82,23 @@ impl Canvas {
     fn text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
         let mut style = TextStyle::default();
         style.span_style.color = Some(color);
+        style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(font_size);
         let id = NodeId(usize::MAX.saturating_sub(1024 + self.children.len()));
+        let prepared = cranpose_ui::text::prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            TextLayoutOptions::default(),
+            Some(rect.width),
+        );
         self.children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
                 node_id: id,
                 rect,
-                text: cranpose_ui::text::shared_plain_annotated_string(text),
-                render_text: cranpose_ui::text::shared_plain_render_string(text),
-                text_style: std::sync::Arc::new(style),
+                render_text: prepared.render_text(),
+                text: prepared.text,
+                layout: prepared.layout,
+                text_style: prepared.visual_style,
                 font_size,
                 layout_options: TextLayoutOptions::default(),
                 clip: Some(rect),

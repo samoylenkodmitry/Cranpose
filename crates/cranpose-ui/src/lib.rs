@@ -303,11 +303,10 @@ pub use subcompose_layout::{
 pub use text::{
     LinkAnnotation, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
-    TextLayoutResult, TextLinePrefixWidths, TextMeasurer, TextMetrics, TextOptions, TextOverflow,
-    TextShaping, TextStyle, get_cursor_x_for_offset, get_offset_for_position, layout_text,
-    measure_text, measure_text_for_node, measure_text_with_options,
-    measure_text_with_options_for_node, prepare_text_layout, prepare_text_layout_for_node,
-    set_text_measurer,
+    TextLayoutResult, TextMetrics, TextOptions, TextOverflow, TextShaping, TextStyle,
+    get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
+    measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
+    prepare_text_layout, prepare_text_layout_for_node, set_text_fonts,
 };
 pub use text_field_focus::{ImeEditorState, has_focused_field};
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};

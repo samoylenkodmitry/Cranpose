@@ -1,7 +1,7 @@
 use std::rc::Weak;
 
 use cranpose_render_common::{
-    dev_overlay::DevOverlayKey, graph::RenderGraph, software_text_raster::SoftwareTextFontSet,
+    dev_overlay::DevOverlayKey, graph::RenderGraph, text_fonts::TextFonts,
 };
 use web_time::Instant;
 
@@ -10,15 +10,14 @@ use crate::{
     frame_packet::{FramePacket, FrameSceneStorage, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
-    text_system::TextSystemState,
 };
 
-/// The producer side of a frame: owns the scene graph and the text layout
-/// state, and collects each frame into the packet the present stage draws.
+/// The producer side of a frame: owns the scene graph and the fonts the app
+/// lays its text out with, and collects each frame into the packet the
+/// present stage draws.
 pub(crate) struct RendererFrontend {
     pub(crate) scene: Scene,
-    pub(crate) text_state: TextSystemState,
-    pub(crate) text_fonts: SoftwareTextFontSet,
+    pub(crate) text_fonts: TextFonts,
     pub(crate) app_context: Option<Weak<cranpose_ui::AppContext>>,
     pub(crate) root_scale: f32,
     pub(crate) dev_overlay_cache: Option<DevOverlayKey>,
@@ -65,10 +64,9 @@ impl RendererFrontend {
         self.dev_overlay_cache = None;
         self.refresh_dev_overlay();
     }
-    pub(crate) fn new(text_state: TextSystemState, text_fonts: SoftwareTextFontSet) -> Self {
+    pub(crate) fn new(text_fonts: TextFonts) -> Self {
         Self {
             scene: Scene::new(),
-            text_state,
             text_fonts,
             app_context: None,
             root_scale: 1.0,
@@ -149,7 +147,6 @@ impl RendererFrontend {
         let root = collect_root(
             &graph.root,
             graph.update,
-            &mut self.text_state,
             &mut self.layer_motion,
             self.root_scene_capacity,
             root_scale,
@@ -158,12 +155,7 @@ impl RendererFrontend {
         self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
         let overlay = if let Some(overlay) = &self.dev_overlay_graph {
-            Some(collect_overlay(
-                &overlay.root,
-                &mut self.text_state,
-                root_scale,
-                recycler,
-            ))
+            Some(collect_overlay(&overlay.root, root_scale, recycler))
         } else {
             None
         };

@@ -93,8 +93,8 @@ impl GlyphOutline {
         }
         Some(Self {
             segments: path.segments,
-            left: whole_number(left),
-            top: whole_number(top),
+            left: whole::to_i32(left),
+            top: whole::to_i32(top),
             width,
             height,
         })
@@ -223,18 +223,9 @@ impl PathSink for PathCollector {
     }
 }
 
-// The whole number `value` holds, for a magnitude below 2^22: adding
-// 1.5 x 2^23 puts it in the low bits of the sum's mantissa, so it is the
-// difference of the two bit patterns. Glyph boxes lie far inside that range.
-fn whole_number(value: f32) -> i32 {
-    const MAGIC: f32 = 12_582_912.0;
-    let bits = i64::from((value + MAGIC).to_bits()) - i64::from(MAGIC.to_bits());
-    i32::try_from(bits).unwrap_or(0)
-}
-
 // A size in whole pixels, at least zero.
 fn pixels(value: f32) -> u32 {
-    u32::try_from(whole_number(value).max(0)).unwrap_or(0)
+    u32::try_from(whole::to_i32(value).max(0)).unwrap_or(0)
 }
 
 fn usize_of(value: u32) -> usize {

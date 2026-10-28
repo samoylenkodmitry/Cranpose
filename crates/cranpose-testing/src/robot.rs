@@ -22,14 +22,13 @@
 //! robot.wait_for_idle();
 //! ```
 
-use std::rc::Rc;
-
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates, graph::RenderGraph, graph_scene::Scene,
 };
-use cranpose_ui::{LayoutTree, TextMeasurer};
+use cranpose_render_common::text_fonts::TextFonts;
+use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{Point, Rect, Size};
 
 const HEADLESS_IDLE_UPDATE_LIMIT: u32 = 100;
@@ -478,15 +477,16 @@ fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)>
 #[derive(Default)]
 pub struct TestRenderer {
     scene: Scene,
-    text_measurer: Option<Rc<dyn TextMeasurer>>,
+    fonts: Option<TextFonts>,
 }
 
 impl TestRenderer {
-    /// Creates a renderer using the supplied text measurement service.
-    pub fn with_text_measurer(text_measurer: Rc<dyn TextMeasurer>) -> Self {
+    /// Creates a renderer that hands the app `fonts` to lay its text out
+    /// with.
+    pub fn with_fonts(fonts: TextFonts) -> Self {
         Self {
             scene: Scene::default(),
-            text_measurer: Some(text_measurer),
+            fonts: Some(fonts),
         }
     }
 
@@ -506,8 +506,8 @@ impl Renderer for TestRenderer {
     type Error = ();
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        if let Some(text_measurer) = &self.text_measurer {
-            app_context.set_text_measurer_rc(Rc::clone(text_measurer));
+        if let Some(fonts) = &self.fonts {
+            app_context.set_text_fonts(fonts.resolver());
         }
     }
 
@@ -570,22 +570,17 @@ where
     RobotTestRule::new(width, height, TestRenderer::default(), content)
 }
 
-/// Create a headless robot test rule with an explicit text measurer.
-pub fn create_headless_robot_test_with_text_measurer<F>(
+/// Create a headless robot test rule whose text lays out with `fonts`.
+pub fn create_headless_robot_test_with_fonts<F>(
     width: u32,
     height: u32,
-    text_measurer: Rc<dyn TextMeasurer>,
+    fonts: TextFonts,
     content: F,
 ) -> RobotTestRule<TestRenderer>
 where
     F: FnMut() + 'static,
 {
-    RobotTestRule::new(
-        width,
-        height,
-        TestRenderer::with_text_measurer(text_measurer),
-        content,
-    )
+    RobotTestRule::new(width, height, TestRenderer::with_fonts(fonts), content)
 }
 
 #[cfg(test)]

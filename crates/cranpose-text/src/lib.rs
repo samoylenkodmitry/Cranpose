@@ -87,7 +87,7 @@ pub use style::{
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
 pub use text_layouter::{LayoutInput, ParagraphIntrinsics, ParagraphLengths, TextLayouter};
 pub use typeface::{
-    DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError,
+    DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Synthesis, Typeface, TypefaceError,
 };
 pub use unit::TextUnit;
 pub use word_boundary::word_boundary;

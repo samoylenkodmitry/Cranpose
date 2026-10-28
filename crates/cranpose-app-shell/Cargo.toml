@@ -32,6 +32,7 @@ cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-runtime-std = { workspace = true }
 cranpose-render-common = { workspace = true }
 cranpose-ui = { workspace = true }
+cranpose-text = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-foundation = { workspace = true }
 log = "0.4"

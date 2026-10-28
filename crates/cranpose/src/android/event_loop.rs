@@ -1072,8 +1072,8 @@ where
 
     let mut surface_handed = false;
     if app_shell.is_none() {
-        let fonts = inputs.settings.resolve_font_set();
-        let mut renderer = WgpuRenderer::with_font_set(fonts);
+        let fonts = inputs.settings.resolve_fonts();
+        let mut renderer = WgpuRenderer::with_text_fonts(fonts);
         renderer.set_device_lost_handler(Arc::clone(device_lost));
         if present_thread {
             init_gpu_threaded_for_android(&mut renderer, &setup.resources, frame_driver)?;
