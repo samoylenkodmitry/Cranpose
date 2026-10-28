@@ -24,6 +24,7 @@ ab_glyph_rasterizer = "0.1.10"
 cranpose-ui-graphics = { workspace = true }
 foldhash = "0.2.0"
 harfrust = "0.15"
+hyphenation = { version = "0.8.4", default-features = false, optional = true }
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data", "unicode_bidi"] }
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 read-fonts = "0.46"
@@ -39,3 +40,7 @@ web-time = { workspace = true }
 # Line breaks in Thai, Lao, Khmer and Burmese text between the words a
 # dictionary finds.
 southeast-asian-line-breaks = []
+# `Hyphens.Auto` with the dictionaries an app registers.
+hyphenation = ["dep:hyphenation"]
+# `Hyphens.Auto` with the dictionaries of every language built in.
+hyphenation-embedded = ["hyphenation", "hyphenation/embed_all"]

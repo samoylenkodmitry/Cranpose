@@ -28,6 +28,8 @@ use unicode_segmentation::UnicodeSegmentation;
 mod shadow_blur;
 mod shaped_font;
 
+#[cfg(feature = "text-hyphenation")]
+use cranpose_text::HyphenationError;
 pub use cranpose_text::{FontBytes, FontFamilyKey};
 use shadow_blur::{
     blend_shadow_pixel, blend_shadow_pixel_subpixel, gaussian_blur_alpha, shadow_blur_sigma,
@@ -37,8 +39,6 @@ use shaped_font::ShapedFont;
 pub use crate::annotated_text::TextFonts;
 #[cfg(test)]
 use crate::font_layout::layout_line_glyphs;
-#[cfg(feature = "text-hyphenation")]
-use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::{
     Brush,
     annotated_text::{AnnotatedBrushExtent, AnnotatedTextLayout, AnnotatedTextSegment},
@@ -1245,7 +1245,7 @@ impl SoftwareTextMeasurer {
         &self,
         locale: &str,
         path: impl AsRef<std::path::Path>,
-    ) -> Result<(), HyphenationDictionaryError> {
+    ) -> Result<(), HyphenationError> {
         self.hyphenation.register_dictionary_path(locale, path)
     }
 
@@ -1255,7 +1255,7 @@ impl SoftwareTextMeasurer {
         &self,
         locale: &str,
         reader: &mut impl std::io::Read,
-    ) -> Result<(), HyphenationDictionaryError> {
+    ) -> Result<(), HyphenationError> {
         self.hyphenation.register_dictionary_reader(locale, reader)
     }
 }

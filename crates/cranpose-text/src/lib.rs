@@ -20,6 +20,8 @@ pub mod font_feature;
 pub mod glyph_id;
 /// Glyph outlines drawn as coverage.
 pub mod glyph_outline;
+#[cfg(feature = "hyphenation")]
+pub mod hyphenator;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
@@ -30,6 +32,7 @@ mod line_breaker;
 pub mod paragraph;
 /// Writing systems and the script runs of text.
 pub mod script;
+mod shaped_item;
 /// Shaping text items into glyphs with HarfRust.
 pub mod shaper;
 /// The stretches of a paragraph that shape alike.
@@ -62,7 +65,9 @@ pub use font::{
 pub use font_family_resolver::{FontFamilyResolver, FontRequest};
 pub use font_feature::{FontFeature, font_feature_settings};
 pub use glyph_id::GlyphId;
-pub use glyph_outline::GlyphOutline;
+pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
+#[cfg(feature = "hyphenation")]
+pub use hyphenator::{HyphenationError, Hyphenator};
 pub use itemizer::{Itemizer, TextItem};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox, line_box, paragraph_line_box};
@@ -79,8 +84,10 @@ pub use style::{
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
     text_align_fraction,
 };
-pub use text_layout::{CaretDirection, GlyphRun, TextLayout};
-pub use text_layouter::{LayoutInput, ParagraphLengths, TextLayouter};
-pub use typeface::{FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError};
+pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
+pub use text_layouter::{LayoutInput, ParagraphIntrinsics, ParagraphLengths, TextLayouter};
+pub use typeface::{
+    DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError,
+};
 pub use unit::TextUnit;
 pub use word_boundary::word_boundary;

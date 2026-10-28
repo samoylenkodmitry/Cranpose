@@ -2,7 +2,10 @@ use std::ops::Range;
 
 use cranpose_ui_graphics::Rect;
 
-use crate::{bidi_level::BidiLevel, glyph_id::GlyphId, shaper::ShapedGlyph, typeface::Typeface};
+use crate::{
+    bidi_level::BidiLevel, glyph_id::GlyphId, paragraph::TextAlign, shaper::ShapedGlyph,
+    typeface::Typeface,
+};
 
 /// A paragraph laid out in lines: glyph runs placed for drawing, and the
 /// queries of Compose's `TextLayoutResult`. Distances are in pixels from the
@@ -10,17 +13,74 @@ use crate::{bidi_level::BidiLevel, glyph_id::GlyphId, shaper::ShapedGlyph, typef
 /// default is empty, ready for [`TextLayouter::layout_into`].
 ///
 /// [`TextLayouter::layout_into`]: crate::TextLayouter::layout_into
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TextLayout {
     pub(crate) faces: Vec<Typeface>,
     pub(crate) glyphs: Vec<ShapedGlyph>,
     pub(crate) runs: Vec<LineRun>,
     pub(crate) lines: Vec<LayoutLine>,
     pub(crate) width: f32,
+    // The widest line with its indent.
+    pub(crate) widest: f32,
     pub(crate) height: f32,
     pub(crate) did_overflow_height: bool,
     pub(crate) did_overflow_width: bool,
+    // The widths at which the text breaks into the same lines; `None` when
+    // only its own width is known to.
+    pub(crate) hold: Option<WidthRange>,
+    pub(crate) sizing: Sizing,
 }
+
+// What the paragraph's width follows: its max intrinsic width rounded up to
+// whole device pixels, and whether the widest it may be counts, which it
+// does when lines wrap or an ellipsis cuts them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Sizing {
+    pub(crate) content_width: f32,
+    pub(crate) follows_max: bool,
+}
+
+impl Sizing {
+    // The width of the paragraph between `min_width` and `max_width`, as
+    // Compose's `finalMaxWidth` gives it.
+    pub(crate) fn width(self, min_width: f32, max_width: f32) -> f32 {
+        let max_width = if self.follows_max {
+            max_width
+        } else {
+            f32::INFINITY
+        };
+        // Equal ends fix the width; a min past the max leaves the max.
+        if min_width >= max_width {
+            max_width
+        } else {
+            self.content_width.max(min_width).min(max_width)
+        }
+    }
+}
+
+// Widths from `min` up to but not including `max`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WidthRange {
+    pub(crate) min: f32,
+    pub(crate) max: f32,
+}
+
+impl WidthRange {
+    pub(crate) const ALL: Self = Self {
+        min: f32::NEG_INFINITY,
+        max: f32::INFINITY,
+    };
+
+    // Narrows the range to the widths from `min` up to `max`.
+    pub(crate) fn narrow(&mut self, min: f32, max: f32) {
+        self.min = self.min.max(min);
+        self.max = self.max.min(max);
+    }
+}
+
+// How far inside a hold's ends a width must be for the layout to stand for
+// it, so that the order a sum is taken in cannot decide.
+const HOLD_MARGIN: f32 = 1e-3;
 
 // A run of one typeface, size and bidi level inside a line, in visual order.
 #[derive(Clone, Debug)]
@@ -33,15 +93,20 @@ pub(crate) struct LineRun {
     pub(crate) scale: f32,
     // Extra width of each cluster, half on each side.
     pub(crate) spacing: f32,
-    // Extra width of each space of a justified line, and the face's space.
-    pub(crate) word_spacing: f32,
+    // The face's space, how many of the run's glyphs are spaces before the
+    // line's trailing whitespace, and the extra width each of them takes in
+    // a justified line.
     pub(crate) space: Option<GlyphId>,
+    pub(crate) spaces: u16,
+    pub(crate) word_spacing: f32,
     // How far the run's baseline sits above the line's.
     pub(crate) baseline_shift: f32,
     pub(crate) level: BidiLevel,
-    // The left edge from the line's left edge.
+    // The left edge from the line's left edge and the width, before
+    // justification, and how far justification moves the run right.
     pub(crate) x: f32,
     pub(crate) width: f32,
+    pub(crate) shift: f32,
 }
 
 // One cluster of a run, left to right: the offset its text starts at, its
@@ -53,6 +118,16 @@ struct Cluster {
 }
 
 impl LineRun {
+    // The left edge from the line's left edge.
+    fn left(&self) -> f32 {
+        self.x + self.shift
+    }
+
+    // The right edge from the line's left edge.
+    fn right(&self) -> f32 {
+        self.left() + self.width + self.word_spacing * f32::from(self.spaces)
+    }
+
     // The run's clusters left to right.
     fn clusters<'a>(&'a self, glyphs: &'a [ShapedGlyph]) -> impl Iterator<Item = Cluster> + 'a {
         let mut at = 0;
@@ -112,12 +187,23 @@ pub(crate) struct LayoutLine {
     pub(crate) top: f32,
     pub(crate) baseline: f32,
     pub(crate) bottom: f32,
-    // The left edge of the line's visible text.
+    // The left edge of the line's visible text, its indent, its width
+    // before justification and what justification adds to it.
     pub(crate) left: f32,
+    pub(crate) indent: f32,
     pub(crate) width: f32,
+    pub(crate) stretch: f32,
     // The level of the paragraph the line is in.
     pub(crate) level: BidiLevel,
     pub(crate) ellipsized: bool,
+    pub(crate) ends_paragraph: bool,
+}
+
+impl LayoutLine {
+    // The right edge of the visible text.
+    fn right(&self) -> f32 {
+        self.left + self.width + self.stretch
+    }
 }
 
 /// Which of its two places a caret takes where the text before and after it
@@ -143,10 +229,24 @@ pub struct GlyphRun<'a> {
     baseline: f32,
 }
 
+/// A glyph placed in a layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PositionedGlyph {
+    /// The glyph.
+    pub id: GlyphId,
+    /// Where its origin sits, from the layout's left edge.
+    pub x: f32,
+    /// Where its origin sits, from the layout's top edge.
+    pub y: f32,
+    /// The offset in the text of the character it draws, the first of its
+    /// cluster.
+    pub offset: usize,
+}
+
 impl GlyphRun<'_> {
     /// Each glyph with the position of its origin in the layout, left to
     /// right.
-    pub fn positions(&self) -> impl Iterator<Item = (GlyphId, f32, f32)> + '_ {
+    pub fn positions(&self) -> impl Iterator<Item = PositionedGlyph> + '_ {
         let run = self.run;
         let baseline = self.baseline - run.baseline_shift;
         let mut pen = self.pen;
@@ -156,13 +256,29 @@ impl GlyphRun<'_> {
             self.glyphs[cluster.glyphs].iter().map(move |glyph| {
                 let at = x + font_units(glyph.x_offset) * run.scale;
                 x += font_units(glyph.advance) * run.scale;
-                (
-                    glyph.id,
-                    at,
-                    baseline - font_units(glyph.y_offset) * run.scale,
-                )
+                PositionedGlyph {
+                    id: glyph.id,
+                    x: at,
+                    y: baseline - font_units(glyph.y_offset) * run.scale,
+                    offset: cluster.offset,
+                }
             })
         })
+    }
+
+    /// The text the run draws.
+    pub fn text(&self) -> Range<usize> {
+        self.run.text.clone()
+    }
+
+    /// Where the run's baseline sits, from the layout's top edge.
+    pub fn baseline(&self) -> f32 {
+        self.baseline - self.run.baseline_shift
+    }
+
+    /// The run's left and right edges, from the layout's left edge.
+    pub fn edges(&self) -> (f32, f32) {
+        (self.pen, self.pen + self.run.right() - self.run.left())
     }
 }
 
@@ -174,13 +290,116 @@ impl TextLayout {
         self.runs.clear();
         self.lines.clear();
         self.width = 0.0;
+        self.widest = 0.0;
         self.height = 0.0;
         self.did_overflow_height = false;
         self.did_overflow_width = false;
+        self.hold = None;
+        self.sizing = Sizing::default();
     }
 
-    /// The width the lines were laid out in: the wrap width, or the widest
-    /// line when lines do not wrap.
+    /// Whether the text laid out again between `min_width` and `max_width`,
+    /// with the rest of its input the same, breaks into the same lines:
+    /// [`TextLayout::align`] then gives that layout without laying the text
+    /// out again.
+    pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
+        let width = self.sizing.width(min_width, max_width);
+        (width - self.width).abs() < HOLD_MARGIN
+            || self.hold.is_some_and(|hold| {
+                hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
+            })
+    }
+
+    /// The width the paragraph takes laid out between `min_width` and
+    /// `max_width`: its max intrinsic width rounded up to whole device
+    /// pixels within them, the max when they are equal.
+    pub fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
+        self.sizing.width(min_width, max_width)
+    }
+
+    /// The max widths, from `.0` up to and with `.1`, at which the paragraph
+    /// laid out from `min_width` keeps its width and its lines: every width
+    /// when its width follows no max, every width from its own when its text
+    /// fits, else only its own width.
+    pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
+        if !self.sizing.follows_max {
+            (f32::NEG_INFINITY, f32::INFINITY)
+        } else if self.width >= self.sizing.content_width.max(min_width) {
+            (self.width, f32::INFINITY)
+        } else {
+            (self.width, self.width)
+        }
+    }
+
+    /// Places the lines across the width the paragraph takes between
+    /// `min_width` and `max_width` as `align` says, for widths the layout
+    /// [holds](TextLayout::holds).
+    pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
+        self.width = self.sizing.width(min_width, max_width);
+        self.did_overflow_width = self.widest > self.width || self.width > max_width;
+        self.align_lines(align);
+    }
+
+    // Places each line across the layout's width as `align` says,
+    // stretching justified lines to the width.
+    pub(crate) fn align_lines(&mut self, align: TextAlign) {
+        for index in 0..self.lines.len() {
+            self.unjustify(index);
+            let line = &self.lines[index];
+            let free = self.width - line.indent - line.width;
+            // Justified text stretches the spaces of each line but the last
+            // of its paragraph, as Android's inter-word justification does.
+            let justified = align == TextAlign::Justify
+                && free > 0.0
+                && !line.ellipsized
+                && !line.ends_paragraph;
+            let stretched = justified && self.justify(index, free);
+            let line = &mut self.lines[index];
+            line.left = if stretched {
+                0.0
+            } else {
+                align_fraction(align, line.level) * free
+            };
+            if !line.level.is_rtl() {
+                line.left += line.indent;
+            }
+        }
+    }
+
+    // Takes the stretch of justification off line `index`.
+    fn unjustify(&mut self, index: usize) {
+        let line = &mut self.lines[index];
+        line.stretch = 0.0;
+        for run in &mut self.runs[line.runs.clone()] {
+            run.word_spacing = 0.0;
+            run.shift = 0.0;
+        }
+    }
+
+    // Spreads `free` width over the spaces of the visible text of line
+    // `index`; false when the line has none.
+    fn justify(&mut self, index: usize, free: f32) -> bool {
+        let line = &mut self.lines[index];
+        let runs = &mut self.runs[line.runs.clone()];
+        let total: u32 = runs.iter().map(|run| u32::from(run.spaces)).sum();
+        if total == 0 {
+            return false;
+        }
+        let per_space = free / f32::from(u16::try_from(total).unwrap_or(u16::MAX));
+        let mut shift = 0.0;
+        for run in runs {
+            run.shift = shift;
+            if run.spaces > 0 {
+                run.word_spacing = per_space;
+                shift += per_space * f32::from(run.spaces);
+            }
+        }
+        line.stretch = free;
+        true
+    }
+
+    /// The paragraph's width: its max intrinsic width rounded up to whole
+    /// device pixels, within the widths it was laid out between.
     pub fn width(&self) -> f32 {
         self.width
     }
@@ -201,8 +420,8 @@ impl TextLayout {
         self.did_overflow_height
     }
 
-    /// Whether a line is wider than the layout: Compose's
-    /// `didOverflowWidth`.
+    /// Whether the paragraph is wider than the widest it was laid out at, or
+    /// a line wider than the paragraph: Compose's `didOverflowWidth`.
     pub fn did_overflow_width(&self) -> bool {
         self.did_overflow_width
     }
@@ -252,8 +471,7 @@ impl TextLayout {
 
     /// The right edge of the visible text of `line`.
     pub fn line_right(&self, line: usize) -> f32 {
-        let line = &self.lines[line];
-        line.left + line.width
+        self.lines[line].right()
     }
 
     /// The line that holds `offset`; the last line for the end of the text.
@@ -293,7 +511,7 @@ impl TextLayout {
             (_, Some(run)) | (Some(run), None) => run,
             (None, None) => {
                 return if line.level.is_rtl() {
-                    line.left + line.width
+                    line.right()
                 } else {
                     line.left
                 };
@@ -309,12 +527,12 @@ impl TextLayout {
         let local = x - line.left;
         let Some(run) = runs
             .iter()
-            .find(|run| local < run.x + run.width)
+            .find(|run| local < run.right())
             .or_else(|| runs.last())
         else {
             return line.text.start;
         };
-        self.offset_in_run(run, local - run.x)
+        self.offset_in_run(run, local - run.left())
     }
 
     /// The glyph runs of `line`, left to right.
@@ -327,7 +545,7 @@ impl TextLayout {
                 size: run.size,
                 glyphs: &self.glyphs[run.glyphs.clone()],
                 run,
-                pen: line.left + run.x,
+                pen: line.left + run.left(),
                 baseline: line.baseline,
             })
     }
@@ -340,7 +558,7 @@ impl TextLayout {
         let found = self.runs[line.runs.clone()].iter().find_map(|run| {
             run.cluster_spans(&self.glyphs[run.glyphs.clone()])
                 .find(|(_, cluster, end)| (cluster.offset..*end).contains(&offset))
-                .map(|(left, cluster, _)| (run.x + left, cluster.width))
+                .map(|(left, cluster, _)| (run.left() + left, cluster.width))
         });
         let (x, width) = found.unwrap_or_else(|| {
             (
@@ -381,7 +599,7 @@ impl TextLayout {
                 for (left, cluster, cluster_end) in
                     run.cluster_spans(&self.glyphs[run.glyphs.clone()])
                 {
-                    let x = run.x + left;
+                    let x = run.left() + left;
                     let covered = cluster.offset < end && cluster_end > start;
                     match (covered, open) {
                         (true, Some((from, _))) => open = Some((from, x + cluster.width)),
@@ -408,9 +626,9 @@ impl TextLayout {
             .map(|cluster| cluster.width)
             .sum();
         if run.level.is_rtl() {
-            run.x + run.width - before
+            run.right() - before
         } else {
-            run.x + before
+            run.left() + before
         }
     }
 
@@ -431,6 +649,19 @@ impl TextLayout {
         } else {
             run.text.end
         }
+    }
+}
+
+// How far across the free width of a line `align` places it, in a
+// paragraph at `level`.
+fn align_fraction(align: TextAlign, level: BidiLevel) -> f32 {
+    let start = if level.is_rtl() { 1.0 } else { 0.0 };
+    match align {
+        TextAlign::Left => 0.0,
+        TextAlign::Right => 1.0,
+        TextAlign::Center => 0.5,
+        TextAlign::Start | TextAlign::Justify | TextAlign::Unspecified => start,
+        TextAlign::End => 1.0 - start,
     }
 }
 

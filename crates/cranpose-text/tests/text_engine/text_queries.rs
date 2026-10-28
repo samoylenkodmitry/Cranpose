@@ -25,7 +25,8 @@ fn layout(
             spans,
             paragraph: &paragraph,
             lengths: ParagraphLengths::default(),
-            width,
+            min_width: 0.0,
+            max_width: width,
             options: TextLayoutOptions::default(),
         },
         resolver,
@@ -90,7 +91,7 @@ fn a_baseline_shift_raises_the_span() {
     let baseline = laid.line_baseline(0);
     let heights: Vec<f32> = laid
         .glyph_runs(0)
-        .flat_map(|run| run.positions().map(|(_, _, y)| y).collect::<Vec<_>>())
+        .flat_map(|run| run.positions().map(|glyph| glyph.y).collect::<Vec<_>>())
         .collect();
     assert!(close(heights[0], baseline), "{heights:?}");
     assert!(

@@ -292,6 +292,29 @@ impl Typeface {
             })
     }
 
+    /// Where the font draws an underline and a line through its text, in
+    /// design units: its `post` underline and `OS/2` strikeout, or Skia's
+    /// defaults for a font without them.
+    pub fn decoration_metrics(&self) -> DecorationMetrics {
+        let metrics = self.0.font.style_metrics();
+        let em = f32::from(self.units_per_em());
+        let top = |decoration: Option<read_fonts::model::metrics::Decoration>,
+                   default: (f32, f32)| {
+            decoration.map_or(default, |decoration| {
+                (-decoration.position.to_f32(), decoration.thickness.to_f32())
+            })
+        };
+        let (underline_top, underline_thickness) = top(metrics.underline, (em / 9.0, em / 18.0));
+        let (strike_through_top, strike_through_thickness) =
+            top(metrics.strike_through, (-em * 6.0 / 21.0, em / 18.0));
+        DecorationMetrics {
+            underline_top,
+            underline_thickness,
+            strike_through_top,
+            strike_through_thickness,
+        }
+    }
+
     /// The glyph the font maps `ch` to, `None` when it has none.
     pub fn glyph(&self, ch: char) -> Option<GlyphId> {
         self.0
@@ -349,7 +372,22 @@ impl std::fmt::Debug for Typeface {
     }
 }
 
-/// A font's vertical line metrics in design units.
+/// Where a font draws an underline and a line through its text, in design
+/// units: Android's underline and strike-through metrics.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DecorationMetrics {
+    /// How far below the baseline the top of an underline sits.
+    pub underline_top: f32,
+    /// How thick an underline is.
+    pub underline_thickness: f32,
+    /// How far below the baseline the top of a line through the text sits;
+    /// negative above it.
+    pub strike_through_top: f32,
+    /// How thick a line through the text is.
+    pub strike_through_thickness: f32,
+}
+
+/// A font's vertical line metrics, in design units.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LineMetrics {
     /// Height above the baseline.

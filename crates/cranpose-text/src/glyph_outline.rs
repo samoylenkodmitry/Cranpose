@@ -1,5 +1,5 @@
 use ab_glyph_rasterizer::{Point, Rasterizer, point};
-use cranpose_ui_graphics::whole;
+use cranpose_ui_graphics::{Point as PixelPoint, whole};
 use read_fonts::{
     model::glyph::outline::{DrawMemory, DrawOptions, PathSink},
     types::GlyphId as FontGlyphId,
@@ -26,18 +26,37 @@ enum Segment {
     Cubic(Point, Point, Point, Point),
 }
 
+/// One piece of a glyph's outline, in pixels from its box's top left corner
+/// with y growing down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OutlineSegment {
+    /// A straight line from the first point to the second.
+    Line(PixelPoint, PixelPoint),
+    /// A quadratic curve from the first point to the third, pulled by the second.
+    Quad(PixelPoint, PixelPoint, PixelPoint),
+    /// A cubic curve from the first point to the fourth, pulled by the middle two.
+    Cubic(PixelPoint, PixelPoint, PixelPoint, PixelPoint),
+}
+
+/// How a glyph's outline is placed in pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OutlineTransform {
+    /// Pixels per em.
+    pub size: f32,
+    /// How far right of the pixel grid the glyph's origin sits: the fraction
+    /// of a pixel a subpixel position adds.
+    pub x_offset: f32,
+    /// How far down of the pixel grid the glyph's origin sits.
+    pub y_offset: f32,
+    /// How far right each pixel of height above the baseline moves the
+    /// outline: the slant of a synthesized italic, 0.25 on Android.
+    pub skew: f32,
+}
+
 impl GlyphOutline {
-    /// The outline of `glyph` of `typeface` at `size` pixels per em, with its
-    /// origin moved right by `x_offset` and down by `y_offset` pixels, the
-    /// fractions of a pixel a subpixel position adds. `None` for a glyph with
-    /// no outline, such as a space.
-    pub fn of(
-        typeface: &Typeface,
-        glyph: GlyphId,
-        size: f32,
-        x_offset: f32,
-        y_offset: f32,
-    ) -> Option<Self> {
+    /// The outline of `glyph` of `typeface` placed as `transform` says.
+    /// `None` for a glyph with no outline, such as a space.
+    pub fn of(typeface: &Typeface, glyph: GlyphId, transform: OutlineTransform) -> Option<Self> {
         let outlines = typeface.font().outline_glyphs();
         let outline = outlines.get(FontGlyphId::new(glyph.0))?;
         // The outline comes in font units and scales in `f32`, as ab_glyph
@@ -46,8 +65,9 @@ impl GlyphOutline {
             segments: Vec::new(),
             start: point(0.0, 0.0),
             pen: point(0.0, 0.0),
-            offset: point(x_offset, y_offset),
-            scale: size / f32::from(typeface.units_per_em()),
+            offset: point(transform.x_offset, transform.y_offset),
+            scale: transform.size / f32::from(typeface.units_per_em()),
+            skew: transform.skew,
         };
         outline
             .draw(
@@ -100,6 +120,18 @@ impl GlyphOutline {
         self.height
     }
 
+    /// The outline's pieces, in pixels from the box's top left corner.
+    pub fn segments(&self) -> impl ExactSizeIterator<Item = OutlineSegment> + '_ {
+        let pixel = |at: Point| PixelPoint::new(at.x, at.y);
+        self.segments.iter().map(move |segment| match *segment {
+            Segment::Line(a, b) => OutlineSegment::Line(pixel(a), pixel(b)),
+            Segment::Quad(a, b, c) => OutlineSegment::Quad(pixel(a), pixel(b), pixel(c)),
+            Segment::Cubic(a, b, c, d) => {
+                OutlineSegment::Cubic(pixel(a), pixel(b), pixel(c), pixel(d))
+            }
+        })
+    }
+
     /// Passes the coverage of each pixel of the box, from 0 to 1, row by row,
     /// with its column and row; `rasterizer` is the scratch the drawing
     /// accumulates in.
@@ -117,19 +149,20 @@ impl GlyphOutline {
 }
 
 // Collects an outline's segments in pixels with y growing down, from font
-// units `scale` pixels each.
+// units `scale` pixels each, slanted right by `skew` a unit of height.
 struct PathCollector {
     segments: Vec<Segment>,
     start: Point,
     pen: Point,
     offset: Point,
     scale: f32,
+    skew: f32,
 }
 
 impl PathCollector {
     fn point(&self, x: f32, y: f32) -> Point {
         point(
-            x * self.scale + self.offset.x,
+            (x + y * self.skew) * self.scale + self.offset.x,
             -y * self.scale + self.offset.y,
         )
     }

@@ -27,7 +27,7 @@ fn options(overflow: TextOverflow, soft_wrap: bool, max_lines: usize) -> TextLay
 // The glyph ids of `line`, left to right.
 fn glyphs(laid: &TextLayout, line: usize) -> Vec<u32> {
     laid.glyph_runs(line)
-        .flat_map(|run| run.positions().map(|(id, _, _)| id.0).collect::<Vec<_>>())
+        .flat_map(|run| run.positions().map(|glyph| glyph.id.0).collect::<Vec<_>>())
         .collect()
 }
 

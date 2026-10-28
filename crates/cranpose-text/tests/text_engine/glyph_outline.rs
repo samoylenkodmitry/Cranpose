@@ -1,5 +1,5 @@
 use ab_glyph::{Font as _, FontRef, PxScale, point};
-use cranpose_text::GlyphOutline;
+use cranpose_text::{GlyphOutline, OutlineTransform};
 
 use crate::fonts::{DEVANAGARI_VF, ROBOTO, bytes, typeface};
 
@@ -23,8 +23,17 @@ fn outlines_draw_the_coverage_ab_glyph_draws() {
         for ch in text.chars() {
             for (size, offset) in [(12.5, 0.0), (31.0, 0.25)] {
                 let glyph = face.glyph(ch).expect("the font maps the character");
-                let outline = GlyphOutline::of(&face, glyph, size, offset, offset)
-                    .expect("the glyph has an outline");
+                let outline = GlyphOutline::of(
+                    &face,
+                    glyph,
+                    OutlineTransform {
+                        size,
+                        x_offset: offset,
+                        y_offset: offset,
+                        skew: 0.0,
+                    },
+                )
+                .expect("the glyph has an outline");
                 let scale = PxScale::from(size * font.height_unscaled() / units);
                 let expected_glyph = font
                     .glyph_id(ch)
@@ -66,5 +75,15 @@ fn a_space_has_no_outline() {
     let face = typeface(ROBOTO);
     let space = face.glyph(' ').expect("the font maps a space");
 
-    assert!(GlyphOutline::of(&face, space, 16.0, 0.0, 0.0).is_none());
+    assert!(
+        GlyphOutline::of(
+            &face,
+            space,
+            OutlineTransform {
+                size: 16.0,
+                ..OutlineTransform::default()
+            }
+        )
+        .is_none()
+    );
 }
