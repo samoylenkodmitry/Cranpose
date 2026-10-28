@@ -39,7 +39,9 @@ pub struct Itemizer {
 impl Itemizer {
     /// Passes the items of `text` to `visit`. `spans` are the style spans of
     /// the text in order, each a byte range and the font it asks for; they
-    /// cover the text with no gap.
+    /// cover the text with no gap. Spans that differ only in what does not
+    /// change shaping, such as color, must be one span: a ligature such as
+    /// Arabic lam-alef forms only inside one item.
     pub fn itemize<'r>(
         &mut self,
         text: &str,

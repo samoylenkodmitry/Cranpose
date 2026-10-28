@@ -1660,6 +1660,7 @@ version = "0.17.2"
 dependencies = [
  "cranpose-ui-graphics",
  "foldhash",
+ "harfrust",
  "icu_properties",
  "read-fonts",
  "smallvec",

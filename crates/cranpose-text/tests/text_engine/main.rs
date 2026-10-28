@@ -1,6 +1,8 @@
 // The text engine on the repository's fonts.
 
 mod font_family_resolver;
+mod font_feature;
 mod fonts;
 mod itemizer;
+mod shaper;
 mod typeface;

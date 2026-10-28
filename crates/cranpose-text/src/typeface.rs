@@ -7,12 +7,14 @@ use foldhash::fast::FixedState;
 use read_fonts::{
     FontRef, TableProvider,
     model::{Blob, Font, Source, Variation, attribute::Style, name::NameId},
-    types::{GlyphId, Tag},
+    types::{GlyphId as FontGlyphId, Tag},
 };
+use smallvec::SmallVec;
 
 use crate::{
     coverage::Coverage,
     font::{FontFamily, FontStyle, FontWeight},
+    glyph_id::GlyphId,
 };
 
 /// The bytes a typeface is read from.
@@ -247,7 +249,7 @@ impl Typeface {
                     .font
                     .charmap()
                     .unicodes()
-                    .filter(|(_, glyph)| *glyph != GlyphId::NOTDEF)
+                    .filter(|(_, glyph)| *glyph != FontGlyphId::NOTDEF)
                     .map(|(codepoint, _)| codepoint),
             )
         })
@@ -284,7 +286,11 @@ impl Typeface {
 
     /// The glyph the font maps `ch` to, `None` when it has none.
     pub fn glyph(&self, ch: char) -> Option<GlyphId> {
-        self.0.font.charmap().map_unicode(ch)
+        self.0
+            .font
+            .charmap()
+            .map_unicode(ch)
+            .map(|glyph| GlyphId(glyph.to_u32()))
     }
 
     /// Whether the font maps `ch` to a glyph.
@@ -294,7 +300,30 @@ impl Typeface {
 
     /// The horizontal advance of `glyph` at the instance, in design units.
     pub fn advance(&self, glyph: GlyphId) -> f32 {
-        self.0.font.glyph_metrics().h_advance(glyph)
+        self.0
+            .font
+            .glyph_metrics()
+            .h_advance(FontGlyphId::new(glyph.0))
+    }
+
+    // The font model at the typeface's instance.
+    pub(crate) fn font(&self) -> &Font {
+        &self.0.font
+    }
+
+    // The axis positions that draw the typeface at `weight` and `style`: for
+    // a variable font read without a declaration, its `wght`, `ital` and
+    // `slnt` positions; none for a registered typeface, which its declaration
+    // already instanced.
+    pub(crate) fn axis_positions(
+        &self,
+        weight: FontWeight,
+        style: FontStyle,
+    ) -> SmallVec<[([u8; 4], f32); 3]> {
+        if self.0.registered_family.is_some() {
+            return SmallVec::new();
+        }
+        declared_variations(&self.0.font, weight, style)
     }
 }
 
@@ -381,7 +410,11 @@ fn family_names(font: &Font) -> Box<[String]> {
 
 // The positions a declared weight and style ask of the font's axes, clamped
 // into each axis's range.
-fn declared_variations(font: &Font, weight: FontWeight, style: FontStyle) -> Vec<([u8; 4], f32)> {
+fn declared_variations(
+    font: &Font,
+    weight: FontWeight,
+    style: FontStyle,
+) -> SmallVec<[([u8; 4], f32); 3]> {
     const OBLIQUE_DEGREES: f32 = -12.0;
     font.axes()
         .iter()

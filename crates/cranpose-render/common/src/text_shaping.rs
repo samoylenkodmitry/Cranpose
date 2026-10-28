@@ -6,6 +6,7 @@ use std::{
 
 use ab_glyph::{Font as _, FontArc, GlyphId};
 use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default};
+use cranpose_text::font_feature::font_feature_settings;
 use cranpose_ui::text::{ResolvedTextDirection, TextShaping, TextStyle};
 use harfrust::{
     Buffer, Direction, Feature, GlyphInfo, GlyphPosition, Language, Script, ShapeOptions,
@@ -13,8 +14,6 @@ use harfrust::{
     font::{Blob, Font, Variation},
 };
 use smallvec::SmallVec;
-
-use crate::font_features::font_feature_settings;
 
 pub(crate) fn required(text: &str, style: &TextStyle) -> bool {
     !text.is_ascii()
