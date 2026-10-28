@@ -801,7 +801,7 @@ fn text_shadow_node() -> RenderNode {
     let render_text = std::sync::Arc::new(annotated.render_string());
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+        node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
             node_id: NodeId(89_001),
             rect: Rect {
                 x: 24.0,
@@ -816,7 +816,8 @@ fn text_shadow_node() -> RenderNode {
             layout_options: TextLayoutOptions::default(),
             clip: None,
             paint: Default::default(),
-        })),
+            layout: Default::default(),
+        }))),
     })
 }
 

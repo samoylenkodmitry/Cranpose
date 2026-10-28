@@ -109,10 +109,11 @@ fn a_frame_of_more_texts_than_the_cache_floor_keeps_every_run_for_the_next() {
     };
     // More texts than the cache's floor of 1,024 runs: the first frame
     // lays every run out, then sizes the cache to hold them.
-    let first = runs_collected(&mut renderer, many_texts_frame(1_600));
+    let frame = many_texts_frame(1_600);
+    let first = runs_collected(&mut renderer, frame.clone());
     assert!(first > 1_024, "the first frame lays out its runs: {first}");
-    let second = runs_collected(&mut renderer, many_texts_frame(1_600));
-    let third = runs_collected(&mut renderer, many_texts_frame(1_600));
+    let second = runs_collected(&mut renderer, frame.clone());
+    let third = runs_collected(&mut renderer, frame);
     assert_eq!(
         (second, third),
         (0, 0),

@@ -20,6 +20,7 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
             cranpose_ui::text::shared_plain_render_string("bounds"),
             &cranpose_ui::TextStyle::default(),
         ),
+        layout: Default::default(),
         color: Color::WHITE,
         text_style: Default::default(),
         style_hash: 0,

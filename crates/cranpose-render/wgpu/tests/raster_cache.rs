@@ -418,7 +418,7 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
     };
     let text = PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+        node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
             node_id,
             rect: local_bounds,
             text: cranpose_ui::text::shared_plain_annotated_string(text_value),
@@ -431,7 +431,8 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
             layout_options: TextLayoutOptions::default(),
             clip: None,
             paint: Default::default(),
-        })),
+            layout: Default::default(),
+        }))),
     };
     support::contract_layer(
         Some(node_id),

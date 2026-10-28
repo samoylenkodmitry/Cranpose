@@ -2074,6 +2074,7 @@ dependencies = [
  "cranpose-render-wgpu",
  "cranpose-services",
  "cranpose-testing",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-wgpu",

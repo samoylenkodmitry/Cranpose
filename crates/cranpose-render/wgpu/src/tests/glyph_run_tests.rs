@@ -1,14 +1,14 @@
 use super::*;
 
-fn placement(glyph_id: u32, x: i32, font_hash: u64, color: Color) -> SoftwareGlyphAtlasPlacement {
-    SoftwareGlyphAtlasPlacement {
-        key: SoftwareGlyphAtlasKey {
+fn placement(glyph_id: u32, x: i32, font_hash: u64, color: Color) -> AtlasGlyph {
+    AtlasGlyph {
+        key: GlyphMaskKey {
             font_hash,
             glyph_id,
-            scale_x_bits: 14.0f32.to_bits(),
-            scale_y_bits: 14.0f32.to_bits(),
-            embolden_px_bits: 0,
-            slant_bits: 0,
+            size_bits: 14.0f32.to_bits(),
+            stroke_bits: 0,
+            embolden_bits: 0,
+            skew_bits: 0,
         },
         x,
         y: -3,
@@ -18,9 +18,7 @@ fn placement(glyph_id: u32, x: i32, font_hash: u64, color: Color) -> SoftwareGly
     }
 }
 
-fn fields(
-    glyph: SoftwareGlyphAtlasPlacement,
-) -> (SoftwareGlyphAtlasKey, i32, i32, usize, usize, Color) {
+fn fields(glyph: AtlasGlyph) -> (GlyphMaskKey, i32, i32, usize, usize, Color) {
     (
         glyph.key,
         glyph.x,
@@ -69,7 +67,7 @@ fn runs_in_the_same_faces_share_them() {
 #[test]
 fn a_glyph_past_the_compact_form_has_no_run() {
     let mut scratch = RunGlyphScratch::default();
-    let huge = SoftwareGlyphAtlasPlacement {
+    let huge = AtlasGlyph {
         width: 70_000,
         ..placement(40, 0, 7, INK)
     };
@@ -81,5 +79,5 @@ fn a_glyph_past_the_compact_form_has_no_run() {
 #[test]
 fn a_compact_glyph_takes_sixteen_bytes() {
     assert_eq!(size_of::<RunGlyph>(), 16);
-    assert!(size_of::<SoftwareGlyphAtlasPlacement>() >= 64);
+    assert!(size_of::<AtlasGlyph>() >= 48);
 }

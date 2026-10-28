@@ -16,6 +16,7 @@ mod scaling_list_scene;
 mod size_updates;
 mod space_frames;
 mod teardown_survivors;
+mod text_decorations;
 mod text_glyph_fallback;
 mod text_updates;
 mod wear_faded_row_composite;

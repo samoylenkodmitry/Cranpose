@@ -1899,7 +1899,7 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
             ),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                     node_id: NodeId(201),
                     rect: Rect {
                         x: 20.0,
@@ -1918,7 +1918,8 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
                     paint: Default::default(),
-                })),
+                    layout: Default::default(),
+                }))),
             }),
             gradient_dstout_rect(
                 Rect {
@@ -2758,7 +2759,7 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(99),
                 rect: Rect {
                     x: 0.0,
@@ -2776,7 +2777,8 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let wrapper = layer(
@@ -3047,7 +3049,7 @@ fn translation_only_wrapper_with_text_style_fixture(
             ),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                     node_id: NodeId(1),
                     rect: Rect {
                         x: 4.0,
@@ -3062,7 +3064,8 @@ fn translation_only_wrapper_with_text_style_fixture(
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
                     paint: Default::default(),
-                })),
+                    layout: Default::default(),
+                }))),
             }),
         ],
     );
@@ -3119,7 +3122,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(101),
                 rect: Rect {
                     x: 0.0,
@@ -3134,7 +3137,8 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let wrapper = layer(
@@ -3196,7 +3200,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
             }),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                     node_id: NodeId(102),
                     rect: Rect {
                         x: 8.0,
@@ -3213,7 +3217,8 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
                     paint: Default::default(),
-                })),
+                    layout: Default::default(),
+                }))),
             }),
         ],
     );
@@ -3264,7 +3269,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(103),
                 rect: Rect {
                     x: 8.0,
@@ -3279,7 +3284,8 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let wrapper = layer(
@@ -3323,7 +3329,7 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(77),
                 rect: Rect {
                     x: 0.0,
@@ -3348,7 +3354,8 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
 
@@ -3424,7 +3431,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(104),
                 rect: Rect {
                     x: 0.0,
@@ -3439,7 +3446,8 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let alpha_surface = layer(

@@ -308,7 +308,7 @@ impl TextResources {
 
     // The atlas entry of `glyph`, its mask uploaded from the mask cache when
     // the atlas lacks it. An atlas that fills is reset and the run fails.
-    fn glyph_atlas_entry_for_placement(
+    pub(super) fn glyph_atlas_entry_for(
         &mut self,
         glyph: &AtlasGlyph,
         upload: &mut FrameUploads<'_>,
@@ -355,7 +355,7 @@ impl TextResources {
             for glyph in glyph_run.iter() {
                 entries.push(
                     seen.entry((&mut *self, &mut *upload), &glyph, |text, upload| {
-                        text.glyph_atlas_entry_for_placement(&glyph, upload)
+                        text.glyph_atlas_entry_for(&glyph, upload)
                     })?,
                 );
             }
@@ -363,7 +363,7 @@ impl TextResources {
             for glyph in collected_run {
                 entries.push(
                     seen.entry((&mut *self, &mut *upload), glyph, |text, upload| {
-                        text.glyph_atlas_entry_for_placement(glyph, upload)
+                        text.glyph_atlas_entry_for(glyph, upload)
                     })?,
                 );
             }

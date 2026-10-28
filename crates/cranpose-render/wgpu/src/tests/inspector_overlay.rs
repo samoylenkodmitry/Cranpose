@@ -24,7 +24,8 @@ fn inspector_survives_fps_overlay_refresh_and_clearing() {
         ..Default::default()
     })));
     assert_inspector(&renderer);
-    renderer.draw_dev_overlay("60 FPS", Size::new(800.0, 600.0));
+    let overlay = test_support::prepared_text("60 FPS");
+    renderer.draw_dev_overlay(&overlay, Size::new(800.0, 600.0));
     assert_inspector(&renderer);
     renderer.frontend.clear_fps_overlay();
     assert_inspector(&renderer);

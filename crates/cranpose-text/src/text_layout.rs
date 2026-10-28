@@ -356,14 +356,20 @@ impl TextLayout {
     pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
         self.width = self.sizing.width(min_width, max_width);
         self.did_overflow_width = self.widest > self.width || self.width > max_width;
-        self.align_lines(align);
-        self.renew_id();
+        // A glyph that keeps its place keeps the id what a renderer drew of
+        // the layout goes by.
+        if self.align_lines(align) {
+            self.renew_id();
+        }
     }
 
     // Places each line across the layout's width as `align` says,
-    // stretching justified lines to the width.
-    pub(crate) fn align_lines(&mut self, align: TextAlign) {
+    // stretching justified lines to the width. True when a line moved or
+    // stretched, moving its glyphs.
+    pub(crate) fn align_lines(&mut self, align: TextAlign) -> bool {
+        let mut moved = false;
         for index in 0..self.lines.len() {
+            let before = (self.lines[index].left, self.lines[index].stretch);
             self.unjustify(index);
             let line = &self.lines[index];
             let free = self.width - line.indent - line.width;
@@ -383,7 +389,10 @@ impl TextLayout {
             if !line.level.is_rtl() {
                 line.left += line.indent;
             }
+            moved |= line.left.to_bits() != before.0.to_bits()
+                || line.stretch.to_bits() != before.1.to_bits();
         }
+        moved
     }
 
     // Takes the stretch of justification off line `index`.

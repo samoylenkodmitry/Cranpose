@@ -231,3 +231,23 @@ fn hyphenated_lines_hold_the_widths_that_keep_their_hyphenation_points() {
     }
     assert!(changes > 3, "{changes}");
 }
+
+#[test]
+fn a_layout_aligned_without_moving_a_glyph_keeps_its_id() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let start = paragraph(TextAlign::Start, LineBreak::Simple);
+    let mut laid = lay_out_with(
+        &resolver,
+        "hello world",
+        (&start, ParagraphLengths::default()),
+        300.0,
+        TextLayoutOptions::default(),
+    );
+    let id = laid.id();
+
+    laid.align(250.0, 250.0, TextAlign::Start);
+    assert_eq!(laid.id(), id, "a start-aligned line stays where it was");
+
+    laid.align(250.0, 250.0, TextAlign::Center);
+    assert_ne!(laid.id(), id, "centring moves the line");
+}

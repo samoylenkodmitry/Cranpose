@@ -1,4 +1,4 @@
-use cranpose_render_common::software_text_raster::SoftwareGlyphAtlasKey;
+use cranpose_render_common::{glyph_mask::GlyphMaskKey, text_atlas::AtlasGlyph};
 use cranpose_ui_graphics::Color;
 
 use super::*;
@@ -7,15 +7,15 @@ use crate::{
     render::glyph_draws::for_each_visible_glyph,
 };
 
-fn placement(x: i32, y: i32, width: usize, height: usize) -> SoftwareGlyphAtlasPlacement {
-    SoftwareGlyphAtlasPlacement {
-        key: SoftwareGlyphAtlasKey {
+fn placement(x: i32, y: i32, width: usize, height: usize) -> AtlasGlyph {
+    AtlasGlyph {
+        key: GlyphMaskKey {
             font_hash: 0,
             glyph_id: 0,
-            scale_x_bits: 0,
-            scale_y_bits: 0,
-            embolden_px_bits: 0,
-            slant_bits: 0,
+            size_bits: 0,
+            stroke_bits: 0,
+            embolden_bits: 0,
+            skew_bits: 0,
         },
         x,
         y,
@@ -46,7 +46,7 @@ fn at(x: f32, y: f32) -> Rect {
 }
 
 /// A line of glyphs, one of them rising above the others and one a space.
-fn line() -> Vec<SoftwareGlyphAtlasPlacement> {
+fn line() -> Vec<AtlasGlyph> {
     vec![
         placement(0, 4, 6, 8),
         placement(7, -2, 5, 14),

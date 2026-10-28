@@ -1,17 +1,21 @@
-use cranpose::text::{FontFamily, FontStyle, FontWeight, TextStyle};
+use std::rc::Rc;
+
+use cranpose::text::{FontFamily, FontStyle, FontWeight, TextStyle, TextUnit};
 use cranpose_render_common::{
-    font_source::SoftwareTextFontRegistry,
-    software_text_raster::{
-        measure_text_with_font, rasterize_text, SoftwareTextFont, SoftwareTextFontError,
-        TextPixels, TextRasterRequest,
-    },
+    font_source::FontRegistry,
+    text_canvas::TextPixels,
+    text_fonts::TextFonts,
+    text_raster::{rasterize_text, TextRasterRequest},
 };
+use cranpose_text::{Typeface, TypefaceError};
+use cranpose_ui::PreparedTextLayout;
 use cranpose_ui_graphics::{Color, Rect, Size};
 
 const FONT: &[u8] = include_bytes!("../assets/leetcodedaily/fonts/MonaspaceKryptonVarVF.ttf");
+const TEXT: &str = "AVATAR Browse";
 
-fn face(axes: &[([u8; 4], f32)]) -> Result<SoftwareTextFont, SoftwareTextFontError> {
-    SoftwareTextFont::from_registered_bytes_with_variations(
+fn face(axes: &[([u8; 4], f32)]) -> Result<Typeface, TypefaceError> {
+    Typeface::from_registered(
         &FontFamily::SansSerif,
         FontWeight::MEDIUM,
         FontStyle::Normal,
@@ -20,26 +24,37 @@ fn face(axes: &[([u8; 4], f32)]) -> Result<SoftwareTextFont, SoftwareTextFontErr
     )
 }
 
+// `TEXT` at 20 pixels laid out in `face` alone.
+fn laid_out(face: &Typeface, style: &TextStyle) -> Rc<PreparedTextLayout> {
+    cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(TextFonts::new(vec![face.clone()]).resolver());
+        cranpose_ui::text::prepare_text_layout(&TEXT.into(), style, Default::default(), None)
+    })
+}
+
 #[test]
 fn explicit_axes_change_measurement_rasterization_and_cache_identity() {
     let normal = face(&[(*b"wdth", 100.0)]).unwrap();
     let wide = face(&[(*b"wdth", 125.0)]).unwrap();
-    let style = TextStyle::default();
-    let measure =
-        |font: &SoftwareTextFont| measure_text_with_font("AVATAR Browse", &style, 20.0, font).width;
+    let mut style = TextStyle::default();
+    style.span_style.font_size = TextUnit::Sp(20.0);
+    let measure = |font: &Typeface| {
+        let layout = laid_out(font, &style).layout.clone();
+        layout.line_right(0) - layout.line_left(0)
+    };
     assert!(measure(&wide) > measure(&normal));
     assert_ne!(normal.content_hash(), wide.content_hash());
-    let raster = |font: &SoftwareTextFont| {
+    let raster = |font: &Typeface| {
+        let prepared = laid_out(font, &style);
         rasterize_text(
             TextRasterRequest::new(
-                "AVATAR Browse",
+                &prepared.layout,
+                TEXT,
                 Rect::from_size(Size::new(300.0, 40.0)),
                 &style,
                 Color::BLACK,
-                20.0,
                 1.0,
             ),
-            font,
             None,
         )
         .and_then(TextPixels::into_image)
@@ -62,7 +77,7 @@ fn explicit_axes_override_semantic_weight_and_have_canonical_cache_identity() {
         first.content_hash(),
         face(&[(*b"wdth", 125.0)]).unwrap().content_hash()
     );
-    let mut registry = SoftwareTextFontRegistry::new();
+    let mut registry = FontRegistry::new();
     registry
         .register_face_bytes_with_variations(
             &FontFamily::SansSerif,
@@ -85,7 +100,7 @@ fn explicit_axes_reject_unknown_nonfinite_and_out_of_range_coordinates() {
         (*b"wdth", 126.0),
     ] {
         assert!(
-            matches!(face(&[(tag, value)]), Err(SoftwareTextFontError::InvalidVariation { tag: rejected }) if rejected == tag)
+            matches!(face(&[(tag, value)]), Err(TypefaceError::InvalidVariation { tag: rejected }) if rejected == tag)
         );
     }
     for value in [100.0, 125.0] {

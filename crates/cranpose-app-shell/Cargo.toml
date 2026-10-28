@@ -43,6 +43,8 @@ web-time = { workspace = true }
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
 cranpose-liquid = { path = "../cranpose-liquid" }
+# Tests lay text out with Cranpose Test Mono.
+cranpose-ui = { workspace = true, features = ["test-helpers"] }
 cranpose-ui-layout = { workspace = true }
 stats_alloc = "0.1.10"
 

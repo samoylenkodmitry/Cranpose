@@ -198,8 +198,13 @@ fn assert_clipped_paragraph_pixels(color_stops: usize, shadow_on_span: bool) {
                         height: 30.0,
                     },
                 );
+                // The glyphs draw from red to blue down a varying gradient.
                 assert!(
-                    reference.as_chunks::<4>().0.iter().any(|p| p[0] > 128),
+                    reference
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|p| p[0] > 128 || p[2] > 128),
                     "the clipped region contains visible glyphs"
                 );
                 if !varying {
