@@ -367,7 +367,7 @@ impl SoftwareTextFont {
         self.shaping
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .shape(self.font.font_data(), text, style)
+            .shape(self.font.as_font(), text, style)
     }
 }
 

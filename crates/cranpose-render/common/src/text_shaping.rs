@@ -4,10 +4,12 @@ use std::{
     sync::Arc,
 };
 
-use ab_glyph::GlyphId;
+use ab_glyph::{Font, FontArc, GlyphId};
 use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default};
 use cranpose_ui::text::{ResolvedTextDirection, TextShaping, TextStyle};
-use rustybuzz::{Direction, Face, Feature, GlyphBuffer, UnicodeBuffer, Variation};
+use rustybuzz::{
+    Direction, Face, Feature, GlyphBuffer, Language, Script, ShapePlan, UnicodeBuffer, Variation,
+};
 use smallvec::SmallVec;
 
 use crate::font_features::font_feature_settings;
@@ -121,10 +123,38 @@ impl ShapedRun {
     }
 }
 
+type FaceOf<'a> = Face<'a>;
+
+self_cell::self_cell!(
+    // The face the shaper reads, kept with the font that owns its bytes:
+    // building one lays out an accelerator for each lookup of the font.
+    struct ShapingFace {
+        owner: FontArc,
+        #[covariant]
+        dependent: FaceOf,
+    }
+);
+
+// What a shape plan is made for.
+#[derive(PartialEq)]
+struct PlanKey {
+    direction: Direction,
+    script: Script,
+    language: Option<Language>,
+    features: SmallVec<[Feature; 4]>,
+}
+
+// The shape plans a font keeps, the newest last: text uses few scripts and
+// feature settings, and a plan takes as long to make as the shaping.
+const KEPT_PLANS: usize = 8;
+
 pub(crate) struct ShapingCache {
     entries: BoundedLruCache<u64, Arc<ShapedRun>>,
     buffer: Option<UnicodeBuffer>,
     variations: Vec<Variation>,
+    // Made when the font first shapes.
+    face: Option<ShapingFace>,
+    plans: Vec<(PlanKey, ShapePlan)>,
 }
 
 impl ShapingCache {
@@ -132,6 +162,8 @@ impl ShapingCache {
         Self {
             entries: BoundedLruCache::with_capacity_at_least_one(256),
             buffer: None,
+            face: None,
+            plans: Vec::new(),
             variations: variations
                 .iter()
                 .map(|(tag, value)| Variation {
@@ -144,7 +176,7 @@ impl ShapingCache {
 
     pub(crate) fn shape(
         &mut self,
-        bytes: &[u8],
+        font: &FontArc,
         text: &str,
         style: &TextStyle,
     ) -> Option<Arc<ShapedRun>> {
@@ -159,8 +191,14 @@ impl ShapingCache {
         {
             return Some(Arc::clone(run));
         }
-        let mut face = Face::from_slice(bytes, 0)?;
-        face.set_variations(&self.variations);
+        if self.face.is_none() {
+            let mut face = ShapingFace::try_new(font.clone(), |font| {
+                Face::from_slice(font.font_data(), 0).ok_or(())
+            })
+            .ok()?;
+            face.with_dependent_mut(|_, face| face.set_variations(&self.variations));
+            self.face = Some(face);
+        }
         let buffer = self.segmented(text, style);
         let cursive = matches!(
             buffer.script(),
@@ -181,7 +219,31 @@ impl ShapingCache {
                 Feature::new(ttf_parser::Tag::from_bytes(&feature.tag), feature.value, ..)
             })
             .collect();
-        let shaped = rustybuzz::shape(&face, &features, buffer);
+        let plan_key = PlanKey {
+            direction: buffer.direction(),
+            script: buffer.script(),
+            language: buffer.language(),
+            features,
+        };
+        let face = self.face.as_ref()?.borrow_dependent();
+        let plan = match self.plans.iter().position(|(kept, _)| *kept == plan_key) {
+            Some(at) => &self.plans[at].1,
+            None => {
+                if self.plans.len() == KEPT_PLANS {
+                    self.plans.remove(0);
+                }
+                let plan = ShapePlan::new(
+                    face,
+                    plan_key.direction,
+                    Some(plan_key.script),
+                    plan_key.language.as_ref(),
+                    &plan_key.features,
+                );
+                self.plans.push((plan_key, plan));
+                &self.plans[self.plans.len() - 1].1
+            }
+        };
+        let shaped = rustybuzz::shape_with_plan(face, plan, buffer);
         let run = Arc::new(ShapedRun::new(text, style_hash, cursive, &shaped));
         self.buffer = Some(shaped.clear());
         self.entries.push(key, Arc::clone(&run));
