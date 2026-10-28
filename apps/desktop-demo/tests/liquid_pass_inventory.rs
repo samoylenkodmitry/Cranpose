@@ -57,7 +57,7 @@ fn report(label: &str, stats: &RenderStatsSnapshot) {
     eprintln!(
         "[inventory] {label}: passes={} pass_px={} blur_passes={} blur_px={} stages={} \
          backdrop_admissions={} prefix_admissions={} substrates={} composites={} effects={} \
-         shader_px={} glass_px={} isolated={} isolated_px={} layer_cache_hits={} misses={} \
+         shader_px={} isolated={} isolated_px={} layer_cache_hits={} misses={} \
          shape_passes={} shape_fill_px={} text_passes={} image_passes={} copies={} copy_px={} \
          uploads={}B/{} pipelines={}",
         stats.pass_count,
@@ -71,7 +71,6 @@ fn report(label: &str, stats: &RenderStatsSnapshot) {
         stats.composite_passes,
         stats.effect_applies,
         stats.shader_pixels,
-        stats.glass_rasterized_pixels,
         stats.isolated_layer_renders,
         stats.isolated_layer_pixels,
         stats.layer_cache_hits,

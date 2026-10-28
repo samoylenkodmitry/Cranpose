@@ -24,7 +24,6 @@ const SCALE: f32 = 2.0;
 const FRAME_WIDTH: u32 = (VIEW_WIDTH * SCALE) as u32;
 const FRAME_HEIGHT: u32 = (VIEW_HEIGHT * SCALE) as u32;
 const TOGGLE: &str = "CRANPOSE_NO_SHADER_SPECIALIZATION";
-const NO_SPLIT: &str = "CRANPOSE_NO_GLASS_SPLIT_SCISSORS";
 
 /// The showcase's card material: refracting, dispersing, adaptive frost,
 /// no blur.
@@ -109,10 +108,6 @@ fn GlassCardScene(button: bool) {
 
 fn capture_card(unspecialized: bool) -> Result<CapturedFrame, String> {
     capture_glass_under(unspecialized.then_some(TOGGLE), false).map(|(frame, _)| frame)
-}
-
-fn capture_card_and_stats() -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
-    capture_glass_under(None, false)
 }
 
 /// The toggles are process-global, so one raised for a capture is raised
@@ -222,7 +217,7 @@ fn glass_material(effect: RenderEffect) -> RuntimeShader {
 /// What a stand-in compiles for a first screen: the glass folded only to
 /// the overrides all its materials share. Each fold is exact on its own, so
 /// every material drawn with that pipeline lands on its own pipeline's
-/// bytes, interior and rim alike.
+/// bytes.
 #[test]
 fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_WIDTH, panes_page};
@@ -276,7 +271,6 @@ fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
                 stand_in.clear_override(name);
             }
         }
-        assert_eq!(stand_in.draw_split(), material.draw_split());
         let own = support::capture_graph(
             &mut renderer,
             panes_page([RenderEffect::runtime_shader(material.clone())]),
@@ -451,36 +445,6 @@ fn a_specialized_glass_pipeline_matches_the_general_one_byte_for_byte() {
 }
 
 #[test]
-fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixels() {
-    let (split, split_stats) = match capture_card_and_stats() {
-        Ok(captured) => captured,
-        Err(err) => {
-            eprintln!("skipping glass split parity: {err}");
-            return;
-        }
-    };
-    let (whole, whole_stats) =
-        capture_glass_under(Some(NO_SPLIT), false).expect("headless WGPU init failed mid-suite");
-    assert_eq!(
-        split_stats.shader_pixels, whole_stats.shader_pixels,
-        "the split shades the same composite area once"
-    );
-    assert!(
-        split_stats.glass_rasterized_pixels * 10 < whole_stats.glass_rasterized_pixels * 9,
-        "the split must rasterise fewer glass fragments: split {} vs whole {}",
-        split_stats.glass_rasterized_pixels,
-        whole_stats.glass_rasterized_pixels
-    );
-    support::assert_same_bytes(
-        "rim bands and inset interior scissors vs whole quads; a scissor only removes \
-         fragments the shader discards, never one it shades",
-        FRAME_WIDTH,
-        &split.pixels,
-        &whole.pixels,
-    );
-}
-
-#[test]
 fn a_floating_button_draws_the_same_with_its_general_and_its_own_pipelines() {
     let general = match capture_glass_under(Some(TOGGLE), true) {
         Ok((frame, _)) => frame,
@@ -564,35 +528,22 @@ fn settled_panel(
 }
 
 /// Where folding is off, a glass covering more than a 1080p frame still
-/// takes its folded pipeline, drawing its interior and rim apart as the
-/// folded platforms do and landing on their bytes, while a smaller one keeps
-/// drawing whole.
+/// takes its folded pipeline, as the folded platforms do (the shader's
+/// large-draw specialization), and lands on their bytes.
 #[test]
-fn a_glass_larger_than_a_1080p_frame_folds_where_folding_is_off() {
-    let (large, large_stats) = match settled_panel(1920, 1200, false) {
+fn a_glass_larger_than_a_1080p_frame_draws_the_folded_bytes_where_folding_is_off() {
+    let (large, _) = match settled_panel(1920, 1200, false) {
         Ok(settled) => settled,
         Err(err) => {
             eprintln!("skipping large glass folds: {err}");
             return;
         }
     };
-    let (folded, folded_stats) =
-        settled_panel(1920, 1200, true).expect("headless WGPU init failed mid-suite");
+    let (folded, _) = settled_panel(1920, 1200, true).expect("headless WGPU init failed mid-suite");
     support::assert_same_bytes(
         "the folded pipeline changed the large glass",
         1920,
         &folded.pixels,
         &large.pixels,
-    );
-    assert_eq!(
-        large_stats.glass_rasterized_pixels, folded_stats.glass_rasterized_pixels,
-        "a glass over a whole 1920x1200 frame must draw its folded interior and rim where \
-         folding is off: {large_stats:?}"
-    );
-    let (_, small_stats) =
-        settled_panel(640, 400, false).expect("headless WGPU init failed mid-suite");
-    assert_eq!(
-        small_stats.glass_rasterized_pixels, small_stats.shader_pixels,
-        "a glass under a 1080p frame keeps drawing whole where folding is off: {small_stats:?}"
     );
 }

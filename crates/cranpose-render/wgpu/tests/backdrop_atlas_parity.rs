@@ -199,45 +199,6 @@ fn pixel_at(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
     [pixels[0], pixels[1], pixels[2], pixels[3]]
 }
 
-fn split_name_probe(name: &'static str) -> RenderEffect {
-    let mut shader = RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
-        r"
-override FIRST: i32 = 0;
-override SECOND: i32 = 0;
-@fragment
-fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let part = max(FIRST, SECOND);
-    if (part == 1 && input.uv.x >= 0.5) || (part == 2 && input.uv.x < 0.5) {
-        discard;
-    }
-    return select(vec4<f32>(0.0, 0.0, 1.0, 1.0), vec4<f32>(1.0, 0.0, 0.0, 1.0), FIRST != 0);
-}
-"
-    ));
-    shader.set_batched_source(true);
-    shader.set_draw_split(Some(name));
-    RenderEffect::runtime_shader(shader)
-}
-
-#[test]
-fn split_override_names_select_distinct_compiled_pipelines() {
-    let mut renderer = support::headless_renderer().expect("headless renderer");
-    for (name, expected) in [("FIRST", [255, 0, 0, 255]), ("SECOND", [0, 0, 255, 255])] {
-        let frame = support::capture_graph_settled(
-            &mut renderer,
-            &glasses_page(1, || split_name_probe(name)),
-            FRAME_WIDTH,
-            FRAME_HEIGHT,
-        );
-        assert_eq!(
-            pixel_at(&frame, GLASS_LEFT + GLASS_WIDTH / 2.0, GLASS_TOP + 4.0),
-            expected,
-            "the {name} override must select its own split pipelines"
-        );
-    }
-}
-
 fn active_glass(activity: f32, rim_style: f32, specialized: bool) -> RenderEffect {
     let RenderEffect::Shader { shader: base } = glass_shader() else {
         panic!("glass shader");

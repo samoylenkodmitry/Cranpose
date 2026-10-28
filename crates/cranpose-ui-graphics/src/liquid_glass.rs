@@ -243,11 +243,10 @@ const GLASS_INNER_SHADOW_PRESENCE_UNIFORM: usize = GLASS_INNER_SHADOW_UNIFORM + 
 /// Whether liquid glass compiles a pipeline per material.
 ///
 /// [`specialize_liquid_glass`] can fold the features a material's uniforms
-/// leave inactive into `override` constants and split its draw into an
-/// interior and a rim. Every distinct fold set is its own pipeline, and a
-/// pipeline is the backend's shader compiler run inside the frame that first
-/// draws it: around a hundred milliseconds cold on Metal, which keeps no
-/// compiled pipeline across launches. A page of thirty materials was sixty
+/// leave inactive into `override` constants. Every distinct fold set is its
+/// own pipeline, and a pipeline is the backend's shader compiler run inside
+/// the frame that first draws it: around a hundred milliseconds cold on
+/// Metal, which keeps no compiled pipeline across launches. A page of thirty materials was sixty
 /// compiles and seven seconds of stalls, one at every touch.
 ///
 /// The folds save tile-based mobile GPUs dead ALU, which is where they were
@@ -273,11 +272,11 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// [`glass_material_folds_enabled`] says to.
 ///
 /// With folds on, every feature the uniforms leave inactive becomes a raised
-/// `override` and the draw is split into interior and rim. Byte-exact: a
+/// `override`. Byte-exact: a
 /// raised flag substitutes the value the uniform already holds, and the
 /// interior guard skips only terms whose weight is zero. With folds off the
-/// shader skips zero-weight interior work but draws whole, except a draw
-/// covering a 1080p frame's pixels, which takes the folded specialization
+/// shader skips zero-weight interior work, except that a draw covering a
+/// 1080p frame's pixels takes the folded specialization
 /// ([`RuntimeShader::draw_specialization`]). Layered surfaces
 /// also fold inactive material features. Known refraction modes and the content
 /// mask predicate are fixed for folded and layered materials. Projection,
@@ -323,7 +322,6 @@ struct GlassSpecializationKey {
     substrate_radius: Option<u32>,
     folds: bool,
     mean_tone: bool,
-    projected: bool,
     pane_radius: Option<u32>,
     stage: u8,
     backdrop_radius: Option<u32>,
@@ -370,11 +368,6 @@ impl GlassSpecializationKey {
         let mean_tone = !content_mask && slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
         let pane_radius = (!content_mask && slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
             .then(|| slot(uniforms, GLASS_PANE_BLEND_UNIFORM).to_bits());
-        let projection = [
-            slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
-            slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM + 1),
-        ];
-        let projected = projection.iter().all(|v| *v > 0.0) && projection != [1.0, 1.0];
         let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
         let backdrop_radius =
             (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
@@ -384,7 +377,6 @@ impl GlassSpecializationKey {
             substrate_radius,
             folds,
             mean_tone,
-            projected,
             pane_radius,
             stage,
             backdrop_radius,
@@ -411,7 +403,6 @@ impl GlassSpecializationKey {
             substrate_radius: radius,
             folds,
             mean_tone,
-            projected,
             pane_radius,
             stage,
             backdrop_radius,
@@ -426,10 +417,6 @@ impl GlassSpecializationKey {
             }
         }
         shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
-        // An intermediate optical stage draws its whole layer into an
-        // offscreen pass; only the final stage splits interior from rim.
-        let splits = folds && !projected && !matches!(stage, 1 | 2);
-        shader.set_draw_split(splits.then_some(GLASS_RIM_DRAW_OVERRIDE));
         if folds {
             shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
         } else {
@@ -509,10 +496,6 @@ fn glass_substrates(
     substrates
 }
 
-/// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to
-/// draw the glass as its interior and its rim, each without the other's
-/// fetches.
-pub const GLASS_RIM_DRAW_OVERRIDE: &str = "GLASS_RIM_DRAW";
 /// The `i32` override pinning the optical stage a folded material draws
 /// (uniform [`GLASS_OPTICAL_STAGE_UNIFORM`]): each stage of an edge lens
 /// compiles only its own path. Unset, the shader reads the uniform.

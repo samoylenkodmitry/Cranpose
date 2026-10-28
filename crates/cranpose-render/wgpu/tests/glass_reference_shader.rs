@@ -48,11 +48,6 @@ fn resourced_shader(shader: &RuntimeShader, source: &str) -> RuntimeShader {
     copy.set_output_support(shader.output_support());
     copy.set_sample_domain(shader.sample_domain());
     copy.set_substrates(shader.substrates());
-    copy.set_draw_split(
-        (source != reference_wgsl())
-            .then(|| shader.draw_split())
-            .flatten(),
-    );
     copy.set_batched_source(shader.batched_source());
     copy
 }

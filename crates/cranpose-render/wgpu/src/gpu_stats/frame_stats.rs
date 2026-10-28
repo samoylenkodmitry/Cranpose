@@ -48,7 +48,6 @@ pub(crate) struct FrameStats {
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
     pub shader_pixels: Cell<u64>,
-    pub glass_rasterized_pixels: Cell<u64>,
     pub blur_pixels: Cell<u64>,
     pub shape_fill_pixels: Cell<u64>,
     pub shape_fill_pixels_by_class: Cell<[u64; ShapeFill::CLASSES]>,
@@ -448,7 +447,6 @@ impl FrameStats {
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
             shader_pixels: self.shader_pixels.get(),
-            glass_rasterized_pixels: self.glass_rasterized_pixels.get(),
             blur_pixels: self.blur_pixels.get(),
             shape_fill_pixels: self.shape_fill_pixels.get(),
             shape_fill_pixels_by_class: self.shape_fill_pixels_by_class.get(),
@@ -527,7 +525,6 @@ impl FrameStats {
         self.composite_passes.set(0);
         self.effect_applies.set(0);
         self.shader_pixels.set(0);
-        self.glass_rasterized_pixels.set(0);
         self.blur_pixels.set(0);
         self.shape_fill_pixels.set(0);
         self.shape_fill_pixels_by_class.set([0; ShapeFill::CLASSES]);

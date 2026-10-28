@@ -202,9 +202,6 @@ pub struct FrameStatsSnapshot {
     /// Pixels shaded by runtime shader composites: what every glass surface
     /// costs a tiling GPU per frame, each capture that re-shades one included.
     pub shader_pixels: u64,
-    /// Pixels the runtime shader draws rasterize once each draw is split into its interior and rim
-    /// regions.
-    pub glass_rasterized_pixels: u64,
     /// Pixels the blur passes write: every downsample, horizontal and
     /// vertical pass of a backdrop's blur and of its substrates, within
     /// the scissor the pass was given.
@@ -395,7 +392,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} depth_passes={} image={} text={} draws={} | \
+             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} depth_passes={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP runs_collected={} | \
              caches: text_pool={} img={}",
@@ -438,7 +435,6 @@ impl FrameStatsSnapshot {
             self.composite_passes,
             self.effect_applies,
             self.shader_pixels as f64 / 1_000_000.0,
-            self.glass_rasterized_pixels as f64 / 1_000_000.0,
             self.blur_pixels as f64 / 1_000_000.0,
             self.shape_passes,
             self.shape_fill_pixels as f64 / 1_000_000.0,

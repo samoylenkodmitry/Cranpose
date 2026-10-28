@@ -71,10 +71,6 @@ const DIAGNOSTIC_PROPERTIES: &[(&str, &str)] = &[
         "CRANPOSE_PROBE_DRAW_PASSES",
     ),
     (
-        "debug.cranpose.no_glass_split_scissors",
-        "CRANPOSE_NO_GLASS_SPLIT_SCISSORS",
-    ),
-    (
         "debug.cranpose.update_stage_ms",
         "CRANPOSE_UPDATE_STAGE_TELEMETRY_MS",
     ),
