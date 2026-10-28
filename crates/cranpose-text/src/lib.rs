@@ -32,6 +32,7 @@ mod line_breaker;
 pub mod paragraph;
 /// Writing systems and the script runs of text.
 pub mod script;
+mod shaped_item;
 /// Shaping text items into glyphs with HarfRust.
 pub mod shaper;
 /// The stretches of a paragraph that shape alike.
