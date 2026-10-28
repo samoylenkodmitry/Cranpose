@@ -24,7 +24,7 @@
 //! style that asks for no line height gets the font's own ascent + descent, as
 //! Compose's does, so a single line of it is exactly as tall as its font.
 
-use crate::text::style::{
+use crate::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, TextStyle,
 };
 

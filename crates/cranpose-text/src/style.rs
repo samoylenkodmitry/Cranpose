@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use cranpose_ui_graphics::{FxHasher, RenderHash};
+use cranpose_ui_graphics::{Brush, Color, FxHasher, RenderHash};
 /// The line-height policy lives with the drawing-side text types, because a
 /// [`DrawScope`](cranpose_ui_graphics::DrawScope) has to be able to name it too:
 /// a run drawn through a canvas and a `Text` composable on the same screen must
@@ -16,7 +16,6 @@ use super::{
     paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent},
     unit::TextUnit,
 };
-use crate::modifier::{Brush, Color};
 
 /// Vertical shift of text from its baseline as a fraction of the font size. Positive values
 /// move the text up. Compose's `BaselineShift`.
@@ -749,11 +748,13 @@ pub fn text_align_fraction(text_style: &TextStyle, text: &str) -> f32 {
         TextAlign::Right => 1.0,
         TextAlign::Center => 0.5,
         TextAlign::Start | TextAlign::End | TextAlign::Justify | TextAlign::Unspecified => {
-            let direction =
-                super::resolve_text_direction(text, Some(paragraph_style.text_direction));
+            let direction = crate::paragraph::resolve_text_direction(
+                text,
+                Some(paragraph_style.text_direction),
+            );
             let start = match direction {
-                super::ResolvedTextDirection::Ltr => 0.0,
-                super::ResolvedTextDirection::Rtl => 1.0,
+                crate::paragraph::ResolvedTextDirection::Ltr => 0.0,
+                crate::paragraph::ResolvedTextDirection::Rtl => 1.0,
             };
             if paragraph_style.text_align == TextAlign::End {
                 1.0 - start

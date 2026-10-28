@@ -1,4 +1,4 @@
-use crate::modifier::Color;
+use cranpose_ui_graphics::Color;
 
 /// A set of lines drawn on text: none, an underline, a line through, or both.
 /// Combine values with [`TextDecoration::combine`]. Compose's `TextDecoration`.
@@ -40,7 +40,7 @@ pub struct Shadow {
     /// Color of the shadow, including its alpha.
     pub color: Color,
     /// Offset of the shadow from the text, in logical pixels.
-    pub offset: crate::modifier::Point,
+    pub offset: cranpose_ui_graphics::Point,
     /// Blur radius of the shadow, in logical pixels. Zero gives a hard-edged shadow.
     pub blur_radius: f32,
 }
@@ -49,7 +49,7 @@ impl Default for Shadow {
     fn default() -> Self {
         Self {
             color: Color(0.0, 0.0, 0.0, 1.0),
-            offset: crate::modifier::Point::new(0.0, 0.0),
+            offset: cranpose_ui_graphics::Point::new(0.0, 0.0),
             blur_radius: 0.0,
         }
     }

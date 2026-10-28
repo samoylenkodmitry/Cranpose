@@ -1,5 +1,5 @@
 use super::*;
-use crate::text::{
+use crate::{
     TextUnit,
     style::{ParagraphStyle, PlatformParagraphStyle},
 };

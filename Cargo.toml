@@ -14,6 +14,7 @@ members = [
     "crates/cranpose-macros",
     "crates/cranpose-runtime-std",
     "crates/cranpose-ui-graphics",
+    "crates/cranpose-text",
     "crates/cranpose-ui-layout",
     "crates/cranpose-foundation",
     "crates/cranpose-animation",
@@ -111,6 +112,7 @@ cranpose-services = { path = "crates/cranpose-services", version = "0.17.2", def
 cranpose-storekit = { path = "crates/cranpose-storekit", version = "0.17.2", default-features = false }
 cranpose-ui = { path = "crates/cranpose-ui", version = "0.17.2" }
 cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.17.2" }
+cranpose-text = { path = "crates/cranpose-text", version = "0.17.2" }
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.17.2" }
 
 cursor-icon = "1.2"
