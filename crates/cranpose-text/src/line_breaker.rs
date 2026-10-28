@@ -114,6 +114,13 @@ pub(crate) fn break_lines(
     }
 }
 
+// Whether `text` holds a hard line break.
+pub(crate) fn has_hard_break(text: &str) -> bool {
+    text.contains([
+        '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
+    ])
+}
+
 // Whether `offset` starts a paragraph: the text's start, or just after a hard
 // break.
 pub(crate) fn starts_paragraph(text: &str, offset: usize) -> bool {

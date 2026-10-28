@@ -8,7 +8,8 @@ use crate::{
     layout_options::{TextLayoutOptions, TextOverflow},
     line_box::{FontExtent, paragraph_line_box},
     line_breaker::{
-        BreakOpportunity, LineBreaker, WrapWidths, break_lines, starts_paragraph, visible_end,
+        BreakOpportunity, LineBreaker, WrapWidths, break_lines, has_hard_break, starts_paragraph,
+        visible_end,
     },
     paragraph::{ResolvedTextDirection, TextAlign},
     script::Script,
@@ -128,7 +129,6 @@ impl TextLayouter {
         };
         self.shape(input, resolver, &mut layout);
         self.measure_clusters(input, &layout);
-        self.breaker.opportunities(input.text, &mut self.breaks);
         let lengths = input.lengths;
         let wrap = if options.soft_wrap {
             WrapWidths {
@@ -141,13 +141,23 @@ impl TextLayouter {
                 rest: f32::INFINITY,
             }
         };
-        break_lines(
-            input.text,
-            &self.widths,
-            &self.breaks,
-            wrap,
-            &mut self.line_ranges,
-        );
+        let text = input.text;
+        // Most text is one line that fits; it needs no break opportunities.
+        if !has_hard_break(text)
+            && self.widths.width(0, visible_end(text, 0, text.len())) <= wrap.first
+        {
+            self.line_ranges.clear();
+            self.line_ranges.push(0..text.len());
+        } else {
+            self.breaker.opportunities(text, &mut self.breaks);
+            break_lines(
+                text,
+                &self.widths,
+                &self.breaks,
+                wrap,
+                &mut self.line_ranges,
+            );
+        }
         layout.did_overflow_height = self.line_ranges.len() > options.max_lines;
         self.line_ranges.truncate(options.max_lines.max(1));
         self.build_lines(input, &options, resolver, &mut layout);

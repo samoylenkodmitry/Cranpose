@@ -31,9 +31,6 @@ pub struct ShapedGlyph {
     /// Whether a line break before this glyph's cluster changes the shapes
     /// on either side of it.
     pub unsafe_to_break: bool,
-    /// Whether shaping the text on either side of this glyph's cluster apart
-    /// can change the shapes on the other side.
-    pub unsafe_to_concat: bool,
 }
 
 impl ShapedGlyph {
@@ -98,7 +95,7 @@ impl Shaper {
         let face = &mut self.faces[face];
         let buffer = &mut self.buffer;
         buffer.clear();
-        let mut flags = BufferFlags::PRODUCE_UNSAFE_TO_CONCAT;
+        let mut flags = BufferFlags::empty();
         flags.set(
             BufferFlags::BEGINNING_OF_TEXT,
             item.range.start == context.start,
@@ -163,7 +160,6 @@ impl Shaper {
                         x_offset: position.x_offset,
                         y_offset: position.y_offset,
                         unsafe_to_break: info.unsafe_to_break(),
-                        unsafe_to_concat: info.unsafe_to_concat(),
                     }),
             );
         }
