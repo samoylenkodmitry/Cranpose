@@ -1,5 +1,7 @@
 use super::*;
-use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
+use crate::{
+    Color, FontStyle, FontWeight, ImageBitmap, RenderEffect, text_primitive::shared_text_str,
+};
 
 #[test]
 fn recorded_iterators_preserve_shapes_content_and_shadows() {
