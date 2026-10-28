@@ -41,6 +41,10 @@ const SETTLE_MS = 1500;
 const LEAVE_MS = 500;
 // A page that failed to draw shows one flat color.
 const MIN_COLORS = 8;
+// How long a page that has not drawn yet may still take: a first frame waits
+// for its pipelines, and on a loaded runner a cold glass compile can outlast
+// the settle (the guide page on an Intel gen-12lp runner).
+const FIRST_DRAW_WAIT_MS = 8000;
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const { cdp, close } = await launchChrome([`--window-size=${WIDTH},${HEIGHT}`, ...PLATFORM_FLAGS], output);
@@ -74,7 +78,13 @@ async function visit(query, index, whileOpen = async () => undefined) {
         && ['running', 'error'].includes(window.__cranposeAppState?.phase)`);
     await pause(SETTLE_MS);
     const phase = await cdp.evaluate("window.__cranposeAppState.phase");
-    const colors = await distinctColors(`page-${String(index).padStart(2, "0")}.png`);
+    const shot = `page-${String(index).padStart(2, "0")}.png`;
+    let colors = await distinctColors(shot);
+    const drawDeadline = Date.now() + FIRST_DRAW_WAIT_MS;
+    while (phase === "running" && colors < MIN_COLORS && Date.now() < drawDeadline) {
+        await pause(250);
+        colors = await distinctColors(shot);
+    }
     const found = phase === "running" ? await whileOpen() : undefined;
     await cdp.send("Page.navigate", { url: "about:blank" });
     await cdp.until("location.href === 'about:blank'");
