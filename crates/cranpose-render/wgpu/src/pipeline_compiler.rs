@@ -422,8 +422,10 @@ impl PipelineCompiler {
     // without parallel compile, as Chrome on a Huawei Mate 20 X runs it,
     // where the first open of the demo's Liquid UI tab linked 16 glass
     // programs in a row, ~250 ms each, and the page drew nothing for 4.4 s.
-    // A draw asking it for a pipeline that is not built draws its
-    // placeholder meanwhile. Elsewhere it is this compiler.
+    // A link runs only after a frame whose scene stood still, the app
+    // changing nothing it shows, so no input or animation waits behind it;
+    // a draw asking for a pipeline that is not built draws its placeholder
+    // meanwhile. Elsewhere it is this compiler.
     #[cfg_attr(
         not(target_arch = "wasm32"),
         expect(unused_variables, reason = "native builds compile on threads")
@@ -461,10 +463,14 @@ impl PipelineCompiler {
         self.discovery.drawing.set(true);
     }
 
-    /// Ends the drawing frame: queues the jobs it held on
-    /// [`CompileLane::Later`] behind the warm-ups, or on the web runs the
-    /// jobs a discovery frame held, and on WebGL the next one waiting.
-    pub(crate) fn end_frame(&self) {
+    /// Ends the drawing frame: queues the jobs it held on [`CompileLane::Later`] behind the
+    /// warm-ups, or on the web runs the jobs a discovery frame held, and on WebGL the next one
+    /// waiting when the frame's `scene_still` (see [`Self::paced`]).
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(unused_variables, reason = "threads build ahead whatever the frame")
+    )]
+    pub(crate) fn end_frame(&self, scene_still: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
             let mut later = workers.later.lock().unwrap_or_else(PoisonError::into_inner);
@@ -487,7 +493,9 @@ impl PipelineCompiler {
                     job();
                 }
             }
-            let paced = self.paced.borrow_mut().next(true, true);
+            let paced = scene_still
+                .then(|| self.paced.borrow_mut().next(true, true))
+                .flatten();
             if let Some(job) = paced {
                 job();
             }

@@ -33,6 +33,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) transparent_background: bool,
     // Whether the app held still since the last packet; the next one says so.
     pub(crate) held_still: bool,
+    // Whether a pointer is held for the next packet's frame.
+    pub(crate) pointer_held: bool,
     // The packet a surface did not show yet, kept by `keep_packet` with the
     // scene update it was built from, for the frame drawn next.
     kept_packet: Option<(u64, FramePacket)>,
@@ -81,6 +83,7 @@ impl RendererFrontend {
             frame_sequence: 0,
             transparent_background: false,
             held_still: false,
+            pointer_held: false,
             kept_packet: None,
         }
     }
@@ -176,6 +179,8 @@ impl RendererFrontend {
             overlay,
             clear: frame_clear_color(self.transparent_background),
             held_still: std::mem::take(&mut self.held_still),
+            pointer_held: std::mem::take(&mut self.pointer_held),
+            scene_update: graph.update,
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {

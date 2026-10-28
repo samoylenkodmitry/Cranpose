@@ -67,31 +67,6 @@ pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 };
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 
-const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
-
-fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
-    let diagnostics = &cranpose_core::DIAGNOSTICS;
-    diagnostics
-        .wgpu_render_stage_telemetry_ms
-        .threshold_ms()
-        .or_else(|| {
-            diagnostics
-                .wgpu_render_stage_telemetry
-                .is_set()
-                .then_some(DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS)
-        })
-}
-
-pub(crate) fn instant_ms(start: Instant, end: Instant) -> f64 {
-    end.duration_since(start).as_secs_f64() * 1000.0
-}
-
-pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
-    let threshold_ms = wgpu_render_stage_telemetry_threshold_ms()?;
-    let total_ms = instant_ms(start, end);
-    (total_ms >= threshold_ms).then_some(total_ms)
-}
-
 type DeviceRect4 = (f32, f32, f32, f32);
 /// A rect of whole target pixels: x, y, width, height.
 pub(crate) type TargetRect = (u32, u32, u32, u32);
@@ -1008,6 +983,9 @@ struct FrameDraw<'a> {
     root_scale: f32,
     clear: wgpu::Color,
     repaint: Repaint,
+    // Whether the frame draws the scene update the frame before drew, with
+    // no pointer held.
+    scene_still: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1117,6 +1095,8 @@ pub(crate) struct GpuRenderer {
     first_screen_recorded: bool,
     /// How many requested shader warm-ups this renderer has queued.
     shader_warm_ups_queued: usize,
+    // The scene update of the frame drawn last.
+    drawn_scene_update: Option<u64>,
 }
 
 /// What a frame clears to before it draws: nothing for a transparent
@@ -1149,7 +1129,7 @@ impl GpuRenderer {
         let GpuRendererInit {
             device,
             queue,
-            surface_format,
+            surface_format: display_format,
             adapter_backend,
             adapter_downlevel,
             text_fonts,
@@ -1157,7 +1137,6 @@ impl GpuRenderer {
             pipeline_compilation,
             on_device_lost,
         } = init;
-        let display_format = surface_format;
         let construction_started = Instant::now();
         let device_errors = Arc::new(DeviceErrorSentry::default());
         if survive_gpu_errors_enabled() {
@@ -1402,6 +1381,7 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             first_screen_recorded: records.shapes.iter().any(|shape| shape.first_screen),
             shader_warm_ups_queued: 0,
+            drawn_scene_update: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         renderer.warm_first_screen(&records, holds_recorded);
@@ -2555,6 +2535,8 @@ impl GpuRenderer {
             overlay,
             root_scale,
             clear,
+            scene_update,
+            pointer_held,
             ..
         } = packet;
         let page = Rc::clone(root_target);
@@ -2564,6 +2546,8 @@ impl GpuRenderer {
             root_scale,
             clear,
             repaint,
+            scene_still: self.drawn_scene_update.replace(scene_update) == Some(scene_update)
+                && !pointer_held,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -2662,6 +2646,7 @@ impl GpuRenderer {
         page: Rc<OffscreenTarget>,
         output: OutputStep<'_>,
     ) -> Result<(), String> {
+        let scene_still = draw.scene_still;
         FrameExecutor::new(self, recorder).render_frame(
             draw.root,
             draw.overlay,
@@ -2706,7 +2691,7 @@ impl GpuRenderer {
         self.stage_frame_uploads(recorder);
         self.pipelines.shape_pipelines.build_wanted();
         self.depth_gate.end_frame();
-        self.pipelines.compiler.end_frame();
+        self.pipelines.compiler.end_frame(scene_still);
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
@@ -3799,10 +3784,12 @@ fn window_draws(draws: &mut Vec<RunDrawCall>, start: usize, window: &std::ops::R
 }
 
 mod glyph_draws;
+mod stage_telemetry;
 pub(crate) use glyph_draws::{
     GlyphDrawCmd, GlyphInstance, GlyphInstances, TurnedGlyphs, defer_retained_glyph_runs,
     group_glyph_kinds,
 };
+pub(crate) use stage_telemetry::{instant_ms, should_log_wgpu_render_stage};
 use text_resources::TextResources;
 pub(crate) mod admission_gate;
 mod glyph_atlas;
