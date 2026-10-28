@@ -983,6 +983,9 @@ struct FrameDraw<'a> {
     root_scale: f32,
     clear: wgpu::Color,
     repaint: Repaint,
+    // Whether the frame draws the scene update the frame before drew, with
+    // no pointer held.
+    scene_still: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1092,6 +1095,8 @@ pub(crate) struct GpuRenderer {
     first_screen_recorded: bool,
     /// How many requested shader warm-ups this renderer has queued.
     shader_warm_ups_queued: usize,
+    // The scene update of the frame drawn last.
+    drawn_scene_update: Option<u64>,
 }
 
 /// What a frame clears to before it draws: nothing for a transparent
@@ -1124,7 +1129,7 @@ impl GpuRenderer {
         let GpuRendererInit {
             device,
             queue,
-            surface_format,
+            surface_format: display_format,
             adapter_backend,
             adapter_downlevel,
             text_fonts,
@@ -1132,7 +1137,6 @@ impl GpuRenderer {
             pipeline_compilation,
             on_device_lost,
         } = init;
-        let display_format = surface_format;
         let construction_started = Instant::now();
         let device_errors = Arc::new(DeviceErrorSentry::default());
         if survive_gpu_errors_enabled() {
@@ -1377,6 +1381,7 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             first_screen_recorded: records.shapes.iter().any(|shape| shape.first_screen),
             shader_warm_ups_queued: 0,
+            drawn_scene_update: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         renderer.warm_first_screen(&records, holds_recorded);
@@ -2530,6 +2535,8 @@ impl GpuRenderer {
             overlay,
             root_scale,
             clear,
+            scene_update,
+            pointer_held,
             ..
         } = packet;
         let page = Rc::clone(root_target);
@@ -2539,6 +2546,8 @@ impl GpuRenderer {
             root_scale,
             clear,
             repaint,
+            scene_still: self.drawn_scene_update.replace(scene_update) == Some(scene_update)
+                && !pointer_held,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -2637,6 +2646,7 @@ impl GpuRenderer {
         page: Rc<OffscreenTarget>,
         output: OutputStep<'_>,
     ) -> Result<(), String> {
+        let scene_still = draw.scene_still;
         FrameExecutor::new(self, recorder).render_frame(
             draw.root,
             draw.overlay,
@@ -2681,7 +2691,7 @@ impl GpuRenderer {
         self.stage_frame_uploads(recorder);
         self.pipelines.shape_pipelines.build_wanted();
         self.depth_gate.end_frame();
-        self.pipelines.compiler.end_frame();
+        self.pipelines.compiler.end_frame(scene_still);
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
