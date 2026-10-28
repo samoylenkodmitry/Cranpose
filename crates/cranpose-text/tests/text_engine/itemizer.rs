@@ -13,7 +13,8 @@ fn items<'t>(
     let mut items = Vec::new();
     itemizer.itemize(text, direction, spans, resolver, |item| {
         items.push((
-            &text[item.range],
+            text.get(item.range)
+                .expect("items end on character boundaries"),
             item.level.value(),
             item.script.tag(),
             item.typeface.family_names()[0].clone(),

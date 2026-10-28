@@ -79,7 +79,12 @@ impl Shaper {
         context: Range<usize>,
         glyphs: &mut Vec<ShapedGlyph>,
     ) {
-        let Ok(start) = u32::try_from(item.range.start) else {
+        let (Ok(start), Some(before), Some(content), Some(after)) = (
+            u32::try_from(item.range.start),
+            text.get(context.start..item.range.start),
+            text.get(item.range.clone()),
+            text.get(item.range.end..context.end),
+        ) else {
             return;
         };
         let face = self.face(item.typeface, span.font.weight, span.font.style);
@@ -93,9 +98,9 @@ impl Shaper {
         );
         flags.set(BufferFlags::END_OF_TEXT, item.range.end == context.end);
         buffer.set_flags(flags);
-        buffer.set_pre_context(&text[context.start..item.range.start]);
-        buffer.set_post_context(&text[item.range.end..context.end]);
-        buffer.push_str(&text[item.range.clone()]);
+        buffer.set_pre_context(before);
+        buffer.set_post_context(after);
+        buffer.push_str(content);
         let direction = if item.level.is_rtl() {
             Direction::RightToLeft
         } else {

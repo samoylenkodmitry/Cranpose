@@ -65,7 +65,9 @@ impl Itemizer {
         resolver: &'r FontFamilyResolver,
         visit: &mut impl FnMut(TextItem<'r>),
     ) {
-        let content = &text[paragraph.clone()];
+        let Some(content) = text.get(paragraph.clone()) else {
+            return;
+        };
         let base = match direction.resolve(content) {
             ResolvedTextDirection::Ltr => BidiLevel::LTR,
             ResolvedTextDirection::Rtl => BidiLevel::RTL,
@@ -78,8 +80,8 @@ impl Itemizer {
         for (index, span) in spans.iter().enumerate() {
             let start = span.range.start.max(paragraph.start);
             let end = span.range.end.min(paragraph.end);
-            if start < end {
-                resolver.typeface_runs(&text[start..end], span.font, |run, typeface| {
+            if let Some(part) = text.get(start..end).filter(|part| !part.is_empty()) {
+                resolver.typeface_runs(part, span.font, |run, typeface| {
                     self.fonts.push((start + run.end, typeface, index));
                 });
             }
@@ -116,7 +118,7 @@ impl Itemizer {
 // one, the information separators 1C to 1E, next line and the paragraph
 // separator), or the end of `text`.
 fn paragraph_end(text: &str, start: usize) -> usize {
-    let rest = &text[start..];
+    let rest = text.get(start..).unwrap_or_default();
     rest.char_indices()
         .find(|&(_, ch)| {
             matches!(
@@ -126,7 +128,7 @@ fn paragraph_end(text: &str, start: usize) -> usize {
         })
         .map_or(text.len(), |(at, ch)| {
             let after = start + at + ch.len_utf8();
-            if ch == '\r' && text[after..].starts_with('\n') {
+            if ch == '\r' && text.as_bytes().get(after) == Some(&b'\n') {
                 after + 1
             } else {
                 after
