@@ -24,9 +24,8 @@ pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox};
 pub use measure::{
     PreparedTextLayout, TextMetrics, first_baseline, get_cursor_x_for_offset,
-    get_offset_for_position, glyph_line_box, layout_text, measure_text, measure_text_for_node,
-    measure_text_with_options, measure_text_with_options_for_node, offset_for_position_wrapped,
-    prepare_text_layout, prepare_text_layout_for_node, set_text_fonts, text_line_box,
+    get_offset_for_position, glyph_line_box, layout_text, measure_text, measure_text_with_options,
+    offset_for_position_wrapped, prepare_text_layout, set_text_fonts, text_line_box,
     wrapped_line_ranges,
 };
 pub use paragraph::{
@@ -39,7 +38,6 @@ pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
-    text_align_fraction,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_fonts::test_fonts;

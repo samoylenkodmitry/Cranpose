@@ -10,139 +10,6 @@ use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_k
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 
 use super::*;
-use crate::{
-    text::{AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextMeasurer, TextMetrics},
-    text_layout_result::TextLayoutResult,
-};
-
-struct CountingPreparedTextMeasurer {
-    prepare_calls: Rc<Cell<usize>>,
-}
-
-struct TallMultilineTextMeasurer;
-
-impl CountingPreparedTextMeasurer {
-    fn new(prepare_calls: Rc<Cell<usize>>) -> Self {
-        Self { prepare_calls }
-    }
-}
-
-impl TextMeasurer for CountingPreparedTextMeasurer {
-    fn measure(&self, text: &AnnotatedString, _style: &TextStyle) -> TextMetrics {
-        TextMetrics {
-            width: text.text.chars().count() as f32 * 8.0,
-            height: 18.0,
-            line_height: 18.0,
-            line_count: 1,
-        }
-    }
-
-    fn prepare_with_options_for_node(
-        &self,
-        _node_id: Option<NodeId>,
-        text: &Rc<AnnotatedString>,
-        style: &std::sync::Arc<TextStyle>,
-        _options: TextLayoutOptions,
-        _max_width: Option<f32>,
-    ) -> PreparedTextLayout {
-        if text.text.starts_with("Stable Row ") {
-            self.prepare_calls.set(self.prepare_calls.get() + 1);
-        }
-        PreparedTextLayout {
-            text: Rc::clone(text),
-            visual_style: std::sync::Arc::clone(style),
-            metrics: self.measure(text, style),
-            did_overflow: false,
-            render_text: Default::default(),
-            visual_style_hash: Default::default(),
-            alignment_lines: Default::default(),
-            wrap_hold: None,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        0.0
-    }
-
-    fn layout(&self, text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
-        TextLayoutResult::monospaced(&text.text, 8.0, 18.0)
-    }
-}
-
-impl TextMeasurer for TallMultilineTextMeasurer {
-    fn measure(&self, text: &AnnotatedString, _style: &TextStyle) -> TextMetrics {
-        let line_count = text.text.lines().count().max(1);
-        let width = text
-            .text
-            .lines()
-            .map(|line| line.chars().count() as f32 * 7.0)
-            .fold(0.0_f32, f32::max);
-        TextMetrics {
-            width,
-            height: line_count as f32 * 20.0,
-            line_height: 20.0,
-            line_count,
-        }
-    }
-
-    fn prepare_with_options_for_node(
-        &self,
-        _node_id: Option<NodeId>,
-        text: &Rc<AnnotatedString>,
-        style: &std::sync::Arc<TextStyle>,
-        _options: TextLayoutOptions,
-        _max_width: Option<f32>,
-    ) -> PreparedTextLayout {
-        PreparedTextLayout {
-            text: Rc::clone(text),
-            visual_style: std::sync::Arc::clone(style),
-            metrics: self.measure(text, style),
-            did_overflow: false,
-            render_text: Default::default(),
-            visual_style_hash: Default::default(),
-            alignment_lines: Default::default(),
-            wrap_hold: None,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        0.0
-    }
-
-    fn layout(&self, text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
-        TextLayoutResult::monospaced(&text.text, 7.0, 20.0)
-    }
-}
 
 #[composable]
 fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
@@ -596,6 +463,42 @@ fn text_x(records: &[RenderedText], value: &str) -> f32 {
         .x
 }
 
+// The text of each "Stable Row" laid out on screen and the id of its
+// layout, which a renderer keys what it drew of the row by.
+fn stable_row_layouts(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+) -> Vec<(String, u32)> {
+    fn collect(layout: &LayoutBox, rows: &mut Vec<(String, u32)>) {
+        let slices = layout.node_data.modifier_slices();
+        if let Some(text) = slices.text_content()
+            && text.starts_with("Stable Row ")
+            && let Some(prepared) = slices.measured_text_layout()
+        {
+            rows.push((text.to_string(), prepared.layout.id()));
+        }
+        for child in &layout.children {
+            collect(child, rows);
+        }
+    }
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let layout = applier
+        .compute_layout(
+            root,
+            Size {
+                width: 320.0,
+                height: 360.0,
+            },
+        )
+        .expect("layout");
+    applier.clear_runtime_handle();
+    let mut rows = Vec::new();
+    collect(layout.root(), &mut rows);
+    rows
+}
+
 fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size: Size) {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -873,8 +776,6 @@ fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
 #[test]
 fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
     let _app_context = render_state::app_context_test_scope();
-    let prepare_calls = Rc::new(Cell::new(0));
-    set_text_measurer(CountingPreparedTextMeasurer::new(Rc::clone(&prepare_calls)));
 
     let item_invocations = Rc::new(Cell::new(0));
     let captured_state = Rc::new(RefCell::new(None));
@@ -895,18 +796,17 @@ fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
     let list_state = (*captured_state.borrow()).expect("state captured");
 
     list_state.dispatch_scroll_delta(-160.0);
-    let _ = render_texts(&mut composition, root);
+    let before = stable_row_layouts(&mut composition, root);
 
-    prepare_calls.set(0);
     item_invocations.set(0);
     composition
         .process_invalid_scopes()
         .expect("process scroll-state invalidation");
-    let _ = render_texts(&mut composition, root);
+    let after = stable_row_layouts(&mut composition, root);
 
+    assert!(!before.is_empty(), "stable rows are on screen");
     assert_eq!(
-        prepare_calls.get(),
-        0,
+        after, before,
         "scroll-indicator recomposition should reuse prepared text for stable visible lazy rows"
     );
     assert_eq!(
@@ -1026,10 +926,9 @@ fn large_forward_lazy_scroll_reuses_skipped_active_slots_in_same_measure_pass() 
 #[test]
 fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
     let _app_context = render_state::app_context_test_scope();
-    set_text_measurer(TallMultilineTextMeasurer);
 
     let body = Rc::new(
-        (0..48)
+        (0..60)
             .map(|index| format!("// retained tall code line {index:02}"))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -1055,7 +954,7 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
         .find(|record| record.value == *body)
         .unwrap_or_else(|| panic!("expected tall text render op, got {initial_records:?}"));
     assert!(
-        initial.height > 900.0,
+        initial.height > viewport.height,
         "initial lazy item measurement should use unbounded main-axis constraints, got {initial_records:?}"
     );
 
@@ -1065,7 +964,7 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
         .find(|record| record.value == *body)
         .unwrap_or_else(|| panic!("expected retained tall text render op, got {cached_records:?}"));
     assert!(
-        cached.height > 900.0,
+        cached.height > viewport.height,
         "cached lazy item placement must retain the unbounded child measurement instead of viewport-clamping it, got {cached_records:?}"
     );
 }

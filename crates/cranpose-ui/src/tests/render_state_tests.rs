@@ -1,5 +1,4 @@
 use super::*;
-use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};
 
 #[test]
 fn a_draw_closure_can_name_its_own_node_for_the_next_frame() {
@@ -25,42 +24,6 @@ fn a_draw_closure_can_name_its_own_node_for_the_next_frame() {
     assert!(take_render_invalidation());
 }
 
-struct TestTextMeasurer;
-
-impl TextMeasurer for TestTextMeasurer {
-    fn measure(&self, text: &AnnotatedString, _style: &TextStyle) -> TextMetrics {
-        TextMetrics {
-            width: text.text.len() as f32,
-            height: 1.0,
-            line_height: 1.0,
-            line_count: 1,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &AnnotatedString,
-        _style: &TextStyle,
-        x: f32,
-        _y: f32,
-    ) -> usize {
-        x.round().max(0.0) as usize % text.text.len().max(1)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        offset: usize,
-    ) -> f32 {
-        offset as f32
-    }
-
-    fn layout(&self, text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
-        TextLayoutResult::monospaced(&text.text, 1.0, 1.0)
-    }
-}
-
 #[test]
 fn app_context_ids_do_not_use_process_global_counter() {
     let source = include_str!("../render_state.rs");
@@ -78,15 +41,15 @@ fn app_context_ids_are_unique_within_thread_registry() {
 }
 
 #[test]
-fn set_text_measurer_requires_active_app_context() {
+fn set_text_fonts_requires_active_app_context() {
     let result = std::panic::catch_unwind(|| {
-        crate::text::set_text_measurer(TestTextMeasurer);
+        crate::text::set_text_fonts(crate::text::test_fonts());
     });
     assert!(result.is_err());
 
     let context = AppContext::new();
     context.enter(|| {
-        crate::text::set_text_measurer(TestTextMeasurer);
+        crate::text::set_text_fonts(crate::text::test_fonts());
     });
 }
 
@@ -296,66 +259,4 @@ fn dropped_app_context_unregisters_from_thread_lookup_registry() {
         "dropped AppContexts must remove their weak registry entry"
     );
     assert!(app_context_by_id(id).is_none());
-}
-
-/// Counts the layout passes it is told of; measures as [`TestTextMeasurer`].
-struct PassCountingMeasurer(Rc<Cell<usize>>);
-
-impl TextMeasurer for PassCountingMeasurer {
-    fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
-        TestTextMeasurer.measure(text, style)
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &AnnotatedString,
-        style: &TextStyle,
-        x: f32,
-        y: f32,
-    ) -> usize {
-        TestTextMeasurer.get_offset_for_position(text, style, x, y)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &AnnotatedString,
-        style: &TextStyle,
-        offset: usize,
-    ) -> f32 {
-        TestTextMeasurer.get_cursor_x_for_offset(text, style, offset)
-    }
-
-    fn layout(&self, text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-        TestTextMeasurer.layout(text, style)
-    }
-
-    fn begin_layout_pass(&self) {
-        self.0.set(self.0.get() + 1);
-    }
-}
-
-#[test]
-fn each_layout_pass_tells_the_text_measurer() {
-    begin_text_layout_pass();
-
-    let passes = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&passes);
-    let mut composition = crate::run_test_composition(|| {
-        crate::Text("pass", crate::Modifier::empty(), TextStyle::default());
-    });
-    crate::text::set_text_measurer(PassCountingMeasurer(counted));
-    let root = composition.root().expect("root");
-    let viewport = cranpose_ui_graphics::Size {
-        width: 100.0,
-        height: 100.0,
-    };
-    for _ in 0..2 {
-        let handle = composition.runtime_handle();
-        let mut applier = composition.applier_mut();
-        applier.set_runtime_handle(handle);
-        crate::measure_layout(&mut applier, root, viewport).expect("layout");
-        applier.clear_runtime_handle();
-    }
-
-    assert_eq!(passes.get(), 2, "one call per layout pass");
 }

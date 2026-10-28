@@ -1,87 +1,33 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_ui::{
-    AppContext, DrawCommand, Modifier, TextMeasurer, TextMetrics, TextStyle,
-    collect_slices_from_modifier, execute_draw_commands, set_font_scale, set_text_measurer,
-    text::{AnnotatedString, TextLayoutResult},
+    AppContext, DrawCommand, Modifier, collect_slices_from_modifier, execute_draw_commands,
+    set_font_scale,
 };
 use cranpose_ui_graphics::{
     Brush, Color, DrawPrimitive, DrawScope, DrawTextStyle, Point, Rect, Size, TextAlign,
-    TextVerticalAlign, estimate_text_measurement,
+    TextVerticalAlign,
 };
 
+// Cranpose Test Mono at `FONT_SIZE` pixels: 0.6 em a character, 1 em a
+// line, the baseline 0.8 em down.
+const FONT_SIZE: f32 = 10.0;
 const CHAR_WIDTH: f32 = 6.0;
 const LINE_HEIGHT: f32 = 10.0;
 const FIRST_BASELINE: f32 = 8.0;
 
-struct RecordingMeasurer {
-    measured: Rc<RefCell<Vec<String>>>,
-}
-
-impl TextMeasurer for RecordingMeasurer {
-    fn measure(&self, text: &AnnotatedString, _style: &TextStyle) -> TextMetrics {
-        self.measured.borrow_mut().push(text.text.clone());
-        let line_count = text.text.split('\n').count().max(1);
-        let width = text
-            .text
-            .split('\n')
-            .map(|line| line.chars().count() as f32 * CHAR_WIDTH)
-            .fold(0.0_f32, f32::max);
-        TextMetrics {
-            width,
-            height: line_count as f32 * LINE_HEIGHT,
-            line_height: LINE_HEIGHT,
-            line_count,
-        }
-    }
-
-    fn first_baseline(&self, _style: &TextStyle) -> Option<f32> {
-        Some(FIRST_BASELINE)
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        0.0
-    }
-
-    fn layout(&self, text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
-        TextLayoutResult::monospaced(&text.text, CHAR_WIDTH, LINE_HEIGHT)
-    }
+fn draw_commands(draw: impl Fn(&mut dyn DrawScope) + 'static) -> Vec<DrawCommand> {
+    collect_slices_from_modifier(&Modifier::empty().draw_behind(draw))
+        .draw_commands()
+        .to_vec()
 }
 
 fn primitives_from_draw_behind(
     size: Size,
     draw: impl Fn(&mut dyn DrawScope) + 'static,
-) -> (Vec<DrawPrimitive>, Vec<String>) {
-    let app_context = AppContext::new();
-    let measured = Rc::new(RefCell::new(Vec::new()));
-    let commands: Vec<DrawCommand> =
-        collect_slices_from_modifier(&Modifier::empty().draw_behind(draw))
-            .draw_commands()
-            .to_vec();
-
-    let primitives = app_context.enter(|| {
-        set_text_measurer(RecordingMeasurer {
-            measured: Rc::clone(&measured),
-        });
-        execute_draw_commands(&commands, size)
-    });
-    let measured = measured.borrow().clone();
-    (primitives, measured)
+) -> Vec<DrawPrimitive> {
+    let commands = draw_commands(draw);
+    AppContext::new().enter(|| execute_draw_commands(&commands, size))
 }
 
 fn text_primitive(primitives: &[DrawPrimitive]) -> &cranpose_ui_graphics::TextPrimitive {
@@ -92,17 +38,16 @@ fn text_primitive(primitives: &[DrawPrimitive]) -> &cranpose_ui_graphics::TextPr
 }
 
 #[test]
-fn draw_behind_text_is_measured_by_the_app_context_measurer() {
-    let (primitives, measured) = primitives_from_draw_behind(Size::new(200.0, 100.0), |scope| {
+fn draw_behind_text_is_laid_out_with_the_app_s_fonts() {
+    let primitives = primitives_from_draw_behind(Size::new(200.0, 100.0), |scope| {
         scope.draw_text_from(
             Point::new(4.0, 5.0),
             Brush::solid(Color::WHITE),
             "SCORE",
-            &DrawTextStyle::new(12.0),
+            &DrawTextStyle::new(FONT_SIZE),
         );
     });
 
-    assert_eq!(measured, vec!["SCORE".to_string()]);
     let text = text_primitive(&primitives);
     assert_eq!(
         text.rect,
@@ -113,12 +58,6 @@ fn draw_behind_text_is_measured_by_the_app_context_measurer() {
             height: LINE_HEIGHT,
         }
     );
-    assert_ne!(
-        text.rect.width,
-        estimate_text_measurement("SCORE", &DrawTextStyle::new(12.0))
-            .size
-            .width
-    );
 }
 
 #[test]
@@ -126,7 +65,7 @@ fn measure_text_reports_the_box_a_later_draw_fills() {
     let reported: Rc<RefCell<Option<cranpose_ui_graphics::TextMeasurement>>> =
         Rc::new(RefCell::new(None));
     let sink = Rc::clone(&reported);
-    let (primitives, _) = primitives_from_draw_behind(Size::new(300.0, 60.0), move |scope| {
+    let primitives = primitives_from_draw_behind(Size::new(300.0, 60.0), move |scope| {
         let style = DrawTextStyle::new(12.0).with_align(TextAlign::Center);
         *sink.borrow_mut() = Some(scope.measure_text("GAME OVER", &style));
         scope.draw_text(Brush::solid(Color::WHITE), "GAME OVER", &style);
@@ -140,8 +79,8 @@ fn measure_text_reports_the_box_a_later_draw_fills() {
 }
 
 #[test]
-fn baseline_alignment_uses_the_measurers_baseline() {
-    let (primitives, _) = primitives_from_draw_behind(Size::new(200.0, 100.0), |scope| {
+fn baseline_alignment_uses_the_font_s_baseline() {
+    let primitives = primitives_from_draw_behind(Size::new(200.0, 100.0), |scope| {
         scope.draw_text_at(
             Rect {
                 x: 0.0,
@@ -151,7 +90,7 @@ fn baseline_alignment_uses_the_measurers_baseline() {
             },
             Brush::solid(Color::WHITE),
             "Ag",
-            &DrawTextStyle::new(12.0).with_vertical_align(TextVerticalAlign::Baseline),
+            &DrawTextStyle::new(FONT_SIZE).with_vertical_align(TextVerticalAlign::Baseline),
         );
     });
 
@@ -159,101 +98,46 @@ fn baseline_alignment_uses_the_measurers_baseline() {
 }
 
 #[test]
-fn an_unchanged_string_measures_once_across_repeated_frames() {
-    let app_context = AppContext::new();
-    let measured = Rc::new(RefCell::new(Vec::new()));
-    let commands: Vec<DrawCommand> = collect_slices_from_modifier(&Modifier::empty().draw_behind(
-        |scope: &mut dyn DrawScope| {
-            scope.draw_text_from(
-                Point::ZERO,
-                Brush::solid(Color::WHITE),
-                "1234",
-                &DrawTextStyle::new(12.0),
-            );
-        },
-    ))
-    .draw_commands()
-    .to_vec();
-
-    app_context.enter(|| {
-        set_text_measurer(RecordingMeasurer {
-            measured: Rc::clone(&measured),
-        });
-        for _ in 0..60 {
-            execute_draw_commands(&commands, Size::new(100.0, 50.0));
-        }
+fn an_unchanged_string_draws_one_layout_across_repeated_frames() {
+    let commands = draw_commands(|scope: &mut dyn DrawScope| {
+        scope.draw_text_from(
+            Point::ZERO,
+            Brush::solid(Color::WHITE),
+            "1234",
+            &DrawTextStyle::new(FONT_SIZE),
+        );
     });
 
-    assert_eq!(
-        measured.borrow().len(),
-        1,
-        "a stable string must be shaped once and served from the metrics cache after that"
+    let layouts: Vec<_> = AppContext::new().enter(|| {
+        (0..60)
+            .map(|_| {
+                let primitives = execute_draw_commands(&commands, Size::new(100.0, 50.0));
+                text_primitive(&primitives).layout.clone()
+            })
+            .collect()
+    });
+
+    assert!(layouts[0].is_some(), "a drawn text carries its layout");
+    assert!(
+        layouts.iter().all(|layout| *layout == layouts[0]),
+        "a stable string must be laid out once and drawn from that layout after that"
     );
-}
-
-struct EmWidthMeasurer;
-
-impl TextMeasurer for EmWidthMeasurer {
-    fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
-        let font_size = style.resolve_font_size(14.0);
-        TextMetrics {
-            width: text.text.chars().count() as f32 * font_size,
-            height: font_size,
-            line_height: font_size,
-            line_count: 1,
-        }
-    }
-
-    fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
-        Some(style.resolve_font_size(14.0) * 0.8)
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        0.0
-    }
-
-    fn layout(&self, text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-        let font_size = style.resolve_font_size(14.0);
-        TextLayoutResult::monospaced(&text.text, font_size, font_size)
-    }
 }
 
 #[test]
 fn draw_scope_text_is_measured_at_the_size_the_style_names() {
-    const FONT_SIZE: f32 = 10.0;
     const TEXT: &str = "ABCD";
 
-    let app_context = AppContext::new();
-    let commands: Vec<DrawCommand> = collect_slices_from_modifier(&Modifier::empty().draw_behind(
-        |scope: &mut dyn DrawScope| {
-            scope.draw_text_from(
-                Point::ZERO,
-                Brush::solid(Color::WHITE),
-                TEXT,
-                &DrawTextStyle::new(FONT_SIZE),
-            );
-        },
-    ))
-    .draw_commands()
-    .to_vec();
+    let commands = draw_commands(|scope: &mut dyn DrawScope| {
+        scope.draw_text_from(
+            Point::ZERO,
+            Brush::solid(Color::WHITE),
+            TEXT,
+            &DrawTextStyle::new(FONT_SIZE),
+        );
+    });
 
-    let primitives = app_context.enter(|| {
-        set_text_measurer(EmWidthMeasurer);
+    let primitives = AppContext::new().enter(|| {
         set_font_scale(2.0);
         execute_draw_commands(&commands, Size::new(500.0, 100.0))
     });
@@ -262,22 +146,18 @@ fn draw_scope_text_is_measured_at_the_size_the_style_names() {
     assert_eq!(text.style.font_size, FONT_SIZE);
     assert_eq!(
         text.rect.width,
-        TEXT.chars().count() as f32 * FONT_SIZE,
+        TEXT.chars().count() as f32 * CHAR_WIDTH,
         "the block the caller was told about must be the block the glyphs fill"
     );
 }
 
 #[test]
 fn text_that_cannot_be_measured_never_reaches_the_primitive_stream() {
-    let (primitives, measured) = primitives_from_draw_behind(Size::new(100.0, 100.0), |scope| {
+    let primitives = primitives_from_draw_behind(Size::new(100.0, 100.0), |scope| {
         let style = DrawTextStyle::new(12.0);
         scope.draw_text(Brush::solid(Color::WHITE), "", &style);
         scope.draw_text(Brush::solid(Color(1.0, 1.0, 1.0, 0.0)), "hidden", &style);
     });
 
     assert!(primitives.is_empty());
-    assert!(
-        measured.is_empty(),
-        "neither empty nor invisible text should cost a measurement"
-    );
 }

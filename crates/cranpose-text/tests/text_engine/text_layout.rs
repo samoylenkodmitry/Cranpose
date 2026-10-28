@@ -112,6 +112,51 @@ fn right_to_left_lines_align_right_and_carets_run_leftward() {
 }
 
 #[test]
+fn each_alignment_puts_the_slack_on_its_side_of_the_paragraph_direction() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
+    let cases = [
+        (TextDirection::Ltr, "שלום", false),
+        (TextDirection::Rtl, "hello", true),
+        (TextDirection::Content, "hello", false),
+        (TextDirection::Content, "שלום", true),
+        (TextDirection::ContentOrLtr, "123.45", false),
+        (TextDirection::ContentOrRtl, "123.45", true),
+        (TextDirection::Unspecified, "hello", false),
+        (TextDirection::Unspecified, "שלום", true),
+        (TextDirection::Content, "١٢٣ Latin", false),
+        (TextDirection::Content, "\u{200f}Latin", true),
+        (TextDirection::Content, "\u{200e}שלום", false),
+        (TextDirection::Content, "\u{2067}שלום\u{2069}Latin", false),
+        (TextDirection::Content, "\u{2066}Latin\u{2069}שלום", true),
+        (TextDirection::ContentOrLtr, "١٢٣", false),
+        (TextDirection::ContentOrRtl, "١٢٣", true),
+    ];
+    // The share of the slack before the line in a left-to-right and in a
+    // right-to-left paragraph.
+    let alignments = [
+        (TextAlign::Left, 0.0, 0.0),
+        (TextAlign::Right, 1.0, 1.0),
+        (TextAlign::Center, 0.5, 0.5),
+        (TextAlign::Start, 0.0, 1.0),
+        (TextAlign::End, 1.0, 0.0),
+        (TextAlign::Justify, 0.0, 1.0),
+        (TextAlign::Unspecified, 0.0, 1.0),
+    ];
+    for (direction, text, rtl) in cases {
+        for (align, ltr_share, rtl_share) in alignments {
+            let laid = layout(&resolver, text, direction, align, 400.0);
+            let slack = 400.0 - (laid.line_right(0) - laid.line_left(0));
+            let share = if rtl { rtl_share } else { ltr_share };
+            assert!(
+                (laid.line_left(0) - share * slack).abs() < 0.01,
+                "{align:?}, {direction:?}, {text:?}: the line starts at {}",
+                laid.line_left(0)
+            );
+        }
+    }
+}
+
+#[test]
 fn a_caret_between_directions_has_a_primary_and_a_secondary_place() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
     let text = "abc مرحبا";

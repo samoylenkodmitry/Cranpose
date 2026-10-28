@@ -57,6 +57,8 @@ text-hyphenation = ["cranpose-text/hyphenation"]
 text-hyphenation-embedded = ["text-hyphenation", "cranpose-text/hyphenation-embedded"]
 
 [dev-dependencies]
+# Integration tests lay text out with Cranpose Test Mono.
+cranpose-ui = { path = ".", features = ["test-helpers"] }
 criterion = "0.8"
 stats_alloc = "0.1.10"
 

@@ -82,7 +82,6 @@ pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
-    text_align_fraction,
 };
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
 pub use text_layouter::{LayoutInput, ParagraphIntrinsics, ParagraphLengths, TextLayouter};

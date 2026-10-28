@@ -164,8 +164,8 @@ fn cursor_x_position_matches_text_width() {
             panic!("Expected Rect primitive for cursor");
         };
 
-        let expected_x =
-            crate::text::measure_text(&crate::text::AnnotatedString::from("Hello"), &style).width;
+        // Cranpose Test Mono advances 0.6 em: five characters at 14 px.
+        let expected_x = 5.0 * 0.6 * 14.0;
 
         assert!(
             (cursor_rect.x - expected_x).abs() < 0.1,

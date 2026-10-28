@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::{NodeId, collections::pass_aged::PassAgedCache};
+use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
@@ -245,7 +245,7 @@ impl TextFrame {
 
     // From zero up to `max_width`; `None`, and a width that is not positive
     // and finite, is no limit.
-    fn up_to(max_width: Option<f32>, options: TextLayoutOptions) -> Self {
+    pub(crate) fn up_to(max_width: Option<f32>, options: TextLayoutOptions) -> Self {
         Self {
             max_width: max_width
                 .filter(|width| width.is_finite() && *width > 0.0)
@@ -620,16 +620,6 @@ pub(crate) fn prepare_resolved(
     )
 }
 
-/// Like [`measure_text`] for the text of node `node_id`.
-pub fn measure_text_for_node(
-    node_id: Option<NodeId>,
-    text: &AnnotatedString,
-    style: &TextStyle,
-) -> TextMetrics {
-    let _ = node_id;
-    measure_text(text, style)
-}
-
 /// Measures `text` wrapped to `max_width` under `options`. `None` and widths
 /// that are not positive and finite mean no width limit.
 pub fn measure_text_with_options(
@@ -647,44 +637,19 @@ pub fn measure_text_with_options(
     .metrics
 }
 
-/// Like [`measure_text_with_options`] for the text of node `node_id`.
-pub fn measure_text_with_options_for_node(
-    node_id: Option<NodeId>,
-    text: &AnnotatedString,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> TextMetrics {
-    let _ = node_id;
-    measure_text_with_options(text, style, options, max_width)
-}
-
 /// Lays `text` out in `style` wrapped to `max_width` under `options`.
 pub fn prepare_text_layout(
     text: &AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
-) -> PreparedTextLayout {
-    Rc::unwrap_or_clone(prepare_borrowed(
+) -> Rc<PreparedTextLayout> {
+    prepare_borrowed(
         text,
         style,
         TextFrame::up_to(max_width, options),
         host_units(),
-    ))
-}
-
-/// Lays out `text` in `style` for `node_id` up to `max_width`. The layout
-/// shares the text and style.
-pub fn prepare_text_layout_for_node(
-    node_id: Option<NodeId>,
-    text: &Rc<AnnotatedString>,
-    style: &Arc<TextStyle>,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> Rc<PreparedTextLayout> {
-    let _ = node_id;
-    prepare_shared(text, style, TextFrame::up_to(max_width, options))
+    )
 }
 
 /// Lays out `text` in `style` between the widths of `frame`, sharing them.

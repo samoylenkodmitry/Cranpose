@@ -57,6 +57,42 @@ fn the_last_line_the_limit_keeps_ends_in_an_ellipsis_that_fits() {
 }
 
 #[test]
+fn the_last_line_the_limit_keeps_takes_the_rest_of_its_paragraph() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let text = format!("{TEXT}\n{TEXT}");
+
+    let laid = layout(
+        &resolver,
+        &text,
+        120.0,
+        options(TextOverflow::Ellipsis, true, 2),
+    );
+
+    assert_eq!(
+        laid.line_end(1),
+        TEXT.len() + 1,
+        "the line runs to its paragraph's end, not the next paragraph"
+    );
+    assert!(laid.is_line_ellipsized(1));
+    assert!(laid.line_right(1) <= 120.0, "{}", laid.line_right(1));
+}
+
+#[test]
+fn start_and_middle_ellipses_clip_text_of_more_lines() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let wrapped = layout(&resolver, TEXT, 120.0, TextLayoutOptions::default());
+
+    for overflow in [TextOverflow::StartEllipsis, TextOverflow::MiddleEllipsis] {
+        let laid = layout(&resolver, TEXT, 120.0, options(overflow, true, 2));
+
+        assert_eq!(laid.line_count(), 2, "{overflow:?}");
+        assert!(laid.did_overflow_height(), "{overflow:?}");
+        assert!(!laid.is_line_ellipsized(1), "{overflow:?}");
+        assert_eq!(laid.line_end(1), wrapped.line_end(1), "{overflow:?}");
+    }
+}
+
+#[test]
 fn clipped_text_keeps_the_lines_that_fit_the_limit_whole() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let wrapped = layout(&resolver, TEXT, 120.0, TextLayoutOptions::default());

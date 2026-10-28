@@ -3,11 +3,11 @@ use std::rc::Rc;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui::{
     BasicTextFieldOptions, BasicTextFieldWithOptions, Column, ColumnSpec, LayoutBox, LayoutEngine,
-    LayoutTree, Modifier, SemanticsNode, SemanticsRole, Size, Text, TextStyle,
-    build_semantics_tree_from_applier, set_text_measurer,
+    LayoutTree, Modifier, SemanticsNode, SemanticsRole, Size, Text,
+    build_semantics_tree_from_applier,
 };
 
-use crate::text_contract_measurer::{CHAR_WIDTH, ContractMeasurer};
+use crate::text_contract::{CHAR_WIDTH, contract_style, layout_lines};
 
 const BODY: &str = "aaaa bbbb cccc";
 
@@ -23,13 +23,8 @@ fn find_box<'a>(
         .find_map(|child| find_box(child, matches))
 }
 
-fn lay_out_in_column<R>(content: impl Fn() + 'static, inspect: impl FnOnce(&LayoutTree) -> R) -> R {
-    lay_out_in_column_with_measurer(content, ContractMeasurer, inspect)
-}
-
-pub(crate) fn lay_out_in_column_with_measurer<R>(
+pub(crate) fn lay_out_in_column<R>(
     content: impl Fn() + 'static,
-    measurer: impl cranpose_ui::TextMeasurer,
     inspect: impl FnOnce(&LayoutTree) -> R,
 ) -> R {
     let content: Rc<dyn Fn()> = Rc::new(content);
@@ -37,7 +32,6 @@ pub(crate) fn lay_out_in_column_with_measurer<R>(
         let content = Rc::clone(&content);
         Column(Modifier::empty(), ColumnSpec::default(), move || content());
     });
-    set_text_measurer(measurer);
     inspect(&layout_composition(
         &mut composition,
         Size::new(300.0, 300.0),
@@ -62,16 +56,13 @@ fn measured_body_lines(layout: &LayoutTree) -> Vec<String> {
         node.node_data.modifier_slices().text_content().as_deref() == Some(BODY)
     })
     .expect("body box");
-    body_box
-        .node_data
-        .modifier_slices()
-        .measured_text_layout()
-        .expect("a measured body exposes its layout")
-        .text
-        .text
-        .lines()
-        .map(str::to_owned)
-        .collect()
+    layout_lines(
+        &body_box
+            .node_data
+            .modifier_slices()
+            .measured_text_layout()
+            .expect("a measured body exposes its layout"),
+    )
 }
 
 fn text_field_lines(line_limits: TextFieldLineLimits) -> Vec<String> {
@@ -83,6 +74,7 @@ fn text_field_lines(line_limits: TextFieldLineLimits) -> Vec<String> {
                 Modifier::empty().width(10.0 * CHAR_WIDTH),
                 BasicTextFieldOptions {
                     line_limits,
+                    text_style: contract_style(),
                     ..BasicTextFieldOptions::default()
                 },
             );
@@ -98,7 +90,7 @@ fn measured_text_layout_is_the_layout_text_measured_under_its_own_constraint() {
             Text(
                 BODY,
                 Modifier::empty().width(10.0 * CHAR_WIDTH),
-                TextStyle::default(),
+                contract_style(),
             );
         },
         |layout| {
@@ -138,16 +130,13 @@ fn text_box_layout(layout: &LayoutTree, text: &str) -> (Vec<String>, Size) {
         node.node_data.modifier_slices().text_content().as_deref() == Some(text)
     })
     .expect("text box");
-    let lines = text_box
-        .node_data
-        .modifier_slices()
-        .measured_text_layout()
-        .expect("a measured text exposes its layout")
-        .text
-        .text
-        .lines()
-        .map(str::to_owned)
-        .collect();
+    let lines = layout_lines(
+        &text_box
+            .node_data
+            .modifier_slices()
+            .measured_text_layout()
+            .expect("a measured text exposes its layout"),
+    );
     (lines, Size::new(text_box.rect.width, text_box.rect.height))
 }
 
@@ -160,7 +149,7 @@ fn a_text_that_changes_in_place_lays_out_as_a_text_composed_with_its_string() {
         .map(|&text| {
             lay_out_in_column(
                 move || {
-                    Text(text, Modifier::empty().width(width), TextStyle::default());
+                    Text(text, Modifier::empty().width(width), contract_style());
                 },
                 |layout| text_box_layout(layout, text),
             )
@@ -168,7 +157,6 @@ fn a_text_that_changes_in_place_lays_out_as_a_text_composed_with_its_string() {
         .collect();
 
     let mut composition = cranpose_ui::run_test_composition(|| {});
-    set_text_measurer(ContractMeasurer);
     let value = cranpose_core::MutableState::with_runtime(
         strings[0].to_string(),
         composition.runtime_handle(),
@@ -181,7 +169,7 @@ fn a_text_that_changes_in_place_lays_out_as_a_text_composed_with_its_string() {
                     Text(
                         value.value(),
                         Modifier::empty().width(width),
-                        TextStyle::default(),
+                        contract_style(),
                     );
                 });
             },
@@ -207,7 +195,6 @@ fn semantics_texts(node: &SemanticsNode, out: &mut Vec<String>) {
 #[test]
 fn a_text_that_changes_in_place_names_each_new_string_to_semantics() {
     let mut composition = cranpose_ui::run_test_composition(|| {});
-    set_text_measurer(ContractMeasurer);
     let value =
         cranpose_core::MutableState::with_runtime(BODY.to_string(), composition.runtime_handle());
     composition
@@ -215,8 +202,8 @@ fn a_text_that_changes_in_place_names_each_new_string_to_semantics() {
             cranpose_core::location_key(file!(), line!(), column!()),
             move || {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
-                    Text(value.value(), Modifier::empty(), TextStyle::default());
-                    Text("static", Modifier::empty(), TextStyle::default());
+                    Text(value.value(), Modifier::empty(), contract_style());
+                    Text("static", Modifier::empty(), contract_style());
                 });
             },
         )
@@ -254,7 +241,7 @@ fn a_text_s_smallest_intrinsic_width_is_its_widest_word() {
                     Modifier::empty().width_intrinsic(cranpose_ui::IntrinsicSize::Min),
                     cranpose_ui::BoxSpec::default(),
                     move || {
-                        Text(text, Modifier::empty(), TextStyle::default());
+                        Text(text, Modifier::empty(), contract_style());
                     },
                 );
             },

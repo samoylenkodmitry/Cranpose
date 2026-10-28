@@ -2,7 +2,7 @@
 //! dictionary finds, and Latin text beside it still wraps at its spaces. A
 //! word longer than the line splits, but never before a vowel or tone mark.
 
-use crate::text_contract_measurer::wrapped_lines;
+use crate::text_contract::wrapped_lines;
 
 /// "Thai is written without spaces between words", word by word.
 const WORDS: [&str; 9] = [

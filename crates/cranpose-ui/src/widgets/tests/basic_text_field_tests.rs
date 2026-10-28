@@ -510,10 +510,9 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
         let text = "aaaaaaaaaaaaaaaaaaaaaaaa";
         let style = TextStyle::default();
         let annotated = AnnotatedString::from(text);
-        let full = measure_text(&annotated, &style);
+        let full = crate::text::measure_text(&annotated, &style);
         let wrap_width = full.width / 3.0;
         let ranges = crate::text::wrapped_line_ranges(
-            None,
             &annotated,
             &style,
             crate::text::TextLayoutOptions::default(),
@@ -529,7 +528,7 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
             "test setup: a mid-word wrap must share its boundary byte, got {ranges:?}"
         );
 
-        let line_height = 20.0;
+        let line_height = full.line_height;
         let metrics = TextFieldHandleMetrics {
             focused: true,
             direct_manipulation: true,

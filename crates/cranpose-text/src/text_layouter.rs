@@ -224,7 +224,10 @@ impl TextLayouter {
             layout.hold = self.hold(input, &options, &wrapping);
         }
         layout.did_overflow_height = self.lines.len() > options.max_lines;
-        self.lines.truncate(options.max_lines.max(1));
+        if layout.did_overflow_height && ellipsis_at(&options, true).is_some() {
+            take_rest_of_paragraph(&mut self.lines, text, options.max_lines - 1);
+        }
+        self.lines.truncate(options.max_lines);
         self.build_lines(input, &options, resolver, layout);
     }
 
@@ -630,13 +633,11 @@ impl TextLayouter {
         layout: &mut TextLayout,
     ) -> bool {
         let (range, visible) = (line.range.clone(), line.visible);
+        // The ellipsis takes the style of the text its line starts with.
         let span = input
             .spans
             .iter()
-            .position(|span| {
-                span.range
-                    .contains(&visible.saturating_sub(1).max(range.start))
-            })
+            .position(|span| span.range.contains(&range.start))
             .unwrap_or(0);
         let level = self.paragraph_level(input, range.start);
         let Some(mut ellipsis) = self.ellipsis_piece(input, resolver, span, level, layout) else {
@@ -672,10 +673,15 @@ impl TextLayouter {
                 )
             }
             EllipsisAt::Middle => {
+                // The end takes up to half the room and the start the rest,
+                // as Android cuts a middle ellipsis.
                 layout.hold = None;
-                let head = self.widths.last_fitting(range.start, visible, room / 2.0);
-                let used = self.widths.width(range.start, head);
-                (head, self.widths.first_fitting(head, visible, room - used))
+                let tail = self.widths.first_fitting(range.start, visible, room / 2.0);
+                let used = self.widths.width(tail, visible);
+                (
+                    self.widths.last_fitting(range.start, tail, room - used),
+                    tail,
+                )
             }
         };
         set_cluster(&mut layout.glyphs[ellipsis.glyphs.clone()], head);
@@ -865,15 +871,27 @@ impl TextLayouter {
 }
 
 // Where the last line, or a line on its own, shows an ellipsis: a start or
-// middle ellipsis only on a single line, as Android lays them out.
+// middle ellipsis only on a single line, as Android lays them out; text of
+// more lines clips.
 fn ellipsis_at(options: &TextLayoutOptions, last: bool) -> Option<EllipsisAt> {
     match options.overflow {
         TextOverflow::Ellipsis if last => Some(EllipsisAt::End),
         TextOverflow::StartEllipsis if last && options.max_lines == 1 => Some(EllipsisAt::Start),
         TextOverflow::MiddleEllipsis if last && options.max_lines == 1 => Some(EllipsisAt::Middle),
-        TextOverflow::StartEllipsis | TextOverflow::MiddleEllipsis if last => Some(EllipsisAt::End),
         _ => None,
     }
+}
+
+// Makes line `last` run to the end of its paragraph over the lines after it
+// a line limit drops, so its ellipsis cuts the paragraph where it stops
+// fitting, as Android's StaticLayout treats them as one line.
+fn take_rest_of_paragraph(lines: &mut [BrokenLine], text: &str, last: usize) {
+    let end = lines[last + 1..]
+        .iter()
+        .take_while(|line| !starts_paragraph(text, line.text.start))
+        .last()
+        .map_or(lines[last].text.end, |line| line.text.end);
+    lines[last] = BrokenLine::plain(lines[last].text.start..end);
 }
 
 // The indent of the line starting at `offset`.

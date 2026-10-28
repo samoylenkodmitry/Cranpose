@@ -676,15 +676,6 @@ fn with_render_state<R>(f: impl FnOnce(&RenderState) -> R) -> R {
     f(&context.state)
 }
 
-/// Tells the current app context's text service, and its measurer, a
-/// layout pass starts. Outside an app context there is neither to tell.
-#[cfg(test)]
-pub(crate) fn begin_text_layout_pass() {
-    if let Some(context) = current_app_context() {
-        context.begin_text_layout_pass();
-    }
-}
-
 pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextService) -> R) -> R {
     let context = require_current_app_context("text service access");
     context.text.pay_owed_pass();

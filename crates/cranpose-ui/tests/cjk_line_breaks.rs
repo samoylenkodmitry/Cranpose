@@ -1,9 +1,10 @@
 //! Chinese and Japanese put no space between words: a line of either wraps
-//! between characters, but never starts with closing punctuation or a small
-//! kana, nor ends with opening punctuation. Korean puts spaces between words
-//! and wraps at them.
+//! between characters, but never starts with closing punctuation, nor ends
+//! with opening punctuation. Compose's default `LineBreak.Simple` breaks with
+//! the normal strictness, which lets a line start with a small kana, and its
+//! default word break wraps Korean between syllables.
 
-use crate::text_contract_measurer::wrapped_lines;
+use crate::text_contract::wrapped_lines;
 
 #[test]
 fn a_latin_word_before_japanese_shares_its_line() {
@@ -29,7 +30,7 @@ fn chinese_and_japanese_lines_keep_their_punctuation() {
                 let first = line.chars().next().expect("no empty line");
                 let last = line.chars().next_back().expect("no empty line");
                 assert!(
-                    !"、。，」）ょっー".contains(first),
+                    !"、。，」）".contains(first),
                     "{max_chars}: {lines:?} starts a line with {first}"
                 );
                 assert!(
@@ -46,7 +47,7 @@ fn chinese_and_japanese_lines_keep_their_punctuation() {
 }
 
 #[test]
-fn korean_wraps_at_its_spaces() {
+fn korean_wraps_between_syllables() {
     let lines = wrapped_lines("한국어는 띄어쓰기를 합니다", 6);
-    assert_eq!(lines, ["한국어는", "띄어쓰기를", "합니다"]);
+    assert_eq!(lines, ["한국어는 띄", "어쓰기를 합", "니다"]);
 }

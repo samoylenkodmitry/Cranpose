@@ -1,7 +1,7 @@
 //! [`SelectionContainer`] and [`DisableSelection`]: read-only text a person
 //! can select and copy.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_core::{
     CompositionLocal, CompositionLocalProvider, DisposableEffect, remember, rememberMutableStateOf,
@@ -150,7 +150,7 @@ pub fn DisableSelection(content: impl FnOnce()) {
 pub(crate) fn selectable_text(
     registrar: SelectionRegistrar,
     text: Rc<AnnotatedString>,
-    style: TextStyle,
+    style: Arc<TextStyle>,
     options: TextLayoutOptions,
 ) -> Modifier {
     let key = {

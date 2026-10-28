@@ -228,17 +228,15 @@ pub type TextPanResolver = Rc<dyn Fn(f32) -> f32>;
 #[derive(Clone)]
 pub(crate) struct TextFieldLayoutHandle {
     state: TextFieldState,
-    node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
     wrap_width: Rc<Cell<Option<f32>>>,
     presentation: Rc<PresentationCache>,
 }
 
 impl TextFieldLayoutHandle {
     pub(crate) fn measured_layout(&self, style: &TextStyle) -> Rc<crate::text::PreparedTextLayout> {
-        crate::text::prepare_text_layout_for_node(
-            self.node_id.get(),
+        crate::text::prepare_text_layout(
             &self.presentation.get(self.state).shown,
-            &std::sync::Arc::new(style.clone()),
+            style,
             crate::text::TextLayoutOptions::default(),
             self.wrap_width.get(),
         )
@@ -873,7 +871,6 @@ impl TextFieldModifierNode {
     pub(crate) fn layout_handle(&self) -> TextFieldLayoutHandle {
         TextFieldLayoutHandle {
             state: self.state,
-            node_id: Rc::clone(&self.refs.node_id),
             wrap_width: Rc::clone(&self.measured_wrap_width),
             presentation: Rc::clone(&self.refs.presentation),
         }
@@ -922,17 +919,15 @@ impl TextFieldModifierNode {
 
     fn measure_text_content(&self, wrap_width: Option<f32>) -> crate::text::TextMetrics {
         let presentation = self.refs.presentation.get(self.state);
-        let node_id = self.refs.node_id.get();
         let annotated = &*presentation.shown;
         let metrics = match wrap_width {
-            Some(max_width) => crate::text::measure_text_with_options_for_node(
-                node_id,
+            Some(max_width) => crate::text::measure_text_with_options(
                 annotated,
                 &self.style,
                 crate::text::TextLayoutOptions::default(),
                 Some(max_width),
             ),
-            None => crate::text::measure_text_for_node(node_id, annotated, &self.style),
+            None => crate::text::measure_text(annotated, &self.style),
         };
         self.measured_line_height.set(metrics.line_height);
         metrics

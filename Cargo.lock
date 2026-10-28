@@ -1682,6 +1682,7 @@ dependencies = [
  "cranpose-localization",
  "cranpose-macros",
  "cranpose-text",
+ "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "criterion",
