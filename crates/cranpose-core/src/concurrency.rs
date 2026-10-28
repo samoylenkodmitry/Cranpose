@@ -11,6 +11,7 @@
 #[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
     future::Future,
     pin::Pin,
@@ -646,12 +647,14 @@ impl<T: Send + 'static> EventSender<T> {
     }
 }
 
+fn bridge_channel(bridge: u64) -> Option<Rc<dyn Any>> {
+    crate::thread_state::runtimes(|state| state.bridges.borrow().get(&bridge).cloned())
+}
+
 static NEXT_BRIDGE: portable_atomic::AtomicU64 = portable_atomic::AtomicU64::new(1);
 
 fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
-    let channel =
-        crate::thread_state::runtimes(|state| state.bridges.borrow().get(&bridge).cloned());
-    let Some(channel) = channel else {
+    let Some(channel) = bridge_channel(bridge) else {
         log::debug!("event bridge {bridge} is gone, one event dropped");
         return;
     };
@@ -673,7 +676,7 @@ impl<T: Send + 'static> Bridge<T> {
             state
                 .bridges
                 .borrow_mut()
-                .insert(id, Rc::clone(&channel) as Rc<dyn std::any::Any>)
+                .insert(id, Rc::clone(&channel) as Rc<dyn Any>)
         });
         Self { id, channel }
     }

@@ -62,18 +62,9 @@ pub(crate) fn without_composer<R>(f: impl FnOnce() -> R) -> R {
 ///
 /// # Panics
 /// Panics if there is no active composer.
+#[inline]
 pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
-    thread_state::runtimes(|state| {
-        let core = Rc::clone(
-            state
-                .current_composer
-                .borrow()
-                .as_ref()
-                .expect("with_composer: no active composer"),
-        );
-        let composer = Composer::from_core(core);
-        f(&composer)
-    })
+    f(&__current_composer())
 }
 
 /// The current thread's composer, for the code `#[composable]` expands to.
@@ -105,9 +96,18 @@ pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option
     with_installed_core(f)
 }
 
-#[inline(never)]
+#[inline]
 fn with_installed_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
-    thread_state::try_runtimes(|state| state.current_composer.borrow().as_deref().map(f)).flatten()
+    installed_core().map(|core| f(&core))
+}
+
+// The thread's composer core outside the thread state, so the caller's
+// closure runs with no borrow held, and a generic caller makes no thread
+// state access of its own: each one was a function a web page compiles at
+// its first call (624 in the demo's Liquid UI tab).
+#[inline(never)]
+fn installed_core() -> Option<Rc<ComposerCore>> {
+    thread_state::try_runtimes(|state| state.current_composer.borrow().clone()).flatten()
 }
 
 /// Return the current thread's composer.
