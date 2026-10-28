@@ -13,7 +13,7 @@ use crate::{
 /// default is empty, ready for [`TextLayouter::layout_into`].
 ///
 /// [`TextLayouter::layout_into`]: crate::TextLayouter::layout_into
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TextLayout {
     pub(crate) faces: Vec<Typeface>,
     pub(crate) glyphs: Vec<ShapedGlyph>,
@@ -228,10 +228,24 @@ pub struct GlyphRun<'a> {
     baseline: f32,
 }
 
+/// A glyph placed in a layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PositionedGlyph {
+    /// The glyph.
+    pub id: GlyphId,
+    /// Where its origin sits, from the layout's left edge.
+    pub x: f32,
+    /// Where its origin sits, from the layout's top edge.
+    pub y: f32,
+    /// The offset in the text of the character it draws, the first of its
+    /// cluster.
+    pub offset: usize,
+}
+
 impl GlyphRun<'_> {
     /// Each glyph with the position of its origin in the layout, left to
     /// right.
-    pub fn positions(&self) -> impl Iterator<Item = (GlyphId, f32, f32)> + '_ {
+    pub fn positions(&self) -> impl Iterator<Item = PositionedGlyph> + '_ {
         let run = self.run;
         let baseline = self.baseline - run.baseline_shift;
         let mut pen = self.pen;
@@ -241,13 +255,29 @@ impl GlyphRun<'_> {
             self.glyphs[cluster.glyphs].iter().map(move |glyph| {
                 let at = x + font_units(glyph.x_offset) * run.scale;
                 x += font_units(glyph.advance) * run.scale;
-                (
-                    glyph.id,
-                    at,
-                    baseline - font_units(glyph.y_offset) * run.scale,
-                )
+                PositionedGlyph {
+                    id: glyph.id,
+                    x: at,
+                    y: baseline - font_units(glyph.y_offset) * run.scale,
+                    offset: cluster.offset,
+                }
             })
         })
+    }
+
+    /// The text the run draws.
+    pub fn text(&self) -> Range<usize> {
+        self.run.text.clone()
+    }
+
+    /// Where the run's baseline sits, from the layout's top edge.
+    pub fn baseline(&self) -> f32 {
+        self.baseline - self.run.baseline_shift
+    }
+
+    /// The run's left and right edges, from the layout's left edge.
+    pub fn edges(&self) -> (f32, f32) {
+        (self.pen, self.pen + self.run.right() - self.run.left())
     }
 }
 
@@ -277,6 +307,27 @@ impl TextLayout {
             || self.hold.is_some_and(|hold| {
                 hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
             })
+    }
+
+    /// The width the paragraph takes laid out between `min_width` and
+    /// `max_width`: its max intrinsic width rounded up to whole device
+    /// pixels within them, the max when they are equal.
+    pub fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
+        self.sizing.width(min_width, max_width)
+    }
+
+    /// The max widths, from `.0` up to and with `.1`, at which the paragraph
+    /// laid out from `min_width` keeps its width and its lines: every width
+    /// when its width follows no max, every width from its own when its text
+    /// fits, else only its own width.
+    pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
+        if !self.sizing.follows_max {
+            (f32::NEG_INFINITY, f32::INFINITY)
+        } else if self.width >= self.sizing.content_width.max(min_width) {
+            (self.width, f32::INFINITY)
+        } else {
+            (self.width, self.width)
+        }
     }
 
     /// Places the lines across the width the paragraph takes between

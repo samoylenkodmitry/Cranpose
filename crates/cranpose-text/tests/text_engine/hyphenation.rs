@@ -65,8 +65,8 @@ fn hyphen_glyph(face: &Typeface) -> Option<GlyphId> {
 fn last_glyph(laid: &TextLayout, line: usize) -> Option<GlyphId> {
     laid.glyph_runs(line)
         .flat_map(|run| run.positions().collect::<Vec<_>>())
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(glyph, _, _)| glyph)
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .map(|glyph| glyph.id)
 }
 
 const AUTO: (Hyphens, LineBreak) = (Hyphens::Auto, LineBreak::Simple);

@@ -175,7 +175,7 @@ fn glyph_runs_follow_each_other_from_the_line_start() {
     // "abc ", the Hindi word with the space after it, and "def".
     let starts: Vec<f32> = laid
         .glyph_runs(0)
-        .filter_map(|run| run.positions().next().map(|(_, x, _)| x))
+        .filter_map(|run| run.positions().next().map(|glyph| glyph.x))
         .collect();
     assert_eq!(starts.len(), 3);
     assert!((starts[0] - laid.line_left(0)).abs() < 0.01, "{starts:?}");
@@ -201,7 +201,7 @@ fn an_arabic_word_broken_across_lines_takes_its_end_and_start_forms() {
     assert!(broken.line_count() > 1);
     let glyphs = |laid: &TextLayout, line: usize| -> Vec<u32> {
         laid.glyph_runs(line)
-            .flat_map(|run| run.positions().map(|(id, _, _)| id.0).collect::<Vec<_>>())
+            .flat_map(|run| run.positions().map(|glyph| glyph.id.0).collect::<Vec<_>>())
             .collect()
     };
     let joined: Vec<u32> = (0..broken.line_count())
@@ -245,7 +245,7 @@ fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
                 laid.glyph_runs(line)
                     .flat_map(|run| {
                         run.positions()
-                            .map(|(id, x, y)| (id.0, x.to_bits(), y.to_bits()))
+                            .map(|glyph| (glyph.id.0, glyph.x.to_bits(), glyph.y.to_bits()))
                             .collect::<Vec<_>>()
                     })
                     .collect()
