@@ -21,7 +21,6 @@ mod fixed_pipeline;
 mod frame_graph;
 mod frame_packet;
 mod frontend;
-mod glass_split;
 mod gpu_target;
 /// The GLSL templates of the built-in shader modules, which `build.rs` wrote.
 #[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]

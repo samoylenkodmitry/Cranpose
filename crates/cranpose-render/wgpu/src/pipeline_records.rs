@@ -3,15 +3,12 @@
 //! frame, and after an update every recent one once that frame is drawn.
 
 /// One runtime shader pipeline as its draw named it: the shader's source and
-/// override set, its blend mode, the draw variant, and the overrides it
-/// compiled with.
+/// override set, its blend mode, and the overrides it compiled with.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ShaderPipelineRecord {
     pub(crate) source: u64,
     pub(crate) overrides: u64,
     pub(crate) mode: u8,
-    pub(crate) variant: u8,
-    pub(crate) split: Option<String>,
     pub(crate) constants: Vec<(String, f64)>,
 }
 
@@ -56,7 +53,7 @@ pub(crate) struct RecordedPipelines<F> {
 pub(crate) type PipelineRecords = RecordedPipelines<String>;
 
 /// Opens the records' section of the cache file.
-const SECTION: &[u8; 4] = b"RSP3";
+const SECTION: &[u8; 4] = b"RSP4";
 
 /// Opens a first screen's pipelines, written by one launch for another to
 /// build before its first frame: the layout of the shape keys they name,
@@ -164,8 +161,7 @@ pub(crate) fn encode<'a>(
     put_list(bytes, shaders, |bytes, record| {
         bytes.extend_from_slice(&record.source.to_le_bytes());
         bytes.extend_from_slice(&record.overrides.to_le_bytes());
-        bytes.extend_from_slice(&[record.mode, record.variant]);
-        put_name(bytes, record.split.as_deref().unwrap_or_default())?;
+        bytes.push(record.mode);
         bytes.extend_from_slice(&u16::try_from(record.constants.len()).ok()?.to_le_bytes());
         for (name, value) in &record.constants {
             put_name(bytes, name)?;
@@ -212,8 +208,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<(PipelineRecords, &[u8])> {
     let shaders = reader.list(|reader| {
         let source = reader.u64()?;
         let overrides = reader.u64()?;
-        let [mode, variant] = reader.take()?;
-        let split = Some(reader.name()?).filter(|split| !split.is_empty());
+        let [mode] = reader.take()?;
         let constants = (0..reader.u16()?)
             .map(|_| Some((reader.name()?, f64::from_le_bytes(reader.take()?))))
             .collect::<Option<Vec<_>>>()?;
@@ -221,8 +216,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<(PipelineRecords, &[u8])> {
             source,
             overrides,
             mode,
-            variant,
-            split,
             constants,
         })
     })?;

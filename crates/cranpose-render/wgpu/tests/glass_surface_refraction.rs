@@ -614,14 +614,6 @@ fn configure_glass_folds(effect: &mut RenderEffect, enabled: bool) {
         RenderEffect::Shader { shader } => {
             let shader = std::sync::Arc::make_mut(shader);
             cranpose_ui_graphics::specialize_liquid_glass_with_folds(shader, enabled);
-            if matches!(
-                shader
-                    .uniforms()
-                    .get(cranpose_ui_graphics::GLASS_OPTICAL_STAGE_UNIFORM),
-                Some(1.0 | 2.0)
-            ) {
-                shader.set_draw_split(None);
-            }
         }
         RenderEffect::Chain { first, second } => {
             configure_glass_folds(std::sync::Arc::make_mut(first), enabled);
@@ -959,7 +951,6 @@ fn changing_glass_modes_keeps_specialized_and_general_pixels_equal() {
         while let Some(&(name, _)) = general.overrides().first() {
             general.clear_override(name);
         }
-        general.set_draw_split(None);
         let captures = [general, specialized.clone()].map(|shader| {
             let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("glass layer")
             else {

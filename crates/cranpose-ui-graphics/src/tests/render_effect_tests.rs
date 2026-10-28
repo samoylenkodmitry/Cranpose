@@ -136,7 +136,6 @@ fn shader_clones_share_declarations_and_isolate_mutation() {
     let mut shader = RuntimeShader::new("fn effect_fs() {}");
     shader.set_override("FLAG", 1.0);
     shader.set_substrates(&[SubstrateSpec::Average { block: 4 }]);
-    shader.set_draw_split(Some("SPLIT"));
     let support = Rect {
         x: 1.0,
         y: 2.0,
@@ -152,13 +151,10 @@ fn shader_clones_share_declarations_and_isolate_mutation() {
     assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
     cloned.set_override("FLAG", 2.0);
     assert_eq!(cloned.substrates(), shader.substrates());
-    assert_eq!(cloned.draw_split(), shader.draw_split());
     cloned.set_substrates(&[SubstrateSpec::Average { block: 8 }]);
-    cloned.set_draw_split(None);
     cloned.set_output_support(None);
     assert_eq!(shader.overrides(), &[("FLAG", 1.0)]);
     assert_eq!(shader.substrates(), &[SubstrateSpec::Average { block: 4 }]);
-    assert_eq!(shader.draw_split(), Some("SPLIT"));
     assert_eq!(shader.output_support(), Some(support));
     assert_ne!(cloned, shader);
 }
@@ -218,7 +214,6 @@ fn cloned_shader_effects_preserve_configuration_and_isolate_edits() {
     shader.set_override("FEATURE", -0.0);
     shader.set_input_padding(7.0);
     shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 12.0 }]);
-    shader.set_draw_split(Some("SPLIT"));
     let original = RenderEffect::runtime_shader(shader.clone());
     let mut edited = original.clone();
     assert_eq!(edited, original);
@@ -240,12 +235,10 @@ fn cloned_shader_effects_preserve_configuration_and_isolate_edits() {
     changed.set_float(20, 9.0);
     changed.set_override("FEATURE", 1.0);
     changed.set_substrates(&[]);
-    changed.set_draw_split(None);
     assert_eq!(original_shader.as_ref(), &shader);
     assert_eq!(edited_shader.uniforms()[20], 9.0);
     assert_eq!(edited_shader.overrides(), &[("FEATURE", 1.0)]);
     assert!(edited_shader.substrates().is_empty());
-    assert_eq!(edited_shader.draw_split(), None);
     assert_ne!(original, edited);
 }
 
@@ -607,7 +600,6 @@ fn specialization_cache_preserves_source_identity_and_shader_values() {
             shader.set_input_padding(key as f32);
             cache.apply(&mut shader, key, |shader, &key| {
                 shader.set_override("FEATURE", f64::from(key));
-                shader.set_draw_split(Some("SPLIT"));
                 shader.set_substrates(&[SubstrateSpec::Average { block: key }]);
             });
             assert_eq!(
@@ -619,12 +611,10 @@ fn specialization_cache_preserves_source_identity_and_shader_values() {
                 shader.substrates(),
                 &[SubstrateSpec::Average { block: key }]
             );
-            assert_eq!(shader.draw_split(), Some("SPLIT"));
             assert_eq!(shader.uniforms(), &[key as f32]);
             assert_eq!(shader.input_padding(), key as f32);
             assert_eq!(source.overrides().len(), 1);
             assert!(source.substrates().is_empty());
-            assert_eq!(source.draw_split(), None);
             let mut repeated = source.clone();
             cache.apply(&mut repeated, key, |_, _| {
                 panic!("shared specialization missed")
@@ -660,14 +650,12 @@ fn specialization_cache_mutates_unique_state_without_retaining_it() {
 fn unchanged_shader_declarations_keep_their_storage() {
     let mut shader = RuntimeShader::new("fn effect_fs() {}");
     shader.set_substrates(&[]);
-    shader.set_draw_split(None);
     assert!(!shader.clear_override("MISSING"));
     assert!(shader.specialization.is_none());
     shader.set_override("FLAG", 1.0);
     let mut cloned = shader.clone();
     cloned.set_override("FLAG", 1.0);
     cloned.set_substrates(&[]);
-    cloned.set_draw_split(None);
     assert!(!cloned.clear_override("MISSING"));
     assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
 }

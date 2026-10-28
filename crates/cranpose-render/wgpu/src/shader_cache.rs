@@ -66,45 +66,6 @@ pub(crate) fn shader_specialization_enabled() -> bool {
         .equals("1")
 }
 
-/// Which of a shader's draws a pipeline serves: the one draw, or the
-/// interior and the rim of a shader that declared a draw split, each
-/// compiled with the split override set to its number.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ShaderDrawVariant {
-    Whole,
-    Interior,
-    Rim,
-}
-
-impl ShaderDrawVariant {
-    fn constant(self) -> Option<f64> {
-        match self {
-            Self::Whole => None,
-            Self::Interior => Some(1.0),
-            Self::Rim => Some(2.0),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn disk_byte(self) -> u8 {
-        match self {
-            Self::Whole => 0,
-            Self::Interior => 1,
-            Self::Rim => 2,
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn from_disk_byte(byte: u8) -> Option<Self> {
-        match byte {
-            0 => Some(Self::Whole),
-            1 => Some(Self::Interior),
-            2 => Some(Self::Rim),
-            _ => None,
-        }
-    }
-}
-
 /// How the pipeline a lookup returned fits the draw: the specialization it
 /// asked for, the shader's general pipeline because the draw asked for
 /// nothing more, or a first screen's stand-in, folded only to what its
@@ -123,40 +84,22 @@ struct PipelineKey {
     overrides: u64,
     forced: u64,
     mode: RuntimeShaderPipelineMode,
-    split: Option<(&'static str, ShaderDrawVariant)>,
 }
 
-/// A pipeline as a record names it: its source, overrides, blend mode and
-/// draw part.
+/// A pipeline as a record names it: its source, overrides and blend mode.
 #[cfg(not(target_arch = "wasm32"))]
-type PipelineIdentity = (u64, u64, u8, u8);
+type PipelineIdentity = (u64, u64, u8);
 
 impl PipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
     fn identity(self) -> PipelineIdentity {
-        (
-            self.source,
-            self.overrides,
-            self.mode.disk_byte(),
-            self.split
-                .map_or(ShaderDrawVariant::Whole, |(_, variant)| variant)
-                .disk_byte(),
-        )
+        (self.source, self.overrides, self.mode.disk_byte())
     }
 
-    /// The key of every material's pipeline for this source, blend mode and
-    /// part.
-    fn part(self) -> Self {
-        Self {
-            overrides: 0,
-            ..self
-        }
-    }
-
+    /// The key of every material's pipeline for this source and blend mode.
     fn general(self) -> Self {
         Self {
             overrides: 0,
-            split: None,
             ..self
         }
     }
@@ -217,7 +160,6 @@ struct PipelineJob {
     key: PipelineKey,
     module: LazyGpuResource<Option<RuntimeShaderModule>>,
     constants: Vec<(&'static str, f64)>,
-    variant: ShaderDrawVariant,
 }
 
 impl PipelineJob {
@@ -228,7 +170,6 @@ impl PipelineJob {
             key,
             module,
             constants,
-            variant,
         } = self;
         let module = module
             .get_or_init(factory.backend, || factory.module(&source, key.source))
@@ -240,7 +181,7 @@ impl PipelineJob {
             &factory.device,
             factory.pipeline_cache.as_ref(),
             &format!(
-                "runtime-shader mode={mode:?} variant={variant:?} source={:016x} \
+                "runtime-shader mode={mode:?} source={:016x} \
                  overrides={:016x} forced={:016x} constants={}",
                 key.source,
                 key.overrides,
@@ -377,23 +318,16 @@ impl ShaderPipelineCache {
         shader: &RuntimeShader,
         specialization: DrawSpecialization<'_>,
         mode: RuntimeShaderPipelineMode,
-        variant: ShaderDrawVariant,
     ) -> PipelineKey {
-        let specialize = shader_specialization_enabled();
         PipelineKey {
             source: shader.source_hash(),
-            overrides: if specialize {
+            overrides: if shader_specialization_enabled() {
                 specialization.overrides_hash()
             } else {
                 0
             },
             forced: self.forced_hash,
             mode,
-            split: specialization
-                .draw_split()
-                .filter(|_| specialize)
-                .zip(variant.constant())
-                .map(|(name, _)| (name, variant)),
         }
     }
 
@@ -419,20 +353,12 @@ impl ShaderPipelineCache {
     fn source_job(&self, key: PipelineKey, mut constants: Vec<(&'static str, f64)>) -> PipelineJob {
         let source = &self.sources[&key.source];
         Self::force_declared_flags(&self.forced, &source.text, &mut constants);
-        let variant = match key.split {
-            Some((name, variant)) => {
-                constants.push((name, variant.constant().unwrap_or(0.0)));
-                variant
-            }
-            None => ShaderDrawVariant::Whole,
-        };
         PipelineJob {
             factory: self.factory.clone(),
             source: Arc::clone(&source.text),
             key,
             module: source.module.clone(),
             constants,
-            variant,
         }
     }
 
@@ -489,7 +415,7 @@ impl ShaderPipelineCache {
             return;
         }
         let specialization = shader.draw_specialization(0);
-        let key = self.key(shader, specialization, mode, ShaderDrawVariant::Whole);
+        let key = self.key(shader, specialization, mode);
         self.request(shader, specialization, key, CompileLane::WarmUp);
     }
 
@@ -498,9 +424,8 @@ impl ShaderPipelineCache {
         shader: &RuntimeShader,
         specialization: DrawSpecialization<'_>,
         mode: RuntimeShaderPipelineMode,
-        variant: ShaderDrawVariant,
     ) -> Option<(&wgpu::RenderPipeline, ShaderPipelineFit)> {
-        let key = self.key(shader, specialization, mode, variant);
+        let key = self.key(shader, specialization, mode);
         #[cfg(not(target_arch = "wasm32"))]
         self.note_drawn(specialization, key);
         let (build, fit, stand_in) = self.choose(shader, specialization, key);
@@ -513,7 +438,7 @@ impl ShaderPipelineCache {
             .map(|pipeline| (pipeline, fit))
     }
 
-    /// Whether drawing `shader` as `variant` now finds a pipeline built: its
+    /// Whether drawing `shader` now finds a pipeline built: its
     /// own or a first screen's stand-in. When neither is, its own is asked
     /// for, unless a stand-in covers it.
     pub(crate) fn ready_to_draw(
@@ -521,12 +446,11 @@ impl ShaderPipelineCache {
         shader: &RuntimeShader,
         specialization: DrawSpecialization<'_>,
         mode: RuntimeShaderPipelineMode,
-        variant: ShaderDrawVariant,
     ) -> bool {
         if !self.compiler.is_active() {
             return true;
         }
-        let key = self.key(shader, specialization, mode, variant);
+        let key = self.key(shader, specialization, mode);
         if self.ready(key) || self.cached(key) {
             return true;
         }
@@ -644,11 +568,6 @@ impl ShaderPipelineCache {
             source: key.source,
             overrides: key.overrides,
             mode: key.mode.disk_byte(),
-            variant: key
-                .split
-                .map_or(ShaderDrawVariant::Whole, |(_, variant)| variant)
-                .disk_byte(),
-            split: key.split.map(|(name, _)| name.to_owned()),
             constants: if key.overrides == 0 {
                 Vec::new()
             } else {
@@ -702,14 +621,17 @@ impl ShaderPipelineCache {
         }
         let mut groups: Vec<(StandIn, usize)> = Vec::new();
         for (key, constants) in &recorded {
-            match groups.iter_mut().find(|(group, _)| group.key == key.part()) {
+            match groups
+                .iter_mut()
+                .find(|(group, _)| group.key == key.general())
+            {
                 Some((group, members)) => {
                     group.constants.retain(|&shared| holds(constants, shared));
                     *members += 1;
                 }
                 None => groups.push((
                     StandIn {
-                        key: key.part(),
+                        key: key.general(),
                         constants: constants.clone(),
                     },
                     1,
@@ -727,7 +649,7 @@ impl ShaderPipelineCache {
         }
         for (key, constants) in recorded {
             let covered = self.stand_ins.iter().any(|stand_in| {
-                stand_in.key.part() == key.part()
+                stand_in.key.general() == key.general()
                     && stand_in
                         .constants
                         .iter()
@@ -751,7 +673,7 @@ impl ShaderPipelineCache {
         self.cached.extend(
             records
                 .into_iter()
-                .map(|record| (record.source, record.overrides, record.mode, record.variant)),
+                .map(|record| (record.source, record.overrides, record.mode)),
         );
     }
 
@@ -816,7 +738,7 @@ impl ShaderPipelineCache {
         specialization: DrawSpecialization<'_>,
     ) -> Option<usize> {
         self.stand_ins.iter().position(|stand_in| {
-            stand_in.key.part() == key.part()
+            stand_in.key.general() == key.general()
                 && stand_in.key != key
                 && stand_in
                     .constants
@@ -847,11 +769,6 @@ fn recorded_key(
     record: &ShaderPipelineRecord,
     text: &'static str,
 ) -> Option<(PipelineKey, Vec<(&'static str, f64)>)> {
-    let variant = ShaderDrawVariant::from_disk_byte(record.variant)?;
-    let split = match &record.split {
-        Some(name) => Some((declared_override(text, name)?, variant)),
-        None => None,
-    };
     let constants = record
         .constants
         .iter()
@@ -862,7 +779,6 @@ fn recorded_key(
         overrides: record.overrides,
         forced: 0,
         mode: RuntimeShaderPipelineMode::from_disk_byte(record.mode)?,
-        split,
     };
     Some((key, constants))
 }

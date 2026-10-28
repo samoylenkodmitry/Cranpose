@@ -171,9 +171,6 @@ pub struct Diagnostics {
     /// `CRANPOSE_NO_FILL_CACHE`: draws fills without the opaque prefix
     /// cache.
     pub no_fill_cache: Diagnostic,
-    /// `CRANPOSE_NO_GLASS_SPLIT_SCISSORS`: glass draws without split
-    /// scissors.
-    pub no_glass_split_scissors: Diagnostic,
     /// `CRANPOSE_NO_INTERIORS_FIRST`: draws shape interiors in paint order.
     pub no_interiors_first: Diagnostic,
     /// `CRANPOSE_NO_SHADER_FLATTEN`: compiles shaders without flattening.
@@ -280,7 +277,6 @@ pub static DIAGNOSTICS: Diagnostics = Diagnostics {
     no_backdrop_cache: Diagnostic::new("CRANPOSE_NO_BACKDROP_CACHE"),
     no_effect_domains: Diagnostic::new("CRANPOSE_NO_EFFECT_DOMAINS"),
     no_fill_cache: Diagnostic::new("CRANPOSE_NO_FILL_CACHE"),
-    no_glass_split_scissors: Diagnostic::new("CRANPOSE_NO_GLASS_SPLIT_SCISSORS"),
     no_interiors_first: Diagnostic::new("CRANPOSE_NO_INTERIORS_FIRST"),
     no_shader_flatten: Diagnostic::new("CRANPOSE_NO_SHADER_FLATTEN"),
     no_shader_fold: Diagnostic::new("CRANPOSE_NO_SHADER_FOLD"),

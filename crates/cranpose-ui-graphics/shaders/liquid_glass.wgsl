@@ -132,10 +132,6 @@ override GLASS_TINT_TRANSMISSION_OFF: bool = false;
 // evaluates everything everywhere; the renderer raises it with the other
 // specializations, and the parity test holds the two byte-identical.
 override GLASS_INTERIOR_GUARD: bool = false;
-// The renderer draws the glass twice when it can, 1 for the interior and
-// 2 for the rim, each pipeline compiled without the other's work and
-// discarding the other's fragments before any fetch; 0 draws it whole.
-override GLASS_RIM_DRAW: i32 = 0;
 // The optical stage the material draws (uniform 147), pinned by the
 // renderer so each stage compiles only its own path; -1 reads the uniform.
 override GLASS_OPTICAL_STAGE: i32 = -1;
@@ -1037,7 +1033,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // wcKSRD's `smoothstep(0, 1, rb1)` is the material's coverage transition.
     // Premultiplied compositing against the untouched backdrop is equivalent
     // to the reference shader's final `mix(backdrop, lighting, transition)`.
-    if (GLASS_RIM_DRAW != 1) & GLASS_SHADOW_OFF & GLASS_RING_SHADOW_OFF & GLASS_CONTOUR_HIGHLIGHT_OFF & (!intermediate_stage && d >= max(gradient_extent, 0.0)) {
+    if GLASS_SHADOW_OFF & GLASS_RING_SHADOW_OFF & GLASS_CONTOUR_HIGHLIGHT_OFF & (!intermediate_stage && d >= max(gradient_extent, 0.0)) {
         return vec4<f32>(0.0);
     }
     let inradius = max(min(half_size.x, half_size.y), 1.0);
@@ -1063,13 +1059,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         max(select(1.5 * gradient_extent + guard_ramp, 0.0, GLASS_RIM_STYLE_OFF), floored_band_width(gradient_extent)),
         max(max(edge_extent, MIN_LINE_WIDTH_PX) + guard_border_ramp, guard_fold),
     ) + 1.0;
-    if ((GLASS_RIM_DRAW == 1) & (d >= -rim_reach)) {
-        discard;
-    }
-    if ((GLASS_RIM_DRAW == 2) & (d < -rim_reach)) {
-        discard;
-    }
-    let in_rim = (GLASS_RIM_DRAW == 2) | ((GLASS_RIM_DRAW != 1) & (!GLASS_INTERIOR_GUARD | (d >= -rim_reach)));
+    let in_rim = !GLASS_INTERIOR_GUARD | (d >= -rim_reach);
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
     // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
     // A DRAINED lens (material activity 0) is a soft tint pool, not
@@ -1084,7 +1074,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let dome_coverage = select(
         smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0)),
         1.0,
-        ((GLASS_RIM_DRAW == 1) | (get_float(134u) > 0.5)) & (material_activity >= 1.0),
+        (get_float(134u) > 0.5) & (material_activity >= 1.0),
     );
     let coverage = select(dome_coverage, clamp(0.5 - d, 0.0, 1.0), key_fill);
     let optical_coverage = smoothstep(
@@ -1415,7 +1405,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         rgb = mix(rgb, dispersed, spectral_opacity);
     }
     let index_spread = dispersion_strength * 0.22;
-    let coincident_rays = GLASS_RIM_DRAW == 1
+    let coincident_rays = GLASS_INTERIOR_GUARD
         && -d / max(lens_refraction * (1.0 + index_spread), 0.001) >= 1.0;
     if !edge_lens && dispersion_strength > 0.0 && !coincident_rays {
         // Chromatic transmission as ONE continuous ray model: each channel

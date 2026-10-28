@@ -34,17 +34,6 @@ fn shader_lines_reading(slot: usize) -> Vec<&'static str> {
 }
 
 #[test]
-fn projected_optics_disable_rim_scissors_and_restore_them_at_identity() {
-    let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-    shader.set_float2(GLASS_OPTICAL_PROJECTION_UNIFORM, 1.2, 0.75);
-    specialize_liquid_glass_with_folds(&mut shader, true);
-    assert_eq!(shader.draw_split(), None);
-    shader.set_float2(GLASS_OPTICAL_PROJECTION_UNIFORM, 1.0, 1.0);
-    specialize_liquid_glass_with_folds(&mut shader, true);
-    assert_eq!(shader.draw_split(), Some(GLASS_RIM_DRAW_OVERRIDE));
-}
-
-#[test]
 fn every_specialization_flag_is_a_shader_override_and_guards_all_of_its_slot_reads() {
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
         let declaration = format!("override {}: bool = false;", specialization.flag);
@@ -214,8 +203,6 @@ fn edge_lens_stages_preserve_intermediate_images_and_final_support() {
             if index < 2 {
                 assert_eq!(pass.output_support(), None);
                 assert_eq!(pass.output_padding(), 0.0);
-                assert_eq!(pass.draw_split(), None);
-                assert_eq!(pass.draw_specialization(u64::MAX).draw_split(), None);
             } else {
                 assert_eq!(pass.output_support(), Some(support));
                 assert_eq!(pass.output_padding(), 8.0);
@@ -270,7 +257,6 @@ fn cached_glass_specialization_tracks_flags_and_substrate_radius() {
                 radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * density,
             });
             assert_eq!(shader.substrates(), substrate.as_slice());
-            assert_eq!(shader.draw_split(), Some(GLASS_RIM_DRAW_OVERRIDE));
             assert!(shader.overrides().contains(&("CALLER", 7.0)));
             assert_eq!(shader.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], density);
         }
@@ -370,7 +356,7 @@ fn every_setter_on_an_unfolded_glass_shader_retires_its_large_draw_specializatio
     type Request = fn(&mut RuntimeShader);
     // Each setter both with a new value and with the value the shader's own
     // specialization already holds, which the large draws may not.
-    let requests: [(&str, Request); 10] = [
+    let requests: [(&str, Request); 8] = [
         ("set_override new", |shader| {
             shader.set_override("CALLER", 1.0);
         }),
@@ -389,12 +375,6 @@ fn every_setter_on_an_unfolded_glass_shader_retires_its_large_draw_specializatio
         ("set_substrates held", |shader| {
             let held: Vec<SubstrateSpec> = shader.substrates().to_vec();
             shader.set_substrates(&held);
-        }),
-        ("set_draw_split new", |shader| {
-            shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
-        }),
-        ("set_draw_split held", |shader| {
-            shader.set_draw_split(shader.draw_split());
         }),
         ("set_specialization_exact new", |shader| {
             let exact = shader.specialization_exact();
@@ -419,7 +399,6 @@ fn every_setter_on_an_unfolded_glass_shader_retires_its_large_draw_specializatio
         let own = shader.draw_specialization(0);
         assert_eq!(large.overrides(), shader.overrides(), "{setter}");
         assert_eq!(large.overrides_hash(), own.overrides_hash(), "{setter}");
-        assert_eq!(large.draw_split(), shader.draw_split(), "{setter}");
         assert_eq!(large.exact(), shader.specialization_exact(), "{setter}");
 
         specialize_liquid_glass_with_folds(&mut shader, false);

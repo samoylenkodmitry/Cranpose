@@ -169,7 +169,6 @@ struct ShaderSpecialization {
     overrides: Vec<(&'static str, f64)>,
     overrides_hash: OnceLock<u64>,
     substrates: ArrayVec<SubstrateSpec, MAX_SUBSTRATES>,
-    draw_split: Option<&'static str>,
     exact: bool,
     large_draws: Option<LargeDrawSpecialization>,
 }
@@ -214,11 +213,6 @@ impl<'a> DrawSpecialization<'a> {
     /// Hash of [`Self::overrides`]; zero when no override is fixed.
     pub fn overrides_hash(self) -> u64 {
         self.specialization.overrides_hash()
-    }
-
-    /// The override selecting the interior or the rim draw, when declared.
-    pub fn draw_split(self) -> Option<&'static str> {
-        self.specialization.draw_split
     }
 
     /// Whether the specialization lands on the general pipeline's bytes,
@@ -291,7 +285,6 @@ static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecializatio
     overrides: Vec::new(),
     overrides_hash: OnceLock::new(),
     substrates: ArrayVec::new_const(),
-    draw_split: None,
     exact: false,
     large_draws: None,
 };
@@ -854,37 +847,17 @@ impl RuntimeShader {
         &self.specialization().substrates
     }
 
-    /// Hashes the declared substrates and the draw split into `state`.
+    /// Hashes the declared substrates into `state`.
     pub fn hash_substrates<H: std::hash::Hasher>(&self, state: &mut H) {
         use std::hash::Hash;
         self.substrates().len().hash(state);
         for substrate in self.substrates() {
             substrate.hash_bits(state);
         }
-        self.draw_split().hash(state);
     }
 
-    /// Declares an `override NAME: i32` the renderer sets to 1 and 2 to draw
-    /// the shader twice in the final pass, once for its interior and once
-    /// for its rim, each pipeline compiled without the other's work and
-    /// discarding the other's fragments before its fetches. Nothing else
-    /// about the draw changes: the two draws partition the pixels the one
-    /// draw shaded and land on the same bits.
-    pub fn set_draw_split(&mut self, override_name: Option<&'static str>) {
-        self.clear_large_draws();
-        if self.draw_split() == override_name {
-            return;
-        }
-        self.specialization_mut().draw_split = override_name;
-    }
-
-    /// The override selecting the interior or the rim draw, when declared.
-    pub fn draw_split(&self) -> Option<&'static str> {
-        self.specialization().draw_split
-    }
-
-    /// Declares that every override and the draw split of this shader are
-    /// folds: a specialized pipeline lands on the same bytes as the general
+    /// Declares that every override of this shader is a fold: a
+    /// specialized pipeline lands on the same bytes as the general
     /// pipeline, which reads every folded value from its uniform. The
     /// renderer then compiles specializations in the background and draws
     /// with the general pipeline until they land. An override that selects
@@ -972,7 +945,6 @@ impl PartialEq for RuntimeShader {
             && self.position_independent == other.position_independent
             && self.preserves_transparency == other.preserves_transparency
             && self.substrates() == other.substrates()
-            && self.draw_split() == other.draw_split()
             && self.domains == other.domains
             && self.placeholder == other.placeholder
     }

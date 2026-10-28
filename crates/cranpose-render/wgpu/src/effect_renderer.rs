@@ -4,10 +4,8 @@ use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel};
 use cranpose_ui::Axis;
 use cranpose_ui_graphics::{
-    BlendMode, DrawSpecialization, MAX_SUBSTRATES, RenderEffect, RuntimeShader, ShaderTarget,
-    SubstrateSpec, TileMode,
+    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, ShaderTarget, SubstrateSpec, TileMode,
 };
-use smallvec::SmallVec;
 
 use crate::{
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
@@ -15,7 +13,6 @@ use crate::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         TextureRegionCopy, UniformUpload, UploadAllocatorId, copy_compatible,
     },
-    glass_split::split_scissors,
     gpu_stats::FrameStats,
     lazy_resource::Pending,
     offscreen::{OffscreenPool, OffscreenTarget},
@@ -24,7 +21,7 @@ use crate::{
     render::PassDepth,
     scissor::{read_scissor, scaled_scissor, widened_scissor},
     shader_cache::{
-        RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
+        RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
         shader_specialization_enabled,
     },
     shaders,
@@ -197,7 +194,6 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_shader_pixels: Cell<u64>,
-    pub(crate) debug_glass_rasterized_pixels: Cell<u64>,
     pub(crate) debug_blur_pixels: Cell<u64>,
     debug_shader_fallback_draws: Cell<u32>,
     debug_shader_specialized_draws: Cell<u32>,
@@ -798,29 +794,12 @@ pub(crate) struct PreparedCompositeDraw<'a> {
 }
 
 pub(crate) struct PreparedShaderDraw<'a> {
-    shader: &'a RuntimeShader,
-    specialization: DrawSpecialization<'a>,
     texture_bind_group: &'a wgpu::BindGroup,
     uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: (f32, f32, f32, f32),
     viewport: (f32, f32, f32, f32),
-    layer_pixel_rect: [f32; 4],
-    pipelines: SmallVec<[(ShaderDrawVariant, wgpu::RenderPipeline); 2]>,
-}
-
-const WHOLE_DRAW: &[ShaderDrawVariant] = &[ShaderDrawVariant::Whole];
-const SPLIT_DRAWS: &[ShaderDrawVariant] = &[ShaderDrawVariant::Interior, ShaderDrawVariant::Rim];
-
-/// The draws a shader makes in a pass: its interior and its rim when its
-/// specialization declared a split and the pipelines are specialized, else
-/// the one draw.
-fn shader_draw_variants(specialization: DrawSpecialization<'_>) -> &'static [ShaderDrawVariant] {
-    if specialization.draw_split().is_some() && shader_specialization_enabled() {
-        SPLIT_DRAWS
-    } else {
-        WHOLE_DRAW
-    }
+    pipeline: wgpu::RenderPipeline,
 }
 
 pub(crate) struct ProjectiveCompositeItem<'a> {
@@ -1169,7 +1148,6 @@ impl EffectRenderer {
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_shader_pixels: Cell::new(0),
-            debug_glass_rasterized_pixels: Cell::new(0),
             debug_blur_pixels: Cell::new(0),
             debug_shader_fallback_draws: Cell::new(0),
             debug_shader_specialized_draws: Cell::new(0),
@@ -1214,17 +1192,10 @@ impl EffectRenderer {
         match effect {
             RenderEffect::Shader { shader } => {
                 let specialization = shader.draw_specialization(layer_pixels);
-                let variants = match target {
-                    ShaderTarget::Page => shader_draw_variants(specialization),
-                    ShaderTarget::Layer => WHOLE_DRAW,
-                };
                 let mode = RuntimeShaderPipelineMode::for_target(target);
-                let mut ready = true;
-                for &variant in variants {
-                    ready &= self
-                        .shader_cache
-                        .ready_to_draw(shader, specialization, mode, variant);
-                }
+                let mut ready = self
+                    .shader_cache
+                    .ready_to_draw(shader, specialization, mode);
                 for &substrate in shader.substrates() {
                     ready &= self.substrate_ready(device, substrate, source_size);
                 }
@@ -1740,9 +1711,6 @@ impl EffectRenderer {
             .shader_pixels
             .set(stats.shader_pixels.get() + self.debug_shader_pixels.get());
         stats
-            .glass_rasterized_pixels
-            .set(stats.glass_rasterized_pixels.get() + self.debug_glass_rasterized_pixels.get());
-        stats
             .blur_pixels
             .set(stats.blur_pixels.get() + self.debug_blur_pixels.get());
         stats.shader_pipeline_fallback_draws.set(
@@ -1757,7 +1725,6 @@ impl EffectRenderer {
         self.debug_composites.set(0);
         self.debug_effects.set(0);
         self.debug_shader_pixels.set(0);
-        self.debug_glass_rasterized_pixels.set(0);
         self.debug_blur_pixels.set(0);
         self.debug_shader_fallback_draws.set(0);
         self.debug_shader_specialized_draws.set(0);
@@ -2479,33 +2446,15 @@ impl EffectRenderer {
         device: &wgpu::Device,
         item: &ShaderCompositeBatchItem<'a>,
     ) -> Option<PreparedShaderDraw<'a>> {
-        let mut pipelines = SmallVec::new();
-        let mut fit = ShaderPipelineFit::General;
-        let mut general = None;
         let specialization = item
             .shader
             .draw_specialization(layer_pixels(item.layer_pixel_rect));
-        for &variant in shader_draw_variants(specialization) {
-            let (pipeline, variant_fit) = self.shader_cache.get_or_create(
-                item.shader,
-                specialization,
-                RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                variant,
-            )?;
-            match variant_fit {
-                ShaderPipelineFit::Fallback => general = Some(pipeline.clone()),
-                ShaderPipelineFit::Specialized => {
-                    fit = ShaderPipelineFit::Specialized;
-                    pipelines.push((variant, pipeline.clone()));
-                }
-                ShaderPipelineFit::General => pipelines.push((variant, pipeline.clone())),
-            }
-        }
-        if let Some(general) = general {
-            pipelines.clear();
-            pipelines.push((ShaderDrawVariant::Whole, general));
-            fit = ShaderPipelineFit::Fallback;
-        }
+        let (pipeline, fit) = self.shader_cache.get_or_create(
+            item.shader,
+            specialization,
+            RuntimeShaderPipelineMode::PremultipliedSrcOver,
+        )?;
+        let pipeline = pipeline.clone();
         self.record_shader_pipeline_fit(fit);
         let mut padded = item.shader.uniforms_padded();
         let (dest_x, dest_y, _, _) = item.dest_viewport;
@@ -2542,15 +2491,12 @@ impl EffectRenderer {
             &self.effect_linear_sampler,
         );
         Some(PreparedShaderDraw {
-            shader: item.shader,
-            specialization,
             texture_bind_group,
             uniform,
             scissor: item.scissor,
             dest_viewport: item.dest_viewport,
             viewport: item.placement.viewport,
-            layer_pixel_rect: item.layer_pixel_rect,
-            pipelines,
+            pipeline,
         })
     }
 
@@ -2575,48 +2521,9 @@ impl EffectRenderer {
         let scissor = draw.scissor.unwrap_or((0, 0, viewport.0, viewport.1));
         self.debug_shader_pixels
             .set(self.debug_shader_pixels.get() + shaded_pixels((x, y, width, height), scissor));
-        let split = (draw.pipelines.len() > 1)
-            .then(|| {
-                let quad = (
-                    x.floor().max(0.0) as u32,
-                    y.floor().max(0.0) as u32,
-                    (x + width).ceil().max(0.0) as u32,
-                    (y + height).ceil().max(0.0) as u32,
-                );
-                let x1 = quad.2.min(scissor.0 + scissor.2);
-                let y1 = quad.3.min(scissor.1 + scissor.3);
-                let x0 = quad.0.max(scissor.0);
-                let y0 = quad.1.max(scissor.1);
-                (x1 > x0 && y1 > y0).then(|| {
-                    split_scissors(
-                        draw.shader,
-                        draw.specialization,
-                        (x, y),
-                        draw.layer_pixel_rect,
-                        (x0, y0, x1 - x0, y1 - y0),
-                    )
-                })
-            })
-            .flatten()
-            .flatten();
-        for (variant, pipeline) in &draw.pipelines {
-            pass.set_pipeline(pipeline);
-            let regions: SmallVec<[(u32, u32, u32, u32); 4]> = match (variant, &split) {
-                (ShaderDrawVariant::Interior, Some(split)) => split.interior.into_iter().collect(),
-                (ShaderDrawVariant::Rim, Some(split)) => {
-                    split.rim.iter().flatten().copied().collect()
-                }
-                _ => std::iter::once(scissor).collect(),
-            };
-            for region in regions {
-                pass.set_scissor_rect(region.0, region.1, region.2, region.3);
-                self.debug_glass_rasterized_pixels.set(
-                    self.debug_glass_rasterized_pixels.get()
-                        + shaded_pixels((x, y, width, height), region),
-                );
-                pass.draw(0..4, 0..1);
-            }
-        }
+        pass.set_pipeline(&draw.pipeline);
+        pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+        pass.draw(0..4, 0..1);
         pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
     }
@@ -2649,12 +2556,10 @@ impl EffectRenderer {
         );
 
         let specialization = shader.draw_specialization(layer_pixels(target.layer_pixel_rect));
-        let Some((pipeline, fit)) = self.shader_cache.get_or_create(
-            shader,
-            specialization,
-            options.pipeline_mode,
-            ShaderDrawVariant::Whole,
-        ) else {
+        let Some((pipeline, fit)) =
+            self.shader_cache
+                .get_or_create(shader, specialization, options.pipeline_mode)
+        else {
             return false;
         };
         let pipeline = pipeline.clone();

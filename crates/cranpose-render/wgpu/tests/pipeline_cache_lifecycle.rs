@@ -359,7 +359,7 @@ fn a_cache_file_without_pipeline_records_keeps_its_first_screen_shapes() {
             bytes[0] ^= 0xff;
             let section = bytes
                 .windows(4)
-                .position(|window| window == b"RSP3")
+                .position(|window| window == b"RSP4")
                 .expect("the cache file keeps its first screen's records");
             bytes.truncate(section);
         },
