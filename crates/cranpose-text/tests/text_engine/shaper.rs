@@ -1,20 +1,21 @@
-use std::ops::Range;
-
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, FontFeature, FontRequest, FontStyle, FontWeight, Itemizer,
-    ShapedGlyph, Shaper, ShapingStyle, TextDirection, font_feature_settings,
+    FontFamily, FontFamilyResolver, FontFeature, Itemizer, ShapedGlyph, Shaper, ShapingSpan,
+    TextDirection, font_feature_settings,
 };
 
-use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, typeface};
+use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, span, typeface};
 
-fn style<'a>(
+// How the spans of a test shape.
+#[derive(Clone, Copy)]
+struct Shaping<'a> {
     weight: u16,
     features: &'a [FontFeature],
     language: Option<&'a str>,
-) -> ShapingStyle<'a> {
-    ShapingStyle {
-        weight: FontWeight::new(weight),
-        style: FontStyle::Normal,
+}
+
+fn style<'a>(weight: u16, features: &'a [FontFeature], language: Option<&'a str>) -> Shaping<'a> {
+    Shaping {
+        weight,
         features,
         language,
     }
@@ -26,25 +27,24 @@ fn shape(
     resolver: &FontFamilyResolver,
     text: &str,
     cuts: &[usize],
-    shaping: ShapingStyle<'_>,
+    shaping: Shaping<'_>,
 ) -> Vec<ShapedGlyph> {
     let family = FontFamily::Default;
-    let request = FontRequest {
-        family: &family,
-        weight: shaping.weight,
-        style: shaping.style,
-    };
     let mut bounds = vec![0];
     bounds.extend_from_slice(cuts);
     bounds.push(text.len());
-    let spans: Vec<(Range<usize>, FontRequest<'_>)> = bounds
+    let spans: Vec<ShapingSpan<'_>> = bounds
         .windows(2)
-        .map(|pair| (pair[0]..pair[1], request))
+        .map(|pair| ShapingSpan {
+            features: shaping.features,
+            language: shaping.language,
+            ..span(pair[0]..pair[1], &family, shaping.weight)
+        })
         .collect();
     let mut shaper = Shaper::default();
     let mut glyphs = Vec::new();
     Itemizer::default().itemize(text, TextDirection::Content, &spans, resolver, |item| {
-        shaper.shape(text, &item, shaping, &mut glyphs);
+        shaper.shape(text, &item, &spans[item.span], 0..text.len(), &mut glyphs);
     });
     glyphs
 }

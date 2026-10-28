@@ -28,6 +28,8 @@ pub mod paragraph;
 pub mod script;
 /// Shaping text items into glyphs with HarfRust.
 pub mod shaper;
+/// The stretches of a paragraph that shape alike.
+pub mod shaping_span;
 /// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
 /// A font loaded for text: Compose's `Typeface`.
@@ -56,7 +58,8 @@ pub use paragraph::{
     resolve_text_direction,
 };
 pub use script::Script;
-pub use shaper::{ShapedGlyph, Shaper, ShapingStyle};
+pub use shaper::{ShapedGlyph, Shaper};
+pub use shaping_span::ShapingSpan;
 pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,

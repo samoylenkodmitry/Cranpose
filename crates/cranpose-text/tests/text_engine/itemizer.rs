@@ -1,18 +1,6 @@
-use std::ops::Range;
+use cranpose_text::{FontFamily, FontFamilyResolver, Itemizer, ShapingSpan, TextDirection};
 
-use cranpose_text::{
-    FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight, Itemizer, TextDirection,
-};
-
-use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, ROBOTO, typeface};
-
-fn plain(family: &FontFamily) -> FontRequest<'_> {
-    FontRequest {
-        family,
-        weight: FontWeight::NORMAL,
-        style: FontStyle::Normal,
-    }
-}
+use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, ROBOTO, span, typeface};
 
 // Each item of `text` as its text, level, script, first family name and span.
 fn items<'t>(
@@ -20,7 +8,7 @@ fn items<'t>(
     resolver: &FontFamilyResolver,
     text: &'t str,
     direction: TextDirection,
-    spans: &[(Range<usize>, FontRequest<'_>)],
+    spans: &[ShapingSpan<'_>],
 ) -> Vec<(&'t str, u8, [u8; 4], String, usize)> {
     let mut items = Vec::new();
     itemizer.itemize(text, direction, spans, resolver, |item| {
@@ -35,8 +23,8 @@ fn items<'t>(
     items
 }
 
-fn whole<'f>(text: &str, family: &'f FontFamily) -> [(Range<usize>, FontRequest<'f>); 1] {
-    [(0..text.len(), plain(family))]
+fn whole<'f>(text: &str, family: &'f FontFamily) -> [ShapingSpan<'f>; 1] {
+    [span(0..text.len(), family, 400)]
 }
 
 const DEVANAGARI_NAME: &str = "CranScan UI Devanagari";
@@ -164,7 +152,7 @@ fn style_spans_split_items() {
             &resolver,
             "abcd",
             TextDirection::Ltr,
-            &[(0..2, plain(&roboto)), (2..4, plain(&dejavu))],
+            &[span(0..2, &roboto, 400), span(2..4, &dejavu, 400)],
         ),
         [
             ("ab", 0, *b"Latn", "Roboto".into(), 0),

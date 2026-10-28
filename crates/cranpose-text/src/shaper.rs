@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use harfrust::{
     Buffer, BufferFlags, Direction, Feature, Language, Script as ShapingScript, ShapeOptions,
     ShapePlan, ShapePlanKey, ShaperFont, Tag,
@@ -7,25 +9,11 @@ use smallvec::SmallVec;
 
 use crate::{
     font::{FontStyle, FontWeight},
-    font_feature::FontFeature,
     glyph_id::GlyphId,
     itemizer::TextItem,
+    shaping_span::ShapingSpan,
     typeface::Typeface,
 };
-
-/// How a style span asks for its text to be shaped.
-#[derive(Clone, Copy, Debug)]
-pub struct ShapingStyle<'a> {
-    /// The weight, which sets a variable font's `wght` axis.
-    pub weight: FontWeight,
-    /// The style, which sets a variable font's `ital` or `slnt` axis.
-    pub style: FontStyle,
-    /// The OpenType features to turn on or off.
-    pub features: &'a [FontFeature],
-    /// A BCP 47 language tag such as `ja` or `sr-Latn`, which picks the
-    /// font's language-specific forms.
-    pub language: Option<&'a str>,
-}
 
 /// One glyph a shaper placed, in font design units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,30 +67,34 @@ impl Default for Shaper {
 }
 
 impl Shaper {
-    /// Shapes `item` of `text` in `style` and appends its glyphs to `glyphs`,
-    /// in the order they are drawn from left to right. The text around the
-    /// item is the shaping context, so joining and contextual forms carry
-    /// across item edges.
+    /// Shapes `item` of `text` in `span` and appends its glyphs to `glyphs`,
+    /// in the order they are drawn from left to right. The text of `context`
+    /// around the item is the shaping context, so joining and contextual
+    /// forms carry across item edges inside it.
     pub fn shape(
         &mut self,
         text: &str,
         item: &TextItem<'_>,
-        style: ShapingStyle<'_>,
+        span: &ShapingSpan<'_>,
+        context: Range<usize>,
         glyphs: &mut Vec<ShapedGlyph>,
     ) {
         let Ok(start) = u32::try_from(item.range.start) else {
             return;
         };
-        let face = self.face(item.typeface, style.weight, style.style);
+        let face = self.face(item.typeface, span.font.weight, span.font.style);
         let face = &mut self.faces[face];
         let buffer = &mut self.buffer;
         buffer.clear();
         let mut flags = BufferFlags::PRODUCE_UNSAFE_TO_CONCAT;
-        flags.set(BufferFlags::BEGINNING_OF_TEXT, item.range.start == 0);
-        flags.set(BufferFlags::END_OF_TEXT, item.range.end == text.len());
+        flags.set(
+            BufferFlags::BEGINNING_OF_TEXT,
+            item.range.start == context.start,
+        );
+        flags.set(BufferFlags::END_OF_TEXT, item.range.end == context.end);
         buffer.set_flags(flags);
-        buffer.set_pre_context(&text[..item.range.start]);
-        buffer.set_post_context(&text[item.range.end..]);
+        buffer.set_pre_context(&text[context.start..item.range.start]);
+        buffer.set_post_context(&text[item.range.end..context.end]);
         buffer.push_str(&text[item.range.clone()]);
         let direction = if item.level.is_rtl() {
             Direction::RightToLeft
@@ -110,14 +102,13 @@ impl Shaper {
             Direction::LeftToRight
         };
         let script = ShapingScript::from_iso15924_tag(Tag::new(&item.script.tag()));
-        let language = style.language.and_then(|tag| tag.parse::<Language>().ok());
+        let language = span.language.and_then(|tag| tag.parse::<Language>().ok());
         buffer.set_direction(direction);
         buffer.set_script(script);
         buffer.set_language(language.clone());
         self.features.clear();
         self.features.extend(
-            style
-                .features
+            span.features
                 .iter()
                 .map(|feature| Feature::new(Tag::new(&feature.tag), feature.value, ..)),
         );

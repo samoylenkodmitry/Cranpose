@@ -2,9 +2,10 @@ use std::ops::Range;
 
 use crate::{
     bidi_level::{BidiLevel, level_runs},
-    font_family_resolver::{FontFamilyResolver, FontRequest},
+    font_family_resolver::FontFamilyResolver,
     paragraph::{ResolvedTextDirection, TextDirection},
     script::{Script, script_runs},
+    shaping_span::ShapingSpan,
     typeface::Typeface,
 };
 
@@ -37,16 +38,13 @@ pub struct Itemizer {
 }
 
 impl Itemizer {
-    /// Passes the items of `text` to `visit`. `spans` are the style spans of
-    /// the text in order, each a byte range and the font it asks for; they
-    /// cover the text with no gap. Spans that differ only in what does not
-    /// change shaping, such as color, must be one span: a ligature such as
-    /// Arabic lam-alef forms only inside one item.
+    /// Passes the items of `text` to `visit`. `spans` cover the text in
+    /// order with no gap.
     pub fn itemize<'r>(
         &mut self,
         text: &str,
         direction: TextDirection,
-        spans: &[(Range<usize>, FontRequest<'_>)],
+        spans: &[ShapingSpan<'_>],
         resolver: &'r FontFamilyResolver,
         mut visit: impl FnMut(TextItem<'r>),
     ) {
@@ -63,7 +61,7 @@ impl Itemizer {
         text: &str,
         paragraph: Range<usize>,
         direction: TextDirection,
-        spans: &[(Range<usize>, FontRequest<'_>)],
+        spans: &[ShapingSpan<'_>],
         resolver: &'r FontFamilyResolver,
         visit: &mut impl FnMut(TextItem<'r>),
     ) {
@@ -77,12 +75,12 @@ impl Itemizer {
         self.scripts.clear();
         script_runs(content, paragraph.start, &mut self.scripts);
         self.fonts.clear();
-        for (span, (range, request)) in spans.iter().enumerate() {
-            let start = range.start.max(paragraph.start);
-            let end = range.end.min(paragraph.end);
+        for (index, span) in spans.iter().enumerate() {
+            let start = span.range.start.max(paragraph.start);
+            let end = span.range.end.min(paragraph.end);
             if start < end {
-                resolver.typeface_runs(&text[start..end], *request, |run, typeface| {
-                    self.fonts.push((start + run.end, typeface, span));
+                resolver.typeface_runs(&text[start..end], span.font, |run, typeface| {
+                    self.fonts.push((start + run.end, typeface, index));
                 });
             }
         }

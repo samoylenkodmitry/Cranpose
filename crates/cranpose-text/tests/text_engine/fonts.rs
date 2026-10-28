@@ -1,6 +1,8 @@
 // The repository's fonts, read for tests.
 
-use cranpose_text::Typeface;
+use std::ops::Range;
+
+use cranpose_text::{FontFamily, FontRequest, FontStyle, FontWeight, ShapingSpan, Typeface};
 
 pub(crate) const ROBOTO: &str = "benchmarks/compose-vs-cranpose/fonts/Roboto-Regular.ttf";
 pub(crate) const ROBOTO_MEDIUM: &str = "benchmarks/compose-vs-cranpose/fonts/Roboto-Medium.ttf";
@@ -25,4 +27,20 @@ pub(crate) fn bytes(path: &str) -> Vec<u8> {
 // The font at `path` read with no declared family.
 pub(crate) fn typeface(path: &str) -> Typeface {
     Typeface::from_bytes(bytes(path)).unwrap_or_else(|error| panic!("{path}: {error}"))
+}
+
+// A span of `range` at 16 pixels in `family` at `weight`, with no features or
+// language.
+pub(crate) fn span(range: Range<usize>, family: &FontFamily, weight: u16) -> ShapingSpan<'_> {
+    ShapingSpan {
+        range,
+        font: FontRequest {
+            family,
+            weight: FontWeight::new(weight),
+            style: FontStyle::Normal,
+        },
+        size: 16.0,
+        features: &[],
+        language: None,
+    }
 }
