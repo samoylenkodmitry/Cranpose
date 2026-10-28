@@ -704,7 +704,7 @@ fn primary_scene_distance(
         strain_along,
         strain_across,
     );
-    if smoothing > 0.0 {
+    if !GLASS_CAPSULE_SMOOTHING_OFF & (smoothing > 0.0) {
         return smoothed_capsule_distance(strained_p, half_a, smoothing) * min(strain_along, strain_across);
     }
 
@@ -763,15 +763,21 @@ fn scene_sdf(scene: GlassScene, p_a: vec2<f32>) -> f32 {
         strain_along,
         strain_across,
     );
-    let count = min(shape_count, MAX_SCENE_SHAPES);
-    for (var i = 0u; i < count; i = i + 1u) {
-        let base = 36u + i * 5u;
-        let d_i = scene_shape_sdf(coord, base, dp_scale, s);
-        // Radius sentinel ≤ -2 marks a SUBTRACT shape (see smax_sub).
-        if get_float(base + 4u) <= -2.0 {
-            d = smax_sub(d, d_i, glue);
-        } else {
-            d = smin(d, d_i, glue);
+    // The flag gates the loop as well as zeroing its count: a GLSL compiler
+    // pays for the loop at each of this function's dozen inlined calls
+    // before it learns the count is zero. Chrome on a Mate 20 X linked a
+    // glass program in 298 ms instead of 378.
+    if !GLASS_SCENE_SHAPES_OFF {
+        let count = min(shape_count, MAX_SCENE_SHAPES);
+        for (var i = 0u; i < count; i = i + 1u) {
+            let base = 36u + i * 5u;
+            let d_i = scene_shape_sdf(coord, base, dp_scale, s);
+            // Radius sentinel ≤ -2 marks a SUBTRACT shape (see smax_sub).
+            if get_float(base + 4u) <= -2.0 {
+                d = smax_sub(d, d_i, glue);
+            } else {
+                d = smin(d, d_i, glue);
+            }
         }
     }
     if wobble_amp > 0.001 || bulge_amp > 0.001 {
