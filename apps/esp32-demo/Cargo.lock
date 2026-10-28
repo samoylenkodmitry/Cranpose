@@ -822,6 +822,7 @@ dependencies = [
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "portable-atomic",
@@ -873,6 +874,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranpose-text"
+version = "0.17.2"
+dependencies = [
+ "cranpose-ui-graphics",
+ "foldhash",
+ "icu_properties",
+ "read-fonts",
+ "smallvec",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "cranpose-ui"
 version = "0.17.2"
 dependencies = [
@@ -880,6 +893,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-macros",
+ "cranpose-text",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "futures-task",
@@ -1436,6 +1450,15 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "font-types"
+version = "0.12.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "fs_at"
@@ -2364,6 +2387,20 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
+name = "read-fonts"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdaa4fffe9ff3ca2c353fa9729792805b9b3e324695ff5a081f860612e81b330"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "font-types",
+ "once_cell",
+ "smallvec",
+ "yoke",
+]
 
 [[package]]
 name = "redox_syscall"

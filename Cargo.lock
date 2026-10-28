@@ -1535,6 +1535,7 @@ dependencies = [
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "harfrust",
@@ -1658,8 +1659,11 @@ name = "cranpose-text"
 version = "0.17.2"
 dependencies = [
  "cranpose-ui-graphics",
+ "foldhash",
  "icu_properties",
+ "read-fonts",
  "smallvec",
+ "thiserror 2.0.21",
  "web-time",
 ]
 
