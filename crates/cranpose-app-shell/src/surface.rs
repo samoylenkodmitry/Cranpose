@@ -234,6 +234,9 @@ impl<R: Renderer> RootSurface<R> {
         if self.frame_scheduler.take_held_still() {
             self.renderer.note_held_still();
         }
+        if self.has_active_pointer_gesture() {
+            self.renderer.note_pointer_held();
+        }
     }
 
     pub(crate) fn renderer_warmup_due(&self, app: &ShellApp) -> bool {

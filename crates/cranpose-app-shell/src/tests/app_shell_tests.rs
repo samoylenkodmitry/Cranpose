@@ -1134,6 +1134,43 @@ fn returning_to_a_previous_viewport_restores_layout_and_hit_geometry() {
 }
 
 #[test]
+fn a_frame_drawn_while_a_pointer_is_held_tells_the_renderer() {
+    let _guard = test_guard();
+    let renderer = HitGraphRenderer::default();
+    let held = Rc::clone(&renderer.pointer_held_frames);
+    let mut shell = AppShell::new(renderer, location_key(file!(), line!(), column!()), || {
+        Box(
+            Modifier::empty().fill_max_size(),
+            BoxSpec::new().content_alignment(Alignment::CENTER),
+            || {
+                Text(
+                    "Hold",
+                    Modifier::empty()
+                        .size(Size::new(40.0, 20.0))
+                        .clickable(|_| {}),
+                    TextStyle::default(),
+                );
+            },
+        );
+    });
+    shell.set_viewport(240.0, 120.0);
+    shell.update();
+    assert_eq!(held.get(), 0, "no pointer is held yet");
+    assert!(shell.set_cursor(120.0, 60.0));
+    assert!(shell.pointer_pressed());
+    shell.update();
+    let while_held = held.get();
+    assert!(
+        while_held > 0,
+        "a frame drawn with the pointer down on a control tells the renderer"
+    );
+    assert!(shell.pointer_released());
+    shell.update();
+    shell.update();
+    assert_eq!(held.get(), while_held, "frames after the release do not");
+}
+
+#[test]
 fn two_app_shells_do_not_share_density_or_render_invalidations() {
     let _guard = test_guard();
     reset_public_render_state_for_test();
@@ -1798,6 +1835,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
 #[derive(Default)]
 pub(super) struct HitGraphRenderer {
     scene: cranpose_render_common::graph_scene::Scene,
+    pointer_held_frames: Rc<Cell<u32>>,
 }
 
 fn collect_graph_hits(
@@ -1819,6 +1857,11 @@ impl Renderer for HitGraphRenderer {
     type Error = ();
 
     renderer_scene_accessors!();
+
+    fn note_pointer_held(&mut self) {
+        self.pointer_held_frames
+            .set(self.pointer_held_frames.get() + 1);
+    }
 
     fn rebuild_scene(
         &mut self,
