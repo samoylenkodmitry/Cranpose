@@ -28,9 +28,9 @@ pub struct FontRequest<'a> {
 /// was given; within a family it takes the typefaces Compose's `FontMatcher`
 /// picks for the weight and style. As in Android's text stack, each character
 /// of a text goes to the first of these typefaces that maps it, the marks and
-/// joiners of a cluster go with their base, and punctuation stays in the
-/// typeface of the word before it when that typeface has it; emoji go to
-/// color typefaces first, other text to plain ones.
+/// joiners of a cluster go with their base, and punctuation and spaces stay
+/// in the typeface of the word before them when that typeface has them; emoji
+/// go to color typefaces first, other text to plain ones.
 pub struct FontFamilyResolver {
     // Grouped by family, the families in the order their first typeface came.
     typefaces: Box<[Typeface]>,

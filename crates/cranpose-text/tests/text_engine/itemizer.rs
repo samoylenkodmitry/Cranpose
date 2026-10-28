@@ -74,8 +74,8 @@ fn a_closing_bracket_takes_the_script_of_its_opening_bracket() {
             &whole(text, &default)
         ),
         [
-            ("नमस्ते", 0, *b"Deva", DEVANAGARI_NAME.into(), 0),
-            (" (", 0, *b"Deva", "Roboto".into(), 0),
+            ("नमस्ते ", 0, *b"Deva", DEVANAGARI_NAME.into(), 0),
+            ("(", 0, *b"Deva", "Roboto".into(), 0),
             ("abc", 0, *b"Latn", "Roboto".into(), 0),
             (") ", 0, *b"Deva", "Roboto".into(), 0),
             ("नमस्ते", 0, *b"Deva", DEVANAGARI_NAME.into(), 0),
@@ -102,8 +102,7 @@ fn right_to_left_text_and_its_numbers_take_their_bidi_levels() {
         ),
         [
             ("abc ", 0, *b"Latn", "Roboto".into(), 0),
-            ("مرحبا", 1, *b"Arab", ARABIC_NAME.into(), 0),
-            (" ", 1, *b"Arab", "Roboto".into(), 0),
+            ("مرحبا ", 1, *b"Arab", ARABIC_NAME.into(), 0),
             ("123", 2, *b"Arab", "Roboto".into(), 0),
         ]
     );

@@ -176,15 +176,15 @@ fn a_registered_generic_family_resolves_to_its_typefaces() {
 }
 
 #[test]
-fn text_falls_back_per_grapheme_and_punctuation_stays_with_its_word() {
+fn text_falls_back_per_character_and_punctuation_and_spaces_stay_with_their_word() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(DEVANAGARI_VF)]);
 
     assert_eq!(
         runs(&resolver, "Hi नमस्ते, ok", plain(&FontFamily::Default)),
         [
             ("Hi ", "Roboto".into()),
-            ("नमस्ते,", "CranScan UI Devanagari".into()),
-            (" ok", "Roboto".into()),
+            ("नमस्ते, ", "CranScan UI Devanagari".into()),
+            ("ok", "Roboto".into()),
         ]
     );
     assert_eq!(
@@ -254,9 +254,9 @@ fn typefaces_that_tie_in_one_family_split_the_text_by_coverage() {
     });
 
     // Both are Noto Sans at 400; only the second maps the heart, and the
-    // comma stays with it.
+    // comma and the space stay with it.
     assert_eq!(
         runs,
-        [(0..1, latin_hash), (1..5, merged_hash), (5..7, latin_hash)]
+        [(0..1, latin_hash), (1..6, merged_hash), (6..7, latin_hash)]
     );
 }

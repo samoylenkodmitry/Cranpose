@@ -223,12 +223,17 @@ pub(crate) fn draws_plainly(coverage: &Coverage, text: &str) -> bool {
 // The ASCII control characters, which need no glyph.
 const ASCII_CONTROLS: u128 = ((1 << 0x20) - 1) | (1 << 0x7F);
 
-// Punctuation that stays in the run's typeface when it has it, so that
-// punctuation after a fallback word matches the word (Android's minikin).
+// Punctuation and spaces that stay in the run's typeface when it has them,
+// so that punctuation after a fallback word matches the word (Android's
+// minikin) and a fallback script's words separated by spaces shape as one
+// item. Android takes a space from the first family that has it; keeping it
+// in the run instead saves shaping each word apart, which for Devanagari
+// walks every lookup of the font once per word.
 fn sticky(ch: char) -> bool {
     matches!(
         ch,
-        '!' | ',' | '-' | '.' | ':' | ';' | '?' | '\u{00A0}' | '\u{2010}' | '\u{2011}' | '\u{202F}'
+        ' ' | '!' | ',' | '-' | '.' | ':' | ';' | '?' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2010}' | '\u{2011}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
     )
 }
 
