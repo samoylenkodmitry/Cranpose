@@ -49,10 +49,10 @@ fn held_widths(
     let mut width = from;
     while width < to {
         width += 0.25;
-        if !laid.holds(width) {
+        if !laid.holds(0.0, width) {
             return (held, Some(width));
         }
-        laid.align(width, paragraph.text_align);
+        laid.align(0.0, width, paragraph.text_align);
         let fresh = lay_out_with(resolver, text, (paragraph, lengths), width, options);
         assert_eq!(picture(&laid), picture(&fresh), "at {width}");
         held += 1;
@@ -179,7 +179,7 @@ fn even_breaking_holds_no_other_width() {
         TextLayoutOptions::default(),
     );
 
-    assert!(!laid.holds(200.25));
+    assert!(!laid.holds(0.0, 200.25));
 }
 
 #[test]

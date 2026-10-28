@@ -233,7 +233,8 @@ fn laying_out_into_an_earlier_layout_gives_what_a_new_one_gives() {
             spans: &spans,
             paragraph: &paragraph,
             lengths: ParagraphLengths::default(),
-            width: 120.0,
+            min_width: 0.0,
+            max_width: 120.0,
             options: TextLayoutOptions::default(),
         };
         layouter.layout_into(&layout_input, &resolver, &mut reused);

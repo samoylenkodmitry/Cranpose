@@ -28,7 +28,8 @@ fn layout(
             spans: &spans,
             paragraph: &paragraph,
             lengths: ParagraphLengths::default(),
-            width,
+            min_width: 0.0,
+            max_width: width,
             options: TextLayoutOptions::default(),
         },
         resolver,
@@ -36,14 +37,14 @@ fn layout(
 }
 
 fn unbroken(resolver: &FontFamilyResolver, text: &str) -> f32 {
-    layout(
+    let laid = layout(
         resolver,
         text,
         (Hyphens::None, LineBreak::Simple),
         None,
         f32::INFINITY,
-    )
-    .width()
+    );
+    laid.line_right(0) - laid.line_left(0)
 }
 
 fn lines<'a>(laid: &TextLayout, text: &'a str) -> Vec<&'a str> {

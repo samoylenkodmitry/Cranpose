@@ -70,7 +70,8 @@ pub(crate) fn lay_out(
 }
 
 // Lays `text` out in one span of the default family at 400, with
-// `paragraph`, `lengths`, `width` and `options`.
+// `paragraph`, `lengths` and `options`, exactly `width` wide when it is
+// finite, as text filling a fixed width is.
 pub(crate) fn lay_out_with(
     resolver: &FontFamilyResolver,
     text: &str,
@@ -86,7 +87,8 @@ pub(crate) fn lay_out_with(
             spans: &spans,
             paragraph,
             lengths,
-            width,
+            min_width: if width.is_finite() { width } else { 0.0 },
+            max_width: width,
             options,
         },
         resolver,

@@ -28,6 +28,33 @@ pub struct TextLayout {
     // The widths at which the text breaks into the same lines; `None` when
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
+    pub(crate) sizing: Sizing,
+}
+
+// What the paragraph's width follows: its max intrinsic width rounded up to
+// whole device pixels, and whether the widest it may be counts, which it
+// does when lines wrap or an ellipsis cuts them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Sizing {
+    pub(crate) content_width: f32,
+    pub(crate) follows_max: bool,
+}
+
+impl Sizing {
+    // The width of the paragraph between `min_width` and `max_width`, as
+    // Compose's `finalMaxWidth` gives it.
+    pub(crate) fn width(self, min_width: f32, max_width: f32) -> f32 {
+        let max_width = if self.follows_max {
+            max_width
+        } else {
+            f32::INFINITY
+        };
+        if min_width == max_width {
+            max_width
+        } else {
+            self.content_width.max(min_width).min(max_width)
+        }
+    }
 }
 
 // Widths from `min` up to but not including `max`.
@@ -237,25 +264,27 @@ impl TextLayout {
         self.did_overflow_height = false;
         self.did_overflow_width = false;
         self.hold = None;
+        self.sizing = Sizing::default();
     }
 
-    /// Whether the text laid out again `width` wide, with the rest of its
-    /// input the same, breaks into the same lines: [`TextLayout::align`]
-    /// then gives that layout without laying the text out again.
-    pub fn holds(&self, width: f32) -> bool {
-        self.hold
-            .is_some_and(|hold| hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max)
+    /// Whether the text laid out again between `min_width` and `max_width`,
+    /// with the rest of its input the same, breaks into the same lines:
+    /// [`TextLayout::align`] then gives that layout without laying the text
+    /// out again.
+    pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
+        let width = self.sizing.width(min_width, max_width);
+        width == self.width
+            || self.hold.is_some_and(|hold| {
+                hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
+            })
     }
 
-    /// Places the lines across `width` as `align` says, for a width the
-    /// layout [holds](TextLayout::holds).
-    pub fn align(&mut self, width: f32, align: TextAlign) {
-        self.width = if width.is_finite() {
-            width
-        } else {
-            self.widest
-        };
-        self.did_overflow_width = self.widest > self.width;
+    /// Places the lines across the width the paragraph takes between
+    /// `min_width` and `max_width` as `align` says, for widths the layout
+    /// [holds](TextLayout::holds).
+    pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
+        self.width = self.sizing.width(min_width, max_width);
+        self.did_overflow_width = self.widest > self.width || self.width > max_width;
         self.align_lines(align);
     }
 
@@ -317,8 +346,8 @@ impl TextLayout {
         true
     }
 
-    /// The width the lines were laid out in: the wrap width, or the widest
-    /// line when lines do not wrap.
+    /// The paragraph's width: its max intrinsic width rounded up to whole
+    /// device pixels, within the widths it was laid out between.
     pub fn width(&self) -> f32 {
         self.width
     }
@@ -339,8 +368,8 @@ impl TextLayout {
         self.did_overflow_height
     }
 
-    /// Whether a line is wider than the layout: Compose's
-    /// `didOverflowWidth`.
+    /// Whether the paragraph is wider than the widest it was laid out at, or
+    /// a line wider than the paragraph: Compose's `didOverflowWidth`.
     pub fn did_overflow_width(&self) -> bool {
         self.did_overflow_width
     }

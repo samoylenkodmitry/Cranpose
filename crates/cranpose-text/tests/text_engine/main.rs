@@ -10,6 +10,7 @@ mod intrinsics;
 mod itemizer;
 mod line_break;
 mod paragraph_lengths;
+mod paragraph_width;
 mod shaper;
 mod text_layout;
 mod text_overflow;

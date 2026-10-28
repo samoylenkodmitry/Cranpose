@@ -47,7 +47,7 @@ impl TextOverflow {
         }
     }
 
-    fn is_ellipsis(self) -> bool {
+    pub(crate) fn is_ellipsis(self) -> bool {
         matches!(
             self,
             Self::Ellipsis | Self::StartEllipsis | Self::MiddleEllipsis

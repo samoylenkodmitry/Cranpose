@@ -467,7 +467,7 @@ pub(crate) fn visible_end(text: &str, start: usize, end: usize) -> usize {
 
 // The characters after which UAX #14 ends a line: the classes BK, CR, LF and
 // NL.
-fn hard_break(ch: char) -> bool {
+pub(crate) fn hard_break(ch: char) -> bool {
     matches!(
         ch,
         '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'

@@ -28,7 +28,8 @@ fn intrinsics(
             spans: &spans,
             paragraph: &ParagraphStyle::default(),
             lengths,
-            width: 1.0,
+            min_width: 0.0,
+            max_width: 1.0,
             options: TextLayoutOptions::default(),
         },
         resolver,
@@ -94,7 +95,11 @@ fn no_paragraph_wraps_at_the_max_intrinsic_width_and_one_does_below_it() {
 
         assert_eq!(at.line_count(), 2, "{first}");
         assert_eq!(below.line_count(), 3, "{first}");
-        assert_eq!(unbounded.width(), widths.max_intrinsic_width, "{first}");
+        assert_eq!(
+            unbounded.width(),
+            widths.max_intrinsic_width.ceil(),
+            "{first}"
+        );
     }
 }
 

@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use cranpose_ui_graphics::whole;
+
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     cluster_widths::ClusterWidths,
@@ -9,7 +11,7 @@ use crate::{
     line_box::{FontExtent, paragraph_line_box},
     line_breaker::{
         BreakKind, BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths,
-        Wrapping, break_lines, has_hard_break, starts_paragraph, visible_end,
+        Wrapping, break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
     },
     paragraph::{LineBreak, ResolvedTextDirection},
     script::Script,
@@ -20,7 +22,7 @@ use crate::{
     shaper::{ShapedGlyph, Shaper},
     shaping_span::ShapingSpan,
     style::ParagraphStyle,
-    text_layout::{LayoutLine, LineRun, TextLayout, WidthRange, font_units},
+    text_layout::{LayoutLine, LineRun, Sizing, TextLayout, WidthRange, font_units},
     typeface::Typeface,
 };
 #[cfg(feature = "hyphenation")]
@@ -40,9 +42,14 @@ pub struct LayoutInput<'a> {
     pub paragraph: &'a ParagraphStyle,
     /// The paragraph's lengths in pixels.
     pub lengths: ParagraphLengths,
-    /// The width lines wrap at and ellipses cut to, in pixels; infinite for
-    /// lines that end only at line breaks.
-    pub width: f32,
+    /// The narrowest the paragraph may be, in pixels.
+    pub min_width: f32,
+    /// The widest the paragraph may be, in pixels; infinite for lines that
+    /// end only at line breaks. As Compose sizes a paragraph, it takes its
+    /// max intrinsic width rounded up to whole device pixels, within these
+    /// two, and the widest only when they are equal; its lines wrap at that
+    /// width when they soft wrap, and ellipses cut to it.
+    pub max_width: f32,
     /// Soft wrapping, the line limits and what shows where text overflows.
     pub options: TextLayoutOptions,
 }
@@ -153,10 +160,16 @@ impl TextLayouter {
         self.shape(input, resolver, layout);
         self.measure_clusters(input, layout);
         let lengths = input.lengths;
+        layout.sizing = Sizing {
+            content_width: whole::ceil(self.widest_paragraph(input) * lengths.grid) / lengths.grid,
+            follows_max: options.soft_wrap || options.overflow.is_ellipsis(),
+        };
+        let width = layout.sizing.width(input.min_width, input.max_width);
+        layout.width = width;
         let wrap = if options.soft_wrap {
             WrapWidths {
-                first: input.width - lengths.first_line_indent,
-                rest: input.width - lengths.rest_line_indent,
+                first: width - lengths.first_line_indent,
+                rest: width - lengths.rest_line_indent,
             }
         } else {
             WrapWidths {
@@ -230,33 +243,48 @@ impl TextLayouter {
         let text = input.text;
         self.breaker
             .opportunities(text, input.paragraph.line_break, &mut self.breaks);
-        let first_indent = input.lengths.first_line_indent;
+        let max_intrinsic_width = self.widest_paragraph(input);
         // An empty text, or one that ends with a line break, ends with an
         // empty line.
         let empty_last = self
             .breaks
             .last()
             .is_none_or(|opportunity| opportunity.kind == BreakKind::Hard);
-        let mut widest = ParagraphIntrinsics {
-            min_intrinsic_width: if empty_last { first_indent } else { 0.0 },
-            max_intrinsic_width: if empty_last { first_indent } else { 0.0 },
+        let mut min_intrinsic_width = if empty_last {
+            input.lengths.first_line_indent
+        } else {
+            0.0
         };
-        let (mut word, mut paragraph) = (0, 0);
+        let mut word = 0;
         for opportunity in &self.breaks {
-            let end = opportunity.offset;
-            let width = self.widths.width(word, visible_end(text, word, end));
-            widest.min_intrinsic_width =
-                widest.min_intrinsic_width.max(width + indent(input, word));
-            if opportunity.kind == BreakKind::Hard || end == text.len() {
-                let width = self
-                    .widths
-                    .width(paragraph, visible_end(text, paragraph, end));
-                widest.max_intrinsic_width = widest.max_intrinsic_width.max(width + first_indent);
-                paragraph = end;
-            }
-            word = end;
+            let width = self
+                .widths
+                .width(word, visible_end(text, word, opportunity.offset));
+            min_intrinsic_width = min_intrinsic_width.max(width + indent(input, word));
+            word = opportunity.offset;
         }
-        widest
+        ParagraphIntrinsics {
+            min_intrinsic_width,
+            max_intrinsic_width,
+        }
+    }
+
+    // The widest paragraph of the text measured last on one line, with its
+    // first line's indent.
+    fn widest_paragraph(&self, input: &LayoutInput<'_>) -> f32 {
+        let text = input.text;
+        let mut widest: f32 = 0.0;
+        let mut start = 0;
+        for (at, ch) in text.char_indices() {
+            if hard_break(ch) {
+                widest = widest.max(self.widths.width(start, visible_end(text, start, at)));
+                start = at + ch.len_utf8();
+            }
+        }
+        let last = self
+            .widths
+            .width(start, visible_end(text, start, text.len()));
+        widest.max(last) + input.lengths.first_line_indent
     }
 
     /// The dictionaries `Hyphens.Auto` hyphenates words by.
@@ -501,7 +529,8 @@ impl TextLayouter {
             top += (first.bottom - first.top) * lines_f32(missing);
         }
         layout.height = top;
-        layout.align(input.width, input.paragraph.text_align);
+        layout.align_lines(input.paragraph.text_align);
+        layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
     }
 
     // Collects the pieces of line `index`, with an ellipsis where it does
@@ -519,7 +548,7 @@ impl TextLayouter {
         self.pieces.clear();
         let last = index + 1 == self.lines.len();
         let visible_width = self.widths.width(line.range.start, line.visible);
-        let overflows = visible_width > input.width - line.indent;
+        let overflows = visible_width > layout.width - line.indent;
         let ellipsis = ellipsis_at(options, last);
         let shown = ellipsis.filter(|_| overflows || (last && layout.did_overflow_height));
         if let Some(hold) = &mut layout.hold {
@@ -612,7 +641,7 @@ impl TextLayouter {
         let Some(mut ellipsis) = self.ellipsis_piece(input, resolver, span, level, layout) else {
             return false;
         };
-        let room = (input.width - line.indent - ellipsis.width).max(0.0);
+        let room = (layout.width - line.indent - ellipsis.width).max(0.0);
         let text = input.text;
         let (head, tail) = match at {
             EllipsisAt::End => {
