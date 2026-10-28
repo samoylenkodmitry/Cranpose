@@ -68,6 +68,22 @@ fn a_caller_key_is_the_location_key_of_its_call_site_every_time() {
 }
 
 #[test]
+fn a_call_site_whose_slot_another_site_took_gets_its_own_key() {
+    for round in 0..2 {
+        if round == 1 {
+            // Every slot holds another call site's key.
+            thread_state::cells(|cells| {
+                for slot in &cells.call_site_keys {
+                    slot.set((1, Key(1)));
+                }
+            });
+        }
+        let (key, site) = caller_key_and_site();
+        assert_eq!(key, location_key(site.file(), site.line(), site.column()));
+    }
+}
+
+#[test]
 fn cached_key_helpers_latch_the_first_value() {
     struct Marker;
     let marker = TypeId::of::<Marker>();

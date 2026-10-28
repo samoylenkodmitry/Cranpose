@@ -18,9 +18,17 @@ use crate::{
 };
 
 pub(crate) const FILE_HASH_SLOTS: usize = 64;
+// Fewer on 32-bit targets, whose RAM is counted in kilobytes: a slot there
+// takes 16 bytes.
+pub(crate) const CALL_SITE_KEY_SLOTS: usize = if cfg!(target_pointer_width = "32") {
+    64
+} else {
+    128
+};
 
 pub(crate) struct ThreadCells {
     pub(crate) file_hashes: [Cell<(usize, usize, u64)>; FILE_HASH_SLOTS],
+    pub(crate) call_site_keys: [Cell<(usize, Key)>; CALL_SITE_KEY_SLOTS],
     pub(crate) hot_origin: Cell<HotOrigin>,
     pub(crate) in_event_handler: Cell<bool>,
     pub(crate) in_applied_snapshot: Cell<bool>,
@@ -42,6 +50,7 @@ impl ThreadCells {
     const fn new() -> Self {
         Self {
             file_hashes: [const { Cell::new((0, 0, 0)) }; FILE_HASH_SLOTS],
+            call_site_keys: [const { Cell::new((0, Key(0))) }; CALL_SITE_KEY_SLOTS],
             hot_origin: Cell::new(HotOrigin::NONE),
             in_event_handler: Cell::new(false),
             in_applied_snapshot: Cell::new(false),
