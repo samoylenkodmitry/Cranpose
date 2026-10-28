@@ -1,5 +1,21 @@
 use naga::ShaderStage;
 
+// The framework's runtime shaders, each with whether its color ignores the
+// pixel's place on the target. On the web a runtime shader of one of these
+// sources takes no validation on the page: its tests validate it
+// (`framework_runtime_shaders_validate_as_listed`), and the page's naga took
+// ~100 ms of a Galaxy Tab S7+'s first glass on WebGPU, where the browser
+// parses the WGSL again itself.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) const FRAMEWORK_RUNTIME_SHADERS: [(&str, bool); 6] = [
+    (cranpose_ui_graphics::LIQUID_GLASS_WGSL, false),
+    (cranpose_ui_graphics::GRADIENT_BLUR_WGSL, false),
+    (cranpose_ui_graphics::GRADIENT_CUT_MASK_WGSL, true),
+    (cranpose_ui_graphics::GRADIENT_FADE_DST_OUT_WGSL, true),
+    (cranpose_ui_graphics::ROUNDED_ALPHA_MASK_WGSL, true),
+    (crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER, true),
+];
+
 /// The parsed `source` and whether its fragment stage ignores the pixel
 /// position, once it holds the entry points a runtime shader needs and
 /// validates for `backend`.

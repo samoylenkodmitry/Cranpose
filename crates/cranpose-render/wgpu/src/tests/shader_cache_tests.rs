@@ -7,7 +7,7 @@ use cranpose_ui_graphics::{
 use web_time::{Duration, Instant};
 
 use super::{
-    RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
+    FRAMEWORK_RUNTIME_SHADERS, RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
     validate_runtime_shader_source,
 };
 use crate::{
@@ -369,5 +369,26 @@ fn validator_accepts_gl_portable_builtin_runtime_shaders() {
             "{name} should remain GL-portable: {}",
             result.err().unwrap_or_default()
         );
+    }
+}
+
+// The framework's runtime shaders validate for every backend, and each one's
+// listed position independence is what the analysis finds: the web skips
+// both for these sources.
+#[test]
+fn framework_runtime_shaders_validate_as_listed() {
+    for (index, &(source, listed)) in FRAMEWORK_RUNTIME_SHADERS.iter().enumerate() {
+        for backend in [
+            wgpu::Backend::Gl,
+            wgpu::Backend::BrowserWebGpu,
+            wgpu::Backend::Vulkan,
+        ] {
+            let (_, position_independent) = validate_runtime_shader_source(source, backend)
+                .unwrap_or_else(|error| panic!("shader {index} on {backend:?}: {error}"));
+            assert_eq!(
+                position_independent, listed,
+                "shader {index} on {backend:?}"
+            );
+        }
     }
 }

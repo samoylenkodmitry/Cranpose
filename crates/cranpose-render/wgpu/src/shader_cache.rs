@@ -801,6 +801,19 @@ fn create_runtime_shader_module(
     source_hash: u64,
     backend: wgpu::Backend,
 ) -> Option<RuntimeShaderModule> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(&(_, position_independent)) = FRAMEWORK_RUNTIME_SHADERS
+        .iter()
+        .find(|&&(wgsl, _)| wgsl == source)
+    {
+        return Some(RuntimeShaderModule {
+            module: device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("RuntimeShader Effect"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            }),
+            position_independent,
+        });
+    }
     let (parsed, position_independent) = match validate_runtime_shader_source(source, backend) {
         Ok(validated) => validated,
         Err(err) => {
@@ -892,6 +905,8 @@ fn create_app_shader_module(
     }
 }
 mod validation;
+#[cfg(any(target_arch = "wasm32", test))]
+use validation::FRAMEWORK_RUNTIME_SHADERS;
 use validation::{validate_runtime_shader_source, validate_shader_source};
 
 #[cfg(test)]
