@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
     PreparedTextLayout, TextLayoutOptions, TextStyle,
@@ -28,7 +30,7 @@ pub(crate) struct DevOverlay {
     controls: Vec<DevOverlayControl>,
     text: String,
     // The line laid out with the app's fonts.
-    layout: Option<PreparedTextLayout>,
+    layout: Option<Rc<PreparedTextLayout>>,
     pub(crate) last_refresh: Option<Instant>,
     viewport: Option<Size>,
 }

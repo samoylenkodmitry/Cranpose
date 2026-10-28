@@ -145,6 +145,17 @@ impl SharedRenderCase {
     /// The fixtures to render for this case. A translated case returns two fixtures that differ in
     /// their fractional offsets.
     pub fn fixtures(self) -> Vec<RenderFixture> {
+        // Draw scope text records as an app lays it out, in the default
+        // font.
+        cranpose_ui::AppContext::new().enter(|| {
+            cranpose_ui::text::set_text_fonts(
+                crate::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver(),
+            );
+            self.fixtures_in_app()
+        })
+    }
+
+    fn fixtures_in_app(self) -> Vec<RenderFixture> {
         match self {
             Self::RoundedRect => vec![rounded_rect_fixture()],
             Self::PrimitiveClip => vec![primitive_clip_fixture()],

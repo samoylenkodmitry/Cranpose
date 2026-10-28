@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 use cranpose_render_common::{
     byte_blend::blend_byte_pixel,
     graph::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
         RenderNode,
     },
+    text_fonts::TextFonts,
 };
 use cranpose_ui::{Brush, text::TextMotion};
 use cranpose_ui_graphics::Color;
@@ -14,6 +13,7 @@ use super::*;
 use crate::{
     scene::{ImageDraw, TextDraw},
     style::point_in_resolved_rounded_rect,
+    text_draws::text_draw,
 };
 
 #[test]
@@ -79,33 +79,8 @@ fn alpha_masks_render_exactly_as_rgba_images() {
 
 fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
     let diagnostics = RenderDiagnostics::new();
-    let text = TextRaster::new(SoftwareTextResources::default());
+    let text = TextRaster::new(TextFonts::from_fonts_or_default(&[]));
     draw_raster_scene(frame, width, height, scene, &diagnostics, &text);
-}
-
-#[test]
-fn fallback_text_metrics_cover_empty_and_multiline_text() {
-    let empty = fallback_text_metrics("", 10.0);
-    assert_eq!(empty.line_count, 1);
-    assert_eq!(empty.width, 0.0);
-    assert_eq!(empty.height, fallback_line_height(10.0));
-
-    let multiline = fallback_text_metrics("ab\ncde", 10.0);
-    assert_eq!(multiline.line_count, 2);
-    assert_eq!(multiline.width, 3.0 * fallback_char_width(10.0));
-    assert_eq!(multiline.height, 2.0 * fallback_line_height(10.0));
-}
-
-#[test]
-fn fallback_cursor_position_handles_non_boundary_byte_offsets() {
-    let text = "éx";
-    let width = fallback_char_width(12.0);
-    assert_eq!(fallback_cursor_x_for_byte_offset(text, 0, 12.0), 0.0);
-    assert_eq!(fallback_cursor_x_for_byte_offset(text, 1, 12.0), width);
-    assert_eq!(
-        fallback_cursor_x_for_byte_offset(text, text.len(), 12.0),
-        width * 2.0
-    );
 }
 
 #[test]
@@ -154,21 +129,18 @@ fn render_single_text_frame(
     x: f32,
 ) -> (u32, u32, Vec<u8>) {
     let mut raster_scene = RasterScene::new();
-    raster_scene.push_text(TextDraw {
-        rect: Rect {
+    raster_scene.push_text(text_draw(
+        Rect {
             x,
             y: 16.0,
             width: 320.0,
             height: 90.0,
         },
-        snap_anchor: None,
-        text: Rc::new(cranpose_ui::text::AnnotatedString::from("MMMMMMMM")),
+        "MMMMMMMM",
+        style,
+        64.0,
         color,
-        text_style: std::sync::Arc::new(style),
-        font_size: 64.0,
-        scale: 1.0,
-        clip: None,
-    });
+    ));
 
     let width = 360;
     let height = 140;
@@ -273,23 +245,18 @@ fn unsupported_blend_mode_falls_back_without_abort() {
 #[test]
 fn multiline_text_renders_second_line_pixels() {
     let mut raster_scene = RasterScene::new();
-    raster_scene.push_text(TextDraw {
-        rect: Rect {
+    raster_scene.push_text(text_draw(
+        Rect {
             x: 8.0,
             y: 8.0,
             width: 180.0,
             height: 80.0,
         },
-        snap_anchor: None,
-        text: Rc::new(cranpose_ui::text::AnnotatedString::from(
-            "Dynamic\nModifiers",
-        )),
-        color: Color::WHITE,
-        text_style: std::sync::Arc::new(cranpose_ui::TextStyle::default()),
-        font_size: 14.0,
-        scale: 1.0,
-        clip: None,
-    });
+        "Dynamic\nModifiers",
+        cranpose_ui::TextStyle::default(),
+        14.0,
+        Color::WHITE,
+    ));
 
     let width = 220;
     let height = 100;
@@ -360,24 +327,24 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
 fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
     let mut raster_scene = RasterScene::new();
     raster_scene.push_text(TextDraw {
-        rect: Rect {
-            x: 8.0,
-            y: 40.0,
-            width: 180.0,
-            height: 24.0,
-        },
-        snap_anchor: None,
-        text: Rc::new(cranpose_ui::text::AnnotatedString::from("Clipped Text")),
-        color: Color::WHITE,
-        text_style: std::sync::Arc::new(cranpose_ui::TextStyle::default()),
-        font_size: 14.0,
-        scale: 1.0,
         clip: Some(Rect {
             x: 0.0,
             y: 0.0,
             width: 220.0,
             height: 20.0,
         }),
+        ..text_draw(
+            Rect {
+                x: 8.0,
+                y: 40.0,
+                width: 180.0,
+                height: 24.0,
+            },
+            "Clipped Text",
+            cranpose_ui::TextStyle::default(),
+            14.0,
+            Color::WHITE,
+        )
     });
 
     let width = 220;

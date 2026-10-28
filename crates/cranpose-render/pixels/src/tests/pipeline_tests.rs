@@ -7,7 +7,7 @@ use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
 
 use super::*;
-use crate::{draw::RenderItem, scene::RasterScene};
+use crate::{draw::RenderItem, scene::RasterScene, text_draws::laid_out};
 
 fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
     let app_context = cranpose_ui::AppContext::new();
@@ -27,11 +27,13 @@ fn push_text_style_draws_for_test(
     text_style: &TextStyle,
     clip: Option<Rect>,
 ) {
+    let prepared = laid_out(text, text_style, rect.width);
     let node = TextPrimitiveNode {
         node_id: NodeId(1),
         rect,
-        text: Rc::new(cranpose_ui::text::AnnotatedString::from(text)),
-        render_text: cranpose_ui::text::shared_plain_render_string(text),
+        text: Rc::clone(&prepared.text),
+        render_text: prepared.render_text(),
+        layout: Arc::clone(&prepared.layout),
         text_style: Arc::new(text_style.clone()),
         font_size: 14.0,
         layout_options: TextLayoutOptions::default(),
@@ -115,6 +117,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                     },
                     text: cranpose_ui::text::shared_plain_annotated_string("48 px"),
                     render_text: cranpose_ui::text::shared_plain_render_string("48 px"),
+                    layout: Arc::clone(&laid_out("48 px", &TextStyle::default(), 36.0).layout),
                     text_style: Default::default(),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
@@ -511,7 +514,10 @@ fn push_text_style_draws_emits_decoration_shapes() {
     let style = TextStyle {
         span_style: cranpose_ui::SpanStyle {
             color: Some(Color(0.9, 0.95, 1.0, 1.0)),
-            text_decoration: Some(TextDecoration::UNDERLINE.combine(TextDecoration::LINE_THROUGH)),
+            text_decoration: Some(
+                cranpose_ui::text::TextDecoration::UNDERLINE
+                    .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            ),
             ..Default::default()
         },
         ..Default::default()
@@ -563,9 +569,11 @@ fn push_text_style_draws_applies_baseline_shift() {
     push_text_style_draws_for_test(&mut scene, rect, "Shifted", &style, None);
 
     assert_eq!(scene.texts.len(), 1);
+    let layout = &scene.texts[0].layout;
+    let run = layout.glyph_runs(0).next().expect("a run of glyphs");
     assert!(
-        scene.texts[0].rect.y < rect.y,
-        "superscript baseline shift should move text up"
+        run.baseline() < layout.line_baseline(0),
+        "superscript baseline shift should move the glyphs up"
     );
 }
 

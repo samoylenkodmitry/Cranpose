@@ -10,6 +10,9 @@ pub mod scene;
 pub mod sprites;
 mod style;
 mod surface;
+#[cfg(test)]
+#[path = "tests/text_draws.rs"]
+mod text_draws;
 
 pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{

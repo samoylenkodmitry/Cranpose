@@ -1,3 +1,5 @@
+use std::{rc::Rc, sync::Arc};
+
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
@@ -96,9 +98,9 @@ impl Canvas {
                 node_id: id,
                 rect,
                 render_text: prepared.render_text(),
-                text: prepared.text,
-                layout: prepared.layout,
-                text_style: prepared.visual_style,
+                text: Rc::clone(&prepared.text),
+                layout: Arc::clone(&prepared.layout),
+                text_style: Arc::clone(&prepared.visual_style),
                 font_size,
                 layout_options: TextLayoutOptions::default(),
                 clip: Some(rect),
