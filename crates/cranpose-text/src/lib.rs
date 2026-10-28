@@ -18,6 +18,8 @@ pub mod font_family_resolver;
 pub mod font_feature;
 /// Glyph indices.
 pub mod glyph_id;
+/// Glyph outlines drawn as coverage.
+pub mod glyph_outline;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
@@ -60,6 +62,7 @@ pub use font::{
 pub use font_family_resolver::{FontFamilyResolver, FontRequest};
 pub use font_feature::{FontFeature, font_feature_settings};
 pub use glyph_id::GlyphId;
+pub use glyph_outline::GlyphOutline;
 pub use itemizer::{Itemizer, TextItem};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox, line_box, paragraph_line_box};

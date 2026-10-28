@@ -877,6 +877,7 @@ dependencies = [
 name = "cranpose-text"
 version = "0.17.2"
 dependencies = [
+ "ab_glyph_rasterizer",
  "cranpose-ui-graphics",
  "foldhash",
  "harfrust",
