@@ -1535,6 +1535,7 @@ dependencies = [
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "hyphenation",
@@ -1659,8 +1660,11 @@ name = "cranpose-text"
 version = "0.17.2"
 dependencies = [
  "cranpose-ui-graphics",
+ "foldhash",
  "icu_properties",
+ "read-fonts",
  "smallvec",
+ "thiserror 2.0.21",
  "web-time",
 ]
 
@@ -2445,6 +2449,15 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "font-types"
+version = "0.12.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "foreign-types"
@@ -5381,6 +5394,20 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdaa4fffe9ff3ca2c353fa9729792805b9b3e324695ff5a081f860612e81b330"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "font-types",
+ "once_cell",
+ "smallvec",
+ "yoke",
 ]
 
 [[package]]

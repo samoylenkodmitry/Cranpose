@@ -6,8 +6,8 @@ use std::{
 };
 
 use ab_glyph::{
-    Font, FontArc, FontRef, FontVec, Glyph, GlyphId, InvalidFont, OutlinedGlyph, PxScale,
-    ScaleFont, VariableFont, point,
+    Font, FontArc, FontRef, FontVec, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont,
+    VariableFont, point,
 };
 use cranpose_core::{
     collections::{bounded_lru::BoundedLruCache, pass_aged::PassAgedCache},
@@ -28,6 +28,7 @@ use unicode_segmentation::UnicodeSegmentation;
 mod shadow_blur;
 mod shaped_font;
 
+pub use cranpose_text::{FontBytes, FontFamilyKey};
 use shadow_blur::{
     blend_shadow_pixel, blend_shadow_pixel_subpixel, gaussian_blur_alpha, shadow_blur_sigma,
 };
@@ -119,83 +120,6 @@ struct SoftwareTextFontMetadata {
     tracking: FontTracking,
 }
 
-/// Identity an app-supplied face was registered under.
-///
-/// `FontFamily::FileBacked` and `FontFamily::LoadedTypeface` name a face by its
-/// files rather than by a name inside the font, so resolution cannot compare
-/// strings from the `name` table. Hashing the `FontFamily` value once at
-/// registration and once per resolve keeps the two sides in step without
-/// walking path lists on every frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FontFamilyKey(u64);
-
-impl FontFamilyKey {
-    /// Returns the key of `family`, the same for equal families.
-    pub fn of(family: &FontFamily) -> Self {
-        let mut state = default_hash::new();
-        family.hash(&mut state);
-        Self(state.finish())
-    }
-}
-
-/// The bytes a face is parsed from.
-pub enum FontBytes {
-    /// Bytes that live as long as the process, such as an embedded font or a
-    /// font file read once: the face reads them in place.
-    Static(&'static [u8]),
-    /// Bytes the face takes over.
-    Owned(Vec<u8>),
-}
-
-impl FontBytes {
-    /// The font file's bytes.
-    pub fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Static(bytes) => bytes,
-            Self::Owned(bytes) => bytes,
-        }
-    }
-
-    /// The bytes with per-glyph tables the parsers read, see
-    /// [`crate::full_glyph_count`].
-    fn fitted(self) -> Self {
-        match self {
-            Self::Static(bytes) => {
-                Self::Static(crate::full_glyph_count::fit_static_glyph_tables(bytes))
-            }
-            Self::Owned(mut bytes) => {
-                crate::full_glyph_count::fit_glyph_tables(&mut bytes);
-                Self::Owned(bytes)
-            }
-        }
-    }
-
-    fn into_font(self) -> Result<FontArc, InvalidFont> {
-        match self {
-            Self::Static(bytes) => FontArc::try_from_slice(bytes),
-            Self::Owned(bytes) => FontArc::try_from_vec(bytes),
-        }
-    }
-}
-
-impl From<&'static [u8]> for FontBytes {
-    fn from(bytes: &'static [u8]) -> Self {
-        Self::Static(bytes)
-    }
-}
-
-impl<const N: usize> From<&'static [u8; N]> for FontBytes {
-    fn from(bytes: &'static [u8; N]) -> Self {
-        Self::Static(bytes)
-    }
-}
-
-impl From<Vec<u8>> for FontBytes {
-    fn from(bytes: Vec<u8>) -> Self {
-        Self::Owned(bytes)
-    }
-}
-
 /// A face instanced at its declared and explicit axis positions.
 struct InstancedFace {
     font: FontArc,
@@ -207,15 +131,17 @@ impl SoftwareTextFont {
     /// Parses `bytes` as a face that is not tied to a declared family. Fails with `InvalidFont`
     /// when the bytes are not a readable font.
     pub fn from_bytes(bytes: impl Into<FontBytes>) -> Result<Self, SoftwareTextFontError> {
-        let bytes = bytes.into().fitted();
+        let bytes = crate::full_glyph_count::fitted(bytes.into());
         let mut hasher = default_hash::new();
         bytes.as_slice().hash(&mut hasher);
         let content_hash = hasher.finish();
         let metadata = software_text_font_metadata(bytes.as_slice());
         let kerning = KernedFont::read_kerning(bytes.as_slice(), &[]);
-        let font = bytes
-            .into_font()
-            .map_err(|_| SoftwareTextFontError::InvalidFont)?;
+        let font = match bytes {
+            FontBytes::Static(bytes) => FontArc::try_from_slice(bytes),
+            FontBytes::Owned(bytes) => FontArc::try_from_vec(bytes),
+        }
+        .map_err(|_| SoftwareTextFontError::InvalidFont)?;
         let score = text_font_score_from_parts(&font, &metadata);
         Ok(Self {
             font: KernedFont::new(font, kerning),
@@ -256,7 +182,7 @@ impl SoftwareTextFont {
         bytes: impl Into<FontBytes>,
         variations: &[([u8; 4], f32)],
     ) -> Result<Self, SoftwareTextFontError> {
-        let bytes = bytes.into().fitted();
+        let bytes = crate::full_glyph_count::fitted(bytes.into());
         let mut hasher = default_hash::new();
         bytes.as_slice().hash(&mut hasher);
         let mut metadata = software_text_font_metadata(bytes.as_slice());

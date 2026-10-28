@@ -10,9 +10,22 @@
 
 use std::sync::{Mutex, PoisonError};
 
+use cranpose_text::FontBytes;
+
 /// Copies of fonts the app holds for the life of the process, shortened,
 /// each with the address of its source.
 static FITTED: Mutex<Vec<(usize, &'static [u8])>> = Mutex::new(Vec::new());
+
+// `bytes` with per-glyph tables ttf-parser reads.
+pub(crate) fn fitted(bytes: FontBytes) -> FontBytes {
+    match bytes {
+        FontBytes::Static(bytes) => FontBytes::Static(fit_static_glyph_tables(bytes)),
+        FontBytes::Owned(mut bytes) => {
+            fit_glyph_tables(&mut bytes);
+            FontBytes::Owned(bytes)
+        }
+    }
+}
 
 /// Shortens the per-glyph tables of `bytes` in place where ttf-parser would
 /// read none of them.

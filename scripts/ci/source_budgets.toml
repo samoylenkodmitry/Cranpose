@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13713
+private_docs = 13711
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 341
@@ -59,7 +59,7 @@ limit = 1000
 "crates/cranpose-macros/src/lib.rs" = 1234
 "crates/cranpose-render/common/src/render_contract.rs" = 1139
 "crates/cranpose-render/common/src/scene_builder.rs" = 3061
-"crates/cranpose-render/common/src/software_text_raster.rs" = 5542
+"crates/cranpose-render/common/src/software_text_raster.rs" = 5468
 "crates/cranpose-render/gl-templates/src/generate.rs" = 1463
 "crates/cranpose-render/pixels/src/pipeline.rs" = 1511
 "crates/cranpose-render/wgpu/src/collect.rs" = 1801
