@@ -2,7 +2,7 @@ use std::sync::mpsc;
 
 use web_time::{Duration, Instant};
 
-use super::{CompileLane, PipelineCompiler};
+use super::{CompileLane, PacedLanding, PipelineCompiler};
 
 /// Both lanes run every job off the calling thread. Each starts its jobs in
 /// queue order, on several threads, so they may finish in any.
@@ -291,4 +291,23 @@ fn a_metal_compiler_runs_more_warm_ups_side_by_side() {
     assert!(metal.warm_up_threads() >= 3);
     assert!(metal.warm_up_threads() >= vulkan.warm_up_threads());
     let _held = hold(&metal, CompileLane::WarmUp, metal.warm_up_threads());
+}
+
+// The web runs a paced build only after the GPU has done the frame that ran
+// the last one, and the next frame's submit is where it learns that: a wait
+// nothing ever clears would stop every pipeline after the first.
+#[test]
+fn a_paced_build_waits_for_the_frame_before_it_and_not_longer() {
+    let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    let landing = PacedLanding::default();
+    assert!(landing.may_build());
+    landing.built();
+    queue.submit([]);
+    landing.watch(&queue);
+    assert!(!landing.may_build());
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("the frame finishes");
+    queue.submit([]);
+    assert!(landing.may_build());
 }

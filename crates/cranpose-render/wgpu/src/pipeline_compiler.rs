@@ -5,6 +5,11 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{self, Receiver, Sender},
 };
+#[cfg(target_arch = "wasm32")]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Tells a renderer that drew a placeholder when a pipeline lands, so it
 /// draws again with the pipeline instead of the placeholder.
@@ -162,7 +167,42 @@ pub(crate) struct PipelineCompiler {
     #[cfg(target_arch = "wasm32")]
     paced: std::rc::Rc<std::cell::RefCell<Queues>>,
     #[cfg(target_arch = "wasm32")]
+    paced_landing: std::rc::Rc<PacedLanding>,
+    #[cfg(target_arch = "wasm32")]
     pacing: bool,
+}
+
+// On WebGL, whether the browser's GPU process is still on the frame that
+// ran the last paced build, that build's link among the frame's work, and
+// whether the next submit is to watch for it.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default)]
+pub(crate) struct PacedLanding {
+    in_flight: Arc<AtomicBool>,
+    watch: std::cell::Cell<bool>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PacedLanding {
+    pub(crate) fn may_build(&self) -> bool {
+        !self.in_flight.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn built(&self) {
+        self.in_flight.store(true, Ordering::Release);
+        self.watch.set(true);
+    }
+
+    // Called after a submit: once the GPU has done the work submitted so far,
+    // a later submit's maintenance lets the next build run.
+    pub(crate) fn watch(&self, queue: &wgpu::Queue) {
+        if self.watch.replace(false) {
+            let in_flight = Arc::clone(&self.in_flight);
+            queue.on_submitted_work_done(move || {
+                in_flight.store(false, Ordering::Release);
+            });
+        }
+    }
 }
 
 /// On the web, the frame drawn while it takes its pipelines from a pipeline
@@ -493,13 +533,28 @@ impl PipelineCompiler {
                     job();
                 }
             }
-            let paced = scene_still
+            // A link is read at the first submit that draws with it, so the
+            // page goes on and runs the next paced build a frame later while
+            // the GPU process still links the last: in Chrome on a Mate 20 X
+            // six glass and blur links piled up there, and the first frame
+            // drawing with one waited 790 ms for all six. The next build waits
+            // until the GPU process has done the frame that ran the last.
+            let paced = (scene_still && self.paced_landing.may_build())
                 .then(|| self.paced.borrow_mut().next(true, true))
                 .flatten();
             if let Some(job) = paced {
                 job();
+                self.paced_landing.built();
             }
         }
+    }
+
+    // After a frame's submit: when a frame ran a paced build, the next one
+    // waits until the browser's GPU process has done the work submitted so
+    // far, the build's link among it (see `end_frame`).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn watch_paced_landing(&self, queue: &wgpu::Queue) {
+        self.paced_landing.watch(queue);
     }
 
     /// Whether the warm-up threads take demanded jobs before their own. A

@@ -2503,11 +2503,11 @@ impl GpuRenderer {
             if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
                 log::warn!("[wgpu-render-stage:graph] total_ms={total_ms:.2}",);
             }
-            let submitted = execution.is_some();
-            if let Some(execution) = execution {
+            if let Some(execution) = &execution {
                 self.frame_stats.record_command_stats(execution.stats);
+                self.pipelines.compiler.watch_paced_landing(&self.queue);
             }
-            (result, submitted)
+            (result, execution.is_some())
         };
         #[cfg(not(target_arch = "wasm32"))]
         if submitted {
