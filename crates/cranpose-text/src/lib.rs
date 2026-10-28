@@ -42,6 +42,8 @@ pub mod text_layouter;
 pub mod typeface;
 /// Text size units: scaled pixels and multiples of the font size.
 pub mod unit;
+mod word_cache;
+mod word_split;
 
 pub use annotated_string::{
     AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,
