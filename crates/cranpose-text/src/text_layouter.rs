@@ -9,10 +9,10 @@ use crate::{
     layout_options::{TextLayoutOptions, TextOverflow},
     line_box::{FontExtent, paragraph_line_box},
     line_breaker::{
-        BreakOpportunity, LineBreaker, WrapWidths, break_lines, has_hard_break, starts_paragraph,
-        visible_end,
+        BreakOpportunity, LineBalancer, LineBreaker, WrapWidths, Wrapping, break_lines,
+        has_hard_break, starts_paragraph, visible_end,
     },
-    paragraph::{ResolvedTextDirection, TextAlign},
+    paragraph::{LineBreak, ResolvedTextDirection, TextAlign},
     script::Script,
     shaper::{ShapedGlyph, Shaper},
     shaping_span::ShapingSpan,
@@ -71,6 +71,7 @@ pub struct TextLayouter {
     itemizer: Itemizer,
     shaper: Shaper,
     breaker: LineBreaker,
+    balancer: LineBalancer,
     items: Vec<ShapedItem>,
     widths: ClusterWidths,
     breaks: Vec<BreakOpportunity>,
@@ -114,6 +115,9 @@ enum EllipsisAt {
 }
 
 const ELLIPSIS: &str = "\u{2026}";
+// How much the free width of a paragraph's last line counts in even breaking
+// for `LineBreak.Paragraph`, which lets the last line stay short.
+const PARAGRAPH_LAST_LINE: f32 = 0.16;
 
 impl TextLayouter {
     /// Lays `input` out with the typefaces of `resolver`.
@@ -156,14 +160,29 @@ impl TextLayouter {
             self.line_ranges.clear();
             self.line_ranges.push(0..text.len());
         } else {
-            self.breaker.opportunities(text, &mut self.breaks);
-            break_lines(
+            let line_break = input.paragraph.line_break;
+            self.breaker
+                .opportunities(text, line_break, &mut self.breaks);
+            let wrapping = Wrapping {
                 text,
-                &self.widths,
-                &self.breaks,
+                widths: &self.widths,
                 wrap,
-                &mut self.line_ranges,
-            );
+            };
+            match line_break {
+                LineBreak::Paragraph => self.balancer.balance(
+                    &wrapping,
+                    &self.breaks,
+                    PARAGRAPH_LAST_LINE,
+                    &mut self.line_ranges,
+                ),
+                LineBreak::Heading => {
+                    self.balancer
+                        .balance(&wrapping, &self.breaks, 1.0, &mut self.line_ranges);
+                }
+                LineBreak::Simple | LineBreak::Unspecified => {
+                    break_lines(&wrapping, &self.breaks, &mut self.line_ranges);
+                }
+            }
         }
         layout.did_overflow_height = self.line_ranges.len() > options.max_lines;
         self.line_ranges.truncate(options.max_lines.max(1));

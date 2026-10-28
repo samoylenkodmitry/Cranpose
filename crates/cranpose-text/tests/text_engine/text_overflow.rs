@@ -1,9 +1,8 @@
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle, TextLayout,
-    TextLayoutOptions, TextLayouter, TextOverflow,
+    FontFamilyResolver, ParagraphStyle, TextLayout, TextLayoutOptions, TextOverflow,
 };
 
-use crate::fonts::{ARABIC_VF, ROBOTO, span, typeface};
+use crate::fonts::{ARABIC_VF, ROBOTO, lay_out, typeface};
 
 const TEXT: &str = "The quick brown fox jumps over the lazy dog";
 
@@ -13,19 +12,7 @@ fn layout(
     width: f32,
     options: TextLayoutOptions,
 ) -> TextLayout {
-    let family = FontFamily::Default;
-    let spans = [span(0..text.len(), &family, 400)];
-    TextLayouter::default().layout(
-        &LayoutInput {
-            text,
-            spans: &spans,
-            paragraph: &ParagraphStyle::default(),
-            lengths: ParagraphLengths::default(),
-            width,
-            options,
-        },
-        resolver,
-    )
+    lay_out(resolver, text, &ParagraphStyle::default(), width, options)
 }
 
 fn options(overflow: TextOverflow, soft_wrap: bool, max_lines: usize) -> TextLayoutOptions {

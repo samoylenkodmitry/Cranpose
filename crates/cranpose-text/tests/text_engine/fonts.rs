@@ -2,7 +2,11 @@
 
 use std::ops::Range;
 
-use cranpose_text::{FontFamily, FontRequest, FontStyle, FontWeight, ShapingSpan, Typeface};
+use cranpose_text::{
+    FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight, LayoutInput,
+    ParagraphLengths, ParagraphStyle, ShapingSpan, TextLayout, TextLayoutOptions, TextLayouter,
+    Typeface,
+};
 
 pub(crate) const ROBOTO: &str = "benchmarks/compose-vs-cranpose/fonts/Roboto-Regular.ttf";
 pub(crate) const ROBOTO_MEDIUM: &str = "benchmarks/compose-vs-cranpose/fonts/Roboto-Medium.ttf";
@@ -45,4 +49,28 @@ pub(crate) fn span(range: Range<usize>, family: &FontFamily, weight: u16) -> Sha
         letter_spacing: 0.0,
         baseline_shift: 0.0,
     }
+}
+
+// Lays `text` out in one span of the default family at 400, with
+// `paragraph`, `width` and `options`.
+pub(crate) fn lay_out(
+    resolver: &FontFamilyResolver,
+    text: &str,
+    paragraph: &ParagraphStyle,
+    width: f32,
+    options: TextLayoutOptions,
+) -> TextLayout {
+    let family = FontFamily::Default;
+    let spans = [span(0..text.len(), &family, 400)];
+    TextLayouter::default().layout(
+        &LayoutInput {
+            text,
+            spans: &spans,
+            paragraph,
+            lengths: ParagraphLengths::default(),
+            width,
+            options,
+        },
+        resolver,
+    )
 }
