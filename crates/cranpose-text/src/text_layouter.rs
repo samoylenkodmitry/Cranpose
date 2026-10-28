@@ -9,8 +9,8 @@ use crate::{
     layout_options::{TextLayoutOptions, TextOverflow},
     line_box::{FontExtent, paragraph_line_box},
     line_breaker::{
-        BreakOpportunity, LineBalancer, LineBreaker, WrapWidths, Wrapping, break_lines,
-        has_hard_break, starts_paragraph, visible_end,
+        BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
+        break_lines, has_hard_break, starts_paragraph, visible_end,
     },
     paragraph::{LineBreak, ResolvedTextDirection, TextAlign},
     script::Script,
@@ -20,6 +20,8 @@ use crate::{
     text_layout::{LayoutLine, LineRun, TextLayout, font_units},
     typeface::Typeface,
 };
+#[cfg(feature = "hyphenation")]
+use crate::{hyphenator::Hyphenator, line_breaker::BreakKind, paragraph::Hyphens};
 
 /// A paragraph to lay out and how.
 #[derive(Clone, Debug)]
@@ -75,8 +77,16 @@ pub struct TextLayouter {
     items: Vec<ShapedItem>,
     widths: ClusterWidths,
     breaks: Vec<BreakOpportunity>,
-    line_ranges: Vec<Range<usize>>,
+    lines: Vec<BrokenLine>,
     pieces: Vec<Piece>,
+    #[cfg(feature = "hyphenation")]
+    hyphenator: Hyphenator,
+    // The opportunities with the hyphenation points among them, swapped
+    // with `breaks` once made, and a word's points.
+    #[cfg(feature = "hyphenation")]
+    hyphenated: Vec<BreakOpportunity>,
+    #[cfg(feature = "hyphenation")]
+    points: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +100,21 @@ struct ShapedItem {
     script: Script,
     // Extra width of each of its clusters.
     spacing: f32,
+}
+
+impl ShapedItem {
+    // The item that shapes `text`, which the layout draws after this item's
+    // text in `face`, its typeface.
+    fn inserted<'a>(&self, text: &str, face: &'a Typeface) -> TextItem<'a> {
+        TextItem {
+            range: 0..text.len(),
+            level: self.level,
+            paragraph_level: self.paragraph_level,
+            script: self.script,
+            typeface: face,
+            span: self.span,
+        }
+    }
 }
 
 // The part of an item inside one line, at one bidi level, or an ellipsis.
@@ -159,12 +184,16 @@ impl TextLayouter {
         if !has_hard_break(text)
             && self.widths.width(0, visible_end(text, 0, text.len())) <= wrap.first
         {
-            self.line_ranges.clear();
-            self.line_ranges.push(0..text.len());
+            self.lines.clear();
+            self.lines.push(BrokenLine::plain(0..text.len()));
         } else {
             let line_break = input.paragraph.line_break;
             self.breaker
                 .opportunities(text, line_break, &mut self.breaks);
+            #[cfg(feature = "hyphenation")]
+            if input.paragraph.hyphens == Hyphens::Auto {
+                self.hyphenate(input, wrap, layout);
+            }
             let wrapping = Wrapping {
                 text,
                 widths: &self.widths,
@@ -175,20 +204,119 @@ impl TextLayouter {
                     &wrapping,
                     &self.breaks,
                     PARAGRAPH_LAST_LINE,
-                    &mut self.line_ranges,
+                    &mut self.lines,
                 ),
                 LineBreak::Heading => {
                     self.balancer
-                        .balance(&wrapping, &self.breaks, 1.0, &mut self.line_ranges);
+                        .balance(&wrapping, &self.breaks, 1.0, &mut self.lines);
                 }
                 LineBreak::Simple | LineBreak::Unspecified => {
-                    break_lines(&wrapping, &self.breaks, &mut self.line_ranges);
+                    break_lines(&wrapping, &self.breaks, &mut self.lines);
                 }
             }
         }
-        layout.did_overflow_height = self.line_ranges.len() > options.max_lines;
-        self.line_ranges.truncate(options.max_lines.max(1));
+        layout.did_overflow_height = self.lines.len() > options.max_lines;
+        self.lines.truncate(options.max_lines.max(1));
         self.build_lines(input, &options, resolver, layout);
+    }
+
+    /// The dictionaries `Hyphens.Auto` hyphenates words by.
+    #[cfg(feature = "hyphenation")]
+    pub fn hyphenator_mut(&mut self) -> &mut Hyphenator {
+        &mut self.hyphenator
+    }
+
+    // Adds to the break opportunities the hyphenation points of the words a
+    // line may break inside: every word for even breaking, and for greedy
+    // breaking the words wider than a line, the only ones it hyphenates.
+    #[cfg(feature = "hyphenation")]
+    fn hyphenate(&mut self, input: &LayoutInput<'_>, wrap: WrapWidths, layout: &mut TextLayout) {
+        if !wrap.first.is_finite() {
+            return;
+        }
+        let wider_than = match input.paragraph.line_break {
+            LineBreak::Paragraph | LineBreak::Heading => f32::NEG_INFINITY,
+            LineBreak::Simple | LineBreak::Unspecified => wrap.first.min(wrap.rest),
+        };
+        // Android's penalty for a hyphen in even breaking: half the font size
+        // times the line width, a quarter of it in justified text.
+        let justified = if input.paragraph.text_align == TextAlign::Justify {
+            0.25
+        } else {
+            1.0
+        };
+        let penalty_per_size = 0.5 * wrap.first * justified;
+        let breaks = std::mem::take(&mut self.breaks);
+        self.hyphenated.clear();
+        let mut word_start = 0;
+        for &opportunity in &breaks {
+            let word_end = visible_end(input.text, word_start, opportunity.offset);
+            if self.widths.width(word_start, word_end) > wider_than {
+                self.hyphenate_word(input, word_start..word_end, penalty_per_size, layout);
+            }
+            self.hyphenated.push(opportunity);
+            word_start = opportunity.offset;
+        }
+        self.breaks = breaks;
+        std::mem::swap(&mut self.breaks, &mut self.hyphenated);
+    }
+
+    // Adds the hyphenation points of the letters of `word`, without the
+    // punctuation around them, that fall between clusters, each with the
+    // width of its hyphen.
+    #[cfg(feature = "hyphenation")]
+    fn hyphenate_word(
+        &mut self,
+        input: &LayoutInput<'_>,
+        word: Range<usize>,
+        penalty_per_size: f32,
+        layout: &mut TextLayout,
+    ) {
+        let Some(text) = input.text.get(word.clone()) else {
+            return;
+        };
+        let letters = text.trim_start_matches(|ch: char| !ch.is_alphabetic());
+        let start = word.start + (text.len() - letters.len());
+        let letters = letters.trim_end_matches(|ch: char| !ch.is_alphabetic());
+        let Some(first) = self.items.get(item_at(&self.items, start)) else {
+            return;
+        };
+        if letters.is_empty() || first.level.is_rtl() {
+            return;
+        }
+        self.points.clear();
+        self.hyphenator
+            .break_points(input.spans[first.span].language, letters, &mut self.points);
+        let mut hyphen_width: Option<(usize, f32)> = None;
+        for &point in &self.points {
+            let at = start + point;
+            if self.widths.next_boundary(at.saturating_sub(1)) != Some(at) {
+                continue;
+            }
+            let index = item_at(&self.items, at.saturating_sub(1));
+            let item = &self.items[index];
+            let width = match hyphen_width {
+                Some((known, width)) if known == index => width,
+                _ => {
+                    let face = &layout.faces[item.face];
+                    let shaped = layout.glyphs.len();
+                    let text = hyphen(face);
+                    let item = item.inserted(text, face);
+                    let width =
+                        shape_inserted(&mut self.shaper, input, &item, text, &mut layout.glyphs);
+                    layout.glyphs.truncate(shaped);
+                    hyphen_width = Some((index, width));
+                    width
+                }
+            };
+            self.hyphenated.push(BreakOpportunity {
+                offset: at,
+                kind: BreakKind::Hyphen {
+                    width,
+                    penalty: penalty_per_size * input.spans[item.span].size,
+                },
+            });
+        }
     }
 
     fn shape(
@@ -258,9 +386,9 @@ impl TextLayouter {
     ) {
         let mut top = 0.0;
         let mut widest: f32 = 0.0;
-        let last = self.line_ranges.len() - 1;
+        let last = self.lines.len() - 1;
         for index in 0..=last {
-            let range = self.line_ranges[index].clone();
+            let range = self.lines[index].text.clone();
             let visible = visible_end(input.text, range.start, range.end);
             let overflows = self.widths.width(range.start, visible) > input.width;
             let ellipsis = ellipsis_at(options, index == last)
@@ -272,6 +400,9 @@ impl TextLayouter {
             };
             if !ellipsized {
                 self.collect_pieces(input, range.clone(), visible, layout);
+                if self.lines[index].end == LineEnd::Hyphen {
+                    self.push_hyphen(input, range.end, layout);
+                }
             }
             reorder_visually(&mut self.pieces, |piece| piece.level);
             let (runs, width) = self.place_runs(visible, layout);
@@ -420,7 +551,6 @@ impl TextLayouter {
             typeface.get_or_insert(face);
         });
         let typeface = &resolver.typefaces()[typeface?];
-        let start = layout.glyphs.len();
         let item = TextItem {
             range: 0..ELLIPSIS.len(),
             level,
@@ -429,26 +559,50 @@ impl TextLayouter {
             typeface,
             span,
         };
-        self.shaper.shape(
-            ELLIPSIS,
-            &item,
-            style,
-            0..ELLIPSIS.len(),
-            &mut layout.glyphs,
-        );
-        let scale = scale(style, typeface);
-        let glyphs = start..layout.glyphs.len();
+        let start = layout.glyphs.len();
+        let width = shape_inserted(&mut self.shaper, input, &item, ELLIPSIS, &mut layout.glyphs);
         Some(Piece {
-            width: spaced_width(&layout.glyphs[glyphs.clone()], scale, 0.0),
+            width,
             text: 0..0,
-            glyphs,
+            glyphs: start..layout.glyphs.len(),
             face: face_index(&mut layout.faces, typeface),
             size: style.size,
-            scale,
+            scale: scale(style, typeface),
             spacing: 0.0,
             baseline_shift: style.baseline_shift,
             level,
         })
+    }
+
+    // Adds the hyphen of a line hyphenated at `at`, in the typeface and
+    // settings of the text before it, as Android draws it.
+    fn push_hyphen(&mut self, input: &LayoutInput<'_>, at: usize, layout: &mut TextLayout) {
+        let Some(item) = self.items.get(item_at(&self.items, at.saturating_sub(1))) else {
+            return;
+        };
+        let span = &input.spans[item.span];
+        let face = &layout.faces[item.face];
+        let hyphen = hyphen(face);
+        let start = layout.glyphs.len();
+        let width = shape_inserted(
+            &mut self.shaper,
+            input,
+            &item.inserted(hyphen, face),
+            hyphen,
+            &mut layout.glyphs,
+        );
+        set_cluster(&mut layout.glyphs[start..], at);
+        self.pieces.push(Piece {
+            width,
+            text: at..at,
+            glyphs: start..layout.glyphs.len(),
+            face: item.face,
+            size: span.size,
+            scale: scale(span, face),
+            spacing: 0.0,
+            baseline_shift: span.baseline_shift,
+            level: item.level,
+        });
     }
 
     // Adds the parts of the items inside `part` of a line, in text order,
@@ -545,9 +699,8 @@ impl TextLayouter {
 
     // The base level of the paragraph that holds `offset`.
     fn paragraph_level(&self, input: &LayoutInput<'_>, offset: usize) -> BidiLevel {
-        let at = self.items.partition_point(|item| item.text.end <= offset);
         self.items
-            .get(at)
+            .get(item_at(&self.items, offset))
             .or_else(|| self.items.last())
             .map_or_else(
                 || match input.paragraph.text_direction.resolve("") {
@@ -571,7 +724,38 @@ fn ellipsis_at(options: &TextLayoutOptions, last: bool) -> Option<EllipsisAt> {
     }
 }
 
-// Gives the glyphs of an ellipsis the text offset it stands at.
+// The index of the item that holds `offset`.
+fn item_at(items: &[ShapedItem], offset: usize) -> usize {
+    items.partition_point(|item| item.text.end <= offset)
+}
+
+// The hyphen Android draws after a hyphenated line in `face`: U+2010, or
+// the hyphen-minus in a face without it.
+fn hyphen(face: &Typeface) -> &'static str {
+    if face.covers('\u{2010}') {
+        "\u{2010}"
+    } else {
+        "-"
+    }
+}
+
+// Shapes `inserted`, text the layout draws that the text does not hold,
+// such as an ellipsis or a hyphen, as `item` says, appending its glyphs to
+// `glyphs`; returns its width.
+fn shape_inserted(
+    shaper: &mut Shaper,
+    input: &LayoutInput<'_>,
+    item: &TextItem<'_>,
+    inserted: &str,
+    glyphs: &mut Vec<ShapedGlyph>,
+) -> f32 {
+    let start = glyphs.len();
+    let span = &input.spans[item.span];
+    shaper.shape(inserted, item, span, 0..inserted.len(), glyphs);
+    spaced_width(&glyphs[start..], scale(span, item.typeface), 0.0)
+}
+
+// Gives the glyphs of an ellipsis or a hyphen the text offset it stands at.
 fn set_cluster(glyphs: &mut [ShapedGlyph], offset: usize) {
     let cluster = u32::try_from(offset).unwrap_or(u32::MAX);
     for glyph in glyphs {

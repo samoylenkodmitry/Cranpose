@@ -8,11 +8,51 @@ use icu_segmenter::{
 use crate::{cluster_widths::ClusterWidths, paragraph::LineBreak};
 
 // A place a line may end: the byte offset where the next line starts, and
-// whether a line must end there, after a hard break such as a line feed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// how a line ends there.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BreakOpportunity {
     pub(crate) offset: usize,
-    pub(crate) mandatory: bool,
+    pub(crate) kind: BreakKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum BreakKind {
+    // Between words.
+    Soft,
+    // After a hard break such as a line feed: a line must end here.
+    Hard,
+    // Inside a word, with a hyphen `width` wide after it. Even breaking adds
+    // `penalty` to the cost of the line ending here.
+    #[cfg_attr(
+        not(feature = "hyphenation"),
+        expect(dead_code, reason = "only hyphenation makes hyphen breaks")
+    )]
+    Hyphen {
+        width: f32,
+        penalty: f32,
+    },
+}
+
+// A line the breaking ended: its text, and whether a hyphen follows it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BrokenLine {
+    pub(crate) text: Range<usize>,
+    pub(crate) end: LineEnd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineEnd {
+    Plain,
+    Hyphen,
+}
+
+impl BrokenLine {
+    pub(crate) fn plain(text: Range<usize>) -> Self {
+        Self {
+            text,
+            end: LineEnd::Plain,
+        }
+    }
 }
 
 // The line break opportunities of UAX #14 at each strictness Compose's
@@ -66,10 +106,15 @@ impl LineBreaker {
                 .filter(|&offset| offset > 0)
                 .map(|offset| BreakOpportunity {
                     offset,
-                    mandatory: text
+                    kind: if text
                         .get(..offset)
                         .and_then(|before| before.chars().next_back())
-                        .is_some_and(hard_break),
+                        .is_some_and(hard_break)
+                    {
+                        BreakKind::Hard
+                    } else {
+                        BreakKind::Soft
+                    },
                 }),
         );
     }
@@ -109,54 +154,86 @@ impl Wrapping<'_> {
     }
 
     // Greedy line breaking from `start` through `breaks`: each line takes as
-    // many opportunities as fit its wrap width, and a word wider than that
-    // breaks between clusters, one at least per line. Appends the lines it
-    // ends and returns where the unfinished last line starts.
+    // many words as fit its wrap width, and a word wider than that breaks at
+    // a hyphenation point or between clusters, one at least per line, as
+    // Android's greedy breaker does. Appends the lines it ends and returns
+    // where the unfinished last line starts.
     fn greedy(
         &self,
         mut start: usize,
         breaks: &[BreakOpportunity],
-        lines: &mut Vec<Range<usize>>,
+        lines: &mut Vec<BrokenLine>,
     ) -> usize {
         let mut fit = None;
         let mut index = 0;
         while let Some(&opportunity) = breaks.get(index) {
             let width = self.limit(start);
             if self.line_width(start, opportunity.offset) <= width {
-                if opportunity.mandatory {
-                    lines.push(start..opportunity.offset);
-                    start = opportunity.offset;
-                    fit = None;
-                } else {
-                    fit = Some(opportunity.offset);
+                match opportunity.kind {
+                    BreakKind::Hard => {
+                        lines.push(BrokenLine::plain(start..opportunity.offset));
+                        start = opportunity.offset;
+                        fit = None;
+                    }
+                    BreakKind::Soft => fit = Some(opportunity.offset),
+                    BreakKind::Hyphen { .. } => {}
                 }
                 index += 1;
             } else {
-                let end = fit.take().unwrap_or_else(|| {
-                    let cut = self.widths.last_fitting(start, opportunity.offset, width);
-                    if cut > start {
-                        cut
-                    } else {
-                        self.widths
-                            .next_boundary(start)
-                            .unwrap_or(opportunity.offset)
-                    }
-                });
-                lines.push(start..end);
-                start = end;
+                let line = match fit.take() {
+                    Some(end) => BrokenLine::plain(start..end),
+                    None => self.cut_word(start, &breaks[..index], opportunity.offset, width),
+                };
+                start = line.text.end;
+                lines.push(line);
             }
         }
         start
     }
 
+    // The line from `start`, inside a word that does not fit `width` before
+    // `end`: up to the last hyphenation point in `passed` that fits with its
+    // hyphen, else up to the last cluster that fits, one cluster at least.
+    fn cut_word(
+        &self,
+        start: usize,
+        passed: &[BreakOpportunity],
+        end: usize,
+        width: f32,
+    ) -> BrokenLine {
+        let hyphen = passed
+            .iter()
+            .rev()
+            .take_while(|opportunity| opportunity.offset > start)
+            .find(|opportunity| match opportunity.kind {
+                BreakKind::Hyphen { width: hyphen, .. } => {
+                    self.widths.width(start, opportunity.offset) + hyphen <= width
+                }
+                BreakKind::Soft | BreakKind::Hard => false,
+            });
+        if let Some(opportunity) = hyphen {
+            return BrokenLine {
+                text: start..opportunity.offset,
+                end: LineEnd::Hyphen,
+            };
+        }
+        let cut = self.widths.last_fitting(start, end, width);
+        let cut = if cut > start {
+            cut
+        } else {
+            self.widths.next_boundary(start).unwrap_or(end)
+        };
+        BrokenLine::plain(start..cut)
+    }
+
     // Ends `lines` with the line from `start` to the end of the text, and an
     // empty line after a final hard break, so an empty text has one line.
-    fn finish(&self, start: usize, breaks: &[BreakOpportunity], lines: &mut Vec<Range<usize>>) {
+    fn finish(&self, start: usize, breaks: &[BreakOpportunity], lines: &mut Vec<BrokenLine>) {
         let ends_with_break = breaks
             .last()
-            .is_some_and(|opportunity| opportunity.mandatory);
+            .is_some_and(|opportunity| opportunity.kind == BreakKind::Hard);
         if start < self.text.len() || lines.is_empty() || ends_with_break {
-            lines.push(start..self.text.len());
+            lines.push(BrokenLine::plain(start..self.text.len()));
         }
     }
 }
@@ -165,7 +242,7 @@ impl Wrapping<'_> {
 pub(crate) fn break_lines(
     wrapping: &Wrapping<'_>,
     breaks: &[BreakOpportunity],
-    lines: &mut Vec<Range<usize>>,
+    lines: &mut Vec<BrokenLine>,
 ) {
     lines.clear();
     let start = wrapping.greedy(0, breaks, lines);
@@ -175,15 +252,16 @@ pub(crate) fn break_lines(
 // Even line breaking, as Compose's `LineBreak.Paragraph` and `Heading` ask:
 // each paragraph breaks where the sum over its lines of the square of the
 // width each leaves free is least, the last line's share weighted by
-// `last_line`, a fraction for `Paragraph` and the whole for `Heading`. A
-// paragraph with a word wider than its lines breaks greedily. Keeps its
-// scratch storage from one text to the next.
+// `last_line`, a fraction for `Paragraph` and the whole for `Heading`, plus
+// the penalty of each line that ends in a hyphen. A paragraph with a word
+// wider than its lines breaks greedily. Keeps its scratch storage from one
+// text to the next.
 #[derive(Default)]
 pub(crate) struct LineBalancer {
     // The paragraph's start and break opportunities, the least cost of the
     // lines from each to the paragraph's end, and where the first of them
     // ends.
-    nodes: Vec<usize>,
+    nodes: Vec<BreakOpportunity>,
     cost: Vec<f32>,
     next: Vec<usize>,
 }
@@ -194,7 +272,7 @@ impl LineBalancer {
         wrapping: &Wrapping<'_>,
         breaks: &[BreakOpportunity],
         last_line: f32,
-        lines: &mut Vec<Range<usize>>,
+        lines: &mut Vec<BrokenLine>,
     ) {
         lines.clear();
         let mut start = 0;
@@ -202,7 +280,7 @@ impl LineBalancer {
         while from < breaks.len() {
             let to = breaks[from..]
                 .iter()
-                .position(|opportunity| opportunity.mandatory)
+                .position(|opportunity| opportunity.kind == BreakKind::Hard)
                 .map_or(breaks.len(), |at| from + at + 1);
             let paragraph = &breaks[from..to];
             start = if self.balance_paragraph(wrapping, start, paragraph, last_line, lines) {
@@ -225,12 +303,14 @@ impl LineBalancer {
         start: usize,
         breaks: &[BreakOpportunity],
         last_line: f32,
-        lines: &mut Vec<Range<usize>>,
+        lines: &mut Vec<BrokenLine>,
     ) -> bool {
         self.nodes.clear();
-        self.nodes.push(start);
-        self.nodes
-            .extend(breaks.iter().map(|opportunity| opportunity.offset));
+        self.nodes.push(BreakOpportunity {
+            offset: start,
+            kind: BreakKind::Soft,
+        });
+        self.nodes.extend_from_slice(breaks);
         let last = self.nodes.len() - 1;
         self.cost.clear();
         self.cost.resize(self.nodes.len(), f32::INFINITY);
@@ -238,15 +318,26 @@ impl LineBalancer {
         self.next.resize(self.nodes.len(), last);
         self.cost[last] = 0.0;
         for from in (0..last).rev() {
-            let limit = wrapping.limit(self.nodes[from]);
+            let line_start = self.nodes[from].offset;
+            let limit = wrapping.limit(line_start);
             for to in from + 1..=last {
-                let width = wrapping.line_width(self.nodes[from], self.nodes[to]);
+                let end = self.nodes[to];
+                let (hyphen, penalty) = match end.kind {
+                    BreakKind::Hyphen { width, penalty } => (width, penalty),
+                    BreakKind::Soft | BreakKind::Hard => (0.0, 0.0),
+                };
+                let width = wrapping.line_width(line_start, end.offset) + hyphen;
                 if width > limit {
+                    // A hyphen can tip a line over that the rest of its word
+                    // keeps within; past a word, every later line is wider.
+                    if let BreakKind::Hyphen { .. } = end.kind {
+                        continue;
+                    }
                     break;
                 }
                 let free = limit - width;
                 let weight = if to == last { last_line } else { 1.0 };
-                let cost = free * free * weight + self.cost[to];
+                let cost = free * free * weight + penalty + self.cost[to];
                 if cost < self.cost[from] {
                     self.cost[from] = cost;
                     self.next[from] = to;
@@ -259,7 +350,13 @@ impl LineBalancer {
         let mut at = 0;
         while at < last {
             let to = self.next[at];
-            lines.push(self.nodes[at]..self.nodes[to]);
+            lines.push(BrokenLine {
+                text: self.nodes[at].offset..self.nodes[to].offset,
+                end: match self.nodes[to].kind {
+                    BreakKind::Hyphen { .. } => LineEnd::Hyphen,
+                    BreakKind::Soft | BreakKind::Hard => LineEnd::Plain,
+                },
+            });
             at = to;
         }
         true

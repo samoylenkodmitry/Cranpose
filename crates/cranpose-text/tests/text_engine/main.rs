@@ -4,6 +4,8 @@ mod font_family_resolver;
 mod font_feature;
 mod fonts;
 mod glyph_outline;
+#[cfg(feature = "hyphenation-embedded")]
+mod hyphenation;
 mod itemizer;
 mod line_break;
 mod paragraph_lengths;

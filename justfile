@@ -566,6 +566,8 @@ test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features internal
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
+    cargo test --profile ci -p cranpose-text --features hyphenation-embedded --test text_engine hyphenation
+    cargo clippy -p cranpose-text -p cranpose-render-common --all-targets --features cranpose-text/hyphenation-embedded,cranpose-render-common/text-hyphenation-embedded -- -D warnings
     cargo test --profile ci -p cranpose-ui --features southeast-asian-line-breaks --test integration thai_line_breaks
     cargo clippy -p cranpose-ui --all-targets --features southeast-asian-line-breaks -- -D warnings
     cargo test --profile ci -p cranpose-render-pixels --features installed-fonts,cranpose-app-shell/installed-fonts --test installed_fonts
