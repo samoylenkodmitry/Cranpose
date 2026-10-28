@@ -755,12 +755,12 @@ impl RenderScene for MutableRecordingScene {
 #[derive(Default)]
 struct TestRenderer {
     scene: TestScene,
-    fonts: Option<cranpose_text::FontFamilyResolver>,
+    fonts: Option<cranpose_render_common::text_fonts::TextFonts>,
 }
 
 impl TestRenderer {
     // A renderer that hands its app `fonts`.
-    fn with_fonts(fonts: cranpose_text::FontFamilyResolver) -> Self {
+    fn with_fonts(fonts: cranpose_render_common::text_fonts::TextFonts) -> Self {
         Self {
             scene: TestScene,
             fonts: Some(fonts),
@@ -774,7 +774,7 @@ impl Renderer for TestRenderer {
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
         if let Some(fonts) = &self.fonts {
-            app_context.set_text_fonts(fonts.clone());
+            app_context.set_text_fonts(fonts.resolver());
         }
     }
 
@@ -1264,13 +1264,15 @@ fn pointer_event_clock_supports_realtime_and_exact_sampling() {
 // without app fonts draws with.
 fn two_shells() -> (AppShell<TestRenderer>, AppShell<TestRenderer>) {
     let first = AppShell::new(
-        TestRenderer::with_fonts(cranpose_ui::text::test_fonts()),
+        TestRenderer::with_fonts(cranpose_render_common::text_fonts::TextFonts::new(
+            cranpose_ui::text::test_fonts().typefaces().to_vec(),
+        )),
         location_key(file!(), line!(), column!()),
         || {},
     );
     let second = AppShell::new(
         TestRenderer::with_fonts(
-            cranpose_render_common::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver(),
+            cranpose_render_common::text_fonts::TextFonts::from_fonts_or_default(&[]),
         ),
         location_key(file!(), line!(), column!()),
         || {},
@@ -1308,8 +1310,7 @@ fn two_app_shells_have_independent_text_caches() {
     let (first, second) = two_shells();
     let text = cranpose_ui::text::AnnotatedString::from("same cached text");
     let style = TextStyle::default();
-    let prepare =
-        || cranpose_ui::prepare_text_layout(&text, &style, TextLayoutOptions::default(), None);
+    let prepare = || cranpose_ui::prepare_text_layout(&text, &style, Default::default(), None);
 
     let first_layout = first.debug_enter_app_context(prepare);
     let first_layout_again = first.debug_enter_app_context(prepare);

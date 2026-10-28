@@ -178,7 +178,7 @@ fn main() {
     .expect("device");
 
     let mut renderer = cranpose_render_wgpu::WgpuRenderer::new(&[
-        cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
+        cranpose_render_common::text_fonts::DEFAULT_FONT_BYTES,
     ]);
     renderer.init_gpu_compiling_inline_for_tests(cranpose_render_wgpu::GpuTarget::on_adapter(
         &adapter,

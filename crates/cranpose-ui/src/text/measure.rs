@@ -13,7 +13,7 @@ use cranpose_text::{
 use smallvec::SmallVec;
 
 use super::{
-    AnnotatedString, LineBox, RenderString,
+    AnnotatedString, LineBox, RenderString, SpanStyle, TextDrawStyle, TextUnit,
     layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
     style::TextStyle,
@@ -400,7 +400,7 @@ impl TextService {
                 },
             )
         };
-        let mut best = at(min_factor);
+        let (mut best, mut factor) = (at(min_factor), min_factor);
         if fits(&best) {
             let (mut low, mut high) = (min_factor, 1.0);
             for _ in 0..SCALE_DOWN_SEARCH_STEPS {
@@ -408,12 +408,13 @@ impl TextService {
                 let candidate = at(mid);
                 if fits(&candidate) {
                     low = mid;
-                    best = candidate;
+                    (best, factor) = (candidate, mid);
                 } else {
                     high = mid;
                 }
             }
         }
+        let (text, style) = scaled_drawing(&text, &style, factor);
         PreparedTextLayout::new(text, style, best, (frame.max_width, min_lines))
     }
 
@@ -548,6 +549,48 @@ fn default_fonts() -> FontFamilyResolver {
     #[cfg(not(any(test, feature = "test-helpers")))]
     {
         FontFamilyResolver::new([])
+    }
+}
+
+// `text` and `style` as a text scaled down by `factor` draws them: sizes,
+// shadows and strokes `factor` of what they say, as its glyphs are. A text
+// whose spans scale nothing keeps its own string.
+fn scaled_drawing(
+    text: &Rc<AnnotatedString>,
+    style: &TextStyle,
+    factor: f32,
+) -> (Rc<AnnotatedString>, Arc<TextStyle>) {
+    let mut scaled_style = style.clone();
+    scaled_style.span_style.font_size =
+        TextUnit::Sp(style.resolve_font_size(DEFAULT_FONT_SIZE_SP) * factor);
+    scale_span_drawing(&mut scaled_style.span_style, factor);
+    let text = if text.span_styles.is_empty() {
+        Rc::clone(text)
+    } else {
+        let mut scaled = AnnotatedString::clone(text);
+        for span in &mut scaled.span_styles {
+            if let TextUnit::Sp(size) = span.item.font_size {
+                span.item.font_size = TextUnit::Sp(size * factor);
+            }
+            scale_span_drawing(&mut span.item, factor);
+        }
+        Rc::new(scaled)
+    };
+    (text, Arc::new(scaled_style))
+}
+
+// Scales the letter spacing, shadow and stroke of `span` by `factor`.
+fn scale_span_drawing(span: &mut SpanStyle, factor: f32) {
+    if let TextUnit::Sp(spacing) = span.letter_spacing {
+        span.letter_spacing = TextUnit::Sp(spacing * factor);
+    }
+    if let Some(shadow) = &mut span.shadow {
+        shadow.offset.x *= factor;
+        shadow.offset.y *= factor;
+        shadow.blur_radius *= factor;
+    }
+    if let Some(TextDrawStyle::Stroke { width }) = &mut span.draw_style {
+        *width *= factor;
     }
 }
 
@@ -789,3 +832,7 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
         (top.clamp(0.0, line_height), height.min(line_height))
     })
 }
+
+#[cfg(test)]
+#[path = "tests/measure_tests.rs"]
+mod tests;
