@@ -1,3 +1,5 @@
+mod stream;
+
 use std::{
     fs::File,
     io::Write,
@@ -8,7 +10,7 @@ use std::{
 
 use super::{
     Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
-    ContentHandle, ContentMetadata, ContentReaderRef, ContentSinkRef,
+    ContentHandle, ContentMetadata, ContentReaderRef, ContentSinkRef, ContentStreamRef,
     threaded::{BlockingSink, open_threaded, run_threaded, threaded_sink},
 };
 
@@ -47,36 +49,58 @@ fn metadata_for(path: &Path) -> ContentMetadata {
     metadata
 }
 
+struct PathInfo {
+    path: PathBuf,
+    metadata: Option<ContentMetadata>,
+}
+
+impl PathInfo {
+    fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            metadata: None,
+        }
+    }
+
+    fn metadata(&self) -> ContentMetadata {
+        self.metadata
+            .clone()
+            .unwrap_or_else(|| metadata_for(&self.path))
+    }
+}
+
 /// A file on the local filesystem.
 pub struct FileContent {
-    path: PathBuf,
+    source: PathInfo,
 }
 
 impl FileContent {
     /// Wraps `path` as readable content.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            source: PathInfo::new(path),
+        }
     }
 
     /// The wrapped path.
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.source.path
     }
 }
 
 impl Content for FileContent {
     fn metadata(&self) -> ContentMetadata {
-        metadata_for(&self.path)
+        self.source.metadata()
     }
 
     fn media_uri(&self) -> Result<String, ContentError> {
-        crate::media_source::media_reference(&self.path)
-            .map_err(|error| io_error(&self.path, error))
+        crate::media_source::media_reference(&self.source.path)
+            .map_err(|error| io_error(&self.source.path, error))
     }
 
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
-        let opened = self.path.clone();
-        let path = self.path.clone();
+        let opened = self.source.path.clone();
+        let path = self.source.path.clone();
         open_threaded(
             move || File::open(&opened).map_err(|error| io_error(&opened, error)),
             move |error| io_error(&path, error),
@@ -84,7 +108,7 @@ impl Content for FileContent {
     }
 
     fn read_all(&self) -> ContentFuture<'_, Result<Vec<u8>, ContentError>> {
-        let path = self.path.clone();
+        let path = self.source.path.clone();
         run_threaded(move || std::fs::read(&path).map_err(|error| io_error(&path, error)))
     }
 }
@@ -96,50 +120,72 @@ pub fn file_content(path: impl Into<PathBuf>) -> ContentHandle {
 
 /// A directory on the local filesystem.
 pub struct FileFolder {
-    path: PathBuf,
+    root: PathInfo,
 }
 
 impl FileFolder {
     /// Wraps `path` as an enumerable folder.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            root: PathInfo::new(path),
+        }
     }
 
     /// The wrapped path.
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.root.path
     }
 }
 
 impl ContentFolder for FileFolder {
     fn metadata(&self) -> ContentMetadata {
-        metadata_for(&self.path)
+        self.root.metadata()
     }
 
     fn entries(&self) -> ContentFuture<'_, Result<Vec<ContentEntry>, ContentError>> {
-        let path = self.path.clone();
+        let path = self.root.path.clone();
         Box::pin(async move {
-            let listing = std::fs::read_dir(&path).map_err(|error| io_error(&path, error))?;
-            let mut entries = Vec::new();
-            for child in listing {
-                let child = child.map_err(|error| io_error(&path, error))?;
-                let child_path = child.path();
-                let is_dir = child
-                    .file_type()
-                    .map_or_else(|_| child_path.is_dir(), |kind| kind.is_dir());
-                if is_dir {
-                    entries.push(ContentEntry::Folder(
-                        Rc::new(Self::new(child_path)) as ContentFolderRef
-                    ));
-                } else {
-                    entries.push(ContentEntry::File(
-                        Rc::new(FileContent::new(child_path)) as ContentHandle
-                    ));
+            let children = run_threaded(move || {
+                let listing = std::fs::read_dir(&path).map_err(|error| io_error(&path, error))?;
+                let mut entries = Vec::new();
+                for child in listing {
+                    let child = child.map_err(|error| io_error(&path, error))?;
+                    let child_path = child.path();
+                    let kind = child
+                        .file_type()
+                        .map_err(|error| io_error(&child_path, error))?;
+                    let metadata = metadata_for(&child_path);
+                    entries.push((child_path, kind.is_dir(), metadata));
                 }
-            }
-            entries.sort_by_key(|entry| entry.metadata().name);
-            Ok(entries)
+                entries.sort_by(|a, b| a.2.name.cmp(&b.2.name));
+                Ok(entries)
+            })
+            .await?;
+            Ok(children
+                .into_iter()
+                .map(|(path, directory, metadata)| {
+                    if directory {
+                        ContentEntry::Folder(Rc::new(Self {
+                            root: PathInfo {
+                                path,
+                                metadata: Some(metadata),
+                            },
+                        }))
+                    } else {
+                        ContentEntry::File(Rc::new(FileContent {
+                            source: PathInfo {
+                                path,
+                                metadata: Some(metadata),
+                            },
+                        }))
+                    }
+                })
+                .collect())
         })
+    }
+
+    fn stream_files(&self) -> Option<ContentStreamRef> {
+        Some(stream::open(self.root.path.clone()))
     }
 }
 
