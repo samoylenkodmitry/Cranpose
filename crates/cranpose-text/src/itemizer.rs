@@ -17,6 +17,8 @@ pub struct TextItem<'a> {
     pub range: Range<usize>,
     /// The bidi embedding level.
     pub level: BidiLevel,
+    /// The base level of the paragraph the item is in.
+    pub paragraph_level: BidiLevel,
     /// The script.
     pub script: Script,
     /// The typeface that draws it.
@@ -101,6 +103,7 @@ impl Itemizer {
             visit(TextItem {
                 range: start..end,
                 level: bidi,
+                paragraph_level: base,
                 script: writing,
                 typeface: &resolver.typefaces()[typeface],
                 span,

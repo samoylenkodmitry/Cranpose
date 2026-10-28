@@ -10,7 +10,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Text styles, annotated strings, fonts and paragraph settings for Cranpose"
+description = "Text styles, fonts, shaping and paragraph layout for Cranpose"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -24,6 +24,7 @@ cranpose-ui-graphics = { workspace = true }
 foldhash = "0.2.0"
 harfrust = "0.15"
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data", "unicode_bidi"] }
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 read-fonts = "0.46"
 smallvec = "1.16"
 thiserror = "2.0.21"
@@ -31,3 +32,8 @@ unicode-bidi = { version = "0.3.18", default-features = false, features = ["std"
 
 [dev-dependencies]
 web-time = { workspace = true }
+
+[features]
+# Line breaks in Thai, Lao, Khmer and Burmese text between the words a
+# dictionary finds.
+southeast-asian-line-breaks = []

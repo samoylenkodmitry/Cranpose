@@ -22,6 +22,7 @@ pub mod itemizer;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
 pub mod layout_options;
 pub mod line_box;
+mod line_breaker;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
 /// Writing systems and the script runs of text.
@@ -32,6 +33,10 @@ pub mod shaper;
 pub mod shaping_span;
 /// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
+/// A paragraph laid out in lines, and Compose's `TextLayoutResult` queries.
+pub mod text_layout;
+/// Laying paragraphs out in lines.
+pub mod text_layouter;
 /// A font loaded for text: Compose's `Typeface`.
 pub mod typeface;
 /// Text size units: scaled pixels and multiples of the font size.
@@ -66,5 +71,7 @@ pub use style::{
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
     text_align_fraction,
 };
+pub use text_layout::{CaretDirection, GlyphRun, TextLayout};
+pub use text_layouter::{LayoutInput, TextLayouter};
 pub use typeface::{FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError};
 pub use unit::TextUnit;

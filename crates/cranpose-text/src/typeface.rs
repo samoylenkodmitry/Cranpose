@@ -272,11 +272,12 @@ impl Typeface {
     }
 
     /// The font's line metrics at the instance, in design units: the
-    /// `hhea` ascender and descender (negative) and line gap.
+    /// typographic line when the font asks for it with `USE_TYPO_METRICS`,
+    /// otherwise the `hhea` line, as Skia and FreeType read them.
     pub fn line_metrics(&self) -> LineMetrics {
         let metrics = self.0.font.metrics();
         metrics
-            .hhea_line
+            .h_line()
             .map_or_else(LineMetrics::default, |line| LineMetrics {
                 ascent: line.ascender.to_f32(),
                 descent: line.descender.to_f32(),
@@ -304,6 +305,11 @@ impl Typeface {
             .font
             .glyph_metrics()
             .h_advance(FontGlyphId::new(glyph.0))
+    }
+
+    // Whether `other` is a clone of this typeface.
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     // The font model at the typeface's instance.

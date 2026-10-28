@@ -36,6 +36,13 @@ pub struct ShapedGlyph {
     pub unsafe_to_concat: bool,
 }
 
+impl ShapedGlyph {
+    /// The byte offset in the text of the cluster the glyph belongs to.
+    pub fn text_offset(&self) -> usize {
+        usize::try_from(self.cluster).unwrap_or(usize::MAX)
+    }
+}
+
 /// Shapes items with HarfRust. Keeps, for each typeface instance it met, the
 /// shaping font and its shape plans, and one glyph buffer for every call.
 pub struct Shaper {

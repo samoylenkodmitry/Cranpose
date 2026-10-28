@@ -5,4 +5,5 @@ mod font_feature;
 mod fonts;
 mod itemizer;
 mod shaper;
+mod text_layout;
 mod typeface;

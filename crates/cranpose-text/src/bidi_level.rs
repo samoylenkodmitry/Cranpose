@@ -60,6 +60,31 @@ pub(crate) fn level_runs(
     }
 }
 
+// Puts `runs` of one line, in text order, in the order they are drawn from
+// left to right, by rule L2 of UAX #9: from the highest level down to the
+// lowest odd one, every sequence of runs at that level or higher reverses.
+pub(crate) fn reorder_visually<T>(runs: &mut [T], level: impl Fn(&T) -> BidiLevel) {
+    let Some(highest) = runs.iter().map(|run| level(run).0).max() else {
+        return;
+    };
+    let lowest = runs.iter().map(|run| level(run).0).min().unwrap_or(0) | 1;
+    for current in (lowest..=highest).rev() {
+        let mut start = 0;
+        while start < runs.len() {
+            if level(&runs[start]).0 < current {
+                start += 1;
+                continue;
+            }
+            let mut end = start;
+            while end < runs.len() && level(&runs[end]).0 >= current {
+                end += 1;
+            }
+            runs[start..end].reverse();
+            start = end;
+        }
+    }
+}
+
 // Whether a character of `class` can give text in a left-to-right paragraph a
 // level other than 0.
 fn turns(class: BidiClass) -> bool {
