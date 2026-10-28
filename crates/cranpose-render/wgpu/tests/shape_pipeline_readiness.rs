@@ -12,7 +12,9 @@ use cranpose_render_common::{
     },
 };
 use cranpose_render_wgpu::pipelines_created;
-use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawScope, DrawScopeDefault, Rect, Size};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, Color, DrawPlacement, DrawScope, DrawScopeDefault, Rect, Size,
+};
 use support::SIZE;
 
 use crate::support;
