@@ -4,11 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use ab_glyph::{Font, FontArc, GlyphId};
+use ab_glyph::{Font as _, FontArc, GlyphId};
 use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default};
 use cranpose_ui::text::{ResolvedTextDirection, TextShaping, TextStyle};
-use rustybuzz::{
-    Direction, Face, Feature, GlyphBuffer, Language, Script, ShapePlan, UnicodeBuffer, Variation,
+use harfrust::{
+    Buffer, Direction, Feature, GlyphInfo, GlyphPosition, Language, Script, ShapeOptions,
+    ShapePlan, ShapePlanKey, ShaperFont, Tag,
+    font::{Blob, Font, Variation},
 };
 use smallvec::SmallVec;
 
@@ -45,27 +47,28 @@ pub(crate) struct ShapedRun {
 }
 
 impl ShapedRun {
-    // The run of `text` as `shaped` lays out its glyphs, each cluster
+    // The run of `text` as the shaper laid out its glyphs, each cluster
     // spanning the bytes up to the next cluster's start.
-    fn new(text: &str, style_hash: u64, cursive: bool, shaped: &GlyphBuffer) -> Self {
-        let mut boundaries: Vec<usize> = shaped
-            .glyph_infos()
-            .iter()
-            .map(|info| info.cluster as usize)
-            .collect();
+    fn new(
+        text: &str,
+        style_hash: u64,
+        cursive: bool,
+        (infos, positions): (&[GlyphInfo], &[GlyphPosition]),
+    ) -> Self {
+        let mut boundaries: Vec<usize> = infos.iter().map(|info| info.cluster as usize).collect();
         boundaries.push(text.len());
         boundaries.sort_unstable();
         boundaries.dedup();
         let mut run = Self {
             text: text.into(),
             style_hash,
-            glyphs: Vec::with_capacity(shaped.len()),
+            glyphs: Vec::with_capacity(infos.len()),
             clusters: Vec::new(),
             advance: 0.0,
             cursive,
         };
         let mut y = 0.0;
-        for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+        for (info, position) in infos.iter().zip(positions) {
             let start = info.cluster as usize;
             if run
                 .clusters
@@ -81,7 +84,7 @@ impl ShapedRun {
             }
             let cluster = run.clusters.len() - 1;
             run.glyphs.push(ShapedGlyph {
-                id: GlyphId(info.glyph_id as u16),
+                id: GlyphId(u16::try_from(info.glyph_id).unwrap_or_default()),
                 x: run.advance + position.x_offset as f32,
                 y: y + position.y_offset as f32,
                 cluster,
@@ -123,25 +126,14 @@ impl ShapedRun {
     }
 }
 
-type FaceOf<'a> = Face<'a>;
+// The bytes of a font as `read-fonts` borrows them, shared with the font
+// that owns them rather than copied.
+struct FontBytes(FontArc);
 
-self_cell::self_cell!(
-    // The face the shaper reads, kept with the font that owns its bytes:
-    // building one lays out an accelerator for each lookup of the font.
-    struct ShapingFace {
-        owner: FontArc,
-        #[covariant]
-        dependent: FaceOf,
+impl AsRef<[u8]> for FontBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.font_data()
     }
-);
-
-// What a shape plan is made for.
-#[derive(PartialEq)]
-struct PlanKey {
-    direction: Direction,
-    script: Script,
-    language: Option<Language>,
-    features: SmallVec<[Feature; 4]>,
 }
 
 // The shape plans a font keeps, the newest last: text uses few scripts and
@@ -150,26 +142,24 @@ const KEPT_PLANS: usize = 8;
 
 pub(crate) struct ShapingCache {
     entries: BoundedLruCache<u64, Arc<ShapedRun>>,
-    buffer: Option<UnicodeBuffer>,
+    buffer: Buffer,
     variations: Vec<Variation>,
-    // Made when the font first shapes.
-    face: Option<ShapingFace>,
-    plans: Vec<(PlanKey, ShapePlan)>,
+    // Made when the font first shapes. It keeps the lookup accelerators the
+    // shaper builds on first use.
+    font: Option<Font>,
+    plans: Vec<ShapePlan>,
 }
 
 impl ShapingCache {
     pub(crate) fn new(variations: &[([u8; 4], f32)]) -> Self {
         Self {
             entries: BoundedLruCache::with_capacity_at_least_one(256),
-            buffer: None,
-            face: None,
+            buffer: Buffer::new(),
+            font: None,
             plans: Vec::new(),
             variations: variations
                 .iter()
-                .map(|(tag, value)| Variation {
-                    tag: ttf_parser::Tag::from_bytes(tag),
-                    value: *value,
-                })
+                .map(|(tag, value)| Variation::new(Tag::new(tag), *value))
                 .collect(),
         }
     }
@@ -191,23 +181,30 @@ impl ShapingCache {
         {
             return Some(Arc::clone(run));
         }
-        if self.face.is_none() {
-            let mut face = ShapingFace::try_new(font.clone(), |font| {
-                Face::from_slice(font.font_data(), 0).ok_or(())
-            })
-            .ok()?;
-            face.with_dependent_mut(|_, face| face.set_variations(&self.variations));
-            self.face = Some(face);
+        if self.font.is_none() {
+            let bytes: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(FontBytes(font.clone()));
+            let base = Font::new(Blob::from(bytes), 0)?;
+            self.font = Some(if self.variations.is_empty() {
+                base
+            } else {
+                base.instance_builder()
+                    .variations(self.variations.iter().copied())
+                    .build()
+            });
         }
-        let buffer = self.segmented(text, style);
+        self.segment(text, style);
+        let font = self.font.as_ref()?;
+        let (direction, script) = (self.buffer.direction(), self.buffer.script());
         let cursive = matches!(
-            buffer.script(),
-            rustybuzz::script::ARABIC
-                | rustybuzz::script::SYRIAC
-                | rustybuzz::script::MONGOLIAN
-                | rustybuzz::script::NKO
-                | rustybuzz::script::MANDAIC
-                | rustybuzz::script::ADLAM
+            script,
+            Some(
+                Script::ARABIC
+                    | Script::SYRIAC
+                    | Script::MONGOLIAN
+                    | Script::NKO
+                    | Script::MANDAIC
+                    | Script::ADLAM
+            )
         );
         let features: SmallVec<[Feature; 4]> = style
             .span_style
@@ -215,46 +212,50 @@ impl ShapingCache {
             .as_deref()
             .into_iter()
             .flat_map(font_feature_settings)
-            .map(|feature| {
-                Feature::new(ttf_parser::Tag::from_bytes(&feature.tag), feature.value, ..)
-            })
+            .map(|feature| Feature::new(Tag::new(&feature.tag), feature.value, ..))
             .collect();
-        let plan_key = PlanKey {
-            direction: buffer.direction(),
-            script: buffer.script(),
-            language: buffer.language(),
-            features,
-        };
-        let face = self.face.as_ref()?.borrow_dependent();
-        let plan = match self.plans.iter().position(|(kept, _)| *kept == plan_key) {
-            Some(at) => &self.plans[at].1,
+        let language = self.buffer.language().cloned();
+        let wanted = ShapePlanKey::new(font, script, direction)
+            .language(language.as_ref())
+            .features(&features);
+        let plan = match self.plans.iter().position(|plan| wanted.matches(plan)) {
+            Some(at) => &self.plans[at],
             None => {
                 if self.plans.len() == KEPT_PLANS {
                     self.plans.remove(0);
                 }
-                let plan = ShapePlan::new(
-                    face,
-                    plan_key.direction,
-                    Some(plan_key.script),
-                    plan_key.language.as_ref(),
-                    &plan_key.features,
-                );
-                self.plans.push((plan_key, plan));
-                &self.plans[self.plans.len() - 1].1
+                self.plans.push(ShapePlan::new(
+                    font,
+                    direction,
+                    script,
+                    language.as_ref(),
+                    &features,
+                ));
+                &self.plans[self.plans.len() - 1]
             }
         };
-        let shaped = rustybuzz::shape_with_plan(face, plan, buffer);
-        let run = Arc::new(ShapedRun::new(text, style_hash, cursive, &shaped));
-        self.buffer = Some(shaped.clear());
+        harfrust::shape(
+            &ShaperFont::new(font),
+            &mut self.buffer,
+            ShapeOptions::new().plan(Some(plan)).features(&features),
+        )
+        .ok()?;
+        let run = Arc::new(ShapedRun::new(
+            text,
+            style_hash,
+            cursive,
+            (self.buffer.glyph_infos(), self.buffer.glyph_positions()),
+        ));
         self.entries.push(key, Arc::clone(&run));
         Some(run)
     }
 
-    // The scratch buffer holding `text`, with the direction and language
+    // Fills the scratch buffer with `text`, the direction and language
     // `style` asks for and the script the text is in.
-    fn segmented(&mut self, text: &str, style: &TextStyle) -> UnicodeBuffer {
+    fn segment(&mut self, text: &str, style: &TextStyle) {
         let rtl = style.paragraph_style.text_direction.resolve(text) == ResolvedTextDirection::Rtl;
-        let mut buffer = self.buffer.take().unwrap_or_default();
+        let buffer = &mut self.buffer;
+        buffer.clear();
         buffer.push_str(text);
         buffer.set_direction(if rtl {
             Direction::RightToLeft
@@ -266,11 +267,10 @@ impl ShapingCache {
             .locale_list
             .as_ref()
             .and_then(|locales| locales.locales().first())
-            .and_then(|tag| tag.parse().ok())
+            .and_then(|tag| tag.parse::<Language>().ok())
         {
-            buffer.set_language(language);
+            buffer.set_language(Some(language));
         }
         buffer.guess_segment_properties();
-        buffer
     }
 }
