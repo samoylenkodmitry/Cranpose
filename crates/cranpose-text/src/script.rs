@@ -21,6 +21,29 @@ impl Script {
         self.0
     }
 
+    // Whether letter spacing spreads this script's letters apart. Android
+    // leaves out the scripts whose letters join, cursively or along a
+    // headline.
+    pub(crate) fn takes_letter_spacing(self) -> bool {
+        !matches!(
+            &self.0,
+            b"Arab"
+                | b"Nkoo"
+                | b"Phlp"
+                | b"Mand"
+                | b"Mong"
+                | b"Phag"
+                | b"Deva"
+                | b"Beng"
+                | b"Guru"
+                | b"Modi"
+                | b"Shrd"
+                | b"Sylo"
+                | b"Tirh"
+                | b"Ogam"
+        )
+    }
+
     fn of(script: UnicodeScript) -> Self {
         PropertyNamesShortBorrowed::<UnicodeScript>::new()
             .get(script)

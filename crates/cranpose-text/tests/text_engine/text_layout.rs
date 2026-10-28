@@ -1,6 +1,6 @@
 use cranpose_text::{
-    CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, TextAlign, TextDirection,
-    TextLayout, TextLayoutOptions, TextLayouter,
+    CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle,
+    TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
 };
 
 use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, span, typeface};
@@ -14,12 +14,17 @@ fn layout(
 ) -> TextLayout {
     let family = FontFamily::Default;
     let spans = [span(0..text.len(), &family, 400)];
+    let paragraph = ParagraphStyle {
+        text_direction: direction,
+        text_align: align,
+        ..ParagraphStyle::default()
+    };
     TextLayouter::default().layout(
         &LayoutInput {
             text,
             spans: &spans,
-            direction,
-            align,
+            paragraph: &paragraph,
+            lengths: ParagraphLengths::default(),
             width,
             options: TextLayoutOptions::default(),
         },

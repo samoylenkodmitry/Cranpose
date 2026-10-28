@@ -6,11 +6,15 @@ use crate::{
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
     layout_options::{TextLayoutOptions, TextOverflow},
-    line_breaker::{BreakOpportunity, LineBreaker, break_lines, visible_end},
-    paragraph::{ResolvedTextDirection, TextAlign, TextDirection},
+    line_box::{FontExtent, paragraph_line_box},
+    line_breaker::{
+        BreakOpportunity, LineBreaker, WrapWidths, break_lines, starts_paragraph, visible_end,
+    },
+    paragraph::{ResolvedTextDirection, TextAlign},
     script::Script,
     shaper::{ShapedGlyph, Shaper},
     shaping_span::ShapingSpan,
+    style::ParagraphStyle,
     text_layout::{LayoutLine, LineRun, TextLayout, font_units},
     typeface::Typeface,
 };
@@ -22,15 +26,40 @@ pub struct LayoutInput<'a> {
     pub text: &'a str,
     /// The spans of the text, covering it in order with no gap.
     pub spans: &'a [ShapingSpan<'a>],
-    /// The base direction of each paragraph of the text.
-    pub direction: TextDirection,
-    /// Where each line sits across the layout's width.
-    pub align: TextAlign,
+    /// The paragraph settings: direction, alignment and line height style.
+    pub paragraph: &'a ParagraphStyle,
+    /// The paragraph's lengths in pixels.
+    pub lengths: ParagraphLengths,
     /// The width lines wrap at and ellipses cut to, in pixels; infinite for
     /// lines that end only at line breaks.
     pub width: f32,
     /// Soft wrapping, the line limits and what shows where text overflows.
     pub options: TextLayoutOptions,
+}
+
+/// A paragraph style's lengths resolved to pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct ParagraphLengths {
+    /// The line height the style asks for, `None` for the fonts' own.
+    pub line_height: Option<f32>,
+    /// The indent of the first line of each paragraph.
+    pub first_line_indent: f32,
+    /// The indent of the other lines.
+    pub rest_line_indent: f32,
+    /// Device pixels per pixel of the layout: line boxes round to whole
+    /// device pixels, as Android's do.
+    pub grid: f32,
+}
+
+impl Default for ParagraphLengths {
+    fn default() -> Self {
+        Self {
+            line_height: None,
+            first_line_indent: 0.0,
+            rest_line_indent: 0.0,
+            grid: 1.0,
+        }
+    }
 }
 
 /// Lays paragraphs out. Keeps its itemizer, shaper, line breaker and scratch
@@ -56,6 +85,8 @@ struct ShapedItem {
     level: BidiLevel,
     paragraph_level: BidiLevel,
     script: Script,
+    // Extra width of each of its clusters.
+    spacing: f32,
 }
 
 // The part of an item inside one line, at one bidi level, or an ellipsis.
@@ -66,6 +97,7 @@ struct Piece {
     face: usize,
     size: f32,
     scale: f32,
+    spacing: f32,
     level: BidiLevel,
     width: f32,
 }
@@ -97,10 +129,17 @@ impl TextLayouter {
         self.shape(input, resolver, &mut layout);
         self.measure_clusters(input, &layout);
         self.breaker.opportunities(input.text, &mut self.breaks);
+        let lengths = input.lengths;
         let wrap = if options.soft_wrap {
-            input.width
+            WrapWidths {
+                first: input.width - lengths.first_line_indent,
+                rest: input.width - lengths.rest_line_indent,
+            }
         } else {
-            f32::INFINITY
+            WrapWidths {
+                first: f32::INFINITY,
+                rest: f32::INFINITY,
+            }
         };
         break_lines(
             input.text,
@@ -124,8 +163,9 @@ impl TextLayouter {
         self.items.clear();
         let text = input.text;
         let (shaper, items) = (&mut self.shaper, &mut self.items);
+        let direction = input.paragraph.text_direction;
         self.itemizer
-            .itemize(text, input.direction, input.spans, resolver, |item| {
+            .itemize(text, direction, input.spans, resolver, |item| {
                 let start = layout.glyphs.len();
                 shaper.shape(
                     text,
@@ -142,6 +182,11 @@ impl TextLayouter {
                     level: item.level,
                     paragraph_level: item.paragraph_level,
                     script: item.script,
+                    spacing: if item.script.takes_letter_spacing() {
+                        input.spans[item.span].letter_spacing
+                    } else {
+                        0.0
+                    },
                 });
             });
     }
@@ -152,8 +197,11 @@ impl TextLayouter {
             let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
             let glyphs = &layout.glyphs[item.glyphs.clone()];
             let mut add = |glyph: &ShapedGlyph| {
-                self.widths
-                    .push(glyph.text_offset(), font_units(glyph.advance) * scale);
+                self.widths.push(
+                    glyph.text_offset(),
+                    font_units(glyph.advance) * scale,
+                    item.spacing,
+                );
             };
             if item.level.is_rtl() {
                 glyphs.iter().rev().for_each(&mut add);
@@ -190,22 +238,35 @@ impl TextLayouter {
             }
             reorder_visually(&mut self.pieces, |piece| piece.level);
             let (runs, width) = self.place_runs(visible, layout);
-            let (ascent, descent) = self.line_extent(input, resolver, layout, range.start);
-            let baseline = top + ascent;
+            let extent = self.line_extent(input, resolver, layout, range.start);
+            let asked = input.lengths.line_height.unwrap_or(f32::NAN);
+            let line_box = paragraph_line_box(input.paragraph, extent, asked, input.lengths.grid);
+            let trim_top = if index == 0 { line_box.trim_top } else { 0.0 };
+            let trim_bottom = if index == last {
+                line_box.trim_bottom
+            } else {
+                0.0
+            };
+            let indent = if starts_paragraph(input.text, range.start) {
+                input.lengths.first_line_indent
+            } else {
+                input.lengths.rest_line_indent
+            };
+            let bottom = top + line_box.height - trim_top - trim_bottom;
             layout.lines.push(LayoutLine {
                 level: self.paragraph_level(input, range.start),
                 text: range,
                 visible_end: visible,
                 runs,
                 top,
-                baseline,
-                bottom: baseline + descent,
-                left: 0.0,
+                baseline: top + line_box.baseline - trim_top,
+                bottom,
+                left: indent,
                 width,
                 ellipsized,
             });
-            top = baseline + descent;
-            widest = widest.max(width);
+            top = bottom;
+            widest = widest.max(width + indent);
         }
         if layout.lines.len() < options.min_lines {
             let first = &layout.lines[0];
@@ -219,8 +280,14 @@ impl TextLayouter {
         };
         layout.height = top;
         layout.did_overflow_width = widest > layout.width;
+        let align = input.paragraph.text_align;
         for line in &mut layout.lines {
-            line.left = align_fraction(input.align, line.level) * (layout.width - line.width);
+            let indent = line.left;
+            let free = layout.width - indent - line.width;
+            line.left = align_fraction(align, line.level) * free;
+            if !line.level.is_rtl() {
+                line.left += indent;
+            }
         }
     }
 
@@ -242,6 +309,7 @@ impl TextLayouter {
                 face: piece.face,
                 size: piece.size,
                 scale: piece.scale,
+                spacing: piece.spacing,
                 level: piece.level,
                 x,
                 width: piece.width,
@@ -339,15 +407,13 @@ impl TextLayouter {
         let scale = scale(style, typeface);
         let glyphs = start..layout.glyphs.len();
         Some(Piece {
-            width: layout.glyphs[glyphs.clone()]
-                .iter()
-                .map(|glyph| font_units(glyph.advance) * scale)
-                .sum(),
+            width: spaced_width(&layout.glyphs[glyphs.clone()], scale, 0.0),
             text: 0..0,
             glyphs,
             face: face_index(&mut layout.faces, typeface),
             size: style.size,
             scale,
+            spacing: 0.0,
             level,
         })
     }
@@ -386,15 +452,13 @@ impl TextLayouter {
                 let glyphs = part_glyphs(shaper, input, item, sub.clone(), part.clone(), layout);
                 let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
                 pieces.push(Piece {
-                    width: layout.glyphs[glyphs.clone()]
-                        .iter()
-                        .map(|glyph| font_units(glyph.advance) * scale)
-                        .sum(),
+                    width: spaced_width(&layout.glyphs[glyphs.clone()], scale, item.spacing),
                     text: sub,
                     glyphs,
                     face: item.face,
                     size: input.spans[item.span].size,
                     scale,
+                    spacing: item.spacing,
                     level,
                 });
             }
@@ -411,10 +475,14 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         layout: &TextLayout,
         start: usize,
-    ) -> (f32, f32) {
+    ) -> FontExtent {
         let extent = |face: &Typeface, scale: f32| {
             let metrics = face.line_metrics();
-            (metrics.ascent * scale, -metrics.descent * scale)
+            FontExtent::new(
+                metrics.ascent * scale,
+                -metrics.descent * scale,
+                metrics.line_gap * scale,
+            )
         };
         if self.pieces.is_empty() {
             let span = input
@@ -427,13 +495,17 @@ impl TextLayouter {
                     let face = resolver.resolve(span.font)?;
                     Some(extent(face, scale(span, face)))
                 })
-                .unwrap_or_default();
+                .unwrap_or_else(|| FontExtent::new(0.0, 0.0, 0.0));
         }
         self.pieces
             .iter()
-            .fold((0.0_f32, 0.0_f32), |(up, down), piece| {
-                let (ascent, descent) = extent(&layout.faces[piece.face], piece.scale);
-                (up.max(ascent), down.max(descent))
+            .fold(FontExtent::new(0.0, 0.0, 0.0), |line, piece| {
+                let face = extent(&layout.faces[piece.face], piece.scale);
+                FontExtent::new(
+                    line.ascent.max(face.ascent),
+                    line.descent.max(face.descent),
+                    line.line_gap.max(face.line_gap),
+                )
             })
     }
 
@@ -444,7 +516,7 @@ impl TextLayouter {
             .get(at)
             .or_else(|| self.items.last())
             .map_or_else(
-                || match input.direction.resolve("") {
+                || match input.paragraph.text_direction.resolve("") {
                     ResolvedTextDirection::Ltr => BidiLevel::LTR,
                     ResolvedTextDirection::Rtl => BidiLevel::RTL,
                 },
@@ -536,6 +608,19 @@ fn face_index(faces: &mut Vec<Typeface>, face: &Typeface) -> usize {
             faces.push(face.clone());
             faces.len() - 1
         })
+}
+
+// The width of `glyphs` at `scale`, each of their clusters `spacing` wider.
+fn spaced_width(glyphs: &[ShapedGlyph], scale: f32, spacing: f32) -> f32 {
+    let mut clusters = 0_u16;
+    let mut width = 0.0;
+    for (at, glyph) in glyphs.iter().enumerate() {
+        if at == 0 || glyphs[at - 1].cluster != glyph.cluster {
+            clusters = clusters.saturating_add(1);
+        }
+        width += font_units(glyph.advance) * scale;
+    }
+    width + spacing * f32::from(clusters)
 }
 
 // Pixels per design unit of `face` at the size of `span`.

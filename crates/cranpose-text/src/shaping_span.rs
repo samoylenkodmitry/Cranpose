@@ -20,4 +20,7 @@ pub struct ShapingSpan<'a> {
     /// A BCP 47 language tag such as `ja` or `sr-Latn`, which picks the
     /// font's language-specific forms.
     pub language: Option<&'a str>,
+    /// Extra space after each character in pixels: Compose's
+    /// `letterSpacing`. Scripts whose letters join take none, as on Android.
+    pub letter_spacing: f32,
 }

@@ -54,16 +54,24 @@ impl LineBreaker {
     }
 }
 
+// The widths lines of a paragraph wrap at: the first line's, and the
+// others', which indents make narrower.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WrapWidths {
+    pub(crate) first: f32,
+    pub(crate) rest: f32,
+}
+
 // Greedy line breaking: each line of `text` takes as many of `breaks` as fit
-// `width` without its trailing whitespace, which hangs past the line's end,
-// and a word wider than `width` breaks between clusters, one at least per
-// line. Replaces `lines` with the line ranges; a text that is empty or ends
-// with a hard break gets an empty last line.
+// its wrap width without its trailing whitespace, which hangs past the
+// line's end, and a word wider than that breaks between clusters, one at
+// least per line. Replaces `lines` with the line ranges; a text that is
+// empty or ends with a hard break gets an empty last line.
 pub(crate) fn break_lines(
     text: &str,
     widths: &ClusterWidths,
     breaks: &[BreakOpportunity],
-    width: f32,
+    wrap: WrapWidths,
     lines: &mut Vec<Range<usize>>,
 ) {
     lines.clear();
@@ -71,6 +79,11 @@ pub(crate) fn break_lines(
     let mut fit = None;
     let mut index = 0;
     while let Some(&opportunity) = breaks.get(index) {
+        let width = if starts_paragraph(text, start) {
+            wrap.first
+        } else {
+            wrap.rest
+        };
         if widths.width(start, visible_end(text, start, opportunity.offset)) <= width {
             if opportunity.mandatory {
                 lines.push(start..opportunity.offset);
@@ -99,6 +112,14 @@ pub(crate) fn break_lines(
     if start < text.len() || lines.is_empty() || ends_with_break {
         lines.push(start..text.len());
     }
+}
+
+// Whether `offset` starts a paragraph: the text's start, or just after a hard
+// break.
+pub(crate) fn starts_paragraph(text: &str, offset: usize) -> bool {
+    text.get(..offset)
+        .and_then(|before| before.chars().next_back())
+        .is_none_or(hard_break)
 }
 
 // The end of the text from `start` to `end` before its trailing whitespace.

@@ -25,7 +25,7 @@
 //! Compose's does, so a single line of it is exactly as tall as its font.
 
 use crate::style::{
-    LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, TextStyle,
+    LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle, TextStyle,
 };
 
 /// A resolved line box: how far apart a paragraph's baselines are, where the
@@ -114,18 +114,28 @@ impl FontExtent {
 /// they are layout points. Getting it wrong does not shift a baseline by a
 /// fraction; it quantises the whole line box to the wrong step.
 pub fn line_box(style: &TextStyle, extent: FontExtent, asked: f32, grid: f32) -> LineBox {
+    paragraph_line_box(&style.paragraph_style, extent, asked, grid)
+}
+
+/// [`line_box`] for the paragraph settings alone.
+pub fn paragraph_line_box(
+    style: &ParagraphStyle,
+    extent: FontExtent,
+    asked: f32,
+    grid: f32,
+) -> LineBox {
     let grid = if grid.is_finite() && grid > 0.0 {
         grid
     } else {
         1.0
     };
-    let asked = if style.paragraph_style.line_height.is_unspecified() {
+    let asked = if style.line_height.is_unspecified() {
         f32::NAN
     } else {
         asked
     };
     let padding = font_padding(style, extent);
-    let line_height_style = match style.paragraph_style.line_height_style {
+    let line_height_style = match style.line_height_style {
         Some(line_height_style) => line_height_style,
         None if padding > 0.0 || font_padding_asked(style) => LineHeightStyle {
             alignment: LineHeightAlignment::Proportional,
@@ -137,15 +147,14 @@ pub fn line_box(style: &TextStyle, extent: FontExtent, asked: f32, grid: f32) ->
     aosp_line_box(line_height_style, extent, asked, padding, grid)
 }
 
-fn font_padding_asked(style: &TextStyle) -> bool {
+fn font_padding_asked(style: &ParagraphStyle) -> bool {
     style
-        .paragraph_style
         .platform_style
         .and_then(|platform| platform.include_font_padding)
         .unwrap_or(false)
 }
 
-fn font_padding(style: &TextStyle, extent: FontExtent) -> f32 {
+fn font_padding(style: &ParagraphStyle, extent: FontExtent) -> f32 {
     if font_padding_asked(style) && extent.line_gap.is_finite() && extent.line_gap > 0.0 {
         extent.line_gap
     } else {

@@ -25,6 +25,8 @@ pub(crate) struct LineRun {
     pub(crate) size: f32,
     // Pixels per design unit.
     pub(crate) scale: f32,
+    // Extra width of each cluster, half on each side.
+    pub(crate) spacing: f32,
     pub(crate) level: BidiLevel,
     // The left edge from the line's left edge.
     pub(crate) x: f32,
@@ -67,6 +69,7 @@ pub struct GlyphRun<'a> {
     pub size: f32,
     glyphs: &'a [ShapedGlyph],
     scale: f32,
+    spacing: f32,
     pen: f32,
     baseline: f32,
 }
@@ -76,7 +79,16 @@ impl GlyphRun<'_> {
     /// right.
     pub fn positions(&self) -> impl Iterator<Item = (GlyphId, f32, f32)> + '_ {
         let mut pen = self.pen;
+        let mut cluster = None;
         self.glyphs.iter().map(move |glyph| {
+            if cluster != Some(glyph.cluster) {
+                pen += if cluster.is_some() {
+                    self.spacing
+                } else {
+                    self.spacing / 2.0
+                };
+                cluster = Some(glyph.cluster);
+            }
             let x = pen + font_units(glyph.x_offset) * self.scale;
             pen += font_units(glyph.advance) * self.scale;
             (
@@ -237,6 +249,7 @@ impl TextLayout {
                 size: run.size,
                 glyphs: &self.glyphs[run.glyphs.clone()],
                 scale: run.scale,
+                spacing: run.spacing,
                 pen: line.left + run.x,
                 baseline: line.baseline,
             })
@@ -244,11 +257,18 @@ impl TextLayout {
 
     // The caret x of `offset` inside `run`, from the line's left edge.
     fn caret_in_run(&self, run: &LineRun, offset: usize) -> f32 {
-        let before: f32 = self.glyphs[run.glyphs.clone()]
-            .iter()
-            .filter(|glyph| glyph.text_offset() < offset)
-            .map(|glyph| font_units(glyph.advance) * run.scale)
-            .sum();
+        let mut before = 0.0;
+        let mut cluster = None;
+        for glyph in &self.glyphs[run.glyphs.clone()] {
+            if glyph.text_offset() >= offset {
+                continue;
+            }
+            if cluster != Some(glyph.cluster) {
+                before += run.spacing;
+                cluster = Some(glyph.cluster);
+            }
+            before += font_units(glyph.advance) * run.scale;
+        }
         if run.level.is_rtl() {
             run.x + run.width - before
         } else {
@@ -265,7 +285,7 @@ impl TextLayout {
         let mut at = 0;
         while at < glyphs.len() {
             let cluster = glyphs[at].cluster;
-            let mut width = 0.0;
+            let mut width = run.spacing;
             let mut end = at;
             while end < glyphs.len() && glyphs[end].cluster == cluster {
                 width += font_units(glyphs[end].advance) * run.scale;

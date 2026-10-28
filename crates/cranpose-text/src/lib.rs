@@ -58,7 +58,7 @@ pub use font_feature::{FontFeature, font_feature_settings};
 pub use glyph_id::GlyphId;
 pub use itemizer::{Itemizer, TextItem};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
-pub use line_box::{FontExtent, LineBox, line_box};
+pub use line_box::{FontExtent, LineBox, line_box, paragraph_line_box};
 pub use paragraph::{
     Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection, TextIndent,
     resolve_text_direction,
@@ -73,6 +73,6 @@ pub use style::{
     text_align_fraction,
 };
 pub use text_layout::{CaretDirection, GlyphRun, TextLayout};
-pub use text_layouter::{LayoutInput, TextLayouter};
+pub use text_layouter::{LayoutInput, ParagraphLengths, TextLayouter};
 pub use typeface::{FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError};
 pub use unit::TextUnit;

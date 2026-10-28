@@ -35,6 +35,8 @@ extend-exclude = [
 ]
 
 [default.extend-words]
+# ISO 15924 code of the Bengali script, which the text engine names.
+Beng = "Beng"
 # German month name the date picker's localized test reads.
 Oktober = "Oktober"
 # Chrome's first-run experience, in the ids of its views the benches tap.

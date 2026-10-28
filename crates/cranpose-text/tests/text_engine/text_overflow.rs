@@ -1,5 +1,5 @@
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, LayoutInput, TextAlign, TextDirection, TextLayout,
+    FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle, TextLayout,
     TextLayoutOptions, TextLayouter, TextOverflow,
 };
 
@@ -19,8 +19,8 @@ fn layout(
         &LayoutInput {
             text,
             spans: &spans,
-            direction: TextDirection::Content,
-            align: TextAlign::Start,
+            paragraph: &ParagraphStyle::default(),
+            lengths: ParagraphLengths::default(),
             width,
             options,
         },

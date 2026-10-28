@@ -14,10 +14,12 @@ impl ClusterWidths {
         self.total = 0.0;
     }
 
-    // Adds a glyph of the cluster at `start`, in text order, `advance` wide.
-    pub(crate) fn push(&mut self, start: usize, advance: f32) {
+    // Adds a glyph of the cluster at `start`, in text order, `advance` wide,
+    // in a run whose clusters each take `spacing` more.
+    pub(crate) fn push(&mut self, start: usize, advance: f32, spacing: f32) {
         if self.clusters.last().is_none_or(|&(last, _)| last != start) {
             self.clusters.push((start, self.total));
+            self.total += spacing;
         }
         self.total += advance;
     }
