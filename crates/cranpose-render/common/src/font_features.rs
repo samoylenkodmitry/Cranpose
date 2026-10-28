@@ -4,6 +4,7 @@ use std::{
 };
 
 use cranpose_core::hash::default as default_hash;
+use cranpose_text::font_feature::{FontFeature, font_feature_settings};
 use ttf_parser::{
     Face, GlyphId, Tag,
     gdef::{GlyphClass, Table as GlyphDefinitions},
@@ -15,16 +16,6 @@ use crate::ascii_glyphs::AsciiGlyphs;
 
 const MAX_FEATURE_VARIANTS: usize = 16;
 const DEFAULT_SCRIPTS: [&[u8; 4]; 2] = [b"DFLT", b"latn"];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FontFeature {
-    pub(crate) tag: [u8; 4],
-    pub(crate) value: u32,
-}
-
-pub(crate) fn font_feature_settings(settings: &str) -> impl Iterator<Item = FontFeature> + '_ {
-    settings.split(',').filter_map(parse_font_feature)
-}
 
 pub(crate) fn enabled_feature_tags(settings: &str) -> Vec<[u8; 4]> {
     let mut features: Vec<FontFeature> = Vec::new();
@@ -41,54 +32,6 @@ pub(crate) fn enabled_feature_tags(settings: &str) -> Vec<[u8; 4]> {
         .collect();
     tags.sort_unstable();
     tags
-}
-
-#[inline(never)]
-fn parse_font_feature(entry: &str) -> Option<FontFeature> {
-    let (tag, rest) = split_feature_tag(entry.trim())?;
-    let tag: [u8; 4] = tag.as_bytes().try_into().ok()?;
-    if !tag.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
-        return None;
-    }
-    Some(FontFeature {
-        tag,
-        value: parse_feature_value(rest.trim_start())?,
-    })
-}
-
-fn split_feature_tag(entry: &str) -> Option<(&str, &str)> {
-    match *entry.as_bytes().first()? {
-        quote @ (b'"' | b'\'') => {
-            if entry.as_bytes().get(5) != Some(&quote) {
-                return None;
-            }
-            Some((entry.get(1..5)?, entry.get(6..)?))
-        }
-        _ => {
-            let length = entry
-                .bytes()
-                .position(|byte| !byte.is_ascii_alphanumeric())
-                .unwrap_or(entry.len());
-            if length != 4 {
-                return None;
-            }
-            entry.split_at_checked(length)
-        }
-    }
-}
-
-fn parse_feature_value(value: &str) -> Option<u32> {
-    if value.is_empty() || value.eq_ignore_ascii_case("on") {
-        return Some(1);
-    }
-    if value.eq_ignore_ascii_case("off") {
-        return Some(0);
-    }
-    value
-        .bytes()
-        .all(|byte| byte.is_ascii_digit())
-        .then(|| value.parse().ok())
-        .flatten()
 }
 
 pub(crate) struct GlyphSubstitutions {

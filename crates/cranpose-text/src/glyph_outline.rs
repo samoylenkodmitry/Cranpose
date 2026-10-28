@@ -1,0 +1,209 @@
+use ab_glyph_rasterizer::{Point, Rasterizer, point};
+use cranpose_ui_graphics::whole;
+use read_fonts::{
+    model::glyph::outline::{DrawMemory, DrawOptions, PathSink},
+    types::GlyphId as FontGlyphId,
+};
+
+use crate::{glyph_id::GlyphId, typeface::Typeface};
+
+/// A glyph's outline at one size and offset, in pixels with y growing down,
+/// ready to draw as coverage. Its box holds every pixel the outline touches,
+/// placed from the glyph's origin on the baseline.
+pub struct GlyphOutline {
+    // Relative to the box's top left corner.
+    segments: Vec<Segment>,
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy)]
+enum Segment {
+    Line(Point, Point),
+    Quad(Point, Point, Point),
+    Cubic(Point, Point, Point, Point),
+}
+
+impl GlyphOutline {
+    /// The outline of `glyph` of `typeface` at `size` pixels per em, with its
+    /// origin moved right by `x_offset` and down by `y_offset` pixels, the
+    /// fractions of a pixel a subpixel position adds. `None` for a glyph with
+    /// no outline, such as a space.
+    pub fn of(
+        typeface: &Typeface,
+        glyph: GlyphId,
+        size: f32,
+        x_offset: f32,
+        y_offset: f32,
+    ) -> Option<Self> {
+        let outlines = typeface.font().outline_glyphs();
+        let outline = outlines.get(FontGlyphId::new(glyph.0))?;
+        // The outline comes in font units and scales in `f32`, as ab_glyph
+        // scales it, so the coverage is the one the renderers drew before.
+        let mut path = PathCollector {
+            segments: Vec::new(),
+            start: point(0.0, 0.0),
+            pen: point(0.0, 0.0),
+            offset: point(x_offset, y_offset),
+            scale: size / f32::from(typeface.units_per_em()),
+        };
+        outline
+            .draw(
+                &DrawOptions::new().with_ppem(None),
+                DrawMemory::Scratch,
+                &mut path,
+            )
+            .ok()?;
+        let (min, max) = path.bounds()?;
+        let (left, top) = (whole::floor(min.x), whole::floor(min.y));
+        let width = pixels(whole::ceil(max.x) - left);
+        let height = pixels(whole::ceil(max.y) - top);
+        let corner = point(left, top);
+        let moved = |at: Point| point(at.x - corner.x, at.y - corner.y);
+        for segment in &mut path.segments {
+            *segment = match *segment {
+                Segment::Line(a, b) => Segment::Line(moved(a), moved(b)),
+                Segment::Quad(a, b, c) => Segment::Quad(moved(a), moved(b), moved(c)),
+                Segment::Cubic(a, b, c, d) => {
+                    Segment::Cubic(moved(a), moved(b), moved(c), moved(d))
+                }
+            };
+        }
+        Some(Self {
+            segments: path.segments,
+            left: whole_number(left),
+            top: whole_number(top),
+            width,
+            height,
+        })
+    }
+
+    /// How far right of the glyph's origin the box starts.
+    pub fn left(&self) -> i32 {
+        self.left
+    }
+
+    /// How far below the baseline the box starts; negative above it.
+    pub fn top(&self) -> i32 {
+        self.top
+    }
+
+    /// The box's width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// The box's height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Passes the coverage of each pixel of the box, from 0 to 1, row by row,
+    /// with its column and row; `rasterizer` is the scratch the drawing
+    /// accumulates in.
+    pub fn draw(&self, rasterizer: &mut Rasterizer, visit: impl FnMut(u32, u32, f32)) {
+        rasterizer.reset(usize_of(self.width), usize_of(self.height));
+        for segment in &self.segments {
+            match *segment {
+                Segment::Line(a, b) => rasterizer.draw_line(a, b),
+                Segment::Quad(a, b, c) => rasterizer.draw_quad(a, b, c),
+                Segment::Cubic(a, b, c, d) => rasterizer.draw_cubic(a, b, c, d),
+            }
+        }
+        rasterizer.for_each_pixel_2d(visit);
+    }
+}
+
+// Collects an outline's segments in pixels with y growing down, from font
+// units `scale` pixels each.
+struct PathCollector {
+    segments: Vec<Segment>,
+    start: Point,
+    pen: Point,
+    offset: Point,
+    scale: f32,
+}
+
+impl PathCollector {
+    fn point(&self, x: f32, y: f32) -> Point {
+        point(
+            x * self.scale + self.offset.x,
+            -y * self.scale + self.offset.y,
+        )
+    }
+
+    // The smallest box around every point of the path, `None` for an empty
+    // one.
+    fn bounds(&self) -> Option<(Point, Point)> {
+        let mut points = self.segments.iter().flat_map(|segment| match *segment {
+            Segment::Line(a, b) => [a, b, b, b],
+            Segment::Quad(a, b, c) => [a, b, c, c],
+            Segment::Cubic(a, b, c, d) => [a, b, c, d],
+        });
+        let first = points.next()?;
+        Some(points.fold((first, first), |(min, max), at| {
+            (
+                point(min.x.min(at.x), min.y.min(at.y)),
+                point(max.x.max(at.x), max.y.max(at.y)),
+            )
+        }))
+    }
+}
+
+impl PathSink for PathCollector {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = self.point(x, y);
+        self.pen = self.start;
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let to = self.point(x, y);
+        self.segments.push(Segment::Line(self.pen, to));
+        self.pen = to;
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        let to = self.point(x, y);
+        self.segments
+            .push(Segment::Quad(self.pen, self.point(cx0, cy0), to));
+        self.pen = to;
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let to = self.point(x, y);
+        self.segments.push(Segment::Cubic(
+            self.pen,
+            self.point(cx0, cy0),
+            self.point(cx1, cy1),
+            to,
+        ));
+        self.pen = to;
+    }
+
+    fn close(&mut self) {
+        if self.pen != self.start {
+            self.segments.push(Segment::Line(self.pen, self.start));
+        }
+        self.pen = self.start;
+    }
+}
+
+// The whole number `value` holds, for a magnitude below 2^22: adding
+// 1.5 x 2^23 puts it in the low bits of the sum's mantissa, so it is the
+// difference of the two bit patterns. Glyph boxes lie far inside that range.
+fn whole_number(value: f32) -> i32 {
+    const MAGIC: f32 = 12_582_912.0;
+    let bits = i64::from((value + MAGIC).to_bits()) - i64::from(MAGIC.to_bits());
+    i32::try_from(bits).unwrap_or(0)
+}
+
+// A size in whole pixels, at least zero.
+fn pixels(value: f32) -> u32 {
+    u32::try_from(whole_number(value).max(0)).unwrap_or(0)
+}
+
+fn usize_of(value: u32) -> usize {
+    usize::try_from(value).unwrap_or(0)
+}

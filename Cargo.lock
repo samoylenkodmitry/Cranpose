@@ -1658,12 +1658,17 @@ dependencies = [
 name = "cranpose-text"
 version = "0.17.2"
 dependencies = [
+ "ab_glyph",
+ "ab_glyph_rasterizer",
  "cranpose-ui-graphics",
  "foldhash",
+ "harfrust",
  "icu_properties",
+ "icu_segmenter",
  "read-fonts",
  "smallvec",
  "thiserror 2.0.21",
+ "unicode-bidi",
  "web-time",
 ]
 
@@ -3460,6 +3465,7 @@ dependencies = [
  "icu_properties_data",
  "icu_provider",
  "serde",
+ "unicode-bidi",
  "zerotrie",
  "zerovec",
 ]

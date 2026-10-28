@@ -1,0 +1,297 @@
+use std::ops::Range;
+
+use icu_segmenter::{
+    LineSegmenter, LineSegmenterBorrowed,
+    options::{LineBreakOptions, LineBreakStrictness},
+};
+
+use crate::{cluster_widths::ClusterWidths, paragraph::LineBreak};
+
+// A place a line may end: the byte offset where the next line starts, and
+// whether a line must end there, after a hard break such as a line feed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BreakOpportunity {
+    pub(crate) offset: usize,
+    pub(crate) mandatory: bool,
+}
+
+// The line break opportunities of UAX #14 at each strictness Compose's
+// `LineBreak` presets use: normal for `Simple`, strict for `Paragraph`,
+// loose for `Heading`. Thai, Lao, Khmer and Burmese, which break between
+// dictionary words, need the `southeast-asian-line-breaks` feature.
+pub(crate) struct LineBreaker {
+    loose: LineSegmenterBorrowed<'static>,
+    normal: LineSegmenterBorrowed<'static>,
+    strict: LineSegmenterBorrowed<'static>,
+}
+
+impl Default for LineBreaker {
+    fn default() -> Self {
+        Self {
+            loose: segmenter(LineBreakStrictness::Loose),
+            normal: segmenter(LineBreakStrictness::Normal),
+            strict: segmenter(LineBreakStrictness::Strict),
+        }
+    }
+}
+
+fn segmenter(strictness: LineBreakStrictness) -> LineSegmenterBorrowed<'static> {
+    let mut options = LineBreakOptions::default();
+    options.strictness = Some(strictness);
+    #[cfg(feature = "southeast-asian-line-breaks")]
+    let segmenter = LineSegmenter::new_dictionary(options);
+    #[cfg(not(feature = "southeast-asian-line-breaks"))]
+    let segmenter = LineSegmenter::new_for_non_complex_scripts(options);
+    segmenter
+}
+
+impl LineBreaker {
+    // Replaces `breaks` with the opportunities of `text` for the line break
+    // preset `line_break`, ascending; the last is the end of the text.
+    pub(crate) fn opportunities(
+        &self,
+        text: &str,
+        line_break: LineBreak,
+        breaks: &mut Vec<BreakOpportunity>,
+    ) {
+        let segmenter = match line_break {
+            LineBreak::Paragraph => self.strict,
+            LineBreak::Heading => self.loose,
+            LineBreak::Simple | LineBreak::Unspecified => self.normal,
+        };
+        breaks.clear();
+        breaks.extend(
+            segmenter
+                .segment_str(text)
+                .filter(|&offset| offset > 0)
+                .map(|offset| BreakOpportunity {
+                    offset,
+                    mandatory: text
+                        .get(..offset)
+                        .and_then(|before| before.chars().next_back())
+                        .is_some_and(hard_break),
+                }),
+        );
+    }
+}
+
+// The widths lines of a paragraph wrap at: the first line's, and the
+// others', which indents make narrower.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WrapWidths {
+    pub(crate) first: f32,
+    pub(crate) rest: f32,
+}
+
+// A text to break into lines: its text, the widths of its clusters, and the
+// widths its lines wrap at.
+#[derive(Clone, Copy)]
+pub(crate) struct Wrapping<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) widths: &'a ClusterWidths,
+    pub(crate) wrap: WrapWidths,
+}
+
+impl Wrapping<'_> {
+    // The width a line starting at `start` wraps at.
+    fn limit(&self, start: usize) -> f32 {
+        if starts_paragraph(self.text, start) {
+            self.wrap.first
+        } else {
+            self.wrap.rest
+        }
+    }
+
+    // The width of the line from `start` to `end` without its trailing
+    // whitespace, which hangs past the line's end.
+    fn line_width(&self, start: usize, end: usize) -> f32 {
+        self.widths.width(start, visible_end(self.text, start, end))
+    }
+
+    // Greedy line breaking from `start` through `breaks`: each line takes as
+    // many opportunities as fit its wrap width, and a word wider than that
+    // breaks between clusters, one at least per line. Appends the lines it
+    // ends and returns where the unfinished last line starts.
+    fn greedy(
+        &self,
+        mut start: usize,
+        breaks: &[BreakOpportunity],
+        lines: &mut Vec<Range<usize>>,
+    ) -> usize {
+        let mut fit = None;
+        let mut index = 0;
+        while let Some(&opportunity) = breaks.get(index) {
+            let width = self.limit(start);
+            if self.line_width(start, opportunity.offset) <= width {
+                if opportunity.mandatory {
+                    lines.push(start..opportunity.offset);
+                    start = opportunity.offset;
+                    fit = None;
+                } else {
+                    fit = Some(opportunity.offset);
+                }
+                index += 1;
+            } else {
+                let end = fit.take().unwrap_or_else(|| {
+                    let cut = self.widths.last_fitting(start, opportunity.offset, width);
+                    if cut > start {
+                        cut
+                    } else {
+                        self.widths
+                            .next_boundary(start)
+                            .unwrap_or(opportunity.offset)
+                    }
+                });
+                lines.push(start..end);
+                start = end;
+            }
+        }
+        start
+    }
+
+    // Ends `lines` with the line from `start` to the end of the text, and an
+    // empty line after a final hard break, so an empty text has one line.
+    fn finish(&self, start: usize, breaks: &[BreakOpportunity], lines: &mut Vec<Range<usize>>) {
+        let ends_with_break = breaks
+            .last()
+            .is_some_and(|opportunity| opportunity.mandatory);
+        if start < self.text.len() || lines.is_empty() || ends_with_break {
+            lines.push(start..self.text.len());
+        }
+    }
+}
+
+// Greedy line breaking of the whole text into `lines`.
+pub(crate) fn break_lines(
+    wrapping: &Wrapping<'_>,
+    breaks: &[BreakOpportunity],
+    lines: &mut Vec<Range<usize>>,
+) {
+    lines.clear();
+    let start = wrapping.greedy(0, breaks, lines);
+    wrapping.finish(start, breaks, lines);
+}
+
+// Even line breaking, as Compose's `LineBreak.Paragraph` and `Heading` ask:
+// each paragraph breaks where the sum over its lines of the square of the
+// width each leaves free is least, the last line's share weighted by
+// `last_line`, a fraction for `Paragraph` and the whole for `Heading`. A
+// paragraph with a word wider than its lines breaks greedily. Keeps its
+// scratch storage from one text to the next.
+#[derive(Default)]
+pub(crate) struct LineBalancer {
+    // The paragraph's start and break opportunities, the least cost of the
+    // lines from each to the paragraph's end, and where the first of them
+    // ends.
+    nodes: Vec<usize>,
+    cost: Vec<f32>,
+    next: Vec<usize>,
+}
+
+impl LineBalancer {
+    pub(crate) fn balance(
+        &mut self,
+        wrapping: &Wrapping<'_>,
+        breaks: &[BreakOpportunity],
+        last_line: f32,
+        lines: &mut Vec<Range<usize>>,
+    ) {
+        lines.clear();
+        let mut start = 0;
+        let mut from = 0;
+        while from < breaks.len() {
+            let to = breaks[from..]
+                .iter()
+                .position(|opportunity| opportunity.mandatory)
+                .map_or(breaks.len(), |at| from + at + 1);
+            let paragraph = &breaks[from..to];
+            start = if self.balance_paragraph(wrapping, start, paragraph, last_line, lines) {
+                paragraph
+                    .last()
+                    .map_or(start, |opportunity| opportunity.offset)
+            } else {
+                wrapping.greedy(start, paragraph, lines)
+            };
+            from = to;
+        }
+        wrapping.finish(start, breaks, lines);
+    }
+
+    // Appends the even lines of the paragraph from `start` through
+    // `breaks`; false, appending nothing, when a word does not fit.
+    fn balance_paragraph(
+        &mut self,
+        wrapping: &Wrapping<'_>,
+        start: usize,
+        breaks: &[BreakOpportunity],
+        last_line: f32,
+        lines: &mut Vec<Range<usize>>,
+    ) -> bool {
+        self.nodes.clear();
+        self.nodes.push(start);
+        self.nodes
+            .extend(breaks.iter().map(|opportunity| opportunity.offset));
+        let last = self.nodes.len() - 1;
+        self.cost.clear();
+        self.cost.resize(self.nodes.len(), f32::INFINITY);
+        self.next.clear();
+        self.next.resize(self.nodes.len(), last);
+        self.cost[last] = 0.0;
+        for from in (0..last).rev() {
+            let limit = wrapping.limit(self.nodes[from]);
+            for to in from + 1..=last {
+                let width = wrapping.line_width(self.nodes[from], self.nodes[to]);
+                if width > limit {
+                    break;
+                }
+                let free = limit - width;
+                let weight = if to == last { last_line } else { 1.0 };
+                let cost = free * free * weight + self.cost[to];
+                if cost < self.cost[from] {
+                    self.cost[from] = cost;
+                    self.next[from] = to;
+                }
+            }
+        }
+        if !self.cost[0].is_finite() {
+            return false;
+        }
+        let mut at = 0;
+        while at < last {
+            let to = self.next[at];
+            lines.push(self.nodes[at]..self.nodes[to]);
+            at = to;
+        }
+        true
+    }
+}
+
+// Whether `text` holds a hard line break.
+pub(crate) fn has_hard_break(text: &str) -> bool {
+    text.contains([
+        '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
+    ])
+}
+
+// Whether `offset` starts a paragraph: the text's start, or just after a hard
+// break.
+pub(crate) fn starts_paragraph(text: &str, offset: usize) -> bool {
+    text.get(..offset)
+        .and_then(|before| before.chars().next_back())
+        .is_none_or(hard_break)
+}
+
+// The end of the text from `start` to `end` before its trailing whitespace.
+pub(crate) fn visible_end(text: &str, start: usize, end: usize) -> usize {
+    text.get(start..end)
+        .map_or(end, |part| start + part.trim_end().len())
+}
+
+// The characters after which UAX #14 ends a line: the classes BK, CR, LF and
+// NL.
+fn hard_break(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
+}

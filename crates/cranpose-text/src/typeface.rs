@@ -7,12 +7,14 @@ use foldhash::fast::FixedState;
 use read_fonts::{
     FontRef, TableProvider,
     model::{Blob, Font, Source, Variation, attribute::Style, name::NameId},
-    types::{GlyphId, Tag},
+    types::{GlyphId as FontGlyphId, Tag},
 };
+use smallvec::SmallVec;
 
 use crate::{
     coverage::Coverage,
     font::{FontFamily, FontStyle, FontWeight},
+    glyph_id::GlyphId,
 };
 
 /// The bytes a typeface is read from.
@@ -100,6 +102,10 @@ struct Loaded {
     weights: (f32, f32),
     // Whether an `ital` or `slnt` axis lets the typeface draw italic as well.
     italic_axis: bool,
+    // The `wght`, `ital` and `slnt` axes a font read without a declaration
+    // draws a weight and style on; none for a registered one, which its
+    // declaration instanced.
+    style_axes: SmallVec<[StyleAxis; 3]>,
     is_color: bool,
     // The axis positions the typeface is instanced at, sorted by tag.
     variations: Box<[([u8; 4], f32)]>,
@@ -122,13 +128,14 @@ impl Typeface {
             Style::Normal => FontStyle::Normal,
             Style::Italic | Style::Oblique(_) => FontStyle::Italic,
         };
-        let axis = |tag: &[u8; 4]| font.axes().iter().find(|axis| axis.tag() == Tag::new(tag));
+        let style_axes = style_axes(&font);
+        let axis = |tag: &[u8; 4]| style_axes.iter().find(|axis| axis.tag == *tag);
         let default_weight = f32::from(weight.value());
         let weights = axis(b"wght").map_or((default_weight, default_weight), |axis| {
-            (axis.min_value().max(1.0), axis.max_value().min(1000.0))
+            (axis.min.max(1.0), axis.max.min(1000.0))
         });
-        let italic_axis = axis(b"ital").is_some_and(|axis| axis.max_value() >= 1.0)
-            || axis(b"slnt").is_some_and(|axis| axis.min_value() < 0.0);
+        let italic_axis = axis(b"ital").is_some_and(|axis| axis.max >= 1.0)
+            || axis(b"slnt").is_some_and(|axis| axis.min < 0.0);
         Ok(Self(Arc::new(Loaded {
             families: family_names(&font),
             registered_family: None,
@@ -136,6 +143,7 @@ impl Typeface {
             style,
             weights,
             italic_axis,
+            style_axes,
             is_color: is_color(&font),
             variations: Box::default(),
             content_hash,
@@ -159,7 +167,7 @@ impl Typeface {
         variations: &[([u8; 4], f32)],
     ) -> Result<Self, TypefaceError> {
         let font = Font::new(blob(bytes.into()), 0).ok_or(TypefaceError::InvalidFont)?;
-        let mut applied = declared_variations(&font, weight, style);
+        let mut applied = declared_variations(&style_axes(&font), weight, style);
         for &(tag, value) in variations {
             let valid = value.is_finite()
                 && font.axes().iter().any(|axis| {
@@ -193,6 +201,7 @@ impl Typeface {
             style,
             weights: (declared_weight, declared_weight),
             italic_axis: false,
+            style_axes: SmallVec::new(),
             is_color: is_color(&font),
             variations: applied.into_boxed_slice(),
             content_hash,
@@ -247,7 +256,7 @@ impl Typeface {
                     .font
                     .charmap()
                     .unicodes()
-                    .filter(|(_, glyph)| *glyph != GlyphId::NOTDEF)
+                    .filter(|(_, glyph)| *glyph != FontGlyphId::NOTDEF)
                     .map(|(codepoint, _)| codepoint),
             )
         })
@@ -270,11 +279,12 @@ impl Typeface {
     }
 
     /// The font's line metrics at the instance, in design units: the
-    /// `hhea` ascender and descender (negative) and line gap.
+    /// typographic line when the font asks for it with `USE_TYPO_METRICS`,
+    /// otherwise the `hhea` line, as Skia and FreeType read them.
     pub fn line_metrics(&self) -> LineMetrics {
         let metrics = self.0.font.metrics();
         metrics
-            .hhea_line
+            .h_line()
             .map_or_else(LineMetrics::default, |line| LineMetrics {
                 ascent: line.ascender.to_f32(),
                 descent: line.descender.to_f32(),
@@ -284,7 +294,11 @@ impl Typeface {
 
     /// The glyph the font maps `ch` to, `None` when it has none.
     pub fn glyph(&self, ch: char) -> Option<GlyphId> {
-        self.0.font.charmap().map_unicode(ch)
+        self.0
+            .font
+            .charmap()
+            .map_unicode(ch)
+            .map(|glyph| GlyphId(glyph.to_u32()))
     }
 
     /// Whether the font maps `ch` to a glyph.
@@ -294,7 +308,44 @@ impl Typeface {
 
     /// The horizontal advance of `glyph` at the instance, in design units.
     pub fn advance(&self, glyph: GlyphId) -> f32 {
-        self.0.font.glyph_metrics().h_advance(glyph)
+        self.0
+            .font
+            .glyph_metrics()
+            .h_advance(FontGlyphId::new(glyph.0))
+    }
+
+    // Whether `other` is a clone of this typeface.
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    // The font model at the typeface's instance.
+    pub(crate) fn font(&self) -> &Font {
+        &self.0.font
+    }
+
+    // The axis positions that draw the typeface at `weight` and `style`: for
+    // a variable font read without a declaration, its `wght`, `ital` and
+    // `slnt` positions; none for a registered typeface, which its declaration
+    // already instanced.
+    pub(crate) fn axis_positions(
+        &self,
+        weight: FontWeight,
+        style: FontStyle,
+    ) -> SmallVec<[([u8; 4], f32); 3]> {
+        declared_variations(&self.0.style_axes, weight, style)
+    }
+}
+
+impl std::fmt::Debug for Typeface {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Typeface")
+            .field("family_names", &self.0.families)
+            .field("weight", &self.0.weight)
+            .field("style", &self.0.style)
+            .field("variations", &self.0.variations)
+            .finish_non_exhaustive()
     }
 }
 
@@ -369,19 +420,42 @@ fn family_names(font: &Font) -> Box<[String]> {
 
 // The positions a declared weight and style ask of the font's axes, clamped
 // into each axis's range.
-fn declared_variations(font: &Font, weight: FontWeight, style: FontStyle) -> Vec<([u8; 4], f32)> {
+fn declared_variations(
+    axes: &[StyleAxis],
+    weight: FontWeight,
+    style: FontStyle,
+) -> SmallVec<[([u8; 4], f32); 3]> {
     const OBLIQUE_DEGREES: f32 = -12.0;
-    font.axes()
-        .iter()
+    axes.iter()
         .filter_map(|axis| {
-            let tag = axis.tag().to_be_bytes();
-            let requested = match &tag {
+            let requested = match &axis.tag {
                 b"wght" => f32::from(weight.value()),
                 b"ital" if style == FontStyle::Italic => 1.0,
                 b"slnt" if style == FontStyle::Italic => OBLIQUE_DEGREES,
                 _ => return None,
             };
-            Some((tag, requested.clamp(axis.min_value(), axis.max_value())))
+            Some((axis.tag, requested.clamp(axis.min, axis.max)))
         })
+        .collect()
+}
+
+// An axis a weight or style sets, with its range.
+#[derive(Clone, Copy, Debug)]
+struct StyleAxis {
+    tag: [u8; 4],
+    min: f32,
+    max: f32,
+}
+
+// The `wght`, `ital` and `slnt` axes of `font`.
+fn style_axes(font: &Font) -> SmallVec<[StyleAxis; 3]> {
+    font.axes()
+        .iter()
+        .map(|axis| StyleAxis {
+            tag: axis.tag().to_be_bytes(),
+            min: axis.min_value(),
+            max: axis.max_value(),
+        })
+        .filter(|axis| matches!(&axis.tag, b"wght" | b"ital" | b"slnt"))
         .collect()
 }
