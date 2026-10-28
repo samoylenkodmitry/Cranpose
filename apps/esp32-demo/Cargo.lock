@@ -883,6 +883,7 @@ dependencies = [
  "read-fonts",
  "smallvec",
  "thiserror 2.0.21",
+ "unicode-bidi",
 ]
 
 [[package]]
@@ -1708,6 +1709,7 @@ dependencies = [
  "icu_locale_core",
  "icu_properties_data",
  "icu_provider",
+ "unicode-bidi",
  "zerotrie",
  "zerovec",
 ]
@@ -3001,6 +3003,12 @@ checksum = "e1b88fcfe09e89d3866a5c11019378088af2d24c3fbd4f0543f96b479ec90697"
 dependencies = [
  "version_check",
 ]
+
+[[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-ident"

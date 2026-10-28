@@ -298,6 +298,18 @@ impl Typeface {
     }
 }
 
+impl std::fmt::Debug for Typeface {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Typeface")
+            .field("family_names", &self.0.families)
+            .field("weight", &self.0.weight)
+            .field("style", &self.0.style)
+            .field("variations", &self.0.variations)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A font's vertical line metrics in design units.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LineMetrics {

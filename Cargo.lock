@@ -1664,6 +1664,7 @@ dependencies = [
  "read-fonts",
  "smallvec",
  "thiserror 2.0.21",
+ "unicode-bidi",
  "web-time",
 ]
 
@@ -3460,6 +3461,7 @@ dependencies = [
  "icu_properties_data",
  "icu_provider",
  "serde",
+ "unicode-bidi",
  "zerotrie",
  "zerovec",
 ]

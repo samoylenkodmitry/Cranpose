@@ -94,6 +94,18 @@ impl FontFamilyResolver {
         request: FontRequest<'_>,
         mut visit: impl FnMut(Range<usize>, &'a Typeface),
     ) {
+        self.typeface_runs(text, request, |range, typeface| {
+            visit(range, &self.typefaces[typeface]);
+        });
+    }
+
+    // `runs` with each typeface as its index in `typefaces`.
+    pub(crate) fn typeface_runs(
+        &self,
+        text: &str,
+        request: FontRequest<'_>,
+        mut visit: impl FnMut(Range<usize>, usize),
+    ) {
         let Some(primary) = self.primary(request) else {
             return;
         };
@@ -104,12 +116,10 @@ impl FontFamilyResolver {
         if self.typefaces.len() == 1
             || (!primary_face.is_color() && draws_plainly(primary_face.coverage(), text))
         {
-            visit(0..text.len(), primary_face);
+            visit(0..text.len(), primary);
             return;
         }
-        self.fallback_chain(request).split(text, |range, typeface| {
-            visit(range, &self.typefaces[typeface]);
-        });
+        self.fallback_chain(request).split(text, visit);
     }
 
     fn primary(&self, request: FontRequest<'_>) -> Option<usize> {

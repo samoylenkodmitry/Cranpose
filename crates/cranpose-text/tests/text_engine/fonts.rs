@@ -11,6 +11,7 @@ pub(crate) const DEJAVU_MONO: &str =
 pub(crate) const TWEMOJI: &str = "apps/desktop-demo/assets/TwemojiMozilla.ttf";
 pub(crate) const NOTO_SANS_LATIN: &str = "apps/esp32-demo/assets/NotoSans-Latin.ttf";
 pub(crate) const NOTO_SANS_MERGED: &str = "apps/desktop-demo/assets/NotoSansMerged.ttf";
+pub(crate) const ARABIC_VF: &str = "crates/cranpose-fonts/assets/NotoSansArabic-VF.ttf";
 pub(crate) const DEVANAGARI_VF: &str = "crates/cranpose-fonts/assets/NotoSansDevanagari-VF.ttf";
 pub(crate) const DEVANAGARI: &str =
     "crates/cranpose-render/common/tests/fixtures/localization/Devanagari.ttf";
