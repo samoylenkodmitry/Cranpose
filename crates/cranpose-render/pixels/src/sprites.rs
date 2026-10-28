@@ -12,15 +12,16 @@
 //! A sprite is [`SPRITE_FLOATS`] numbers; [`field`] names where each part
 //! starts. Positions are device pixels with the origin at the top left.
 
-use std::{
-    collections::HashMap,
-    fmt::Write as _,
-    hash::{DefaultHasher, Hasher},
-};
+use std::{collections::HashMap, fmt::Write as _, hash::Hasher};
 
-use cranpose_render_common::{brush_sampling::color_to_rgba, graph_scene::RenderDiagnostics};
+use cranpose_render_common::{
+    brush_sampling::color_to_rgba,
+    graph_scene::RenderDiagnostics,
+    layer_shadow::{ShadowHole, ShadowRRect},
+};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, Point, Rect, StrokeCap, StrokeJoin, TileMode, whole,
+    BlendMode, Brush, Color, FxBuildHasher, FxHasher, Point, Rect, StrokeCap, StrokeJoin, TileMode,
+    whole,
 };
 
 use crate::{
@@ -28,7 +29,7 @@ use crate::{
         ClipBounds, RenderItem, ShapeCoverage, Target, TextRaster, clip_rect_to_window, draw_item,
         place_shape, snap_delta_for_anchor,
     },
-    scene::{DrawShape, RasterScene},
+    scene::{DrawShape, RasterScene, ShadowDraw, TextDraw},
 };
 
 /// How many numbers make one sprite.
@@ -105,7 +106,7 @@ pub struct SpriteFrame {
     sprites: Vec<f32>,
     uploads: Vec<TextureUpload>,
     releases: Vec<u32>,
-    textures: HashMap<u64, CachedTexture>,
+    textures: HashMap<u64, CachedTexture, FxBuildHasher>,
     next_texture: u32,
     generation: u64,
 }
@@ -510,13 +511,20 @@ impl Canonical {
     /// A hash of everything that decides the canonical item's pixels.
     fn key(&self) -> u64 {
         let Self { scene, item } = self;
-        let mut hasher = HashWriter(DefaultHasher::new());
-        // The `Debug` forms name every field, positions included; an image's
-        // pixels are named by the bitmap's id instead of printed.
+        let mut hasher = HashWriter(FxHasher::default());
+        // A text's and a shadow's fields are hashed as numbers. A shape's and
+        // an image's `Debug` forms name every field, positions included; an
+        // image's pixels are named by the bitmap's id instead of printed.
         let _ = match item {
+            RenderItem::Text(_) => {
+                hash_text(&mut hasher.0, &scene.texts[0]);
+                Ok(())
+            }
+            RenderItem::Shadow(_) => {
+                hash_shadow(&mut hasher.0, &scene.shadows[0]);
+                Ok(())
+            }
             RenderItem::Shape(_) => write!(hasher, "shape {:?}", scene.shapes[0]),
-            RenderItem::Text(_) => write!(hasher, "text {:?}", scene.texts[0]),
-            RenderItem::Shadow(_) => write!(hasher, "shadow {:?}", scene.shadows[0]),
             RenderItem::Image(_) => {
                 let draw = &scene.images[0];
                 write!(
@@ -583,7 +591,7 @@ impl Canonical {
 }
 
 /// Text drawn as the rasterizer draws it, into its own premultiplied image.
-fn rasterize_text(draw: &crate::scene::TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
+fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
     let (text, rect) = crate::draw::rasterize_text(draw, text)?;
     let mut pixels = text.pixels;
     for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -595,7 +603,98 @@ fn rasterize_text(draw: &crate::scene::TextDraw, text: &TextRaster) -> Option<(R
     Some((rect, pixels))
 }
 
-struct HashWriter(DefaultHasher);
+// A text's draw: its numbers, and the render hashes of its string and style,
+// which hash every setting that changes how the text looks, as the
+// renderers' text caches key on them. Formatting the draw for its `Debug`
+// form took about half of a watch frame's instructions. Every field is named,
+// so a new one does not build until it is hashed here too.
+fn hash_text(hasher: &mut FxHasher, draw: &TextDraw) {
+    let TextDraw {
+        rect,
+        snap_anchor,
+        text,
+        color,
+        text_style,
+        font_size,
+        scale,
+        clip,
+    } = draw;
+    hasher.write_u8(b't');
+    hash_rect(hasher, *rect);
+    hash_point(hasher, *snap_anchor);
+    hasher.write_u64(text.render_hash());
+    hash_color(hasher, *color);
+    hasher.write_u64(text_style.render_hash());
+    hash_floats(hasher, &[*font_size, *scale]);
+    hash_clip(hasher, *clip);
+}
+
+// A shadow's draw, every field of it as numbers.
+fn hash_shadow(hasher: &mut FxHasher, draw: &ShadowDraw) {
+    let ShadowDraw {
+        shadow:
+            ShadowRRect {
+                bounds,
+                radii,
+                umbra_inset,
+                distance_correction,
+                hole,
+            },
+        snap_anchor,
+        color,
+        clip,
+    } = draw;
+    hasher.write_u8(b's');
+    hash_rect(hasher, *bounds);
+    hash_floats(hasher, radii);
+    hash_floats(hasher, &[*umbra_inset, *distance_correction]);
+    match hole {
+        Some(ShadowHole { inset, radius }) => {
+            hasher.write_u8(1);
+            hash_floats(hasher, &[*inset, *radius]);
+        }
+        None => hasher.write_u8(0),
+    }
+    hash_point(hasher, *snap_anchor);
+    hash_color(hasher, *color);
+    hash_clip(hasher, *clip);
+}
+
+fn hash_floats(hasher: &mut FxHasher, values: &[f32]) {
+    for value in values {
+        hasher.write_u32(value.to_bits());
+    }
+}
+
+fn hash_color(hasher: &mut FxHasher, color: Color) {
+    hash_floats(hasher, &[color.0, color.1, color.2, color.3]);
+}
+
+fn hash_clip(hasher: &mut FxHasher, clip: Option<Rect>) {
+    match clip {
+        Some(clip) => {
+            hasher.write_u8(1);
+            hash_rect(hasher, clip);
+        }
+        None => hasher.write_u8(0),
+    }
+}
+
+fn hash_rect(hasher: &mut FxHasher, rect: Rect) {
+    hash_floats(hasher, &[rect.x, rect.y, rect.width, rect.height]);
+}
+
+fn hash_point(hasher: &mut FxHasher, point: Option<Point>) {
+    match point {
+        Some(point) => {
+            hasher.write_u8(1);
+            hash_floats(hasher, &[point.x, point.y]);
+        }
+        None => hasher.write_u8(0),
+    }
+}
+
+struct HashWriter(FxHasher);
 
 impl std::fmt::Write for HashWriter {
     fn write_str(&mut self, text: &str) -> std::fmt::Result {
@@ -603,3 +702,7 @@ impl std::fmt::Write for HashWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "tests/sprites_tests.rs"]
+mod tests;

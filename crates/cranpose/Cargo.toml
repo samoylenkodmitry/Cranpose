@@ -804,6 +804,11 @@ name = "framebuffer_frame"
 harness = false
 required-features = ["framebuffer"]
 
+[[bench]]
+name = "watch_sprites"
+harness = false
+required-features = ["watchos"]
+
 [[example]]
 name = "localization"
 path = "examples/localization.rs"
