@@ -226,6 +226,83 @@ impl Wrapping<'_> {
         BrokenLine::plain(start..cut)
     }
 
+    // The limits from `.0` up to but not including `.1` at which greedy
+    // breaking through `breaks` ends `line` where it does: it still fits,
+    // and no later place the breaking would end it at fits.
+    pub(crate) fn greedy_limits(
+        &self,
+        line: &BrokenLine,
+        breaks: &[BreakOpportunity],
+    ) -> (f32, f32) {
+        let Range { start, end } = line.text;
+        let at = breaks.partition_point(|opportunity| opportunity.offset < end);
+        let ended_at = breaks
+            .get(at)
+            .filter(|opportunity| opportunity.offset == end)
+            .map(|opportunity| opportunity.kind);
+        let later = breaks.get(at + 1..).unwrap_or_default();
+        match (line.end, ended_at) {
+            (LineEnd::Hyphen, Some(BreakKind::Hyphen { width, .. })) => (
+                self.widths.width(start, end) + width,
+                self.next_word_fits(start, later),
+            ),
+            (LineEnd::Plain, Some(BreakKind::Soft)) => {
+                let next = later
+                    .iter()
+                    .find(|opportunity| !is_hyphen(opportunity))
+                    .map_or(f32::INFINITY, |opportunity| {
+                        self.line_width(start, opportunity.offset)
+                    });
+                (self.line_width(start, end), next)
+            }
+            (LineEnd::Plain, Some(BreakKind::Hard)) => (self.line_width(start, end), f32::INFINITY),
+            _ if end == self.text.len() => (self.line_width(start, end), f32::INFINITY),
+            _ => self.cut_limits(line.text.clone(), breaks),
+        }
+    }
+
+    // The limits of a line that cuts a word between clusters: the cut moves
+    // once one more cluster fits, or a hyphenation point of the word does.
+    fn cut_limits(
+        &self,
+        Range { start, end }: Range<usize>,
+        breaks: &[BreakOpportunity],
+    ) -> (f32, f32) {
+        let width = self.widths.width(start, end);
+        let fits = if width <= self.limit(start) {
+            width
+        } else {
+            f32::NEG_INFINITY
+        };
+        let first = breaks.partition_point(|opportunity| opportunity.offset <= start);
+        let cluster = self
+            .widths
+            .next_boundary(end)
+            .map_or(f32::INFINITY, |next| self.widths.width(start, next));
+        (
+            fits,
+            cluster.min(self.next_word_fits(start, &breaks[first..])),
+        )
+    }
+
+    // The narrowest width the line from `start` takes ending at one of
+    // `breaks` up to and with the next end between words.
+    fn next_word_fits(&self, start: usize, breaks: &[BreakOpportunity]) -> f32 {
+        let words = breaks
+            .iter()
+            .position(|opportunity| !is_hyphen(opportunity))
+            .map_or(breaks.len(), |index| index + 1);
+        breaks[..words]
+            .iter()
+            .map(|opportunity| match opportunity.kind {
+                BreakKind::Hyphen { width, .. } => {
+                    self.widths.width(start, opportunity.offset) + width
+                }
+                BreakKind::Soft | BreakKind::Hard => self.line_width(start, opportunity.offset),
+            })
+            .fold(f32::INFINITY, f32::min)
+    }
+
     // Ends `lines` with the line from `start` to the end of the text, and an
     // empty line after a final hard break, so an empty text has one line.
     fn finish(&self, start: usize, breaks: &[BreakOpportunity], lines: &mut Vec<BrokenLine>) {
@@ -361,6 +438,10 @@ impl LineBalancer {
         }
         true
     }
+}
+
+fn is_hyphen(opportunity: &BreakOpportunity) -> bool {
+    matches!(opportunity.kind, BreakKind::Hyphen { .. })
 }
 
 // Whether `text` holds a hard line break.

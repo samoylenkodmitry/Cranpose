@@ -60,6 +60,24 @@ pub(crate) fn lay_out(
     width: f32,
     options: TextLayoutOptions,
 ) -> TextLayout {
+    lay_out_with(
+        resolver,
+        text,
+        (paragraph, ParagraphLengths::default()),
+        width,
+        options,
+    )
+}
+
+// Lays `text` out in one span of the default family at 400, with
+// `paragraph`, `lengths`, `width` and `options`.
+pub(crate) fn lay_out_with(
+    resolver: &FontFamilyResolver,
+    text: &str,
+    (paragraph, lengths): (&ParagraphStyle, ParagraphLengths),
+    width: f32,
+    options: TextLayoutOptions,
+) -> TextLayout {
     let family = FontFamily::Default;
     let spans = [span(0..text.len(), &family, 400)];
     TextLayouter::default().layout(
@@ -67,7 +85,7 @@ pub(crate) fn lay_out(
             text,
             spans: &spans,
             paragraph,
-            lengths: ParagraphLengths::default(),
+            lengths,
             width,
             options,
         },

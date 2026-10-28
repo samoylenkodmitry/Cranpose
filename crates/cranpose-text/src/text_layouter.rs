@@ -4,7 +4,6 @@ use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     cluster_widths::ClusterWidths,
     font_family_resolver::FontFamilyResolver,
-    glyph_id::GlyphId,
     itemizer::{Itemizer, TextItem},
     layout_options::{TextLayoutOptions, TextOverflow},
     line_box::{FontExtent, paragraph_line_box},
@@ -12,16 +11,20 @@ use crate::{
         BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
         break_lines, has_hard_break, starts_paragraph, visible_end,
     },
-    paragraph::{LineBreak, ResolvedTextDirection, TextAlign},
+    paragraph::{LineBreak, ResolvedTextDirection},
     script::Script,
     shaper::{ShapedGlyph, Shaper},
     shaping_span::ShapingSpan,
     style::ParagraphStyle,
-    text_layout::{LayoutLine, LineRun, TextLayout, font_units},
+    text_layout::{LayoutLine, LineRun, TextLayout, WidthRange, font_units},
     typeface::Typeface,
 };
 #[cfg(feature = "hyphenation")]
-use crate::{hyphenator::Hyphenator, line_breaker::BreakKind, paragraph::Hyphens};
+use crate::{
+    hyphenator::Hyphenator,
+    line_breaker::BreakKind,
+    paragraph::{Hyphens, TextAlign},
+};
 
 /// A paragraph to lay out and how.
 #[derive(Clone, Debug)]
@@ -131,6 +134,13 @@ struct Piece {
     width: f32,
 }
 
+// A line's text, the end of its visible text and its indent.
+struct LineText {
+    range: Range<usize>,
+    visible: usize,
+    indent: f32,
+}
+
 // Where a line that does not fit shows an ellipsis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EllipsisAt {
@@ -186,6 +196,15 @@ impl TextLayouter {
         {
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
+            let min = if options.soft_wrap {
+                self.widths.width(0, visible_end(text, 0, text.len())) + lengths.first_line_indent
+            } else {
+                f32::NEG_INFINITY
+            };
+            layout.hold = Some(WidthRange {
+                min,
+                max: f32::INFINITY,
+            });
         } else {
             let line_break = input.paragraph.line_break;
             self.breaker
@@ -214,6 +233,7 @@ impl TextLayouter {
                     break_lines(&wrapping, &self.breaks, &mut self.lines);
                 }
             }
+            layout.hold = self.hold(input, &options, &wrapping);
         }
         layout.did_overflow_height = self.lines.len() > options.max_lines;
         self.lines.truncate(options.max_lines.max(1));
@@ -319,6 +339,34 @@ impl TextLayouter {
         }
     }
 
+    // The widths at which breaking gives the same lines: every width when
+    // lines do not wrap, for greedy breaking the limits each line keeps its
+    // end over moved by its indent, and none for even breaking, whose lines
+    // can move with any width.
+    fn hold(
+        &self,
+        input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
+        wrapping: &Wrapping<'_>,
+    ) -> Option<WidthRange> {
+        if !options.soft_wrap {
+            return Some(WidthRange::ALL);
+        }
+        if !matches!(
+            input.paragraph.line_break,
+            LineBreak::Simple | LineBreak::Unspecified
+        ) {
+            return None;
+        }
+        let mut hold = WidthRange::ALL;
+        for line in &self.lines {
+            let (min, max) = wrapping.greedy_limits(line, &self.breaks);
+            let indent = indent(input, line.text.start);
+            hold.narrow(min + indent, max + indent);
+        }
+        Some(hold)
+    }
+
     fn shape(
         &mut self,
         input: &LayoutInput<'_>,
@@ -385,28 +433,18 @@ impl TextLayouter {
         layout: &mut TextLayout,
     ) {
         let mut top = 0.0;
-        let mut widest: f32 = 0.0;
         let last = self.lines.len() - 1;
         for index in 0..=last {
             let range = self.lines[index].text.clone();
-            let visible = visible_end(input.text, range.start, range.end);
-            let overflows = self.widths.width(range.start, visible) > input.width;
-            let ellipsis = ellipsis_at(options, index == last)
-                .filter(|_| overflows || (index == last && layout.did_overflow_height));
-            self.pieces.clear();
-            let ellipsized = match ellipsis {
-                Some(at) => self.ellipsize(input, resolver, at, range.clone(), visible, layout),
-                None => false,
+            let line = LineText {
+                visible: visible_end(input.text, range.start, range.end),
+                indent: indent(input, range.start),
+                range,
             };
-            if !ellipsized {
-                self.collect_pieces(input, range.clone(), visible, layout);
-                if self.lines[index].end == LineEnd::Hyphen {
-                    self.push_hyphen(input, range.end, layout);
-                }
-            }
+            let ellipsized = self.collect_line(input, options, resolver, (index, &line), layout);
             reorder_visually(&mut self.pieces, |piece| piece.level);
-            let (runs, width) = self.place_runs(visible, layout);
-            let extent = self.line_extent(input, resolver, layout, range.start);
+            let (runs, width) = self.place_runs(line.visible, layout);
+            let extent = self.line_extent(input, resolver, layout, line.range.start);
             let asked = input.lengths.line_height.unwrap_or(f32::NAN);
             let line_box = paragraph_line_box(input.paragraph, extent, asked, input.lengths.grid);
             let trim_top = if index == 0 { line_box.trim_top } else { 0.0 };
@@ -415,40 +453,75 @@ impl TextLayouter {
             } else {
                 0.0
             };
-            let indent = if starts_paragraph(input.text, range.start) {
-                input.lengths.first_line_indent
-            } else {
-                input.lengths.rest_line_indent
-            };
             let bottom = top + line_box.height - trim_top - trim_bottom;
             layout.lines.push(LayoutLine {
-                level: self.paragraph_level(input, range.start),
-                text: range,
-                visible_end: visible,
+                level: self.paragraph_level(input, line.range.start),
+                text: line.range,
+                visible_end: line.visible,
                 runs,
                 top,
                 baseline: top + line_box.baseline - trim_top,
                 bottom,
-                left: indent,
+                left: line.indent,
+                indent: line.indent,
                 width,
+                stretch: 0.0,
                 ellipsized,
+                ends_paragraph: true,
             });
             top = bottom;
-            widest = widest.max(width + indent);
+            layout.widest = layout.widest.max(width + line.indent);
+        }
+        for index in 1..layout.lines.len() {
+            let starts = starts_paragraph(input.text, layout.lines[index].text.start);
+            layout.lines[index - 1].ends_paragraph = starts;
         }
         if layout.lines.len() < options.min_lines {
             let first = &layout.lines[0];
             let missing = options.min_lines - layout.lines.len();
             top += (first.bottom - first.top) * lines_f32(missing);
         }
-        layout.width = if input.width.is_finite() {
-            input.width
-        } else {
-            widest
-        };
         layout.height = top;
-        layout.did_overflow_width = widest > layout.width;
-        align_lines(input, layout);
+        layout.align(input.width, input.paragraph.text_align);
+    }
+
+    // Collects the pieces of line `index`, with an ellipsis where it does
+    // not fit and the options ask for one, or the hyphen of a hyphenated
+    // line, and narrows the layout's hold to the widths that keep the
+    // ellipsis where it is. True when the line shows an ellipsis.
+    fn collect_line(
+        &mut self,
+        input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
+        resolver: &FontFamilyResolver,
+        (index, line): (usize, &LineText),
+        layout: &mut TextLayout,
+    ) -> bool {
+        self.pieces.clear();
+        let last = index + 1 == self.lines.len();
+        let visible_width = self.widths.width(line.range.start, line.visible);
+        let overflows = visible_width > input.width - line.indent;
+        let ellipsis = ellipsis_at(options, last);
+        let shown = ellipsis.filter(|_| overflows || (last && layout.did_overflow_height));
+        if let Some(hold) = &mut layout.hold {
+            if ellipsis.is_some() && shown.is_none() {
+                hold.narrow(visible_width + line.indent, f32::INFINITY);
+            }
+            if shown.is_some() && overflows {
+                hold.narrow(f32::NEG_INFINITY, visible_width + line.indent);
+            }
+        }
+        let ellipsized = match shown {
+            Some(at) => self.ellipsize(input, resolver, at, line, layout),
+            None => false,
+        };
+        if !ellipsized {
+            self.collect_pieces(input, line.range.clone(), line.visible, layout);
+            if self.lines[index].end == LineEnd::Hyphen {
+                self.push_hyphen(input, line.range.end, layout);
+            }
+        }
+        ellipsized
     }
 
     // Puts the line's pieces, already in visual order, into runs from its
@@ -463,6 +536,15 @@ impl TextLayouter {
                 visible_left.get_or_insert(x);
                 width += piece.width;
             }
+            let space = layout.faces[piece.face].glyph(' ');
+            let spaces = if piece.text.start < visible {
+                layout.glyphs[piece.glyphs.clone()]
+                    .iter()
+                    .filter(|glyph| Some(glyph.id) == space)
+                    .count()
+            } else {
+                0
+            };
             layout.runs.push(LineRun {
                 text: piece.text.clone(),
                 glyphs: piece.glyphs.clone(),
@@ -470,12 +552,14 @@ impl TextLayouter {
                 size: piece.size,
                 scale: piece.scale,
                 spacing: piece.spacing,
+                space,
+                spaces: u16::try_from(spaces).unwrap_or(u16::MAX),
                 word_spacing: 0.0,
-                space: None,
                 baseline_shift: piece.baseline_shift,
                 level: piece.level,
                 x,
                 width: piece.width,
+                shift: 0.0,
             });
             x += piece.width;
         }
@@ -493,10 +577,10 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
         at: EllipsisAt,
-        range: Range<usize>,
-        visible: usize,
+        line: &LineText,
         layout: &mut TextLayout,
     ) -> bool {
+        let (range, visible) = (line.range.clone(), line.visible);
         let span = input
             .spans
             .iter()
@@ -509,18 +593,37 @@ impl TextLayouter {
         let Some(mut ellipsis) = self.ellipsis_piece(input, resolver, span, level, layout) else {
             return false;
         };
-        let room = (input.width - ellipsis.width).max(0.0);
+        let room = (input.width - line.indent - ellipsis.width).max(0.0);
         let text = input.text;
         let (head, tail) = match at {
             EllipsisAt::End => {
                 let cut = self.widths.last_fitting(range.start, visible, room);
+                if let Some(hold) = &mut layout.hold {
+                    // The cut stays while its text fits and one more cluster
+                    // does not.
+                    let edge = line.indent + ellipsis.width;
+                    let min = if cut > range.start {
+                        self.widths.width(range.start, cut) + edge
+                    } else {
+                        f32::NEG_INFINITY
+                    };
+                    let max = match self.widths.next_boundary(cut) {
+                        Some(next) if cut < visible => self.widths.width(range.start, next) + edge,
+                        _ => f32::INFINITY,
+                    };
+                    hold.narrow(min, max);
+                }
                 (visible_end(text, range.start, cut), range.end)
             }
-            EllipsisAt::Start => (
-                range.start,
-                self.widths.first_fitting(range.start, visible, room),
-            ),
+            EllipsisAt::Start => {
+                layout.hold = None;
+                (
+                    range.start,
+                    self.widths.first_fitting(range.start, visible, room),
+                )
+            }
             EllipsisAt::Middle => {
+                layout.hold = None;
                 let head = self.widths.last_fitting(range.start, visible, room / 2.0);
                 let used = self.widths.width(range.start, head);
                 (head, self.widths.first_fitting(head, visible, room - used))
@@ -724,6 +827,15 @@ fn ellipsis_at(options: &TextLayoutOptions, last: bool) -> Option<EllipsisAt> {
     }
 }
 
+// The indent of the line starting at `offset`.
+fn indent(input: &LayoutInput<'_>, offset: usize) -> f32 {
+    if starts_paragraph(input.text, offset) {
+        input.lengths.first_line_indent
+    } else {
+        input.lengths.rest_line_indent
+    }
+}
+
 // The index of the item that holds `offset`.
 fn item_at(items: &[ShapedItem], offset: usize) -> usize {
     items.partition_point(|item| item.text.end <= offset)
@@ -828,74 +940,6 @@ fn face_index(faces: &mut Vec<Typeface>, face: &Typeface) -> usize {
         })
 }
 
-// Places each line across the layout's width as the paragraph aligns it,
-// stretching justified lines to the width.
-fn align_lines(input: &LayoutInput<'_>, layout: &mut TextLayout) {
-    let align = input.paragraph.text_align;
-    for index in 0..layout.lines.len() {
-        let line = &layout.lines[index];
-        let indent = line.left;
-        let free = layout.width - indent - line.width;
-        // Justified text stretches the spaces of each line but the last
-        // of its paragraph, as Android's inter-word justification does.
-        let justified = align == TextAlign::Justify
-            && free > 0.0
-            && !line.ellipsized
-            && layout
-                .lines
-                .get(index + 1)
-                .is_some_and(|next| !starts_paragraph(input.text, next.text.start));
-        let stretched = justified && justify(layout, index, free);
-        let line = &mut layout.lines[index];
-        line.left = if stretched {
-            0.0
-        } else {
-            align_fraction(align, line.level) * free
-        };
-        if !line.level.is_rtl() {
-            line.left += indent;
-        }
-    }
-}
-
-// Spreads `free` width over the spaces of the visible text of line `index`;
-// false when the line has none.
-fn justify(layout: &mut TextLayout, index: usize, free: f32) -> bool {
-    let line = &layout.lines[index];
-    let visible = line.visible_end;
-    let runs = line.runs.clone();
-    let spaces_of = |layout: &TextLayout, run: &LineRun| -> (Option<GlyphId>, u16) {
-        let space = layout.faces[run.face].glyph(' ');
-        let count = layout.glyphs[run.glyphs.clone()]
-            .iter()
-            .filter(|glyph| Some(glyph.id) == space && glyph.text_offset() < visible)
-            .count();
-        (space, u16::try_from(count).unwrap_or(u16::MAX))
-    };
-    let total: u32 = layout.runs[runs.clone()]
-        .iter()
-        .map(|run| u32::from(spaces_of(layout, run).1))
-        .sum();
-    if total == 0 {
-        return false;
-    }
-    let per_space = free / f32::from(u16::try_from(total).unwrap_or(u16::MAX));
-    let mut x = layout.runs[runs.start].x;
-    for at in runs {
-        let (space, count) = spaces_of(layout, &layout.runs[at]);
-        let run = &mut layout.runs[at];
-        run.x = x;
-        if count > 0 {
-            run.word_spacing = per_space;
-            run.space = space;
-            run.width += per_space * f32::from(count);
-        }
-        x += run.width;
-    }
-    layout.lines[index].width += free;
-    true
-}
-
 // The width of `glyphs` at `scale`, each of their clusters `spacing` wider.
 fn spaced_width(glyphs: &[ShapedGlyph], scale: f32, spacing: f32) -> f32 {
     let mut clusters = 0_u16;
@@ -926,17 +970,5 @@ fn cluster_index(glyphs: &[ShapedGlyph], offset: usize, level: BidiLevel) -> usi
         glyphs.partition_point(|glyph| glyph.text_offset() > offset)
     } else {
         glyphs.partition_point(|glyph| glyph.text_offset() < offset)
-    }
-}
-
-// How far across the free width a line of paragraph `level` sits.
-fn align_fraction(align: TextAlign, level: BidiLevel) -> f32 {
-    let start = if level.is_rtl() { 1.0 } else { 0.0 };
-    match align {
-        TextAlign::Left => 0.0,
-        TextAlign::Right => 1.0,
-        TextAlign::Center => 0.5,
-        TextAlign::Start | TextAlign::Justify | TextAlign::Unspecified => start,
-        TextAlign::End => 1.0 - start,
     }
 }

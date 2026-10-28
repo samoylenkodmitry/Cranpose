@@ -14,4 +14,5 @@ mod text_layout;
 mod text_overflow;
 mod text_queries;
 mod typeface;
+mod width_hold;
 mod word_cache;
