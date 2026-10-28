@@ -1,11 +1,9 @@
+use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
-use std::{
-    collections::VecDeque,
-    sync::{
-        Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, Receiver, Sender},
-    },
+use std::sync::{
+    Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    mpsc::{self, Receiver, Sender},
 };
 
 /// Tells a renderer that drew a placeholder when a pipeline lands, so it
@@ -102,6 +100,8 @@ fn warm_up_threads(backend: wgpu::Backend) -> usize {
 
 #[cfg(not(target_arch = "wasm32"))]
 type Job = Box<dyn FnOnce() + Send + 'static>;
+#[cfg(target_arch = "wasm32")]
+type Job = Box<dyn FnOnce()>;
 
 /// What a value crossing to the compiler threads must be: `Send` where
 /// those threads exist, nothing on the web, where wgpu handles are single-threaded
@@ -157,6 +157,12 @@ pub(crate) struct PipelineCompiler {
     workers: Option<Arc<Workers>>,
     #[cfg(target_arch = "wasm32")]
     discovery: std::rc::Rc<DiscoveryFrame>,
+    // On WebGL, the builds that link one a frame (see `paced`), shared by
+    // every handle, and whether this handle queues there.
+    #[cfg(target_arch = "wasm32")]
+    paced: std::rc::Rc<std::cell::RefCell<Queues>>,
+    #[cfg(target_arch = "wasm32")]
+    pacing: bool,
 }
 
 /// On the web, the frame drawn while it takes its pipelines from a pipeline
@@ -165,21 +171,27 @@ pub(crate) struct PipelineCompiler {
 #[derive(Default)]
 struct DiscoveryFrame {
     drawing: std::cell::Cell<bool>,
-    held: std::cell::RefCell<Vec<Box<dyn FnOnce()>>>,
+    held: std::cell::RefCell<Vec<Job>>,
 }
 
-/// The jobs waiting for a compiler thread, per lane.
-#[cfg(not(target_arch = "wasm32"))]
+/// The jobs waiting for a compiler thread, or on WebGL for a frame's end, per lane.
 #[derive(Default)]
 struct Queues {
     demanded: VecDeque<Job>,
     warm_up: VecDeque<Job>,
     /// Set by the last handle: the threads start nothing more.
+    #[cfg(not(target_arch = "wasm32"))]
     closed: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Queues {
+    fn push(&mut self, lane: CompileLane, job: Job) {
+        match lane {
+            CompileLane::Demanded => self.demanded.push_back(job),
+            CompileLane::WarmUp | CompileLane::Later => self.warm_up.push_back(job),
+        }
+    }
+
     /// The next job a thread taking `warm_ups` or only demanded jobs
     /// starts; a warm-up thread takes demanded jobs only when `spread`.
     fn next(&mut self, warm_ups: bool, spread: bool) -> Option<Job> {
@@ -401,13 +413,35 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            false
+            self.pacing
         }
     }
 
-    /// Whether a pipeline queued now is built ahead of the draw that needs
-    /// it: on the compiler's threads where they run, and on the web at the
-    /// end of a frame that takes its pipelines from a pipeline discovery.
+    // A handle whose builds link one a frame, at the frame's end, where a
+    // link holds the browser's GPU process and every frame behind it: WebGL
+    // without parallel compile, as Chrome on a Huawei Mate 20 X runs it,
+    // where the first open of the demo's Liquid UI tab linked 16 glass
+    // programs in a row, ~250 ms each, and the page drew nothing for 4.4 s.
+    // A draw asking it for a pipeline that is not built draws its
+    // placeholder meanwhile. Elsewhere it is this compiler.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(unused_variables, reason = "native builds compile on threads")
+    )]
+    pub(crate) fn paced(&self, backend: wgpu::Backend) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        if backend == wgpu::Backend::Gl {
+            return Self {
+                pacing: true,
+                ..self.clone()
+            };
+        }
+        self.clone()
+    }
+
+    /// Whether a pipeline queued now is built ahead of the draw that needs it: on the
+    /// compiler's threads where they run, on WebGL at a frame's end, and elsewhere on the
+    /// web at the end of a frame that takes its pipelines from a pipeline discovery.
     pub(crate) fn builds_ahead(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -415,7 +449,7 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.discovery.drawing.get()
+            self.pacing || self.discovery.drawing.get()
         }
     }
 
@@ -429,7 +463,7 @@ impl PipelineCompiler {
 
     /// Ends the drawing frame: queues the jobs it held on
     /// [`CompileLane::Later`] behind the warm-ups, or on the web runs the
-    /// jobs a discovery frame held.
+    /// jobs a discovery frame held, and on WebGL the next one waiting.
     pub(crate) fn end_frame(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
@@ -446,9 +480,15 @@ impl PipelineCompiler {
             workers.pool.queued.notify_all();
         }
         #[cfg(target_arch = "wasm32")]
-        if self.discovery.drawing.replace(false) {
-            let held = std::mem::take(&mut *self.discovery.held.borrow_mut());
-            for job in held {
+        {
+            if self.discovery.drawing.replace(false) {
+                let held = std::mem::take(&mut *self.discovery.held.borrow_mut());
+                for job in held {
+                    job();
+                }
+            }
+            let paced = self.paced.borrow_mut().next(true, true);
+            if let Some(job) = paced {
                 job();
             }
         }
@@ -472,11 +512,11 @@ impl PipelineCompiler {
         }
     }
 
-    /// Queues `job` on `lane`'s thread, behind the jobs already waiting
-    /// there, or holds it to the frame's end on [`CompileLane::Later`]; on
-    /// the web it waits for the end of a frame that takes its pipelines from
-    /// a pipeline discovery. An inactive compiler drops it, and the caller
-    /// compiles at first use as before.
+    /// Queues `job` on `lane`'s thread, behind the jobs already waiting there, or holds
+    /// it to the frame's end on [`CompileLane::Later`]; on WebGL it waits for its turn at
+    /// a frame's end, and elsewhere on the web for the end of a frame that takes its
+    /// pipelines from a pipeline discovery. An inactive compiler drops it, and the
+    /// caller compiles at first use as before.
     pub(crate) fn enqueue(&self, lane: CompileLane, job: impl FnOnce() + CompilerSend + 'static) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
@@ -489,20 +529,15 @@ impl PipelineCompiler {
                 return;
             }
             workers.landing.queued.fetch_add(1, Ordering::AcqRel);
-            let mut queues = workers.pool.queues();
-            match lane {
-                CompileLane::Demanded => queues.demanded.push_back(Box::new(job)),
-                CompileLane::WarmUp | CompileLane::Later => {
-                    queues.warm_up.push_back(Box::new(job));
-                }
-            }
-            drop(queues);
+            workers.pool.queues().push(lane, Box::new(job));
             // A warm-up wakes every thread: the one taking only demanded
             // jobs may be the one woken, and it would leave the job queued.
             workers.pool.queued.notify_all();
         }
         #[cfg(target_arch = "wasm32")]
-        if self.discovery.drawing.get() {
+        if self.pacing {
+            self.paced.borrow_mut().push(lane, Box::new(job));
+        } else if self.discovery.drawing.get() {
             self.discovery.held.borrow_mut().push(Box::new(job));
         } else {
             drop((lane, job));
