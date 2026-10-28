@@ -555,6 +555,7 @@ impl KernedFont {
         })
     }
 
+    #[cfg(feature = "text-shaping")]
     pub(crate) fn as_font(&self) -> &FontArc {
         &self.font
     }
