@@ -62,6 +62,11 @@ pub(crate) struct FramePacket {
     // Whether the app held still, asking for no frame, between the frame
     // before and this one.
     pub(crate) held_still: bool,
+    // Whether a pointer was held on the app's controls for this frame.
+    pub(crate) pointer_held: bool,
+    // The scene update the packet was collected from: a frame drawn from the
+    // update the frame before drew shows nothing new of the app's.
+    pub(crate) scene_update: u64,
 }
 
 pub(crate) struct FrameSceneStorage {

@@ -852,8 +852,7 @@ fn dst_out_blend_state() -> wgpu::BlendState {
 
 /// The framework's own runtime shader sources, which recorded pipelines are
 /// rebuilt from.
-#[cfg(not(target_arch = "wasm32"))]
-fn framework_shader_sources() -> impl Iterator<Item = &'static str> {
+pub(crate) fn framework_shader_sources() -> impl Iterator<Item = &'static str> {
     cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
         .into_iter()
         .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER])

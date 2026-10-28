@@ -354,6 +354,13 @@ pub trait Renderer {
     /// AppShell calls this before the first frame after such a pause.
     fn note_held_still(&mut self) {}
 
+    /// Tells the renderer that a pointer is held on the app's controls for the coming frame: the
+    /// user may move it at any moment, so the frame is not one to spend on work that holds the
+    /// frames after it back, such as a WebGL program link.
+    ///
+    /// AppShell calls this before each frame drawn while a pointer is held.
+    fn note_pointer_held(&mut self) {}
+
     /// Returns whether renderer-side cache materialization needs a visible follow-up frame.
     fn needs_frame_warmup(&self) -> bool {
         false
