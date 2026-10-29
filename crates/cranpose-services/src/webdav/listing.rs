@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use crate::{ContentError, percent_decode_lossy};
 
@@ -24,7 +24,7 @@ pub(super) fn parse(bytes: &[u8], parent: &url::Url) -> Result<Vec<Entry>, Conte
             "The address did not return a WebDAV directory".into(),
         ));
     }
-    let mut seen = HashSet::new();
+    let mut seen = BTreeSet::new();
     let mut entries = Vec::new();
     for response in root
         .children()

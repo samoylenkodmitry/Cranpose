@@ -31,7 +31,8 @@ impl Dolby {
     fn packet_frames(mut bytes: &[u8], output: &AudioBuffer<f32>) -> Result<usize> {
         let mut frames: usize = 0;
         while !bytes.is_empty() {
-            let header = filmcraft_ac3::parse_header(bytes).map_err(decode_error)?;
+            let header =
+                filmcraft_ac3::parse_header(bytes).map_err(|error| decode_error(&error))?;
             bytes = bytes
                 .get(header.frame_bytes..)
                 .ok_or(Error::DecodeError("truncated Dolby frame"))?;
@@ -68,7 +69,10 @@ impl PacketCodec for Dolby {
         output.render_uninit(Some(frames));
         let mut offset = 0;
         while !bytes.is_empty() {
-            let decoded = self.decoder.decode(bytes).map_err(decode_error)?;
+            let decoded = self
+                .decoder
+                .decode(bytes)
+                .map_err(|error| decode_error(&error))?;
             bytes = &bytes[decoded.header.frame_bytes..];
             if !decoded.header.is_primary() {
                 continue;
@@ -85,7 +89,7 @@ impl PacketCodec for Dolby {
     }
 }
 
-fn decode_error(error: filmcraft_ac3::Error) -> Error {
+fn decode_error(error: &filmcraft_ac3::Error) -> Error {
     match error {
         filmcraft_ac3::Error::Unsupported(_) => Error::Unsupported("unsupported Dolby coding mode"),
         _ => Error::DecodeError("invalid Dolby frame"),
@@ -105,10 +109,12 @@ pub(crate) fn initialize(
         if packet.track_id != track_id {
             continue;
         }
-        let header = filmcraft_ac3::parse_header(&packet.data).map_err(decode_error)?;
+        let header =
+            filmcraft_ac3::parse_header(&packet.data).map_err(|error| decode_error(&error))?;
         params.sample_rate = Some(header.sample_rate);
         params.channels = Some(symphonia::core::audio::Channels::Discrete(
-            header.channels() as u16,
+            u16::try_from(header.channels())
+                .map_err(|_| Error::DecodeError("invalid Dolby channel count"))?,
         ));
         return Ok(Some(packet));
     }
