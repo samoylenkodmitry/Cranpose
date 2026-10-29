@@ -5,16 +5,18 @@ use cranpose_ui_graphics::{MemoryHeadroom, whole};
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     cluster_widths::ClusterWidths,
+    ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
     layout_input::LayoutInput,
-    layout_options::{TextLayoutOptions, TextOverflow},
+    layout_options::TextLayoutOptions,
     line_box::paragraph_line_box,
     line_breaker::{
         BreakKind, BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths,
         Wrapping, break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
     },
     line_runs::{line_extent, place_runs},
+    line_text::{LineEdges, LineText, before_hard_break, indent},
     paragraph::{LineBreak, ResolvedTextDirection},
     script::Script,
     shaped_item::{
@@ -71,36 +73,6 @@ pub struct ParagraphIntrinsics {
     pub max_intrinsic_width: f32,
 }
 
-// A line's text, the end of its visible text, the end of the text it draws,
-// before the hard break that ends it, which draws nothing, its indent and
-// the width its text may take, the paragraph's past the indent.
-struct LineText {
-    range: Range<usize>,
-    visible: usize,
-    drawn: usize,
-    indent: f32,
-    room: f32,
-}
-
-// Where a line stands among a layout's lines: the bottom of the line above,
-// whether it is the first and the last, and whether it shows an ellipsis.
-#[derive(Clone, Copy)]
-struct LineEdges {
-    top: f32,
-    first: bool,
-    last: bool,
-    ellipsized: bool,
-}
-
-// Where a line that does not fit shows an ellipsis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EllipsisAt {
-    Start,
-    Middle,
-    End,
-}
-
-const ELLIPSIS: &str = "\u{2026}";
 // The most glyphs the layouter keeps room for between texts: the storage of
 // a longer text goes once the text is laid out.
 const SCRATCH_GLYPHS: usize = 4096;
@@ -211,7 +183,7 @@ impl TextLayouter {
         {
             let line = piece.width + lengths.first_line_indent;
             let mut hold = fitting_hold(&options, line);
-            if ellipsis_at(&options, true).is_some() {
+            if ellipsis_at(&options).is_some() {
                 hold.narrow(line, f32::INFINITY);
             }
             layout.hold = Some(hold);
@@ -230,7 +202,7 @@ impl TextLayouter {
             self.wrap_lines(input, &options, wrap, layout);
         }
         layout.did_overflow_height = self.lines.len() > options.max_lines;
-        if layout.did_overflow_height && ellipsis_at(&options, true).is_some() {
+        if layout.did_overflow_height && ellipsis_at(&options).is_some() {
             take_rest_of_paragraph(&mut self.lines, text, options.max_lines - 1);
         }
         self.lines.truncate(options.max_lines);
@@ -703,7 +675,7 @@ impl TextLayouter {
         let last = index + 1 == self.lines.len();
         let visible_width = self.widths.width(line.range.start, line.visible);
         let overflows = visible_width > line.room;
-        let ellipsis = ellipsis_at(options, last);
+        let ellipsis = ellipsis_at(options).filter(|_| last);
         let shown = ellipsis.filter(|_| overflows || (last && layout.did_overflow_height));
         if let Some(hold) = &mut layout.hold {
             if ellipsis.is_some() && shown.is_none() {
@@ -950,46 +922,6 @@ fn fitting_hold(options: &TextLayoutOptions, line: f32) -> WidthRange {
             f32::NEG_INFINITY
         },
         max: f32::INFINITY,
-    }
-}
-
-// Where the last line, or a line on its own, shows an ellipsis: a start or
-// middle ellipsis only on a single line, as Android lays them out; text of
-// more lines clips.
-fn ellipsis_at(options: &TextLayoutOptions, last: bool) -> Option<EllipsisAt> {
-    match options.overflow {
-        TextOverflow::Ellipsis if last => Some(EllipsisAt::End),
-        TextOverflow::StartEllipsis if last && options.max_lines == 1 => Some(EllipsisAt::Start),
-        TextOverflow::MiddleEllipsis if last && options.max_lines == 1 => Some(EllipsisAt::Middle),
-        _ => None,
-    }
-}
-
-// Makes line `last` run to the end of its paragraph over the lines after it
-// a line limit drops, so its ellipsis cuts the paragraph where it stops
-// fitting, as Android's StaticLayout treats them as one line.
-fn take_rest_of_paragraph(lines: &mut [BrokenLine], text: &str, last: usize) {
-    let end = lines[last + 1..]
-        .iter()
-        .take_while(|line| !starts_paragraph(text, line.text.start))
-        .last()
-        .map_or(lines[last].text.end, |line| line.text.end);
-    lines[last] = BrokenLine::plain(lines[last].text.start..end);
-}
-
-// The end of the text from `start` to `end` before the hard break that ends
-// it, if one does.
-fn before_hard_break(text: &str, start: usize, end: usize) -> usize {
-    text.get(start..end)
-        .map_or(end, |part| start + part.trim_end_matches(hard_break).len())
-}
-
-// The indent of the line starting at `offset`.
-fn indent(input: &LayoutInput<'_>, offset: usize) -> f32 {
-    if starts_paragraph(input.text, offset) {
-        input.lengths.first_line_indent
-    } else {
-        input.lengths.rest_line_indent
     }
 }
 

@@ -10,6 +10,7 @@ mod cluster_widths;
 mod coverage;
 /// Text decorations (underline, line through) and text shadows.
 pub mod decoration;
+mod ellipsis_at;
 /// Font weight, style, family and synthesis settings.
 pub mod font;
 mod font_fallback;
@@ -33,6 +34,7 @@ pub mod layout_options;
 pub mod line_box;
 mod line_breaker;
 mod line_runs;
+mod line_text;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
 mod plain_chars;
