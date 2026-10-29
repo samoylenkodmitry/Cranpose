@@ -1,7 +1,7 @@
 use crate::line_breaker::{BreakKind, BreakOpportunity};
 
 // The line break classes of UAX #14 that ASCII characters take.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Class {
     Alphabetic,
     BreakAfter,
@@ -53,6 +53,36 @@ const fn class(byte: u8) -> Class {
     }
 }
 
+// Every class, in the order the enum declares them.
+const CLASSES: [Class; 18] = [
+    Alphabetic,
+    BreakAfter,
+    ClosePunctuation,
+    CloseParenthesis,
+    CombiningMark,
+    CarriageReturn,
+    Exclamation,
+    Hyphen,
+    InfixSeparator,
+    LineFeed,
+    MandatoryBreak,
+    Numeric,
+    OpenPunctuation,
+    PostfixNumeric,
+    PrefixNumeric,
+    Quotation,
+    Space,
+    Symbol,
+];
+
+const _: () = {
+    let mut index = 0;
+    while index < CLASSES.len() {
+        assert!(CLASSES[index] as usize == index);
+        index += 1;
+    }
+};
+
 // What stands before a character, which tells whether a line may break
 // before it.
 #[derive(Clone, Copy)]
@@ -65,6 +95,44 @@ struct Before {
     opened: bool,
 }
 
+const STATES: usize = CLASSES.len() * 2;
+
+// How a step ends a line: not at all, between words, or after a mandatory
+// break, in the top two bits of a step; the low six hold the state after
+// it.
+const SOFT: u8 = 1 << 6;
+const HARD: u8 = 2 << 6;
+const STATE: u8 = (1 << 6) - 1;
+
+// The class of each ASCII character.
+const CLASS_OF: [u8; 128] = {
+    let mut table = [0; 128];
+    let mut byte = 0;
+    while byte < table.len() {
+        table[byte] = class(byte as u8) as u8;
+        byte += 1;
+    }
+    table
+};
+
+// For each state and the class of the character after it, whether a line
+// breaks before that character and the state after it, from the rules.
+const STEPS: [[u8; CLASSES.len()]; STATES] = {
+    let mut table = [[0; CLASSES.len()]; STATES];
+    let mut state = 0;
+    while state < STATES {
+        let before = Before::of(state);
+        let mut right = 0;
+        while right < CLASSES.len() {
+            table[state][right] =
+                before.breaks(CLASSES[right]) | before.next(CLASSES[right]).index() as u8;
+            right += 1;
+        }
+        state += 1;
+    }
+    table
+};
+
 // Replaces `breaks` with the line break opportunities of ASCII `text` as the
 // segmenter finds them, without its tables: the rules of UAX #14 for the
 // classes ASCII characters take, as the segmenter applies them.
@@ -74,18 +142,22 @@ pub(crate) fn ascii_breaks(text: &[u8], breaks: &mut Vec<BreakOpportunity>) {
         return;
     };
     let start = alone(class(first));
-    let mut before = Before {
+    let mut state = Before {
         class: start,
-        opened: start == OpenPunctuation,
-    };
-    for at in 1..text.len() {
-        let right = class(text[at]);
-        if let Some(kind) = before.breaks(right) {
-            breaks.push(BreakOpportunity { offset: at, kind });
-        }
-        before = before.next(right);
+        opened: matches!(start, OpenPunctuation),
     }
-    let kind = if hard(before.class) {
+    .index();
+    for (at, &byte) in text.iter().enumerate().skip(1) {
+        let step = STEPS[state][usize::from(CLASS_OF[usize::from(byte & 0x7F)])];
+        state = usize::from(step & STATE);
+        let kind = match step & !STATE {
+            SOFT => BreakKind::Soft,
+            HARD => BreakKind::Hard,
+            _ => continue,
+        };
+        breaks.push(BreakOpportunity { offset: at, kind });
+    }
+    let kind = if hard(Before::of(state).class) {
         BreakKind::Hard
     } else {
         BreakKind::Soft
@@ -96,14 +168,14 @@ pub(crate) fn ascii_breaks(text: &[u8], breaks: &mut Vec<BreakOpportunity>) {
     });
 }
 
-fn hard(class: Class) -> bool {
+const fn hard(class: Class) -> bool {
     matches!(class, MandatoryBreak | CarriageReturn | LineFeed)
 }
 
 // The class of a character with nothing before it that it joins: a
 // combining mark counts as alphabetic (LB10).
-fn alone(class: Class) -> Class {
-    if class == CombiningMark {
+const fn alone(class: Class) -> Class {
+    if matches!(class, CombiningMark) {
         Alphabetic
     } else {
         class
@@ -111,27 +183,42 @@ fn alone(class: Class) -> Class {
 }
 
 impl Before {
-    // Whether a line may break before a character of class `right`, and
-    // how.
-    fn breaks(&self, right: Class) -> Option<BreakKind> {
+    const fn index(self) -> usize {
+        self.class as usize * 2 + self.opened as usize
+    }
+
+    const fn of(index: usize) -> Self {
+        Self {
+            class: CLASSES[index / 2],
+            opened: index % 2 == 1,
+        }
+    }
+
+    // How a line breaks before a character of class `right`: not at all,
+    // `SOFT` or `HARD`.
+    const fn breaks(self, right: Class) -> u8 {
         let left = self.class;
         // LB4, LB5: after a mandatory break, but not inside CR LF.
-        if left == CarriageReturn && right == LineFeed {
-            return None;
+        if matches!((left, right), (CarriageReturn, LineFeed)) {
+            return 0;
         }
         if hard(left) {
-            return Some(BreakKind::Hard);
+            return HARD;
         }
         // LB6, LB7, LB9: before a mandatory break, a space or a mark.
-        if hard(right) || right == Space || (right == CombiningMark && left != Space) {
-            return None;
+        if hard(right)
+            || matches!(right, Space)
+            || (matches!(right, CombiningMark) && !matches!(left, Space))
+        {
+            return 0;
         }
-        (!self.joins(left, alone(right))).then_some(BreakKind::Soft)
+        if self.joins(alone(right)) { 0 } else { SOFT }
     }
 
     // Whether the rules from LB13 on keep a character of class `right`
-    // after one of class `left`.
-    fn joins(&self, left: Class, right: Class) -> bool {
+    // after this.
+    const fn joins(self, right: Class) -> bool {
+        let left = self.class;
         // LB13, LB14.
         if self.opened
             || matches!(
@@ -142,11 +229,11 @@ impl Before {
             return true;
         }
         // LB18.
-        if left == Space {
+        if matches!(left, Space) {
             return false;
         }
         // LB19, LB21.
-        if left == Quotation || matches!(right, Quotation | BreakAfter | Hyphen) {
+        if matches!(left, Quotation) || matches!(right, Quotation | BreakAfter | Hyphen) {
             return true;
         }
         matches!(
@@ -166,14 +253,14 @@ impl Before {
     }
 
     // What stands before the character after one of class `right`.
-    fn next(self, right: Class) -> Self {
-        if right == CombiningMark && !hard(self.class) && self.class != Space {
+    const fn next(self, right: Class) -> Self {
+        if matches!(right, CombiningMark) && !hard(self.class) && !matches!(self.class, Space) {
             return self;
         }
         let right = alone(right);
         Self {
             class: right,
-            opened: right == OpenPunctuation || (right == Space && self.opened),
+            opened: matches!(right, OpenPunctuation) || (matches!(right, Space) && self.opened),
         }
     }
 }
