@@ -629,7 +629,7 @@ impl Starts<'_> {
             for rule in set.ok()?.chained_seq_rules().iter() {
                 let rule = rule.ok()?;
                 let next = rule.input_sequence().first();
-                let after = next.or(rule.lookahead_sequence().first()).map(one);
+                let after = next.or_else(|| rule.lookahead_sequence().first()).map(one);
                 let before = rule.backtrack_sequence().first().map(one);
                 self.rule(first, beside(after, before))?;
             }
@@ -672,7 +672,7 @@ impl Starts<'_> {
         let backtrack = format.backtrack_coverages();
         let after = if inputs.len() > 1 {
             Some(inputs.get(1).ok()?)
-        } else if lookahead.len() > 0 {
+        } else if !lookahead.is_empty() {
             Some(lookahead.get(0).ok()?)
         } else {
             None

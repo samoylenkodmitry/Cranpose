@@ -133,7 +133,7 @@ impl PlainKerning {
         let mut total = 0;
         // The lookup whose subtable applied: its later ones are not tried.
         let mut applied = None;
-        for subtable in self.subtables.iter() {
+        for subtable in &self.subtables {
             if applied == Some(subtable.lookup) {
                 continue;
             }
