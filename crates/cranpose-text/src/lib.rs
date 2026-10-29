@@ -5,6 +5,7 @@ pub mod annotated_string;
 mod ascii_breaks;
 /// The embedding levels of the Unicode bidirectional algorithm.
 pub mod bidi_level;
+mod break_leads;
 mod cluster_widths;
 mod coverage;
 /// Text decorations (underline, line through) and text shadows.

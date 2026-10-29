@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use crate::{
     bidi_level::{BidiLevel, level_runs},
+    break_leads::find_break_lead,
     font_family_resolver::FontFamilyResolver,
     paragraph::{ResolvedTextDirection, TextDirection},
     script::{Script, script_runs},
@@ -124,11 +125,8 @@ impl Itemizer {
 fn paragraph_end(text: &str, start: usize) -> usize {
     let bytes = text.as_bytes();
     let mut at = start;
-    while let Some(found) = bytes.get(at..).and_then(|rest| {
-        rest.iter()
-            .position(|&byte| matches!(byte, b'\n' | b'\r' | 0x1C..=0x1E | 0xC2 | 0xE2))
-    }) {
-        at += found;
+    while let Some(found) = find_break_lead(bytes, at) {
+        at = found;
         let after = match &bytes[at..] {
             [b'\r', b'\n', ..] => at + 2,
             [b'\n' | b'\r' | 0x1C..=0x1E, ..] => at + 1,

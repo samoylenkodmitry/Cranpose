@@ -81,17 +81,24 @@ fn hard_breaks_end_lines_and_a_final_break_adds_an_empty_line() {
 fn each_hard_break_ends_a_line() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
 
+    // At each place in a word of eight bytes and after it, behind a tab, a
+    // degree sign and a quote mark, whose first bytes may start one.
     for separator in [
         "\n", "\r", "\r\n", "\u{0B}", "\u{0C}", "\u{85}", "\u{2028}", "\u{2029}",
     ] {
-        let text = format!("a{separator}b");
+        for before in 0..18 {
+            let text = format!("\t\u{B0}\u{2019}{}{separator}b", "a".repeat(before));
 
-        assert_eq!(
-            lines(&unwrapped(&resolver, &text), &text),
-            [&text[..text.len() - 1], "b"],
-            "{separator:?}"
-        );
+            assert_eq!(
+                lines(&unwrapped(&resolver, &text), &text),
+                [&text[..text.len() - 1], "b"],
+                "{separator:?} {before}"
+            );
+        }
     }
+    // Those characters alone break no line.
+    let text = "\t\u{B0}\u{2019}".repeat(5);
+    assert_eq!(lines(&unwrapped(&resolver, &text), &text), [text.as_str()]);
 }
 
 #[test]

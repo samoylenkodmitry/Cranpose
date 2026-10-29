@@ -5,7 +5,10 @@ use icu_segmenter::{
     options::{LineBreakOptions, LineBreakStrictness},
 };
 
-use crate::{ascii_breaks::ascii_breaks, cluster_widths::ClusterWidths, paragraph::LineBreak};
+use crate::{
+    ascii_breaks::ascii_breaks, break_leads::find_break_lead, cluster_widths::ClusterWidths,
+    paragraph::LineBreak,
+};
 
 // A place a line may end: the byte offset where the next line starts, and
 // how a line ends there.
@@ -464,12 +467,17 @@ fn is_hyphen(opportunity: &BreakOpportunity) -> bool {
 // which in UTF-8 starts no other character it is not part of.
 pub(crate) fn has_hard_break(text: &str) -> bool {
     let bytes = text.as_bytes();
-    bytes.iter().enumerate().any(|(at, &byte)| match byte {
-        b'\n' | b'\r' | 0x0B | 0x0C => true,
-        0xC2 => bytes.get(at + 1) == Some(&0x85),
-        0xE2 => matches!(bytes.get(at + 1..at + 3), Some([0x80, 0xA8 | 0xA9])),
-        _ => false,
-    })
+    let mut at = 0;
+    while let Some(found) = find_break_lead(bytes, at) {
+        if matches!(
+            &bytes[found..],
+            [b'\n' | b'\r' | 0x0B | 0x0C, ..] | [0xC2, 0x85, ..] | [0xE2, 0x80, 0xA8 | 0xA9, ..]
+        ) {
+            return true;
+        }
+        at = found + 1;
+    }
+    false
 }
 
 // Whether `offset` starts a paragraph: the text's start, or just after a hard
