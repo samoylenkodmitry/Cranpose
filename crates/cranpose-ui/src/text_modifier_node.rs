@@ -164,18 +164,26 @@ impl TextPreparedLayoutOwner {
         };
         let prepared = {
             // The cache holds layouts of this source only: the latest one, on
-            // the fonts of now, gives its glyphs to the new one.
+            // the fonts of now, takes the widths when it breaks into the same
+            // lines there, as a width animates, or gives its glyphs to the new
+            // one.
             let cache = self.cache.borrow();
-            let shaped = cache
+            let latest = cache
                 .first()
                 .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
-                .map(|entry| &*entry.layout.layout);
-            let text = crate::text::measure::SharedText {
-                text: &source.text,
-                style: &source.style,
-                style_hash: source.style_hash,
-            };
-            crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
+                .map(|entry| &entry.layout);
+            match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
+                Some(latest) => latest.at_widths(frame, source.style.paragraph_style.text_align),
+                None => {
+                    let text = crate::text::measure::SharedText {
+                        text: &source.text,
+                        style: &source.style,
+                        style_hash: source.style_hash,
+                    };
+                    let shaped = latest.map(|latest| &*latest.layout);
+                    crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
+                }
+            }
         };
         if Arc::ptr_eq(&prepared.visual_style, &source.style) {
             let _ = prepared.visual_style_hash.set(source.style_hash);

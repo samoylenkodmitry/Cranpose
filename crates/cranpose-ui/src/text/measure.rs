@@ -13,7 +13,7 @@ use cranpose_text::{
 use smallvec::SmallVec;
 
 use super::{
-    AnnotatedString, LineBox, RenderString, SpanStyle, TextDrawStyle, TextUnit,
+    AnnotatedString, LineBox, RenderString, SpanStyle, TextAlign, TextDrawStyle, TextUnit,
     layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
     style::TextStyle,
@@ -98,20 +98,28 @@ impl PreparedTextLayout {
         }
     }
 
-    // This layout's text in its style laid out as `layout`, its own layout
-    // aligned at other widths: the text as a renderer draws it and the
-    // style's hash carry over.
-    fn aligned(&self, layout: TextLayout, (max_width, min_lines): (f32, usize)) -> Self {
-        Self {
+    // This layout at the widths of `frame`, at which it breaks into the
+    // same lines: itself when its width there is its own, else a copy whose
+    // lines `align` places across that width. The copy keeps the text as a
+    // renderer draws it and the style's hash.
+    pub(crate) fn at_widths(self: &Rc<Self>, frame: TextFrame, align: TextAlign) -> Rc<Self> {
+        let width = self.layout.width_between(frame.min_width, frame.max_width);
+        if width.to_bits() == self.layout.width().to_bits() {
+            return Rc::clone(self);
+        }
+        let mut layout = TextLayout::clone(&self.layout);
+        layout.align(frame.min_width, frame.max_width, align);
+        let min_lines = frame.options.normalized().min_lines;
+        Rc::new(Self {
             render_text: self.render_text.clone(),
             visual_style_hash: self.visual_style_hash.clone(),
             ..Self::new(
                 Rc::clone(&self.text),
                 Arc::clone(&self.visual_style),
                 layout,
-                (max_width, min_lines),
+                (frame.max_width, min_lines),
             )
-        }
+        })
     }
 
     /// The display text as a renderer draws it. Converted once for the layout
@@ -449,21 +457,10 @@ impl TextService {
         else {
             return Cached::OtherWidths;
         };
-        let width = held.layout.width_between(frame.min_width, frame.max_width);
-        if width.to_bits() == held.layout.width().to_bits() {
-            return Cached::Held(held);
+        let aligned = held.at_widths(frame, style.paragraph_style.text_align);
+        if !Rc::ptr_eq(&aligned, &held) {
+            remember(widths, &aligned);
         }
-        let mut layout = TextLayout::clone(&held.layout);
-        layout.align(
-            frame.min_width,
-            frame.max_width,
-            style.paragraph_style.text_align,
-        );
-        let aligned = Rc::new(held.aligned(
-            layout,
-            (frame.max_width, frame.options.normalized().min_lines),
-        ));
-        remember(widths, &aligned);
         Cached::Held(aligned)
     }
 
