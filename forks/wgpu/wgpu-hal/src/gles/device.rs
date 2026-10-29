@@ -182,6 +182,24 @@ fn bind_varying(
 }
 
 impl super::Device {
+    /// Reads the link of every program whose link no submission read yet,
+    /// and returns whether there was one. Each read waits for the GPU to
+    /// reach that program's link; called once it has, between frames, the
+    /// reads cost only their replies there instead of in the first frame
+    /// that draws with the programs. In Chrome on a Huawei Mate 20 X that
+    /// frame read 22 links built ahead of it in 113 ms.
+    pub fn read_program_links(&self) -> bool {
+        if self.shared.unread_links.load(Ordering::Relaxed) == 0 {
+            return false;
+        }
+        let gl = &self.shared.context.lock();
+        for program in self.shared.program_cache.lock().values().flatten() {
+            // SAFETY: the context is current while `gl` holds its lock.
+            drop(unsafe { program.read_link(gl, &self.shared.unread_links) });
+        }
+        true
+    }
+
     /// # Safety
     ///
     /// - `name` must be created respecting `desc`

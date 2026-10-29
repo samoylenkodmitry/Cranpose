@@ -202,6 +202,20 @@ impl Device {
         ShaderModule { inner: module }
     }
 
+    /// Reads the link of every program this GL `Device` built that no
+    /// submission has drawn with yet, and returns whether there was one;
+    /// nothing on another backend. A link is read at the first submission
+    /// that draws with its program, and the read waits for the GPU to reach
+    /// the link: call this between frames, once the GPU has done the work
+    /// submitted after the last pipeline was created, and that first frame
+    /// reads none.
+    #[cfg(wgpu_core)]
+    pub fn read_program_links(&self) -> bool {
+        self.inner
+            .as_core_opt()
+            .is_some_and(crate::backend::wgpu_core::CoreDevice::read_program_links)
+    }
+
     /// Creates a shader module from GLSL ES templates, one per entry point,
     /// on a WebGL device; `None` on a device of another backend.
     ///

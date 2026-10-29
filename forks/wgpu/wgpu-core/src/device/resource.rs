@@ -2597,6 +2597,17 @@ impl Device {
         Ok(Arc::new(module))
     }
 
+    /// Reads the links of the GL programs no submission read yet, and
+    /// returns whether there was one; nothing on another backend. See
+    /// `hal::gles::Device::read_program_links`.
+    pub fn read_program_links(&self) -> bool {
+        #[cfg(gles)]
+        if let Some(device) = self.raw().as_any().downcast_ref::<hal::gles::Device>() {
+            return device.read_program_links();
+        }
+        false
+    }
+
     /// A module of GLSL templates, one per entry point, for the GL backend.
     ///
     /// # Safety

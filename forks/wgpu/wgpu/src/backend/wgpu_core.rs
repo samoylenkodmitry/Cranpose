@@ -471,6 +471,12 @@ pub struct CoreDevice {
 }
 
 impl CoreDevice {
+    /// Reads the links of the GL programs no submission read yet, and
+    /// returns whether there was one.
+    pub fn read_program_links(&self) -> bool {
+        self.context.0.device_read_program_links(self.id)
+    }
+
     /// A module of GLSL templates on a WebGL device, which the browser checks.
     #[cfg(webgl)]
     pub fn create_shader_module_glsl_templates(

@@ -216,6 +216,15 @@ impl PacedLanding {
         frames >= MOVING_FRAMES_PER_BUILD
     }
 
+    // A build run while the page draws no frames: an empty submit places the
+    // fence that tells when the GPU process has linked it, which no frame's
+    // submit does now.
+    pub(crate) fn built_between_frames(&self, queue: &wgpu::Queue) {
+        self.built();
+        crate::frame_graph::submit_nothing::submit_nothing(queue);
+        self.watch(queue);
+    }
+
     // Called after a submit: once the GPU has done the work submitted so far,
     // a later submit's maintenance lets the next build run.
     pub(crate) fn watch(&self, queue: &wgpu::Queue) {
@@ -580,6 +589,35 @@ impl PipelineCompiler {
                 self.paced_landing.built();
             }
         }
+    }
+
+    // While the page draws no frames: once the GPU process has linked the
+    // last paced build, reads its link, and in the next idle period runs the
+    // next build, as a still frame runs one at its end. In Chrome on a Mate
+    // 20 X the 24 warm-ups a tab bar asked for, its first tap's nine glass
+    // programs among them, waited 5 s for a frame, and the tap then linked
+    // those nine, a stall each. Whether a build or a link read still waits.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn build_while_idle(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
+        // No frame's submit notices the last build's landing now.
+        let _ = device.poll(wgpu::PollType::Poll);
+        if !self.paced_landing.may_build() {
+            return true;
+        }
+        // Read now, the links cost their replies; read by the first frame
+        // drawing with them, they cost a tap's frame 113 ms on the Mate. With
+        // the next build in the same idle period, the Mate's page once missed
+        // a frame by 67 ms.
+        if device.read_program_links() {
+            return true;
+        }
+        let job = self.paced.borrow_mut().next(true, true);
+        let Some(job) = job else {
+            return false;
+        };
+        job();
+        self.paced_landing.built_between_frames(queue);
+        true
     }
 
     // After a frame's submit: when a frame ran a paced build, the next one
