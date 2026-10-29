@@ -175,6 +175,32 @@ fn each_alignment_puts_the_slack_on_its_side_of_the_paragraph_direction() {
 }
 
 #[test]
+fn spaces_after_a_line_hang_past_its_end() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let centered = |text| {
+        layout(
+            &resolver,
+            text,
+            TextDirection::Content,
+            TextAlign::Center,
+            200.0,
+        )
+    };
+    let positions = |laid: &TextLayout| {
+        laid.glyph_runs(0)
+            .flat_map(|run| run.positions().collect::<Vec<_>>())
+            .take(3)
+            .collect::<Vec<_>>()
+    };
+
+    let bare = centered("Tea");
+    let spaced = centered("Tea   ");
+
+    assert_eq!(positions(&spaced), positions(&bare));
+    assert_eq!(spaced.line_right(0), bare.line_right(0));
+}
+
+#[test]
 fn a_caret_between_directions_has_a_primary_and_a_secondary_place() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
     let text = "abc مرحبا";

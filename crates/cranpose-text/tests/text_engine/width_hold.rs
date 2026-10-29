@@ -167,6 +167,30 @@ fn text_that_does_not_wrap_holds_every_width() {
 }
 
 #[test]
+fn a_line_that_fits_by_an_ellipsis_it_does_not_show_holds_no_narrower_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let style = paragraph(TextAlign::Start, LineBreak::Simple);
+    let options = TextLayoutOptions {
+        soft_wrap: false,
+        overflow: TextOverflow::Ellipsis,
+        ..TextLayoutOptions::default()
+    };
+
+    let laid = lay_out_with(
+        &resolver,
+        "Tea",
+        (&style, lengths(0.0, 0.0)),
+        200.0,
+        options,
+    );
+    let fits = laid.line_right(0);
+
+    assert!(!laid.is_line_ellipsized(0));
+    assert!(laid.holds(0.0, fits + 1.0));
+    assert!(!laid.holds(0.0, fits - 1.0));
+}
+
+#[test]
 fn even_breaking_holds_no_other_width() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let style = paragraph(TextAlign::Start, LineBreak::Paragraph);

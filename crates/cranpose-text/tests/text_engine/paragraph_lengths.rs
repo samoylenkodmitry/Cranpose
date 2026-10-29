@@ -144,6 +144,32 @@ fn indents_move_and_narrow_the_first_and_the_other_lines() {
 }
 
 #[test]
+fn a_line_alone_starts_at_the_first_line_indent() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let lengths = ParagraphLengths {
+        first_line_indent: 30.0,
+        rest_line_indent: 10.0,
+        ..ParagraphLengths::default()
+    };
+
+    let laid = layout(
+        &resolver,
+        "Tea",
+        &ParagraphStyle::default(),
+        lengths,
+        200.0,
+        0.0,
+    );
+
+    assert_eq!(laid.line_count(), 1);
+    assert!(
+        (laid.line_left(0) - 30.0).abs() < 0.01,
+        "{}",
+        laid.line_left(0)
+    );
+}
+
+#[test]
 fn letter_spacing_widens_each_character_except_in_joined_scripts() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
     let paragraph = ParagraphStyle::default();

@@ -77,6 +77,16 @@ struct LineText {
     indent: f32,
 }
 
+// Where a line stands among a layout's lines: the bottom of the line above,
+// whether it is the first and the last, and whether it shows an ellipsis.
+#[derive(Clone, Copy)]
+struct LineEdges {
+    top: f32,
+    first: bool,
+    last: bool,
+    ellipsized: bool,
+}
+
 // Where a line that does not fit shows an ellipsis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EllipsisAt {
@@ -182,17 +192,31 @@ impl TextLayouter {
         };
         // Most text is one line that fits; it needs no break opportunities.
         if let Some(line) = unbroken.filter(|&line| line <= wrap.first) {
-            self.lines.clear();
-            self.lines.push(BrokenLine::plain(0..text.len()));
             let min = if options.soft_wrap {
                 line + lengths.first_line_indent
             } else {
                 f32::NEG_INFINITY
             };
-            layout.hold = Some(WidthRange {
+            let mut hold = WidthRange {
                 min,
                 max: f32::INFINITY,
-            });
+            };
+            // A line of one item that fits with no ellipsis and has no
+            // whitespace after its text is that item.
+            if self.items.len() == 1
+                && line <= width - lengths.first_line_indent
+                && visible_end(text, 0, text.len()) == text.len()
+            {
+                if ellipsis_at(&options, true).is_some() {
+                    hold.narrow(line + lengths.first_line_indent, f32::INFINITY);
+                }
+                layout.hold = Some(hold);
+                self.lay_out_one_line(input, &options, resolver, layout);
+                return;
+            }
+            layout.hold = Some(hold);
+            self.lines.clear();
+            self.lines.push(BrokenLine::plain(0..text.len()));
         } else {
             let line_break = input.paragraph.line_break;
             self.breaker
@@ -527,48 +551,101 @@ impl TextLayouter {
             };
             let ellipsized = self.collect_line(input, options, resolver, (index, &line), layout);
             reorder_visually(&mut self.pieces, |piece| piece.level);
-            let (runs, width) = place_runs(&self.pieces, line.visible, layout);
-            let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
-            let asked = input.lengths.line_height.unwrap_or(f32::NAN);
-            let line_box = paragraph_line_box(input.paragraph, extent, asked, input.lengths.grid);
-            let trim_top = if index == 0 { line_box.trim_top } else { 0.0 };
-            let trim_bottom = if index == last {
-                line_box.trim_bottom
-            } else {
-                0.0
-            };
-            let bottom = top + line_box.height - trim_top - trim_bottom;
-            layout.lines.push(LayoutLine {
-                level: self.paragraph_level(input, line.range.start),
-                text: line.range,
-                visible_end: line.visible,
-                runs,
+            let edges = LineEdges {
                 top,
-                baseline: top + line_box.baseline - trim_top,
-                bottom,
-                left: line.indent,
-                indent: line.indent,
-                width,
-                stretch: 0.0,
+                first: index == 0,
+                last: index == last,
                 ellipsized,
-                ends_paragraph: true,
-            });
-            top = bottom;
-            layout.widest = layout.widest.max(width + line.indent);
+            };
+            top = self.push_line(input, resolver, line, edges, layout);
         }
         for index in 1..layout.lines.len() {
             let starts = starts_paragraph(input.text, layout.lines[index].text.start);
             layout.lines[index - 1].ends_paragraph = starts;
         }
-        if layout.lines.len() < options.min_lines {
-            let first = &layout.lines[0];
-            let missing = options.min_lines - layout.lines.len();
-            top += (first.bottom - first.top) * lines_f32(missing);
-        }
-        layout.height = top;
-        layout.align_lines(input.paragraph.text_align);
-        layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
-        layout.renew_id();
+        finish_lines(input, options, top, layout);
+    }
+
+    // Lays out the one line of a text whose one item fits it to its end, as
+    // `build_lines` lays it out: the item is the line's one piece.
+    fn lay_out_one_line(
+        &mut self,
+        input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
+        resolver: &FontFamilyResolver,
+        layout: &mut TextLayout,
+    ) {
+        let item = &self.items[0];
+        let span = &input.spans[item.span];
+        let scale = scale(span, &layout.faces[item.face]);
+        self.pieces.clear();
+        self.pieces.push(Piece {
+            width: spaced_width(&layout.glyphs[item.glyphs.clone()], scale, item.spacing),
+            text: item.text.clone(),
+            glyphs: item.glyphs.clone(),
+            face: item.face,
+            size: span.size,
+            scale,
+            spacing: item.spacing,
+            baseline_shift: span.baseline_shift,
+            level: item.level,
+        });
+        let end = input.text.len();
+        let line = LineText {
+            range: 0..end,
+            visible: end,
+            drawn: end,
+            indent: input.lengths.first_line_indent,
+        };
+        let edges = LineEdges {
+            top: 0.0,
+            first: true,
+            last: true,
+            ellipsized: false,
+        };
+        let top = self.push_line(input, resolver, line, edges, layout);
+        finish_lines(input, options, top, layout);
+    }
+
+    // Places the pieces just collected for `line` as its runs, adds the
+    // line below `edges.top` and returns its bottom.
+    fn push_line(
+        &self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        line: LineText,
+        edges: LineEdges,
+        layout: &mut TextLayout,
+    ) -> f32 {
+        let (runs, width) = place_runs(&self.pieces, line.visible, layout);
+        let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
+        let asked = input.lengths.line_height.unwrap_or(f32::NAN);
+        let line_box = paragraph_line_box(input.paragraph, extent, asked, input.lengths.grid);
+        let trim_top = if edges.first { line_box.trim_top } else { 0.0 };
+        let trim_bottom = if edges.last {
+            line_box.trim_bottom
+        } else {
+            0.0
+        };
+        let top = edges.top;
+        let bottom = top + line_box.height - trim_top - trim_bottom;
+        layout.lines.push(LayoutLine {
+            level: self.paragraph_level(input, line.range.start),
+            text: line.range,
+            visible_end: line.visible,
+            runs,
+            top,
+            baseline: top + line_box.baseline - trim_top,
+            bottom,
+            left: line.indent,
+            indent: line.indent,
+            width,
+            stretch: 0.0,
+            ellipsized: edges.ellipsized,
+            ends_paragraph: true,
+        });
+        layout.widest = layout.widest.max(width + line.indent);
+        bottom
     }
 
     // Collects the pieces of line `index`, with an ellipsis where it does
@@ -813,6 +890,26 @@ impl TextLayouter {
                 |item| item.paragraph_level,
             )
     }
+}
+
+// Ends a layout whose lines reach down to `top`: a text short of its
+// minimum lines takes the height of that many of its first line, and its
+// lines align.
+fn finish_lines(
+    input: &LayoutInput<'_>,
+    options: &TextLayoutOptions,
+    mut top: f32,
+    layout: &mut TextLayout,
+) {
+    if layout.lines.len() < options.min_lines {
+        let first = &layout.lines[0];
+        let missing = options.min_lines - layout.lines.len();
+        top += (first.bottom - first.top) * lines_f32(missing);
+    }
+    layout.height = top;
+    layout.align_lines(input.paragraph.text_align);
+    layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
+    layout.renew_id();
 }
 
 // Where the last line, or a line on its own, shows an ellipsis: a start or
