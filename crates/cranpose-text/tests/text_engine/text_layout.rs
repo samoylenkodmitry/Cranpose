@@ -455,6 +455,39 @@ fn shown(layout: &TextLayout) -> Shown {
 }
 
 #[test]
+fn a_kerned_pair_draws_the_glyphs_its_letters_draw_alone() {
+    // Kerning moves the V toward each A, so a break between them would
+    // change their places.
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let ids = |text: &str| -> Vec<u32> {
+        unwrapped(&resolver, text)
+            .glyph_runs(0)
+            .flat_map(|run| run.positions().map(|glyph| glyph.id.0).collect::<Vec<_>>())
+            .collect()
+    };
+
+    let alone = [ids("A"), ids("V"), ids("A")].concat();
+    assert_eq!(ids("AVA"), alone);
+}
+
+#[test]
+fn a_combining_mark_draws_over_its_base_at_its_offset() {
+    // Roboto has no precomposed q with an acute, so the acute takes no
+    // advance and draws back over the q.
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let layout = unwrapped(&resolver, "q\u{301}x");
+    let xs: Vec<f32> = layout
+        .glyph_runs(0)
+        .flat_map(|run| run.positions().map(|glyph| glyph.x).collect::<Vec<_>>())
+        .collect();
+
+    let [q, acute, x] = xs[..] else {
+        panic!("three glyphs, not {xs:?}");
+    };
+    assert!(q < acute && acute < x, "{xs:?}");
+}
+
+#[test]
 fn a_layout_from_the_glyphs_of_another_size_gives_what_a_new_one_gives() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let family = FontFamily::Default;
@@ -495,6 +528,8 @@ fn a_layout_from_the_glyphs_of_another_width_gives_what_a_new_one_gives() {
         "AVA Toyota 123.45 We fly over the lazy dog",
         "مرحبا بالعالم الجميل اليوم",
         "Total: مرحبا 42 bonjour\nsecond line",
+        // A combining mark draws at an offset from the pen.
+        "q\u{301}uays q\u{301}uote q\u{301}uick",
     ];
     let wrapped = TextLayoutOptions::default();
     let ellipsized = TextLayoutOptions {

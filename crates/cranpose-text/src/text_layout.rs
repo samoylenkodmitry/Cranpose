@@ -10,7 +10,10 @@ use cranpose_ui_graphics::Rect;
 use smallvec::SmallVec;
 
 use crate::{
-    bidi_level::BidiLevel, glyph_id::GlyphId, paragraph::TextAlign, shaper::ShapedGlyph,
+    bidi_level::BidiLevel,
+    glyph_id::GlyphId,
+    laid_glyph::{GlyphOffset, LaidGlyph, LaidGlyphs},
+    paragraph::TextAlign,
     typeface::Typeface,
 };
 
@@ -47,7 +50,7 @@ pub(crate) struct LayoutBody {
     // without allocating.
     pub(crate) faces: SmallVec<[Typeface; 1]>,
     // Shared with the bodies copied to place the lines anew.
-    pub(crate) glyphs: Arc<[ShapedGlyph]>,
+    pub(crate) glyphs: LaidGlyphs,
     pub(crate) runs: SmallVec<[LineRun; 1]>,
     pub(crate) lines: SmallVec<[LayoutLine; 1]>,
     // The widest line with its indent.
@@ -164,7 +167,7 @@ impl LineRun {
     }
 
     // The run's clusters left to right.
-    fn clusters<'a>(&'a self, glyphs: &'a [ShapedGlyph]) -> impl Iterator<Item = Cluster> + 'a {
+    fn clusters<'a>(&'a self, glyphs: &'a [LaidGlyph]) -> impl Iterator<Item = Cluster> + 'a {
         let mut at = 0;
         std::iter::from_fn(move || {
             let first = glyphs.get(at)?;
@@ -175,7 +178,7 @@ impl LineRun {
                 .filter(|glyph| glyph.cluster == first.cluster)
             {
                 width += font_units(glyph.advance) * self.scale;
-                if self.space == Some(glyph.id) {
+                if self.space == Some(glyph.id()) {
                     width += self.word_spacing;
                 }
                 at += 1;
@@ -193,7 +196,7 @@ impl LineRun {
     // cluster in text order starts.
     fn cluster_spans<'a>(
         &'a self,
-        glyphs: &'a [ShapedGlyph],
+        glyphs: &'a [LaidGlyph],
     ) -> impl Iterator<Item = (f32, Cluster, usize)> + 'a {
         let mut clusters = self.clusters(glyphs).peekable();
         let mut left = 0.0;
@@ -258,7 +261,8 @@ pub struct GlyphRun<'a> {
     pub typeface: &'a Typeface,
     /// The font size in pixels.
     pub size: f32,
-    glyphs: &'a [ShapedGlyph],
+    glyphs: &'a [LaidGlyph],
+    offsets: Option<&'a [GlyphOffset]>,
     run: &'a LineRun,
     pen: f32,
     baseline: f32,
@@ -288,13 +292,17 @@ impl GlyphRun<'_> {
         run.clusters(self.glyphs).flat_map(move |cluster| {
             let mut x = pen + run.spacing / 2.0;
             pen += cluster.width;
-            self.glyphs[cluster.glyphs].iter().map(move |glyph| {
-                let at = x + font_units(glyph.x_offset) * run.scale;
+            cluster.glyphs.map(move |index| {
+                let glyph = self.glyphs[index];
+                let drawn = self
+                    .offsets
+                    .map_or_else(GlyphOffset::default, |offsets| offsets[index]);
+                let at = x + font_units(drawn.x) * run.scale;
                 x += font_units(glyph.advance) * run.scale;
                 PositionedGlyph {
-                    id: glyph.id,
+                    id: glyph.id(),
                     x: at,
-                    y: baseline - font_units(glyph.y_offset) * run.scale,
+                    y: baseline - font_units(drawn.y) * run.scale,
                     offset: cluster.offset,
                 }
             })
@@ -320,14 +328,14 @@ impl GlyphRun<'_> {
 impl LayoutBody {
     // The glyphs when shaping placed them all, which a relayout that adds
     // none keeps.
-    pub(crate) fn shaped_glyphs(&self) -> Option<&Arc<[ShapedGlyph]>> {
+    pub(crate) fn shaped_glyphs(&self) -> Option<&LaidGlyphs> {
         (self.glyphs.len() == self.shaped).then_some(&self.glyphs)
     }
 
     // Empties the body, keeping the storage of all but its shared glyphs.
     pub(crate) fn clear(&mut self) {
         self.faces.clear();
-        self.glyphs = Arc::default();
+        self.glyphs = LaidGlyphs::default();
         self.runs.clear();
         self.lines.clear();
         self.widest = 0.0;
@@ -415,7 +423,7 @@ impl LayoutBody {
             }
             let count = glyphs[run.glyphs.clone()]
                 .iter()
-                .filter(|glyph| Some(glyph.id) == run.space)
+                .filter(|glyph| Some(glyph.id()) == run.space)
                 .count();
             u16::try_from(count).unwrap_or(u16::MAX)
         };
@@ -678,6 +686,7 @@ impl TextLayout {
                 typeface: &self.body.faces[run.face],
                 size: run.size,
                 glyphs: &self.body.glyphs[run.glyphs.clone()],
+                offsets: self.body.glyphs.offsets(run.glyphs.clone()),
                 run,
                 pen: line.left + run.left(),
                 baseline: line.baseline,

@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use cranpose_ui_graphics::{MemoryHeadroom, whole};
 use smallvec::SmallVec;
@@ -8,6 +8,7 @@ use crate::{
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
+    laid_glyph::LaidGlyphs,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
     line_box::paragraph_line_box,
@@ -131,7 +132,8 @@ impl TextLayouter {
         layout.shaped = self.glyphs.len();
         layout.glyphs = shaped
             .and_then(|shaped| shaped.body().shaped_glyphs())
-            .map_or_else(Arc::default, Arc::clone);
+            .cloned()
+            .unwrap_or_default();
         let lengths = input.lengths;
         let text = input.text;
         // The piece of a text of one item with no line break and no
@@ -322,7 +324,7 @@ impl TextLayouter {
     ) {
         // A relayout that added no glyphs keeps those it took.
         if layout.glyphs.len() != self.glyphs.len() {
-            layout.glyphs = Arc::from(self.glyphs.as_slice());
+            layout.glyphs = LaidGlyphs::new(&self.glyphs);
         }
         self.keep_glyph_room();
         if layout.lines.len() < options.min_lines {
@@ -514,19 +516,13 @@ impl TextLayouter {
         let text = input.text;
         let (shaper, items, glyphs) = (&mut self.shaper, &mut self.items, &mut self.glyphs);
         let direction = input.paragraph.text_direction;
-        let mut taken = shaped.map(|shaped| &shaped.body().glyphs[..shaped.body().shaped]);
+        let mut taken = shaped.map(|shaped| (shaped.body(), 0));
         self.itemizer
             .itemize(text, direction, input.spans, resolver, |item| {
                 let start = glyphs.len();
                 match &mut taken {
-                    Some(taken) => {
-                        let count = taken
-                            .iter()
-                            .take_while(|glyph| item.range.contains(&glyph.text_offset()))
-                            .count();
-                        let (own, rest) = taken.split_at(count);
-                        glyphs.extend_from_slice(own);
-                        *taken = rest;
+                    Some((body, from)) => {
+                        *from = body.glyphs.take(*from..body.shaped, &item.range, glyphs);
                     }
                     None => {
                         shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs);
