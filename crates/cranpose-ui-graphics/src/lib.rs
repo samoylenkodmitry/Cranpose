@@ -52,6 +52,7 @@ mod image;
 /// quads.
 pub mod layer_transform;
 pub mod liquid_glass;
+mod liquid_widget_shaders;
 mod path;
 mod path_fill;
 mod pointer_icon;
@@ -83,6 +84,7 @@ pub use geometry::*;
 pub use gradient_blur::*;
 pub use image::*;
 pub use liquid_glass::*;
+pub use liquid_widget_shaders::*;
 pub use path::*;
 pub use path_fill::*;
 pub use pointer_icon::*;

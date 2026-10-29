@@ -14,8 +14,7 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader, ShaderTarget,
-    ShaderWarmUp, Size,
+    GraphicsLayer, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size,
 };
 use cranpose_ui_layout::Alignment;
 
@@ -65,11 +64,8 @@ fn lighting_shader() -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     SHADER
         .get_or_init(|| {
-            let mut shader = RuntimeShader::new(&format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
-                cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
-                include_str!("floating_lighting.wgsl")
-            ));
+            let mut shader =
+                RuntimeShader::new(cranpose_ui_graphics::LIQUID_FLOATING_LIGHTING_WGSL);
             shader.set_position_independent(true);
             shader
         })
