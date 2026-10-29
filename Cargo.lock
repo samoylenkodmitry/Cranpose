@@ -1460,6 +1460,7 @@ dependencies = [
  "cranpose-audio",
  "cranpose-core",
  "cranpose-services",
+ "filmcraft-ac3",
  "log",
  "opus-pure",
  "parking_lot",
@@ -1617,11 +1618,13 @@ dependencies = [
  "portable-atomic",
  "reqwest",
  "rfd",
+ "roxmltree",
  "rustix",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2382,6 +2385,15 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "filmcraft-ac3"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d17e68e57e0039be2264551c24f22b622079e43c4ec6d736626348220e98b79"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5583,6 +5595,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

@@ -16,6 +16,8 @@ pub mod bundled_assets;
 pub mod camera;
 mod composition_locals;
 pub mod content;
+mod webdav;
+pub use webdav::WebDavFolder;
 pub mod device_info;
 mod durable_save;
 pub mod file_picker;
