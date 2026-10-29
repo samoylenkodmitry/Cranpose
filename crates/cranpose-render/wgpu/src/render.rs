@@ -915,9 +915,7 @@ struct FrameDraw<'a> {
     root_scale: f32,
     clear: wgpu::Color,
     repaint: Repaint,
-    // Whether the frame draws the scene update the frame before drew, with
-    // no pointer held.
-    scene_still: bool,
+    scene_motion: crate::frame_packet::SceneMotion,
 }
 
 #[derive(Clone, Copy)]
@@ -2462,13 +2460,13 @@ impl GpuRenderer {
     ) -> Result<bool, String> {
         #[cfg(target_arch = "wasm32")]
         let graph_start = Instant::now();
+        let scene_motion =
+            packet.scene_motion(self.drawn_scene_update.replace(packet.scene_update));
         let FramePacket {
             root,
             overlay,
             root_scale,
             clear,
-            scene_update,
-            pointer_held,
             ..
         } = packet;
         let page = Rc::clone(root_target);
@@ -2478,8 +2476,7 @@ impl GpuRenderer {
             root_scale,
             clear,
             repaint,
-            scene_still: self.drawn_scene_update.replace(scene_update) == Some(scene_update)
-                && !pointer_held,
+            scene_motion,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -2578,7 +2575,7 @@ impl GpuRenderer {
         page: Rc<OffscreenTarget>,
         output: OutputStep<'_>,
     ) -> Result<(), String> {
-        let scene_still = draw.scene_still;
+        let scene_motion = draw.scene_motion;
         FrameExecutor::new(self, recorder).render_frame(
             draw.root,
             draw.overlay,
@@ -2623,7 +2620,7 @@ impl GpuRenderer {
         self.stage_frame_uploads(recorder);
         self.pipelines.shape_pipelines.build_wanted();
         self.depth_gate.end_frame();
-        self.pipelines.compiler.end_frame(scene_still);
+        self.pipelines.compiler.end_frame(scene_motion);
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
