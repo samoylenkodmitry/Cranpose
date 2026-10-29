@@ -29,7 +29,7 @@ use crate::{
         shape_inserted, spaced_width,
     },
     shaper::Shaper,
-    text_layout::{LayoutBody, LayoutLine, Sizing, TextLayout, WidthRange},
+    text_layout::{LayoutBody, LayoutLine, TextLayout, WidthRange},
     typeface::Typeface,
 };
 #[cfg(feature = "hyphenation")]
@@ -160,11 +160,9 @@ impl TextLayouter {
             || self.widest_paragraph(input),
             |width| width.max(0.0) + lengths.first_line_indent,
         );
-        layout.sizing = Sizing {
-            content_width: whole::ceil(widest * lengths.grid) / lengths.grid,
-            follows_max: options.soft_wrap || options.overflow.is_ellipsis(),
-        };
-        let width = layout.sizing.width(input.min_width, input.max_width);
+        layout.content_width = whole::ceil(widest * lengths.grid) / lengths.grid;
+        layout.follows_max = options.soft_wrap || options.overflow.is_ellipsis();
+        let width = layout.width_between(input.min_width, input.max_width);
         let wrap = if options.soft_wrap {
             WrapWidths {
                 first: width - lengths.first_line_indent,

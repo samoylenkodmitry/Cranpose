@@ -62,7 +62,11 @@ pub(crate) struct LayoutBody {
     // The widths at which the text breaks into the same lines; `None` when
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
-    pub(crate) sizing: Sizing,
+    // What the paragraph's width follows: its max intrinsic width rounded
+    // up to whole device pixels, and whether the widest it may be counts,
+    // which it does when lines wrap or an ellipsis cuts them.
+    pub(crate) content_width: f32,
+    pub(crate) follows_max: bool,
     // How many glyphs, from the first, shaping placed: an ellipsis's and a
     // hyphen's follow them.
     pub(crate) shaped: usize,
@@ -70,33 +74,6 @@ pub(crate) struct LayoutBody {
 
 // The id the next layout made or aligned takes.
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
-
-// What the paragraph's width follows: its max intrinsic width rounded up to
-// whole device pixels, and whether the widest it may be counts, which it
-// does when lines wrap or an ellipsis cuts them.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct Sizing {
-    pub(crate) content_width: f32,
-    pub(crate) follows_max: bool,
-}
-
-impl Sizing {
-    // The width of the paragraph between `min_width` and `max_width`, as
-    // Compose's `finalMaxWidth` gives it.
-    pub(crate) fn width(self, min_width: f32, max_width: f32) -> f32 {
-        let max_width = if self.follows_max {
-            max_width
-        } else {
-            f32::INFINITY
-        };
-        // Equal ends fix the width; a min past the max leaves the max.
-        if min_width >= max_width {
-            max_width
-        } else {
-            self.content_width.max(min_width).min(max_width)
-        }
-    }
-}
 
 // Widths from `min` up to but not including `max`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -342,6 +319,22 @@ impl GlyphRun<'_> {
 }
 
 impl LayoutBody {
+    // The width of the paragraph between `min_width` and `max_width`, as
+    // Compose's `finalMaxWidth` gives it.
+    pub(crate) fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
+        let max_width = if self.follows_max {
+            max_width
+        } else {
+            f32::INFINITY
+        };
+        // Equal ends fix the width; a min past the max leaves the max.
+        if min_width >= max_width {
+            max_width
+        } else {
+            self.content_width.max(min_width).min(max_width)
+        }
+    }
+
     // The glyphs when shaping placed them all, which a relayout that adds
     // none keeps.
     pub(crate) fn shaped_glyphs(&self) -> Option<&LaidGlyphs> {
@@ -366,7 +359,8 @@ impl LayoutBody {
         self.height = 0.0;
         self.did_overflow_height = false;
         self.hold = None;
-        self.sizing = Sizing::default();
+        self.content_width = 0.0;
+        self.follows_max = false;
         self.shaped = 0;
     }
 
@@ -520,7 +514,7 @@ impl TextLayout {
     /// [`TextLayout::align`] then gives that layout without laying the text
     /// out again.
     pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
-        let width = self.body.sizing.width(min_width, max_width);
+        let width = self.body.width_between(min_width, max_width);
         (width - self.width).abs() < HOLD_MARGIN
             || self.body.hold.is_some_and(|hold| {
                 hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
@@ -531,7 +525,7 @@ impl TextLayout {
     /// `max_width`: its max intrinsic width rounded up to whole device
     /// pixels within them, the max when they are equal.
     pub fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
-        self.body.sizing.width(min_width, max_width)
+        self.body.width_between(min_width, max_width)
     }
 
     /// The max widths, from `.0` up to and with `.1`, at which the paragraph
@@ -539,9 +533,9 @@ impl TextLayout {
     /// when its width follows no max, every width from its own when its text
     /// fits, else only its own width.
     pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
-        if !self.body.sizing.follows_max {
+        if !self.body.follows_max {
             (f32::NEG_INFINITY, f32::INFINITY)
-        } else if self.width >= self.body.sizing.content_width.max(min_width) {
+        } else if self.width >= self.body.content_width.max(min_width) {
             (self.width, f32::INFINITY)
         } else {
             (self.width, self.width)
@@ -552,7 +546,7 @@ impl TextLayout {
     /// `min_width` and `max_width` as `align` says, for widths the layout
     /// [holds](TextLayout::holds).
     pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
-        self.width = self.body.sizing.width(min_width, max_width);
+        self.width = self.body.width_between(min_width, max_width);
         self.did_overflow_width = self.body.widest > self.width || self.width > max_width;
         // Lines that keep their places keep the body the copies share, and
         // the id what a renderer drew of the layout goes by.
