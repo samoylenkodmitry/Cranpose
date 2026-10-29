@@ -142,8 +142,8 @@ fn an_app_supplied_family_draws_in_the_face_it_was_measured_with() {
 
     const OVERHANG: f32 = 1.0;
     for glyph in &run {
-        let right = (glyph.x + glyph.width as i32) as f32;
-        let bottom = (glyph.y + glyph.height as i32) as f32;
+        let right = (glyph.x + i32::try_from(glyph.width).unwrap_or(i32::MAX)) as f32;
+        let bottom = (glyph.y + i32::try_from(glyph.height).unwrap_or(i32::MAX)) as f32;
         assert!(
             glyph.x as f32 >= -OVERHANG && right <= block.rect.width + OVERHANG,
             "glyph spans x {}..{right}, measured block is 0..{}",

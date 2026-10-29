@@ -43,7 +43,8 @@ fn lines(layout: &crate::text::PreparedTextLayout) -> Lines {
     (0..layout.layout.line_count())
         .map(|line| {
             (
-                text[layout.layout.line_start(line)..layout.layout.line_visible_end(line)]
+                text.get(layout.layout.line_start(line)..layout.layout.line_visible_end(line))
+                    .unwrap_or_default()
                     .to_owned(),
                 layout.layout.line_left(line),
                 layout.layout.line_right(line),

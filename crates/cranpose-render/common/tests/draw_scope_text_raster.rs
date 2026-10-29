@@ -219,7 +219,7 @@ fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
     let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let run = collect(rect, "H", &measured, &style, &mut cache);
     let glyph = run.first().expect("one glyph");
-    let ink_bottom = (glyph.y + glyph.height as i32) as f32;
+    let ink_bottom = (glyph.y + i32::try_from(glyph.height).unwrap_or(i32::MAX)) as f32;
     assert!(
         (ink_bottom - baseline).abs() <= 1.5,
         "cap-height ink ends at {ink_bottom}, reported baseline is {baseline}"
@@ -267,7 +267,7 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
     let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let run = collect(rect, "H", &measured, &styled, &mut cache);
     let glyph = run.first().expect("one glyph");
-    let ink_bottom = (glyph.y + glyph.height as i32) as f32;
+    let ink_bottom = (glyph.y + i32::try_from(glyph.height).unwrap_or(i32::MAX)) as f32;
     assert!(
         (ink_bottom - styled_box.baseline).abs() <= 1.5,
         "cap-height ink ends at {ink_bottom}, the styled line box puts the \

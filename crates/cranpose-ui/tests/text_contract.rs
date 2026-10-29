@@ -24,7 +24,12 @@ pub(crate) fn layout_lines(prepared: &PreparedTextLayout) -> Vec<String> {
     let layout = &prepared.layout;
     (0..layout.line_count())
         .map(|line| {
-            prepared.text.text[layout.line_start(line)..layout.line_visible_end(line)].to_owned()
+            prepared
+                .text
+                .text
+                .get(layout.line_start(line)..layout.line_visible_end(line))
+                .unwrap_or_default()
+                .to_owned()
         })
         .collect()
 }
@@ -67,7 +72,9 @@ fn drawn_line(
                     if Some(glyph.id) == ellipsis {
                         '\u{2026}'
                     } else {
-                        text[glyph.offset..].chars().next().unwrap_or('\u{fffd}')
+                        text.get(glyph.offset..)
+                            .and_then(|rest| rest.chars().next())
+                            .unwrap_or('\u{fffd}')
                     }
                 })
                 .collect::<Vec<_>>()

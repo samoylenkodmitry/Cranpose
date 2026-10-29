@@ -123,11 +123,11 @@ fn beside<'a>(after: Option<Glyphs<'a>>, before: Option<Glyphs<'a>>) -> Beside<'
     }
 }
 
-fn one(glyph: &BigEndian<GlyphId16>) -> Glyphs<'static> {
+fn one(glyph: BigEndian<GlyphId16>) -> Glyphs<'static> {
     Glyphs::One(glyph.get().into())
 }
 
-fn class<'a>(classes: &ClassDef<'a>, class: &BigEndian<u16>) -> Glyphs<'a> {
+fn class<'a>(classes: &ClassDef<'a>, class: BigEndian<u16>) -> Glyphs<'a> {
     Glyphs::Class(classes.clone(), u32::from(class.get()))
 }
 
@@ -603,7 +603,7 @@ impl Starts<'_> {
                 continue;
             };
             for rule in set.ok()?.seq_rules().iter() {
-                let after = rule.ok()?.input_sequence().first().map(one);
+                let after = rule.ok()?.input_sequence().first().copied().map(one);
                 self.rule(first, beside(after, None))?;
             }
         }
@@ -623,7 +623,7 @@ impl Starts<'_> {
                     .ok()?
                     .input_sequence()
                     .first()
-                    .map(|next| class(&classes, next));
+                    .map(|next| class(&classes, *next));
                 self.rule(first, beside(after, None))?;
             }
         }
@@ -652,8 +652,11 @@ impl Starts<'_> {
             for rule in set.ok()?.chained_seq_rules().iter() {
                 let rule = rule.ok()?;
                 let next = rule.input_sequence().first();
-                let after = next.or_else(|| rule.lookahead_sequence().first()).map(one);
-                let before = rule.backtrack_sequence().first().map(one);
+                let after = next
+                    .or_else(|| rule.lookahead_sequence().first())
+                    .copied()
+                    .map(one);
+                let before = rule.backtrack_sequence().first().copied().map(one);
                 self.rule(first, beside(after, before))?;
             }
         }
@@ -673,16 +676,16 @@ impl Starts<'_> {
             for rule in set.ok()?.chained_class_seq_rules().iter() {
                 let rule = rule.ok()?;
                 let after = match rule.input_sequence().first() {
-                    Some(next) => Some(class(&input, next)),
+                    Some(next) => Some(class(&input, *next)),
                     None => rule
                         .lookahead_sequence()
                         .first()
-                        .map(|next| class(&lookahead, next)),
+                        .map(|next| class(&lookahead, *next)),
                 };
                 let before = rule
                     .backtrack_sequence()
                     .first()
-                    .map(|previous| class(&backtrack, previous));
+                    .map(|previous| class(&backtrack, *previous));
                 self.rule(first, beside(after, before))?;
             }
         }

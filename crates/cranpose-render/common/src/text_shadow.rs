@@ -22,10 +22,13 @@ fn blend_shadow_pixel(
     color: [f32; 4],
     alpha: f32,
 ) {
-    if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 || alpha <= 0.0 {
+    let (Ok(px), Ok(py)) = (u32::try_from(px), u32::try_from(py)) else {
+        return;
+    };
+    if px >= width || py >= height || alpha <= 0.0 {
         return;
     }
-    let idx = (py as u32 * width + px as u32) as usize;
+    let idx = (py * width + px) as usize;
     blend_src_over(
         &mut canvas[idx],
         [color[0], color[1], color[2], alpha.clamp(0.0, 1.0)],
@@ -49,8 +52,8 @@ fn blend_shadow_pixel_subpixel(
     let base_y = whole::floor(y);
     let frac_x = x - base_x;
     let frac_y = y - base_y;
-    let base_x_i32 = base_x as i32;
-    let base_y_i32 = base_y as i32;
+    let base_x_i32 = whole::to_i32(base_x);
+    let base_y_i32 = whole::to_i32(base_y);
     let weights = [
         ((1.0 - frac_x) * (1.0 - frac_y), 0i32, 0i32),
         (frac_x * (1.0 - frac_y), 1, 0),
@@ -119,7 +122,7 @@ fn gaussian_blur_alpha(src: &[f32], width: usize, height: usize, sigma: f32) -> 
 }
 
 fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
-    let half = (whole::ceil(sigma * 3.0) as i32).clamp(1, MAX_GAUSSIAN_KERNEL_HALF);
+    let half = whole::to_i32(whole::ceil(sigma * 3.0)).clamp(1, MAX_GAUSSIAN_KERNEL_HALF);
     if half <= 0 {
         return vec![1.0];
     }
@@ -162,7 +165,7 @@ pub(crate) fn draw_shadow_mask(
     let blur_radius = (shadow.blur_radius * scale).max(0.0);
     let sigma = shadow_blur_sigma(blur_radius);
     let blur_margin = if sigma > 0.0 {
-        whole::ceil(sigma * 3.0) as i32
+        whole::to_i32(whole::ceil(sigma * 3.0))
     } else {
         0
     };
@@ -217,8 +220,8 @@ pub(crate) fn draw_shadow_mask(
                     canvas,
                     width,
                     height,
-                    whole::round(target_x) as i32,
-                    whole::round(target_y) as i32,
+                    whole::to_i32(whole::round(target_x)),
+                    whole::to_i32(whole::round(target_y)),
                     shadow_rgba,
                     alpha.clamp(0.0, 1.0),
                 );

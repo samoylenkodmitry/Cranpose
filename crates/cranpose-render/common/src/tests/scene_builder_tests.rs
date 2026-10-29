@@ -3428,7 +3428,9 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
 fn layout_lines(layout: &cranpose_text::TextLayout, text: &str) -> Vec<String> {
     (0..layout.line_count())
         .map(|line| {
-            let shown = &text[layout.line_start(line)..layout.line_visible_end(line)];
+            let shown = text
+                .get(layout.line_start(line)..layout.line_visible_end(line))
+                .unwrap_or_default();
             if layout.is_line_ellipsized(line) {
                 format!("{shown}\u{2026}")
             } else {

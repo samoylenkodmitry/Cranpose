@@ -298,7 +298,7 @@ fn atlas_ink_bottoms(glyphs: &[(AtlasGlyph, GlyphMask)], channel: usize) -> Vec<
             .iter()
             .enumerate()
             .filter(|(_, alpha)| **alpha > 32)
-            .map(|(index, _)| glyph.y + (index / mask.width) as i32)
+            .map(|(index, _)| glyph.y + i32::try_from(index / mask.width).unwrap_or(i32::MAX))
             .max()
         {
             bottoms.push(bottom);

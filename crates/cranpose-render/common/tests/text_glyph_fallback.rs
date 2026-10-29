@@ -181,8 +181,15 @@ fn assert_matches_reference(
 
     let actual_layout = prepare(actual, style, fonts);
     let expected_layout = prepare(expected, style, fonts);
-    assert_eq!(actual_layout.metrics, expected_layout.metrics);
-    assert_eq!(actual_layout.layout.width(), expected_layout.layout.width());
+    assert_eq!(
+        actual_layout.metrics, expected_layout.metrics,
+        "the fallback text measures as the text it stands for"
+    );
+    assert_eq!(
+        actual_layout.layout.width(),
+        expected_layout.layout.width(),
+        "the fallback text is as wide as the text it stands for"
+    );
     assert_eq!(
         actual_layout.layout.height(),
         expected_layout.layout.height()
