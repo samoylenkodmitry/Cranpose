@@ -34,7 +34,8 @@ impl ClusterWidths {
         self.before(end) - self.before(start)
     }
 
-    fn before(&self, offset: usize) -> f32 {
+    // The width of the text before `offset`.
+    pub(crate) fn before(&self, offset: usize) -> f32 {
         let at = self.clusters.partition_point(|&(start, _)| start < offset);
         self.clusters
             .get(at)

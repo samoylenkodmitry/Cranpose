@@ -153,6 +153,12 @@ impl Wrapping<'_> {
         }
     }
 
+    // The width a line starting at `start` wraps at, and the width of the
+    // text before it.
+    fn line_start(&self, start: usize) -> (f32, f32) {
+        (self.limit(start), self.widths.before(start))
+    }
+
     // The width of the line from `start` to `end` without its trailing
     // whitespace, which hangs past the line's end.
     fn line_width(&self, start: usize, end: usize) -> f32 {
@@ -172,13 +178,16 @@ impl Wrapping<'_> {
     ) -> usize {
         let mut fit = None;
         let mut index = 0;
+        // The width the line wraps at and the width of the text before it.
+        let (mut limit, mut before) = self.line_start(start);
         while let Some(&opportunity) = breaks.get(index) {
-            let width = self.limit(start);
-            if self.line_width(start, opportunity.offset) <= width {
+            let visible = visible_end(self.text, start, opportunity.offset);
+            if self.widths.before(visible) - before <= limit {
                 match opportunity.kind {
                     BreakKind::Hard => {
                         lines.push(BrokenLine::plain(start..opportunity.offset));
                         start = opportunity.offset;
+                        (limit, before) = self.line_start(start);
                         fit = None;
                     }
                     BreakKind::Soft => fit = Some(opportunity.offset),
@@ -186,12 +195,13 @@ impl Wrapping<'_> {
                 }
                 index += 1;
             } else {
-                let line = match fit.take() {
+                let ended = match fit.take() {
                     Some(end) => BrokenLine::plain(start..end),
-                    None => self.cut_word(start, &breaks[..index], opportunity.offset, width),
+                    None => self.cut_word(start, &breaks[..index], opportunity.offset, limit),
                 };
-                start = line.text.end;
-                lines.push(line);
+                start = ended.text.end;
+                (limit, before) = self.line_start(start);
+                lines.push(ended);
             }
         }
         start
