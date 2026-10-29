@@ -11,7 +11,7 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::{FxHasher, HashBits, MemoryHeadroom, TextLayoutHandle};
+use cranpose_ui_graphics::{HashBits, MemoryHeadroom, TextLayoutHandle};
 use smallvec::SmallVec;
 
 use super::{
@@ -190,7 +190,7 @@ impl PartialEq for PreparedTextLayout {
 
 // What a layout is cached by: the text and style hashes, the options and the
 // units its sizes became pixels in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TextKey {
     text_hash: u64,
     style_hash: u64,
@@ -220,6 +220,19 @@ impl TextKey {
                 units.factor.to_bits(),
             ),
         })
+    }
+
+    // The text's and the style's hashes in one, mixed into the high bits.
+    // The options and units, which an app's texts rarely differ in, are left
+    // to equality.
+    fn mixed_hash(&self) -> u64 {
+        (self.text_hash ^ self.style_hash.rotate_left(32)).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+}
+
+impl Hash for TextKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.mixed_hash());
     }
 }
 
@@ -415,9 +428,7 @@ impl TextService {
                 let admitted = match admission {
                     CacheAdmission::First => true,
                     CacheAdmission::Second if self.headroom.get() == MemoryHeadroom::Ample => {
-                        let mut hasher = FxHasher::default();
-                        key.hash(&mut hasher);
-                        let hash = hasher.finish();
+                        let hash = key.mixed_hash();
                         let mut seen = self.seen.borrow_mut();
                         seen.contains(hash) || {
                             seen.insert(hash);
