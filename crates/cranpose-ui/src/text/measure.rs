@@ -187,6 +187,15 @@ impl TextKey {
     }
 }
 
+// What the text service's shared cache holds of a text for a frame.
+enum Cached {
+    // A layout that breaks into the same lines, aligned to the frame.
+    Held(Rc<PreparedTextLayout>),
+    // Layouts at other widths, which a new one joins.
+    OtherWidths,
+    Missing,
+}
+
 // When the text service's shared cache keeps a layout it missed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CacheAdmission {
@@ -232,26 +241,32 @@ enum LayoutSource<'a> {
         style: &'a TextStyle,
     },
     Shared {
-        text: &'a Rc<AnnotatedString>,
-        style: &'a Arc<TextStyle>,
+        text: &'a SharedText<'a>,
         // A layout of the text in the style at other widths, whose glyphs a
         // new layout takes in place of shaping the text again.
         shaped: Option<&'a TextLayout>,
     },
 }
 
+// A text and style a node holds, and the style's render hash.
+pub(crate) struct SharedText<'a> {
+    pub(crate) text: &'a Rc<AnnotatedString>,
+    pub(crate) style: &'a Arc<TextStyle>,
+    pub(crate) style_hash: u64,
+}
+
 impl LayoutSource<'_> {
     fn text(&self) -> &AnnotatedString {
         match self {
             Self::Borrowed { text, .. } => text,
-            Self::Shared { text, .. } => text,
+            Self::Shared { text, .. } => text.text,
         }
     }
 
     fn style(&self) -> &TextStyle {
         match self {
             Self::Borrowed { style, .. } => style,
-            Self::Shared { style, .. } => style,
+            Self::Shared { text, .. } => text.style,
         }
     }
 
@@ -260,7 +275,14 @@ impl LayoutSource<'_> {
             Self::Borrowed { text, style } => {
                 (Rc::new((*text).clone()), Arc::new((*style).clone()))
             }
-            Self::Shared { text, style, .. } => (Rc::clone(text), Arc::clone(style)),
+            Self::Shared { text, .. } => (Rc::clone(text.text), Arc::clone(text.style)),
+        }
+    }
+
+    fn style_hash(&self) -> u64 {
+        match self {
+            Self::Borrowed { style, .. } => style.render_hash(),
+            Self::Shared { text, .. } => text.style_hash,
         }
     }
 
@@ -357,51 +379,63 @@ impl TextService {
         (units, admission): (TextUnits, CacheAdmission),
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
-        let key = TextKey::of(text, style.render_hash(), frame.options, units);
-        if let Some(key) = key
-            && let Some(prepared) = self.held(key, frame, style)
-        {
-            return prepared;
-        }
+        let key = TextKey::of(text, source.style_hash(), frame.options, units);
+        let cached = key.map_or(Cached::Missing, |key| self.cached(key, frame, style));
+        let other_widths = match cached {
+            Cached::Held(prepared) => return prepared,
+            Cached::OtherWidths => true,
+            Cached::Missing => false,
+        };
         let (text, style) = source.shared();
         let prepared = Rc::new(self.lay_out(text, style, frame, (units, source.shaped())));
         if let Some(key) = key {
-            let mut cache = self.prepared.borrow_mut();
-            match (cache.get_mut(&key), admission) {
-                (Some(widths), _) => remember(widths, &prepared),
-                (None, CacheAdmission::First) => {
-                    cache.push(key, SmallVec::from_elem(Rc::clone(&prepared), 1));
+            if other_widths {
+                if let Some(widths) = self.prepared.borrow_mut().get_mut(&key) {
+                    remember(widths, &prepared);
                 }
-                (None, CacheAdmission::Second) => {
-                    self.trial.borrow_mut().put(key, Rc::clone(&prepared));
+            } else {
+                match admission {
+                    CacheAdmission::First => {
+                        let widths = SmallVec::from_elem(Rc::clone(&prepared), 1);
+                        self.prepared.borrow_mut().push(key, widths);
+                    }
+                    CacheAdmission::Second => {
+                        self.trial.borrow_mut().put(key, Rc::clone(&prepared));
+                    }
                 }
             }
         }
         prepared
     }
 
-    // A cached layout of `key` that breaks into the same lines in `frame`,
-    // aligned to its widths.
-    fn held(
-        &self,
-        key: TextKey,
-        frame: TextFrame,
-        style: &TextStyle,
-    ) -> Option<Rc<PreparedTextLayout>> {
+    // What the shared cache holds of `key` for `frame`: a layout that
+    // breaks into the same lines, aligned to its widths, or layouts at
+    // other widths only, or nothing.
+    fn cached(&self, key: TextKey, frame: TextFrame, style: &TextStyle) -> Cached {
         let mut cache = self.prepared.borrow_mut();
-        if cache.get_mut(&key).is_none()
-            && let Some(tried) = self.trial.borrow_mut().take(key)
-        {
-            cache.push(key, SmallVec::from_elem(tried, 1));
-        }
-        let widths = cache.get_mut(&key)?;
-        let held = widths
+        let widths = match cache.get_mut(&key) {
+            Some(widths) => widths,
+            None => {
+                let Some(tried) = self.trial.borrow_mut().take(key) else {
+                    return Cached::Missing;
+                };
+                cache.push(key, SmallVec::from_elem(tried, 1));
+                let Some(widths) = cache.get_mut(&key) else {
+                    return Cached::Missing;
+                };
+                widths
+            }
+        };
+        let Some(held) = widths
             .iter()
             .find(|prepared| prepared.layout.holds(frame.min_width, frame.max_width))
-            .map(Rc::clone)?;
+            .map(Rc::clone)
+        else {
+            return Cached::OtherWidths;
+        };
         let width = held.layout.width_between(frame.min_width, frame.max_width);
         if width.to_bits() == held.layout.width().to_bits() {
-            return Some(held);
+            return Cached::Held(held);
         }
         let mut layout = TextLayout::clone(&held.layout);
         layout.align(
@@ -416,7 +450,7 @@ impl TextService {
             (frame.max_width, frame.options.normalized().min_lines),
         ));
         remember(widths, &aligned);
-        Some(aligned)
+        Cached::Held(aligned)
     }
 
     // Lays `text` out in `style`, auto-sizing it when its options ask, with
@@ -774,18 +808,14 @@ pub fn prepare_text_layout(
 // Lays out `text` in `style` between the widths of `frame`, sharing them,
 // kept by the shared cache as `admission` says.
 pub(crate) fn prepare_shared(
-    (text, style): (&Rc<AnnotatedString>, &Arc<TextStyle>),
+    text: &SharedText<'_>,
     frame: TextFrame,
     admission: CacheAdmission,
     shaped: Option<&TextLayout>,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
         service.prepare(
-            LayoutSource::Shared {
-                text,
-                style,
-                shaped,
-            },
+            LayoutSource::Shared { text, shaped },
             frame,
             (host_units(), admission),
         )

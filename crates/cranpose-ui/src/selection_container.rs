@@ -20,7 +20,7 @@ use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size, WindowCoordin
 use crate::{
     text::{
         AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextStyle,
-        measure::{CacheAdmission, TextFrame, prepare_shared},
+        measure::{CacheAdmission, SharedText, TextFrame, prepare_shared},
     },
     text_selection::{
         MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionAnchor, SelectionGranularity,
@@ -117,12 +117,12 @@ impl Selectable {
         } else {
             TextFrame::up_to(None, self.options)
         };
-        prepare_shared(
-            (&self.text, &self.style),
-            frame,
-            CacheAdmission::First,
-            None,
-        )
+        let text = SharedText {
+            text: &self.text,
+            style: &self.style,
+            style_hash: self.style.render_hash(),
+        };
+        prepare_shared(&text, frame, CacheAdmission::First, None)
     }
 
     /// The byte offset nearest `local`, a point in the content's coordinates.

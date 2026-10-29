@@ -121,6 +121,8 @@ struct Loaded {
     // The normal track of the font's `trak` table: the tracking in ems at
     // each point size it lists, ascending; empty without one.
     tracking: Box<[(f32, f32)]>,
+    // The glyph of the space, whose advance justification stretches.
+    space: Option<GlyphId>,
 }
 
 impl Typeface {
@@ -159,6 +161,7 @@ impl Typeface {
             content_hash,
             coverage: OnceLock::new(),
             tracking: normal_track(&font),
+            space: space_glyph(&font),
             font,
         })))
     }
@@ -218,6 +221,7 @@ impl Typeface {
             content_hash,
             coverage: OnceLock::new(),
             tracking: normal_track(&font),
+            space: space_glyph(&font),
             font,
         })))
     }
@@ -377,6 +381,11 @@ impl Typeface {
             .charmap()
             .map_unicode(ch)
             .map(|glyph| GlyphId(glyph.to_u32()))
+    }
+
+    // The glyph of the space.
+    pub(crate) fn space(&self) -> Option<GlyphId> {
+        self.0.space
     }
 
     /// Whether the font maps `ch` to a glyph.
@@ -589,4 +598,10 @@ fn style_axes(font: &Font) -> SmallVec<[StyleAxis; 3]> {
         })
         .filter(|axis| matches!(&axis.tag, b"wght" | b"ital" | b"slnt"))
         .collect()
+}
+
+fn space_glyph(font: &Font) -> Option<GlyphId> {
+    font.charmap()
+        .map_unicode(' ')
+        .map(|glyph| GlyphId(glyph.to_u32()))
 }

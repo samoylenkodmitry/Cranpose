@@ -170,12 +170,12 @@ impl TextPreparedLayoutOwner {
                 .first()
                 .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
                 .map(|entry| &*entry.layout.layout);
-            crate::text::measure::prepare_shared(
-                (&source.text, &source.style),
-                frame,
-                source.admission,
-                shaped,
-            )
+            let text = crate::text::measure::SharedText {
+                text: &source.text,
+                style: &source.style,
+                style_hash: source.style_hash,
+            };
+            crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
         };
         if Arc::ptr_eq(&prepared.visual_style, &source.style) {
             let _ = prepared.visual_style_hash.set(source.style_hash);

@@ -154,8 +154,17 @@ impl TextLayouter {
         self.shape(input, resolver, shaped, layout);
         self.measure_clusters(input, layout);
         let lengths = input.lengths;
+        let text = input.text;
+        // The width up to the trailing whitespace of a text with no line
+        // break: its one paragraph.
+        let unbroken =
+            (!has_hard_break(text)).then(|| self.widths.width(0, visible_end(text, 0, text.len())));
+        let widest = unbroken.map_or_else(
+            || self.widest_paragraph(input),
+            |width| width.max(0.0) + lengths.first_line_indent,
+        );
         layout.sizing = Sizing {
-            content_width: whole::ceil(self.widest_paragraph(input) * lengths.grid) / lengths.grid,
+            content_width: whole::ceil(widest * lengths.grid) / lengths.grid,
             follows_max: options.soft_wrap || options.overflow.is_ellipsis(),
         };
         let width = layout.sizing.width(input.min_width, input.max_width);
@@ -171,15 +180,12 @@ impl TextLayouter {
                 rest: f32::INFINITY,
             }
         };
-        let text = input.text;
         // Most text is one line that fits; it needs no break opportunities.
-        if !has_hard_break(text)
-            && self.widths.width(0, visible_end(text, 0, text.len())) <= wrap.first
-        {
+        if let Some(line) = unbroken.filter(|&line| line <= wrap.first) {
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
             let min = if options.soft_wrap {
-                self.widths.width(0, visible_end(text, 0, text.len())) + lengths.first_line_indent
+                line + lengths.first_line_indent
             } else {
                 f32::NEG_INFINITY
             };
@@ -616,7 +622,7 @@ impl TextLayouter {
                 visible_left.get_or_insert(x);
                 width += piece.width;
             }
-            let space = layout.faces[piece.face].glyph(' ');
+            let space = layout.faces[piece.face].space();
             let spaces = if piece.text.start < visible {
                 layout.glyphs[piece.glyphs.clone()]
                     .iter()
