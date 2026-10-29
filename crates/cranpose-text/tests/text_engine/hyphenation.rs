@@ -1,7 +1,6 @@
 use cranpose_text::{
     FontFamily, FontFamilyResolver, GlyphId, HyphenationError, Hyphens, LayoutInput, LineBreak,
-    ParagraphLengths, ParagraphStyle, Shaped, TextLayout, TextLayoutOptions, TextLayouter,
-    Typeface,
+    ParagraphLengths, ParagraphStyle, TextLayout, TextLayoutOptions, TextLayouter, Typeface,
 };
 
 use crate::fonts::{ROBOTO, span, typeface};
@@ -182,19 +181,12 @@ fn a_relayout_at_a_wider_width_hyphenates_only_the_words_wider_than_its_lines() 
         max_width,
         options: TextLayoutOptions::default(),
     };
-    let narrow = unbroken(&resolver, "understand");
     let mut layouter = TextLayouter::default();
-    let first = layouter.layout(&input(narrow), &resolver);
-    // A relayout that wraps keeps the measures the wider one takes.
-    let hyphenated = layouter.relayout(
-        &input(narrow + 0.25),
-        &resolver,
-        Shaped::AtOtherWidths(&first),
-    );
-    assert_eq!(lines(&hyphenated, text), ["a ", "under", "standing"]);
+    let narrow = layouter.layout(&input(unbroken(&resolver, "understand")), &resolver);
+    assert_eq!(lines(&narrow, text), ["a ", "under", "standing"]);
 
     let wide = unbroken(&resolver, "understanding") + 0.5;
-    let relaid = layouter.relayout(&input(wide), &resolver, Shaped::AtOtherWidths(&hyphenated));
+    let relaid = layouter.relayout(&input(wide), &resolver, &narrow);
 
     assert_eq!(lines(&relaid, text), ["a ", "understanding"]);
 }

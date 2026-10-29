@@ -318,6 +318,12 @@ impl GlyphRun<'_> {
 }
 
 impl LayoutBody {
+    // The glyphs when shaping placed them all, which a relayout that adds
+    // none keeps.
+    pub(crate) fn shaped_glyphs(&self) -> Option<&Arc<[ShapedGlyph]>> {
+        (self.glyphs.len() == self.shaped).then_some(&self.glyphs)
+    }
+
     // Empties the body, keeping the storage of all but its shared glyphs.
     pub(crate) fn clear(&mut self) {
         self.faces.clear();
