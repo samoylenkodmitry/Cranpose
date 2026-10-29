@@ -63,5 +63,9 @@ pub(crate) fn draw_text_layout(
     style: &cranpose_ui_graphics::DrawTextStyle,
 ) -> Option<cranpose_ui_graphics::TextLayoutHandle> {
     use cranpose_ui_graphics::DrawTextMeasurer as _;
-    in_layout_context(|| cranpose_ui::text::AppContextTextMeasurer.layout_text(text, style))
+    in_layout_context(|| {
+        cranpose_ui::text::AppContextTextMeasurer
+            .measure_text(text, style)
+            .layout
+    })
 }

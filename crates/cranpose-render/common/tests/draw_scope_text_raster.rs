@@ -27,11 +27,10 @@ struct Measured {
 fn measured(text: &str, style: &DrawTextStyle) -> Measured {
     cranpose_ui::AppContext::new().enter(|| {
         cranpose_ui::text::set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
-        let handle = AppContextTextMeasurer
-            .layout_text(text, style)
-            .expect("an app context lays text out");
+        let measured = AppContextTextMeasurer.measure_text(text, style);
+        let handle = measured.layout.expect("an app context lays text out");
         Measured {
-            measurement: AppContextTextMeasurer.measure_text(text, style),
+            measurement: measured.measurement,
             layout: handle.downcast::<TextLayout>().expect("an engine layout"),
             line_box: draw_style_line_box(style),
         }

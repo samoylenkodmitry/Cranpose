@@ -362,16 +362,20 @@ impl TextMeasurement {
 /// back to [`estimate_text_measurement`], which is good enough for layout
 /// smoke tests and wrong for anything that has to line up with real glyphs.
 pub trait DrawTextMeasurer {
-    /// Returns the size and line metrics of `text` laid out in `style`.
-    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement;
+    /// `text` laid out in `style`: its size and line metrics, and the layout
+    /// measured.
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> MeasuredText;
+}
 
-    /// The layout of `text` in `style` that [`DrawTextMeasurer::measure_text`]
-    /// measured, which a draw scope hands its renderer so the glyphs drawn
-    /// are the ones measured. `None` from a measurer with no layouts.
-    fn layout_text(&self, text: &str, style: &DrawTextStyle) -> Option<TextLayoutHandle> {
-        let _ = (text, style);
-        None
-    }
+/// A text a [`DrawTextMeasurer`] measured.
+#[derive(Clone)]
+pub struct MeasuredText {
+    /// The size and line metrics.
+    pub measurement: TextMeasurement,
+    /// The layout measured, which a draw scope hands its renderer so the
+    /// glyphs drawn are the ones measured. `None` from a measurer with no
+    /// layouts.
+    pub layout: Option<TextLayoutHandle>,
 }
 
 /// The layout the text system made of a text. It is opaque here, below the

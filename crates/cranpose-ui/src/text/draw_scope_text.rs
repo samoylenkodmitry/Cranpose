@@ -12,8 +12,8 @@
 use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
-    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, Size, TextLayoutHandle,
-    TextMeasurement, estimate_text_measurement,
+    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, MeasuredText, Size,
+    TextLayoutHandle, TextMeasurement, estimate_text_measurement,
 };
 
 use super::{
@@ -103,30 +103,31 @@ impl AppContextTextMeasurer {
 }
 
 impl DrawTextMeasurer for AppContextTextMeasurer {
-    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> MeasuredText {
         if crate::render_state::current_app_context().is_none() {
-            return estimate_text_measurement(text, style);
+            return MeasuredText {
+                measurement: estimate_text_measurement(text, style),
+                layout: None,
+            };
         }
         let prepared = prepare_draw_text(text, style);
         let layout = &prepared.layout;
         let line_height = layout.line_bottom(0) - layout.line_top(0);
         let first_baseline = layout.line_baseline(0);
-        if text.is_empty() {
-            return TextMeasurement::empty(line_height, first_baseline);
+        let measurement = if text.is_empty() {
+            TextMeasurement::empty(line_height, first_baseline)
+        } else {
+            TextMeasurement {
+                size: Size::new(prepared.metrics.width, prepared.metrics.height),
+                line_height,
+                first_baseline,
+                line_count: prepared.metrics.line_count,
+            }
+        };
+        MeasuredText {
+            measurement,
+            layout: Some(TextLayoutHandle::from(Arc::clone(layout))),
         }
-        TextMeasurement {
-            size: Size::new(prepared.metrics.width, prepared.metrics.height),
-            line_height,
-            first_baseline,
-            line_count: prepared.metrics.line_count,
-        }
-    }
-
-    fn layout_text(&self, text: &str, style: &DrawTextStyle) -> Option<TextLayoutHandle> {
-        crate::render_state::current_app_context()?;
-        Some(TextLayoutHandle::from(Arc::clone(
-            &prepare_draw_text(text, style).layout,
-        )))
     }
 }
 

@@ -459,8 +459,11 @@ impl DrawPrimitiveSink for CollectingTextSink {
 
 fn text_primitive(rect: Rect, text: &str, style: DrawTextStyle) -> DrawPrimitive {
     use cranpose_ui_graphics::DrawTextMeasurer as _;
-    let layout = cranpose_ui::AppContext::new()
-        .enter(|| cranpose_ui::text::AppContextTextMeasurer.layout_text(text, &style));
+    let layout = cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::AppContextTextMeasurer
+            .measure_text(text, &style)
+            .layout
+    });
     DrawPrimitive::Text(Box::new(TextPrimitive {
         rect,
         text: StdRc::from(text),

@@ -8,11 +8,8 @@ use crate::{
     normalized_band,
     path::{DrawStyle, Path},
     stroke::{LineGeometry, Stroke},
-    text_primitive::{TextPrimitive, align_text_block, shared_text_str},
-    typography::{
-        DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
-        estimate_text_measurement,
-    },
+    text_primitive::{TextBlockAt, TextPrimitive, measured_text, text_primitive},
+    typography::{DrawTextMeasurer, DrawTextStyle, TextMeasurement},
     vector_path_mask::{
         PathSide, VECTOR_PATH_SUPERSAMPLE, rasterize_vector_path, vector_path_mask_cache_get,
         vector_path_mask_cache_put, vector_path_mask_key,
@@ -1173,22 +1170,7 @@ pub trait DrawScope {
     /// Alignment is a no-op here because the box is the measurement — this is
     /// the "I already know where it goes" form, and the one to pair with
     /// [`measure_text`](Self::measure_text) for hand-rolled centering.
-    fn draw_text_from(&mut self, top_left: Point, brush: Brush, text: &str, style: &DrawTextStyle) {
-        if text.is_empty() {
-            return;
-        }
-        let measurement = self.measure_text(text, style);
-        self.draw_text_at(
-            Rect::from_origin_size(top_left, measurement.size),
-            brush,
-            text,
-            &DrawTextStyle {
-                align: TextAlign::Left,
-                vertical_align: TextVerticalAlign::Top,
-                ..style.clone()
-            },
-        );
-    }
+    fn draw_text_from(&mut self, top_left: Point, brush: Brush, text: &str, style: &DrawTextStyle);
 
     /// Draws `block` with every primitive it records, text and images
     /// included, placed by `transform`'s steps in order, each inside the
@@ -2008,36 +1990,23 @@ impl DrawScope for DrawScopeDefault<'_> {
     }
 
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
-        match &self.text_measurer {
-            Some(measurer) => measurer.measure_text(text, style),
-            None => estimate_text_measurement(text, style),
-        }
+        measured_text(self.text_measurer.as_deref(), text, style).measurement
     }
 
     fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &DrawTextStyle) {
-        if text.is_empty() || !brush.paints() {
-            return;
+        let at = TextBlockAt::Aligned(rect);
+        let measurer = self.text_measurer.as_deref();
+        if let Some(text) = text_primitive(measurer, at, brush, text, style) {
+            self.recording.push_other(text);
         }
-        let measurement = self.measure_text(text, style);
-        if !(measurement.size.width > 0.0 && measurement.size.height > 0.0) {
-            return;
+    }
+
+    fn draw_text_from(&mut self, top_left: Point, brush: Brush, text: &str, style: &DrawTextStyle) {
+        let at = TextBlockAt::From(top_left);
+        let measurer = self.text_measurer.as_deref();
+        if let Some(text) = text_primitive(measurer, at, brush, text, style) {
+            self.recording.push_other(text);
         }
-        let origin = align_text_block(rect, measurement, style);
-        if !origin.x.is_finite() || !origin.y.is_finite() {
-            return;
-        }
-        let layout = self
-            .text_measurer
-            .as_ref()
-            .and_then(|measurer| measurer.layout_text(text, style));
-        self.recording
-            .push_other(DrawPrimitive::Text(Box::new(TextPrimitive {
-                rect: Rect::from_origin_size(origin, measurement.size),
-                text: shared_text_str(text),
-                style: style.clone(),
-                brush,
-                layout,
-            })));
     }
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {

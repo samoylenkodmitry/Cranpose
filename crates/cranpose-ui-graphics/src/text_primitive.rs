@@ -4,8 +4,11 @@
 use std::rc::Rc;
 
 use crate::{
-    Brush, Point, Rect,
-    typography::{DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign},
+    Brush, DrawPrimitive, Point, Rect,
+    typography::{
+        DrawTextMeasurer, DrawTextStyle, MeasuredText, TextAlign, TextMeasurement,
+        TextVerticalAlign, estimate_text_measurement,
+    },
 };
 
 /// A run of text, positioned and ready to rasterize.
@@ -77,4 +80,74 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTe
         TextVerticalAlign::Baseline => rect.y - measurement.first_baseline,
     };
     Point::new(x, y)
+}
+
+// Where a drawn text's block goes.
+#[derive(Clone, Copy)]
+pub(crate) enum TextBlockAt {
+    // Inside a rect, placed by the style's alignments.
+    Aligned(Rect),
+    // With its top left corner at a point, the style's alignments set to
+    // the top left.
+    From(Point),
+}
+
+// `text` in `style` measured by `measurer`, or estimated without one.
+pub(crate) fn measured_text(
+    measurer: Option<&dyn DrawTextMeasurer>,
+    text: &str,
+    style: &DrawTextStyle,
+) -> MeasuredText {
+    match measurer {
+        Some(measurer) => measurer.measure_text(text, style),
+        None => MeasuredText {
+            measurement: estimate_text_measurement(text, style),
+            layout: None,
+        },
+    }
+}
+
+// The primitive that draws `text` in `style` with `brush`, measured once by
+// `measurer`, its block placed `at`. `None` when nothing would draw: the
+// text is empty, the brush paints nothing, the block has no area or its
+// corner is not finite.
+pub(crate) fn text_primitive(
+    measurer: Option<&dyn DrawTextMeasurer>,
+    at: TextBlockAt,
+    brush: Brush,
+    text: &str,
+    style: &DrawTextStyle,
+) -> Option<DrawPrimitive> {
+    if text.is_empty() || !brush.paints() {
+        return None;
+    }
+    let measured = measured_text(measurer, text, style);
+    let size = measured.measurement.size;
+    if !(size.width > 0.0 && size.height > 0.0) {
+        return None;
+    }
+    let (origin, style) = match at {
+        TextBlockAt::Aligned(rect) => (
+            align_text_block(rect, measured.measurement, style),
+            style.clone(),
+        ),
+        TextBlockAt::From(top_left) => (
+            top_left,
+            DrawTextStyle {
+                align: TextAlign::Left,
+                vertical_align: TextVerticalAlign::Top,
+                ..style.clone()
+            },
+        ),
+    };
+    if !origin.x.is_finite() || !origin.y.is_finite() {
+        return None;
+    }
+    Some(DrawPrimitive::Text(Box::new(TextPrimitive {
+        rect: Rect::from_origin_size(origin, size),
+        text: shared_text_str(text),
+        style,
+        brush,
+        layout: measured.layout,
+    })))
 }
