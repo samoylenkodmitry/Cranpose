@@ -1,6 +1,7 @@
 use std::{ops::Range, sync::Arc};
 
 use cranpose_ui_graphics::{MemoryHeadroom, whole};
+use smallvec::SmallVec;
 
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
@@ -25,6 +26,7 @@ use crate::{
     },
     shaper::{ShapedGlyph, Shaper},
     text_layout::{LayoutBody, LayoutLine, Sizing, TextLayout, WidthRange},
+    typeface::Typeface,
 };
 #[cfg(feature = "hyphenation")]
 use crate::{
@@ -48,9 +50,9 @@ pub struct TextLayouter {
     // The glyphs of the text being laid out, which keep their storage from
     // one text to the next; a layout takes them once they are all placed.
     glyphs: Vec<ShapedGlyph>,
-    // The body intrinsic widths are measured in, which keeps its storage
+    // The faces intrinsic widths are measured in, which keep their storage
     // from one text to the next.
-    scratch: LayoutBody,
+    faces: SmallVec<[Typeface; 1]>,
     #[cfg(feature = "hyphenation")]
     hyphenator: Hyphenator,
     // The opportunities with the hyphenation points among them, swapped
@@ -136,7 +138,8 @@ impl TextLayouter {
     ) -> f32 {
         let options = input.options.normalized();
         layout.clear();
-        self.shape(input, resolver, shaped, layout);
+        self.shape(input, resolver, shaped, &mut layout.faces);
+        layout.shaped = self.glyphs.len();
         let lengths = input.lengths;
         let text = input.text;
         // The piece of a text of one item with no line break and no
@@ -257,12 +260,12 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
     ) -> ParagraphIntrinsics {
-        let mut measured = std::mem::take(&mut self.scratch);
-        measured.clear();
-        self.shape(input, resolver, None, &mut measured);
+        let mut faces = std::mem::take(&mut self.faces);
+        faces.clear();
+        self.shape(input, resolver, None, &mut faces);
         self.widths
-            .measure(&self.items, input, &measured.faces, &self.glyphs);
-        self.scratch = measured;
+            .measure(&self.items, input, &faces, &self.glyphs);
+        self.faces = faces;
         self.keep_glyph_room();
         let text = input.text;
         self.breaker
@@ -473,15 +476,15 @@ impl TextLayouter {
         Some(hold)
     }
 
-    // Shapes the items of `input` into `layout`, or takes the glyphs
-    // `shaped` placed for them, whose clusters fall in each item's text in
-    // item order.
+    // Shapes the items of `input` with the typefaces it adds to `faces`, or
+    // takes the glyphs `shaped` placed for them, whose clusters fall in each
+    // item's text in item order.
     fn shape(
         &mut self,
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
         shaped: Option<&TextLayout>,
-        layout: &mut LayoutBody,
+        faces: &mut SmallVec<[Typeface; 1]>,
     ) {
         self.items.clear();
         self.glyphs.clear();
@@ -511,7 +514,7 @@ impl TextLayouter {
                 items.push(ShapedItem {
                     text: item.range,
                     glyphs: start..glyphs.len(),
-                    face: face_index(&mut layout.faces, item.typeface),
+                    face: face_index(faces, item.typeface),
                     span: item.span,
                     level: item.level,
                     paragraph_level: item.paragraph_level,
@@ -525,7 +528,6 @@ impl TextLayouter {
                     },
                 });
             });
-        layout.shaped = self.glyphs.len();
     }
 
     fn build_lines(
