@@ -3,11 +3,11 @@ use std::ops::Range;
 use crate::{
     bidi_level::BidiLevel,
     itemizer::TextItem,
+    layout_input::LayoutInput,
     script::Script,
     shaper::{ShapedGlyph, Shaper},
     shaping_span::ShapingSpan,
     text_layout::{TextLayout, font_units},
-    text_layouter::LayoutInput,
     typeface::Typeface,
 };
 

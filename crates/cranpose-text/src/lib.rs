@@ -24,6 +24,8 @@ pub mod glyph_outline;
 pub mod hyphenator;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
+/// A paragraph to lay out and the lengths of its style.
+pub mod layout_input;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
 pub mod layout_options;
 pub mod line_box;
@@ -72,6 +74,7 @@ pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
 #[cfg(feature = "hyphenation")]
 pub use hyphenator::{HyphenationError, Hyphenator};
 pub use itemizer::{Itemizer, TextItem};
+pub use layout_input::{LayoutInput, ParagraphLengths};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox, line_box, paragraph_line_box};
 pub use paragraph::{
@@ -87,7 +90,7 @@ pub use style::{
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
 };
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
-pub use text_layouter::{LayoutInput, ParagraphIntrinsics, ParagraphLengths, TextLayouter};
+pub use text_layouter::{ParagraphIntrinsics, TextLayouter};
 pub use typeface::{
     DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Synthesis, Typeface, TypefaceError,
 };
