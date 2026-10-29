@@ -8,7 +8,7 @@ use crate::{
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
-    kept_measures::{KeptMeasures, Measured},
+    kept_measures::{Broken, KeptMeasures, Measured},
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
     line_box::paragraph_line_box,
@@ -203,19 +203,21 @@ impl TextLayouter {
         if lone.is_some() {
             self.measure_widths(input, &layout.faces, taken);
         }
-        if let Some(line) = fits {
+        let broken = if let Some(line) = fits {
             layout.hold = Some(fitting_hold(&options, line + lengths.first_line_indent));
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
+            Broken::AsOneLine
         } else {
             self.wrap_lines(input, &options, (wrap, taken), layout);
-        }
+            Broken::AtOpportunities
+        };
         layout.did_overflow_height = self.lines.len() > options.max_lines;
         if layout.did_overflow_height && ellipsis_at(&options).is_some() {
             take_rest_of_paragraph(&mut self.lines, text, options.max_lines - 1);
         }
         self.lines.truncate(options.max_lines);
-        self.build_lines(input, &options, resolver, width, layout);
+        self.build_lines(input, &options, resolver, (width, broken), layout);
         width
     }
 
@@ -226,18 +228,15 @@ impl TextLayouter {
         &mut self,
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
-        (wrap, taken): (WrapWidths, Measured<'_>),
+        (wrap, taken): (WrapWidths, Measured),
         layout: &mut LayoutBody,
     ) {
         let text = input.text;
         let line_break = input.paragraph.line_break;
-        if let Measured::Anew(keep_for) = taken {
+        if matches!(taken, Measured::Anew) {
             let measures = ParagraphMeasures::fresh(&mut self.measures);
             self.breaker
                 .opportunities(text, line_break, &mut measures.breaks);
-            if let Some(glyphs) = keep_for {
-                self.kept.keep(glyphs, &self.measures);
-            }
         }
         #[cfg(feature = "hyphenation")]
         let breaks =
@@ -279,7 +278,7 @@ impl TextLayouter {
         let mut faces = std::mem::take(&mut self.faces);
         faces.clear();
         self.shape(input, resolver, None, &mut faces);
-        self.measure_widths(input, &faces, Measured::Anew(None));
+        self.measure_widths(input, &faces, Measured::Anew);
         self.faces = faces;
         self.keep_glyph_room();
         let text = input.text;
@@ -316,7 +315,7 @@ impl TextLayouter {
 
     // Measures the widths of the clusters shaped last, in storage of the
     // layouter's own, unless `taken` kept them.
-    fn measure_widths(&mut self, input: &LayoutInput<'_>, faces: &[Typeface], taken: Measured<'_>) {
+    fn measure_widths(&mut self, input: &LayoutInput<'_>, faces: &[Typeface], taken: Measured) {
         if matches!(taken, Measured::Kept) {
             return;
         }
@@ -341,12 +340,15 @@ impl TextLayouter {
         &mut self,
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
-        (mut top, width): (f32, f32),
+        (mut top, width, broken): (f32, f32, Broken),
         layout: &mut LayoutBody,
     ) {
         // A relayout that added no glyphs keeps those it took.
         if layout.glyphs.len() != self.glyphs.len() {
             layout.glyphs = Arc::from(self.glyphs.as_slice());
+        }
+        if matches!(broken, Broken::AtOpportunities) {
+            self.kept.keep(&layout.glyphs, &self.measures);
         }
         self.keep_glyph_room();
         if layout.lines.len() < options.min_lines {
@@ -580,7 +582,7 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
         resolver: &FontFamilyResolver,
-        width: f32,
+        (width, broken): (f32, Broken),
         layout: &mut LayoutBody,
     ) {
         let mut top = 0.0;
@@ -612,7 +614,7 @@ impl TextLayouter {
             let starts = starts_paragraph(input.text, layout.lines[index].text.start);
             layout.lines[index - 1].ends_paragraph = starts;
         }
-        self.finish_lines(input, options, (top, width), layout);
+        self.finish_lines(input, options, (top, width, broken), layout);
     }
 
     // The piece of the one item of a text: the whole item.
@@ -662,7 +664,7 @@ impl TextLayouter {
             ellipsized: false,
         };
         let top = self.push_line(input, resolver, line, edges, layout);
-        self.finish_lines(input, options, (top, width), layout);
+        self.finish_lines(input, options, (top, width, Broken::AsOneLine), layout);
     }
 
     // Places the pieces just collected for `line` as its runs, adds the

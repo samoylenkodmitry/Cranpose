@@ -27,11 +27,11 @@ impl<'a> Shaped<'a> {
         (body.glyphs.len() == body.shaped).then_some(&body.glyphs)
     }
 
-    // The glyphs of a layout in the same spans when shaping placed them
-    // all, by which the layouter keeps the text's measures.
+    // The glyphs of a layout in the same spans, by which the layouter keeps
+    // the text's measures.
     pub(crate) fn measured_glyphs(self) -> Option<&'a Arc<[ShapedGlyph]>> {
         match self {
-            Self::AtOtherWidths(_) => self.glyphs(),
+            Self::AtOtherWidths(layout) => Some(&layout.body().glyphs),
             Self::AtOtherSizes(_) => None,
         }
     }
