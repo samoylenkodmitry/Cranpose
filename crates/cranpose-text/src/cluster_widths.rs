@@ -20,21 +20,12 @@ pub(crate) struct ClusterWidths {
 
 // The width of glyphs added in text order, each cluster `spacing` wider.
 #[derive(Default)]
-pub(crate) struct ClusterTotal {
+struct ClusterTotal {
     last: Option<usize>,
     width: f32,
 }
 
 impl ClusterTotal {
-    // The width of the glyphs of `items`, laid out in `layout`.
-    pub(crate) fn of(items: &[ShapedItem], input: &LayoutInput<'_>, layout: &TextLayout) -> f32 {
-        let mut total = Self::default();
-        each_cluster_glyph(items, input, layout, |start, advance, spacing| {
-            total.add(start, advance, spacing);
-        });
-        total.width
-    }
-
     // Adds a glyph of the cluster at `start`, `advance` wide, in a run whose
     // clusters each take `spacing` more; true when it starts a cluster.
     fn add(&mut self, start: usize, advance: f32, spacing: f32) -> bool {

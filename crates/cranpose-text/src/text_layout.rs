@@ -740,8 +740,9 @@ fn push_span(rects: &mut Vec<Rect>, line: &LayoutLine, (left, right): (f32, f32)
     });
 }
 
-// A distance in font design units as a float. Shaped values lie far inside
-// the range of an `i16` for any font, whose em is at most 16,384 units.
+// A distance in font design units as a float, exact for every value under
+// 2^24: shaped values lie far inside it for any font, whose em is at most
+// 16,384 units.
 pub(crate) fn font_units(value: i32) -> f32 {
-    f32::from(i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX }))
+    value as f32
 }

@@ -163,15 +163,19 @@ pub(crate) fn face_index(faces: &mut SmallVec<[Typeface; 1]>, face: &Typeface) -
 
 // The width of `glyphs` at `scale`, each of their clusters `spacing` wider.
 pub(crate) fn spaced_width(glyphs: &[ShapedGlyph], scale: f32, spacing: f32) -> f32 {
-    let mut clusters = 0_u16;
-    let mut width = 0.0;
-    for (at, glyph) in glyphs.iter().enumerate() {
-        if at == 0 || glyphs[at - 1].cluster != glyph.cluster {
-            clusters = clusters.saturating_add(1);
-        }
-        width += font_units(glyph.advance) * scale;
+    let width = glyphs.iter().fold(0.0, |width, glyph| {
+        width + font_units(glyph.advance) * scale
+    });
+    // Most text has no spacing, which adds nothing whatever the clusters.
+    if spacing == 0.0 {
+        return width;
     }
-    width + spacing * f32::from(clusters)
+    let starts = glyphs
+        .windows(2)
+        .filter(|pair| pair[0].cluster != pair[1].cluster)
+        .count()
+        + usize::from(!glyphs.is_empty());
+    width + spacing * f32::from(u16::try_from(starts).unwrap_or(u16::MAX))
 }
 
 // Pixels per design unit of `face` at the size of `span`.

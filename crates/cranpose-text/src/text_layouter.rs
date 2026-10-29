@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{MemoryHeadroom, whole};
 
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
-    cluster_widths::{ClusterTotal, ClusterWidths},
+    cluster_widths::ClusterWidths,
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
     layout_input::LayoutInput,
@@ -162,15 +162,16 @@ impl TextLayouter {
         self.shape(input, resolver, shaped, layout);
         let lengths = input.lengths;
         let text = input.text;
-        // A text of one item with no line break and no whitespace at its end,
-        // which lays out as that item when it fits.
-        let lone = self.items.len() == 1
+        // The piece of a text of one item with no line break and no
+        // whitespace at its end, which is its line when it fits.
+        let mut lone = (self.items.len() == 1
             && !has_hard_break(text)
-            && visible_end(text, 0, text.len()) == text.len();
+            && visible_end(text, 0, text.len()) == text.len())
+        .then(|| self.lone_piece(input, layout));
         // The width up to the trailing whitespace of a text with no line
         // break: its one paragraph.
-        let unbroken = if lone {
-            Some(ClusterTotal::of(&self.items, input, layout))
+        let unbroken = if let Some(piece) = &lone {
+            Some(piece.width)
         } else {
             self.widths.measure(&self.items, input, layout);
             (!has_hard_break(text)).then(|| self.widths.width(0, visible_end(text, 0, text.len())))
@@ -200,16 +201,19 @@ impl TextLayouter {
         let fits = unbroken.filter(|&line| line <= wrap.first);
         // A lone item that fits with no ellipsis is the line, and needs no
         // cluster widths.
-        if let Some(line) = fits.filter(|&line| lone && line <= width - lengths.first_line_indent) {
-            let mut hold = fitting_hold(&options, line + lengths.first_line_indent);
+        if let Some(piece) =
+            lone.take_if(|piece| fits.is_some() && piece.width <= width - lengths.first_line_indent)
+        {
+            let line = piece.width + lengths.first_line_indent;
+            let mut hold = fitting_hold(&options, line);
             if ellipsis_at(&options, true).is_some() {
-                hold.narrow(line + lengths.first_line_indent, f32::INFINITY);
+                hold.narrow(line, f32::INFINITY);
             }
             layout.hold = Some(hold);
-            self.lay_out_one_line(input, &options, resolver, layout);
+            self.lay_out_one_line(input, &options, resolver, piece, layout);
             return;
         }
-        if lone {
+        if lone.is_some() {
             self.widths.measure(&self.items, input, layout);
         }
         if let Some(line) = fits {
@@ -560,20 +564,12 @@ impl TextLayouter {
         finish_lines(input, options, top, layout);
     }
 
-    // Lays out the one line of a text whose one item fits it to its end, as
-    // `build_lines` lays it out: the item is the line's one piece.
-    fn lay_out_one_line(
-        &mut self,
-        input: &LayoutInput<'_>,
-        options: &TextLayoutOptions,
-        resolver: &FontFamilyResolver,
-        layout: &mut TextLayout,
-    ) {
+    // The piece of the one item of a text: the whole item.
+    fn lone_piece(&self, input: &LayoutInput<'_>, layout: &TextLayout) -> Piece {
         let item = &self.items[0];
         let span = &input.spans[item.span];
         let scale = scale(span, &layout.faces[item.face]);
-        self.pieces.clear();
-        self.pieces.push(Piece {
+        Piece {
             width: spaced_width(&layout.glyphs[item.glyphs.clone()], scale, item.spacing),
             text: item.text.clone(),
             glyphs: item.glyphs.clone(),
@@ -583,7 +579,21 @@ impl TextLayouter {
             spacing: item.spacing,
             baseline_shift: span.baseline_shift,
             level: item.level,
-        });
+        }
+    }
+
+    // Lays out the one line of a text whose one item fits it to its end, as
+    // `build_lines` lays it out: the item's `piece` is the line's one piece.
+    fn lay_out_one_line(
+        &mut self,
+        input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
+        resolver: &FontFamilyResolver,
+        piece: Piece,
+        layout: &mut TextLayout,
+    ) {
+        self.pieces.clear();
+        self.pieces.push(piece);
         let end = input.text.len();
         let line = LineText {
             range: 0..end,
