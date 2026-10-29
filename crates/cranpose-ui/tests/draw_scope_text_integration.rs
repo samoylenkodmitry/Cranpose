@@ -1,12 +1,12 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_ui::{
-    AppContext, DrawCommand, Modifier, collect_slices_from_modifier, execute_draw_commands,
-    set_font_scale,
+    AppContext, DrawCommand, MemoryHeadroom, Modifier, collect_slices_from_modifier,
+    execute_draw_commands, set_font_scale, set_memory_headroom,
 };
 use cranpose_ui_graphics::{
     Brush, Color, DrawPrimitive, DrawScope, DrawTextStyle, Point, Rect, Size, TextAlign,
-    TextVerticalAlign,
+    TextLayoutHandle, TextVerticalAlign,
 };
 
 // Cranpose Test Mono at `FONT_SIZE` pixels: 0.6 em a character, 1 em a
@@ -124,36 +124,57 @@ fn an_unchanged_string_draws_one_layout_from_its_second_frame() {
     );
 }
 
-#[test]
-fn a_string_drawn_again_after_another_keeps_its_second_layout() {
-    // A clock that shows a few strings by turns: each frame draws the next.
-    let strings = ["10:00", "10:01", "10:02"];
+// A clock that shows a few strings by turns.
+const CLOCK: [&str; 3] = ["10:00", "10:01", "10:02"];
+
+// The layouts of 12 frames of `CLOCK`, each frame drawing the next string,
+// on a host that reports `headroom`.
+fn clock_layouts(headroom: MemoryHeadroom) -> Vec<Option<TextLayoutHandle>> {
     let frame = Rc::new(std::cell::Cell::new(0usize));
     let shown = Rc::clone(&frame);
     let commands = draw_commands(move |scope: &mut dyn DrawScope| {
         scope.draw_text_from(
             Point::ZERO,
             Brush::solid(Color::WHITE),
-            strings[shown.get() % strings.len()],
+            CLOCK[shown.get() % CLOCK.len()],
             &DrawTextStyle::new(FONT_SIZE),
         );
     });
-
-    let layouts: Vec<_> = AppContext::new().enter(|| {
+    let context = AppContext::new();
+    context.enter(|| {
+        set_memory_headroom(headroom);
         (0..12)
             .map(|index| {
+                context.start_text_frame();
                 frame.set(index);
                 let primitives = execute_draw_commands(&commands, Size::new(100.0, 50.0));
                 text_primitive(&primitives).layout.clone()
             })
             .collect()
-    });
+    })
+}
 
-    for (index, layout) in layouts.iter().enumerate().skip(2 * strings.len()) {
+#[test]
+fn a_string_drawn_again_after_another_keeps_its_second_layout() {
+    let layouts = clock_layouts(MemoryHeadroom::Ample);
+
+    for (index, layout) in layouts.iter().enumerate().skip(2 * CLOCK.len()) {
         assert_eq!(
             *layout,
-            layouts[strings.len() + index % strings.len()],
+            layouts[CLOCK.len() + index % CLOCK.len()],
             "frame {index} draws the layout its string was drawn with the second time"
+        );
+    }
+}
+
+#[test]
+fn a_tight_heap_keeps_no_layout_of_a_string_drawn_again() {
+    let layouts = clock_layouts(MemoryHeadroom::Tight);
+
+    for (index, layout) in layouts.iter().enumerate() {
+        assert!(
+            layouts[..index].iter().all(|earlier| earlier != layout),
+            "frame {index} lays its string out anew"
         );
     }
 }

@@ -11,7 +11,7 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::{FxHasher, HashBits, TextLayoutHandle};
+use cranpose_ui_graphics::{FxHasher, HashBits, MemoryHeadroom, TextLayoutHandle};
 use smallvec::SmallVec;
 
 use super::{
@@ -350,6 +350,9 @@ pub(crate) struct TextService {
     // into the cache: a string drawn every frame keeps its second layout,
     // and one drawn once keeps nothing.
     seen: RefCell<HashBits>,
+    // The host's memory headroom when the pass began. A tight heap keeps
+    // no layout of a text that changes in place.
+    headroom: Cell<MemoryHeadroom>,
 }
 
 impl TextService {
@@ -366,6 +369,7 @@ impl TextService {
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
             seen: RefCell::default(),
+            headroom: Cell::default(),
         }
     }
 
@@ -410,7 +414,7 @@ impl TextService {
             } else {
                 let admitted = match admission {
                     CacheAdmission::First => true,
-                    CacheAdmission::Second => {
+                    CacheAdmission::Second if self.headroom.get() == MemoryHeadroom::Ample => {
                         let mut hasher = FxHasher::default();
                         key.hash(&mut hasher);
                         let hash = hasher.finish();
@@ -420,6 +424,7 @@ impl TextService {
                             false
                         }
                     }
+                    CacheAdmission::Second => false,
                 };
                 if admitted {
                     let widths = SmallVec::from_elem(Rc::clone(&prepared), 1);
@@ -618,9 +623,9 @@ impl TextService {
         self.pass_owed.set(false);
         self.prepared.borrow_mut().begin_pass(drop);
         self.intrinsics.borrow_mut().begin_pass(drop);
-        self.layouter
-            .borrow_mut()
-            .set_memory_headroom(crate::current_memory_headroom());
+        let headroom = crate::current_memory_headroom();
+        self.headroom.set(headroom);
+        self.layouter.borrow_mut().set_memory_headroom(headroom);
     }
 
     /// A frame starts: the first use of the service in it outside a layout
