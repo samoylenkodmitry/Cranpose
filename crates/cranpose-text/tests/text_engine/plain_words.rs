@@ -13,13 +13,28 @@ const BOLD: Style<'static> = Style {
     features: &[],
 };
 
-const CASES: [(&str, Style<'static>, &str); 11] = [
+const CASES: [(&str, Style<'static>, &str); 14] = [
     // No default lookup of Noto Sans starts at the digits but the zero,
     // which a variation selector after it turns slashed.
     (
         NOTO_SANS_MERGED,
         REGULAR,
         "Reading 42 1234567890 +3.14% x2 0\u{FE00}9 (78)",
+    ),
+    // Pair adjustments that move only the first glyph's advance kern plain
+    // glyphs: letters, the period, the comma and the hyphen.
+    (
+        NOTO_SANS_MERGED,
+        REGULAR,
+        "AVATAR Toyota 123.45 -0.50% +1.25% T. V, Y: Layer 7 We",
+    ),
+    (ROBOTO, REGULAR, "AVA Tea Wo 1.5 -2,3 Yes T. P, F."),
+    // Characters whose code points share their low bits take turns in one
+    // place of what a plan remembers: U+0410 and U+0490, `A` and `\u{C1}`.
+    (
+        NOTO_SANS_MERGED,
+        REGULAR,
+        "\u{490}\u{410}\u{490} \u{410}\u{490}\u{410} A\u{C1}A \u{C1}AV",
     ),
     // DejaVu carries a kern table, which keeps its words shaping.
     (DEJAVU, REGULAR, "100 200 (300) 4.5 Tea"),

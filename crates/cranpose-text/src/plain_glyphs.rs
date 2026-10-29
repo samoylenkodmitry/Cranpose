@@ -25,6 +25,8 @@ use read_fonts::{
 use crate::{
     font_fallback::needs_no_glyph,
     glyph_id,
+    plain_chars::{PairFit, PlainChar, PlainChars},
+    plain_kerning::{KernSubtable, PlainKerning},
     shaper::ShapedGlyph,
     word_split::{chosen_script, class_index, everything, moves, single},
 };
@@ -40,6 +42,10 @@ pub(crate) struct PlainGlyphs {
     // The pairs of glyphs side by side that a ligature or a pair adjustment
     // starting at a plain glyph reads, sorted.
     pairs: Box<[(u32, u32)]>,
+    // The pair adjustments that move only a plain glyph's advance.
+    kerning: PlainKerning,
+    // What the plan found for the characters it met; made at the first.
+    chars: Option<PlainChars>,
 }
 
 // The features HarfBuzz applies to horizontal left to right text in a
@@ -50,15 +56,18 @@ const DEFAULT_FEATURES: [&[u8; 4]; 22] = [
     b"Buzz", b"BUZZ",
 ];
 
-// The glyphs lookups start at, and the pairs of glyphs side by side that
-// lookups starting at the other glyphs read.
-#[derive(Default)]
-struct Starts {
+// The glyphs lookups start at, the pairs of glyphs side by side that
+// lookups starting at the other glyphs read, and the pair adjustments plain
+// glyphs take.
+struct Starts<'a> {
     busy: IntSet<GlyphId>,
     pairs: Vec<(u32, u32)>,
+    kerning: Vec<KernSubtable>,
     // The space, which starts every word cut before spaces: a font may
     // adjust it with the few glyphs after it it pairs with.
     space: Option<GlyphId>,
+    // The font's bytes, where kerning subtables are found again.
+    font: &'a [u8],
 }
 
 impl PlainGlyphs {
@@ -81,16 +90,23 @@ impl PlainGlyphs {
         }
         let mut tags = IntSet::empty();
         tags.extend_unsorted(DEFAULT_FEATURES.iter().map(|tag| Tag::new(tag)));
-        tags.extend_unsorted(
-            features
-                .iter()
-                .filter(|feature| feature.value != 0)
-                .map(|feature| feature.tag),
-        );
+        // The shaper sets each feature over the whole text: it turns the
+        // feature on or off, the later setting winning, as HarfBuzz takes
+        // them.
+        for feature in features {
+            if feature.value == 0 {
+                tags.remove(feature.tag);
+            } else {
+                tags.insert(feature.tag);
+            }
+        }
         let scripts = script.tags();
         let mut starts = Starts {
+            busy: IntSet::empty(),
+            pairs: Vec::new(),
+            kerning: Vec::new(),
             space: font.cmap().ok().and_then(|cmap| cmap.map_codepoint(' ')),
-            ..Starts::default()
+            font: font.data().as_bytes(),
         };
         substitution_starts(font, scripts.as_slice(), &tags, &mut starts)?;
         positioning_starts(font, scripts.as_slice(), &tags, &mut starts)?;
@@ -100,14 +116,17 @@ impl PlainGlyphs {
         Some(Self {
             busy: starts.busy,
             pairs: starts.pairs.into_boxed_slice(),
+            kerning: PlainKerning::new(starts.kerning),
+            chars: None,
         })
     }
 
-    // Appends the nominal glyphs of `range` of `text` at `font`'s advances
-    // when every one is plain, and returns whether it did.
+    // Appends the nominal glyphs of `range` of `text` at `font`'s advances,
+    // kerned as the plan kerns them, when every one is plain, and returns
+    // whether it did. `bytes` are the font's.
     pub(crate) fn append(
-        &self,
-        font: &ShaperFont<'_, '_>,
+        &mut self,
+        (font, bytes): (&ShaperFont<'_, '_>, &[u8]),
         text: &str,
         range: Range<usize>,
         glyphs: &mut Vec<ShapedGlyph>,
@@ -116,48 +135,65 @@ impl PlainGlyphs {
         let Some(run) = text.get(range.clone()) else {
             return false;
         };
-        let mut previous = None;
+        let Self {
+            busy,
+            pairs,
+            kerning,
+            chars,
+        } = self;
+        let chars = chars.get_or_insert_with(PlainChars::default);
+        let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
-            let Some(glyph) = self.plain_glyph(font, ch, previous) else {
+            let Some(plain) = chars.char(ch, || plain_glyph(font, busy, ch)) else {
                 glyphs.truncate(first);
                 return false;
             };
-            previous = Some(glyph.to_u32());
+            let fit = previous.map_or(PairFit::Kern(0), |before| {
+                chars.pair(before, plain, || {
+                    let pair = (before.glyph, plain.glyph);
+                    if pairs.binary_search(&pair).is_ok() {
+                        PairFit::Joins
+                    } else {
+                        PairFit::Kern(kerning.between(bytes, pair.0.into(), pair.1.into()))
+                    }
+                })
+            });
+            // A pair adjustment moves the glyph before; a line break between
+            // the two would undo it.
+            let kern = match fit {
+                PairFit::Joins => {
+                    glyphs.truncate(first);
+                    return false;
+                }
+                PairFit::Kern(kern) => kern,
+            };
+            if let Some(before) = glyphs.last_mut().filter(|_| kern != 0) {
+                before.advance += kern;
+            }
+            previous = Some(plain);
             glyphs.push(ShapedGlyph {
-                id: glyph_id::GlyphId(glyph.to_u32()),
+                id: glyph_id::GlyphId(plain.glyph),
                 cluster: u32::try_from(range.start + at).unwrap_or(u32::MAX),
-                advance: font.glyph_h_advance(glyph),
+                advance: plain.advance,
                 x_offset: 0,
                 y_offset: 0,
-                unsafe_to_break: false,
+                unsafe_to_break: kern != 0,
             });
         }
         true
     }
+}
 
-    // The nominal glyph of `ch` after the glyph `previous`, when it is plain
-    // there.
-    fn plain_glyph(
-        &self,
-        font: &ShaperFont<'_, '_>,
-        ch: char,
-        previous: Option<u32>,
-    ) -> Option<GlyphId> {
-        if !stands_as_itself(ch) {
-            return None;
-        }
-        let glyph = font
-            .nominal_glyph(u32::from(ch))
-            .filter(|&glyph| glyph != GlyphId::NOTDEF && !self.busy.contains(glyph))?;
-        let joins = previous.is_some_and(|previous| {
-            !self.pairs.is_empty()
-                && self
-                    .pairs
-                    .binary_search(&(previous, glyph.to_u32()))
-                    .is_ok()
-        });
-        (!joins).then_some(glyph)
+// The nominal glyph of `ch` in `font` and its advance, when it is plain: it
+// stands as itself and maps to a glyph no lookup starts at.
+fn plain_glyph(font: &ShaperFont<'_, '_>, busy: &IntSet<GlyphId>, ch: char) -> Option<(u32, i32)> {
+    if !stands_as_itself(ch) {
+        return None;
     }
+    let glyph = font
+        .nominal_glyph(u32::from(ch))
+        .filter(|&glyph| glyph != GlyphId::NOTDEF && !busy.contains(glyph))?;
+    Some((glyph.to_u32(), font.glyph_h_advance(glyph)))
 }
 
 // Whether HarfBuzz shapes `script` with its default shaper, whatever the
@@ -228,7 +264,7 @@ fn substitution_starts(
     font: &FontRef<'_>,
     scripts: &[Tag],
     features: &IntSet<Tag>,
-    starts: &mut Starts,
+    starts: &mut Starts<'_>,
 ) -> Option<()> {
     let Ok(gsub) = font.gsub() else {
         return Some(());
@@ -254,7 +290,7 @@ fn positioning_starts(
     font: &FontRef<'_>,
     scripts: &[Tag],
     features: &IntSet<Tag>,
-    starts: &mut Starts,
+    starts: &mut Starts<'_>,
 ) -> Option<()> {
     let Ok(gpos) = font.gpos() else {
         return Some(());
@@ -271,7 +307,7 @@ fn positioning_starts(
     let list = gpos.lookup_list().ok()?;
     for index in gpos.collect_lookups(&indices).ok()?.iter() {
         let lookup = list.lookups().get(usize::from(index)).ok()?;
-        positioning_lookup_starts(&lookup, starts)?;
+        positioning_lookup_starts(&lookup, index, starts)?;
     }
     Some(())
 }
@@ -306,16 +342,29 @@ fn each<T>(
     Some(())
 }
 
-impl Starts {
+impl Starts<'_> {
     fn cover(&mut self, coverage: Result<CoverageTable<'_>, ReadError>) -> Option<()> {
         self.busy.extend_unsorted(coverage.ok()?.iter());
         Some(())
     }
 
-    // The glyphs the pair adjustments of `pair` start at. The space moves
-    // only with the glyphs after it it pairs with, which go to the pairs,
-    // unless `flag` lets the adjustment skip glyphs between the two.
-    fn pair_adjustments(&mut self, pair: &PairPos<'_>, flag: LookupFlag) -> Option<()> {
+    // The pair adjustments of `pair`, in the lookup at `lookup` with
+    // `flag`: kerning when they move only the first glyph's advance and the
+    // two glyphs stand side by side, else the glyphs they start at. The
+    // space moves only with the glyphs after it it pairs with, which go to
+    // the pairs, unless `flag` lets the adjustment skip glyphs between the
+    // two.
+    fn pair_adjustments(
+        &mut self,
+        pair: &PairPos<'_>,
+        (lookup, flag): (u16, LookupFlag),
+    ) -> Option<()> {
+        if !skips_glyphs(flag)
+            && let Some(kerning) = KernSubtable::of(pair, lookup, self.font)
+        {
+            self.kerning.push(kerning);
+            return Some(());
+        }
         let coverage = match pair {
             PairPos::Format1(format) => format.coverage(),
             PairPos::Format2(format) => format.coverage(),
@@ -428,13 +477,16 @@ fn skips_glyphs(flag: LookupFlag) -> bool {
 // `None` when one does not read.
 fn covers<'a, T>(
     subtables: impl Iterator<Item = Result<T, ReadError>>,
-    starts: &mut Starts,
+    starts: &mut Starts<'_>,
     start: impl Fn(&T) -> Option<Result<CoverageTable<'a>, ReadError>>,
 ) -> Option<()> {
     each(subtables, |subtable| starts.cover(start(&subtable)?))
 }
 
-fn substitution_lookup_starts(lookup: &SubstitutionLookup<'_>, starts: &mut Starts) -> Option<()> {
+fn substitution_lookup_starts(
+    lookup: &SubstitutionLookup<'_>,
+    starts: &mut Starts<'_>,
+) -> Option<()> {
     let flag = lookup.lookup_flag();
     match lookup.subtables().ok()? {
         SubstitutionSubtables::Single(subtables) => covers(subtables.iter(), starts, single_start),
@@ -463,12 +515,16 @@ fn substitution_lookup_starts(lookup: &SubstitutionLookup<'_>, starts: &mut Star
     }
 }
 
-fn positioning_lookup_starts(lookup: &PositionLookup<'_>, starts: &mut Starts) -> Option<()> {
+fn positioning_lookup_starts(
+    lookup: &PositionLookup<'_>,
+    index: u16,
+    starts: &mut Starts<'_>,
+) -> Option<()> {
     let flag = lookup.lookup_flag();
     match lookup.subtables().ok()? {
         PositionSubtables::Single(subtables) => covers(subtables.iter(), starts, adjust_start),
         PositionSubtables::Pair(subtables) => each(subtables.iter(), |subtable| {
-            starts.pair_adjustments(&subtable, flag)
+            starts.pair_adjustments(&subtable, (index, flag))
         }),
         PositionSubtables::Cursive(subtables) => covers(subtables.iter(), starts, cursive_start),
         PositionSubtables::MarkToBase(subtables) => {

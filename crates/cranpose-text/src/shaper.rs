@@ -85,6 +85,8 @@ struct KeptPlan {
 // What one shaping call shapes with.
 struct Setting<'a> {
     font: ShaperFont<'a, 'a>,
+    // The font's bytes, which plain glyphs read their kerning from.
+    bytes: &'a [u8],
     plan: &'a ShapePlan,
     features: &'a [Feature],
     direction: Direction,
@@ -148,29 +150,36 @@ impl Shaper {
             word_ends,
             pieces,
         } = self;
-        let face = &faces[face];
-        let kept = &face.plans[plan];
+        let ShapingFace { font, plans, .. } = &mut faces[face];
+        let kept = &mut plans[plan];
         let setting = Setting {
-            font: ShaperFont::new(&face.font),
+            font: ShaperFont::new(font),
+            bytes: font_bytes(font),
             plan: &kept.plan,
             features,
             direction,
             script,
             language: language.as_ref(),
         };
-        let plain = kept.plain.as_ref();
+        // A run of plain glyphs needs neither shaping nor words.
+        if kept.plain.as_mut().is_some_and(|plain| {
+            plain.append(
+                (&setting.font, setting.bytes),
+                text,
+                item.range.clone(),
+                glyphs,
+            )
+        }) {
+            return;
+        }
         let Some(split) = &kept.split else {
-            if !plain
-                .is_some_and(|plain| plain.append(&setting.font, text, item.range.clone(), glyphs))
-            {
-                shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
-            }
+            shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
             return;
         };
         WordShaping {
             buffer,
             setting,
-            plain,
+            plain: kept.plain.as_mut(),
             words,
             key: kept.key,
             text,
@@ -280,7 +289,7 @@ impl Shaper {
 struct WordShaping<'a> {
     buffer: &'a mut Buffer,
     setting: Setting<'a>,
-    plain: Option<&'a PlainGlyphs>,
+    plain: Option<&'a mut PlainGlyphs>,
     words: &'a mut WordCache,
     key: u64,
     text: &'a str,
@@ -349,21 +358,23 @@ impl WordShaping<'_> {
             }
         }
     }
-    // Appends the glyphs of `word`: kept ones, its plain glyphs, or shaped
+    // Appends the glyphs of `word`: its plain glyphs, kept ones, or shaped
     // and kept when the word shapes the same wherever it stands.
     fn word(&mut self, word: Range<usize>, glyphs: &mut Vec<ShapedGlyph>) {
         let Some(word_text) = self.text.get(word.clone()) else {
             return;
         };
+        let font = (&self.setting.font, self.setting.bytes);
+        if self
+            .plain
+            .as_deref_mut()
+            .is_some_and(|plain| plain.append(font, self.text, word.clone(), glyphs))
+        {
+            return;
+        }
         let keeps = stands_alone(self.text, &word, &self.context);
         if keeps && let Some(cached) = self.words.get(self.key, word_text) {
             append(glyphs, cached, word.start);
-            return;
-        }
-        if self
-            .plain
-            .is_some_and(|plain| plain.append(&self.setting.font, self.text, word.clone(), glyphs))
-        {
             return;
         }
         let first = glyphs.len();
@@ -477,10 +488,15 @@ fn offset(at: usize) -> u32 {
 
 // The layout tables of `font`.
 fn layout_tables(font: &Font) -> Option<FontRef<'_>> {
-    let Source::Blob(bytes) = font.source() else {
-        return None;
-    };
-    FontRef::from_index(bytes.as_ref(), 0).ok()
+    FontRef::from_index(font_bytes(font), 0).ok()
+}
+
+// The bytes of `font`, empty when it is not read from bytes.
+fn font_bytes(font: &Font) -> &[u8] {
+    match font.source() {
+        Source::Blob(bytes) => bytes.as_ref(),
+        _ => &[],
+    }
 }
 
 // The word split of `font`, whose layout tables are `tables`, for runs in
