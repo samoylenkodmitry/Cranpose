@@ -9,7 +9,6 @@ all-features = true
 unmaintained = "workspace"
 ignore = [
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser reads the font tables of every text path; no maintained replacement reads them yet" },
-    { id = "RUSTSEC-2026-0206", reason = "rustybuzz shapes over ttf-parser and goes with it" },
 ]
 
 [licenses]

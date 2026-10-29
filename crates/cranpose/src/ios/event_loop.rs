@@ -20,8 +20,8 @@ use winit::{
 use crate::{
     app_launcher::{AppSettings, LaunchError},
     wgpu_surface::{
-        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        surface_present_required,
+        PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_step,
     },
     winit_pointer::{
         is_primary_pointer_button, other_mouse_button, pointer_source_from_button,
@@ -354,13 +354,13 @@ impl<F: FnMut() + 'static> IosApp<F> {
             gpu.surface_dirty = true;
             return false;
         }
-        if !surface_present_required(
+        let PresentStep::Present = surface_present_step(
             dirty_before,
             update_result.visual_changed,
             &mut shell.primary(),
-        ) {
+        ) else {
             return false;
-        }
+        };
 
         match current_surface_texture(&gpu.surface, "ios") {
             SurfaceFrame::Ready(frame) => {

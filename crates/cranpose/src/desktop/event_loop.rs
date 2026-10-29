@@ -31,8 +31,8 @@ use crate::{
         NativeWindowRequest, WindowFocus, WindowResizeDirection, WindowState,
     },
     wgpu_surface::{
-        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        present_initial_placeholder_frame_cleared_to, surface_present_required,
+        PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        present_initial_placeholder_frame_cleared_to, surface_present_step,
     },
     winit_pointer::{
         is_primary_pointer_button, other_mouse_button, pointer_source_from_button,
@@ -2991,15 +2991,14 @@ impl App {
             return false;
         };
         let frame_owed = surface.take_frame_owed();
-        let present_required =
-            surface_present_required(native.surface_dirty, frame_owed, &mut surface);
+        let present = surface_present_step(native.surface_dirty, frame_owed, &mut surface);
         pace_after_empty_redraw(
             &mut native.last_frame_start_time,
             &mut native.last_redraw_empty,
             frame_started_at,
-            present_required,
+            present == PresentStep::Present,
         );
-        if !present_required {
+        if present != PresentStep::Present {
             return false;
         }
         native.surface_dirty = true;
@@ -5630,7 +5629,7 @@ impl ApplicationHandler for App {
                 sync_native_windows_after_event = true;
 
                 let frame_owed = app.take_frame_owed();
-                let present_required = surface_present_required(
+                let present = surface_present_step(
                     primary_surface_dirty_before_update || robot_surface_dirty_before_update,
                     frame_owed,
                     &mut app.primary(),
@@ -5639,9 +5638,9 @@ impl ApplicationHandler for App {
                     &mut self.last_frame_start_time,
                     &mut self.last_redraw_empty,
                     frame_started_at,
-                    present_required,
+                    present == PresentStep::Present,
                 );
-                if present_required {
+                if present == PresentStep::Present {
                     self.primary_surface_dirty = true;
                     let acquire_started_at = Instant::now();
                     let output = match current_surface_texture(primary.surface, "primary window") {
@@ -5728,7 +5727,7 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     record_pacing_event(|diag| &mut diag.skipped_no_present);
-                    self.robot.note_skipped_present(app);
+                    self.robot.note_skipped_present(present);
                 }
             }
             event => {

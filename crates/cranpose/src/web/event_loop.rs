@@ -20,8 +20,8 @@ use super::{
 use crate::{
     app_launcher::AppSettings,
     wgpu_surface::{
-        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        surface_present_required,
+        PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_step,
     },
 };
 
@@ -769,13 +769,13 @@ pub async fn run(
             log::error!("web accessibility sync failed: {error:?}");
         }
 
-        let present_required = surface_present_required(
+        let presents = surface_present_step(
             surface_dirty.get(),
             update_result.visual_changed,
             &mut app.borrow_mut().primary(),
-        );
+        ) == PresentStep::Present;
         device_loss.recover(&recovery);
-        if present_required && !device_loss.paused() && presenter.present(&app, frame_started_at) {
+        if presents && !device_loss.paused() && presenter.present(&app, frame_started_at) {
             device_loss.presented();
         }
 

@@ -187,7 +187,11 @@ impl ComputedRefresh for Released {
 
 /// Runs `f` with the thread's observer of what computed states read.
 fn with_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
-    let observer = crate::thread_state::runtimes(|state| {
+    f(&observer())
+}
+
+fn observer() -> SnapshotStateObserver {
+    crate::thread_state::runtimes(|state| {
         state
             .computed_observer
             .borrow_mut()
@@ -197,20 +201,22 @@ fn with_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
                 observer
             })
             .clone()
-    });
-    f(&observer)
+    })
 }
 
 fn try_with_observer(f: impl FnOnce(&SnapshotStateObserver)) {
-    let observer = crate::thread_state::try_runtimes(|state| {
+    if let Some(observer) = started_observer() {
+        f(&observer);
+    }
+}
+
+fn started_observer() -> Option<SnapshotStateObserver> {
+    crate::thread_state::try_runtimes(|state| {
         state
             .computed_observer
             .try_borrow()
             .ok()
             .and_then(|observer| observer.clone())
     })
-    .flatten();
-    if let Some(observer) = observer {
-        f(&observer);
-    }
+    .flatten()
 }

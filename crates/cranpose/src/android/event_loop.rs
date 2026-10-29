@@ -36,8 +36,8 @@ use crate::{
     app_launcher::{AndroidGpuBackend, AppSettings},
     frame_pacer::FramePacer,
     wgpu_surface::{
-        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        surface_present_required,
+        PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_step,
     },
 };
 
@@ -2149,7 +2149,7 @@ pub fn run(
                     &mut pending_host_window_confirmation,
                 );
                 frame_timings.after_sync_ns = frame_telemetry.now();
-                if surface_present_required(
+                if let PresentStep::Present = surface_present_step(
                     resources.surface_dirty,
                     update_result.visual_changed,
                     &mut shell.primary(),
