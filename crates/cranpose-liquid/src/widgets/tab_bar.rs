@@ -12,8 +12,8 @@ use cranpose_ui::{
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
 
 use super::tab_flight_lens::{
-    TabFlightGeometry, TabFlightNode, tab_flight_dynamics, tab_flight_lens_material,
-    tab_lens_base_size, tab_lens_deformed_size,
+    TabFlightGeometry, TabFlightNode, request_touch_warm_ups, tab_flight_dynamics,
+    tab_flight_lens_material, tab_lens_base_size, tab_lens_deformed_size,
 };
 use crate::{
     material::{GlassDynamics, LiquidModifierExt},
@@ -137,7 +137,7 @@ pub(super) const BAR_HEIGHT: f32 = 62.0;
 pub(super) const BLOB_HEIGHT: f32 = 54.0;
 const BLOB_MARGIN: f32 = 4.0;
 const TAB_LENS_OVERLAP: f32 = 7.0;
-const TAB_WIDTH: f32 = 78.0;
+pub(super) const TAB_WIDTH: f32 = 78.0;
 const TAB_ICON_SIZE: f32 = 32.0;
 const TAB_LABEL_SIZE: f32 = 10.0;
 const TAP_SLOP: f32 = 6.0;
@@ -755,21 +755,11 @@ fn LiquidTabBarLayout(
                                 .modifier();
                                 Box(gesture, BoxSpec::default(), || {});
                             });
-
-                            let drawing = Rc::new(TabLensDrawing {
-                                lens: TabLensPlacement::new(
-                                    cells,
-                                    resting_lens_x,
-                                    colors,
-                                    has_accessory,
-                                ),
-                                motion: motion.clone(),
+                            let drawing = TabLensDrawing::remember(
+                                TabLensPlacement::new(cells, resting_lens_x, colors, has_accessory),
+                                motion.clone(),
                                 colors,
-                                held_layers: cranpose_core::remember(|| {
-                                    Rc::new(RefCell::new(None))
-                                })
-                                .with(Rc::clone),
-                            });
+                            );
                             let lighting = Rc::clone(&drawing);
                             super::tab_lighting::TabLighting(
                                 Size::new(pill_w, BAR_HEIGHT),
@@ -1074,6 +1064,16 @@ struct TabLensDrawing {
 }
 
 impl TabLensDrawing {
+    fn remember(lens: TabLensPlacement, motion: TabBarMotion, colors: LiquidColors) -> Rc<Self> {
+        request_touch_warm_ups(&colors, lens.accessory_center);
+        Rc::new(Self {
+            lens,
+            motion,
+            colors,
+            held_layers: cranpose_core::remember(|| Rc::new(RefCell::new(None))).with(Rc::clone),
+        })
+    }
+
     /// The bar's lift this frame.
     fn transform(&self) -> cranpose_ui_graphics::GraphicsLayer {
         tab_bar_transform(
