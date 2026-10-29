@@ -450,11 +450,16 @@ fn is_hyphen(opportunity: &BreakOpportunity) -> bool {
     matches!(opportunity.kind, BreakKind::Hyphen { .. })
 }
 
-// Whether `text` holds a hard line break.
+// Whether `text` holds a hard line break, found by the first byte of each,
+// which in UTF-8 starts no other character it is not part of.
 pub(crate) fn has_hard_break(text: &str) -> bool {
-    text.contains([
-        '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
-    ])
+    let bytes = text.as_bytes();
+    bytes.iter().enumerate().any(|(at, &byte)| match byte {
+        b'\n' | b'\r' | 0x0B | 0x0C => true,
+        0xC2 => bytes.get(at + 1) == Some(&0x85),
+        0xE2 => matches!(bytes.get(at + 1..at + 3), Some([0x80, 0xA8 | 0xA9])),
+        _ => false,
+    })
 }
 
 // Whether `offset` starts a paragraph: the text's start, or just after a hard

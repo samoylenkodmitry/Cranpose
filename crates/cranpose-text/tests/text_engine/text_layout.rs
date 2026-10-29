@@ -78,6 +78,23 @@ fn hard_breaks_end_lines_and_a_final_break_adds_an_empty_line() {
 }
 
 #[test]
+fn each_hard_break_ends_a_line() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+
+    for separator in [
+        "\n", "\r", "\r\n", "\u{0B}", "\u{0C}", "\u{85}", "\u{2028}", "\u{2029}",
+    ] {
+        let text = format!("a{separator}b");
+
+        assert_eq!(
+            lines(&unwrapped(&resolver, &text), &text),
+            [&text[..text.len() - 1], "b"],
+            "{separator:?}"
+        );
+    }
+}
+
+#[test]
 fn a_line_break_draws_no_glyph() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     for text in ["A\nB", "A \r\nB", "A\u{2029}B"] {

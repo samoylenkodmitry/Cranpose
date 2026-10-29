@@ -160,3 +160,28 @@ fn style_spans_split_items() {
         ]
     );
 }
+
+#[test]
+fn each_paragraph_separator_ends_its_paragraph_and_the_items_in_it() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let mut itemizer = Itemizer::default();
+    let default = FontFamily::Default;
+
+    for separator in [
+        "\n", "\r", "\r\n", "\u{1C}", "\u{1D}", "\u{1E}", "\u{85}", "\u{2029}",
+    ] {
+        let text = format!("a{separator}b");
+        let found: Vec<_> = items(
+            &mut itemizer,
+            &resolver,
+            &text,
+            TextDirection::Ltr,
+            &whole(&text, &default),
+        )
+        .into_iter()
+        .map(|item| item.0)
+        .collect();
+
+        assert_eq!(found, [&text[..text.len() - 1], "b"], "{separator:?}");
+    }
+}

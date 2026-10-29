@@ -119,22 +119,27 @@ impl Itemizer {
 // The end of the paragraph that starts at `start`: just past the next bidi
 // paragraph separator (class B: line feed, carriage return and line feed as
 // one, the information separators 1C to 1E, next line and the paragraph
-// separator), or the end of `text`.
+// separator), or the end of `text`. Found by the first byte of each, which
+// in UTF-8 starts no other character it is not part of.
 fn paragraph_end(text: &str, start: usize) -> usize {
-    let rest = text.get(start..).unwrap_or_default();
-    rest.char_indices()
-        .find(|&(_, ch)| {
-            matches!(
-                ch,
-                '\n' | '\r' | '\u{1C}'..='\u{1E}' | '\u{85}' | '\u{2029}'
-            )
-        })
-        .map_or(text.len(), |(at, ch)| {
-            let after = start + at + ch.len_utf8();
-            if ch == '\r' && text.as_bytes().get(after) == Some(&b'\n') {
-                after + 1
-            } else {
-                after
+    let bytes = text.as_bytes();
+    let mut at = start;
+    while let Some(found) = bytes.get(at..).and_then(|rest| {
+        rest.iter()
+            .position(|&byte| matches!(byte, b'\n' | b'\r' | 0x1C..=0x1E | 0xC2 | 0xE2))
+    }) {
+        at += found;
+        let after = match &bytes[at..] {
+            [b'\r', b'\n', ..] => at + 2,
+            [b'\n' | b'\r' | 0x1C..=0x1E, ..] => at + 1,
+            [0xC2, 0x85, ..] => at + 2,
+            [0xE2, 0x80, 0xA9, ..] => at + 3,
+            _ => {
+                at += 1;
+                continue;
             }
-        })
+        };
+        return after;
+    }
+    text.len()
 }
