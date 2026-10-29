@@ -1050,6 +1050,7 @@ fn future_request_device(
                     error_scope_count: Rc::new(Cell::new(0)),
                     pipeline_discovery: Rc::default(),
                     background_pipelines: Rc::default(),
+                    background_compiles: Rc::default(),
                     #[cfg(feature = "portable-wgsl")]
                     handle_lets: portable_wgsl::browser_has_handle_lets(),
                 }
@@ -1281,9 +1282,12 @@ pub struct WebDevice {
     /// The `createRenderPipelineAsync` promises of the pipelines created
     /// while pipeline discovery is on, or `None` while it is off.
     pipeline_discovery: Rc<RefCell<Option<js_sys::Array>>>,
-    /// The pipelines compiling in the background since they were last
-    /// taken, while background compiles are on, or `None` while they are off.
-    background_pipelines: Rc<RefCell<Option<js_sys::Array>>>,
+    /// The pipelines compiling in the background that no taking has taken,
+    /// while background compiles are on, or `None` while they are off.
+    background_pipelines: Rc<RefCell<Option<Vec<BackgroundPipeline>>>>,
+    /// The pipelines compiling in the background that have neither compiled
+    /// nor failed yet, taken or not.
+    background_compiles: Rc<Cell<u32>>,
     /// The browser's WGSL compiler accepts a `let` that names a texture or a
     /// sampler (the `texture_and_sampler_let` language feature).
     #[cfg(feature = "portable-wgsl")]
@@ -1448,8 +1452,20 @@ pub struct WebRenderPipeline {
     /// Empty for a pipeline created during pipeline discovery, which never
     /// draws, and for one compiling in the background until it compiled.
     pub(crate) inner: Rc<OnceCell<webgpu_sys::GpuRenderPipeline>>,
+    /// Whether a pass left out a draw while the pipeline compiled in the
+    /// background.
+    left_out: Rc<Cell<bool>>,
     /// Unique identifier for this RenderPipeline.
     ident: crate::cmp::Identifier,
+}
+
+/// A pipeline compiling in the background: the promise that settles once it
+/// compiled or failed, and whether it has.
+#[derive(Debug)]
+struct BackgroundPipeline {
+    compiling: Promise,
+    settled: Rc<Cell<bool>>,
+    left_out: Rc<Cell<bool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1903,9 +1919,13 @@ impl PipelineDraws {
         &mut self,
         pipeline: &'a dispatch::DispatchRenderPipeline,
     ) -> Option<&'a webgpu_sys::GpuRenderPipeline> {
-        let pipeline = pipeline.as_webgpu().inner.get().filter(|_| !self.discovering);
-        self.skipping = pipeline.is_none();
-        pipeline
+        let pipeline = pipeline.as_webgpu();
+        let set = pipeline.inner.get().filter(|_| !self.discovering);
+        self.skipping = set.is_none();
+        if self.skipping && !self.discovering {
+            pipeline.left_out.set(true);
+        }
+        set
     }
 }
 
@@ -1933,22 +1953,38 @@ impl WebDevice {
         async move { DiscoveredPipelines(settled.await.unwrap_or_else(|error| error)) }
     }
 
+    /// See `Device::compiles_in_background`.
+    pub(crate) fn compiles_in_background(&self) -> bool {
+        self.background_compiles.get() > 0
+    }
+
     /// Turns background compiles on: see `Device::compile_pipelines_in_background`.
     pub(crate) fn compile_pipelines_in_background(&self) {
         let mut pending = self.background_pipelines.borrow_mut();
         if pending.is_none() {
-            *pending = Some(js_sys::Array::new());
+            *pending = Some(Vec::new());
         }
     }
 
-    /// Takes the pipelines compiling in the background: see
-    /// `Device::take_background_pipelines`.
+    /// Takes the pipelines compiling in the background whose draws a pass
+    /// left out: see `Device::take_background_pipelines`. One that compiled
+    /// before any draw needed it is let go.
     pub(crate) fn take_background_pipelines(
         &self,
     ) -> Option<impl Future<Output = ()> + 'static> {
         let mut background = self.background_pipelines.borrow_mut();
-        let pending = background.as_mut().filter(|pending| pending.length() > 0)?;
-        let taken = core::mem::replace(pending, js_sys::Array::new());
+        let pending = background.as_mut()?;
+        let taken = js_sys::Array::new();
+        pending.retain(|pipeline| {
+            if pipeline.left_out.get() {
+                taken.push(&pipeline.compiling);
+                return false;
+            }
+            !pipeline.settled.get()
+        });
+        if taken.length() == 0 {
+            return None;
+        }
         let settled = wasm_bindgen_futures::JsFuture::from(Promise::all_settled(&taken));
         Some(async move {
             let _ = settled.await;
@@ -2502,22 +2538,34 @@ impl dispatch::DeviceInterface for WebDevice {
         // background it compiles the same way, and this one draws once it
         // compiled.
         let render_pipeline = Rc::new(OnceCell::new());
+        let left_out = Rc::new(Cell::new(false));
         if let Some(pending) = self.pipeline_discovery.borrow().as_ref() {
             pending.push(&self.inner.create_render_pipeline_async(&mapped_desc));
-        } else if let Some(pending) = self.background_pipelines.borrow().as_ref() {
+        } else if let Some(pending) = self.background_pipelines.borrow_mut().as_mut() {
             let compiling = self.inner.create_render_pipeline_async(&mapped_desc);
             let compiled = Rc::clone(&render_pipeline);
-            pending.push(&wasm_bindgen_futures::future_to_promise(async move {
-                let pipeline = wasm_bindgen_futures::JsFuture::from(compiling).await?;
-                let _ = compiled.set(pipeline.unchecked_into());
-                Ok(JsValue::UNDEFINED)
-            }));
+            let settled = Rc::new(Cell::new(false));
+            let settling = Rc::clone(&settled);
+            let compiles = Rc::clone(&self.background_compiles);
+            compiles.set(compiles.get() + 1);
+            pending.push(BackgroundPipeline {
+                compiling: wasm_bindgen_futures::future_to_promise(async move {
+                    let pipeline = wasm_bindgen_futures::JsFuture::from(compiling).await;
+                    settling.set(true);
+                    compiles.set(compiles.get() - 1);
+                    let _ = compiled.set(pipeline?.unchecked_into());
+                    Ok(JsValue::UNDEFINED)
+                }),
+                settled,
+                left_out: Rc::clone(&left_out),
+            });
         } else {
             let _ = render_pipeline.set(self.inner.create_render_pipeline(&mapped_desc).unwrap());
         }
 
         WebRenderPipeline {
             inner: render_pipeline,
+            left_out,
             ident: crate::cmp::Identifier::create(),
         }
         .into()

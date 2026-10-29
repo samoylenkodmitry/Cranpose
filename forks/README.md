@@ -355,9 +355,19 @@ device creates from then on to `createRenderPipelineAsync`. The pipeline
 object exists at once; its draws are left out until the browser compiled
 it, as a pipeline discovery leaves them out, and from then on it draws.
 `Device::take_background_pipelines` returns a future for the pipelines
-created since the last call, which a renderer awaits to drop what it drew
-without them and draw again. Cranpose's web shell turns it on after the
-first frame, whose pipelines discovery compiles.
+whose draws a pass left out since the last call, which a renderer awaits to
+drop what it drew without them and draw again. A pipeline created ahead of
+its first draw that compiles before a pass needs it is never taken, so it
+causes no redraw. Cranpose's web shell turns background compiles on after
+the first frame, whose pipelines discovery compiles.
+
+`Device::compiles_in_background` tells whether a pipeline still compiles in
+the background, taken or not. Chrome compiles several beside each other, on
+threads the page's frames need too: on a Galaxy Tab S7+ twenty warm-ups
+created within 0.4 s compiled over the next 4.5 s, the pipelines the page
+had drawn without landed 200-300 ms later, and the frame they redrew missed
+its vsync. Cranpose's renderer starts its next warm-up only when none
+compiles.
 
 `RenderPipeline::is_ready` tells whether a pipeline's draws draw: `false`
 while the browser compiles it in the background and for one pipeline

@@ -488,9 +488,24 @@ impl Device {
             .is_some()
     }
 
-    /// Takes the pipelines compiling in the background since the last call,
-    /// with a future that resolves once each compiled or failed; `None` when
-    /// none was created. A frame that left their draws out draws again then.
+    /// Whether a pipeline compiling in the background
+    /// ([`Self::compile_pipelines_in_background`]) has neither compiled nor
+    /// failed yet; `false` on every other backend. The browser compiles
+    /// several beside each other, on threads the page's frames need too.
+    pub fn compiles_in_background(&self) -> bool {
+        #[cfg(webgpu)]
+        if let Some(device) = self.inner.as_webgpu_opt() {
+            return device.compiles_in_background();
+        }
+        false
+    }
+
+    /// Takes the pipelines compiling in the background whose draws a pass
+    /// left out since the last call, with a future that resolves once each
+    /// compiled or failed; `None` when no pass left one out. A frame that
+    /// left their draws out draws again then. A pipeline created ahead of
+    /// its first draw, which compiles before any pass needs it, is never
+    /// taken.
     #[cfg(webgpu)]
     pub fn take_background_pipelines(
         &self,
