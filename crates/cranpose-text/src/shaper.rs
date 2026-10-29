@@ -85,8 +85,8 @@ struct KeptPlan {
 // What one shaping call shapes with.
 struct Setting<'a> {
     font: ShaperFont<'a, 'a>,
-    // The font's bytes, which plain glyphs read their kerning from.
-    bytes: &'a [u8],
+    // The font `font` shapes with, which plain glyphs read.
+    face: &'a Font,
     plan: &'a ShapePlan,
     features: &'a [Feature],
     direction: Direction,
@@ -151,27 +151,25 @@ impl Shaper {
             pieces,
         } = self;
         let ShapingFace { font, plans, .. } = &mut faces[face];
+        let font = &*font;
         let kept = &mut plans[plan];
+        // A run of plain glyphs needs neither shaping nor words.
+        if kept
+            .plain
+            .as_mut()
+            .is_some_and(|plain| plain.append(font, text, item.range.clone(), glyphs))
+        {
+            return;
+        }
         let setting = Setting {
             font: ShaperFont::new(font),
-            bytes: font_bytes(font),
+            face: font,
             plan: &kept.plan,
             features,
             direction,
             script,
             language: language.as_ref(),
         };
-        // A run of plain glyphs needs neither shaping nor words.
-        if kept.plain.as_mut().is_some_and(|plain| {
-            plain.append(
-                (&setting.font, setting.bytes),
-                text,
-                item.range.clone(),
-                glyphs,
-            )
-        }) {
-            return;
-        }
         let Some(split) = &kept.split else {
             shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
             return;
@@ -364,11 +362,11 @@ impl WordShaping<'_> {
         let Some(word_text) = self.text.get(word.clone()) else {
             return;
         };
-        let font = (&self.setting.font, self.setting.bytes);
+        let face = self.setting.face;
         if self
             .plain
             .as_deref_mut()
-            .is_some_and(|plain| plain.append(font, self.text, word.clone(), glyphs))
+            .is_some_and(|plain| plain.append(face, self.text, word.clone(), glyphs))
         {
             return;
         }
@@ -492,7 +490,7 @@ fn layout_tables(font: &Font) -> Option<FontRef<'_>> {
 }
 
 // The bytes of `font`, empty when it is not read from bytes.
-fn font_bytes(font: &Font) -> &[u8] {
+pub(crate) fn font_bytes(font: &Font) -> &[u8] {
     match font.source() {
         Source::Blob(bytes) => bytes.as_ref(),
         _ => &[],

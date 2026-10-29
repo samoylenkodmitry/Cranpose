@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use harfrust::{Direction, Feature, Script as ShapingScript, ShaperFont};
+use harfrust::{Direction, Feature, Script as ShapingScript, ShaperFont, font::Font};
 use icu_properties::{CodePointMapData, props::GraphemeClusterBreak};
 use read_fonts::{
     FontRef, ReadError, TableProvider,
@@ -29,7 +29,7 @@ use crate::{
     glyph_id,
     plain_chars::{PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
-    shaper::ShapedGlyph,
+    shaper::{ShapedGlyph, font_bytes},
     word_split::{chosen_script, class_index, everything, moves, single},
 };
 
@@ -186,10 +186,10 @@ impl PlainGlyphs {
 
     // Appends the nominal glyphs of `range` of `text` at `font`'s advances,
     // kerned as the plan kerns them, when every one is plain, and returns
-    // whether it did. `bytes` are the font's.
+    // whether it did.
     pub(crate) fn append(
         &mut self,
-        (font, bytes): (&ShaperFont<'_, '_>, &[u8]),
+        font: &Font,
         text: &str,
         range: Range<usize>,
         glyphs: &mut Vec<ShapedGlyph>,
@@ -205,9 +205,18 @@ impl PlainGlyphs {
             chars,
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
+        // The shaping font, made for the first character the plan has not\n        // met.
+        let mut shaping = None;
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
-            let Some(plain) = chars.char(ch, || plain_glyph(font, busy, ch)) else {
+            let read = || {
+                plain_glyph(
+                    shaping.get_or_insert_with(|| ShaperFont::new(font)),
+                    busy,
+                    ch,
+                )
+            };
+            let Some(plain) = chars.char(ch, read) else {
                 glyphs.truncate(first);
                 return false;
             };
@@ -217,7 +226,11 @@ impl PlainGlyphs {
                     if pairs.binary_search(&pair).is_ok() {
                         PairFit::Joins
                     } else {
-                        PairFit::Kern(kerning.between(bytes, pair.0.into(), pair.1.into()))
+                        PairFit::Kern(kerning.between(
+                            font_bytes(font),
+                            pair.0.into(),
+                            pair.1.into(),
+                        ))
                     }
                 })
             });
