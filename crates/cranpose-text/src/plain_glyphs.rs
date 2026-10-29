@@ -205,7 +205,8 @@ impl PlainGlyphs {
             chars,
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
-        // The shaping font, made for the first character the plan has not\n        // met.
+        // The shaping font, made for the first character the plan has not
+        // met.
         let mut shaping = None;
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {

@@ -312,6 +312,14 @@ impl TextLayout {
         self.shaped = 0;
     }
 
+    // Gives back the room each part has past its length.
+    pub(crate) fn shrink_to_fit(&mut self) {
+        self.faces.shrink_to_fit();
+        self.glyphs.shrink_to_fit();
+        self.runs.shrink_to_fit();
+        self.lines.shrink_to_fit();
+    }
+
     /// A number this layout's glyphs and positions go by: a layout laid out
     /// or aligned again takes a new one, so a renderer keys what it drew of
     /// a layout by it; a clone keeps it.

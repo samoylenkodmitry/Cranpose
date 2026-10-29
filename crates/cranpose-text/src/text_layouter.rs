@@ -128,12 +128,10 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         shaped: Option<&TextLayout>,
     ) -> TextLayout {
-        let mut scratch = std::mem::take(&mut self.scratch);
-        self.fill(input, resolver, shaped, &mut scratch);
-        // A clone holds each part in storage of its own length: a label's
-        // layout keeps one run and one line, not the room a vector grows by.
-        let layout = scratch.clone();
-        self.keep_scratch(scratch);
+        let mut layout = TextLayout::default();
+        self.fill(input, resolver, shaped, &mut layout);
+        // A layout kept holds each part in storage of its own length.
+        layout.shrink_to_fit();
         layout
     }
 
@@ -534,6 +532,9 @@ impl TextLayouter {
     ) {
         let mut top = 0.0;
         let last = self.lines.len() - 1;
+        // Most lines are one run.
+        layout.lines.reserve_exact(self.lines.len());
+        layout.runs.reserve_exact(self.lines.len());
         for index in 0..=last {
             let range = self.lines[index].text.clone();
             let line = LineText {
