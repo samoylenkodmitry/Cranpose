@@ -186,6 +186,17 @@ impl TextKey {
     }
 }
 
+// Whether a layout goes through the text service's shared cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayoutSharing {
+    // Looked up in the cache and kept there, for text that other nodes or
+    // later passes lay out again.
+    Shared,
+    // Laid out for its node alone: text changed in place, as a ticker's is
+    // every frame, which no other text repeats.
+    Unshared,
+}
+
 /// The text and style a layout is prepared from: borrowed, which the layout
 /// copies, or shared with the node that holds them.
 #[derive(Clone, Copy)]
@@ -304,10 +315,13 @@ impl TextService {
         &self,
         source: LayoutSource<'_>,
         frame: TextFrame,
-        units: TextUnits,
+        (units, sharing): (TextUnits, LayoutSharing),
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
-        let key = TextKey::of(text, style.render_hash(), frame.options, units);
+        let key = match sharing {
+            LayoutSharing::Shared => TextKey::of(text, style.render_hash(), frame.options, units),
+            LayoutSharing::Unshared => None,
+        };
         if let Some(key) = key
             && let Some(prepared) = self.held(key, frame, style)
         {
@@ -628,7 +642,11 @@ fn prepare_borrowed(
     units: TextUnits,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
-        service.prepare(LayoutSource::Borrowed { text, style }, frame, units)
+        service.prepare(
+            LayoutSource::Borrowed { text, style },
+            frame,
+            (units, LayoutSharing::Shared),
+        )
     })
 }
 
@@ -699,14 +717,20 @@ pub fn prepare_text_layout(
     )
 }
 
-/// Lays out `text` in `style` between the widths of `frame`, sharing them.
+// Lays out `text` in `style` between the widths of `frame`, sharing them,
+// through the shared cache as `sharing` says.
 pub(crate) fn prepare_shared(
     text: &Rc<AnnotatedString>,
     style: &Arc<TextStyle>,
     frame: TextFrame,
+    sharing: LayoutSharing,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
-        service.prepare(LayoutSource::Shared { text, style }, frame, host_units())
+        service.prepare(
+            LayoutSource::Shared { text, style },
+            frame,
+            (host_units(), sharing),
+        )
     })
 }
 
