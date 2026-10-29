@@ -135,6 +135,9 @@ impl TextLayouter {
             &mut layout.faces,
         );
         layout.shaped = self.glyphs.len();
+        layout.glyphs = shaped
+            .and_then(Shaped::glyphs)
+            .map_or_else(Arc::default, Arc::clone);
         let taken = shaped.and_then(Shaped::measures);
         if let Some(measures) = taken {
             self.measures = Arc::clone(measures);
@@ -344,7 +347,10 @@ impl TextLayouter {
         (mut top, width): (f32, f32),
         layout: &mut LayoutBody,
     ) {
-        layout.glyphs = Arc::from(self.glyphs.as_slice());
+        // A relayout that added no glyphs keeps those it took.
+        if layout.glyphs.len() != self.glyphs.len() {
+            layout.glyphs = Arc::from(self.glyphs.as_slice());
+        }
         self.keep_glyph_room();
         if layout.lines.len() < options.min_lines {
             let first = &layout.lines[0];
