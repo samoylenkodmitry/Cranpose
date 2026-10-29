@@ -106,9 +106,9 @@ pub(crate) struct LineRun {
     pub(crate) scale: f32,
     // Extra width of each cluster, half on each side.
     pub(crate) spacing: f32,
-    // The face's space, how many of the run's glyphs are spaces before the
-    // line's trailing whitespace, and the extra width each of them takes in
-    // a justified line.
+    // The face's space, and in a justified line how many of the run's
+    // glyphs are spaces before the line's trailing whitespace and the extra
+    // width each of them takes.
     pub(crate) space: Option<GlyphId>,
     pub(crate) spaces: u16,
     pub(crate) word_spacing: f32,
@@ -423,9 +423,28 @@ impl TextLayout {
     // Spreads `free` width over the spaces of the visible text of line
     // `index`; false when the line has none.
     fn justify(&mut self, index: usize, free: f32) -> bool {
-        let line = &mut self.lines[index];
-        let runs = &mut self.runs[line.runs.clone()];
-        let total: u32 = runs.iter().map(|run| u32::from(run.spaces)).sum();
+        let Self {
+            lines,
+            runs,
+            glyphs,
+            ..
+        } = self;
+        let line = &mut lines[index];
+        let runs = &mut runs[line.runs.clone()];
+        let visible_end = line.visible_end;
+        // How many of a run's glyphs are spaces before the line's trailing
+        // whitespace.
+        let spaces = |run: &LineRun| {
+            if run.text.start >= visible_end {
+                return 0;
+            }
+            let count = glyphs[run.glyphs.clone()]
+                .iter()
+                .filter(|glyph| Some(glyph.id) == run.space)
+                .count();
+            u16::try_from(count).unwrap_or(u16::MAX)
+        };
+        let total: u32 = runs.iter().map(|run| u32::from(spaces(run))).sum();
         if total == 0 {
             return false;
         }
@@ -433,6 +452,7 @@ impl TextLayout {
         let mut shift = 0.0;
         for run in runs {
             run.shift = shift;
+            run.spaces = spaces(run);
             if run.spaces > 0 {
                 run.word_spacing = per_space;
                 shift += per_space * f32::from(run.spaces);

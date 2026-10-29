@@ -25,15 +25,6 @@ pub(crate) fn place_runs(
             visible_left.get_or_insert(x);
             width += piece.width;
         }
-        let space = layout.faces[piece.face].space();
-        let spaces = if piece.text.start < visible {
-            layout.glyphs[piece.glyphs.clone()]
-                .iter()
-                .filter(|glyph| Some(glyph.id) == space)
-                .count()
-        } else {
-            0
-        };
         layout.runs.push(LineRun {
             text: piece.text.clone(),
             glyphs: piece.glyphs.clone(),
@@ -41,8 +32,8 @@ pub(crate) fn place_runs(
             size: piece.size,
             scale: piece.scale,
             spacing: piece.spacing,
-            space,
-            spaces: u16::try_from(spaces).unwrap_or(u16::MAX),
+            space: layout.faces[piece.face].space(),
+            spaces: 0,
             word_spacing: 0.0,
             baseline_shift: piece.baseline_shift,
             level: piece.level,
