@@ -10,8 +10,8 @@ use cranpose_ui_graphics::Rect;
 use smallvec::SmallVec;
 
 use crate::{
-    bidi_level::BidiLevel, glyph_id::GlyphId, paragraph::TextAlign,
-    paragraph_measures::KeptMeasures, shaper::ShapedGlyph, typeface::Typeface,
+    bidi_level::BidiLevel, glyph_id::GlyphId, paragraph::TextAlign, shaper::ShapedGlyph,
+    typeface::Typeface,
 };
 
 /// A paragraph laid out in lines: glyph runs placed for drawing, and the
@@ -61,8 +61,6 @@ pub(crate) struct LayoutBody {
     // How many glyphs, from the first, shaping placed: an ellipsis's and a
     // hyphen's follow them.
     pub(crate) shaped: usize,
-    // What breaking the text into lines read, kept when it wrapped.
-    pub(crate) measures: Option<KeptMeasures>,
 }
 
 // The id the next layout made or aligned takes.
@@ -332,7 +330,6 @@ impl LayoutBody {
         self.hold = None;
         self.sizing = Sizing::default();
         self.shaped = 0;
-        self.measures = None;
     }
 
     // Gives back the room each part has past its length.

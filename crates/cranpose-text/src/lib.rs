@@ -27,6 +27,7 @@ pub mod glyph_outline;
 pub mod hyphenator;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
+mod kept_measures;
 /// A paragraph to lay out and the lengths of its style.
 pub mod layout_input;
 /// Options that limit lines, control wrapping and choose the overflow behavior.

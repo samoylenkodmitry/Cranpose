@@ -8,6 +8,7 @@ use crate::{
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
+    kept_measures::{KeptMeasures, Measured},
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
     line_box::paragraph_line_box,
@@ -19,7 +20,7 @@ use crate::{
     line_text::{LineEdges, LineText, before_hard_break, indent},
     paragraph::{LineBreak, ResolvedTextDirection},
     paragraph_intrinsics::ParagraphIntrinsics,
-    paragraph_measures::{KeptMeasures, ParagraphMeasures},
+    paragraph_measures::ParagraphMeasures,
     script::Script,
     shaped::Shaped,
     shaped_item::{
@@ -46,8 +47,10 @@ pub struct TextLayouter {
     balancer: LineBalancer,
     items: Vec<ShapedItem>,
     // The cluster widths and break opportunities of the text laid out last,
-    // in the layouter's own storage until a layout that wraps keeps them.
+    // in the layouter's own storage unless `kept` holds them, and those of
+    // the texts relaid out last.
     measures: Arc<ParagraphMeasures>,
+    kept: KeptMeasures,
     lines: Vec<BrokenLine>,
     pieces: Vec<Piece>,
     // The glyphs of the text being laid out, which keep their storage from
@@ -138,10 +141,9 @@ impl TextLayouter {
         layout.glyphs = shaped
             .and_then(Shaped::glyphs)
             .map_or_else(Arc::default, Arc::clone);
-        let taken = shaped.and_then(Shaped::measures);
-        if let Some(measures) = taken {
-            self.measures = Arc::clone(measures);
-        }
+        let taken = self
+            .kept
+            .take(shaped.and_then(Shaped::measured_glyphs), &mut self.measures);
         let lengths = input.lengths;
         let text = input.text;
         // The piece of a text of one item with no line break and no
@@ -218,24 +220,25 @@ impl TextLayouter {
     }
 
     // Breaks `input` into lines of the `wrap` widths, at the opportunities
-    // its line break style takes, found anew unless `taken` measures, which
-    // the layouter holds, have them, and sets the layout's hold. The layout
-    // keeps the measures.
+    // its line break style takes, found anew unless `taken` kept them, and
+    // sets the layout's hold.
     fn wrap_lines(
         &mut self,
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
-        (wrap, taken): (WrapWidths, Option<&Arc<ParagraphMeasures>>),
+        (wrap, taken): (WrapWidths, Measured<'_>),
         layout: &mut LayoutBody,
     ) {
         let text = input.text;
         let line_break = input.paragraph.line_break;
-        if taken.is_none() {
+        if let Measured::Anew(keep_for) = taken {
             let measures = ParagraphMeasures::fresh(&mut self.measures);
             self.breaker
                 .opportunities(text, line_break, &mut measures.breaks);
+            if let Some(glyphs) = keep_for {
+                self.kept.keep(glyphs, &self.measures);
+            }
         }
-        layout.measures = Some(KeptMeasures(Arc::clone(&self.measures)));
         #[cfg(feature = "hyphenation")]
         let breaks =
             if input.paragraph.hyphens == Hyphens::Auto && self.hyphenate(input, wrap, layout) {
@@ -276,7 +279,7 @@ impl TextLayouter {
         let mut faces = std::mem::take(&mut self.faces);
         faces.clear();
         self.shape(input, resolver, None, &mut faces);
-        self.measure_widths(input, &faces, None);
+        self.measure_widths(input, &faces, Measured::Anew(None));
         self.faces = faces;
         self.keep_glyph_room();
         let text = input.text;
@@ -312,15 +315,9 @@ impl TextLayouter {
     }
 
     // Measures the widths of the clusters shaped last, in storage of the
-    // layouter's own, unless `taken` measures, which the layouter holds,
-    // have them.
-    fn measure_widths(
-        &mut self,
-        input: &LayoutInput<'_>,
-        faces: &[Typeface],
-        taken: Option<&Arc<ParagraphMeasures>>,
-    ) {
-        if taken.is_some() {
+    // layouter's own, unless `taken` kept them.
+    fn measure_widths(&mut self, input: &LayoutInput<'_>, faces: &[Typeface], taken: Measured<'_>) {
+        if matches!(taken, Measured::Kept) {
             return;
         }
         let measures = ParagraphMeasures::fresh(&mut self.measures);

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{paragraph_measures::ParagraphMeasures, shaper::ShapedGlyph, text_layout::TextLayout};
+use crate::{shaper::ShapedGlyph, text_layout::TextLayout};
 
 /// A layout of the same text in the same typefaces whose glyphs a relayout
 /// takes in place of shaping the text again.
@@ -27,11 +27,11 @@ impl<'a> Shaped<'a> {
         (body.glyphs.len() == body.shaped).then_some(&body.glyphs)
     }
 
-    // The measures of a layout in the same spans, which it kept when it
-    // wrapped.
-    pub(crate) fn measures(self) -> Option<&'a Arc<ParagraphMeasures>> {
+    // The glyphs of a layout in the same spans when shaping placed them
+    // all, by which the layouter keeps the text's measures.
+    pub(crate) fn measured_glyphs(self) -> Option<&'a Arc<[ShapedGlyph]>> {
         match self {
-            Self::AtOtherWidths(layout) => layout.body().measures.as_ref().map(|kept| &kept.0),
+            Self::AtOtherWidths(_) => self.glyphs(),
             Self::AtOtherSizes(_) => None,
         }
     }

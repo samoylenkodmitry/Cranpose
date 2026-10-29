@@ -479,8 +479,14 @@ fn a_layout_from_the_glyphs_of_another_size_gives_what_a_new_one_gives() {
         ..at_small
     };
     let mut layouter = TextLayouter::default();
-    // The small layout wraps, so it keeps what its lines were broken by.
-    let shaped = layouter.layout(&at_small, &resolver);
+    let first = layouter.layout(&at_small, &resolver);
+    // A relayout at another width that wraps keeps the small text's
+    // measures for the glyphs it shares.
+    let narrower = LayoutInput {
+        max_width: 120.0,
+        ..at_small
+    };
+    let shaped = layouter.relayout(&narrower, &resolver, Shaped::AtOtherWidths(&first));
     let fresh = TextLayouter::default().layout(&at_large, &resolver);
     let relaid = layouter.relayout(&at_large, &resolver, Shaped::AtOtherSizes(&shaped));
     assert_eq!(shown(&relaid), shown(&fresh));
