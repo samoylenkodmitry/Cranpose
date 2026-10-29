@@ -559,8 +559,7 @@ pub fn resolve_content(uri: &str) -> Option<ContentHandle> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = uri.strip_prefix("file://").unwrap_or(uri);
-        if !path.contains("://") {
+        if let Some(path) = crate::media::path_from_uri(uri) {
             return Some(file_content(path));
         }
     }

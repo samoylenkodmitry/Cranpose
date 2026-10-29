@@ -2,6 +2,7 @@ mod app_info_integration;
 mod audio_haptics_integration;
 mod capability_state_integration;
 mod composition_support;
+mod content_resolution;
 mod content_work_bounds;
 mod file_preferences_regressions;
 mod hook_caller_identity;
