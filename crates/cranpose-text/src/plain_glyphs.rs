@@ -27,7 +27,7 @@ use read_fonts::{
 use crate::{
     font_fallback::needs_no_glyph,
     glyph_id,
-    plain_chars::{PairFit, PlainChar, PlainChars},
+    plain_chars::{CharGlyph, PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
     shaper::{ShapedGlyph, font_bytes},
     word_split::{chosen_script, class_index, everything, moves, single},
@@ -211,30 +211,40 @@ impl PlainGlyphs {
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
             let read = || {
-                plain_glyph(
+                let (glyph, advance) = plain_glyph(
                     shaping.get_or_insert_with(|| ShaperFont::new(font)),
                     busy,
                     ch,
-                )
+                )?;
+                let starts = pairs.partition_point(|&(first, _)| first < glyph);
+                Some(CharGlyph {
+                    glyph,
+                    advance,
+                    pairs: pairs.get(starts).is_some_and(|&(first, _)| first == glyph)
+                        || kerning.starts(font_bytes(font), glyph.into()),
+                })
             };
             let Some(plain) = chars.char(ch, read) else {
                 glyphs.truncate(first);
                 return false;
             };
-            let fit = previous.map_or(PairFit::Kern(0), |before| {
-                chars.pair(before, plain, || {
-                    let pair = (u32::from(before.glyph), u32::from(plain.glyph));
-                    if pairs.binary_search(&pair).is_ok() {
-                        PairFit::Joins
-                    } else {
-                        PairFit::Kern(kerning.between(
-                            font_bytes(font),
-                            pair.0.into(),
-                            pair.1.into(),
-                        ))
-                    }
-                })
-            });
+            // A glyph that starts no pair kerns with nothing after it.
+            let fit = previous
+                .filter(|before| before.pairs)
+                .map_or(PairFit::Kern(0), |before| {
+                    chars.pair(before, plain, || {
+                        let pair = (u32::from(before.glyph), u32::from(plain.glyph));
+                        if pairs.binary_search(&pair).is_ok() {
+                            PairFit::Joins
+                        } else {
+                            PairFit::Kern(kerning.between(
+                                font_bytes(font),
+                                pair.0.into(),
+                                pair.1.into(),
+                            ))
+                        }
+                    })
+                });
             // A pair adjustment moves the glyph before; a line break between
             // the two would undo it.
             let kern = match fit {

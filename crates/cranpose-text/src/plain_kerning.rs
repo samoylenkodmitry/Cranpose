@@ -49,6 +49,22 @@ impl KernSubtable {
         })
     }
 
+    // Whether the subtable may move `first`'s advance before some glyph.
+    fn starts(self, font: &[u8], first: GlyphId) -> bool {
+        let Some(data) = usize::try_from(self.offset)
+            .ok()
+            .and_then(|offset| font.get(offset..))
+        else {
+            return false;
+        };
+        let coverage = match PairPos::read(FontData::new(data)) {
+            Ok(PairPos::Format1(format)) => format.coverage(),
+            Ok(PairPos::Format2(format)) => format.coverage(),
+            _ => return false,
+        };
+        coverage.is_ok_and(|coverage| coverage.get(first).is_some())
+    }
+
     // How far the subtable moves `first`'s advance before `second`; `None`
     // when it does not apply to the pair, so the lookup's next one is tried.
     fn adjustment(self, font: &[u8], first: GlyphId, second: GlyphId) -> Option<i32> {
@@ -124,6 +140,13 @@ impl PlainKerning {
         Self {
             subtables: subtables.into_boxed_slice(),
         }
+    }
+
+    // Whether the font may move `first`'s advance before some glyph.
+    pub(crate) fn starts(&self, font: &[u8], first: GlyphId) -> bool {
+        self.subtables
+            .iter()
+            .any(|subtable| subtable.starts(font, first))
     }
 
     // How far the font moves `first`'s advance before `second`, in font
