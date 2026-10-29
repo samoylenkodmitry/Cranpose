@@ -103,7 +103,11 @@ impl MediaSourceOpener for BookmarkOpener {
             .url
             .path()
             .ok_or_else(|| io::Error::other("bookmark has no file path"))?;
-        let path = Path::new(&root.to_string()).join(relative);
+        let mut path = std::path::PathBuf::from(root.to_string());
+        // An empty suffix names the bookmarked file itself; pushing it adds a slash.
+        if !relative.is_empty() {
+            path.push(relative);
+        }
         let file = File::open(path)?;
         let len = file.metadata().ok().map(|metadata| metadata.len());
         Ok(MediaSourceHandle::new(file, len).with_access(access))
