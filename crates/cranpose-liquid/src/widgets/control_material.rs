@@ -1,9 +1,6 @@
 use std::sync::{Once, OnceLock};
 
-use cranpose_ui_graphics::{
-    Color, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp,
-    Size,
-};
+use cranpose_ui_graphics::{Color, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size};
 
 use super::control_motion::ControlContactKind;
 use crate::material::{
@@ -170,11 +167,7 @@ fn shader(foreground: bool) -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     let mut shader = SHADER
         .get_or_init(|| {
-            let mut shader = RuntimeShader::new(&format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
-                cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
-                include_str!("control_content.wgsl"),
-            ));
+            let mut shader = RuntimeShader::new(cranpose_ui_graphics::LIQUID_CONTROL_CONTENT_WGSL);
             shader.set_position_independent(true);
             shader
         })

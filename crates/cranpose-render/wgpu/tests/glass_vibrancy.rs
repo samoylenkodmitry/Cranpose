@@ -3,18 +3,13 @@ use cranpose_render_common::{
     graph::{IsolationReasons, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RuntimeShader,
+    BlendMode, Color, CompositingStrategy, GraphicsLayer, Rect, RenderEffect, RuntimeShader,
 };
 
 use crate::{shared_test_support, support};
 
 fn effect(mask: bool, selected: bool, dark: bool) -> RenderEffect {
-    let mut shader = RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
-        cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
-        include_str!("../../../cranpose-liquid/src/widgets/vibrancy.wgsl")
-    ));
+    let mut shader = RuntimeShader::new(cranpose_ui_graphics::LIQUID_VIBRANCY_WGSL);
     shader.set_override("VIBRANCY_MASK", f64::from(mask));
     shader.set_float4(0, 0.9, 64.0, 48.0, 0.0);
     shader.set_float4(4, 22.0, 22.0, if selected { 12.0 } else { 0.0 }, 20.0);
@@ -275,15 +270,14 @@ fn selected_glyph_mask_samples_the_native_refracted_content_coordinates() {
 #[test]
 fn content_refraction_matches_the_native_displacement_map() {
     let mut renderer = support::headless_renderer().expect("GPU content warp must run");
-    let source = include_str!("../../../cranpose-liquid/src/widgets/vibrancy.wgsl")
-        .replace("fn effect_fs", "fn vibrancy_fs");
+    let source =
+        cranpose_ui_graphics::LIQUID_VIBRANCY_WGSL.replace("fn effect_fs", "fn vibrancy_fs");
     let mut shader = RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{source}\n\
+        "{source}\n\
          @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{\n\
              let field = content_displacement(input.uv * vec2<f32>(402.0, 120.0), 3.0) / (-17.5 * u[3].z);\n\
              return vec4<f32>(vec2<f32>(0.5) + field * 0.25, 0.75, 1.0);\n\
          }}",
-        cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
     ));
     configure_native_content_shader(&mut shader);
     let image = content_test_frame(
@@ -1686,13 +1680,13 @@ fn raised_tab_light_preserves_the_native_face_illumination() {
 
 #[test]
 fn native_touch_light_uses_a_gaussian_disk() {
-    let source = include_str!("../../../cranpose-liquid/src/widgets/tab_lighting.wgsl")
-        .replace("fn effect_fs(", "fn lighting_fs(");
+    let source =
+        cranpose_ui_graphics::LIQUID_TAB_LIGHTING_WGSL.replace("fn effect_fs(", "fn lighting_fs(");
     let mut shader = RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{source}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+        "{source}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
             let p = input.position.xy - vec2<f32>(160.0);
             return vec4<f32>(vec3<f32>(blurred_disk(length(p), 46.5)), 1.0);
-        }}", cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL
+        }}"
     ));
     shader.set_float(0, 1.0);
     let bounds = Rect {
