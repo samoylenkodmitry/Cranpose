@@ -10,8 +10,8 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size, SubstrateSpec,
+    BlendMode, Color, CompositingStrategy, GraphicsLayer, Rect, RenderEffect, RuntimeShader,
+    ShaderTarget, ShaderWarmUp, Size, SubstrateSpec,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -40,11 +40,7 @@ fn shader(pass: InkPass) -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     let mut shader = SHADER
         .get_or_init(|| {
-            let mut shader = RuntimeShader::new(&format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
-                cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
-                include_str!("vibrancy.wgsl")
-            ));
+            let mut shader = RuntimeShader::new(cranpose_ui_graphics::LIQUID_VIBRANCY_WGSL);
             shader.set_position_independent(true);
             shader.set_float(0, 0.9);
             shader

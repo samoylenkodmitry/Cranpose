@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13427
+private_docs = 13417
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 328
@@ -54,7 +54,7 @@ limit = 1000
 "crates/cranpose-foundation/src/modifier.rs" = 2262
 "crates/cranpose-liquid/src/material.rs" = 2198
 "crates/cranpose-liquid/src/widgets/menu.rs" = 1907
-"crates/cranpose-liquid/src/widgets/tab_bar.rs" = 1310
+"crates/cranpose-liquid/src/widgets/tab_bar.rs" = 1157
 "crates/cranpose-macros/src/branch_groups.rs" = 1200
 "crates/cranpose-macros/src/lib.rs" = 1234
 "crates/cranpose-render/common/src/scene_builder.rs" = 2992
@@ -62,13 +62,13 @@ limit = 1000
 "crates/cranpose-render/pixels/src/pipeline.rs" = 1389
 "crates/cranpose-render/wgpu/src/collect.rs" = 1747
 "crates/cranpose-render/wgpu/src/draw_pass.rs" = 1932
-"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 3181
+"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 2921
 "crates/cranpose-render/wgpu/src/frame.rs" = 5477
-"crates/cranpose-render/wgpu/src/frame_graph.rs" = 2549
+"crates/cranpose-render/wgpu/src/frame_graph.rs" = 2368
 "crates/cranpose-render/wgpu/src/lib.rs" = 1193
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1189
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1243
-"crates/cranpose-render/wgpu/src/render.rs" = 3810
+"crates/cranpose-render/wgpu/src/render.rs" = 3807
 "crates/cranpose-render/wgpu/src/run_store.rs" = 2005
 "crates/cranpose-render/wgpu/src/scene_pass.rs" = 1459
 "crates/cranpose-render/wgpu/src/shader_flatten.rs" = 1726

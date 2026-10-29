@@ -6,19 +6,18 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader, ShaderTarget,
-    ShaderWarmUp, Size,
+    GraphicsLayer, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size,
 };
 
 fn shader() -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     SHADER
         .get_or_init(|| {
-            RuntimeShader::new(&format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
-                cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
-                include_str!("tab_lighting.wgsl")
-            ))
+            let mut shader = RuntimeShader::new(cranpose_ui_graphics::LIQUID_TAB_LIGHTING_WGSL);
+            // A framework source is not analyzed on the web, so it declares
+            // what the analysis found elsewhere.
+            shader.set_position_independent(true);
+            shader
         })
         .clone()
 }

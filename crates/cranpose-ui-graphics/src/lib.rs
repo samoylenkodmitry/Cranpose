@@ -53,6 +53,7 @@ mod image;
 /// quads.
 pub mod layer_transform;
 pub mod liquid_glass;
+mod liquid_widget_shaders;
 mod memory_headroom;
 mod path;
 mod path_fill;
@@ -88,6 +89,7 @@ pub use gradient_blur::*;
 pub use hash_bits::HashBits;
 pub use image::*;
 pub use liquid_glass::*;
+pub use liquid_widget_shaders::*;
 pub use memory_headroom::MemoryHeadroom;
 pub use path::*;
 pub use path_fill::*;

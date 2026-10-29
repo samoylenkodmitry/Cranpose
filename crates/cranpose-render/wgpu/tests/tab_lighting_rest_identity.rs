@@ -1,21 +1,17 @@
 use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
-use cranpose_ui_graphics::{
-    GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader,
-};
+use cranpose_ui_graphics::{GraphicsLayer, RenderEffect, RuntimeShader};
 
 use crate::{
     shared_test_support, support,
     support::bar_scene::{BAR, HEIGHT, WIDTH},
 };
 
-/// The liquid tab bar's lighting shader, assembled the way the bar builds
-/// it: the source with no uniform set.
+/// The liquid tab bar's lighting shader, built the way the bar builds it:
+/// position independent, with no uniform set.
 fn lighting_shader() -> RuntimeShader {
-    RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
-        cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
-        include_str!("../../../cranpose-liquid/src/widgets/tab_lighting.wgsl")
-    ))
+    let mut shader = RuntimeShader::new(cranpose_ui_graphics::LIQUID_TAB_LIGHTING_WGSL);
+    shader.set_position_independent(true);
+    shader
 }
 
 /// The lighting composited over a page at zero glow must leave every byte

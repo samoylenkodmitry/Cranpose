@@ -202,6 +202,20 @@ impl Device {
         ShaderModule { inner: module }
     }
 
+    /// Reads the link of every program this GL `Device` built that no
+    /// submission has drawn with yet, and returns whether there was one;
+    /// nothing on another backend. A link is read at the first submission
+    /// that draws with its program, and the read waits for the GPU to reach
+    /// the link: call this between frames, once the GPU has done the work
+    /// submitted after the last pipeline was created, and that first frame
+    /// reads none.
+    #[cfg(wgpu_core)]
+    pub fn read_program_links(&self) -> bool {
+        self.inner
+            .as_core_opt()
+            .is_some_and(crate::backend::wgpu_core::CoreDevice::read_program_links)
+    }
+
     /// Creates a shader module from GLSL ES templates, one per entry point,
     /// on a WebGL device; `None` on a device of another backend.
     ///
@@ -474,9 +488,24 @@ impl Device {
             .is_some()
     }
 
-    /// Takes the pipelines compiling in the background since the last call,
-    /// with a future that resolves once each compiled or failed; `None` when
-    /// none was created. A frame that left their draws out draws again then.
+    /// Whether a pipeline compiling in the background
+    /// ([`Self::compile_pipelines_in_background`]) has neither compiled nor
+    /// failed yet; `false` on every other backend. The browser compiles
+    /// several beside each other, on threads the page's frames need too.
+    pub fn compiles_in_background(&self) -> bool {
+        #[cfg(webgpu)]
+        if let Some(device) = self.inner.as_webgpu_opt() {
+            return device.compiles_in_background();
+        }
+        false
+    }
+
+    /// Takes the pipelines compiling in the background whose draws a pass
+    /// left out since the last call, with a future that resolves once each
+    /// compiled or failed; `None` when no pass left one out. A frame that
+    /// left their draws out draws again then. A pipeline created ahead of
+    /// its first draw, which compiles before any pass needs it, is never
+    /// taken.
     #[cfg(webgpu)]
     pub fn take_background_pipelines(
         &self,

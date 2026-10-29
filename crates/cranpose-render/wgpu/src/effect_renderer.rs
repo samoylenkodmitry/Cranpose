@@ -28,9 +28,15 @@ use crate::{
     shared_shader::SharedShader,
 };
 
+mod blur_draw;
+mod blur_pipelines;
 mod scratch_targets;
 mod uniform_values;
 mod upload_specs;
+use blur_draw::{
+    BlurDraw, BlurFilter, BlurSource, BlurSourceSet, BlurUniformSpec, PreparedBlurDraw, blur_block,
+};
+use blur_pipelines::{BlurPipeline, BlurPipelines, blur_family};
 use scratch_targets::acquire_recorded_effect_scratch_textures_into;
 pub(crate) use scratch_targets::{
     EffectScratchTargetProvider, RecordedEffectScratchTargets, blur_scratch_size,
@@ -49,31 +55,6 @@ const BLUR_TILE_MODES: [TileMode; 4] = [
     TileMode::Mirror,
     TileMode::Decal,
 ];
-const BLUR_LABELS: [&str; BLUR_TILE_MODES.len()] = [
-    "effect/blur/clamp",
-    "effect/blur/repeated",
-    "effect/blur/mirror",
-    "effect/blur/decal",
-];
-const BLUR_DOWNSAMPLE_LABELS: [[&str; BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()] = [
-    [
-        "effect/blur-downsample/clamp/2",
-        "effect/blur-downsample/clamp/4",
-    ],
-    [
-        "effect/blur-downsample/repeated/2",
-        "effect/blur-downsample/repeated/4",
-    ],
-    [
-        "effect/blur-downsample/mirror/2",
-        "effect/blur-downsample/mirror/4",
-    ],
-    [
-        "effect/blur-downsample/decal/2",
-        "effect/blur-downsample/decal/4",
-    ],
-];
-
 // Where a blur pass draws: its label and uniform pass, the view and size it
 // writes, and how the pass starts that view.
 #[derive(Clone, Copy)]
@@ -150,14 +131,8 @@ pub(crate) struct EffectRenderer {
     pub shader_cache: ShaderPipelineCache,
     pipeline_cache: Option<wgpu::PipelineCache>,
 
-    blur_shader: SharedShader,
-    blur_pipelines: [FixedPipeline; BLUR_TILE_MODES.len()],
-    blur_downsample_pipelines:
-        [[FixedPipeline; BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
-    blur_mean_pipeline: FixedPipeline,
+    blurs: BlurPipelines,
     recorder: PipelineRecorder,
-    /// One bit per tile mode whose blur family is queued for warm-up.
-    blur_families_queued: Cell<u8>,
     /// Whether a composite was left out this frame while its pipeline
     /// compiles (see [`Self::take_skipped_draw`]).
     skipped_draw: Cell<bool>,
@@ -278,125 +253,6 @@ struct ProjectiveBlitUniforms {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ProjectiveBlitVertex {
     position: [f32; 2],
-}
-
-/// The blocks of source texels a blur's downsample averages per scratch
-/// pixel: the downscales `blur_scratch_size` chooses.
-const BLUR_DOWNSAMPLE_BLOCKS: [u32; 2] = [2, 4];
-
-/// The block of source texels one pixel of a blur's scratch stands for: one
-/// when `scratch` is `source`'s size.
-fn blur_block(source: (u32, u32, u32, u32), scratch: (u32, u32, u32, u32)) -> u32 {
-    (source.2 as f32 / scratch.2.max(1) as f32).round().max(1.0) as u32
-}
-
-#[derive(Clone, Copy)]
-struct BlurDraw {
-    source: BlurSource,
-    uniforms: BlurUniformSpec,
-    filter: BlurFilter,
-    scissor: Option<(u32, u32, u32, u32)>,
-}
-
-#[derive(Clone, Copy)]
-enum BlurSource {
-    Primary,
-    Secondary,
-}
-
-struct BlurSourceSet<'a> {
-    primary: &'a OffscreenTarget,
-    secondary: &'a OffscreenTarget,
-}
-
-impl<'a> BlurSourceSet<'a> {
-    fn single(target: &'a OffscreenTarget) -> Self {
-        BlurSourceSet {
-            primary: target,
-            secondary: target,
-        }
-    }
-
-    fn resolve(&self, source: BlurSource) -> &OffscreenTarget {
-        match source {
-            BlurSource::Primary => self.primary,
-            BlurSource::Secondary => self.secondary,
-        }
-    }
-}
-
-struct PreparedBlurDraw {
-    source: BlurSource,
-    uniform: UniformUpload,
-    pipeline: BlurPipeline,
-    scissor: Option<(u32, u32, u32, u32)>,
-}
-
-#[derive(Clone, Copy)]
-struct BlurUniformSpec {
-    axis: Axis,
-    sampled: (u32, u32),
-    source: [f32; 4],
-    dest: [f32; 4],
-    radius: (f32, f32),
-    tile_mode: TileMode,
-}
-
-#[derive(Clone, Copy)]
-enum BlurFilter {
-    Kernel,
-    Downsample(u32),
-    Mean,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BlurPipeline {
-    Mean,
-    Downsample { block: u32, tile_mode: usize },
-    Kernel { tile_mode: usize },
-}
-
-impl BlurPipeline {
-    /// The tile mode whose blur family this pipeline belongs to: its
-    /// kernel and its downsample of each block. The mean has none.
-    fn family(self) -> Option<usize> {
-        match self {
-            Self::Mean => None,
-            Self::Downsample { tile_mode, .. } | Self::Kernel { tile_mode } => Some(tile_mode),
-        }
-    }
-}
-
-/// The pipelines of the blur family of `tile_mode`.
-fn blur_family(tile_mode: usize) -> impl Iterator<Item = BlurPipeline> {
-    std::iter::once(BlurPipeline::Kernel { tile_mode }).chain(
-        BLUR_DOWNSAMPLE_BLOCKS
-            .into_iter()
-            .map(move |block| BlurPipeline::Downsample { block, tile_mode }),
-    )
-}
-
-impl BlurDraw {
-    fn uniforms(&self, renderer: &EffectRenderer) -> BlurUniforms {
-        let spec = self.uniforms;
-        renderer.blur_uniforms(
-            spec.axis,
-            spec.sampled,
-            spec.source,
-            spec.dest,
-            spec.radius,
-            spec.tile_mode,
-        )
-    }
-
-    fn pipeline(&self) -> BlurPipeline {
-        let tile_mode = tile_mode_uniform_value(self.uniforms.tile_mode) as usize;
-        match self.filter {
-            BlurFilter::Downsample(block) => BlurPipeline::Downsample { block, tile_mode },
-            BlurFilter::Kernel => BlurPipeline::Kernel { tile_mode },
-            BlurFilter::Mean => BlurPipeline::Mean,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1013,10 +869,6 @@ impl EffectRenderer {
             ],
         );
 
-        let blur_pipelines = BLUR_LABELS.map(FixedPipeline::new);
-        let blur_downsample_pipelines =
-            BLUR_DOWNSAMPLE_LABELS.map(|labels| labels.map(FixedPipeline::new));
-
         let offset_shader = SharedShader::new(
             device,
             adapter_backend,
@@ -1110,13 +962,16 @@ impl EffectRenderer {
                 effect_layouts,
                 recorder.clone(),
             ),
+            blurs: BlurPipelines::new(
+                blur_shader,
+                &compiler,
+                pipeline_cache.clone(),
+                recorder.clone(),
+                surface_format,
+                adapter_backend,
+            ),
             recorder,
             pipeline_cache,
-            blur_shader,
-            blur_pipelines,
-            blur_downsample_pipelines,
-            blur_mean_pipeline: FixedPipeline::new("effect/mean"),
-            blur_families_queued: Cell::new(0),
             compiler,
             blur_uniform_bind_group_layout,
             blur_prepared_draws: Vec::new(),
@@ -1251,10 +1106,10 @@ impl EffectRenderer {
     ) -> bool {
         let clamp = 0;
         match spec {
-            SubstrateSpec::Mean => self.blur_ready(device, BlurPipeline::Mean),
+            SubstrateSpec::Mean => self.blurs.ready(device, BlurPipeline::Mean),
             SubstrateSpec::Average { block } => {
                 block <= 1
-                    || self.blur_ready(
+                    || self.blurs.ready(
                         device,
                         BlurPipeline::Downsample {
                             block,
@@ -1281,17 +1136,12 @@ impl EffectRenderer {
         (scratch_width, scratch_height): (u32, u32),
     ) -> bool {
         let block = blur_block((0, 0, width, height), (0, 0, scratch_width, scratch_height));
-        let kernel = self.blur_ready(device, BlurPipeline::Kernel { tile_mode });
-        let downsample =
-            block <= 1 || self.blur_ready(device, BlurPipeline::Downsample { block, tile_mode });
+        let kernel = self.blurs.ready(device, BlurPipeline::Kernel { tile_mode });
+        let downsample = block <= 1
+            || self
+                .blurs
+                .ready(device, BlurPipeline::Downsample { block, tile_mode });
         kernel & downsample
-    }
-
-    fn blur_ready(&self, device: &wgpu::Device, pipeline: BlurPipeline) -> bool {
-        self.blur_resource(pipeline)
-            .ready_or_queue(&self.compiler, self.adapter_backend, || {
-                self.blur_job(device, pipeline)
-            })
     }
 
     /// Queues the recorded pipelines a stand-in drew the first frame for.
@@ -1310,7 +1160,7 @@ impl EffectRenderer {
         let blurs = (0..BLUR_TILE_MODES.len())
             .flat_map(blur_family)
             .chain([BlurPipeline::Mean])
-            .map(|blur| self.blur_resource(blur));
+            .map(|blur| self.blurs.resource(blur));
         for pipeline in blurs.chain([&self.offset_pipeline]) {
             if records
                 .fixed
@@ -1332,7 +1182,7 @@ impl EffectRenderer {
             .flat_map(blur_family)
             .chain([BlurPipeline::Mean]);
         for blur in blurs {
-            visit(self.blur_resource(blur), &|| self.blur_job(device, blur));
+            visit(self.blurs.resource(blur), &|| self.blurs.job(device, blur));
         }
         visit(&self.offset_pipeline, &|| self.offset_pipeline_job(device));
         for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
@@ -1360,116 +1210,6 @@ impl EffectRenderer {
                 RuntimeShaderPipelineMode::for_target(warm_up.target),
             );
         }
-    }
-
-    fn blur_pipeline_job(&self, device: &wgpu::Device, tile_mode: usize) -> FixedPipelineJob {
-        fullscreen_pipeline_job(
-            device,
-            self.pipeline_cache.as_ref(),
-            "Blur Pipeline",
-            ShaderEntry {
-                shader: &self.blur_shader,
-                entries: (crate::render::FULLSCREEN_VS, "blur_fs"),
-                constants: &[("BLUR_TILE_MODE", tile_mode as f64)],
-            },
-            self.surface_format,
-            (wgpu::BlendState::REPLACE, None),
-        )
-    }
-
-    fn blur_resource(&self, pipeline: BlurPipeline) -> &FixedPipeline {
-        match pipeline {
-            BlurPipeline::Mean => &self.blur_mean_pipeline,
-            BlurPipeline::Kernel { tile_mode } => &self.blur_pipelines[tile_mode],
-            BlurPipeline::Downsample { block, tile_mode } => {
-                let index = BLUR_DOWNSAMPLE_BLOCKS
-                    .iter()
-                    .position(|candidate| *candidate == block)
-                    .unwrap_or_else(|| {
-                        panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
-                    });
-                &self.blur_downsample_pipelines[tile_mode][index]
-            }
-        }
-    }
-
-    fn blur_job(&self, device: &wgpu::Device, pipeline: BlurPipeline) -> FixedPipelineJob {
-        match pipeline {
-            BlurPipeline::Mean => self.mean_pipeline_job(device),
-            BlurPipeline::Kernel { tile_mode } => self.blur_pipeline_job(device, tile_mode),
-            BlurPipeline::Downsample { block, tile_mode } => {
-                self.blur_downsample_pipeline_job(device, block, tile_mode)
-            }
-        }
-    }
-
-    /// The pipeline of a blur draw, built here if nothing has built it yet.
-    /// The first draw of a tile mode's blur family queues the rest of the
-    /// family for warm-up: the downsample block follows the radius, so an
-    /// effect that blurs asks for the other block once its radius crosses
-    /// a threshold, often mid-scroll.
-    fn blur_draw_pipeline(
-        &self,
-        device: &wgpu::Device,
-        pipeline: BlurPipeline,
-    ) -> &wgpu::RenderPipeline {
-        if let Some(tile_mode) = pipeline.family() {
-            let bit = 1u8 << tile_mode;
-            let queued = self.blur_families_queued.get();
-            if queued & bit == 0 {
-                self.blur_families_queued.set(queued | bit);
-                for sibling in blur_family(tile_mode).filter(|sibling| *sibling != pipeline) {
-                    self.blur_resource(sibling).queue(
-                        &self.compiler,
-                        CompileLane::WarmUp,
-                        self.adapter_backend,
-                        self.blur_job(device, sibling),
-                    );
-                }
-            }
-        }
-        self.blur_resource(pipeline)
-            .for_draw(&self.recorder, self.adapter_backend, || {
-                self.blur_job(device, pipeline)()
-            })
-    }
-
-    fn mean_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
-        fullscreen_pipeline_job(
-            device,
-            self.pipeline_cache.as_ref(),
-            "Mean Pipeline",
-            ShaderEntry {
-                shader: &self.blur_shader,
-                entries: (crate::render::FULLSCREEN_VS, "blur_mean_fs"),
-                constants: &[],
-            },
-            self.surface_format,
-            (wgpu::BlendState::REPLACE, None),
-        )
-    }
-
-    fn blur_downsample_pipeline_job(
-        &self,
-        device: &wgpu::Device,
-        block: u32,
-        tile_mode: usize,
-    ) -> FixedPipelineJob {
-        fullscreen_pipeline_job(
-            device,
-            self.pipeline_cache.as_ref(),
-            "Blur Downsample Pipeline",
-            ShaderEntry {
-                shader: &self.blur_shader,
-                entries: (crate::render::FULLSCREEN_VS, "blur_downsample_fs"),
-                constants: &[
-                    ("BLUR_BLOCK", f64::from(block)),
-                    ("BLUR_TILE_MODE", tile_mode as f64),
-                ],
-            },
-            self.surface_format,
-            (wgpu::BlendState::REPLACE, None),
-        )
     }
 
     fn offset_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
@@ -1820,7 +1560,7 @@ impl EffectRenderer {
         let mut bound = None;
         for draw in prepared.drain(..) {
             if bound != Some(draw.pipeline) {
-                pass.set_pipeline(self.blur_draw_pipeline(device, draw.pipeline));
+                pass.set_pipeline(self.blurs.for_draw(device, draw.pipeline));
                 bound = Some(draw.pipeline);
             }
             let source = sources.resolve(draw.source);

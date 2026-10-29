@@ -114,6 +114,18 @@ impl Renderer for WgpuRenderer {
         self.frontend.pointer_held = true;
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn build_while_idle(&mut self) -> bool {
+        let PresentBackend::Sync(sync) = &self.backend else {
+            return false;
+        };
+        let renderer = &sync.renderer;
+        renderer
+            .pipelines
+            .compiler
+            .build_while_idle(&renderer.device, &renderer.queue)
+    }
+
     fn set_inspector_overlay(&mut self, graph: Option<RenderGraph>) {
         self.frontend.inspector_overlay_graph = graph;
         self.frontend.refresh_dev_overlay();

@@ -2,7 +2,7 @@ use std::sync::mpsc;
 
 use web_time::{Duration, Instant};
 
-use super::{CompileLane, PacedLanding, PipelineCompiler};
+use super::{CompileLane, MOVING_FRAMES_PER_BUILD, PacedLanding, PipelineCompiler};
 
 /// Both lanes run every job off the calling thread. Each starts its jobs in
 /// queue order, on several threads, so they may finish in any.
@@ -323,4 +323,40 @@ fn a_paced_build_waits_for_the_frame_before_it_and_not_longer() {
     // The next frame's submit.
     crate::frame_graph::read_test_texture(&device, &queue, &texture);
     assert!(landing.may_build());
+}
+
+// A page that draws no frames runs its paced builds between them, and no
+// frame's submit tells when the GPU has done the last: the build's own submit
+// and a poll must, or the page would build one pipeline and wait for a frame.
+#[test]
+fn a_paced_build_between_frames_lands_without_a_frame() {
+    let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    let landing = PacedLanding::default();
+    landing.built_between_frames(&queue);
+    assert!(!landing.may_build());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("the build's submit completes");
+    assert!(landing.may_build());
+}
+
+// A paced build waits for a frame whose scene stands still, and the demo's
+// glass tiles tab, whose clock never stops, drew its glass's stand-in for
+// good: a demanded build runs after a bounded number of moving frames, and
+// moving frames with nothing demanded count nothing toward the next one.
+#[test]
+fn a_moving_scene_gets_its_demanded_builds_after_a_bounded_wait() {
+    let landing = PacedLanding::default();
+    for _ in 0..2 * MOVING_FRAMES_PER_BUILD {
+        assert!(!landing.waited_out(false));
+    }
+    for _ in 1..MOVING_FRAMES_PER_BUILD {
+        assert!(!landing.waited_out(true));
+    }
+    assert!(landing.waited_out(true));
+    landing.built();
+    assert!(!landing.waited_out(true));
 }

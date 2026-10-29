@@ -69,6 +69,33 @@ pub(crate) struct FramePacket {
     pub(crate) scene_update: u64,
 }
 
+impl FramePacket {
+    // How the packet's scene moved since the frame that drew `drawn`, the
+    // scene update before.
+    pub(crate) fn scene_motion(&self, drawn: Option<u64>) -> SceneMotion {
+        if self.pointer_held {
+            SceneMotion::Held
+        } else if drawn == Some(self.scene_update) {
+            SceneMotion::Still
+        } else {
+            SceneMotion::Moving
+        }
+    }
+}
+
+// How a frame's scene moved since the frame before, which on WebGL decides
+// whether a paced build runs at its end (see `PipelineCompiler::paced`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SceneMotion {
+    // The frame draws the scene update the frame before drew, with no
+    // pointer held.
+    Still,
+    // The scene changed, with no pointer held.
+    Moving,
+    // A pointer is held on the app's controls.
+    Held,
+}
+
 pub(crate) struct FrameSceneStorage {
     pub(crate) root: Box<LayerScene>,
     pub(crate) overlay: Option<Box<LayerScene>>,

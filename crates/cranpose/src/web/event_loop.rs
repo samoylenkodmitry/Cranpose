@@ -399,9 +399,9 @@ pub async fn run(
 
     let content = crate::gpu_context::provide_current_gpu_context(device_loss.share(), content);
 
-    // The page runs idle prefetch passes between frames (`web_idle_prefetch`):
-    // a lazy list leaves them the items beyond its viewport that its scroll
-    // does not soon reach.
+    // The page runs idle prefetch passes between frames (`IdleWork`): a lazy
+    // list leaves them the items beyond its viewport that its scroll does
+    // not soon reach.
     cranpose_ui::set_idle_prefetch_passes(true);
     let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
         renderer,
@@ -733,7 +733,7 @@ pub async fn run(
     #[cfg(feature = "webview")]
     let webview_canvas = canvas.clone();
 
-    let idle_prefetch = super::idle_prefetch::IdlePrefetch::new(&app);
+    let idle_work = super::idle_work::IdleWork::new(&app, &frame_pending);
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         let frame_started_at = web_time::Instant::now();
         frame_pending.set(false);
@@ -788,7 +788,7 @@ pub async fn run(
         let schedule = app.borrow().schedule_platform_frame(&frame_driver);
         release_kept_copy_when_idle(&app, schedule);
         frame_driver.also_wake_at(schedule, accessibility.borrow().sync_wake());
-        idle_prefetch.queue_after_frame(frame_started_at);
+        idle_work.queue_after_frame(frame_started_at, schedule);
     }) as Box<dyn FnMut()>));
 
     request_frame();

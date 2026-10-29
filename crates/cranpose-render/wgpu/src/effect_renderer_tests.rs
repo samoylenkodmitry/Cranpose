@@ -146,7 +146,7 @@ fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
                 PipelineRecorder::default(),
             );
             if reference {
-                renderer.blur_shader = SharedShader::new(
+                renderer.blurs.shader = SharedShader::new(
                     &device,
                     device.adapter_info().backend,
                     "Dynamic Blur Tile Reference",

@@ -360,6 +360,15 @@ pub trait Renderer {
     /// AppShell calls this before each frame drawn while a pointer is held.
     fn note_pointer_held(&mut self) {}
 
+    /// Runs one step of the pipeline builds that wait for a frame, where frames run them (a WebGL
+    /// page links one program at a frame's end), while the app draws none: a page that stands
+    /// still still builds what its next touch draws. Returns whether builds still wait.
+    ///
+    /// The platform calls this in its idle periods while it has no frame to draw.
+    fn build_while_idle(&mut self) -> bool {
+        false
+    }
+
     /// Returns whether renderer-side cache materialization needs a visible follow-up frame.
     fn needs_frame_warmup(&self) -> bool {
         false
