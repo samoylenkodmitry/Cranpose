@@ -2,7 +2,8 @@ use crate::{
     layout_input::LayoutInput,
     shaped_item::{ShapedItem, scale},
     shaper::ShapedGlyph,
-    text_layout::{TextLayout, font_units},
+    text_layout::font_units,
+    typeface::Typeface,
 };
 
 // The widths of a paragraph's clusters in text order, as running sums, so the
@@ -40,16 +41,17 @@ impl ClusterTotal {
 }
 
 impl ClusterWidths {
-    // Measures the clusters of the glyphs of `items`, laid out in `layout`.
+    // Measures the clusters of `glyphs` of `items`, in `faces`.
     pub(crate) fn measure(
         &mut self,
         items: &[ShapedItem],
         input: &LayoutInput<'_>,
-        layout: &TextLayout,
+        faces: &[Typeface],
+        glyphs: &[ShapedGlyph],
     ) {
         self.clusters.clear();
         self.total = ClusterTotal::default();
-        each_cluster_glyph(items, input, layout, |start, advance, spacing| {
+        each_cluster_glyph(items, input, faces, glyphs, |start, advance, spacing| {
             let before = self.total.width;
             if self.total.add(start, advance, spacing) {
                 self.clusters.push((start, before));
@@ -110,17 +112,19 @@ impl ClusterWidths {
     }
 }
 
-// Calls `add` with the cluster start of each glyph of `items` in text
-// order, its advance in pixels and the spacing its item adds per cluster.
+// Calls `add` with the cluster start of each of `glyphs` of `items` in
+// text order, its advance in pixels and the spacing its item adds per
+// cluster.
 fn each_cluster_glyph(
     items: &[ShapedItem],
     input: &LayoutInput<'_>,
-    layout: &TextLayout,
+    faces: &[Typeface],
+    glyphs: &[ShapedGlyph],
     mut add: impl FnMut(usize, f32, f32),
 ) {
     for item in items {
-        let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
-        let glyphs = &layout.glyphs[item.glyphs.clone()];
+        let scale = scale(&input.spans[item.span], &faces[item.face]);
+        let glyphs = &glyphs[item.glyphs.clone()];
         let mut add_glyph = |glyph: &ShapedGlyph| {
             add(
                 glyph.text_offset(),

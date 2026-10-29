@@ -1,6 +1,9 @@
 use std::{
     ops::Range,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use cranpose_ui_graphics::Rect;
@@ -22,7 +25,8 @@ pub struct TextLayout {
     // Most text is one line in one run of one typeface, which these hold
     // without allocating.
     pub(crate) faces: SmallVec<[Typeface; 1]>,
-    pub(crate) glyphs: Vec<ShapedGlyph>,
+    // Shared with the copies aligned at other widths, which move no glyph.
+    pub(crate) glyphs: Arc<[ShapedGlyph]>,
     pub(crate) runs: SmallVec<[LineRun; 1]>,
     pub(crate) lines: SmallVec<[LayoutLine; 1]>,
     pub(crate) width: f32,
@@ -296,10 +300,10 @@ impl GlyphRun<'_> {
 }
 
 impl TextLayout {
-    // Empties the layout, keeping its storage.
+    // Empties the layout, keeping the storage of all but its shared glyphs.
     pub(crate) fn clear(&mut self) {
         self.faces.clear();
-        self.glyphs.clear();
+        self.glyphs = Arc::default();
         self.runs.clear();
         self.lines.clear();
         self.width = 0.0;
@@ -315,7 +319,6 @@ impl TextLayout {
     // Gives back the room each part has past its length.
     pub(crate) fn shrink_to_fit(&mut self) {
         self.faces.shrink_to_fit();
-        self.glyphs.shrink_to_fit();
         self.runs.shrink_to_fit();
         self.lines.shrink_to_fit();
     }

@@ -9,7 +9,7 @@ use crate::{
     script::Script,
     shaper::{ShapedGlyph, Shaper},
     shaping_span::ShapingSpan,
-    text_layout::{TextLayout, font_units},
+    text_layout::font_units,
     typeface::Typeface,
 };
 
@@ -96,22 +96,23 @@ pub(crate) fn set_cluster(glyphs: &mut [ShapedGlyph], offset: usize) {
     }
 }
 
-// The glyphs of `sub` of `item` inside `part` of a line: a slice of the
-// item's glyphs, or `sub` shaped again without the text outside `part` when
-// the item's shapes change across an edge of `part` inside it.
+// The glyphs of `sub` of `item` inside `part` of a line, among `glyphs` in
+// `faces`: a slice of the item's glyphs, or `sub` shaped again without the
+// text outside `part`, added to `glyphs`, when the item's shapes change
+// across an edge of `part` inside it.
 pub(crate) fn part_glyphs(
     shaper: &mut Shaper,
     input: &LayoutInput<'_>,
     item: &ShapedItem,
     sub: Range<usize>,
     part: Range<usize>,
-    layout: &mut TextLayout,
+    faces: &[Typeface],
+    glyphs: &mut Vec<ShapedGlyph>,
 ) -> Range<usize> {
-    let glyphs = &layout.glyphs[item.glyphs.clone()];
+    let own = &glyphs[item.glyphs.clone()];
     let cut_unsafe = |cut: usize| {
-        let at = cluster_index(glyphs, cut, item.level);
-        glyphs
-            .get(at)
+        let at = cluster_index(own, cut, item.level);
+        own.get(at)
             .is_none_or(|glyph| glyph.unsafe_to_break || glyph.text_offset() != cut)
     };
     let cut_inside =
@@ -120,34 +121,28 @@ pub(crate) fn part_glyphs(
     if !cut_inside {
         let (low, high) = if item.level.is_rtl() {
             (
-                glyphs.partition_point(|glyph| glyph.text_offset() >= sub.end),
-                glyphs.partition_point(|glyph| glyph.text_offset() >= sub.start),
+                own.partition_point(|glyph| glyph.text_offset() >= sub.end),
+                own.partition_point(|glyph| glyph.text_offset() >= sub.start),
             )
         } else {
             (
-                glyphs.partition_point(|glyph| glyph.text_offset() < sub.start),
-                glyphs.partition_point(|glyph| glyph.text_offset() < sub.end),
+                own.partition_point(|glyph| glyph.text_offset() < sub.start),
+                own.partition_point(|glyph| glyph.text_offset() < sub.end),
             )
         };
         return item.glyphs.start + low..item.glyphs.start + high;
     }
-    let start = layout.glyphs.len();
+    let start = glyphs.len();
     let reshaped = TextItem {
         range: sub,
         level: item.level,
         paragraph_level: item.paragraph_level,
         script: item.script,
-        typeface: &layout.faces[item.face],
+        typeface: &faces[item.face],
         span: item.span,
     };
-    shaper.shape(
-        input.text,
-        &reshaped,
-        &input.spans[item.span],
-        part,
-        &mut layout.glyphs,
-    );
-    start..layout.glyphs.len()
+    shaper.shape(input.text, &reshaped, &input.spans[item.span], part, glyphs);
+    start..glyphs.len()
 }
 
 // The index of `face` in `faces`, added when missing.

@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use cranpose_ui_graphics::{MemoryHeadroom, whole};
 
@@ -21,7 +21,7 @@ use crate::{
         Piece, ShapedItem, face_index, hyphen, item_at, part_glyphs, scale, set_cluster,
         shape_inserted, spaced_width,
     },
-    shaper::Shaper,
+    shaper::{ShapedGlyph, Shaper},
     text_layout::{LayoutLine, Sizing, TextLayout, WidthRange},
 };
 #[cfg(feature = "hyphenation")]
@@ -43,8 +43,11 @@ pub struct TextLayouter {
     breaks: Vec<BreakOpportunity>,
     lines: Vec<BrokenLine>,
     pieces: Vec<Piece>,
-    // The layout intrinsic widths are measured in and new layouts are built
-    // in, which keeps its storage from one text to the next.
+    // The glyphs of the text being laid out, which keep their storage from
+    // one text to the next; a layout takes them once they are all placed.
+    glyphs: Vec<ShapedGlyph>,
+    // The layout intrinsic widths are measured in, which keeps its storage
+    // from one text to the next.
     scratch: TextLayout,
     #[cfg(feature = "hyphenation")]
     hyphenator: Hyphenator,
@@ -96,8 +99,8 @@ enum EllipsisAt {
 }
 
 const ELLIPSIS: &str = "\u{2026}";
-// The most glyphs the scratch layout keeps room for between texts: the
-// storage of a longer text goes once the text is laid out.
+// The most glyphs the layouter keeps room for between texts: the storage of
+// a longer text goes once the text is laid out.
 const SCRATCH_GLYPHS: usize = 4096;
 // How much the free width of a paragraph's last line counts in even breaking
 // for `LineBreak.Paragraph`, which lets the last line stay short.
@@ -157,8 +160,6 @@ impl TextLayouter {
     ) {
         let options = input.options.normalized();
         layout.clear();
-        // A glyph takes at least a byte of text, so the glyphs grow once.
-        layout.glyphs.reserve(input.text.len());
         self.shape(input, resolver, shaped, layout);
         let lengths = input.lengths;
         let text = input.text;
@@ -173,7 +174,8 @@ impl TextLayouter {
         let unbroken = if let Some(piece) = &lone {
             Some(piece.width)
         } else {
-            self.widths.measure(&self.items, input, layout);
+            self.widths
+                .measure(&self.items, input, &layout.faces, &self.glyphs);
             (!has_hard_break(text)).then(|| self.widths.width(0, visible_end(text, 0, text.len())))
         };
         let widest = unbroken.map_or_else(
@@ -214,7 +216,8 @@ impl TextLayouter {
             return;
         }
         if lone.is_some() {
-            self.widths.measure(&self.items, input, layout);
+            self.widths
+                .measure(&self.items, input, &layout.faces, &self.glyphs);
         }
         if let Some(line) = fits {
             layout.hold = Some(fitting_hold(&options, line + lengths.first_line_indent));
@@ -281,8 +284,10 @@ impl TextLayouter {
         let mut measured = std::mem::take(&mut self.scratch);
         measured.clear();
         self.shape(input, resolver, None, &mut measured);
-        self.widths.measure(&self.items, input, &measured);
-        self.keep_scratch(measured);
+        self.widths
+            .measure(&self.items, input, &measured.faces, &self.glyphs);
+        self.scratch = measured;
+        self.keep_glyph_room();
         let text = input.text;
         self.breaker
             .opportunities(text, input.paragraph.line_break, &mut self.breaks);
@@ -312,12 +317,35 @@ impl TextLayouter {
         }
     }
 
-    // Keeps `scratch` for the next text, unless its storage grew past what a
-    // label or a paragraph needs.
-    fn keep_scratch(&mut self, scratch: TextLayout) {
-        if scratch.glyphs.capacity() <= SCRATCH_GLYPHS {
-            self.scratch = scratch;
+    // Gives back the storage of the glyphs when it grew past what a label or
+    // a paragraph needs.
+    fn keep_glyph_room(&mut self) {
+        if self.glyphs.capacity() > SCRATCH_GLYPHS {
+            self.glyphs = Vec::new();
         }
+    }
+
+    // Ends a layout whose lines reach down to `top`: the layout takes the
+    // glyphs, a text short of its minimum lines takes the height of that
+    // many of its first line, and its lines align.
+    fn finish_lines(
+        &mut self,
+        input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
+        mut top: f32,
+        layout: &mut TextLayout,
+    ) {
+        layout.glyphs = Arc::from(self.glyphs.as_slice());
+        self.keep_glyph_room();
+        if layout.lines.len() < options.min_lines {
+            let first = &layout.lines[0];
+            let missing = options.min_lines - layout.lines.len();
+            top += (first.bottom - first.top) * lines_f32(missing);
+        }
+        layout.height = top;
+        layout.align_lines(input.paragraph.text_align);
+        layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
+        layout.renew_id();
     }
 
     // The widest paragraph of the text measured last on one line, with its
@@ -423,12 +451,12 @@ impl TextLayouter {
                 Some((known, width)) if known == index => width,
                 _ => {
                     let face = &layout.faces[item.face];
-                    let shaped = layout.glyphs.len();
+                    let shaped = self.glyphs.len();
                     let text = hyphen(face);
                     let item = item.inserted(text, face);
                     let width =
-                        shape_inserted(&mut self.shaper, input, &item, text, &mut layout.glyphs);
-                    layout.glyphs.truncate(shaped);
+                        shape_inserted(&mut self.shaper, input, &item, text, &mut self.glyphs);
+                    self.glyphs.truncate(shaped);
                     hyphen_width = Some((index, width));
                     width
                 }
@@ -482,34 +510,33 @@ impl TextLayouter {
         layout: &mut TextLayout,
     ) {
         self.items.clear();
+        self.glyphs.clear();
+        // A glyph takes at least a byte of text, so the glyphs grow once.
+        self.glyphs.reserve(input.text.len());
         let text = input.text;
-        let (shaper, items) = (&mut self.shaper, &mut self.items);
+        let (shaper, items, glyphs) = (&mut self.shaper, &mut self.items, &mut self.glyphs);
         let direction = input.paragraph.text_direction;
         let mut taken = shaped.map(|shaped| &shaped.glyphs[..shaped.shaped]);
         self.itemizer
             .itemize(text, direction, input.spans, resolver, |item| {
-                let start = layout.glyphs.len();
+                let start = glyphs.len();
                 match &mut taken {
-                    Some(glyphs) => {
-                        let count = glyphs
+                    Some(taken) => {
+                        let count = taken
                             .iter()
                             .take_while(|glyph| item.range.contains(&glyph.text_offset()))
                             .count();
-                        let (own, rest) = glyphs.split_at(count);
-                        layout.glyphs.extend_from_slice(own);
-                        *glyphs = rest;
+                        let (own, rest) = taken.split_at(count);
+                        glyphs.extend_from_slice(own);
+                        *taken = rest;
                     }
-                    None => shaper.shape(
-                        text,
-                        &item,
-                        &input.spans[item.span],
-                        0..text.len(),
-                        &mut layout.glyphs,
-                    ),
+                    None => {
+                        shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs)
+                    }
                 }
                 items.push(ShapedItem {
                     text: item.range,
-                    glyphs: start..layout.glyphs.len(),
+                    glyphs: start..glyphs.len(),
                     face: face_index(&mut layout.faces, item.typeface),
                     span: item.span,
                     level: item.level,
@@ -524,7 +551,7 @@ impl TextLayouter {
                     },
                 });
             });
-        layout.shaped = layout.glyphs.len();
+        layout.shaped = self.glyphs.len();
     }
 
     fn build_lines(
@@ -561,7 +588,7 @@ impl TextLayouter {
             let starts = starts_paragraph(input.text, layout.lines[index].text.start);
             layout.lines[index - 1].ends_paragraph = starts;
         }
-        finish_lines(input, options, top, layout);
+        self.finish_lines(input, options, top, layout);
     }
 
     // The piece of the one item of a text: the whole item.
@@ -570,7 +597,7 @@ impl TextLayouter {
         let span = &input.spans[item.span];
         let scale = scale(span, &layout.faces[item.face]);
         Piece {
-            width: spaced_width(&layout.glyphs[item.glyphs.clone()], scale, item.spacing),
+            width: spaced_width(&self.glyphs[item.glyphs.clone()], scale, item.spacing),
             text: item.text.clone(),
             glyphs: item.glyphs.clone(),
             face: item.face,
@@ -608,7 +635,7 @@ impl TextLayouter {
             ellipsized: false,
         };
         let top = self.push_line(input, resolver, line, edges, layout);
-        finish_lines(input, options, top, layout);
+        self.finish_lines(input, options, top, layout);
     }
 
     // Places the pieces just collected for `line` as its runs, adds the
@@ -754,7 +781,7 @@ impl TextLayouter {
                 )
             }
         };
-        set_cluster(&mut layout.glyphs[ellipsis.glyphs.clone()], head);
+        set_cluster(&mut self.glyphs[ellipsis.glyphs.clone()], head);
         ellipsis.text = head..head;
         self.collect_pieces(input, range.start..head, visible, layout);
         self.pieces.push(ellipsis);
@@ -787,12 +814,12 @@ impl TextLayouter {
             typeface,
             span,
         };
-        let start = layout.glyphs.len();
-        let width = shape_inserted(&mut self.shaper, input, &item, ELLIPSIS, &mut layout.glyphs);
+        let start = self.glyphs.len();
+        let width = shape_inserted(&mut self.shaper, input, &item, ELLIPSIS, &mut self.glyphs);
         Some(Piece {
             width,
             text: 0..0,
-            glyphs: start..layout.glyphs.len(),
+            glyphs: start..self.glyphs.len(),
             face: face_index(&mut layout.faces, typeface),
             size: style.size,
             scale: scale(style, typeface),
@@ -811,19 +838,19 @@ impl TextLayouter {
         let span = &input.spans[item.span];
         let face = &layout.faces[item.face];
         let hyphen = hyphen(face);
-        let start = layout.glyphs.len();
+        let start = self.glyphs.len();
         let width = shape_inserted(
             &mut self.shaper,
             input,
             &item.inserted(hyphen, face),
             hyphen,
-            &mut layout.glyphs,
+            &mut self.glyphs,
         );
-        set_cluster(&mut layout.glyphs[start..], at);
+        set_cluster(&mut self.glyphs[start..], at);
         self.pieces.push(Piece {
             width,
             text: at..at,
-            glyphs: start..layout.glyphs.len(),
+            glyphs: start..self.glyphs.len(),
             face: item.face,
             size: span.size,
             scale: scale(span, face),
@@ -847,6 +874,7 @@ impl TextLayouter {
             items,
             shaper,
             pieces,
+            glyphs: all,
             ..
         } = self;
         let first = items.partition_point(|item| item.text.end <= part.start);
@@ -864,10 +892,18 @@ impl TextLayouter {
                 if sub.is_empty() {
                     continue;
                 }
-                let glyphs = part_glyphs(shaper, input, item, sub.clone(), part.clone(), layout);
+                let glyphs = part_glyphs(
+                    shaper,
+                    input,
+                    item,
+                    sub.clone(),
+                    part.clone(),
+                    &layout.faces,
+                    all,
+                );
                 let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
                 pieces.push(Piece {
-                    width: spaced_width(&layout.glyphs[glyphs.clone()], scale, item.spacing),
+                    width: spaced_width(&all[glyphs.clone()], scale, item.spacing),
                     text: sub,
                     glyphs,
                     face: item.face,
@@ -907,26 +943,6 @@ fn fitting_hold(options: &TextLayoutOptions, line: f32) -> WidthRange {
         },
         max: f32::INFINITY,
     }
-}
-
-// Ends a layout whose lines reach down to `top`: a text short of its
-// minimum lines takes the height of that many of its first line, and its
-// lines align.
-fn finish_lines(
-    input: &LayoutInput<'_>,
-    options: &TextLayoutOptions,
-    mut top: f32,
-    layout: &mut TextLayout,
-) {
-    if layout.lines.len() < options.min_lines {
-        let first = &layout.lines[0];
-        let missing = options.min_lines - layout.lines.len();
-        top += (first.bottom - first.top) * lines_f32(missing);
-    }
-    layout.height = top;
-    layout.align_lines(input.paragraph.text_align);
-    layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
-    layout.renew_id();
 }
 
 // Where the last line, or a line on its own, shows an ellipsis: a start or
