@@ -5,9 +5,11 @@
 // bits, so a script block of up to `SLOTS` characters fills without
 // collisions; per pair of slots the kerning between their glyphs, or that a
 // ligature joins them, in rows made for the characters that precede others.
+// A cell names its kerning among the few values a font kerns by.
 pub(crate) struct PlainChars {
     slots: Box<[u64; SLOTS]>,
-    rows: Box<[Option<Box<[i16; SLOTS]>>; SLOTS]>,
+    rows: Box<[Option<Box<[u8; SLOTS]>>; SLOTS]>,
+    kerns: Vec<i16>,
 }
 
 // A plain character's glyph, its advance, whether its glyph may kern with
@@ -46,15 +48,21 @@ const SLOTS: usize = 1 << SLOT_BITS;
 const FILLED: u64 = 1 << 63;
 const PLAIN: u64 = 1 << 62;
 const PAIRS: u64 = 1 << 61;
-// A pair cell not read yet, and one a ligature joins.
-const UNREAD: i16 = i16::MIN;
-const JOINS: i16 = i16::MIN + 1;
+// A pair cell not read yet, one a ligature joins and one with no kerning;
+// a cell from `KERNED` on holds the kerning `kerns` holds at its distance
+// from `KERNED`.
+const UNREAD: u8 = 0;
+const JOINS: u8 = 1;
+const UNKERNED: u8 = 2;
+const KERNED: u8 = 3;
+const MOST_KERNS: usize = (u8::MAX - KERNED) as usize + 1;
 
 impl Default for PlainChars {
     fn default() -> Self {
         Self {
             slots: Box::new([0; SLOTS]),
             rows: Box::new(std::array::from_fn(|_| None)),
+            kerns: Vec::new(),
         }
     }
 }
@@ -114,9 +122,13 @@ impl PlainChars {
             self.rows[usize::from(first.slot)].get_or_insert_with(|| Box::new([UNREAD; SLOTS]));
         let cell = &mut row[usize::from(second.slot)];
         match *cell {
-            JOINS => return PairFit::Joins,
             UNREAD => {}
-            kern => return PairFit::Kern(i32::from(kern)),
+            JOINS => return PairFit::Joins,
+            UNKERNED => return PairFit::Kern(0),
+            kerned => {
+                let kern = self.kerns[usize::from(kerned - KERNED)];
+                return PairFit::Kern(i32::from(kern));
+            }
         }
         let fit = read();
         // A cell holds what stands between the glyphs its slots hold now:
@@ -126,19 +138,38 @@ impl PlainChars {
         }
         *cell = match fit {
             PairFit::Joins => JOINS,
-            PairFit::Kern(kern) => match i16::try_from(kern) {
-                Ok(kern) if kern != UNREAD && kern != JOINS => kern,
-                _ => return fit,
-            },
+            PairFit::Kern(0) => UNKERNED,
+            PairFit::Kern(kern) => {
+                let Some(name) = kern_name(&mut self.kerns, kern) else {
+                    return fit;
+                };
+                name
+            }
         };
         fit
     }
 
-    // Drops what pairs knew of the character leaving `slot`.
+    // Drops what pairs knew of the character leaving `slot`; the kerning
+    // values stay for the cells that name them.
     fn forget(&mut self, slot: u8) {
         self.rows[usize::from(slot)] = None;
         for row in self.rows.iter_mut().flatten() {
             row[usize::from(slot)] = UNREAD;
         }
     }
+}
+
+// The cell that names `kern` among `kerns`, which it joins when new; `None`
+// when `kern` is not an `i16` or the cells name as many values as they can.
+fn kern_name(kerns: &mut Vec<i16>, kern: i32) -> Option<u8> {
+    let kern = i16::try_from(kern).ok()?;
+    let index = match kerns.iter().position(|&known| known == kern) {
+        Some(index) => index,
+        None if kerns.len() < MOST_KERNS => {
+            kerns.push(kern);
+            kerns.len() - 1
+        }
+        None => return None,
+    };
+    u8::try_from(index).ok().map(|index| index + KERNED)
 }

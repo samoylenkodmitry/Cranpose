@@ -6,6 +6,7 @@ use cranpose_text::{FontFeature, Shaper, font_feature_settings};
 use crate::{
     fonts::{
         DEJAVU, DEJAVU_MONO, DEVANAGARI_VF, MONASPACE_VF, NOTO_SANS_MERGED, ROBOTO, TEST_CONTEXTS,
+        TEST_KERNS,
     },
     harfrust_oracle::{REGULAR, Style, compare},
 };
@@ -95,6 +96,23 @@ fn words_of_plain_glyphs_shape_as_the_whole_run_shapes() {
             let (shaped, oracle) = compare(&mut shaper, path, text, style);
             assert_eq!(shaped, oracle, "{path}: {text}");
         }
+    }
+}
+
+#[test]
+fn pairs_kerned_by_more_values_than_a_pair_cell_names_shape_as_the_whole_run_shapes() {
+    // Cranpose Test Kerns kerns each pair of letters by a value of its own,
+    // more values than the cells name: every pair, twice, the second round
+    // reading the kerning the first kept.
+    let letters: Vec<char> = ('a'..='z').chain('A'..='Z').collect();
+    let text: String = letters
+        .iter()
+        .flat_map(|&first| letters.iter().flat_map(move |&second| [first, second, ' ']))
+        .collect();
+    let mut shaper = Shaper::default();
+    for _ in 0..2 {
+        let (shaped, oracle) = compare(&mut shaper, TEST_KERNS, &text, REGULAR);
+        assert_eq!(shaped, oracle);
     }
 }
 
