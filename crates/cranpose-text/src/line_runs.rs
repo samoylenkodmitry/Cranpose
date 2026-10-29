@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use crate::{
     font_family_resolver::FontFamilyResolver,
+    index_range::narrow,
     layout_input::LayoutInput,
     line_box::FontExtent,
     shaped_item::{Piece, scale},
@@ -26,9 +27,9 @@ pub(crate) fn place_runs(
             width += piece.width;
         }
         layout.runs.push(LineRun {
-            text: piece.text.clone(),
-            glyphs: piece.glyphs.clone(),
-            face: piece.face,
+            text: piece.text.clone().into(),
+            glyphs: piece.glyphs.clone().into(),
+            face: narrow(piece.face),
             size: piece.size,
             scale: piece.scale,
             spacing: piece.spacing,

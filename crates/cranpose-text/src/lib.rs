@@ -25,6 +25,7 @@ pub mod glyph_id;
 pub mod glyph_outline;
 #[cfg(feature = "hyphenation")]
 pub mod hyphenator;
+mod index_range;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
 mod laid_glyph;

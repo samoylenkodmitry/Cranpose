@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
+    index_range::{IndexRange, widen},
     laid_glyph::{GlyphOffset, LaidGlyph, LaidGlyphs},
     paragraph::TextAlign,
     typeface::Typeface,
@@ -123,9 +124,9 @@ const HOLD_MARGIN: f32 = 1e-3;
 // A run of one typeface, size and bidi level inside a line, in visual order.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LineRun {
-    pub(crate) text: Range<usize>,
-    pub(crate) glyphs: Range<usize>,
-    pub(crate) face: usize,
+    pub(crate) text: IndexRange,
+    pub(crate) glyphs: IndexRange,
+    pub(crate) face: u32,
     pub(crate) size: f32,
     // Pixels per design unit.
     pub(crate) scale: f32,
@@ -204,9 +205,11 @@ impl LineRun {
         std::iter::from_fn(move || {
             let cluster = clusters.next()?;
             let end = if self.level.is_rtl() {
-                previous.unwrap_or(self.text.end)
+                previous.unwrap_or_else(|| self.text.end())
             } else {
-                clusters.peek().map_or(self.text.end, |next| next.offset)
+                clusters
+                    .peek()
+                    .map_or_else(|| self.text.end(), |next| next.offset)
             };
             previous = Some(cluster.offset);
             let at = left;
@@ -218,10 +221,10 @@ impl LineRun {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LayoutLine {
-    pub(crate) text: Range<usize>,
+    pub(crate) text: IndexRange,
     // The end of the text before the line's trailing whitespace.
-    pub(crate) visible_end: usize,
-    pub(crate) runs: Range<usize>,
+    pub(crate) visible_end: u32,
+    pub(crate) runs: IndexRange,
     pub(crate) top: f32,
     pub(crate) baseline: f32,
     pub(crate) bottom: f32,
@@ -311,7 +314,7 @@ impl GlyphRun<'_> {
 
     /// The text the run draws.
     pub fn text(&self) -> Range<usize> {
-        self.run.text.clone()
+        self.run.text.range()
     }
 
     /// Where the run's baseline sits, from the layout's top edge.
@@ -397,7 +400,7 @@ impl LayoutBody {
     fn unjustify(&mut self, index: usize) {
         let line = &mut self.lines[index];
         line.stretch = 0.0;
-        for run in &mut self.runs[line.runs.clone()] {
+        for run in &mut self.runs[line.runs.range()] {
             run.word_spacing = 0.0;
             run.shift = 0.0;
         }
@@ -413,15 +416,15 @@ impl LayoutBody {
             ..
         } = self;
         let line = &mut lines[index];
-        let runs = &mut runs[line.runs.clone()];
-        let visible_end = line.visible_end;
+        let runs = &mut runs[line.runs.range()];
+        let visible_end = widen(line.visible_end);
         // How many of a run's glyphs are spaces before the line's trailing
         // whitespace.
         let spaces = |run: &LineRun| {
-            if run.text.start >= visible_end {
+            if run.text.start() >= visible_end {
                 return 0;
             }
-            let count = glyphs[run.glyphs.clone()]
+            let count = glyphs[run.glyphs.range()]
                 .iter()
                 .filter(|glyph| Some(glyph.id()) == run.space)
                 .count();
@@ -574,19 +577,19 @@ impl TextLayout {
     /// The offset where `line` starts. Panics when `line` is out of range, as
     /// Compose throws.
     pub fn line_start(&self, line: usize) -> usize {
-        self.body.lines[line].text.start
+        self.body.lines[line].text.start()
     }
 
     /// The offset where `line` ends, after its line break and trailing
     /// whitespace.
     pub fn line_end(&self, line: usize) -> usize {
-        self.body.lines[line].text.end
+        self.body.lines[line].text.end()
     }
 
     /// The offset where the visible text of `line` ends, before its line
     /// break and trailing whitespace: Compose's `getLineEnd(line, true)`.
     pub fn line_visible_end(&self, line: usize) -> usize {
-        self.body.lines[line].visible_end
+        widen(self.body.lines[line].visible_end)
     }
 
     /// The top of `line`.
@@ -618,7 +621,7 @@ impl TextLayout {
     pub fn line_for_offset(&self, offset: usize) -> usize {
         self.body
             .lines
-            .partition_point(|line| line.text.end <= offset)
+            .partition_point(|line| line.text.end() <= offset)
             .min(self.body.lines.len() - 1)
     }
 
@@ -635,13 +638,13 @@ impl TextLayout {
     /// picks one.
     pub fn horizontal_position(&self, offset: usize, direction: CaretDirection) -> f32 {
         let line = &self.body.lines[self.line_for_offset(offset)];
-        let runs = &self.body.runs[line.runs.clone()];
+        let runs = &self.body.runs[line.runs.range()];
         let after = runs
             .iter()
-            .find(|run| run.text.start <= offset && offset < run.text.end);
+            .find(|run| run.text.start() <= offset && offset < run.text.end());
         let before = runs
             .iter()
-            .find(|run| run.text.start < offset && offset <= run.text.end);
+            .find(|run| run.text.start() < offset && offset <= run.text.end());
         let run = match (before, after) {
             (Some(before), Some(after)) if before.level != after.level => {
                 if (before.level == line.level) == (direction == CaretDirection::Primary) {
@@ -665,14 +668,14 @@ impl TextLayout {
     /// The offset of the caret nearest to the point `x`, `y`.
     pub fn offset_for_position(&self, x: f32, y: f32) -> usize {
         let line = &self.body.lines[self.line_for_vertical_position(y)];
-        let runs = &self.body.runs[line.runs.clone()];
+        let runs = &self.body.runs[line.runs.range()];
         let local = x - line.left;
         let Some(run) = runs
             .iter()
             .find(|run| local < run.right())
             .or_else(|| runs.last())
         else {
-            return line.text.start;
+            return line.text.start();
         };
         self.offset_in_run(run, local - run.left())
     }
@@ -680,13 +683,13 @@ impl TextLayout {
     /// The glyph runs of `line`, left to right.
     pub fn glyph_runs(&self, line: usize) -> impl Iterator<Item = GlyphRun<'_>> + '_ {
         let line = &self.body.lines[line];
-        self.body.runs[line.runs.clone()]
+        self.body.runs[line.runs.range()]
             .iter()
             .map(move |run| GlyphRun {
-                typeface: &self.body.faces[run.face],
+                typeface: &self.body.faces[widen(run.face)],
                 size: run.size,
-                glyphs: &self.body.glyphs[run.glyphs.clone()],
-                offsets: self.body.glyphs.offsets(run.glyphs.clone()),
+                glyphs: &self.body.glyphs[run.glyphs.range()],
+                offsets: self.body.glyphs.offsets(run.glyphs.range()),
                 run,
                 pen: line.left + run.left(),
                 baseline: line.baseline,
@@ -698,8 +701,8 @@ impl TextLayout {
     /// character, such as the end of the text.
     pub fn bounding_box(&self, offset: usize) -> Rect {
         let line = &self.body.lines[self.line_for_offset(offset)];
-        let found = self.body.runs[line.runs.clone()].iter().find_map(|run| {
-            run.cluster_spans(&self.body.glyphs[run.glyphs.clone()])
+        let found = self.body.runs[line.runs.range()].iter().find_map(|run| {
+            run.cluster_spans(&self.body.glyphs[run.glyphs.range()])
                 .find(|(_, cluster, end)| (cluster.offset..*end).contains(&offset))
                 .map(|(left, cluster, _)| (run.left() + left, cluster.width))
         });
@@ -734,13 +737,13 @@ impl TextLayout {
     /// direction: Compose's `getPathForRange` as rectangles.
     pub fn selection_rects(&self, start: usize, end: usize, rects: &mut Vec<Rect>) {
         for line in &self.body.lines {
-            if line.text.end <= start || line.text.start >= end {
+            if line.text.end() <= start || line.text.start() >= end {
                 continue;
             }
             let mut open: Option<(f32, f32)> = None;
-            for run in &self.body.runs[line.runs.clone()] {
+            for run in &self.body.runs[line.runs.range()] {
                 for (left, cluster, cluster_end) in
-                    run.cluster_spans(&self.body.glyphs[run.glyphs.clone()])
+                    run.cluster_spans(&self.body.glyphs[run.glyphs.range()])
                 {
                     let x = run.left() + left;
                     let covered = cluster.offset < end && cluster_end > start;
@@ -764,7 +767,7 @@ impl TextLayout {
     // The caret x of `offset` inside `run`, from the line's left edge.
     fn caret_in_run(&self, run: &LineRun, offset: usize) -> f32 {
         let before: f32 = run
-            .clusters(&self.body.glyphs[run.glyphs.clone()])
+            .clusters(&self.body.glyphs[run.glyphs.range()])
             .filter(|cluster| cluster.offset < offset)
             .map(|cluster| cluster.width)
             .sum();
@@ -778,7 +781,7 @@ impl TextLayout {
     // The offset nearest to `x` pixels from the left edge of `run`: each
     // cluster's left half gives the offset on its left.
     fn offset_in_run(&self, run: &LineRun, x: f32) -> usize {
-        for (left, cluster, end) in run.cluster_spans(&self.body.glyphs[run.glyphs.clone()]) {
+        for (left, cluster, end) in run.cluster_spans(&self.body.glyphs[run.glyphs.range()]) {
             if x < left + cluster.width / 2.0 {
                 return if run.level.is_rtl() {
                     end
@@ -788,9 +791,9 @@ impl TextLayout {
             }
         }
         if run.level.is_rtl() {
-            run.text.start
+            run.text.start()
         } else {
-            run.text.end
+            run.text.end()
         }
     }
 }

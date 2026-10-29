@@ -7,6 +7,7 @@ use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
+    index_range::narrow,
     itemizer::{Itemizer, TextItem},
     laid_glyph::LaidGlyphs,
     layout_input::LayoutInput,
@@ -581,7 +582,7 @@ impl TextLayouter {
             top = self.push_line(input, resolver, line, edges, layout);
         }
         for index in 1..layout.lines.len() {
-            let starts = starts_paragraph(input.text, layout.lines[index].text.start);
+            let starts = starts_paragraph(input.text, layout.lines[index].text.start());
             layout.lines[index - 1].ends_paragraph = starts;
         }
         self.finish_lines(input, options, (top, width), layout);
@@ -661,9 +662,9 @@ impl TextLayouter {
         let bottom = top + line_box.height - trim_top - trim_bottom;
         layout.lines.push(LayoutLine {
             level: self.paragraph_level(input, line.range.start),
-            text: line.range,
-            visible_end: line.visible,
-            runs,
+            text: line.range.into(),
+            visible_end: narrow(line.visible),
+            runs: runs.into(),
             top,
             baseline: top + line_box.baseline - trim_top,
             bottom,
