@@ -964,7 +964,7 @@ impl EffectRenderer {
             ),
             blurs: BlurPipelines::new(
                 blur_shader,
-                compiler.clone(),
+                &compiler,
                 pipeline_cache.clone(),
                 recorder.clone(),
                 surface_format,

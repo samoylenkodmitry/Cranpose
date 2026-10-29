@@ -72,6 +72,10 @@ pub(super) struct BlurPipelines {
     mean: FixedPipeline,
     // One bit per tile mode whose blur family is queued for warm-up.
     families_queued: Cell<u8>,
+    // Paced on WebGL, as runtime shaders are (see `PipelineCompiler::paced`):
+    // built inline, the first frames drawing a glass in the demo's Liquid UI
+    // tab linked six blur programs in one frame, 16 to 65 ms each in Chrome
+    // on a Huawei Mate 20 X.
     compiler: PipelineCompiler,
     pipeline_cache: Option<wgpu::PipelineCache>,
     recorder: PipelineRecorder,
@@ -82,7 +86,7 @@ pub(super) struct BlurPipelines {
 impl BlurPipelines {
     pub(super) fn new(
         shader: SharedShader,
-        compiler: PipelineCompiler,
+        compiler: &PipelineCompiler,
         pipeline_cache: Option<wgpu::PipelineCache>,
         recorder: PipelineRecorder,
         surface_format: wgpu::TextureFormat,
@@ -94,7 +98,7 @@ impl BlurPipelines {
             downsamples: BLUR_DOWNSAMPLE_LABELS.map(|labels| labels.map(FixedPipeline::new)),
             mean: FixedPipeline::new("effect/mean"),
             families_queued: Cell::new(0),
-            compiler,
+            compiler: compiler.paced(adapter_backend),
             pipeline_cache,
             recorder,
             surface_format,
