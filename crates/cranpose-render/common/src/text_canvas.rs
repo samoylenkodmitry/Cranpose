@@ -389,22 +389,21 @@ fn draw_mask_glyph_solid<P>(
     if width == 0 || mask.width == 0 || stride == 0 {
         return;
     }
-    // The mask columns and rows that land in the area.
+    // The mask columns and rows that land in the area, and the area's column
+    // and row of the first of them. A row is found by its index: walking
+    // rows through iterator adapters cost more than its pixels.
     let columns = canvas_span(placed.x, mask.width, width);
     let rows = canvas_span(placed.y, mask.height, height);
-    let area_rows = pixels.chunks_mut(stride);
-    for (row, mask_row) in area_rows
-        .skip(rows.start.saturating_add_signed(placed.y as isize))
-        .zip(
-            mask.alpha
-                .chunks_exact(mask.width)
-                .take(rows.end)
-                .skip(rows.start),
-        )
-    {
-        let first = columns.start.saturating_add_signed(placed.x as isize);
-        let pixels = row.iter_mut().skip(first);
-        for (dst, &mask_coverage) in pixels.zip(&mask_row[columns.clone()]) {
+    let left = columns.start.saturating_add_signed(placed.x as isize);
+    let top = rows.start.saturating_add_signed(placed.y as isize);
+    for (row, mask_y) in (top..).zip(rows) {
+        let start = mask_y.saturating_mul(mask.width);
+        let coverage = mask
+            .alpha
+            .get(start + columns.start..start + columns.end)
+            .unwrap_or_default();
+        let area_row = row_pixels(pixels, stride, row, (left, columns.len()));
+        for (dst, &mask_coverage) in area_row.iter_mut().zip(coverage) {
             let corrected = correction.apply(mask_coverage);
             if corrected == 0 {
                 continue;
@@ -424,6 +423,21 @@ fn draw_mask_glyph_solid<P>(
             blend.blend(dst, [red, green, blue, alpha_u8], alpha);
         }
     }
+}
+
+// The pixels of `row` of `pixels`, a row every `stride` of them, from
+// column `left` on, `len` of them or fewer where the pixels end.
+fn row_pixels<P>(
+    pixels: &mut [P],
+    stride: usize,
+    row: usize,
+    (left, len): (usize, usize),
+) -> &mut [P] {
+    let start = row.saturating_mul(stride);
+    let end = start.saturating_add(stride).min(pixels.len());
+    let from = start.saturating_add(left).min(end);
+    let to = from.saturating_add(len).min(end);
+    pixels.get_mut(from..to).unwrap_or_default()
 }
 
 /// The indices of a mask's `len` columns or rows, the first at `origin`
