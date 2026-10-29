@@ -8,7 +8,10 @@
 // A cell names its kerning among the few values a font kerns by.
 pub(crate) struct PlainChars {
     slots: Box<[u64; SLOTS]>,
-    rows: Box<[Option<Box<[u8; SLOTS]>>; SLOTS]>,
+    // For each slot, the number of its row in `rows`, from 1; 0 for a slot
+    // with no row yet.
+    row_of: Box<[u8; SLOTS]>,
+    rows: Vec<[u8; SLOTS]>,
     kerns: Vec<i16>,
 }
 
@@ -61,7 +64,8 @@ impl Default for PlainChars {
     fn default() -> Self {
         Self {
             slots: Box::new([0; SLOTS]),
-            rows: Box::new(std::array::from_fn(|_| None)),
+            row_of: Box::new([0; SLOTS]),
+            rows: Vec::new(),
             kerns: Vec::new(),
         }
     }
@@ -118,9 +122,15 @@ impl PlainChars {
         second: PlainChar,
         read: impl FnOnce() -> PairFit,
     ) -> PairFit {
-        let row =
-            self.rows[usize::from(first.slot)].get_or_insert_with(|| Box::new([UNREAD; SLOTS]));
-        let cell = &mut row[usize::from(second.slot)];
+        let number = &mut self.row_of[usize::from(first.slot)];
+        if *number == 0 {
+            // A plan meets a few rows' worth of characters; room for more
+            // goes unused.
+            self.rows.reserve_exact(1);
+            self.rows.push([UNREAD; SLOTS]);
+            *number = u8::try_from(self.rows.len()).unwrap_or(u8::MAX);
+        }
+        let cell = &mut self.rows[usize::from(*number - 1)][usize::from(second.slot)];
         match *cell {
             UNREAD => {}
             JOINS => return PairFit::Joins,
@@ -149,11 +159,14 @@ impl PlainChars {
         fit
     }
 
-    // Drops what pairs knew of the character leaving `slot`; the kerning
-    // values stay for the cells that name them.
+    // Drops what pairs knew of the character leaving `slot`, keeping its
+    // row for the next character in it; the kerning values stay for the
+    // cells that name them.
     fn forget(&mut self, slot: u8) {
-        self.rows[usize::from(slot)] = None;
-        for row in self.rows.iter_mut().flatten() {
+        if let Some(number) = self.row_of[usize::from(slot)].checked_sub(1) {
+            self.rows[usize::from(number)] = [UNREAD; SLOTS];
+        }
+        for row in &mut self.rows {
             row[usize::from(slot)] = UNREAD;
         }
     }

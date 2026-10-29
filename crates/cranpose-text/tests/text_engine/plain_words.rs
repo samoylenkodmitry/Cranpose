@@ -117,6 +117,18 @@ fn pairs_kerned_by_more_values_than_a_pair_cell_names_shape_as_the_whole_run_sha
 }
 
 #[test]
+fn a_character_in_the_slot_of_another_kerns_as_itself() {
+    // The quote and the greater-than sign take the slots of the Cyrillic Te
+    // and o, a multiple of 128 code points above them; Te kerns with o, the
+    // others not as Te and o do.
+    let mut shaper = Shaper::default();
+    for text in ["То", "\"о", "То", "Т>", "То"] {
+        let (shaped, oracle) = compare(&mut shaper, NOTO_SANS_MERGED, text, REGULAR);
+        assert_eq!(shaped, oracle, "{text}");
+    }
+}
+
+#[test]
 fn a_contextual_rule_shapes_the_glyphs_it_reads() {
     // Each rule of Cranpose Test Contexts gives the letters it reads wider
     // alternates: the words of each kind of rule, then words beside them
