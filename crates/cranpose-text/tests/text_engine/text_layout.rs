@@ -571,3 +571,36 @@ fn a_layout_from_the_glyphs_of_another_width_gives_what_a_new_one_gives() {
         }
     }
 }
+
+#[test]
+fn a_text_laid_out_again_into_the_same_lines_equals_its_first_layout() {
+    // A renderer compares layouts to find what it must draw again: a text
+    // laid out anew, as a string drawn again each frame is, draws the same
+    // though it takes another id.
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let text = "Wrapped text lays out the same twice";
+    let first = layout(
+        &resolver,
+        text,
+        TextDirection::Content,
+        TextAlign::Start,
+        90.0,
+    );
+    let again = layout(
+        &resolver,
+        text,
+        TextDirection::Content,
+        TextAlign::Start,
+        90.0,
+    );
+    assert_ne!(first.id(), again.id(), "each layout takes an id of its own");
+    assert_eq!(first, again, "the same lines draw the same");
+    let wider = layout(
+        &resolver,
+        text,
+        TextDirection::Content,
+        TextAlign::Start,
+        140.0,
+    );
+    assert_ne!(first, wider, "other lines draw otherwise");
+}

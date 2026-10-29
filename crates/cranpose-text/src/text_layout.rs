@@ -37,11 +37,12 @@ pub struct TextLayout {
 
 impl PartialEq for TextLayout {
     fn eq(&self, other: &Self) -> bool {
-        // Copies that share a body hold the same lines and glyphs.
+        // Copies that share a body hold the same lines and glyphs. A text
+        // laid out again into the same lines draws the same, though it
+        // takes a new id.
         (Arc::ptr_eq(&self.body, &other.body) || self.body == other.body)
             && self.width == other.width
             && self.did_overflow_width == other.did_overflow_width
-            && self.id == other.id
     }
 }
 
