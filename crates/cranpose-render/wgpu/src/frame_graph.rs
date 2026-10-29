@@ -1,8 +1,8 @@
 mod buffer_uploads;
-/// Lives beside the executor because it is the only other place that may
-/// finish an encoder and submit it.
 pub(crate) mod fence_profile;
 mod mapped_pool;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod submit_nothing;
 
 use std::fmt;
 

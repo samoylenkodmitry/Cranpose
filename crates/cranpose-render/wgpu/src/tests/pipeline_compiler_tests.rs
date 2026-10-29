@@ -325,6 +325,24 @@ fn a_paced_build_waits_for_the_frame_before_it_and_not_longer() {
     assert!(landing.may_build());
 }
 
+// A page that draws no frames runs its paced builds between them, and no
+// frame's submit tells when the GPU has done the last: the build's own submit
+// and a poll must, or the page would build one pipeline and wait for a frame.
+#[test]
+fn a_paced_build_between_frames_lands_without_a_frame() {
+    let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    let landing = PacedLanding::default();
+    landing.built_between_frames(&queue);
+    assert!(!landing.may_build());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("the build's submit completes");
+    assert!(landing.may_build());
+}
+
 // A paced build waits for a frame whose scene stands still, and the demo's
 // glass tiles tab, whose clock never stops, drew its glass's stand-in for
 // good: a demanded build runs after a bounded number of moving frames, and

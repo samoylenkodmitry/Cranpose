@@ -1,3 +1,6 @@
+// Lives in the frame graph module because only that module may finish an
+// encoder and submit it.
+
 use web_time::Instant;
 
 const DEFAULT_REPORT_EVERY_FRAMES: u32 = 60;
