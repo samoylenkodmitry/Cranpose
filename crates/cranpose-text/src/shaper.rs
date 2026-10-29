@@ -69,6 +69,17 @@ struct ShapingFace {
     // The newest last: text uses few scripts and feature settings, and a
     // plan takes as long to make as the shaping.
     plans: Vec<KeptPlan>,
+    // The plan the last item with no language or features of its own took,
+    // and what it asked for: an item that asks the same takes it without
+    // matching the plans kept.
+    last: Option<(PlanAsk, usize)>,
+}
+
+// What chooses the plan of an item with no language or features of its own.
+#[derive(Clone, Copy, PartialEq)]
+struct PlanAsk {
+    rtl: bool,
+    script: [u8; 4],
 }
 
 struct KeptPlan {
@@ -141,7 +152,18 @@ impl Shaper {
                 .iter()
                 .map(|feature| Feature::new(Tag::new(&feature.tag), feature.value, ..)),
         );
-        let plan = self.plan(face, direction, script, language.as_ref());
+        let asked = (span.language.is_none() && span.features.is_empty()).then_some(PlanAsk {
+            rtl: item.level.is_rtl(),
+            script: item.script.tag(),
+        });
+        let plan = match self.faces[face].last.filter(|last| Some(last.0) == asked) {
+            Some((_, plan)) => plan,
+            None => {
+                let plan = self.plan(face, direction, script, language.as_ref());
+                self.faces[face].last = asked.map(|asked| (asked, plan));
+                plan
+            }
+        };
         let Self {
             faces,
             buffer,
@@ -277,6 +299,7 @@ impl Shaper {
             positions,
             font,
             plans: Vec::new(),
+            last: None,
         });
         self.faces.len() - 1
     }

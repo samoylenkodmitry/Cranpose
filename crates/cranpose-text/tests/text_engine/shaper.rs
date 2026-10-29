@@ -157,3 +157,58 @@ fn the_language_picks_local_forms() {
         ids(&shape(&resolver, "б", &[], style(400, &[], Some("ru")))),
     );
 }
+
+// One item to shape: its text, the paragraph's direction, the language and
+// the features.
+type Turn<'a> = (&'a str, TextDirection, Option<&'a str>, &'a [FontFeature]);
+
+// The glyphs of each text, shaped in turn by one shaper.
+fn shape_in_turn(resolver: &FontFamilyResolver, turns: &[Turn<'_>]) -> Vec<Vec<ShapedGlyph>> {
+    let family = FontFamily::Default;
+    let mut shaper = Shaper::default();
+    turns
+        .iter()
+        .map(|&(text, direction, language, features)| {
+            let spans = [ShapingSpan {
+                language,
+                features,
+                ..span(0..text.len(), &family, 400)
+            }];
+            let mut glyphs = Vec::new();
+            Itemizer::default().itemize(text, direction, &spans, resolver, |item| {
+                shaper.shape(text, &item, &spans[item.span], 0..text.len(), &mut glyphs);
+            });
+            glyphs
+        })
+        .collect()
+}
+
+#[test]
+fn an_item_shapes_alike_whatever_its_shaper_shaped_before() {
+    let no_ligatures: Vec<FontFeature> = font_feature_settings("liga 0").collect();
+    let (ltr, rtl) = (TextDirection::Ltr, TextDirection::Rtl);
+    // Pairs in one typeface that ask for other plans: another language,
+    // direction or feature setting.
+    let cases: [(&str, [Turn<'_>; 2]); 4] = [
+        (
+            NOTO_SANS_MERGED,
+            [("б", ltr, None, &[]), ("б", ltr, Some("sr"), &[])],
+        ),
+        (ROBOTO, [("!?", rtl, None, &[]), ("!?", ltr, None, &[])]),
+        (ROBOTO, [("!?", ltr, None, &[]), ("!?", rtl, None, &[])]),
+        (
+            DEJAVU,
+            [("fi", ltr, None, &[]), ("fi", ltr, None, &no_ligatures)],
+        ),
+    ];
+    for (path, turns) in cases {
+        let resolver = FontFamilyResolver::new([typeface(path)]);
+        let apart: Vec<_> = turns
+            .iter()
+            .flat_map(|turn| shape_in_turn(&resolver, &[*turn]))
+            .collect();
+        assert_ne!(apart[0], apart[1], "{path}: {turns:?}");
+
+        assert_eq!(shape_in_turn(&resolver, &turns), apart, "{path}: {turns:?}");
+    }
+}
