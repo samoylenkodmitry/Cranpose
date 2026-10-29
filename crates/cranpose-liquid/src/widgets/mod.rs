@@ -26,6 +26,7 @@ mod slider_gesture;
 mod slider_motion;
 mod snackbar;
 mod tab_bar;
+mod tab_flight_lens;
 mod tab_lighting;
 mod time_picker;
 mod toggle;
