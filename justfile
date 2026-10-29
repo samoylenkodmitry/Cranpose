@@ -433,9 +433,11 @@ _size-ceiling path max what:
     fi
     echo "size budget: the {{what}} is $size bytes, within {{max}}"
 
-# The web demo's wasm after `just web`: 12.5 MiB, the size CI built on
-# 2026-10-25 (12,983,806 bytes) and about 1%.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13107200" "web demo wasm")
+# The web demo's wasm after `just web`: 13.25 MiB, the size of 2026-10-29
+# (13,784,385 bytes) and about 0.8%. The text engine of #1961 added 800 KB:
+# HarfRust shapes every script on the web and read-fonts reads every outline
+# format, in place of ttf-parser's 125 KB.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13893632" "web demo wasm")
 
 # The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
 # 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
