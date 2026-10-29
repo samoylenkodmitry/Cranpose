@@ -213,7 +213,7 @@ impl PlainGlyphs {
             };
             let fit = previous.map_or(PairFit::Kern(0), |before| {
                 chars.pair(before, plain, || {
-                    let pair = (before.glyph, plain.glyph);
+                    let pair = (u32::from(before.glyph), u32::from(plain.glyph));
                     if pairs.binary_search(&pair).is_ok() {
                         PairFit::Joins
                     } else {
@@ -230,14 +230,16 @@ impl PlainGlyphs {
                 }
                 PairFit::Kern(kern) => kern,
             };
-            if let Some(before) = glyphs.last_mut().filter(|_| kern != 0) {
+            if kern != 0
+                && let Some(before) = glyphs.last_mut()
+            {
                 before.advance += kern;
             }
             previous = Some(plain);
             glyphs.push(ShapedGlyph {
-                id: glyph_id::GlyphId(plain.glyph),
+                id: glyph_id::GlyphId(u32::from(plain.glyph)),
                 cluster: u32::try_from(range.start + at).unwrap_or(u32::MAX),
-                advance: plain.advance,
+                advance: i32::from(plain.advance),
                 x_offset: 0,
                 y_offset: 0,
                 unsafe_to_break: kern != 0,

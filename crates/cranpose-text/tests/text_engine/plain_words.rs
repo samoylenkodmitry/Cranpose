@@ -39,11 +39,13 @@ const CASES: [(&str, Style<'static>, &str); 17] = [
         "Reading jinx minimum ij i\u{301} j\u{307}x i\u{328}\u{301} fi",
     ),
     // Characters whose code points share their low bits take turns in one
-    // place of what a plan remembers: U+0410 and U+0490, `A` and `\u{C1}`.
+    // place of what a plan remembers: U+0410 and U+0490, `A` and `\u{C1}`;
+    // a character that takes the place of the one before it pairs with it
+    // once: U+0490 and U+0410 kern unlike two U+0410.
     (
         NOTO_SANS_MERGED,
         REGULAR,
-        "\u{490}\u{410}\u{490} \u{410}\u{490}\u{410} A\u{C1}A \u{C1}AV",
+        "\u{490}\u{410}\u{490} \u{410}\u{490}\u{410} A\u{C1}A \u{C1}AV \u{490}\u{410} \u{410}\u{410} F\u{C6} \u{C6}\u{C6} X\u{D8} \u{D8}\u{D8}",
     ),
     // DejaVu carries a kern table, which keeps its words shaping.
     (DEJAVU, REGULAR, "100 200 (300) 4.5 Tea"),
