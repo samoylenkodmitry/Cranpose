@@ -253,6 +253,9 @@ impl Shaper {
                 .hash(&mut key);
         }
         let tables = layout_tables(&face.font);
+        // A face keeps a plan or two, each a few hundred bytes: room for
+        // more goes unused.
+        face.plans.reserve_exact(1);
         face.plans.push(KeptPlan {
             plan: ShapePlan::new(&face.font, direction, script, language, &self.features),
             split: tables

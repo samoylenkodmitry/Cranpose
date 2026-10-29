@@ -508,7 +508,7 @@ impl TextLayouter {
                         *taken = rest;
                     }
                     None => {
-                        shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs)
+                        shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs);
                     }
                 }
                 items.push(ShapedItem {
