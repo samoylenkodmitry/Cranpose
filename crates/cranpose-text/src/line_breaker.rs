@@ -490,8 +490,18 @@ pub(crate) fn starts_paragraph(text: &str, offset: usize) -> bool {
 
 // The end of the text from `start` to `end` before its trailing whitespace.
 pub(crate) fn visible_end(text: &str, start: usize, end: usize) -> usize {
-    text.get(start..end)
-        .map_or(end, |part| start + part.trim_end().len())
+    let Some(part) = text.get(start..end) else {
+        return end;
+    };
+    // Most text ends in a visible ASCII character, which no whitespace is.
+    if part
+        .as_bytes()
+        .last()
+        .is_some_and(|&byte| byte > b' ' && byte.is_ascii())
+    {
+        return end;
+    }
+    start + part.trim_end().len()
 }
 
 // The characters after which UAX #14 ends a line: the classes BK, CR, LF and
