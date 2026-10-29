@@ -111,6 +111,9 @@ impl PipelineKey {
 struct ShaderSource {
     text: Arc<str>,
     module: LazyGpuResource<Option<RuntimeShaderModule>>,
+    // Whether a warm-up asked for the module to be made ahead of it.
+    #[cfg(target_arch = "wasm32")]
+    module_ahead: bool,
 }
 
 impl ShaderSource {
@@ -118,6 +121,8 @@ impl ShaderSource {
         Self {
             text: Arc::from(text),
             module: LazyGpuResource::new("runtime-shader module"),
+            #[cfg(target_arch = "wasm32")]
+            module_ahead: false,
         }
     }
 }
@@ -405,12 +410,37 @@ impl ShaderPipelineCache {
             return;
         }
         let job = self.job(shader, specialization, key);
+        #[cfg(target_arch = "wasm32")]
+        if lane == CompileLane::WarmUp {
+            self.make_module_ahead(key.source);
+        }
         self.slot(key)
             .queue(&self.compiler, lane, self.factory.backend, || job.build());
     }
 
+    // On WebGPU, makes a warm-up's shader module in the page's idle periods
+    // ahead of the warm-ups' compiles, which run one at a time: a module is
+    // page-thread work (naga, for an app's own shader) and no compile in the
+    // browser. A Galaxy Tab S7+ made one in the first frame of a tap 4 s
+    // after the Liquid UI tab opened, its warm-up still waiting.
+    #[cfg(target_arch = "wasm32")]
+    fn make_module_ahead(&mut self, source_hash: u64) {
+        let Some(source) = self.sources.get_mut(&source_hash) else {
+            return;
+        };
+        if std::mem::replace(&mut source.module_ahead, true) {
+            return;
+        }
+        let factory = self.factory.clone();
+        let text = Arc::clone(&source.text);
+        let module = source.module.clone();
+        self.compiler.make_module_ahead(move || {
+            module.get_or_init(factory.backend, || factory.module(&text, source_hash));
+        });
+    }
+
     pub(crate) fn warm(&mut self, shader: &RuntimeShader, mode: RuntimeShaderPipelineMode) {
-        if !self.compiler.is_active() {
+        if !self.compiler.takes_warm_ups() {
             return;
         }
         let specialization = shader.draw_specialization(0);

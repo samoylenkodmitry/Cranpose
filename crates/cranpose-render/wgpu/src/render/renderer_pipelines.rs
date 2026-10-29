@@ -168,6 +168,7 @@ impl RendererPipelines {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn compile_pipelines_in_background(&mut self) {
         self.shape_pipelines.build_in_background();
+        self.compiler.compile_in_background();
     }
 
     /// Whether the background compiler has a queued pipeline left to build.

@@ -164,14 +164,44 @@ pub(crate) struct PipelineCompiler {
     workers: Option<Arc<Workers>>,
     #[cfg(target_arch = "wasm32")]
     discovery: std::rc::Rc<DiscoveryFrame>,
-    // On WebGL, the builds that link one a frame (see `paced`), shared by
-    // every handle, and whether this handle queues there.
+    // On WebGL, the builds that link one a frame (see `paced`), and on
+    // WebGPU the warm-ups built in idle periods, shared by every handle, and
+    // how this handle builds.
     #[cfg(target_arch = "wasm32")]
     paced: std::rc::Rc<std::cell::RefCell<Queues>>,
     #[cfg(target_arch = "wasm32")]
     paced_landing: std::rc::Rc<PacedLanding>,
     #[cfg(target_arch = "wasm32")]
-    pacing: bool,
+    background_warm_ups: std::rc::Rc<BackgroundWarmUps>,
+    #[cfg(target_arch = "wasm32")]
+    builds: WebBuilds,
+}
+
+// How a web handle builds the pipelines queued on it.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum WebBuilds {
+    // At their first use, or at the end of a frame that takes its pipelines
+    // from a pipeline discovery.
+    #[default]
+    AtFirstUse,
+    // On WebGL, one at a time between frames (see `PipelineCompiler::paced`).
+    Paced,
+    // On WebGPU, as at first use, and its warm-ups in the page's idle
+    // periods once the browser compiles pipelines in the background.
+    WarmsInBackground,
+}
+
+// On WebGPU, the warm-ups waiting for the page's idle periods, the shader
+// modules made ahead of them, and whether the browser compiles the pipelines
+// created from now on in the background: until it does, creating one holds
+// the page until it compiled.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct BackgroundWarmUps {
+    compiling_in_background: std::cell::Cell<bool>,
+    modules: std::cell::RefCell<VecDeque<Job>>,
+    jobs: std::cell::RefCell<VecDeque<Job>>,
 }
 
 // On WebGL, whether the browser's GPU process is still on the frame that
@@ -485,7 +515,20 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.pacing
+            self.builds == WebBuilds::Paced
+        }
+    }
+
+    // Whether a warm-up queued on this handle is built ahead of its first
+    // use: where `is_active`, and on WebGPU in the page's idle periods.
+    pub(crate) fn takes_warm_ups(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.is_active()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.builds != WebBuilds::AtFirstUse
         }
     }
 
@@ -499,18 +542,29 @@ impl PipelineCompiler {
     // a draw asking for a pipeline that is not built draws its placeholder
     // meanwhile. A scene that never stands still still gets its demanded
     // builds, one per `MOVING_FRAMES_PER_BUILD` frames, and a held pointer
-    // none. Elsewhere it is this compiler.
+    // none. On WebGPU its warm-ups build in the page's idle periods, once
+    // the browser compiles in the background: a Galaxy Tab S7+'s first tap
+    // on the demo's tab bar created ten glass pipelines, which compiled in
+    // 1.9-2.9 s, and the lens flew without its glass meanwhile. Elsewhere it
+    // is this compiler.
     #[cfg_attr(
         not(target_arch = "wasm32"),
         expect(unused_variables, reason = "native builds compile on threads")
     )]
     pub(crate) fn paced(&self, backend: wgpu::Backend) -> Self {
         #[cfg(target_arch = "wasm32")]
-        if backend == wgpu::Backend::Gl {
-            return Self {
-                pacing: true,
-                ..self.clone()
+        {
+            let builds = match backend {
+                wgpu::Backend::Gl => WebBuilds::Paced,
+                wgpu::Backend::BrowserWebGpu => WebBuilds::WarmsInBackground,
+                _ => WebBuilds::AtFirstUse,
             };
+            if builds != WebBuilds::AtFirstUse {
+                return Self {
+                    builds,
+                    ..self.clone()
+                };
+            }
         }
         self.clone()
     }
@@ -525,8 +579,27 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.pacing || self.discovery.drawing.get()
+            self.builds == WebBuilds::Paced || self.discovery.drawing.get()
         }
+    }
+
+    // On WebGPU, queues `make`, which makes a warm-up's shader module, to
+    // run in the page's idle periods ahead of the warm-ups.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn make_module_ahead(&self, make: impl FnOnce() + 'static) {
+        if self.builds == WebBuilds::WarmsInBackground {
+            self.background_warm_ups
+                .modules
+                .borrow_mut()
+                .push_back(Box::new(make));
+        }
+    }
+
+    // The browser compiles the pipelines created from now on in the
+    // background, so the warm-ups that waited for it may build.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn compile_in_background(&self) {
+        self.background_warm_ups.compiling_in_background.set(true);
     }
 
     /// Starts a frame that takes its pipelines from a pipeline discovery:
@@ -596,7 +669,9 @@ impl PipelineCompiler {
     // next build, as a still frame runs one at its end. In Chrome on a Mate
     // 20 X the 24 warm-ups a tab bar asked for, its first tap's nine glass
     // programs among them, waited 5 s for a frame, and the tap then linked
-    // those nine, a stall each. Whether a build or a link read still waits.
+    // those nine, a stall each. On WebGPU, once the browser compiles in the
+    // background, runs the next warm-up when no pipeline compiles there.
+    // Whether a build, a link read or a warm-up still waits.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn build_while_idle(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
         // No frame's submit notices the last build's landing now.
@@ -612,11 +687,34 @@ impl PipelineCompiler {
             return true;
         }
         let job = self.paced.borrow_mut().next(true, true);
-        let Some(job) = job else {
+        if let Some(job) = job {
+            job();
+            self.paced_landing.built_between_frames(queue);
+            return true;
+        }
+        let warm_ups = &self.background_warm_ups;
+        if !warm_ups.compiling_in_background.get() {
             return false;
-        };
-        job();
-        self.paced_landing.built_between_frames(queue);
+        }
+        let module = warm_ups.modules.borrow_mut().pop_front();
+        if let Some(module) = module {
+            module();
+            return true;
+        }
+        if warm_ups.jobs.borrow().is_empty() {
+            return false;
+        }
+        // One at a time, after the frames' own pipelines: on a Galaxy Tab
+        // S7+ twenty warm-ups made within 0.4 s compiled over the next 4.5 s,
+        // the tab's own pipelines landed 200-300 ms later, and the frame they
+        // redrew missed its vsync.
+        if device.compiles_in_background() {
+            return true;
+        }
+        let job = warm_ups.jobs.borrow_mut().pop_front();
+        if let Some(job) = job {
+            job();
+        }
         true
     }
 
@@ -669,12 +767,18 @@ impl PipelineCompiler {
             workers.pool.queued.notify_all();
         }
         #[cfg(target_arch = "wasm32")]
-        if self.pacing {
-            self.paced.borrow_mut().push(lane, Box::new(job));
-        } else if self.discovery.drawing.get() {
-            self.discovery.held.borrow_mut().push(Box::new(job));
-        } else {
-            drop((lane, job));
+        match self.builds {
+            WebBuilds::Paced => self.paced.borrow_mut().push(lane, Box::new(job)),
+            _ if self.discovery.drawing.get() => {
+                self.discovery.held.borrow_mut().push(Box::new(job));
+            }
+            WebBuilds::WarmsInBackground if lane == CompileLane::WarmUp => {
+                self.background_warm_ups
+                    .jobs
+                    .borrow_mut()
+                    .push_back(Box::new(job));
+            }
+            WebBuilds::WarmsInBackground | WebBuilds::AtFirstUse => drop((lane, job)),
         }
     }
 }
