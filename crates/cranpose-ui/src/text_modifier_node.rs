@@ -74,9 +74,9 @@ struct TextLayoutSource {
     style: Arc<TextStyle>,
     style_hash: u64,
     options: TextLayoutOptions,
-    // Which part of the text service's shared cache keeps the layouts: the
-    // recent part for a text changed in place, as a ticker's is every
-    // frame.
+    // How the text service's shared cache keeps the layouts: those of a
+    // text changed in place, as a ticker's is every frame, once it comes
+    // back.
     admission: CacheAdmission,
 }
 
@@ -126,7 +126,7 @@ impl TextPreparedLayoutOwner {
         }
         source.text = Rc::clone(text);
         source.options = options;
-        source.admission = CacheAdmission::Second;
+        source.admission = CacheAdmission::Changed;
         drop(source);
         self.cache.borrow_mut().clear();
     }

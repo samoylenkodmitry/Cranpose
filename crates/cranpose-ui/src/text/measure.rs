@@ -659,7 +659,7 @@ pub(crate) fn prepare_resolved(
         service.prepare(
             LayoutSource::Borrowed { text, style },
             TextFrame::unbounded(TextLayoutOptions::default()),
-            (resolved_units(), CacheAdmission::Second),
+            (resolved_units(), CacheAdmission::Drawn),
         )
     })
 }
