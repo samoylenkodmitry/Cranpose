@@ -5,7 +5,7 @@ use icu_segmenter::{
     options::{LineBreakOptions, LineBreakStrictness},
 };
 
-use crate::{cluster_widths::ClusterWidths, paragraph::LineBreak};
+use crate::{ascii_breaks::ascii_breaks, cluster_widths::ClusterWidths, paragraph::LineBreak};
 
 // A place a line may end: the byte offset where the next line starts, and
 // how a line ends there.
@@ -88,12 +88,18 @@ fn segmenter(strictness: LineBreakStrictness) -> LineSegmenterBorrowed<'static> 
 impl LineBreaker {
     // Replaces `breaks` with the opportunities of `text` for the line break
     // preset `line_break`, ascending; the last is the end of the text.
+    // ASCII text breaks the same at every strictness, by rules that need no
+    // segmenter tables.
     pub(crate) fn opportunities(
         &self,
         text: &str,
         line_break: LineBreak,
         breaks: &mut Vec<BreakOpportunity>,
     ) {
+        if text.is_ascii() {
+            ascii_breaks(text.as_bytes(), breaks);
+            return;
+        }
         let segmenter = match line_break {
             LineBreak::Paragraph => self.strict,
             LineBreak::Heading => self.loose,

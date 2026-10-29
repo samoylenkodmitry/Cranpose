@@ -2,6 +2,7 @@
 
 /// Styled text: spans, links and string annotations.
 pub mod annotated_string;
+mod ascii_breaks;
 /// The embedding levels of the Unicode bidirectional algorithm.
 pub mod bidi_level;
 mod cluster_widths;
