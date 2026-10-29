@@ -50,6 +50,11 @@ fn scripts_and_fonts_split_left_to_right_text() {
         items("Hello, world!"),
         [("Hello, world!", 0, *b"Latn", "Roboto".into(), 0)]
     );
+    // Digits and punctuation alone are common to every script.
+    assert_eq!(
+        items("+0.03% 42"),
+        [("+0.03% 42", 0, *b"Zyyy", "Roboto".into(), 0)]
+    );
     assert_eq!(
         items("Hello नमस्ते"),
         [

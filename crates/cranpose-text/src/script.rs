@@ -52,6 +52,15 @@ impl Script {
     }
 }
 
+// The script of ASCII `text`: Latin when it holds a letter, else Common.
+pub(crate) fn ascii_script(text: &str) -> Script {
+    if text.bytes().any(|byte| byte.is_ascii_alphabetic()) {
+        Script::LATIN
+    } else {
+        Script::COMMON
+    }
+}
+
 // Pushes the script runs of `text` onto `runs`, each as the end of its byte
 // range offset by `offset` and its script, by the rules of UAX #24: common and
 // inherited characters (spaces, digits, punctuation, combining marks) join
@@ -60,12 +69,7 @@ impl Script {
 // stays in the run.
 pub(crate) fn script_runs(text: &str, offset: usize, runs: &mut Vec<(usize, Script)>) {
     if text.is_ascii() {
-        let script = if text.bytes().any(|byte| byte.is_ascii_alphabetic()) {
-            Script::LATIN
-        } else {
-            Script::COMMON
-        };
-        runs.push((offset + text.len(), script));
+        runs.push((offset + text.len(), ascii_script(text)));
         return;
     }
     let scripts = ScriptWithExtensions::new();

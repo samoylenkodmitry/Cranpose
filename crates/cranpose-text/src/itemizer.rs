@@ -5,7 +5,7 @@ use crate::{
     break_leads::find_break_lead,
     font_family_resolver::FontFamilyResolver,
     paragraph::{ResolvedTextDirection, TextDirection},
-    script::{Script, script_runs},
+    script::{Script, ascii_script, script_runs},
     shaping_span::ShapingSpan,
     typeface::Typeface,
 };
@@ -75,6 +75,25 @@ impl Itemizer {
             ResolvedTextDirection::Ltr => BidiLevel::LTR,
             ResolvedTextDirection::Rtl => BidiLevel::RTL,
         };
+        // Left to right ASCII in one span, most text, is one level and one
+        // script: its items are the runs of its typefaces.
+        if let [span] = spans
+            && base == BidiLevel::LTR
+            && content.is_ascii()
+        {
+            let script = ascii_script(content);
+            resolver.typeface_runs(content, span.font, |run, typeface| {
+                visit(TextItem {
+                    range: paragraph.start + run.start..paragraph.start + run.end,
+                    level: base,
+                    paragraph_level: base,
+                    script,
+                    typeface: &resolver.typefaces()[typeface],
+                    span: 0,
+                });
+            });
+            return;
+        }
         self.levels.clear();
         level_runs(content, base, paragraph.start, &mut self.levels);
         self.scripts.clear();
