@@ -185,6 +185,12 @@ impl PlainGlyphs {
         })
     }
 
+    // Whether `other` leaves the same glyphs plain and kerns them the same,
+    // so the characters and pairs it meets read as this one reads them.
+    pub(crate) fn reads_as(&self, other: &Self) -> bool {
+        self.busy == other.busy && self.pairs == other.pairs && self.kerning == other.kerning
+    }
+
     // Appends the nominal glyphs of `range` of `text` at `font`'s advances,
     // kerned as the plan kerns them, when every one is plain, and returns
     // whether it did.

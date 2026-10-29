@@ -168,3 +168,55 @@ fn a_feature_that_reaches_plain_glyphs_shapes_them() {
         "oldstyle figures are other glyphs"
     );
 }
+
+#[test]
+fn plans_shape_as_harfrust_after_plans_with_plain_glyphs_of_others_leave() {
+    // A face keeps eight plans. With kerning off the first plan's plain
+    // glyphs are its own; the plans of features Noto Sans lacks share the
+    // default plan's. The ninth plan pushes the first out and the tenth,
+    // kerning off again, the default one, and the plans left still kern as
+    // HarfRust kerns.
+    let settings: Vec<Vec<FontFeature>> = [
+        "kern off", "", "zz01", "zz02", "zz03", "zz04", "zz05", "zz06", "zz07", "kern off",
+    ]
+    .iter()
+    .map(|settings| font_feature_settings(settings).collect())
+    .collect();
+    let text = "AVATAR Toyota 42";
+    let mut shaper = Shaper::default();
+    for features in settings
+        .iter()
+        .chain(&settings[2..9])
+        .chain(&settings[1..2])
+    {
+        let style = Style {
+            weight: 400,
+            features,
+        };
+        let (shaped, oracle) = compare(&mut shaper, NOTO_SANS_MERGED, text, style);
+        assert_eq!(shaped, oracle, "{features:?}");
+    }
+}
+
+#[test]
+fn a_plan_whose_lookups_leave_other_glyphs_plain_keeps_plain_glyphs_of_its_own() {
+    // Each second plan differs from the first in one way: oldstyle figures
+    // start lookups at the digits, and with ligatures on and no other
+    // lookup at their letters, a ligature reads pairs of plain glyphs.
+    let cases = [
+        (NOTO_SANS_MERGED, ["", "onum"], "2026 13:45"),
+        (NOTO_SANS_MERGED, ["liga off", ""], "fi fl office"),
+    ];
+    for (path, settings, text) in cases {
+        let mut shaper = Shaper::default();
+        for settings in settings {
+            let features: Vec<FontFeature> = font_feature_settings(settings).collect();
+            let style = Style {
+                weight: 400,
+                features: &features,
+            };
+            let (shaped, oracle) = compare(&mut shaper, path, text, style);
+            assert_eq!(shaped, oracle, "{path}: {settings}");
+        }
+    }
+}

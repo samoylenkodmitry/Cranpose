@@ -7,12 +7,12 @@ use read_fonts::{
 // The pair adjustments plain glyphs take from the glyph after them: the
 // subtables of a plan's pair adjustment lookups that move only the first
 // glyph's advance, read from the font's bytes, as HarfBuzz applies them.
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub(crate) struct PlainKerning {
     subtables: Box<[KernSubtable]>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct KernSubtable {
     // Where the subtable starts in the font's bytes.
     offset: u32,

@@ -45,6 +45,9 @@ struct ShapingFace {
     // The newest last: text uses few scripts and feature settings, and a
     // plan takes as long to make as the shaping.
     plans: Vec<KeptPlan>,
+    // The plain glyphs of the plans, one for the plans whose lookups leave
+    // the same glyphs plain, as the plans of numbers and of words do.
+    plain: Vec<PlainGlyphs>,
     // The plan the last item with no language or features of its own took,
     // and what it asked for: an item that asks the same takes it without
     // matching the plans kept.
@@ -63,8 +66,9 @@ struct KeptPlan {
     // Where runs shaped with the plan cut into words; `None` when they
     // shape whole.
     split: Option<WordSplit>,
-    // The glyphs the plan leaves as they are; `None` when it cannot tell.
-    plain: Option<PlainGlyphs>,
+    // The index in its face of the glyphs the plan leaves as they are;
+    // `None` when it cannot tell.
+    plain: Option<usize>,
     // The face and plan as one number, which keys the plan's words.
     key: u64,
 }
@@ -148,13 +152,15 @@ impl Shaper {
             word_ends,
             pieces,
         } = self;
-        let ShapingFace { font, plans, .. } = &mut faces[face];
+        let ShapingFace {
+            font, plans, plain, ..
+        } = &mut faces[face];
         let font = &*font;
-        let kept = &mut plans[plan];
+        let kept = &plans[plan];
+        let mut plain = kept.plain.map(|index| &mut plain[index]);
         // A run of plain glyphs needs neither shaping nor words.
-        if kept
-            .plain
-            .as_mut()
+        if plain
+            .as_deref_mut()
             .is_some_and(|plain| plain.append(font, text, item.range.clone(), glyphs))
         {
             return;
@@ -175,7 +181,7 @@ impl Shaper {
         WordShaping {
             buffer,
             setting,
-            plain: kept.plain.as_mut(),
+            plain,
             words,
             key: kept.key,
             text,
@@ -206,7 +212,7 @@ impl Shaper {
             return plan;
         }
         if face.plans.len() == KEPT_PLANS {
-            face.plans.remove(0);
+            face.forget_oldest_plan();
         }
         let mut key = HASH_STATE.build_hasher();
         face.content_hash.hash(&mut key);
@@ -229,17 +235,20 @@ impl Shaper {
                 .hash(&mut key);
         }
         let tables = layout_tables(&face.font);
+        let split = tables
+            .as_ref()
+            .and_then(|tables| face_word_split(&face.font, tables, script));
+        let plain = tables
+            .as_ref()
+            .and_then(|tables| PlainGlyphs::of(tables, script, direction, &self.features));
+        let plain = plain.map(|plain| face.keep_plain(plain));
         // A face keeps a plan or two, each a few hundred bytes: room for
         // more goes unused.
         face.plans.reserve_exact(1);
         face.plans.push(KeptPlan {
             plan: ShapePlan::new(&face.font, direction, script, language, &self.features),
-            split: tables
-                .as_ref()
-                .and_then(|tables| face_word_split(&face.font, tables, script)),
-            plain: tables
-                .as_ref()
-                .and_then(|tables| PlainGlyphs::of(tables, script, direction, &self.features)),
+            split,
+            plain,
             key: key.finish(),
         });
         face.plans.len() - 1
@@ -278,9 +287,40 @@ impl Shaper {
             positions,
             font,
             plans: Vec::new(),
+            plain: Vec::new(),
             last: None,
         });
         self.faces.len() - 1
+    }
+}
+
+impl ShapingFace {
+    // The index of `plain` among the face's plain glyphs: of the ones equal
+    // to it, or of itself, kept.
+    fn keep_plain(&mut self, plain: PlainGlyphs) -> usize {
+        if let Some(index) = self.plain.iter().position(|kept| kept.reads_as(&plain)) {
+            return index;
+        }
+        self.plain.reserve_exact(1);
+        self.plain.push(plain);
+        self.plain.len() - 1
+    }
+
+    // Drops the oldest plan, and its plain glyphs when no other plan has
+    // them.
+    fn forget_oldest_plan(&mut self) {
+        let Some(index) = self.plans.remove(0).plain else {
+            return;
+        };
+        if self.plans.iter().any(|kept| kept.plain == Some(index)) {
+            return;
+        }
+        self.plain.remove(index);
+        for other in self.plans.iter_mut().filter_map(|kept| kept.plain.as_mut()) {
+            if *other > index {
+                *other -= 1;
+            }
+        }
     }
 }
 
