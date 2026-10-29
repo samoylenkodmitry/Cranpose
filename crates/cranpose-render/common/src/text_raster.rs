@@ -10,8 +10,8 @@ use cranpose_ui_graphics::{Point, Rect, whole};
 
 use crate::{
     glyph_mask::GlyphMaskCache,
-    text_canvas::{CanvasPaint, PlacedMask, TextCanvas, TextPixelWindow, TextPixels},
-    text_glyphs::{SpanPaints, StyledTextRef, visit_placed_glyphs},
+    text_canvas::{CanvasPaint, PlacedMask, SolidInk, TextCanvas, TextPixelWindow, TextPixels},
+    text_glyphs::{SpanPaint, SpanPaints, StyledTextRef, visit_placed_glyphs},
     text_shadow::shadow_blur_sigma,
 };
 
@@ -162,9 +162,9 @@ pub fn paint_text(
 // Paints each glyph of `request` over `canvas`, which covers
 // `request.rect`, its mask from `glyph_cache` or from a cache of the call's
 // own when that is in use.
-fn paint_glyphs(
-    request: TextRasterRequest<'_>,
-    paints: &SpanPaints,
+fn paint_glyphs<'a>(
+    request: TextRasterRequest<'a>,
+    paints: &'a SpanPaints,
     glyph_cache: Option<&mut GlyphMaskCache>,
     canvas: &mut TextCanvas<'_>,
 ) {
@@ -181,6 +181,30 @@ fn paint_glyphs(
     };
     let brush_rect = request.brush_rect();
     let area = (canvas.width, canvas.height);
+    let canvas_paint = |span: &'a SpanPaint| {
+        let alpha = span.alpha * ink;
+        CanvasPaint {
+            brush: &span.brush,
+            alpha,
+            solid: SolidInk::of(&span.brush, alpha),
+            shadow: span.shadow,
+            brush_rect,
+            canvas_origin: Point::new(rect.x, rect.y),
+            scale,
+            static_motion: motion == TextMotion::Static,
+        }
+    };
+    // How far past a glyph's mask its shadow reaches, in pixels.
+    let margin = |span: &SpanPaint| {
+        span.shadow.map_or(0, |shadow| {
+            let reach = shadow.offset.x.abs().max(shadow.offset.y.abs()) * scale;
+            let blur = shadow_blur_sigma((shadow.blur_radius * scale).max(0.0)) * 3.0;
+            whole::to_i32(whole::ceil(reach + blur)) + 1
+        })
+    };
+    // The span paint of the glyph before as the canvas paints it, and its
+    // margin: a text's glyphs mostly share one.
+    let mut last: Option<(&'a SpanPaint, CanvasPaint<'a>, i32)> = None;
     visit_placed_glyphs(
         request.layout,
         paints,
@@ -196,24 +220,13 @@ fn paint_glyphs(
                 x: whole::to_i32(whole::round(glyph.x - rect.x)) + mask.left,
                 y: whole::to_i32(whole::round(glyph.y - rect.y)) + mask.top,
             };
-            let margin = glyph.paint.shadow.map_or(0, |shadow| {
-                let reach = shadow.offset.x.abs().max(shadow.offset.y.abs()) * scale;
-                let blur = shadow_blur_sigma((shadow.blur_radius * scale).max(0.0)) * 3.0;
-                whole::to_i32(whole::ceil(reach + blur)) + 1
-            });
-            if !overlaps(placed, area, margin) {
-                return;
-            }
-            let paint = CanvasPaint {
-                brush: &glyph.paint.brush,
-                alpha: glyph.paint.alpha * ink,
-                shadow: glyph.paint.shadow,
-                brush_rect,
-                canvas_origin: Point::new(rect.x, rect.y),
-                scale,
-                static_motion: motion == TextMotion::Static,
+            let (_, paint, margin) = match &last {
+                Some(found) if std::ptr::eq(found.0, glyph.paint) => found,
+                _ => &*last.insert((glyph.paint, canvas_paint(glyph.paint), margin(glyph.paint))),
             };
-            canvas.paint(placed, &paint);
+            if overlaps(placed, area, *margin) {
+                canvas.paint(placed, paint);
+            }
         },
     );
 }

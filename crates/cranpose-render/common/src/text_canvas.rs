@@ -8,7 +8,7 @@ use crate::{
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     glyph_mask::GlyphMask,
     rgb565::{GlyphPixel, Rgb565Be, Rgb565Le},
-    text_mask_gamma::TextLuminance,
+    text_mask_gamma::{MaskGammaCorrection, TextLuminance},
     text_shadow::draw_shadow_mask,
 };
 
@@ -69,11 +69,53 @@ pub(crate) struct PlacedMask<'a> {
 pub(crate) struct CanvasPaint<'a> {
     pub(crate) brush: &'a Brush,
     pub(crate) alpha: f32,
+    // `brush` at `alpha` as a solid glyph's pixels take it.
+    pub(crate) solid: Option<SolidInk>,
     pub(crate) shadow: Option<Shadow>,
     pub(crate) brush_rect: Rect,
     pub(crate) canvas_origin: Point,
     pub(crate) scale: f32,
     pub(crate) static_motion: bool,
+}
+
+// A solid paint as a glyph's pixels take it, worked out once for all the
+// glyphs it paints.
+#[derive(Clone, Copy)]
+pub(crate) struct SolidInk {
+    // The color's channels, each between 0 and 1.
+    color: [f32; 4],
+    red: u8,
+    green: u8,
+    blue: u8,
+    // What a mask's coverage is multiplied by: the color's alpha times the
+    // paint's.
+    alpha_scale: f32,
+    correction: MaskGammaCorrection,
+}
+
+impl SolidInk {
+    // `brush` at `alpha`; `None` for a brush that is no solid color or that
+    // paints nothing.
+    pub(crate) fn of(brush: &Brush, alpha: f32) -> Option<Self> {
+        let Brush::Solid(color) = brush else {
+            return None;
+        };
+        let color = color_to_rgba(*color);
+        let alpha_scale = color[3].clamp(0.0, 1.0) * alpha.clamp(0.0, 1.0);
+        if alpha_scale <= 0.0 {
+            return None;
+        }
+        let byte = |channel: f32| whole::round(channel.clamp(0.0, 1.0) * 255.0) as u8;
+        Some(Self {
+            color,
+            red: byte(color[0]),
+            green: byte(color[1]),
+            blue: byte(color[2]),
+            alpha_scale,
+            correction: TextLuminance::of_color(Color(color[0], color[1], color[2], 1.0))
+                .correction(),
+        })
+    }
 }
 
 enum CanvasPixels<'a> {
@@ -127,31 +169,29 @@ impl<'a> TextCanvas<'a> {
         let area = (self.width, self.height);
         match &mut self.pixels {
             CanvasPixels::Solid(pixels) => {
-                if let Brush::Solid(color) = paint.brush {
-                    let color = color_to_rgba(*color);
+                if let Some(ink) = &paint.solid {
                     draw_mask_glyph_solid(
                         pixels.as_chunks_mut::<4>().0,
                         self.width as usize,
                         area,
                         placed,
-                        (color, paint.alpha),
-                        CanvasBlend { color },
+                        ink,
+                        CanvasBlend { color: ink.color },
                     );
                 }
             }
             CanvasPixels::Window(window) => {
-                if let Brush::Solid(color) = paint.brush {
-                    let (stride, color) = (window.stride, color_to_rgba(*color));
-                    let solid = (color, paint.alpha);
+                if let Some(ink) = &paint.solid {
+                    let stride = window.stride;
                     match &mut window.pixels {
                         TextPixelRows::Rgba(pixels) => {
-                            draw_mask_glyph_solid(pixels, stride, area, placed, solid, OverBlend);
+                            draw_mask_glyph_solid(pixels, stride, area, placed, ink, OverBlend);
                         }
                         TextPixelRows::Rgb565Le(pixels) => {
-                            draw_mask_glyph_solid(pixels, stride, area, placed, solid, OverBlend);
+                            draw_mask_glyph_solid(pixels, stride, area, placed, ink, OverBlend);
                         }
                         TextPixelRows::Rgb565Be(pixels) => {
-                            draw_mask_glyph_solid(pixels, stride, area, placed, solid, OverBlend);
+                            draw_mask_glyph_solid(pixels, stride, area, placed, ink, OverBlend);
                         }
                     }
                 }
@@ -327,25 +367,28 @@ impl<P: GlyphPixel> SolidGlyphBlend<P> for OverBlend {
     }
 }
 
-/// Paints the solid glyph `placed` in `color` times `alpha_multiplier` over
-/// an `area` of `pixels`, width by height, a row every `stride` pixels.
+/// Paints the solid glyph `placed` in `ink` over an `area` of `pixels`,
+/// width by height, a row every `stride` pixels.
 fn draw_mask_glyph_solid<P>(
     pixels: &mut [P],
     stride: usize,
     (width, height): (u32, u32),
     placed: PlacedMask<'_>,
-    (color, alpha_multiplier): ([f32; 4], f32),
+    ink: &SolidInk,
     blend: impl SolidGlyphBlend<P>,
 ) {
     let mask = placed.mask;
-    let red = whole::round(color[0].clamp(0.0, 1.0) * 255.0) as u8;
-    let green = whole::round(color[1].clamp(0.0, 1.0) * 255.0) as u8;
-    let blue = whole::round(color[2].clamp(0.0, 1.0) * 255.0) as u8;
-    let alpha_scale = color[3].clamp(0.0, 1.0) * alpha_multiplier.clamp(0.0, 1.0);
-    if alpha_scale <= 0.0 || width == 0 || mask.width == 0 || stride == 0 {
+    let SolidInk {
+        red,
+        green,
+        blue,
+        alpha_scale,
+        correction,
+        ..
+    } = *ink;
+    if width == 0 || mask.width == 0 || stride == 0 {
         return;
     }
-    let correction = TextLuminance::of_color(Color(color[0], color[1], color[2], 1.0)).correction();
     // The mask columns and rows that land in the area.
     let columns = canvas_span(placed.x, mask.width, width);
     let rows = canvas_span(placed.y, mask.height, height);

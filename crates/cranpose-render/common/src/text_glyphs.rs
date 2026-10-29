@@ -192,13 +192,14 @@ impl SpanPaints {
         Self { paints }
     }
 
-    // The paint of the character at `offset`.
-    pub(crate) fn at(&self, offset: usize) -> &SpanPaint {
+    // The span of the character at `offset` and its paint.
+    pub(crate) fn span_at(&self, offset: usize) -> (&Range<usize>, &SpanPaint) {
         let at = self
             .paints
             .partition_point(|(range, _)| range.end <= offset)
             .min(self.paints.len() - 1);
-        &self.paints[at].1
+        let (range, paint) = &self.paints[at];
+        (range, paint)
     }
 
     // Whether every span paints with `test` true.
@@ -238,13 +239,22 @@ pub(crate) fn visit_placed_glyphs<'a>(
     for line in 0..layout.line_count() {
         for run in layout.glyph_runs(line) {
             let size = run.size * scale;
+            // The span of the glyph before, its paint and its raster: a run's
+            // glyphs mostly share them.
+            let mut span: Option<(&Range<usize>, &SpanPaint, GlyphRaster)> = None;
             for glyph in run.positions() {
-                let paint = paints.at(glyph.offset);
+                let (_, paint, raster) = match span {
+                    Some(found) if found.0.contains(&glyph.offset) => found,
+                    _ => {
+                        let (range, paint) = paints.span_at(glyph.offset);
+                        *span.insert((range, paint, paint.raster(run.typeface, size, scale)))
+                    }
+                };
                 visit(PlacedGlyph {
                     typeface: run.typeface,
                     glyph: glyph.id,
                     size,
-                    raster: paint.raster(run.typeface, size, scale),
+                    raster,
                     x: place(glyph.x, origin.x),
                     y: place(glyph.y, origin.y),
                     paint,
