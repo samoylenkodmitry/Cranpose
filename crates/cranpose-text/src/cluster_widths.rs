@@ -13,6 +13,9 @@ pub(crate) struct ClusterWidths {
     // last entry is the end of the text with the width of all of it.
     clusters: Vec<(usize, f32)>,
     total: ClusterTotal,
+    // Whether every byte of the text starts a cluster, as in most ASCII
+    // text: each cluster then sits at the index of its start.
+    dense: bool,
 }
 
 // The width of glyphs added in text order, each cluster `spacing` wider.
@@ -61,6 +64,9 @@ impl ClusterWidths {
                 self.clusters.push((start, before));
             }
         });
+        // Clusters start in text order, each once: as many as the text has
+        // bytes start at every byte.
+        self.dense = input.text.len() == self.clusters.len();
         self.clusters.push((input.text.len(), self.total.width));
     }
 
@@ -71,6 +77,11 @@ impl ClusterWidths {
 
     // The width of the text before `offset`.
     pub(crate) fn before(&self, offset: usize) -> f32 {
+        if self.dense
+            && let Some(&(_, width)) = self.clusters.get(offset)
+        {
+            return width;
+        }
         let at = self.clusters.partition_point(|&(start, _)| start < offset);
         self.clusters
             .get(at)

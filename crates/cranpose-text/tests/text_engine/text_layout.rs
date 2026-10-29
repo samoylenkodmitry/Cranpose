@@ -50,17 +50,29 @@ fn lines(layout: &TextLayout, text: &str) -> Vec<String> {
 #[test]
 fn lines_wrap_after_the_last_word_that_fits() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
-    let text = "The quick brown fox";
-    let width = unwrapped(&resolver, "The quick")
-        .width()
-        .max(unwrapped(&resolver, "brown fox").width())
-        + 1.0;
+    // Letters of one byte each, and of two.
+    for (first, second) in [
+        ("The quick", "brown fox"),
+        ("Быстрая бурая", "лиса прыгает"),
+    ] {
+        let text = format!("{first} {second}");
+        let width = unwrapped(&resolver, first)
+            .width()
+            .max(unwrapped(&resolver, second).width())
+            + 1.0;
 
-    let wrapped = layout(&resolver, text, TextDirection::Ltr, TextAlign::Start, width);
+        let wrapped = layout(
+            &resolver,
+            &text,
+            TextDirection::Ltr,
+            TextAlign::Start,
+            width,
+        );
 
-    assert_eq!(lines(&wrapped, text), ["The quick ", "brown fox"]);
-    assert_eq!(wrapped.line_visible_end(0), "The quick".len());
-    assert!(wrapped.line_right(0) <= width);
+        assert_eq!(lines(&wrapped, &text), [format!("{first} "), second.into()]);
+        assert_eq!(wrapped.line_visible_end(0), first.len());
+        assert!(wrapped.line_right(0) <= width);
+    }
 }
 
 #[test]
