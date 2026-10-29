@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{MemoryHeadroom, whole};
 
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
-    cluster_widths::ClusterWidths,
+    cluster_widths::{ClusterTotal, ClusterWidths},
     font_family_resolver::FontFamilyResolver,
     itemizer::{Itemizer, TextItem},
     layout_input::LayoutInput,
@@ -21,8 +21,8 @@ use crate::{
         Piece, ShapedItem, face_index, hyphen, item_at, part_glyphs, scale, set_cluster,
         shape_inserted, spaced_width,
     },
-    shaper::{ShapedGlyph, Shaper},
-    text_layout::{LayoutLine, Sizing, TextLayout, WidthRange, font_units},
+    shaper::Shaper,
+    text_layout::{LayoutLine, Sizing, TextLayout, WidthRange},
 };
 #[cfg(feature = "hyphenation")]
 use crate::{
@@ -162,13 +162,21 @@ impl TextLayouter {
         // A glyph takes at least a byte of text, so the glyphs grow once.
         layout.glyphs.reserve(input.text.len());
         self.shape(input, resolver, shaped, layout);
-        self.measure_clusters(input, layout);
         let lengths = input.lengths;
         let text = input.text;
+        // A text of one item with no line break and no whitespace at its end,
+        // which lays out as that item when it fits.
+        let lone = self.items.len() == 1
+            && !has_hard_break(text)
+            && visible_end(text, 0, text.len()) == text.len();
         // The width up to the trailing whitespace of a text with no line
         // break: its one paragraph.
-        let unbroken =
-            (!has_hard_break(text)).then(|| self.widths.width(0, visible_end(text, 0, text.len())));
+        let unbroken = if lone {
+            Some(ClusterTotal::of(&self.items, input, layout))
+        } else {
+            self.widths.measure(&self.items, input, layout);
+            (!has_hard_break(text)).then(|| self.widths.width(0, visible_end(text, 0, text.len())))
+        };
         let widest = unbroken.map_or_else(
             || self.widest_paragraph(input),
             |width| width.max(0.0) + lengths.first_line_indent,
@@ -191,61 +199,27 @@ impl TextLayouter {
             }
         };
         // Most text is one line that fits; it needs no break opportunities.
-        if let Some(line) = unbroken.filter(|&line| line <= wrap.first) {
-            let min = if options.soft_wrap {
-                line + lengths.first_line_indent
-            } else {
-                f32::NEG_INFINITY
-            };
-            let mut hold = WidthRange {
-                min,
-                max: f32::INFINITY,
-            };
-            // A line of one item that fits with no ellipsis and has no
-            // whitespace after its text is that item.
-            if self.items.len() == 1
-                && line <= width - lengths.first_line_indent
-                && visible_end(text, 0, text.len()) == text.len()
-            {
-                if ellipsis_at(&options, true).is_some() {
-                    hold.narrow(line + lengths.first_line_indent, f32::INFINITY);
-                }
-                layout.hold = Some(hold);
-                self.lay_out_one_line(input, &options, resolver, layout);
-                return;
+        let fits = unbroken.filter(|&line| line <= wrap.first);
+        // A lone item that fits with no ellipsis is the line, and needs no
+        // cluster widths.
+        if let Some(line) = fits.filter(|&line| lone && line <= width - lengths.first_line_indent) {
+            let mut hold = fitting_hold(&options, line + lengths.first_line_indent);
+            if ellipsis_at(&options, true).is_some() {
+                hold.narrow(line + lengths.first_line_indent, f32::INFINITY);
             }
             layout.hold = Some(hold);
+            self.lay_out_one_line(input, &options, resolver, layout);
+            return;
+        }
+        if lone {
+            self.widths.measure(&self.items, input, layout);
+        }
+        if let Some(line) = fits {
+            layout.hold = Some(fitting_hold(&options, line + lengths.first_line_indent));
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
         } else {
-            let line_break = input.paragraph.line_break;
-            self.breaker
-                .opportunities(text, line_break, &mut self.breaks);
-            #[cfg(feature = "hyphenation")]
-            if input.paragraph.hyphens == Hyphens::Auto {
-                self.hyphenate(input, wrap, layout);
-            }
-            let wrapping = Wrapping {
-                text,
-                widths: &self.widths,
-                wrap,
-            };
-            match line_break {
-                LineBreak::Paragraph => self.balancer.balance(
-                    &wrapping,
-                    &self.breaks,
-                    PARAGRAPH_LAST_LINE,
-                    &mut self.lines,
-                ),
-                LineBreak::Heading => {
-                    self.balancer
-                        .balance(&wrapping, &self.breaks, 1.0, &mut self.lines);
-                }
-                LineBreak::Simple | LineBreak::Unspecified => {
-                    break_lines(&wrapping, &self.breaks, &mut self.lines);
-                }
-            }
-            layout.hold = self.hold(input, &options, &wrapping);
+            self.wrap_lines(input, &options, wrap, layout);
         }
         layout.did_overflow_height = self.lines.len() > options.max_lines;
         if layout.did_overflow_height && ellipsis_at(&options, true).is_some() {
@@ -253,6 +227,46 @@ impl TextLayouter {
         }
         self.lines.truncate(options.max_lines);
         self.build_lines(input, &options, resolver, layout);
+    }
+
+    // Breaks `input` into lines of the `wrap` widths, at the opportunities
+    // its line break style takes, and sets the layout's hold.
+    fn wrap_lines(
+        &mut self,
+        input: &LayoutInput<'_>,
+        options: &TextLayoutOptions,
+        wrap: WrapWidths,
+        layout: &mut TextLayout,
+    ) {
+        let text = input.text;
+        let line_break = input.paragraph.line_break;
+        self.breaker
+            .opportunities(text, line_break, &mut self.breaks);
+        #[cfg(feature = "hyphenation")]
+        if input.paragraph.hyphens == Hyphens::Auto {
+            self.hyphenate(input, wrap, layout);
+        }
+        let wrapping = Wrapping {
+            text,
+            widths: &self.widths,
+            wrap,
+        };
+        match line_break {
+            LineBreak::Paragraph => self.balancer.balance(
+                &wrapping,
+                &self.breaks,
+                PARAGRAPH_LAST_LINE,
+                &mut self.lines,
+            ),
+            LineBreak::Heading => {
+                self.balancer
+                    .balance(&wrapping, &self.breaks, 1.0, &mut self.lines);
+            }
+            LineBreak::Simple | LineBreak::Unspecified => {
+                break_lines(&wrapping, &self.breaks, &mut self.lines);
+            }
+        }
+        layout.hold = self.hold(input, options, &wrapping);
     }
 
     /// The intrinsic widths of `input`, laid out with the typefaces of
@@ -265,7 +279,7 @@ impl TextLayouter {
         let mut measured = std::mem::take(&mut self.scratch);
         measured.clear();
         self.shape(input, resolver, None, &mut measured);
-        self.measure_clusters(input, &measured);
+        self.widths.measure(&self.items, input, &measured);
         self.keep_scratch(measured);
         let text = input.text;
         self.breaker
@@ -509,27 +523,6 @@ impl TextLayouter {
                 });
             });
         layout.shaped = layout.glyphs.len();
-    }
-
-    fn measure_clusters(&mut self, input: &LayoutInput<'_>, layout: &TextLayout) {
-        self.widths.clear();
-        for item in &self.items {
-            let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
-            let glyphs = &layout.glyphs[item.glyphs.clone()];
-            let mut add = |glyph: &ShapedGlyph| {
-                self.widths.push(
-                    glyph.text_offset(),
-                    font_units(glyph.advance) * scale,
-                    item.spacing,
-                );
-            };
-            if item.level.is_rtl() {
-                glyphs.iter().rev().for_each(&mut add);
-            } else {
-                glyphs.iter().for_each(&mut add);
-            }
-        }
-        self.widths.finish(input.text.len());
     }
 
     fn build_lines(
@@ -889,6 +882,19 @@ impl TextLayouter {
                 },
                 |item| item.paragraph_level,
             )
+    }
+}
+
+// The hold of a text that fits on one line `line` wide with its indent:
+// any width that keeps it on one line, when it wraps.
+fn fitting_hold(options: &TextLayoutOptions, line: f32) -> WidthRange {
+    WidthRange {
+        min: if options.soft_wrap {
+            line
+        } else {
+            f32::NEG_INFINITY
+        },
+        max: f32::INFINITY,
     }
 }
 
