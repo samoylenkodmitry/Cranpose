@@ -98,6 +98,22 @@ impl PreparedTextLayout {
         }
     }
 
+    // This layout's text in its style laid out as `layout`, its own layout
+    // aligned at other widths: the text as a renderer draws it and the
+    // style's hash carry over.
+    fn aligned(&self, layout: TextLayout, (max_width, min_lines): (f32, usize)) -> Self {
+        Self {
+            render_text: self.render_text.clone(),
+            visual_style_hash: self.visual_style_hash.clone(),
+            ..Self::new(
+                Rc::clone(&self.text),
+                Arc::clone(&self.visual_style),
+                layout,
+                (max_width, min_lines),
+            )
+        }
+    }
+
     /// The display text as a renderer draws it. Converted once for the layout
     /// and shared after, so every frame and scene rebuild drawing this layout
     /// hands over the same allocation.
@@ -443,9 +459,7 @@ impl TextService {
             frame.max_width,
             style.paragraph_style.text_align,
         );
-        let aligned = Rc::new(PreparedTextLayout::new(
-            Rc::clone(&held.text),
-            Arc::clone(&held.visual_style),
+        let aligned = Rc::new(held.aligned(
             layout,
             (frame.max_width, frame.options.normalized().min_lines),
         ));
