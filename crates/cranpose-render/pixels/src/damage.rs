@@ -203,7 +203,7 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
     *rect == new.rect
         && *snap_anchor == new.snap_anchor
         && (Rc::ptr_eq(text, &new.text) || **text == *new.text)
-        && (Arc::ptr_eq(layout, &new.layout) || **layout == *new.layout)
+        && *layout == new.layout
         && *ink == new.ink
         && (Arc::ptr_eq(text_style, &new.text_style) || **text_style == *new.text_style)
         && *color == new.color

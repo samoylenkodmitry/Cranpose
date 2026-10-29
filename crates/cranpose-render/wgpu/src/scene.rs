@@ -312,7 +312,7 @@ pub(crate) struct TextDraw {
     pub snap_anchor: Option<SnapAnchor>,
     pub text: DrawnText,
     /// The lines and glyphs, from `rect`'s top left corner.
-    pub layout: Arc<cranpose_text::TextLayout>,
+    pub layout: cranpose_text::TextLayout,
     pub color: Color,
     pub text_style: Arc<TextStyle>,
     /// `text_style`'s [`TextStyle::render_hash`], hashed once per text.

@@ -180,7 +180,7 @@ impl TextPreparedLayoutOwner {
                         style: &source.style,
                         style_hash: source.style_hash,
                     };
-                    let shaped = latest.map(|latest| &*latest.layout);
+                    let shaped = latest.map(|latest| &latest.layout);
                     crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
                 }
             }

@@ -9,11 +9,11 @@
 //! and the same string rasterized by the renderer are described identically,
 //! down to the cache key.
 
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use cranpose_ui_graphics::{
     DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, MeasuredText, Size,
-    TextLayoutHandle, TextMeasurement, estimate_text_measurement,
+    TextMeasurement, estimate_text_measurement,
 };
 
 use super::{
@@ -126,7 +126,7 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
         };
         MeasuredText {
             measurement,
-            layout: Some(TextLayoutHandle::from(Arc::clone(layout))),
+            layout: Some(prepared.layout_handle()),
         }
     }
 }

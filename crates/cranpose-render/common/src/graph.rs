@@ -96,7 +96,7 @@ pub struct TextPrimitiveNode {
     pub render_text: std::sync::Arc<RenderString>,
     /// The lines and glyphs the text draws, from its top left corner at
     /// `rect`'s.
-    pub layout: std::sync::Arc<cranpose_text::TextLayout>,
+    pub layout: cranpose_text::TextLayout,
     /// Shared so every frame's draws of this text hand over the same style
     /// instead of copying it.
     pub text_style: std::sync::Arc<TextStyle>,

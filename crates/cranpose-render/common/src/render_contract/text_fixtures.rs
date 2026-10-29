@@ -203,7 +203,7 @@ fn text_node_with_style(
             rect,
             render_text: prepared.render_text(),
             text,
-            layout: std::sync::Arc::clone(&prepared.layout),
+            layout: prepared.layout.clone(),
             text_style: std::sync::Arc::new(text_style),
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),

@@ -56,7 +56,7 @@ pub(crate) fn text_graph(
                 node_id: NodeId(1),
                 rect: text_rect,
                 render_text: prepared.render_text(),
-                layout: Arc::clone(&prepared.layout),
+                layout: prepared.layout.clone(),
                 text: Rc::new(text),
                 font_size: style.resolve_font_size(10.0),
                 text_style: Arc::new(style),

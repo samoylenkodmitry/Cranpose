@@ -1,7 +1,5 @@
 //! The layout of a text, as Compose's `TextLayoutResult` gives it.
 
-use std::sync::Arc;
-
 use cranpose_text::TextLayout;
 
 /// The layout of a text: Compose's `TextLayoutResult`. Its queries are the
@@ -9,12 +7,12 @@ use cranpose_text::TextLayout;
 /// offsets into the text.
 #[derive(Clone, Debug)]
 pub struct TextLayoutResult {
-    layout: Arc<TextLayout>,
+    layout: TextLayout,
 }
 
 impl TextLayoutResult {
     /// The result of `layout`.
-    pub fn new(layout: Arc<TextLayout>) -> Self {
+    pub fn new(layout: TextLayout) -> Self {
         Self { layout }
     }
 

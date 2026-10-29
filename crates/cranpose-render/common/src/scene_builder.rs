@@ -2807,7 +2807,7 @@ fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
         rect,
         text: Rc::clone(&prepared.text),
         render_text: prepared.render_text(),
-        layout: std::sync::Arc::clone(&prepared.layout),
+        layout: prepared.layout.clone(),
         text_style: std::sync::Arc::clone(visual_style),
         font_size,
         layout_options: options,

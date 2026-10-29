@@ -112,7 +112,7 @@ pub(crate) struct TextDraw {
     pub snap_anchor: Option<Point>,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
     // The lines and glyphs, from `rect`'s top left corner.
-    pub layout: Arc<cranpose_text::TextLayout>,
+    pub layout: cranpose_text::TextLayout,
     // Whether the glyphs paint or only their shadows.
     pub ink: cranpose_render_common::text_raster::GlyphInk,
     pub color: Color,

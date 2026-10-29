@@ -75,6 +75,44 @@ fn justified_lines_fill_the_width_except_the_last() {
 }
 
 #[test]
+fn a_justified_line_that_fits_exactly_stretches_at_a_wider_held_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let text = "aaa bbb ccc";
+    let start = plain(&resolver, text, TextAlign::Start, 60.0);
+    assert_eq!(start.line_visible_end(0), "aaa bbb".len());
+    let exact = start.line_right(0);
+
+    let mut laid = plain(&resolver, text, TextAlign::Justify, exact);
+    assert_eq!(laid.line_visible_end(0), "aaa bbb".len());
+    assert!(close(laid.line_right(0), exact));
+    let wider = exact + 5.0;
+    assert!(laid.holds(0.0, wider));
+    laid.align(0.0, wider, TextAlign::Justify);
+
+    assert!(close(laid.line_right(0), wider), "{}", laid.line_right(0));
+    let fresh = plain(&resolver, text, TextAlign::Justify, wider);
+    assert!(close(laid.line_right(0), fresh.line_right(0)));
+}
+
+#[test]
+fn aligning_a_justified_layout_again_takes_its_stretch_off() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let mut laid = plain(&resolver, TEXT, TextAlign::Justify, 150.0);
+    let start = plain(&resolver, TEXT, TextAlign::Start, 150.0);
+
+    laid.align(0.0, 150.0, TextAlign::Start);
+
+    for line in 0..laid.line_count() {
+        assert!(
+            close(laid.line_right(line), start.line_right(line)),
+            "line {line}: {} against {}",
+            laid.line_right(line),
+            start.line_right(line)
+        );
+    }
+}
+
+#[test]
 fn a_baseline_shift_raises_the_span() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let family = FontFamily::Default;

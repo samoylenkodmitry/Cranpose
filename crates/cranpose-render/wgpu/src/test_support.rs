@@ -32,15 +32,14 @@ pub(crate) fn with_layout(
     mut node: cranpose_render_common::graph::TextPrimitiveNode,
 ) -> cranpose_render_common::graph::TextPrimitiveNode {
     node.layout = in_layout_context(|| {
-        std::sync::Arc::clone(
-            &cranpose_ui::text::prepare_text_layout(
-                &node.text,
-                &node.text_style,
-                node.layout_options,
-                Some(node.rect.width),
-            )
-            .layout,
+        cranpose_ui::text::prepare_text_layout(
+            &node.text,
+            &node.text_style,
+            node.layout_options,
+            Some(node.rect.width),
         )
+        .layout
+        .clone()
     });
     node
 }

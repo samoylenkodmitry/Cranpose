@@ -75,7 +75,7 @@ fn text_node(
         rect: Rect::EMPTY,
         text: Rc::new(text.clone()),
         render_text: prepared.render_text(),
-        layout: Arc::clone(&prepared.layout),
+        layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
         font_size,
         layout_options,
@@ -682,27 +682,29 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
         height: 28.0,
     };
     let text = cranpose_ui::text::AnnotatedString::from("Shifted");
+    let base_node = text_node(
+        NodeId(24),
+        &text,
+        &base_style,
+        14.0,
+        TextLayoutOptions::default(),
+    );
+    let shifted_node = text_node(
+        NodeId(25),
+        &text,
+        &shifted_style,
+        14.0,
+        TextLayoutOptions::default(),
+    );
 
     push_text_style_draws_for_test(
         &mut base_scene,
-        &text_node(
-            NodeId(24),
-            &text,
-            &base_style,
-            14.0,
-            TextLayoutOptions::default(),
-        ),
+        &base_node,
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
     push_text_style_draws_for_test(
         &mut shifted_scene,
-        &text_node(
-            NodeId(25),
-            &text,
-            &shifted_style,
-            14.0,
-            TextLayoutOptions::default(),
-        ),
+        &shifted_node,
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
@@ -710,8 +712,14 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
     let shifted = shape_records(&mut shifted_scene);
     assert_eq!(base.len(), 1, "base underline expected");
     assert_eq!(shifted.len(), 1, "shifted underline expected");
+    // The line grows to hold shifted text, as Android's does: the underline
+    // of superscript text sits higher above its line's baseline.
+    let below_baseline = |records: &[(cranpose_ui_graphics::ShapeRecord, Placement)],
+                          node: &TextPrimitiveNode| {
+        record_rect(&records[0]).y - node.layout.line_baseline(0)
+    };
     assert!(
-        record_rect(&shifted[0]).y < record_rect(&base[0]).y,
+        below_baseline(&shifted, &shifted_node) < below_baseline(&base, &base_node),
         "baseline shift should move decoration geometry with shifted text"
     );
 }
@@ -1563,7 +1571,7 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
     push_text_style_draws_for_test(
         &mut scene,
         &TextPrimitiveNode {
-            layout: Arc::clone(&prepared.layout),
+            layout: prepared.layout.clone(),
             ..text_node(NodeId(27), &prepared.text, &style, 14.0, options)
         },
         placement(rect, rect, &GraphicsLayer::default(), None),

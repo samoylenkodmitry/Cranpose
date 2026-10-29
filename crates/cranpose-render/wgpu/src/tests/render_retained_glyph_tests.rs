@@ -615,15 +615,14 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
     let text = cranpose_ui::text::shared_plain_annotated_string("MM");
     let layout = cranpose_ui::AppContext::new().enter(|| {
         cranpose_ui::text::set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
-        Arc::clone(
-            &cranpose_ui::text::prepare_text_layout(
-                &text,
-                &style,
-                TextLayoutOptions::default(),
-                Some(30.0),
-            )
-            .layout,
+        cranpose_ui::text::prepare_text_layout(
+            &text,
+            &style,
+            TextLayoutOptions::default(),
+            Some(30.0),
         )
+        .layout
+        .clone()
     });
     scene.push_text(TextDraw {
         node_id: NodeId(1),

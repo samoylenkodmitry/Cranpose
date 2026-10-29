@@ -22,7 +22,7 @@ use crate::{
         shape_inserted, spaced_width,
     },
     shaper::{ShapedGlyph, Shaper},
-    text_layout::{LayoutLine, Sizing, TextLayout, WidthRange},
+    text_layout::{LayoutBody, LayoutLine, Sizing, TextLayout, WidthRange},
 };
 #[cfg(feature = "hyphenation")]
 use crate::{
@@ -46,9 +46,9 @@ pub struct TextLayouter {
     // The glyphs of the text being laid out, which keep their storage from
     // one text to the next; a layout takes them once they are all placed.
     glyphs: Vec<ShapedGlyph>,
-    // The layout intrinsic widths are measured in, which keeps its storage
+    // The body intrinsic widths are measured in, which keeps its storage
     // from one text to the next.
-    scratch: TextLayout,
+    scratch: LayoutBody,
     #[cfg(feature = "hyphenation")]
     hyphenator: Hyphenator,
     // The opportunities with the hyphenation points among them, swapped
@@ -72,12 +72,14 @@ pub struct ParagraphIntrinsics {
 }
 
 // A line's text, the end of its visible text, the end of the text it draws,
-// before the hard break that ends it, which draws nothing, and its indent.
+// before the hard break that ends it, which draws nothing, its indent and
+// the width its text may take, the paragraph's past the indent.
 struct LineText {
     range: Range<usize>,
     visible: usize,
     drawn: usize,
     indent: f32,
+    room: f32,
 }
 
 // Where a line stands among a layout's lines: the bottom of the line above,
@@ -131,33 +133,35 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         shaped: Option<&TextLayout>,
     ) -> TextLayout {
-        let mut layout = TextLayout::default();
-        self.fill(input, resolver, shaped, &mut layout);
+        let mut body = LayoutBody::default();
+        let width = self.fill(input, resolver, shaped, &mut body);
         // A layout kept holds each part in storage of its own length.
-        layout.shrink_to_fit();
-        layout
+        body.shrink_to_fit();
+        TextLayout::new(body, width, input.max_width)
     }
 
-    /// Lays `input` out into `layout` in place of what it held, reusing its
-    /// storage: text that changes every frame lays out without allocating
-    /// once the storage has grown to fit it.
+    /// Lays `input` out into `layout` in place of what it held, in the
+    /// storage of its lines and runs when no copy of it shares them.
     pub fn layout_into(
         &mut self,
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
         layout: &mut TextLayout,
     ) {
-        self.fill(input, resolver, None, layout);
+        layout.refill(input.max_width, |body| {
+            self.fill(input, resolver, None, body)
+        });
     }
 
-    // Lays `input` out into `layout`, with the glyphs of `shaped` when given.
+    // Lays `input` out into `layout`, with the glyphs of `shaped` when
+    // given, and returns the width its lines are placed across.
     fn fill(
         &mut self,
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
         shaped: Option<&TextLayout>,
-        layout: &mut TextLayout,
-    ) {
+        layout: &mut LayoutBody,
+    ) -> f32 {
         let options = input.options.normalized();
         layout.clear();
         self.shape(input, resolver, shaped, layout);
@@ -187,7 +191,6 @@ impl TextLayouter {
             follows_max: options.soft_wrap || options.overflow.is_ellipsis(),
         };
         let width = layout.sizing.width(input.min_width, input.max_width);
-        layout.width = width;
         let wrap = if options.soft_wrap {
             WrapWidths {
                 first: width - lengths.first_line_indent,
@@ -212,8 +215,8 @@ impl TextLayouter {
                 hold.narrow(line, f32::INFINITY);
             }
             layout.hold = Some(hold);
-            self.lay_out_one_line(input, &options, resolver, piece, layout);
-            return;
+            self.lay_out_one_line(input, &options, resolver, piece, width, layout);
+            return width;
         }
         if lone.is_some() {
             self.widths
@@ -231,7 +234,8 @@ impl TextLayouter {
             take_rest_of_paragraph(&mut self.lines, text, options.max_lines - 1);
         }
         self.lines.truncate(options.max_lines);
-        self.build_lines(input, &options, resolver, layout);
+        self.build_lines(input, &options, resolver, width, layout);
+        width
     }
 
     // Breaks `input` into lines of the `wrap` widths, at the opportunities
@@ -241,7 +245,7 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
         wrap: WrapWidths,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) {
         let text = input.text;
         let line_break = input.paragraph.line_break;
@@ -327,13 +331,13 @@ impl TextLayouter {
 
     // Ends a layout whose lines reach down to `top`: the layout takes the
     // glyphs, a text short of its minimum lines takes the height of that
-    // many of its first line, and its lines align.
+    // many of its first line, and its lines align across `width`.
     fn finish_lines(
         &mut self,
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
-        mut top: f32,
-        layout: &mut TextLayout,
+        (mut top, width): (f32, f32),
+        layout: &mut LayoutBody,
     ) {
         layout.glyphs = Arc::from(self.glyphs.as_slice());
         self.keep_glyph_room();
@@ -343,9 +347,7 @@ impl TextLayouter {
             top += (first.bottom - first.top) * lines_f32(missing);
         }
         layout.height = top;
-        layout.align_lines(input.paragraph.text_align);
-        layout.did_overflow_width = layout.widest > layout.width || layout.width > input.max_width;
-        layout.renew_id();
+        layout.align_lines(width, input.paragraph.text_align);
     }
 
     // The widest paragraph of the text measured last on one line, with its
@@ -382,7 +384,7 @@ impl TextLayouter {
     // line may break inside: every word for even breaking, and for greedy
     // breaking the words wider than a line, the only ones it hyphenates.
     #[cfg(feature = "hyphenation")]
-    fn hyphenate(&mut self, input: &LayoutInput<'_>, wrap: WrapWidths, layout: &mut TextLayout) {
+    fn hyphenate(&mut self, input: &LayoutInput<'_>, wrap: WrapWidths, layout: &mut LayoutBody) {
         if !wrap.first.is_finite() {
             return;
         }
@@ -422,7 +424,7 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         word: Range<usize>,
         penalty_per_size: f32,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) {
         let Some(text) = input.text.get(word.clone()) else {
             return;
@@ -507,7 +509,7 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
         shaped: Option<&TextLayout>,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) {
         self.items.clear();
         self.glyphs.clear();
@@ -516,7 +518,7 @@ impl TextLayouter {
         let text = input.text;
         let (shaper, items, glyphs) = (&mut self.shaper, &mut self.items, &mut self.glyphs);
         let direction = input.paragraph.text_direction;
-        let mut taken = shaped.map(|shaped| &shaped.glyphs[..shaped.shaped]);
+        let mut taken = shaped.map(|shaped| &shaped.body().glyphs[..shaped.body().shaped]);
         self.itemizer
             .itemize(text, direction, input.spans, resolver, |item| {
                 let start = glyphs.len();
@@ -559,7 +561,8 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
         resolver: &FontFamilyResolver,
-        layout: &mut TextLayout,
+        width: f32,
+        layout: &mut LayoutBody,
     ) {
         let mut top = 0.0;
         let last = self.lines.len() - 1;
@@ -568,10 +571,12 @@ impl TextLayouter {
         layout.runs.reserve_exact(self.lines.len());
         for index in 0..=last {
             let range = self.lines[index].text.clone();
+            let indent = indent(input, range.start);
             let line = LineText {
                 visible: visible_end(input.text, range.start, range.end),
                 drawn: before_hard_break(input.text, range.start, range.end),
-                indent: indent(input, range.start),
+                indent,
+                room: width - indent,
                 range,
             };
             let ellipsized = self.collect_line(input, options, resolver, (index, &line), layout);
@@ -588,11 +593,11 @@ impl TextLayouter {
             let starts = starts_paragraph(input.text, layout.lines[index].text.start);
             layout.lines[index - 1].ends_paragraph = starts;
         }
-        self.finish_lines(input, options, top, layout);
+        self.finish_lines(input, options, (top, width), layout);
     }
 
     // The piece of the one item of a text: the whole item.
-    fn lone_piece(&self, input: &LayoutInput<'_>, layout: &TextLayout) -> Piece {
+    fn lone_piece(&self, input: &LayoutInput<'_>, layout: &LayoutBody) -> Piece {
         let item = &self.items[0];
         let span = &input.spans[item.span];
         let scale = scale(span, &layout.faces[item.face]);
@@ -617,16 +622,19 @@ impl TextLayouter {
         options: &TextLayoutOptions,
         resolver: &FontFamilyResolver,
         piece: Piece,
-        layout: &mut TextLayout,
+        width: f32,
+        layout: &mut LayoutBody,
     ) {
         self.pieces.clear();
         self.pieces.push(piece);
         let end = input.text.len();
+        let indent = input.lengths.first_line_indent;
         let line = LineText {
             range: 0..end,
             visible: end,
             drawn: end,
-            indent: input.lengths.first_line_indent,
+            indent,
+            room: width - indent,
         };
         let edges = LineEdges {
             top: 0.0,
@@ -635,7 +643,7 @@ impl TextLayouter {
             ellipsized: false,
         };
         let top = self.push_line(input, resolver, line, edges, layout);
-        self.finish_lines(input, options, top, layout);
+        self.finish_lines(input, options, (top, width), layout);
     }
 
     // Places the pieces just collected for `line` as its runs, adds the
@@ -646,7 +654,7 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         line: LineText,
         edges: LineEdges,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) -> f32 {
         let (runs, width) = place_runs(&self.pieces, line.visible, layout);
         let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
@@ -689,12 +697,12 @@ impl TextLayouter {
         options: &TextLayoutOptions,
         resolver: &FontFamilyResolver,
         (index, line): (usize, &LineText),
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) -> bool {
         self.pieces.clear();
         let last = index + 1 == self.lines.len();
         let visible_width = self.widths.width(line.range.start, line.visible);
-        let overflows = visible_width > layout.width - line.indent;
+        let overflows = visible_width > line.room;
         let ellipsis = ellipsis_at(options, last);
         let shown = ellipsis.filter(|_| overflows || (last && layout.did_overflow_height));
         if let Some(hold) = &mut layout.hold {
@@ -727,7 +735,7 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         at: EllipsisAt,
         line: &LineText,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) -> bool {
         let (range, visible) = (line.range.clone(), line.visible);
         // The ellipsis takes the style of the text its line starts with.
@@ -740,7 +748,7 @@ impl TextLayouter {
         let Some(mut ellipsis) = self.ellipsis_piece(input, resolver, span, level, layout) else {
             return false;
         };
-        let room = (layout.width - line.indent - ellipsis.width).max(0.0);
+        let room = (line.room - ellipsis.width).max(0.0);
         let text = input.text;
         let (head, tail) = match at {
             EllipsisAt::End => {
@@ -798,7 +806,7 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         span: usize,
         level: BidiLevel,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) -> Option<Piece> {
         let style = &input.spans[span];
         let mut typeface = None;
@@ -831,7 +839,7 @@ impl TextLayouter {
 
     // Adds the hyphen of a line hyphenated at `at`, in the typeface and
     // settings of the text before it, as Android draws it.
-    fn push_hyphen(&mut self, input: &LayoutInput<'_>, at: usize, layout: &mut TextLayout) {
+    fn push_hyphen(&mut self, input: &LayoutInput<'_>, at: usize, layout: &mut LayoutBody) {
         let Some(item) = self.items.get(item_at(&self.items, at.saturating_sub(1))) else {
             return;
         };
@@ -868,7 +876,7 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         part: Range<usize>,
         visible: usize,
-        layout: &mut TextLayout,
+        layout: &mut LayoutBody,
     ) {
         let Self {
             items,

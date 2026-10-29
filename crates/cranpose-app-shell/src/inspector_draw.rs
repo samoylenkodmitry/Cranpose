@@ -99,7 +99,7 @@ impl Canvas {
                 rect,
                 render_text: prepared.render_text(),
                 text: Rc::clone(&prepared.text),
-                layout: Arc::clone(&prepared.layout),
+                layout: prepared.layout.clone(),
                 text_style: Arc::clone(&prepared.visual_style),
                 font_size,
                 layout_options: TextLayoutOptions::default(),

@@ -33,7 +33,7 @@ fn push_text_style_draws_for_test(
         rect,
         text: Rc::clone(&prepared.text),
         render_text: prepared.render_text(),
-        layout: Arc::clone(&prepared.layout),
+        layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
         font_size: 14.0,
         layout_options: TextLayoutOptions::default(),
@@ -117,7 +117,9 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                     },
                     text: cranpose_ui::text::shared_plain_annotated_string("48 px"),
                     render_text: cranpose_ui::text::shared_plain_render_string("48 px"),
-                    layout: Arc::clone(&laid_out("48 px", &TextStyle::default(), 36.0).layout),
+                    layout: laid_out("48 px", &TextStyle::default(), 36.0)
+                        .layout
+                        .clone(),
                     text_style: Default::default(),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),

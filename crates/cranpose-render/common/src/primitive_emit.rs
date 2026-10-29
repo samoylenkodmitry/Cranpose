@@ -130,7 +130,7 @@ pub struct TextDrawParams {
     /// `text` as a renderer's draws carry it across threads.
     pub render_text: std::sync::Arc<cranpose_ui::text::RenderString>,
     /// The lines and glyphs, from `rect`'s top left corner.
-    pub layout: std::sync::Arc<cranpose_text::TextLayout>,
+    pub layout: cranpose_text::TextLayout,
     /// Color that fills the glyphs.
     pub color: Color,
     /// Style the text is drawn with.
@@ -540,10 +540,12 @@ fn text_draw_params(
         return None;
     }
     // A text no text system laid out draws nothing.
-    let layout = text
-        .layout
-        .as_ref()?
-        .downcast::<cranpose_text::TextLayout>()?;
+    let layout = cranpose_text::TextLayout::clone(
+        &*text
+            .layout
+            .as_ref()?
+            .downcast::<cranpose_text::TextLayout>()?,
+    );
     let draw_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
     let rect = apply_layer_to_rect(draw_rect, layer_bounds, layer);
     if !(rect.width > 0.0 && rect.height > 0.0) {

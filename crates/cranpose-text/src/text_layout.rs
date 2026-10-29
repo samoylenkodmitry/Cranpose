@@ -20,21 +20,40 @@ use crate::{
 /// default is empty, ready for [`TextLayouter::layout_into`].
 ///
 /// [`TextLayouter::layout_into`]: crate::TextLayouter::layout_into
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct TextLayout {
+    // The lines and glyphs, shared by the copies aligned at other widths
+    // while their lines keep their places.
+    body: Arc<LayoutBody>,
+    width: f32,
+    did_overflow_width: bool,
+    id: u32,
+}
+
+impl PartialEq for TextLayout {
+    fn eq(&self, other: &Self) -> bool {
+        // Copies that share a body hold the same lines and glyphs.
+        (Arc::ptr_eq(&self.body, &other.body) || self.body == other.body)
+            && self.width == other.width
+            && self.did_overflow_width == other.did_overflow_width
+            && self.id == other.id
+    }
+}
+
+// What a layout holds at every width it is aligned at.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LayoutBody {
     // Most text is one line in one run of one typeface, which these hold
     // without allocating.
     pub(crate) faces: SmallVec<[Typeface; 1]>,
-    // Shared with the copies aligned at other widths, which move no glyph.
+    // Shared with the bodies copied to place the lines anew.
     pub(crate) glyphs: Arc<[ShapedGlyph]>,
     pub(crate) runs: SmallVec<[LineRun; 1]>,
     pub(crate) lines: SmallVec<[LayoutLine; 1]>,
-    pub(crate) width: f32,
     // The widest line with its indent.
     pub(crate) widest: f32,
     pub(crate) height: f32,
     pub(crate) did_overflow_height: bool,
-    pub(crate) did_overflow_width: bool,
     // The widths at which the text breaks into the same lines; `None` when
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
@@ -42,7 +61,6 @@ pub struct TextLayout {
     // How many glyphs, from the first, shaping placed: an ellipsis's and a
     // hyphen's follow them.
     pub(crate) shaped: usize,
-    id: u32,
 }
 
 // The id the next layout made or aligned takes.
@@ -299,18 +317,16 @@ impl GlyphRun<'_> {
     }
 }
 
-impl TextLayout {
-    // Empties the layout, keeping the storage of all but its shared glyphs.
+impl LayoutBody {
+    // Empties the body, keeping the storage of all but its shared glyphs.
     pub(crate) fn clear(&mut self) {
         self.faces.clear();
         self.glyphs = Arc::default();
         self.runs.clear();
         self.lines.clear();
-        self.width = 0.0;
         self.widest = 0.0;
         self.height = 0.0;
         self.did_overflow_height = false;
-        self.did_overflow_width = false;
         self.hold = None;
         self.sizing = Sizing::default();
         self.shaped = 0;
@@ -323,74 +339,27 @@ impl TextLayout {
         self.lines.shrink_to_fit();
     }
 
-    /// A number this layout's glyphs and positions go by: a layout laid out
-    /// or aligned again takes a new one, so a renderer keys what it drew of
-    /// a layout by it; a clone keeps it.
-    pub fn id(&self) -> u32 {
-        self.id
-    }
-
-    // Gives the layout a new id, its glyphs or positions changed.
-    pub(crate) fn renew_id(&mut self) {
-        self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1);
-    }
-
-    /// Whether the text laid out again between `min_width` and `max_width`,
-    /// with the rest of its input the same, breaks into the same lines:
-    /// [`TextLayout::align`] then gives that layout without laying the text
-    /// out again.
-    pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
-        let width = self.sizing.width(min_width, max_width);
-        (width - self.width).abs() < HOLD_MARGIN
-            || self.hold.is_some_and(|hold| {
-                hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
+    // Whether placing the lines across `width` as `align` says moves one:
+    // every justified text does, and other text when a line's place across
+    // the free width changes.
+    fn lines_move(&self, width: f32, align: TextAlign) -> bool {
+        align == TextAlign::Justify
+            || self.lines.iter().any(|line| {
+                line.stretch != 0.0
+                    || line_left(line, width, align).to_bits() != line.left.to_bits()
             })
     }
 
-    /// The width the paragraph takes laid out between `min_width` and
-    /// `max_width`: its max intrinsic width rounded up to whole device
-    /// pixels within them, the max when they are equal.
-    pub fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
-        self.sizing.width(min_width, max_width)
-    }
-
-    /// The max widths, from `.0` up to and with `.1`, at which the paragraph
-    /// laid out from `min_width` keeps its width and its lines: every width
-    /// when its width follows no max, every width from its own when its text
-    /// fits, else only its own width.
-    pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
-        if !self.sizing.follows_max {
-            (f32::NEG_INFINITY, f32::INFINITY)
-        } else if self.width >= self.sizing.content_width.max(min_width) {
-            (self.width, f32::INFINITY)
-        } else {
-            (self.width, self.width)
-        }
-    }
-
-    /// Places the lines across the width the paragraph takes between
-    /// `min_width` and `max_width` as `align` says, for widths the layout
-    /// [holds](TextLayout::holds).
-    pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
-        self.width = self.sizing.width(min_width, max_width);
-        self.did_overflow_width = self.widest > self.width || self.width > max_width;
-        // A glyph that keeps its place keeps the id what a renderer drew of
-        // the layout goes by.
-        if self.align_lines(align) {
-            self.renew_id();
-        }
-    }
-
-    // Places each line across the layout's width as `align` says,
-    // stretching justified lines to the width. True when a line moved or
-    // stretched, moving its glyphs.
-    pub(crate) fn align_lines(&mut self, align: TextAlign) -> bool {
+    // Places each line across `width` as `align` says, stretching justified
+    // lines to the width. True when a line moved or stretched, moving its
+    // glyphs.
+    pub(crate) fn align_lines(&mut self, width: f32, align: TextAlign) -> bool {
         let mut moved = false;
         for index in 0..self.lines.len() {
             let before = (self.lines[index].left, self.lines[index].stretch);
             self.unjustify(index);
             let line = &self.lines[index];
-            let free = self.width - line.indent - line.width;
+            let free = width - line.indent - line.width;
             // Justified text stretches the spaces of each line but the last
             // of its paragraph, as Android's inter-word justification does.
             let justified = align == TextAlign::Justify
@@ -402,11 +371,8 @@ impl TextLayout {
             line.left = if stretched {
                 0.0
             } else {
-                align_fraction(align, line.level) * free
+                line_left(line, width, align)
             };
-            if !line.level.is_rtl() {
-                line.left += line.indent;
-            }
             moved |= line.left.to_bits() != before.0.to_bits()
                 || line.stretch.to_bits() != before.1.to_bits();
         }
@@ -464,6 +430,99 @@ impl TextLayout {
         line.stretch = free;
         true
     }
+}
+
+impl TextLayout {
+    // The layout of `body`, whose lines are placed across `width`, laid out
+    // to be at most `max_width` wide.
+    pub(crate) fn new(body: LayoutBody, width: f32, max_width: f32) -> Self {
+        let mut layout = Self {
+            did_overflow_width: body.widest > width || width > max_width,
+            body: Arc::new(body),
+            width,
+            id: 0,
+        };
+        layout.renew_id();
+        layout
+    }
+
+    // Lays the layout out again: `fill` fills its body, in the body's own
+    // storage when no copy shares it, and gives the width its lines are
+    // placed across; the layout is at most `max_width` wide.
+    pub(crate) fn refill(&mut self, max_width: f32, fill: impl FnOnce(&mut LayoutBody) -> f32) {
+        if Arc::get_mut(&mut self.body).is_none() {
+            self.body = Arc::default();
+        }
+        let body = Arc::make_mut(&mut self.body);
+        self.width = fill(body);
+        self.did_overflow_width = body.widest > self.width || self.width > max_width;
+        self.renew_id();
+    }
+
+    // The body, which the layouter reads glyphs shaped before from.
+    pub(crate) fn body(&self) -> &LayoutBody {
+        &self.body
+    }
+
+    /// A number this layout's glyphs and positions go by: a layout laid out
+    /// or aligned again takes a new one, so a renderer keys what it drew of
+    /// a layout by it; a clone keeps it.
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    // Gives the layout a new id, its glyphs or positions changed.
+    pub(crate) fn renew_id(&mut self) {
+        self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1);
+    }
+
+    /// Whether the text laid out again between `min_width` and `max_width`,
+    /// with the rest of its input the same, breaks into the same lines:
+    /// [`TextLayout::align`] then gives that layout without laying the text
+    /// out again.
+    pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
+        let width = self.body.sizing.width(min_width, max_width);
+        (width - self.width).abs() < HOLD_MARGIN
+            || self.body.hold.is_some_and(|hold| {
+                hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
+            })
+    }
+
+    /// The width the paragraph takes laid out between `min_width` and
+    /// `max_width`: its max intrinsic width rounded up to whole device
+    /// pixels within them, the max when they are equal.
+    pub fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
+        self.body.sizing.width(min_width, max_width)
+    }
+
+    /// The max widths, from `.0` up to and with `.1`, at which the paragraph
+    /// laid out from `min_width` keeps its width and its lines: every width
+    /// when its width follows no max, every width from its own when its text
+    /// fits, else only its own width.
+    pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
+        if !self.body.sizing.follows_max {
+            (f32::NEG_INFINITY, f32::INFINITY)
+        } else if self.width >= self.body.sizing.content_width.max(min_width) {
+            (self.width, f32::INFINITY)
+        } else {
+            (self.width, self.width)
+        }
+    }
+
+    /// Places the lines across the width the paragraph takes between
+    /// `min_width` and `max_width` as `align` says, for widths the layout
+    /// [holds](TextLayout::holds).
+    pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
+        self.width = self.body.sizing.width(min_width, max_width);
+        self.did_overflow_width = self.body.widest > self.width || self.width > max_width;
+        // Lines that keep their places keep the body the copies share, and
+        // the id what a renderer drew of the layout goes by.
+        if self.body.lines_move(self.width, align)
+            && Arc::make_mut(&mut self.body).align_lines(self.width, align)
+        {
+            self.renew_id();
+        }
+    }
 
     /// The paragraph's width: its max intrinsic width rounded up to whole
     /// device pixels, within the widths it was laid out between.
@@ -473,18 +532,18 @@ impl TextLayout {
 
     /// The height of all lines.
     pub fn height(&self) -> f32 {
-        self.height
+        self.body.height
     }
 
     /// The number of lines, at least one.
     pub fn line_count(&self) -> usize {
-        self.lines.len()
+        self.body.lines.len()
     }
 
     /// Whether the text had more lines than the line limit: Compose's
     /// `didOverflowHeight` of a layout the line limit cut.
     pub fn did_overflow_height(&self) -> bool {
-        self.did_overflow_height
+        self.body.did_overflow_height
     }
 
     /// Whether the paragraph is wider than the widest it was laid out at, or
@@ -495,72 +554,74 @@ impl TextLayout {
 
     /// Whether `line` shows an ellipsis in place of text.
     pub fn is_line_ellipsized(&self, line: usize) -> bool {
-        self.lines[line].ellipsized
+        self.body.lines[line].ellipsized
     }
 
     /// The offset where `line` starts. Panics when `line` is out of range, as
     /// Compose throws.
     pub fn line_start(&self, line: usize) -> usize {
-        self.lines[line].text.start
+        self.body.lines[line].text.start
     }
 
     /// The offset where `line` ends, after its line break and trailing
     /// whitespace.
     pub fn line_end(&self, line: usize) -> usize {
-        self.lines[line].text.end
+        self.body.lines[line].text.end
     }
 
     /// The offset where the visible text of `line` ends, before its line
     /// break and trailing whitespace: Compose's `getLineEnd(line, true)`.
     pub fn line_visible_end(&self, line: usize) -> usize {
-        self.lines[line].visible_end
+        self.body.lines[line].visible_end
     }
 
     /// The top of `line`.
     pub fn line_top(&self, line: usize) -> f32 {
-        self.lines[line].top
+        self.body.lines[line].top
     }
 
     /// The bottom of `line`.
     pub fn line_bottom(&self, line: usize) -> f32 {
-        self.lines[line].bottom
+        self.body.lines[line].bottom
     }
 
     /// The baseline of `line`.
     pub fn line_baseline(&self, line: usize) -> f32 {
-        self.lines[line].baseline
+        self.body.lines[line].baseline
     }
 
     /// The left edge of the visible text of `line`.
     pub fn line_left(&self, line: usize) -> f32 {
-        self.lines[line].left
+        self.body.lines[line].left
     }
 
     /// The right edge of the visible text of `line`.
     pub fn line_right(&self, line: usize) -> f32 {
-        self.lines[line].right()
+        self.body.lines[line].right()
     }
 
     /// The line that holds `offset`; the last line for the end of the text.
     pub fn line_for_offset(&self, offset: usize) -> usize {
-        self.lines
+        self.body
+            .lines
             .partition_point(|line| line.text.end <= offset)
-            .min(self.lines.len() - 1)
+            .min(self.body.lines.len() - 1)
     }
 
     /// The line at height `y`, the first above the text and the last below it.
     pub fn line_for_vertical_position(&self, y: f32) -> usize {
-        self.lines
+        self.body
+            .lines
             .partition_point(|line| line.bottom <= y)
-            .min(self.lines.len() - 1)
+            .min(self.body.lines.len() - 1)
     }
 
     /// The x of a caret at `offset`. Where the text before and after `offset`
     /// runs in different directions the caret has two places, and `direction`
     /// picks one.
     pub fn horizontal_position(&self, offset: usize, direction: CaretDirection) -> f32 {
-        let line = &self.lines[self.line_for_offset(offset)];
-        let runs = &self.runs[line.runs.clone()];
+        let line = &self.body.lines[self.line_for_offset(offset)];
+        let runs = &self.body.runs[line.runs.clone()];
         let after = runs
             .iter()
             .find(|run| run.text.start <= offset && offset < run.text.end);
@@ -589,8 +650,8 @@ impl TextLayout {
 
     /// The offset of the caret nearest to the point `x`, `y`.
     pub fn offset_for_position(&self, x: f32, y: f32) -> usize {
-        let line = &self.lines[self.line_for_vertical_position(y)];
-        let runs = &self.runs[line.runs.clone()];
+        let line = &self.body.lines[self.line_for_vertical_position(y)];
+        let runs = &self.body.runs[line.runs.clone()];
         let local = x - line.left;
         let Some(run) = runs
             .iter()
@@ -604,13 +665,13 @@ impl TextLayout {
 
     /// The glyph runs of `line`, left to right.
     pub fn glyph_runs(&self, line: usize) -> impl Iterator<Item = GlyphRun<'_>> + '_ {
-        let line = &self.lines[line];
-        self.runs[line.runs.clone()]
+        let line = &self.body.lines[line];
+        self.body.runs[line.runs.clone()]
             .iter()
             .map(move |run| GlyphRun {
-                typeface: &self.faces[run.face],
+                typeface: &self.body.faces[run.face],
                 size: run.size,
-                glyphs: &self.glyphs[run.glyphs.clone()],
+                glyphs: &self.body.glyphs[run.glyphs.clone()],
                 run,
                 pen: line.left + run.left(),
                 baseline: line.baseline,
@@ -621,9 +682,9 @@ impl TextLayout {
     /// `getBoundingBox`. A zero-width box at the caret for an offset with no
     /// character, such as the end of the text.
     pub fn bounding_box(&self, offset: usize) -> Rect {
-        let line = &self.lines[self.line_for_offset(offset)];
-        let found = self.runs[line.runs.clone()].iter().find_map(|run| {
-            run.cluster_spans(&self.glyphs[run.glyphs.clone()])
+        let line = &self.body.lines[self.line_for_offset(offset)];
+        let found = self.body.runs[line.runs.clone()].iter().find_map(|run| {
+            run.cluster_spans(&self.body.glyphs[run.glyphs.clone()])
                 .find(|(_, cluster, end)| (cluster.offset..*end).contains(&offset))
                 .map(|(left, cluster, _)| (run.left() + left, cluster.width))
         });
@@ -644,7 +705,7 @@ impl TextLayout {
     /// The caret at `offset` as a zero-width rectangle across its line:
     /// Compose's `getCursorRect`.
     pub fn cursor_rect(&self, offset: usize) -> Rect {
-        let line = &self.lines[self.line_for_offset(offset)];
+        let line = &self.body.lines[self.line_for_offset(offset)];
         Rect {
             x: self.horizontal_position(offset, CaretDirection::Primary),
             y: line.top,
@@ -657,14 +718,14 @@ impl TextLayout {
     /// to `end` line by line, one for each stretch of it that runs in one
     /// direction: Compose's `getPathForRange` as rectangles.
     pub fn selection_rects(&self, start: usize, end: usize, rects: &mut Vec<Rect>) {
-        for line in &self.lines {
+        for line in &self.body.lines {
             if line.text.end <= start || line.text.start >= end {
                 continue;
             }
             let mut open: Option<(f32, f32)> = None;
-            for run in &self.runs[line.runs.clone()] {
+            for run in &self.body.runs[line.runs.clone()] {
                 for (left, cluster, cluster_end) in
-                    run.cluster_spans(&self.glyphs[run.glyphs.clone()])
+                    run.cluster_spans(&self.body.glyphs[run.glyphs.clone()])
                 {
                     let x = run.left() + left;
                     let covered = cluster.offset < end && cluster_end > start;
@@ -688,7 +749,7 @@ impl TextLayout {
     // The caret x of `offset` inside `run`, from the line's left edge.
     fn caret_in_run(&self, run: &LineRun, offset: usize) -> f32 {
         let before: f32 = run
-            .clusters(&self.glyphs[run.glyphs.clone()])
+            .clusters(&self.body.glyphs[run.glyphs.clone()])
             .filter(|cluster| cluster.offset < offset)
             .map(|cluster| cluster.width)
             .sum();
@@ -702,7 +763,7 @@ impl TextLayout {
     // The offset nearest to `x` pixels from the left edge of `run`: each
     // cluster's left half gives the offset on its left.
     fn offset_in_run(&self, run: &LineRun, x: f32) -> usize {
-        for (left, cluster, end) in run.cluster_spans(&self.glyphs[run.glyphs.clone()]) {
+        for (left, cluster, end) in run.cluster_spans(&self.body.glyphs[run.glyphs.clone()]) {
             if x < left + cluster.width / 2.0 {
                 return if run.level.is_rtl() {
                     end
@@ -716,6 +777,17 @@ impl TextLayout {
         } else {
             run.text.end
         }
+    }
+}
+
+// Where `align` places the left edge of `line` across `width`, unjustified.
+fn line_left(line: &LayoutLine, width: f32, align: TextAlign) -> f32 {
+    let free = width - line.indent - line.width;
+    let left = align_fraction(align, line.level) * free;
+    if line.level.is_rtl() {
+        left
+    } else {
+        left + line.indent
     }
 }
 

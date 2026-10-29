@@ -5,7 +5,7 @@ use crate::{
     layout_input::LayoutInput,
     line_box::FontExtent,
     shaped_item::{Piece, scale},
-    text_layout::{LineRun, TextLayout},
+    text_layout::{LayoutBody, LineRun},
     typeface::Typeface,
 };
 
@@ -14,7 +14,7 @@ use crate::{
 pub(crate) fn place_runs(
     pieces: &[Piece],
     visible: usize,
-    layout: &mut TextLayout,
+    layout: &mut LayoutBody,
 ) -> (Range<usize>, f32) {
     let first = layout.runs.len();
     let mut x = 0.0;
@@ -57,7 +57,7 @@ pub(crate) fn line_extent(
     pieces: &[Piece],
     input: &LayoutInput<'_>,
     resolver: &FontFamilyResolver,
-    layout: &TextLayout,
+    layout: &LayoutBody,
     start: usize,
 ) -> FontExtent {
     let extent = |face: &Typeface, scale: f32| {

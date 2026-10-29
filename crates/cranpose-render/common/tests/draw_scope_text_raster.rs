@@ -1,7 +1,5 @@
 #![cfg(feature = "embedded-default-font")]
 
-use std::sync::Arc;
-
 use cranpose_render_common::{
     glyph_mask::GlyphMaskCache,
     text_atlas::{AtlasGlyph, collect_solid_text_atlas_run},
@@ -20,7 +18,7 @@ const GLYPH_CACHE_CAPACITY: usize = 512;
 // fonts a renderer without app fonts hands its app.
 struct Measured {
     measurement: TextMeasurement,
-    layout: Arc<TextLayout>,
+    layout: TextLayout,
     line_box: Option<LineBox>,
 }
 
@@ -31,7 +29,7 @@ fn measured(text: &str, style: &DrawTextStyle) -> Measured {
         let handle = measured.layout.expect("an app context lays text out");
         Measured {
             measurement: measured.measurement,
-            layout: handle.downcast::<TextLayout>().expect("an engine layout"),
+            layout: TextLayout::clone(&handle.downcast::<TextLayout>().expect("an engine layout")),
             line_box: draw_style_line_box(style),
         }
     })

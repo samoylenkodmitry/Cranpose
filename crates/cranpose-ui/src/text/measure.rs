@@ -10,6 +10,7 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
+use cranpose_ui_graphics::TextLayoutHandle;
 use smallvec::SmallVec;
 
 use super::{
@@ -52,7 +53,7 @@ pub struct PreparedTextLayout {
     /// from this layout.
     pub visual_style: Arc<TextStyle>,
     /// The lines and glyphs.
-    pub layout: Arc<TextLayout>,
+    pub layout: TextLayout,
     /// Size and line count.
     pub metrics: TextMetrics,
     /// The first and last baselines.
@@ -65,6 +66,8 @@ pub struct PreparedTextLayout {
     /// converted on first use: see [`PreparedTextLayout::render_text`].
     pub render_text: OnceCell<(Arc<RenderString>, u64)>,
     pub(crate) visual_style_hash: OnceCell<u64>,
+    // The layout as a draw scope carries it, made on first use.
+    layout_handle: OnceCell<TextLayoutHandle>,
 }
 
 impl PreparedTextLayout {
@@ -92,10 +95,19 @@ impl PreparedTextLayout {
             metrics,
             text,
             visual_style: style,
-            layout: Arc::new(layout),
+            layout,
             render_text: OnceCell::new(),
             visual_style_hash: OnceCell::new(),
+            layout_handle: OnceCell::new(),
         }
+    }
+
+    // The layout as a draw scope carries it to a renderer, made once for
+    // every frame that draws the same text.
+    pub(crate) fn layout_handle(&self) -> TextLayoutHandle {
+        self.layout_handle
+            .get_or_init(|| TextLayoutHandle::from(Arc::new(self.layout.clone())))
+            .clone()
     }
 
     // This layout at the widths of `frame`, at which it breaks into the
@@ -107,7 +119,7 @@ impl PreparedTextLayout {
         if width.to_bits() == self.layout.width().to_bits() {
             return Rc::clone(self);
         }
-        let mut layout = TextLayout::clone(&self.layout);
+        let mut layout = self.layout.clone();
         layout.align(frame.min_width, frame.max_width, align);
         let min_lines = frame.options.normalized().min_lines;
         Rc::new(Self {
@@ -162,7 +174,7 @@ impl PreparedTextLayout {
 
     /// The layout's queries, as Compose's `TextLayoutResult` gives them.
     pub fn result(&self) -> TextLayoutResult {
-        TextLayoutResult::new(Arc::clone(&self.layout))
+        TextLayoutResult::new(self.layout.clone())
     }
 }
 
