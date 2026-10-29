@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 
 use crate::{
     density::Density,
-    text::{AnnotatedString, TextLayoutOptions, TextStyle, measure::CacheAdmission},
+    text::{AnnotatedString, TextLayoutOptions, TextStyle, layout_cache::CacheAdmission},
 };
 
 /// Node that stores text content and handles measurement, drawing, and semantics.

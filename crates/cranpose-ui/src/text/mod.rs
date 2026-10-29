@@ -2,6 +2,7 @@ pub use cranpose_text::{
     annotated_string, decoration, font, layout_options, line_box, paragraph, style, unit,
 };
 pub mod draw_scope_text;
+pub(crate) mod layout_cache;
 mod layout_input;
 /// Text measurement, line wrapping and cursor hit testing.
 pub mod measure;
@@ -9,6 +10,7 @@ pub(crate) mod shared_plain_text;
 mod shared_text;
 #[cfg(any(test, feature = "test-helpers"))]
 mod test_fonts;
+mod text_key;
 
 pub use annotated_string::{
     AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,

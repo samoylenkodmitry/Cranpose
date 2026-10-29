@@ -20,7 +20,8 @@ use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size, WindowCoordin
 use crate::{
     text::{
         AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextStyle,
-        measure::{CacheAdmission, SharedText, TextFrame, prepare_shared},
+        layout_cache::CacheAdmission,
+        measure::{SharedText, TextFrame, prepare_shared},
     },
     text_selection::{
         MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionAnchor, SelectionGranularity,

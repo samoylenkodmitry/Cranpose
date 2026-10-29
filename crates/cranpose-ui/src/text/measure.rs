@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, OnceCell, RefCell},
-    hash::{Hash, Hasher},
     ops::Range,
     rc::Rc,
     sync::Arc,
@@ -11,23 +10,19 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::{HashBits, MemoryHeadroom, TextLayoutHandle};
-use smallvec::SmallVec;
+use cranpose_ui_graphics::{MemoryHeadroom, TextLayoutHandle};
 
 use super::{
     AnnotatedString, LineBox, RenderString, SpanStyle, TextAlign, TextDrawStyle, TextUnit,
+    layout_cache::{CacheAdmission, Cached, LayoutCache},
     layout_input::{DEFAULT_FONT_SIZE_SP, ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
     style::TextStyle,
+    text_key::TextKey,
 };
 use crate::{density::Density, font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
 
-/// Prepared layouts kept across nodes. Each node keeps its own, so this
-/// serves the items a list composes again, a few screens of them.
-const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
-// Layouts kept for one text at different widths.
-const WIDTHS_PER_TEXT: usize = 2;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
@@ -188,74 +183,6 @@ impl PartialEq for PreparedTextLayout {
     }
 }
 
-// What a layout is cached by: the text and style hashes, the options and the
-// units its sizes became pixels in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TextKey {
-    text_hash: u64,
-    style_hash: u64,
-    options: TextLayoutOptions,
-    // The density's bits, the font scale curve's fingerprint and the size
-    // factor's bits.
-    units: (u32, u32, u32),
-}
-
-impl TextKey {
-    // The key of `text` in `style` by `style_hash`; `None` for a text with
-    // annotations, which a layout of another text with the same look must
-    // not stand in for.
-    fn of(
-        text: &AnnotatedString,
-        style_hash: u64,
-        options: TextLayoutOptions,
-        units: TextUnits,
-    ) -> Option<Self> {
-        (text.string_annotations.is_empty() && text.link_annotations.is_empty()).then(|| Self {
-            text_hash: text.render_hash(),
-            style_hash,
-            options: options.normalized(),
-            units: (
-                units.density.density().to_bits(),
-                units.density.font_scale_curve().fingerprint(),
-                units.factor.to_bits(),
-            ),
-        })
-    }
-
-    // The text's and the style's hashes in one, mixed into the high bits.
-    // The options and units, which an app's texts rarely differ in, are left
-    // to equality.
-    fn mixed_hash(&self) -> u64 {
-        (self.text_hash ^ self.style_hash.rotate_left(32)).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-    }
-}
-
-impl Hash for TextKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(self.mixed_hash());
-    }
-}
-
-// What the text service's shared cache holds of a text for a frame.
-enum Cached {
-    // A layout that breaks into the same lines, aligned to the frame.
-    Held(Rc<PreparedTextLayout>),
-    // Layouts at other widths, which a new one joins.
-    OtherWidths,
-    Missing,
-}
-
-// When the text service's shared cache keeps a layout it missed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CacheAdmission {
-    // At once: a node's first text, which a list composes again.
-    First,
-    // Once asked for again since the doorkeeper last forgot: text changed
-    // in place or drawn by a draw scope, whose strings come back only
-    // sometimes, as a stat's do, or never, as a ticker's.
-    Second,
-}
-
 /// The text and style a layout is prepared from: borrowed, which the layout
 /// copies, or shared with the node that holds them.
 #[derive(Clone, Copy)]
@@ -357,15 +284,8 @@ pub(crate) struct TextService {
     pass_owed: Cell<bool>,
     fonts: RefCell<FontFamilyResolver>,
     layouter: RefCell<TextLayouter>,
-    prepared: RefCell<PassAgedCache<TextKey, SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>>>,
+    layouts: RefCell<LayoutCache>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
-    // The keys of layouts missed once, by which a text missed again goes
-    // into the cache: a string drawn every frame keeps its second layout,
-    // and one drawn once keeps nothing.
-    seen: RefCell<HashBits>,
-    // The host's memory headroom when the pass began. A tight heap keeps
-    // no layout of a text that changes in place.
-    headroom: Cell<MemoryHeadroom>,
 }
 
 impl TextService {
@@ -375,14 +295,10 @@ impl TextService {
             pass_owed: Cell::new(false),
             fonts: RefCell::new(default_fonts()),
             layouter: RefCell::new(TextLayouter::default()),
-            prepared: RefCell::new(PassAgedCache::with_capacity_at_least_one(
-                TEXT_PREPARED_CACHE_CAPACITY,
-            )),
+            layouts: RefCell::new(LayoutCache::new()),
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
-            seen: RefCell::default(),
-            headroom: Cell::default(),
         }
     }
 
@@ -391,8 +307,7 @@ impl TextService {
         *self.fonts.borrow_mut() = fonts;
         self.generation
             .set(self.generation.get().wrapping_add(1).max(1));
-        self.prepared.borrow_mut().clear();
-        *self.seen.borrow_mut() = HashBits::default();
+        self.layouts.borrow_mut().clear();
         self.intrinsics.borrow_mut().clear();
     }
 
@@ -411,61 +326,20 @@ impl TextService {
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
         let key = TextKey::of(text, source.style_hash(), frame.options, units);
-        let cached = key.map_or(Cached::Missing, |key| self.cached(key, frame, style));
-        let other_widths = match cached {
-            Cached::Held(prepared) => return prepared,
-            Cached::OtherWidths => true,
-            Cached::Missing => false,
+        let cached = key.map(|key| (key, self.layouts.borrow_mut().cached(key, frame, style)));
+        let missed = match cached {
+            Some((_, Cached::Held(prepared))) => return prepared,
+            Some((key, Cached::Missed(miss))) => Some((key, miss)),
+            None => None,
         };
         let (text, style) = source.shared();
         let prepared = Rc::new(self.lay_out(text, style, frame, (units, source.shaped())));
-        if let Some(key) = key {
-            if other_widths {
-                if let Some(widths) = self.prepared.borrow_mut().get_mut(&key) {
-                    remember(widths, &prepared);
-                }
-            } else {
-                let admitted = match admission {
-                    CacheAdmission::First => true,
-                    CacheAdmission::Second if self.headroom.get() == MemoryHeadroom::Ample => {
-                        let hash = key.mixed_hash();
-                        let mut seen = self.seen.borrow_mut();
-                        seen.contains(hash) || {
-                            seen.insert(hash);
-                            false
-                        }
-                    }
-                    CacheAdmission::Second => false,
-                };
-                if admitted {
-                    let widths = SmallVec::from_elem(Rc::clone(&prepared), 1);
-                    self.prepared.borrow_mut().push(key, widths);
-                }
-            }
+        if let Some((key, miss)) = missed {
+            self.layouts
+                .borrow_mut()
+                .keep(key, &prepared, (miss, admission));
         }
         prepared
-    }
-
-    // What the shared cache holds of `key` for `frame`: a layout that
-    // breaks into the same lines, aligned to its widths, or layouts at
-    // other widths only, or nothing.
-    fn cached(&self, key: TextKey, frame: TextFrame, style: &TextStyle) -> Cached {
-        let mut cache = self.prepared.borrow_mut();
-        let Some(widths) = cache.get_mut(&key) else {
-            return Cached::Missing;
-        };
-        let Some(held) = widths
-            .iter()
-            .find(|prepared| prepared.layout.holds(frame.min_width, frame.max_width))
-            .map(Rc::clone)
-        else {
-            return Cached::OtherWidths;
-        };
-        let aligned = held.at_widths(frame, style.paragraph_style.text_align);
-        if !Rc::ptr_eq(&aligned, &held) {
-            remember(widths, &aligned);
-        }
-        Cached::Held(aligned)
     }
 
     // Lays `text` out in `style`, auto-sizing it when its options ask, with
@@ -638,9 +512,8 @@ impl TextService {
             MemoryHeadroom::Ample => IDLE_PASSES,
             MemoryHeadroom::Tight => 1,
         };
-        self.prepared.borrow_mut().begin_pass(idle_passes, drop);
+        self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
-        self.headroom.set(headroom);
         self.layouter.borrow_mut().set_memory_headroom(headroom);
     }
 
@@ -712,15 +585,6 @@ fn scale_span_drawing(span: &mut SpanStyle, factor: f32) {
     if let Some(TextDrawStyle::Stroke { width }) = &mut span.draw_style {
         *width *= factor;
     }
-}
-
-// Puts `prepared` first among the layouts of one text, keeping the newest.
-fn remember(
-    widths: &mut SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>,
-    prepared: &Rc<PreparedTextLayout>,
-) {
-    widths.insert(0, Rc::clone(prepared));
-    widths.truncate(WIDTHS_PER_TEXT);
 }
 
 // Text sizes at the host's density and font scale.
