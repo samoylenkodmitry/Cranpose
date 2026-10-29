@@ -15,11 +15,13 @@ use read_fonts::{
             ReverseChainSingleSubst, SingleSubst, SubstitutionLookup, SubstitutionSubtables,
         },
         layout::{
-            ChainedSequenceContext, CoverageTable, FeatureList, LookupFlag, ScriptList,
-            SequenceContext,
+            ChainedSequenceContext, ChainedSequenceContextFormat1, ChainedSequenceContextFormat2,
+            ChainedSequenceContextFormat3, ClassDef, CoverageTable, FeatureList, LookupFlag,
+            ScriptList, SequenceContext, SequenceContextFormat1, SequenceContextFormat2,
+            SequenceContextFormat3,
         },
     },
-    types::{GlyphId, Tag},
+    types::{BigEndian, GlyphId, GlyphId16, Tag},
 };
 
 use crate::{
@@ -68,6 +70,64 @@ struct Starts<'a> {
     space: Option<GlyphId>,
     // The font's bytes, where kerning subtables are found again.
     font: &'a [u8],
+    // How many more pairs contextual rules may add.
+    room: usize,
+}
+
+// The most pairs the contextual rules of a plan add; the glyphs a rule that
+// would add more starts at are busy.
+const MOST_CONTEXT_PAIRS: usize = 512;
+
+// The glyphs a contextual rule reads beside the glyph it starts at: in a
+// run of plain glyphs, the glyph next to it on that side.
+#[derive(Clone)]
+enum Beside<'a> {
+    // It reads none: it applies to its first glyph alone.
+    Nothing,
+    After(Glyphs<'a>),
+    Before(Glyphs<'a>),
+}
+
+// The glyphs a rule reads at one place.
+#[derive(Clone)]
+enum Glyphs<'a> {
+    One(GlyphId),
+    Covered(CoverageTable<'a>),
+    // A class of glyphs; class 0 holds every glyph no class names.
+    Class(ClassDef<'a>, u32),
+}
+
+impl Glyphs<'_> {
+    // Runs `each` on the glyphs; `None` when `each` gives `None`, or for
+    // class 0, whose glyphs no list holds.
+    fn each(&self, mut each: impl FnMut(GlyphId) -> Option<()>) -> Option<()> {
+        match self {
+            Self::One(glyph) => each(*glyph),
+            Self::Covered(coverage) => coverage.iter().try_for_each(each),
+            Self::Class(_, 0) => None,
+            Self::Class(classes, class) => classes
+                .iter()
+                .filter(|&(_, of)| of == *class)
+                .try_for_each(|(glyph, _)| each(glyph)),
+        }
+    }
+}
+
+// What a rule reads beside its first glyph: after it, else before it.
+fn beside<'a>(after: Option<Glyphs<'a>>, before: Option<Glyphs<'a>>) -> Beside<'a> {
+    match (after, before) {
+        (Some(after), _) => Beside::After(after),
+        (None, Some(before)) => Beside::Before(before),
+        (None, None) => Beside::Nothing,
+    }
+}
+
+fn one(glyph: &BigEndian<GlyphId16>) -> Glyphs<'static> {
+    Glyphs::One(glyph.get().into())
+}
+
+fn class<'a>(classes: &ClassDef<'a>, class: &BigEndian<u16>) -> Glyphs<'a> {
+    Glyphs::Class(classes.clone(), u32::from(class.get()))
 }
 
 impl PlainGlyphs {
@@ -107,10 +167,13 @@ impl PlainGlyphs {
             kerning: Vec::new(),
             space: font.cmap().ok().and_then(|cmap| cmap.map_codepoint(' ')),
             font: font.data().as_bytes(),
+            room: MOST_CONTEXT_PAIRS,
         };
+        // The marks first: a contextual rule needs no pair with a glyph that
+        // is busy already.
+        mark_glyphs(font, &mut starts.busy)?;
         substitution_starts(font, scripts.as_slice(), &tags, &mut starts)?;
         positioning_starts(font, scripts.as_slice(), &tags, &mut starts)?;
-        mark_glyphs(font, &mut starts.busy)?;
         starts.pairs.sort_unstable();
         starts.pairs.dedup();
         Some(Self {
@@ -417,6 +480,198 @@ impl Starts<'_> {
         }
         Some(())
     }
+
+    // The rules of a contextual subtable, each as the pairs of the glyph it
+    // starts at with the glyphs it reads beside it: a plain run holds such a
+    // pair nowhere, so the rule cannot match in it. The glyphs a subtable
+    // starts at are busy when it may skip glyphs between those it reads, as
+    // `flag` lets it, or when `read` gives up: on rules past the room left,
+    // or reading class 0.
+    fn rules(
+        &mut self,
+        firsts: Start<'_>,
+        flag: LookupFlag,
+        read: impl FnOnce(&mut Self) -> Option<()>,
+    ) -> Option<()> {
+        let firsts = firsts?.ok()?;
+        let (added, room) = (self.pairs.len(), self.room);
+        if skips_glyphs(flag) || read(self).is_none() {
+            self.pairs.truncate(added);
+            self.room = room;
+            self.busy.extend_unsorted(firsts.iter());
+        }
+        Some(())
+    }
+
+    // A rule starting at `first` reading `beside`: its pairs with the glyphs
+    // that are not busy, or `first` busy when it reads nothing beside.
+    fn rule(&mut self, first: GlyphId, beside: Beside<'_>) -> Option<()> {
+        let (glyphs, after) = match beside {
+            Beside::Nothing => {
+                self.busy.insert(first);
+                return Some(());
+            }
+            Beside::After(glyphs) => (glyphs, true),
+            Beside::Before(glyphs) => (glyphs, false),
+        };
+        if self.busy.contains(first) {
+            return Some(());
+        }
+        glyphs.each(|other| {
+            if self.busy.contains(other) {
+                return Some(());
+            }
+            self.room = self.room.checked_sub(1)?;
+            let (one, two) = if after {
+                (first, other)
+            } else {
+                (other, first)
+            };
+            self.pairs.push((one.to_u32(), two.to_u32()));
+            Some(())
+        })
+    }
+
+    fn context(&mut self, context: &SequenceContext<'_>, flag: LookupFlag) -> Option<()> {
+        self.rules(context_start(context), flag, |starts| match context {
+            SequenceContext::Format1(format) => starts.glyph_rules(format),
+            SequenceContext::Format2(format) => starts.class_rules(format),
+            SequenceContext::Format3(format) => starts.coverage_rule(format),
+            _ => None,
+        })
+    }
+
+    fn chained_context(
+        &mut self,
+        context: &ChainedSequenceContext<'_>,
+        flag: LookupFlag,
+    ) -> Option<()> {
+        self.rules(
+            chained_context_start(context),
+            flag,
+            |starts| match context {
+                ChainedSequenceContext::Format1(format) => starts.chained_glyph_rules(format),
+                ChainedSequenceContext::Format2(format) => starts.chained_class_rules(format),
+                ChainedSequenceContext::Format3(format) => starts.chained_coverage_rule(format),
+                _ => None,
+            },
+        )
+    }
+
+    fn glyph_rules(&mut self, format: &SequenceContextFormat1<'_>) -> Option<()> {
+        let sets = format.seq_rule_sets();
+        for (first, set) in format.coverage().ok()?.iter().zip(sets.iter()) {
+            let Some(set) = set else {
+                continue;
+            };
+            for rule in set.ok()?.seq_rules().iter() {
+                let after = rule.ok()?.input_sequence().first().map(one);
+                self.rule(first, beside(after, None))?;
+            }
+        }
+        Some(())
+    }
+
+    fn class_rules(&mut self, format: &SequenceContextFormat2<'_>) -> Option<()> {
+        let classes = format.class_def().ok()?;
+        let sets = format.class_seq_rule_sets();
+        for first in format.coverage().ok()?.iter() {
+            let index = class_index(classes.get(first));
+            let Some(set) = sets.get(index).filter(|_| index < sets.len()) else {
+                continue;
+            };
+            for rule in set.ok()?.class_seq_rules().iter() {
+                let after = rule
+                    .ok()?
+                    .input_sequence()
+                    .first()
+                    .map(|next| class(&classes, next));
+                self.rule(first, beside(after, None))?;
+            }
+        }
+        Some(())
+    }
+
+    fn coverage_rule(&mut self, format: &SequenceContextFormat3<'_>) -> Option<()> {
+        let coverages = format.coverages();
+        let after = match coverages.len() {
+            0 | 1 => None,
+            _ => Some(Glyphs::Covered(coverages.get(1).ok()?)),
+        };
+        let beside = beside(after, None);
+        for first in coverages.get(0).ok()?.iter() {
+            self.rule(first, beside.clone())?;
+        }
+        Some(())
+    }
+
+    fn chained_glyph_rules(&mut self, format: &ChainedSequenceContextFormat1<'_>) -> Option<()> {
+        let sets = format.chained_seq_rule_sets();
+        for (first, set) in format.coverage().ok()?.iter().zip(sets.iter()) {
+            let Some(set) = set else {
+                continue;
+            };
+            for rule in set.ok()?.chained_seq_rules().iter() {
+                let rule = rule.ok()?;
+                let next = rule.input_sequence().first();
+                let after = next.or(rule.lookahead_sequence().first()).map(one);
+                let before = rule.backtrack_sequence().first().map(one);
+                self.rule(first, beside(after, before))?;
+            }
+        }
+        Some(())
+    }
+
+    fn chained_class_rules(&mut self, format: &ChainedSequenceContextFormat2<'_>) -> Option<()> {
+        let input = format.input_class_def().ok()?;
+        let lookahead = format.lookahead_class_def().ok()?;
+        let backtrack = format.backtrack_class_def().ok()?;
+        let sets = format.chained_class_seq_rule_sets();
+        for first in format.coverage().ok()?.iter() {
+            let index = class_index(input.get(first));
+            let Some(set) = sets.get(index).filter(|_| index < sets.len()) else {
+                continue;
+            };
+            for rule in set.ok()?.chained_class_seq_rules().iter() {
+                let rule = rule.ok()?;
+                let after = match rule.input_sequence().first() {
+                    Some(next) => Some(class(&input, next)),
+                    None => rule
+                        .lookahead_sequence()
+                        .first()
+                        .map(|next| class(&lookahead, next)),
+                };
+                let before = rule
+                    .backtrack_sequence()
+                    .first()
+                    .map(|previous| class(&backtrack, previous));
+                self.rule(first, beside(after, before))?;
+            }
+        }
+        Some(())
+    }
+
+    fn chained_coverage_rule(&mut self, format: &ChainedSequenceContextFormat3<'_>) -> Option<()> {
+        let inputs = format.input_coverages();
+        let lookahead = format.lookahead_coverages();
+        let backtrack = format.backtrack_coverages();
+        let after = if inputs.len() > 1 {
+            Some(inputs.get(1).ok()?)
+        } else if lookahead.len() > 0 {
+            Some(lookahead.get(0).ok()?)
+        } else {
+            None
+        };
+        let before = match backtrack.len() {
+            0 => None,
+            _ => Some(backtrack.get(0).ok()?),
+        };
+        let beside = beside(after.map(Glyphs::Covered), before.map(Glyphs::Covered));
+        for first in inputs.get(0).ok()?.iter() {
+            self.rule(first, beside.clone())?;
+        }
+        Some(())
+    }
 }
 
 // Adds to `after` the glyphs a pair set of `format` at `index` in its
@@ -503,11 +758,11 @@ fn substitution_lookup_starts(
             starts.ligatures(&format, flag)
         }),
         SubstitutionSubtables::Contextual(subtables) => {
-            covers(subtables.iter(), starts, context_start)
+            each(subtables.iter(), |subtable| starts.context(&subtable, flag))
         }
-        SubstitutionSubtables::ChainContextual(subtables) => {
-            covers(subtables.iter(), starts, chained_context_start)
-        }
+        SubstitutionSubtables::ChainContextual(subtables) => each(subtables.iter(), |subtable| {
+            starts.chained_context(&subtable, flag)
+        }),
         SubstitutionSubtables::Reverse(subtables) => {
             covers(subtables.iter(), starts, reverse_start)
         }
@@ -536,10 +791,12 @@ fn positioning_lookup_starts(
         PositionSubtables::MarkToMark(subtables) => {
             covers(subtables.iter(), starts, mark_mark_start)
         }
-        PositionSubtables::Contextual(subtables) => covers(subtables.iter(), starts, context_start),
-        PositionSubtables::ChainContextual(subtables) => {
-            covers(subtables.iter(), starts, chained_context_start)
+        PositionSubtables::Contextual(subtables) => {
+            each(subtables.iter(), |subtable| starts.context(&subtable, flag))
         }
+        PositionSubtables::ChainContextual(subtables) => each(subtables.iter(), |subtable| {
+            starts.chained_context(&subtable, flag)
+        }),
         PositionSubtables::EmptyExtension => Some(()),
     }
 }

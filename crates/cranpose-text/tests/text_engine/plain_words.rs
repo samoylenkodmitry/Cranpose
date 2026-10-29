@@ -4,7 +4,9 @@
 use cranpose_text::{FontFeature, Shaper, font_feature_settings};
 
 use crate::{
-    fonts::{DEJAVU, DEVANAGARI_VF, MONASPACE_VF, NOTO_SANS_MERGED, ROBOTO},
+    fonts::{
+        DEJAVU, DEJAVU_MONO, DEVANAGARI_VF, MONASPACE_VF, NOTO_SANS_MERGED, ROBOTO, TEST_CONTEXTS,
+    },
     harfrust_oracle::{REGULAR, Style, compare},
 };
 
@@ -13,7 +15,7 @@ const BOLD: Style<'static> = Style {
     features: &[],
 };
 
-const CASES: [(&str, Style<'static>, &str); 14] = [
+const CASES: [(&str, Style<'static>, &str); 17] = [
     // No default lookup of Noto Sans starts at the digits but the zero,
     // which a variation selector after it turns slashed.
     (
@@ -29,6 +31,13 @@ const CASES: [(&str, Style<'static>, &str); 14] = [
         "AVATAR Toyota 123.45 -0.50% +1.25% T. V, Y: Layer 7 We",
     ),
     (ROBOTO, REGULAR, "AVA Tea Wo 1.5 -2,3 Yes T. P, F."),
+    // Noto Sans drops the dot of an `i` or a `j` under an accent above:
+    // the rule starts at them and reads the mark after them.
+    (
+        NOTO_SANS_MERGED,
+        REGULAR,
+        "Reading jinx minimum ij i\u{301} j\u{307}x i\u{328}\u{301} fi",
+    ),
     // Characters whose code points share their low bits take turns in one
     // place of what a plan remembers: U+0410 and U+0490, `A` and `\u{C1}`.
     (
@@ -46,6 +55,12 @@ const CASES: [(&str, Style<'static>, &str); 14] = [
     (ROBOTO, REGULAR, "\u{4B4} \u{4B4}\u{4B4} \u{A68A}"),
     // Monaspace's contextual alternates start at some letters only.
     (MONASPACE_VF, REGULAR, "ABC 2345 689 xyz {a} [b] mmm iii"),
+    // Its texture healing widens a wide letter beside a narrow one: a
+    // narrow letter before a wide one, after it, and a wide one beside
+    // brackets and a period.
+    (MONASPACE_VF, REGULAR, "mi im (m) m. Wi iW 1M lm fit"),
+    // DejaVu Sans Mono's rules read classes of glyphs.
+    (DEJAVU_MONO, REGULAR, "fi fl ffi 1/2 -> => != <= a.b"),
     // A variable instance: the advances come from its variations. Digits
     // next to Devanagari take its script and shaper.
     (DEVANAGARI_VF, BOLD, "(0123) 456.789"),
@@ -77,6 +92,27 @@ fn words_of_plain_glyphs_shape_as_the_whole_run_shapes() {
         for (path, style, text) in CASES {
             let (shaped, oracle) = compare(&mut shaper, path, text, style);
             assert_eq!(shaped, oracle, "{path}: {text}");
+        }
+    }
+}
+
+#[test]
+fn a_contextual_rule_shapes_the_glyphs_it_reads() {
+    // Each rule of Cranpose Test Contexts gives the letters it reads wider
+    // alternates: the words of each kind of rule, then words beside them
+    // that no rule reads.
+    // A rule that skips ligatures reads past the one U+FB01 maps to.
+    let read = "ab cd ef g hi jk lm pn oq rs tu vw xy zA z\u{FB01}A Bc Z9";
+    let unread = "ac ce fe hj kj ln pm qo tv vx xz B BC";
+    let mut shaper = Shaper::default();
+    for (text, takes_alternates) in [(read, true), (unread, false)] {
+        let (shaped, oracle) = compare(&mut shaper, TEST_CONTEXTS, text, REGULAR);
+        assert_eq!(shaped, oracle, "{text}");
+        for word in text.split(' ') {
+            let (shaped, oracle) = compare(&mut shaper, TEST_CONTEXTS, word, REGULAR);
+            assert_eq!(shaped, oracle, "{word}");
+            let widened = oracle.iter().any(|glyph| glyph.advance > 500);
+            assert_eq!(widened, takes_alternates, "{word}");
         }
     }
 }

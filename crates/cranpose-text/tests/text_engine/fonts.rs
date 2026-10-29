@@ -23,6 +23,9 @@ pub(crate) const ARABIC_VF: &str = "crates/cranpose-fonts/assets/NotoSansArabic-
 pub(crate) const DEVANAGARI_VF: &str = "crates/cranpose-fonts/assets/NotoSansDevanagari-VF.ttf";
 pub(crate) const DEVANAGARI: &str =
     "crates/cranpose-render/common/tests/fixtures/localization/Devanagari.ttf";
+// Built by `scripts/fonts/make_test_contexts.py`: a contextual rule of each
+// kind, each taking wider alternates of the letters it reads.
+pub(crate) const TEST_CONTEXTS: &str = "crates/cranpose-text/tests/fonts/CranposeTestContexts.ttf";
 
 // The bytes of the font at `path`, relative to the repository root.
 pub(crate) fn bytes(path: &str) -> Vec<u8> {
