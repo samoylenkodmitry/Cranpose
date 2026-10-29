@@ -174,15 +174,33 @@ impl PresentSurface for SurfaceMut<'_, WgpuRenderer> {
     }
 }
 
-// Whether a frame takes an image: the surface was dirtied, or the update
-// changed what it draws or the surface still owes a frame, and the surface
+// What a frame does with the surface: takes an image and presents it, or
+// takes none because the surface already shows the app's scene, or because
+// nothing asked for a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PresentStep {
+    Present,
+    Shown,
+    Unasked,
+}
+
+// A frame takes an image when the surface was dirtied, or when the update
+// changed what it draws or the surface still owes a frame and the surface
 // does not show the scene yet.
-pub(crate) fn surface_present_required(
+pub(crate) fn surface_present_step(
     surface_dirty: bool,
     update_visual_changed: bool,
     surface: &mut impl PresentSurface,
-) -> bool {
-    surface_dirty || (update_visual_changed || surface.needs_redraw()) && !surface.shows_scene()
+) -> PresentStep {
+    if surface_dirty {
+        PresentStep::Present
+    } else if !update_visual_changed && !surface.needs_redraw() {
+        PresentStep::Unasked
+    } else if surface.shows_scene() {
+        PresentStep::Shown
+    } else {
+        PresentStep::Present
+    }
 }
 
 #[cfg(test)]
