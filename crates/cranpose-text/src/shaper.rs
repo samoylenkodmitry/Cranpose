@@ -16,6 +16,7 @@ use crate::{
     font::{FontStyle, FontWeight},
     glyph_id::GlyphId,
     itemizer::TextItem,
+    plain_glyphs::PlainGlyphs,
     shaping_span::ShapingSpan,
     typeface::Typeface,
     word_cache::WordCache,
@@ -75,13 +76,15 @@ struct KeptPlan {
     // Where runs shaped with the plan cut into words; `None` when they
     // shape whole.
     split: Option<WordSplit>,
+    // The glyphs the plan leaves as they are; `None` when it cannot tell.
+    plain: Option<PlainGlyphs>,
     // The face and plan as one number, which keys the plan's words.
     key: u64,
 }
 
 // What one shaping call shapes with.
 struct Setting<'a> {
-    font: &'a Font,
+    font: ShaperFont<'a, 'a>,
     plan: &'a ShapePlan,
     features: &'a [Feature],
     direction: Direction,
@@ -148,20 +151,26 @@ impl Shaper {
         let face = &faces[face];
         let kept = &face.plans[plan];
         let setting = Setting {
-            font: &face.font,
+            font: ShaperFont::new(&face.font),
             plan: &kept.plan,
             features,
             direction,
             script,
             language: language.as_ref(),
         };
+        let plain = kept.plain.as_ref();
         let Some(split) = &kept.split else {
-            shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
+            if !plain
+                .is_some_and(|plain| plain.append(&setting.font, text, item.range.clone(), glyphs))
+            {
+                shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
+            }
             return;
         };
         WordShaping {
             buffer,
             setting,
+            plain,
             words,
             key: kept.key,
             text,
@@ -214,9 +223,15 @@ impl Shaper {
             )
                 .hash(&mut key);
         }
+        let tables = layout_tables(&face.font);
         face.plans.push(KeptPlan {
             plan: ShapePlan::new(&face.font, direction, script, language, &self.features),
-            split: face_word_split(&face.font, script),
+            split: tables
+                .as_ref()
+                .and_then(|tables| face_word_split(&face.font, tables, script)),
+            plain: tables
+                .as_ref()
+                .and_then(|tables| PlainGlyphs::of(tables, script, direction, &self.features)),
             key: key.finish(),
         });
         face.plans.len() - 1
@@ -260,11 +275,12 @@ impl Shaper {
     }
 }
 
-// One item's words being shaped: the buffer, the setting, the kept words and
-// their key, and the text with its context.
+// One item's words being shaped: the buffer, the setting, the plan's plain
+// glyphs, the kept words and their key, and the text with its context.
 struct WordShaping<'a> {
     buffer: &'a mut Buffer,
     setting: Setting<'a>,
+    plain: Option<&'a PlainGlyphs>,
     words: &'a mut WordCache,
     key: u64,
     text: &'a str,
@@ -333,8 +349,8 @@ impl WordShaping<'_> {
             }
         }
     }
-    // Appends the glyphs of `word`: kept ones, or shaped and kept when the
-    // word shapes the same wherever it stands.
+    // Appends the glyphs of `word`: kept ones, its plain glyphs, or shaped
+    // and kept when the word shapes the same wherever it stands.
     fn word(&mut self, word: Range<usize>, glyphs: &mut Vec<ShapedGlyph>) {
         let Some(word_text) = self.text.get(word.clone()) else {
             return;
@@ -342,6 +358,12 @@ impl WordShaping<'_> {
         let keeps = stands_alone(self.text, &word, &self.context);
         if keeps && let Some(cached) = self.words.get(self.key, word_text) {
             append(glyphs, cached, word.start);
+            return;
+        }
+        if self
+            .plain
+            .is_some_and(|plain| plain.append(&self.setting.font, self.text, word.clone(), glyphs))
+        {
             return;
         }
         let first = glyphs.len();
@@ -396,7 +418,7 @@ fn shape_range(
     buffer.set_script(setting.script);
     buffer.set_language(setting.language.cloned());
     let shaped = harfrust::shape(
-        &ShaperFont::new(setting.font),
+        &setting.font,
         buffer,
         ShapeOptions::new()
             .plan(Some(setting.plan))
@@ -453,20 +475,25 @@ fn offset(at: usize) -> u32 {
     u32::try_from(at).unwrap_or(u32::MAX)
 }
 
-// The word split of `font` for runs in `script`.
-fn face_word_split(font: &Font, script: Option<ShapingScript>) -> Option<WordSplit> {
+// The layout tables of `font`.
+fn layout_tables(font: &Font) -> Option<FontRef<'_>> {
     let Source::Blob(bytes) = font.source() else {
         return None;
     };
-    let (Ok(font_ref), Some(space)) = (
-        FontRef::from_index(bytes.as_ref(), 0),
-        font.charmap().map_unicode(' '),
-    ) else {
-        return None;
-    };
+    FontRef::from_index(bytes.as_ref(), 0).ok()
+}
+
+// The word split of `font`, whose layout tables are `tables`, for runs in
+// `script`.
+fn face_word_split(
+    font: &Font,
+    tables: &FontRef<'_>,
+    script: Option<ShapingScript>,
+) -> Option<WordSplit> {
+    let space = font.charmap().map_unicode(' ')?;
     let tags = script.map(ShapingScript::tags);
     word_split(
-        &font_ref,
+        tables,
         space,
         tags.as_ref().map_or(&[], |tags| tags.as_slice()),
     )

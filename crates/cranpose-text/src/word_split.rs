@@ -158,7 +158,7 @@ fn positioning_lookups_sides(
 
 // The script of `list` HarfBuzz shapes with: the first of `scripts` the font
 // has, else its default script, else Latin.
-fn chosen_script(list: &ScriptList<'_>, scripts: &[Tag]) -> Option<Tag> {
+pub(crate) fn chosen_script(list: &ScriptList<'_>, scripts: &[Tag]) -> Option<Tag> {
     scripts
         .iter()
         .copied()
@@ -166,13 +166,13 @@ fn chosen_script(list: &ScriptList<'_>, scripts: &[Tag]) -> Option<Tag> {
         .find(|&tag| list.index_for_tag(tag).is_some())
 }
 
-fn single(tag: Tag) -> IntSet<Tag> {
+pub(crate) fn single(tag: Tag) -> IntSet<Tag> {
     let mut set = IntSet::empty();
     set.insert(tag);
     set
 }
 
-fn everything() -> IntSet<Tag> {
+pub(crate) fn everything() -> IntSet<Tag> {
     let mut set = IntSet::empty();
     set.invert();
     set
@@ -450,7 +450,7 @@ fn class_pair_sides(
 }
 
 // Whether a value record moves its glyph.
-fn moves(record: &ValueRecord<'_>) -> bool {
+pub(crate) fn moves(record: &ValueRecord<'_>) -> bool {
     [
         record.x_placement(),
         record.y_placement(),
@@ -620,6 +620,6 @@ fn coverages_mention<'a>(
 }
 
 // A class as an index; classes beyond `usize` saturate.
-fn class_index(class: u32) -> usize {
+pub(crate) fn class_index(class: u32) -> usize {
     usize::try_from(class).unwrap_or(usize::MAX)
 }

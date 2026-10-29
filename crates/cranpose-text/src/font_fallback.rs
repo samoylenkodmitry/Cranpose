@@ -239,7 +239,7 @@ fn sticky(ch: char) -> bool {
 
 // A control character or a default-ignorable one (joiners, variation
 // selectors, bidi controls, tags), which the shaper hides when no font has it.
-fn needs_no_glyph(ch: char) -> bool {
+pub(crate) fn needs_no_glyph(ch: char) -> bool {
     static IGNORABLE: LazyLock<CodePointSet> =
         LazyLock::new(|| CodePointSet::of(CodePointSetData::new::<DefaultIgnorableCodePoint>()));
     ch.is_control() || IGNORABLE.contains(ch)

@@ -30,6 +30,7 @@ pub mod line_box;
 mod line_breaker;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
+mod plain_glyphs;
 /// Writing systems and the script runs of text.
 pub mod script;
 mod shaped_item;

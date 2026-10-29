@@ -14,6 +14,8 @@ pub(crate) const ROBOTO_BOLD: &str = "benchmarks/compose-vs-cranpose/fonts/Robot
 pub(crate) const DEJAVU: &str = "apps/desktop-demo/assets/leetcodedaily/fonts/DejaVuSans.ttf";
 pub(crate) const DEJAVU_MONO: &str =
     "apps/desktop-demo/assets/leetcodedaily/fonts/DejaVuSansMono.ttf";
+pub(crate) const MONASPACE_VF: &str =
+    "apps/desktop-demo/assets/leetcodedaily/fonts/MonaspaceKryptonVarVF.ttf";
 pub(crate) const TWEMOJI: &str = "apps/desktop-demo/assets/TwemojiMozilla.ttf";
 pub(crate) const NOTO_SANS_LATIN: &str = "apps/esp32-demo/assets/NotoSans-Latin.ttf";
 pub(crate) const NOTO_SANS_MERGED: &str = "apps/desktop-demo/assets/NotoSansMerged.ttf";
