@@ -3,7 +3,7 @@ use super::*;
 fn passes(cache: &mut PassAgedCache<u32, &'static str>, count: u64) -> Vec<&'static str> {
     let mut dropped = Vec::new();
     for _ in 0..count {
-        cache.begin_pass(|value| dropped.push(value));
+        cache.begin_pass(IDLE_PASSES, |value| dropped.push(value));
     }
     dropped
 }

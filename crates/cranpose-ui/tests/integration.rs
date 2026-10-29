@@ -34,6 +34,7 @@ mod static_density_integration;
 mod subcompose_disposal;
 #[cfg(feature = "svg")]
 mod svg_painter_integration;
+mod text_cache_headroom;
 mod text_contract;
 mod text_font_features;
 mod text_hyphenation_contract_integration;

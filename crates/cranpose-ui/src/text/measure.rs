@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::collections::pass_aged::PassAgedCache;
+use cranpose_core::collections::pass_aged::{IDLE_PASSES, PassAgedCache};
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
@@ -632,9 +632,14 @@ impl TextService {
     /// Starts a layout pass: the caches drop what recent passes did not use.
     pub(crate) fn begin_layout_pass(&self) {
         self.pass_owed.set(false);
-        self.prepared.borrow_mut().begin_pass(drop);
-        self.intrinsics.borrow_mut().begin_pass(drop);
         let headroom = crate::current_memory_headroom();
+        // A tight heap keeps only what the last pass asked for.
+        let idle_passes = match headroom {
+            MemoryHeadroom::Ample => IDLE_PASSES,
+            MemoryHeadroom::Tight => 1,
+        };
+        self.prepared.borrow_mut().begin_pass(idle_passes, drop);
+        self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
         self.headroom.set(headroom);
         self.layouter.borrow_mut().set_memory_headroom(headroom);
     }
