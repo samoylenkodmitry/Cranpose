@@ -760,10 +760,16 @@ fn a_path_opens_here_and_everything_else_is_the_platforms() {
     assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
 
     set_platform_media_source_opener(Arc::new(Opener));
-    let opened = open_media_source("content://provider/document/7").expect("the opener");
+    for uri in [
+        "content://provider/document/7",
+        "apple-bookmark:012345/",
+        "custom+media.v1:track",
+    ] {
+        let opened = open_media_source(uri).expect("the platform opener");
+        assert_eq!(opened.byte_len(), Some(uri.len() as u64));
+        assert_eq!(read(opened), uri);
+    }
     clear_platform_media_source_opener();
-    assert_eq!(opened.byte_len(), Some(29));
-    assert_eq!(read(opened), "content://provider/document/7");
 }
 
 #[test]
@@ -792,6 +798,14 @@ fn a_bare_path_is_accepted_as_itself() {
         path_from_uri("/music/track.mp3"),
         Some(PathBuf::from("/music/track.mp3"))
     );
+    for path in [
+        "C:\\Music\\track.mp3",
+        "C:track.mp3",
+        "./album:live/track.mp3",
+        "/music/album:live.mp3",
+    ] {
+        assert_eq!(path_from_uri(path), Some(PathBuf::from(path)));
+    }
 }
 
 #[test]
@@ -799,6 +813,9 @@ fn anything_that_is_not_a_local_file_has_no_path() {
     assert_eq!(path_from_uri("https://host/stream.mp3"), None);
     assert_eq!(path_from_uri("content://media/audio/1"), None);
     assert_eq!(path_from_uri("blob:https://host/abc"), None);
+    assert_eq!(path_from_uri("apple-bookmark:012345/"), None);
+    assert_eq!(path_from_uri("custom+media.v1:track"), None);
+    assert_eq!(path_from_uri("data:audio/wav;base64,AAAA"), None);
     assert_eq!(path_from_uri("file://host/share/track.mp3"), None);
     assert_eq!(path_from_uri(""), None);
 }

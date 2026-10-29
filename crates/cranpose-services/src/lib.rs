@@ -39,6 +39,7 @@ pub mod launch_args;
 pub mod launcher;
 pub mod media;
 mod media_source;
+mod media_uri;
 pub mod memory_pressure;
 pub mod microphone_permission;
 pub mod microphone_standby;

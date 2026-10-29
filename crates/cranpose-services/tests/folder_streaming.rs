@@ -34,6 +34,10 @@ fn discovery_yields_a_root_file_before_opening_a_nested_directory() {
 
 #[test]
 #[ignore = "reads the folder supplied through CRANPOSE_FOLDER_PROBE"]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "explicit path for a manual read-only integration probe"
+)]
 fn mounted_folder_first_entry() {
     let path = std::env::var("CRANPOSE_FOLDER_PROBE").expect("folder path");
     let start = std::time::Instant::now();
