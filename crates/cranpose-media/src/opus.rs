@@ -1,21 +1,13 @@
 use opus_pure::OpusMSDecoder;
 use symphonia::core::{
-    audio::{AsGenericAudioBufferRef, AudioBuffer, AudioMut, AudioSpec, GenericAudioBufferRef},
-    codecs::{
-        CodecInfo,
-        audio::{AudioCodecParameters, AudioDecoder, FinalizeResult},
-    },
+    audio::{AudioBuffer, AudioMut, AudioSpec},
+    codecs::{CodecInfo, audio::AudioCodecParameters},
     errors::{Error, Result},
-    packet::PacketRef,
 };
+
+use crate::packet_decoder::{PacketCodec, PacketDecoder};
 
 const MAX_FRAMES: usize = 5_760;
-const INFO: CodecInfo = CodecInfo {
-    short_name: "opus",
-    long_name: "Opus",
-    profiles: &[],
-};
-
 // Opus family 1 uses Vorbis order; Symphonia uses ascending speaker positions.
 const CHANNEL_ORDER: [&[usize]; 8] = [
     &[0],
@@ -30,14 +22,12 @@ const CHANNEL_ORDER: [&[usize]; 8] = [
 
 pub(crate) struct Opus {
     decoder: OpusMSDecoder,
-    params: AudioCodecParameters,
     pcm: Vec<f32>,
-    output: AudioBuffer<f32>,
     gain: f32,
 }
 
 impl Opus {
-    pub(crate) fn new(params: &AudioCodecParameters) -> Result<Self> {
+    pub(crate) fn new(params: &AudioCodecParameters) -> Result<PacketDecoder<Self>> {
         let header = params
             .extra_data
             .as_deref()
@@ -65,58 +55,41 @@ impl Opus {
         let gain_q8 = i16::from_le_bytes([header[16], header[17]]);
         let mut params = params.clone();
         params.sample_rate = Some(48_000);
-        Ok(Self {
-            decoder,
+        Ok(PacketDecoder::new(
+            Self {
+                decoder,
+                pcm: vec![0.0; MAX_FRAMES * channels],
+                gain: 10.0_f32.powf(f32::from(gain_q8) / (20.0 * 256.0)),
+            },
             params,
-            pcm: vec![0.0; MAX_FRAMES * channels],
-            output: AudioBuffer::new(AudioSpec::new(48_000, positions), MAX_FRAMES),
-            gain: 10.0_f32.powf(f32::from(gain_q8) / (20.0 * 256.0)),
-        })
+            AudioBuffer::new(AudioSpec::new(48_000, positions), MAX_FRAMES),
+        ))
     }
 }
 
-impl AudioDecoder for Opus {
+impl PacketCodec for Opus {
+    const INFO: CodecInfo = CodecInfo {
+        short_name: "opus",
+        long_name: "Opus",
+        profiles: &[],
+    };
     fn reset(&mut self) {
         let _ = self.decoder.reset_state();
-        self.output.clear();
     }
-
-    fn codec_info(&self) -> &CodecInfo {
-        &INFO
-    }
-
-    fn codec_params(&self) -> &AudioCodecParameters {
-        &self.params
-    }
-
-    fn decode_ref(&mut self, packet: &PacketRef<'_>) -> Result<GenericAudioBufferRef<'_>> {
-        self.output.clear();
+    fn decode(&mut self, bytes: &[u8], output: &mut AudioBuffer<f32>) -> Result<()> {
         let frames = self
             .decoder
-            .decode(packet.data, MAX_FRAMES, &mut self.pcm)
+            .decode(bytes, MAX_FRAMES, &mut self.pcm)
             .map_err(|_| Error::DecodeError("invalid Opus packet"))?;
-        self.output.render_uninit(Some(frames));
+        output.render_uninit(Some(frames));
         let channels = self.decoder.channels();
         for (destination, &source) in CHANNEL_ORDER[channels - 1].iter().enumerate() {
-            if let Some(plane) = self.output.plane_mut(destination) {
+            if let Some(plane) = output.plane_mut(destination) {
                 for (frame, sample) in plane.iter_mut().enumerate() {
                     *sample = self.pcm[frame * channels + source] * self.gain;
                 }
             }
         }
-        let trim_start = usize::try_from(packet.trim_start.get())
-            .map_err(|_| Error::DecodeError("Opus trim start is too large"))?;
-        let trim_end = usize::try_from(packet.trim_end.get())
-            .map_err(|_| Error::DecodeError("Opus trim end is too large"))?;
-        self.output.trim(trim_start, trim_end);
-        Ok(self.output.as_generic_audio_buffer_ref())
-    }
-
-    fn finalize(&mut self) -> FinalizeResult {
-        FinalizeResult::default()
-    }
-
-    fn last_decoded(&self) -> GenericAudioBufferRef<'_> {
-        self.output.as_generic_audio_buffer_ref()
+        Ok(())
     }
 }

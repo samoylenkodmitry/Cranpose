@@ -240,6 +240,8 @@ pub enum HttpMethod {
     Put,
     /// Removes the resource.
     Delete,
+    /// Lists WebDAV properties without downloading file contents.
+    Propfind,
 }
 
 impl HttpMethod {
@@ -251,6 +253,7 @@ impl HttpMethod {
             Self::Post => "POST",
             Self::Put => "PUT",
             Self::Delete => "DELETE",
+            Self::Propfind => "PROPFIND",
         }
     }
 }
@@ -989,13 +992,7 @@ fn read_native_response(
         body,
         resume_from,
     } = request;
-    let method = match method {
-        HttpMethod::Get => reqwest::Method::GET,
-        HttpMethod::Head => reqwest::Method::HEAD,
-        HttpMethod::Post => reqwest::Method::POST,
-        HttpMethod::Put => reqwest::Method::PUT,
-        HttpMethod::Delete => reqwest::Method::DELETE,
-    };
+    let method = reqwest::Method::from_bytes(method.name().as_bytes()).expect("valid HTTP method");
     let mut builder = client.request(method, &url);
     for (name, value) in headers {
         builder = builder.header(name, value);

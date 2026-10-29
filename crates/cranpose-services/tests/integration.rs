@@ -24,3 +24,4 @@ mod uri_handler_integration;
 mod windowless_command;
 
 mod folder_streaming;
+mod webdav;
