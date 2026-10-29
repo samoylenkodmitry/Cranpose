@@ -37,6 +37,7 @@ mod line_runs;
 mod line_text;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
+mod paragraph_intrinsics;
 mod paragraph_measures;
 mod plain_chars;
 mod plain_glyphs;
@@ -88,6 +89,7 @@ pub use paragraph::{
     Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection, TextIndent,
     resolve_text_direction,
 };
+pub use paragraph_intrinsics::ParagraphIntrinsics;
 pub use script::Script;
 pub use shaped::Shaped;
 pub use shaper::{ShapedGlyph, Shaper};
@@ -98,7 +100,7 @@ pub use style::{
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
 };
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
-pub use text_layouter::{ParagraphIntrinsics, TextLayouter};
+pub use text_layouter::TextLayouter;
 pub use typeface::{
     DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Synthesis, Typeface, TypefaceError,
 };
