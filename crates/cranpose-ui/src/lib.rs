@@ -136,10 +136,10 @@ pub use cranpose_ui_graphics::space;
 pub use cranpose_ui_graphics::{
     BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, DashPathEffect, Dp,
     DrawScope, DrawSpecialization, DrawStyle, DrawTextStyle, DrawTransform, ExternalTexture,
-    ImageBitmap, ImageBitmapError, ImagePixelFormat, ImageSampling, Path, PlaceholderShape,
-    PointerIcon, PointerIconError, RuntimeShaderUniformError, ShaderPlaceholder, Stroke, StrokeCap,
-    StrokeJoin, SubstrateSpec, TextMeasurement, TextVerticalAlign, TileMode, WindowCoordinates,
-    glass_material_folds_enabled, set_glass_material_folds,
+    ImageBitmap, ImageBitmapError, ImagePixelFormat, ImageSampling, MemoryHeadroom, Path,
+    PlaceholderShape, PointerIcon, PointerIconError, RuntimeShaderUniformError, ShaderPlaceholder,
+    Stroke, StrokeCap, StrokeJoin, SubstrateSpec, TextMeasurement, TextVerticalAlign, TileMode,
+    WindowCoordinates, glass_material_folds_enabled, set_glass_material_folds,
 };
 pub use cranpose_ui_layout::{AlignmentLines, Axis, IntrinsicSize, Measurement};
 pub use cursor_animation::{
@@ -208,7 +208,7 @@ pub use lazy_prefetch::{
     drain_lazy_prefetch_requests, has_lazy_prefetch_requests, lazy_prefetch_pass_cost,
     set_idle_prefetch_passes, warm_prefetched_slices, with_lazy_prefetch_pass,
 };
-pub use memory_headroom::{MemoryHeadroom, current_memory_headroom, set_memory_headroom};
+pub use memory_headroom::{current_memory_headroom, set_memory_headroom};
 pub use modal::{
     ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };

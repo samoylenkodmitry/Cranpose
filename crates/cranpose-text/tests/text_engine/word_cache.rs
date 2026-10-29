@@ -1,6 +1,9 @@
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, Itemizer, ShapedGlyph, Shaper, TextDirection, TextItem,
+    FontFamily, FontFamilyResolver, Itemizer, LayoutInput, ParagraphLengths, ParagraphStyle,
+    PositionedGlyph, ShapedGlyph, Shaper, TextDirection, TextItem, TextLayout, TextLayoutOptions,
+    TextLayouter,
 };
+use cranpose_ui_graphics::MemoryHeadroom;
 use harfrust::{
     Buffer, BufferFlags, Direction, Script, ShapeOptions, ShaperFont, Tag,
     font::{Blob, Font},
@@ -95,5 +98,66 @@ fn kept_words_shape_new_text_as_the_whole_run_shapes() {
         let reordered: String = text.split(' ').rev().collect::<Vec<_>>().join(" ");
         let (split, oracle) = compare(&mut shaper, path, &reordered);
         assert_eq!(split, oracle, "{path}: {reordered}");
+    }
+}
+
+// More distinct words than the word cache first has room for.
+fn many_words() -> String {
+    (0..600)
+        .map(|n| format!("w{n}x"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[test]
+fn words_kept_past_the_cache_s_first_room_shape_as_the_whole_run_shapes() {
+    let text = many_words();
+    let mut shaper = Shaper::default();
+    // The second pass keeps every word, the rings wrap over the first kept,
+    // and the third misses those, which grows the room.
+    for _ in 0..4 {
+        let (split, oracle) = compare(&mut shaper, ROBOTO, &text);
+        assert_eq!(split, oracle);
+    }
+}
+
+// Every glyph of `layout`, line by line, where it draws.
+fn placed(layout: &TextLayout) -> Vec<PositionedGlyph> {
+    (0..layout.line_count())
+        .flat_map(|line| layout.glyph_runs(line).collect::<Vec<_>>())
+        .flat_map(|run| run.positions().collect::<Vec<_>>())
+        .collect()
+}
+
+#[test]
+fn a_layouter_told_memory_is_tight_lays_text_out_as_with_ample_memory() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let text = many_words();
+    let family = FontFamily::Default;
+    let spans = [span(0..text.len(), &family, 400)];
+    let paragraph = ParagraphStyle::default();
+    let input = LayoutInput {
+        text: &text,
+        spans: &spans,
+        paragraph: &paragraph,
+        lengths: ParagraphLengths::default(),
+        min_width: 0.0,
+        max_width: 300.0,
+        options: TextLayoutOptions::default(),
+    };
+    let mut layouter = TextLayouter::default();
+    let mut lay_out = |headroom| {
+        layouter.set_memory_headroom(headroom);
+        placed(&layouter.layout(&input, &resolver))
+    };
+    let first = lay_out(MemoryHeadroom::Ample);
+    for headroom in [
+        MemoryHeadroom::Ample,
+        MemoryHeadroom::Ample,
+        MemoryHeadroom::Tight,
+        MemoryHeadroom::Tight,
+        MemoryHeadroom::Ample,
+    ] {
+        assert_eq!(lay_out(headroom), first, "{headroom:?}");
     }
 }

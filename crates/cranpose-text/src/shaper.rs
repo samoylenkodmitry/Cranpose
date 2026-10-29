@@ -54,7 +54,7 @@ pub struct Shaper {
     faces: Vec<ShapingFace>,
     buffer: Buffer,
     features: Vec<Feature>,
-    words: WordCache,
+    pub(crate) words: WordCache,
     // The ends of an item's words, and its pieces shaped apart: their text
     // and their glyphs, reused from item to item.
     word_ends: Vec<usize>,

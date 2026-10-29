@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use cranpose_ui_graphics::whole;
+use cranpose_ui_graphics::{MemoryHeadroom, whole};
 
 use crate::{
     bidi_level::{BidiLevel, reorder_visually},
@@ -306,6 +306,12 @@ impl TextLayouter {
             .widths
             .width(start, visible_end(text, start, text.len()));
         widest.max(last) + input.lengths.first_line_indent
+    }
+
+    /// Sizes the caches the layouter keeps by how much memory the device
+    /// has left: tight memory takes them back to their least.
+    pub fn set_memory_headroom(&mut self, headroom: MemoryHeadroom) {
+        self.shaper.words.set_headroom(headroom);
     }
 
     /// The dictionaries `Hyphens.Auto` hyphenates words by.

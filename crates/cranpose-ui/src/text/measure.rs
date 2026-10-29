@@ -537,6 +537,9 @@ impl TextService {
         self.pass_owed.set(false);
         self.prepared.borrow_mut().begin_pass(drop);
         self.intrinsics.borrow_mut().begin_pass(drop);
+        self.layouter
+            .borrow_mut()
+            .set_memory_headroom(crate::current_memory_headroom());
     }
 
     /// A frame starts: the first use of the service in it outside a layout
