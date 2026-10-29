@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use smallvec::SmallVec;
+
 use crate::{
     bidi_level::BidiLevel,
     itemizer::TextItem,
@@ -149,7 +151,7 @@ pub(crate) fn part_glyphs(
 }
 
 // The index of `face` in `faces`, added when missing.
-pub(crate) fn face_index(faces: &mut Vec<Typeface>, face: &Typeface) -> usize {
+pub(crate) fn face_index(faces: &mut SmallVec<[Typeface; 1]>, face: &Typeface) -> usize {
     faces
         .iter()
         .position(|known| known.same(face))

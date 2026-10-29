@@ -4,6 +4,7 @@ use std::{
 };
 
 use cranpose_ui_graphics::Rect;
+use smallvec::SmallVec;
 
 use crate::{
     bidi_level::BidiLevel, glyph_id::GlyphId, paragraph::TextAlign, shaper::ShapedGlyph,
@@ -18,10 +19,12 @@ use crate::{
 /// [`TextLayouter::layout_into`]: crate::TextLayouter::layout_into
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextLayout {
-    pub(crate) faces: Vec<Typeface>,
+    // Most text is one line in one run of one typeface, which these hold
+    // without allocating.
+    pub(crate) faces: SmallVec<[Typeface; 1]>,
     pub(crate) glyphs: Vec<ShapedGlyph>,
-    pub(crate) runs: Vec<LineRun>,
-    pub(crate) lines: Vec<LayoutLine>,
+    pub(crate) runs: SmallVec<[LineRun; 1]>,
+    pub(crate) lines: SmallVec<[LayoutLine; 1]>,
     pub(crate) width: f32,
     // The widest line with its indent.
     pub(crate) widest: f32,
