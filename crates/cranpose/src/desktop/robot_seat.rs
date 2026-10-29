@@ -1,12 +1,11 @@
 use std::time::Instant;
 
-use cranpose_app_shell::{AppShell, FrameUpdateResult};
-use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_app_shell::FrameUpdateResult;
 use winit::event_loop::ControlFlow;
 
 #[cfg(feature = "robot")]
 use super::robot_driver::{RobotController, bound_robot_park};
-use crate::app_launcher::AppSettings;
+use crate::{app_launcher::AppSettings, wgpu_surface::PresentStep};
 
 // What the event loop keeps for a robot test driver: its controller and app
 // hook, the frames presented and the ones that could not be since the last
@@ -107,16 +106,20 @@ impl RobotSeat {
         }
     }
 
-    // Notes a frame that drew nothing to present: the visible surface waits
-    // for a frame while `app` needs a redraw.
+    // Notes a frame the loop took no image for. One the surface already
+    // showed holds what a present would have drawn, so it counts as one: a
+    // robot waiting for the next present would otherwise wait for a frame
+    // that never comes. Otherwise nothing asked for a frame.
     #[cfg_attr(
         not(feature = "robot"),
         expect(unused_variables, reason = "only a robot tracks the visible surface")
     )]
-    pub(super) fn note_skipped_present(&mut self, app: &AppShell<WgpuRenderer>) {
+    pub(super) fn note_skipped_present(&mut self, step: PresentStep) {
         #[cfg(feature = "robot")]
-        {
-            self.visible_surface_dirty = app.needs_redraw();
+        if step == PresentStep::Shown {
+            self.note_presented();
+        } else {
+            self.visible_surface_dirty = false;
         }
     }
 
