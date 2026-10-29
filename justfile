@@ -437,13 +437,14 @@ _size-ceiling path max what:
 # 2026-10-25 (12,983,806 bytes) and about 1%.
 web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13107200" "web demo wasm")
 
-# The ESP32-S3 app image after `just esp32-build`: 2.8 MiB, the image of
-# 2026-10-25 (2,865,760 bytes) and about 2.4%. The factory partition holds
-# 8,323,072 bytes.
+# The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
+# 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
+# 500 KB: HarfRust shapes every script and read-fonts reads every outline
+# format. The factory partition holds 8,323,072 bytes.
 esp32-size-budget:
     mkdir -p target/esp32
     . "$HOME/export-{{esp32_toolchain}}.sh" && espflash save-image --chip esp32s3 --flash-mode dio --flash-size 8mb --partition-table {{esp32_demo}}/partitions.csv {{esp32_elf}} target/esp32/app.bin
-    just _size-ceiling target/esp32/app.bin 2936012 "ESP32-S3 app image"
+    just _size-ceiling target/esp32/app.bin 3447751 "ESP32-S3 app image"
 
 # Each feature of the framework crates built alone, so a feature that only
 # compiles beside another is found. About 12 minutes: the nightly runs it.

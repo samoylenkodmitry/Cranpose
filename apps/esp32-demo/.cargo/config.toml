@@ -8,6 +8,10 @@ rustflags = ["--cfg", "espidf_time64"]
 
 [unstable]
 build-std = ["std", "panic_abort"]
+# Without std's backtrace: it reads symbols from an ELF file the device does
+# not have, and its gimli, addr2line and demangling took 70 KB of code. A
+# panic prints its message, and ESP-IDF prints the addresses to decode.
+build-std-features = []
 
 [env]
 MCU = "esp32s3"

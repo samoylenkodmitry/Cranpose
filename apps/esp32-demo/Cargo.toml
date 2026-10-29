@@ -62,6 +62,16 @@ opt-level = 2
 lto = "fat"
 codegen-units = 1
 
+# HarfRust and read-fonts run when a word is shaped or a glyph drawn for the
+# first time, not every frame. Built for size they take 150 KB less code,
+# which with std built without its backtrace keeps the classic ESP32's code
+# inside the 3.2 MB its cache maps from flash, 119 KB to spare (2026-10-29).
+[profile.release.package.harfrust]
+opt-level = "s"
+
+[profile.release.package.read-fonts]
+opt-level = "s"
+
 [profile.dev]
 debug = true
 opt-level = "z"
