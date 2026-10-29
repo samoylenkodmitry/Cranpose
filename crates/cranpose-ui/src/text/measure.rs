@@ -326,7 +326,13 @@ impl TextService {
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
         let key = TextKey::of(text, source.style_hash(), frame.options, units);
-        let cached = key.map(|key| (key, self.layouts.borrow_mut().cached(key, frame, style)));
+        let cached = key.map(|key| {
+            let cached = self
+                .layouts
+                .borrow_mut()
+                .cached(key, frame, (style, admission));
+            (key, cached)
+        });
         let missed = match cached {
             Some((_, Cached::Held(prepared))) => return prepared,
             Some((key, Cached::Missed(miss))) => Some((key, miss)),
@@ -642,8 +648,9 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
 
 // `text` laid out in `style` with lines ending only at its line breaks,
 // `style`'s sizes taken as stated, not scaled by the system font scale, as
-// a draw scope draws it: the cache keeps it once it comes back, so a
-// number drawn anew each frame takes no room in it.
+// a draw scope draws it: the cache keeps it while the last pass drew it,
+// and longer once it comes back, so a number drawn anew each frame takes
+// little room in it.
 pub(crate) fn prepare_resolved(
     text: &AnnotatedString,
     style: &TextStyle,

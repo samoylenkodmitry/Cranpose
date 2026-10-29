@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_ui::{
     AppContext, DrawCommand, MemoryHeadroom, Modifier, collect_slices_from_modifier,
@@ -98,7 +101,7 @@ fn baseline_alignment_uses_the_font_s_baseline() {
 }
 
 #[test]
-fn an_unchanged_string_draws_one_layout_from_its_second_frame() {
+fn an_unchanged_string_draws_one_layout() {
     let commands = draw_commands(|scope: &mut dyn DrawScope| {
         scope.draw_text_from(
             Point::ZERO,
@@ -119,39 +122,67 @@ fn an_unchanged_string_draws_one_layout_from_its_second_frame() {
 
     assert!(layouts[0].is_some(), "a drawn text carries its layout");
     assert!(
-        layouts[1..].iter().all(|layout| *layout == layouts[1]),
-        "a stable string goes into the cache when drawn again and draws from that layout after that"
+        layouts.iter().all(|layout| *layout == layouts[0]),
+        "a stable string draws from its first layout"
     );
 }
 
 // A clock that shows a few strings by turns.
 const CLOCK: [&str; 3] = ["10:00", "10:01", "10:02"];
 
-// The layouts of 12 frames of `CLOCK`, each frame drawing the next string,
-// on a host that reports `headroom`.
-fn clock_layouts(headroom: MemoryHeadroom) -> Vec<Option<TextLayoutHandle>> {
-    let frame = Rc::new(std::cell::Cell::new(0usize));
-    let shown = Rc::clone(&frame);
+// The layouts of frames that draw `frames`, a string each, on a host that
+// reports `headroom`.
+fn drawn_layouts(
+    frames: &[&'static str],
+    headroom: MemoryHeadroom,
+) -> Vec<Option<TextLayoutHandle>> {
+    let shown = Rc::new(Cell::new(""));
+    let drawn = Rc::clone(&shown);
     let commands = draw_commands(move |scope: &mut dyn DrawScope| {
         scope.draw_text_from(
             Point::ZERO,
             Brush::solid(Color::WHITE),
-            CLOCK[shown.get() % CLOCK.len()],
+            drawn.get(),
             &DrawTextStyle::new(FONT_SIZE),
         );
     });
     let context = AppContext::new();
     context.enter(|| {
         set_memory_headroom(headroom);
-        (0..12)
-            .map(|index| {
+        frames
+            .iter()
+            .map(|string| {
                 context.start_text_frame();
-                frame.set(index);
+                shown.set(string);
                 let primitives = execute_draw_commands(&commands, Size::new(100.0, 50.0));
                 text_primitive(&primitives).layout.clone()
             })
             .collect()
     })
+}
+
+// The layouts of 12 frames of `CLOCK`, each frame drawing the next string.
+fn clock_layouts(headroom: MemoryHeadroom) -> Vec<Option<TextLayoutHandle>> {
+    let frames: Vec<_> = CLOCK.iter().copied().cycle().take(12).collect();
+    drawn_layouts(&frames, headroom)
+}
+
+#[test]
+fn a_string_drawn_again_the_next_frame_draws_its_first_layout() {
+    let layouts = drawn_layouts(&["7", "7", "8", "7", "7"], MemoryHeadroom::Ample);
+
+    assert_eq!(
+        layouts[1], layouts[0],
+        "the next frame draws the layout of the frame before"
+    );
+    assert_ne!(
+        layouts[3], layouts[0],
+        "a frame without the string drops its layout, as a reading's that goes up by one"
+    );
+    assert_eq!(
+        layouts[4], layouts[3],
+        "a string that came back keeps its layout"
+    );
 }
 
 #[test]
