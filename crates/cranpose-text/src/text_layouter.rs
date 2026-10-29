@@ -92,8 +92,9 @@ pub struct TextLayouter {
     breaks: Vec<BreakOpportunity>,
     lines: Vec<BrokenLine>,
     pieces: Vec<Piece>,
-    // The glyphs of a text measured for its intrinsic widths.
-    measured: TextLayout,
+    // The layout intrinsic widths are measured in and new layouts are built
+    // in, which keeps its storage from one text to the next.
+    scratch: TextLayout,
     #[cfg(feature = "hyphenation")]
     hyphenator: Hyphenator,
     // The opportunities with the hyphenation points among them, swapped
@@ -134,6 +135,9 @@ enum EllipsisAt {
 }
 
 const ELLIPSIS: &str = "\u{2026}";
+// The most glyphs the scratch layout keeps room for between texts: the
+// storage of a longer text goes once the text is laid out.
+const SCRATCH_GLYPHS: usize = 4096;
 // How much the free width of a paragraph's last line counts in even breaking
 // for `LineBreak.Paragraph`, which lets the last line stay short.
 const PARAGRAPH_LAST_LINE: f32 = 0.16;
@@ -141,8 +145,12 @@ const PARAGRAPH_LAST_LINE: f32 = 0.16;
 impl TextLayouter {
     /// Lays `input` out with the typefaces of `resolver`.
     pub fn layout(&mut self, input: &LayoutInput<'_>, resolver: &FontFamilyResolver) -> TextLayout {
-        let mut layout = TextLayout::default();
-        self.layout_into(input, resolver, &mut layout);
+        let mut scratch = std::mem::take(&mut self.scratch);
+        self.layout_into(input, resolver, &mut scratch);
+        // A clone holds each part in storage of its own length: a label's
+        // layout keeps one run and one line, not the room a vector grows by.
+        let layout = scratch.clone();
+        self.keep_scratch(scratch);
         layout
     }
 
@@ -240,11 +248,11 @@ impl TextLayouter {
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
     ) -> ParagraphIntrinsics {
-        let mut measured = std::mem::take(&mut self.measured);
+        let mut measured = std::mem::take(&mut self.scratch);
         measured.clear();
         self.shape(input, resolver, &mut measured);
         self.measure_clusters(input, &measured);
-        self.measured = measured;
+        self.keep_scratch(measured);
         let text = input.text;
         self.breaker
             .opportunities(text, input.paragraph.line_break, &mut self.breaks);
@@ -271,6 +279,14 @@ impl TextLayouter {
         ParagraphIntrinsics {
             min_intrinsic_width,
             max_intrinsic_width,
+        }
+    }
+
+    // Keeps `scratch` for the next text, unless its storage grew past what a
+    // label or a paragraph needs.
+    fn keep_scratch(&mut self, scratch: TextLayout) {
+        if scratch.glyphs.capacity() <= SCRATCH_GLYPHS {
+            self.scratch = scratch;
         }
     }
 
