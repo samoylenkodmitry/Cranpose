@@ -11,6 +11,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use crate::frame_packet::SceneMotion;
+
 /// Tells a renderer that drew a placeholder when a pipeline lands, so it
 /// draws again with the pipeline instead of the placeholder.
 #[cfg(not(target_arch = "wasm32"))]
@@ -173,14 +175,22 @@ pub(crate) struct PipelineCompiler {
 }
 
 // On WebGL, whether the browser's GPU process is still on the frame that
-// ran the last paced build, that build's link among the frame's work, and
-// whether the next submit is to watch for it.
+// ran the last paced build, that build's link among the frame's work,
+// whether the next submit is to watch for it, and the moving frames a
+// demanded build has waited since the last build.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Default)]
 pub(crate) struct PacedLanding {
     in_flight: Arc<AtomicBool>,
     watch: std::cell::Cell<bool>,
+    moving_frames: std::cell::Cell<u32>,
 }
+
+// The moving frames a demanded paced build waits for a still one at most: a
+// scene that never stands still, as an endless animation keeps it, gets its
+// pipelines one per this many frames.
+#[cfg(any(target_arch = "wasm32", test))]
+const MOVING_FRAMES_PER_BUILD: u32 = 60;
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl PacedLanding {
@@ -191,6 +201,19 @@ impl PacedLanding {
     pub(crate) fn built(&self) {
         self.in_flight.store(true, Ordering::Release);
         self.watch.set(true);
+        self.moving_frames.set(0);
+    }
+
+    // Notes the end of a frame whose scene moved: whether `demanded` builds
+    // have waited `MOVING_FRAMES_PER_BUILD` such frames, so the next runs.
+    pub(crate) fn waited_out(&self, demanded: bool) -> bool {
+        let frames = if demanded {
+            self.moving_frames.get() + 1
+        } else {
+            0
+        };
+        self.moving_frames.set(frames);
+        frames >= MOVING_FRAMES_PER_BUILD
     }
 
     // Called after a submit: once the GPU has done the work submitted so far,
@@ -465,7 +488,9 @@ impl PipelineCompiler {
     // A link runs only after a frame whose scene stood still, the app
     // changing nothing it shows, so no input or animation waits behind it;
     // a draw asking for a pipeline that is not built draws its placeholder
-    // meanwhile. Elsewhere it is this compiler.
+    // meanwhile. A scene that never stands still still gets its demanded
+    // builds, one per `MOVING_FRAMES_PER_BUILD` frames, and a held pointer
+    // none. Elsewhere it is this compiler.
     #[cfg_attr(
         not(target_arch = "wasm32"),
         expect(unused_variables, reason = "native builds compile on threads")
@@ -505,12 +530,12 @@ impl PipelineCompiler {
 
     /// Ends the drawing frame: queues the jobs it held on [`CompileLane::Later`] behind the
     /// warm-ups, or on the web runs the jobs a discovery frame held, and on WebGL the next one
-    /// waiting when the frame's `scene_still` (see [`Self::paced`]).
+    /// waiting as the frame's `scene_motion` allows (see [`Self::paced`]).
     #[cfg_attr(
         not(target_arch = "wasm32"),
         expect(unused_variables, reason = "threads build ahead whatever the frame")
     )]
-    pub(crate) fn end_frame(&self, scene_still: bool) {
+    pub(crate) fn end_frame(&self, scene_motion: SceneMotion) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
             let mut later = workers.later.lock().unwrap_or_else(PoisonError::into_inner);
@@ -539,9 +564,17 @@ impl PipelineCompiler {
             // six glass and blur links piled up there, and the first frame
             // drawing with one waited 790 ms for all six. The next build waits
             // until the GPU process has done the frame that ran the last.
-            let paced = (scene_still && self.paced_landing.may_build())
-                .then(|| self.paced.borrow_mut().next(true, true))
-                .flatten();
+            let warm_ups = match scene_motion {
+                SceneMotion::Still => Some(true),
+                SceneMotion::Moving => {
+                    let demanded = !self.paced.borrow().demanded.is_empty();
+                    self.paced_landing.waited_out(demanded).then_some(false)
+                }
+                SceneMotion::Held => None,
+            };
+            let paced = warm_ups
+                .filter(|_| self.paced_landing.may_build())
+                .and_then(|warm_ups| self.paced.borrow_mut().next(warm_ups, true));
             if let Some(job) = paced {
                 job();
                 self.paced_landing.built();
