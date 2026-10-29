@@ -129,7 +129,17 @@ impl FontFamilyResolver {
             .iter()
             .find(|family| wanted.matches(self, family))
             .or_else(|| self.families.first())?;
-        self.closest(family, request).next()
+        // The first of the closest, scored once each.
+        let requested = f32::from(request.weight.value());
+        family
+            .typefaces
+            .clone()
+            .map(|index| {
+                let score = MatchScore::of(&self.typefaces[index], requested, request.style);
+                (score, index)
+            })
+            .min_by(|a, b| a.0.cmp(b.0))
+            .map(|(_, index)| index)
     }
 
     // The closest typefaces of each family in fallback order, the requested
