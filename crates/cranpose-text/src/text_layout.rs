@@ -129,14 +129,10 @@ pub(crate) struct LineRun {
     pub(crate) glyphs: IndexRange,
     pub(crate) face: u32,
     pub(crate) size: f32,
-    // Pixels per design unit.
-    pub(crate) scale: f32,
     // Extra width of each cluster, half on each side.
     pub(crate) spacing: f32,
-    // The face's space, and in a justified line how many of the run's
-    // glyphs are spaces before the line's trailing whitespace and the extra
-    // width each of them takes.
-    pub(crate) space: Option<GlyphId>,
+    // In a justified line, how many of the run's glyphs are spaces before
+    // the line's trailing whitespace and the extra width each of them takes.
     pub(crate) spaces: u16,
     pub(crate) word_spacing: f32,
     // How far the run's baseline sits above the line's.
@@ -168,8 +164,20 @@ impl LineRun {
         self.left() + self.width + self.word_spacing * f32::from(self.spaces)
     }
 
-    // The run's clusters left to right.
-    fn clusters<'a>(&'a self, glyphs: &'a [ShapedGlyph]) -> impl Iterator<Item = Cluster> + 'a {
+    // Pixels per design unit of `face`, the run's typeface.
+    fn scale(&self, face: &Typeface) -> f32 {
+        self.size / f32::from(face.units_per_em())
+    }
+
+    // The run's clusters left to right, of its `glyphs` in its typeface
+    // `face`.
+    fn clusters<'a>(
+        &'a self,
+        glyphs: &'a [ShapedGlyph],
+        face: &Typeface,
+    ) -> impl Iterator<Item = Cluster> + 'a {
+        let scale = self.scale(face);
+        let space = face.space();
         let mut at = 0;
         std::iter::from_fn(move || {
             let first = glyphs.get(at)?;
@@ -179,8 +187,8 @@ impl LineRun {
                 .get(at)
                 .filter(|glyph| glyph.cluster == first.cluster)
             {
-                width += font_units(glyph.advance) * self.scale;
-                if self.space == Some(glyph.id()) {
+                width += font_units(glyph.advance) * scale;
+                if space == Some(glyph.id()) {
                     width += self.word_spacing;
                 }
                 at += 1;
@@ -198,9 +206,9 @@ impl LineRun {
     // cluster in text order starts.
     fn cluster_spans<'a>(
         &'a self,
-        glyphs: &'a [ShapedGlyph],
+        (glyphs, face): (&'a [ShapedGlyph], &Typeface),
     ) -> impl Iterator<Item = (f32, Cluster, usize)> + 'a {
-        let mut clusters = self.clusters(glyphs).peekable();
+        let mut clusters = self.clusters(glyphs, face).peekable();
         let mut left = 0.0;
         let mut previous = None;
         std::iter::from_fn(move || {
@@ -292,27 +300,29 @@ impl GlyphRun<'_> {
     pub fn positions(&self) -> impl Iterator<Item = PositionedGlyph> + '_ {
         let run = self.run;
         let baseline = self.baseline - run.baseline_shift;
+        let scale = run.scale(self.typeface);
         let mut pen = self.pen;
-        run.clusters(self.glyphs).flat_map(move |cluster| {
-            let mut x = pen + run.spacing / 2.0;
-            pen += cluster.width;
-            cluster.glyphs.map(move |index| {
-                let glyph = self.glyphs[index];
-                let drawn = self
-                    .offsets
-                    .and_then(|offsets| offsets.get(index))
-                    .copied()
-                    .unwrap_or_default();
-                let at = x + font_units(drawn.x) * run.scale;
-                x += font_units(glyph.advance) * run.scale;
-                PositionedGlyph {
-                    id: glyph.id(),
-                    x: at,
-                    y: baseline - font_units(drawn.y) * run.scale,
-                    offset: cluster.offset,
-                }
+        run.clusters(self.glyphs, self.typeface)
+            .flat_map(move |cluster| {
+                let mut x = pen + run.spacing / 2.0;
+                pen += cluster.width;
+                cluster.glyphs.map(move |index| {
+                    let glyph = self.glyphs[index];
+                    let drawn = self
+                        .offsets
+                        .and_then(|offsets| offsets.get(index))
+                        .copied()
+                        .unwrap_or_default();
+                    let at = x + font_units(drawn.x) * scale;
+                    x += font_units(glyph.advance) * scale;
+                    PositionedGlyph {
+                        id: glyph.id(),
+                        x: at,
+                        y: baseline - font_units(drawn.y) * scale,
+                        offset: cluster.offset,
+                    }
+                })
             })
-        })
     }
 
     /// The text the run draws.
@@ -336,6 +346,14 @@ impl LayoutBody {
     // none keeps.
     pub(crate) fn shaped_glyphs(&self) -> Option<&LaidGlyphs> {
         (self.glyphs.len() == self.shaped).then_some(&self.glyphs)
+    }
+
+    // The glyphs of `run` and their typeface.
+    fn run_glyphs(&self, run: &LineRun) -> (&[ShapedGlyph], &Typeface) {
+        (
+            &self.glyphs[run.glyphs.range()],
+            &self.faces[widen(run.face)],
+        )
     }
 
     // Empties the body, keeping the storage of all but its shared glyphs.
@@ -413,6 +431,7 @@ impl LayoutBody {
     // `index`; false when the line has none.
     fn justify(&mut self, index: usize, free: f32) -> bool {
         let Self {
+            faces,
             lines,
             runs,
             glyphs,
@@ -429,7 +448,7 @@ impl LayoutBody {
             }
             let count = glyphs[run.glyphs.range()]
                 .iter()
-                .filter(|glyph| Some(glyph.id()) == run.space)
+                .filter(|glyph| Some(glyph.id()) == faces[widen(run.face)].space())
                 .count();
             u16::try_from(count).unwrap_or(u16::MAX)
         };
@@ -705,7 +724,7 @@ impl TextLayout {
     pub fn bounding_box(&self, offset: usize) -> Rect {
         let line = &self.body.lines[self.line_for_offset(offset)];
         let found = self.body.runs[line.runs.range()].iter().find_map(|run| {
-            run.cluster_spans(&self.body.glyphs[run.glyphs.range()])
+            run.cluster_spans(self.body.run_glyphs(run))
                 .find(|(_, cluster, end)| (cluster.offset..*end).contains(&offset))
                 .map(|(left, cluster, _)| (run.left() + left, cluster.width))
         });
@@ -745,9 +764,7 @@ impl TextLayout {
             }
             let mut open: Option<(f32, f32)> = None;
             for run in &self.body.runs[line.runs.range()] {
-                for (left, cluster, cluster_end) in
-                    run.cluster_spans(&self.body.glyphs[run.glyphs.range()])
-                {
+                for (left, cluster, cluster_end) in run.cluster_spans(self.body.run_glyphs(run)) {
                     let x = run.left() + left;
                     let covered = cluster.offset < end && cluster_end > start;
                     match (covered, open) {
@@ -769,8 +786,9 @@ impl TextLayout {
 
     // The caret x of `offset` inside `run`, from the line's left edge.
     fn caret_in_run(&self, run: &LineRun, offset: usize) -> f32 {
+        let (glyphs, face) = self.body.run_glyphs(run);
         let before: f32 = run
-            .clusters(&self.body.glyphs[run.glyphs.range()])
+            .clusters(glyphs, face)
             .filter(|cluster| cluster.offset < offset)
             .map(|cluster| cluster.width)
             .sum();
@@ -784,7 +802,7 @@ impl TextLayout {
     // The offset nearest to `x` pixels from the left edge of `run`: each
     // cluster's left half gives the offset on its left.
     fn offset_in_run(&self, run: &LineRun, x: f32) -> usize {
-        for (left, cluster, end) in run.cluster_spans(&self.body.glyphs[run.glyphs.range()]) {
+        for (left, cluster, end) in run.cluster_spans(self.body.run_glyphs(run)) {
             if x < left + cluster.width / 2.0 {
                 return if run.level.is_rtl() {
                     end
