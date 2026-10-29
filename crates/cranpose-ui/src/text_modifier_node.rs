@@ -162,12 +162,21 @@ impl TextPreparedLayoutOwner {
             max_width: widths.1,
             options: source.options,
         };
-        let prepared = crate::text::measure::prepare_shared(
-            &source.text,
-            &source.style,
-            frame,
-            source.admission,
-        );
+        let prepared = {
+            // The cache holds layouts of this source only: the latest one, on
+            // the fonts of now, gives its glyphs to the new one.
+            let cache = self.cache.borrow();
+            let shaped = cache
+                .first()
+                .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
+                .map(|entry| &*entry.layout.layout);
+            crate::text::measure::prepare_shared(
+                (&source.text, &source.style),
+                frame,
+                source.admission,
+                shaped,
+            )
+        };
         if Arc::ptr_eq(&prepared.visual_style, &source.style) {
             let _ = prepared.visual_style_hash.set(source.style_hash);
         }

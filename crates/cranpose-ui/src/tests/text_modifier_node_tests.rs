@@ -104,6 +104,55 @@ fn new_fonts_lay_the_text_out_again() {
 }
 
 #[test]
+fn a_text_laid_out_after_new_fonts_takes_their_glyphs() {
+    // The glyphs of each line of the layout the node measured at `widths`,
+    // and where they draw.
+    fn glyphs(node: &TextModifierNode, widths: (f32, f32)) -> Vec<Vec<(u32, u32)>> {
+        node.layout.measure_layout(widths);
+        let prepared = node
+            .prepared_layout_handle()
+            .measured_layout()
+            .expect("a measured node has a layout");
+        (0..prepared.layout.line_count())
+            .map(|line| {
+                prepared
+                    .layout
+                    .glyph_runs(line)
+                    .flat_map(|run| {
+                        run.positions()
+                            .map(|glyph| (glyph.id.0, glyph.x.to_bits()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+    fn noto() {
+        let noto = include_bytes!("../../../cranpose-render/common/assets/NotoSansMerged.ttf");
+        crate::text::set_text_fonts(cranpose_text::FontFamilyResolver::new(
+            cranpose_text::Typeface::from_bytes(noto.as_slice()).ok(),
+        ));
+    }
+    // Cyrillic, which Cranpose Test Mono has no glyphs for.
+    const TEXT: &str = "Шрифт fonts";
+    let relaid = in_app(|| {
+        let node = text_node(TEXT, sized(10.0), TextLayoutOptions::default());
+        glyphs(&node, (0.0, 160.0));
+        noto();
+        glyphs(&node, (0.0, 40.0))
+    });
+    // In an app of its own, which shares no layouts with the first.
+    let fresh = in_app(|| {
+        noto();
+        glyphs(
+            &text_node(TEXT, sized(10.0), TextLayoutOptions::default()),
+            (0.0, 40.0),
+        )
+    });
+    assert_eq!(relaid, fresh);
+}
+
+#[test]
 fn a_new_system_font_scale_lays_the_text_out_again() {
     let (first, second) = in_app(|| {
         let node = text_node("scale", sized(10.0), TextLayoutOptions::default());

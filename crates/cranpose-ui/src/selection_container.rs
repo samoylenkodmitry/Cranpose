@@ -117,7 +117,12 @@ impl Selectable {
         } else {
             TextFrame::up_to(None, self.options)
         };
-        prepare_shared(&self.text, &self.style, frame, CacheAdmission::First)
+        prepare_shared(
+            (&self.text, &self.style),
+            frame,
+            CacheAdmission::First,
+            None,
+        )
     }
 
     /// The byte offset nearest `local`, a point in the content's coordinates.

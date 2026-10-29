@@ -1,6 +1,7 @@
 use cranpose_text::{
     CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle,
     ShapingSpan, TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
+    TextOverflow,
 };
 
 use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, lay_out, span, typeface};
@@ -351,4 +352,93 @@ fn a_line_grows_to_hold_text_shifted_off_its_baseline() {
     assert!((raised.line_baseline(0) - plain.line_baseline(0) - 6.0).abs() < 0.01);
     assert!((lowered.height() - plain.height() - 6.0).abs() < 0.01);
     assert!((lowered.line_baseline(0) - plain.line_baseline(0)).abs() < 0.01);
+}
+
+// What a layout shows: its size, whether it overflowed, and per line its
+// text, its ellipsis and its glyphs where they draw.
+type Shown = (
+    u32,
+    u32,
+    bool,
+    bool,
+    Vec<(usize, usize, bool, Vec<(u32, u32, u32)>)>,
+);
+
+fn shown(layout: &TextLayout) -> Shown {
+    let lines = (0..layout.line_count())
+        .map(|line| {
+            let glyphs = layout
+                .glyph_runs(line)
+                .flat_map(|run| {
+                    run.positions()
+                        .map(|glyph| (glyph.id.0, glyph.x.to_bits(), glyph.y.to_bits()))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            (
+                layout.line_start(line),
+                layout.line_end(line),
+                layout.is_line_ellipsized(line),
+                glyphs,
+            )
+        })
+        .collect();
+    (
+        layout.width().to_bits(),
+        layout.height().to_bits(),
+        layout.did_overflow_width(),
+        layout.did_overflow_height(),
+        lines,
+    )
+}
+
+#[test]
+fn a_layout_from_the_glyphs_of_another_width_gives_what_a_new_one_gives() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
+    let family = FontFamily::Default;
+    let paragraph = ParagraphStyle::default();
+    let mut layouter = TextLayouter::default();
+    let texts = [
+        "AVA Toyota 123.45 We fly over the lazy dog",
+        "مرحبا بالعالم الجميل اليوم",
+        "Total: مرحبا 42 bonjour\nsecond line",
+    ];
+    let wrapped = TextLayoutOptions::default();
+    let ellipsized = TextLayoutOptions {
+        overflow: TextOverflow::Ellipsis,
+        max_lines: 1,
+        ..wrapped
+    };
+    // Every width from every other: a line cut inside a word shapes its
+    // parts again, and an ellipsis adds glyphs to the layout it is in.
+    let frames = [
+        (f32::INFINITY, wrapped),
+        (90.0, wrapped),
+        (60.0, ellipsized),
+        (25.0, wrapped),
+    ];
+    for text in texts {
+        let spans = [span(0..text.len(), &family, 400)];
+        let input = |(max_width, options)| LayoutInput {
+            text,
+            spans: &spans,
+            paragraph: &paragraph,
+            lengths: ParagraphLengths::default(),
+            min_width: 0.0,
+            max_width,
+            options,
+        };
+        for from in frames {
+            let shaped = layouter.layout(&input(from), &resolver);
+            for to in frames {
+                let fresh = TextLayouter::default().layout(&input(to), &resolver);
+                let relaid = layouter.relayout(&input(to), &resolver, &shaped);
+                assert_eq!(
+                    shown(&relaid),
+                    shown(&fresh),
+                    "{text} from {from:?} to {to:?}"
+                );
+            }
+        }
+    }
 }

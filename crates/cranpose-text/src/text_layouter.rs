@@ -145,8 +145,30 @@ const PARAGRAPH_LAST_LINE: f32 = 0.16;
 impl TextLayouter {
     /// Lays `input` out with the typefaces of `resolver`.
     pub fn layout(&mut self, input: &LayoutInput<'_>, resolver: &FontFamilyResolver) -> TextLayout {
+        self.layout_taking(input, resolver, None)
+    }
+
+    /// Lays `input` out as [`TextLayouter::layout`] does, with the glyphs of
+    /// `shaped`, a layout of the same text in the same spans and typefaces
+    /// at other widths, in place of shaping the text again: Compose's
+    /// `Paragraph` made from the `ParagraphIntrinsics` of another.
+    pub fn relayout(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        shaped: &TextLayout,
+    ) -> TextLayout {
+        self.layout_taking(input, resolver, Some(shaped))
+    }
+
+    fn layout_taking(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        shaped: Option<&TextLayout>,
+    ) -> TextLayout {
         let mut scratch = std::mem::take(&mut self.scratch);
-        self.layout_into(input, resolver, &mut scratch);
+        self.fill(input, resolver, shaped, &mut scratch);
         // A clone holds each part in storage of its own length: a label's
         // layout keeps one run and one line, not the room a vector grows by.
         let layout = scratch.clone();
@@ -163,11 +185,22 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         layout: &mut TextLayout,
     ) {
+        self.fill(input, resolver, None, layout);
+    }
+
+    // Lays `input` out into `layout`, with the glyphs of `shaped` when given.
+    fn fill(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        shaped: Option<&TextLayout>,
+        layout: &mut TextLayout,
+    ) {
         let options = input.options.normalized();
         layout.clear();
         // A glyph takes at least a byte of text, so the glyphs grow once.
         layout.glyphs.reserve(input.text.len());
-        self.shape(input, resolver, layout);
+        self.shape(input, resolver, shaped, layout);
         self.measure_clusters(input, layout);
         let lengths = input.lengths;
         layout.sizing = Sizing {
@@ -250,7 +283,7 @@ impl TextLayouter {
     ) -> ParagraphIntrinsics {
         let mut measured = std::mem::take(&mut self.scratch);
         measured.clear();
-        self.shape(input, resolver, &mut measured);
+        self.shape(input, resolver, None, &mut measured);
         self.measure_clusters(input, &measured);
         self.keep_scratch(measured);
         let text = input.text;
@@ -441,26 +474,42 @@ impl TextLayouter {
         Some(hold)
     }
 
+    // Shapes the items of `input` into `layout`, or takes the glyphs
+    // `shaped` placed for them, whose clusters fall in each item's text in
+    // item order.
     fn shape(
         &mut self,
         input: &LayoutInput<'_>,
         resolver: &FontFamilyResolver,
+        shaped: Option<&TextLayout>,
         layout: &mut TextLayout,
     ) {
         self.items.clear();
         let text = input.text;
         let (shaper, items) = (&mut self.shaper, &mut self.items);
         let direction = input.paragraph.text_direction;
+        let mut taken = shaped.map(|shaped| &shaped.glyphs[..shaped.shaped]);
         self.itemizer
             .itemize(text, direction, input.spans, resolver, |item| {
                 let start = layout.glyphs.len();
-                shaper.shape(
-                    text,
-                    &item,
-                    &input.spans[item.span],
-                    0..text.len(),
-                    &mut layout.glyphs,
-                );
+                match &mut taken {
+                    Some(glyphs) => {
+                        let count = glyphs
+                            .iter()
+                            .take_while(|glyph| item.range.contains(&glyph.text_offset()))
+                            .count();
+                        let (own, rest) = glyphs.split_at(count);
+                        layout.glyphs.extend_from_slice(own);
+                        *glyphs = rest;
+                    }
+                    None => shaper.shape(
+                        text,
+                        &item,
+                        &input.spans[item.span],
+                        0..text.len(),
+                        &mut layout.glyphs,
+                    ),
+                }
                 items.push(ShapedItem {
                     text: item.range,
                     glyphs: start..layout.glyphs.len(),
@@ -478,6 +527,7 @@ impl TextLayouter {
                     },
                 });
             });
+        layout.shaped = layout.glyphs.len();
     }
 
     fn measure_clusters(&mut self, input: &LayoutInput<'_>, layout: &TextLayout) {

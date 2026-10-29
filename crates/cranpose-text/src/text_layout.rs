@@ -32,6 +32,9 @@ pub struct TextLayout {
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
     pub(crate) sizing: Sizing,
+    // How many glyphs, from the first, shaping placed: an ellipsis's and a
+    // hyphen's follow them.
+    pub(crate) shaped: usize,
     id: u32,
 }
 
@@ -303,6 +306,7 @@ impl TextLayout {
         self.did_overflow_width = false;
         self.hold = None;
         self.sizing = Sizing::default();
+        self.shaped = 0;
     }
 
     /// A number this layout's glyphs and positions go by: a layout laid out

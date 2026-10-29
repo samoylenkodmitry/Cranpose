@@ -234,6 +234,9 @@ enum LayoutSource<'a> {
     Shared {
         text: &'a Rc<AnnotatedString>,
         style: &'a Arc<TextStyle>,
+        // A layout of the text in the style at other widths, whose glyphs a
+        // new layout takes in place of shaping the text again.
+        shaped: Option<&'a TextLayout>,
     },
 }
 
@@ -257,7 +260,14 @@ impl LayoutSource<'_> {
             Self::Borrowed { text, style } => {
                 (Rc::new((*text).clone()), Arc::new((*style).clone()))
             }
-            Self::Shared { text, style } => (Rc::clone(text), Arc::clone(style)),
+            Self::Shared { text, style, .. } => (Rc::clone(text), Arc::clone(style)),
+        }
+    }
+
+    fn shaped(&self) -> Option<&TextLayout> {
+        match self {
+            Self::Borrowed { .. } => None,
+            Self::Shared { shaped, .. } => *shaped,
         }
     }
 }
@@ -354,7 +364,7 @@ impl TextService {
             return prepared;
         }
         let (text, style) = source.shared();
-        let prepared = Rc::new(self.lay_out(text, style, frame, units));
+        let prepared = Rc::new(self.lay_out(text, style, frame, (units, source.shaped())));
         if let Some(key) = key {
             let mut cache = self.prepared.borrow_mut();
             match (cache.get_mut(&key), admission) {
@@ -409,18 +419,19 @@ impl TextService {
         Some(aligned)
     }
 
-    // Lays `text` out in `style`, auto-sizing it when its options ask.
+    // Lays `text` out in `style`, auto-sizing it when its options ask, with
+    // the glyphs of `shaped` when given.
     fn lay_out(
         &self,
         text: Rc<AnnotatedString>,
         style: Arc<TextStyle>,
         frame: TextFrame,
-        units: TextUnits,
+        (units, shaped): (TextUnits, Option<&TextLayout>),
     ) -> PreparedTextLayout {
         let options = frame.options.normalized();
         let min_lines = options.min_lines;
         let Some(min_font_size_sp) = options.overflow.scale_down_min_font_size_sp() else {
-            let layout = self.layout(&text, &style, frame, units);
+            let layout = self.layout(&text, &style, frame, (units, shaped));
             return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
         };
         let frame = TextFrame {
@@ -432,22 +443,20 @@ impl TextService {
         };
         let fits =
             |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
-        let full = self.layout(&text, &style, frame, units);
+        let full = self.layout(&text, &style, frame, (units, shaped));
         let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
         if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
             return PreparedTextLayout::new(text, style, full, (frame.max_width, min_lines));
         }
+        // Each size takes the glyphs of the first: shaping is the same at
+        // every size.
         let at = |factor: f32| {
-            self.layout(
-                &text,
-                &style,
-                frame,
-                TextUnits {
-                    factor: units.factor * factor,
-                    ..units
-                },
-            )
+            let units = TextUnits {
+                factor: units.factor * factor,
+                ..units
+            };
+            self.layout(&text, &style, frame, (units, Some(&full)))
         };
         let (mut best, mut factor) = (at(min_factor), min_factor);
         if fits(&best) {
@@ -467,13 +476,14 @@ impl TextService {
         PreparedTextLayout::new(text, style, best, (frame.max_width, min_lines))
     }
 
-    // One layout of `text` in `style` in `frame`, with sizes in `units`.
+    // One layout of `text` in `style` in `frame`, with sizes in `units`, with
+    // the glyphs of `shaped` when given.
     fn layout(
         &self,
         text: &AnnotatedString,
         style: &TextStyle,
         frame: TextFrame,
-        units: TextUnits,
+        (units, shaped): (TextUnits, Option<&TextLayout>),
     ) -> TextLayout {
         let paragraph = ParagraphSpans::new(text, style, units);
         let fonts = self.fonts.borrow();
@@ -487,7 +497,11 @@ impl TextService {
             max_width: frame.max_width,
             options: frame.options,
         };
-        self.layouter.borrow_mut().layout(&input, &fonts)
+        let mut layouter = self.layouter.borrow_mut();
+        match shaped {
+            Some(shaped) => layouter.relayout(&input, &fonts, shaped),
+            None => layouter.layout(&input, &fonts),
+        }
     }
 
     // The intrinsic widths of `text` in `style`, with sizes in `units`.
@@ -760,14 +774,18 @@ pub fn prepare_text_layout(
 // Lays out `text` in `style` between the widths of `frame`, sharing them,
 // kept by the shared cache as `admission` says.
 pub(crate) fn prepare_shared(
-    text: &Rc<AnnotatedString>,
-    style: &Arc<TextStyle>,
+    (text, style): (&Rc<AnnotatedString>, &Arc<TextStyle>),
     frame: TextFrame,
     admission: CacheAdmission,
+    shaped: Option<&TextLayout>,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
         service.prepare(
-            LayoutSource::Shared { text, style },
+            LayoutSource::Shared {
+                text,
+                style,
+                shaped,
+            },
             frame,
             (host_units(), admission),
         )
