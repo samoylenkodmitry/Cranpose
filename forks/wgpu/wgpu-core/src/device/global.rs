@@ -1085,6 +1085,13 @@ impl Global {
         (id, Some(error))
     }
 
+    /// Reads the links of the GL programs no submission read yet, and
+    /// returns whether there was one; see
+    /// [`crate::device::resource::Device::read_program_links`].
+    pub fn device_read_program_links(&self, device_id: DeviceId) -> bool {
+        self.hub.devices.get(device_id).read_program_links()
+    }
+
     /// A module of GLSL templates for the GL backend.
     ///
     /// # Safety

@@ -232,6 +232,13 @@ use would wait for every frame sent before it. In Chrome on a Huawei Mate
 program the first frame did not draw with; with the read in the first
 frame, frames two to five took 25-30 ms less in all.
 
+`Device::read_program_links` reads every unread link at once, outside a
+submission. A page that builds pipelines ahead of their first draw, while
+it draws no frames, calls it once the GPU has done the work submitted after
+the last one, and the first frame that draws with them reads none. In
+Chrome on the Mate a tab bar's first tap read 22 such links in its frame,
+113 ms of a 262 ms frame.
+
 ### The GL queue skips calls that set what the context holds
 
 Upstream's GL encoder re-specifies every vertex attribute of a pipeline at
