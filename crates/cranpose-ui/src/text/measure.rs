@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, OnceCell, RefCell},
+    hash::{Hash, Hasher},
     ops::Range,
     rc::Rc,
     sync::Arc,
@@ -10,7 +11,7 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::TextLayoutHandle;
+use cranpose_ui_graphics::{FxHasher, HashBits, TextLayoutHandle};
 use smallvec::SmallVec;
 
 use super::{
@@ -27,7 +28,6 @@ const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
 // Layouts kept for one text at different widths.
 const WIDTHS_PER_TEXT: usize = 2;
-const TRIAL_KEYS: usize = 8;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
@@ -237,36 +237,10 @@ enum Cached {
 pub(crate) enum CacheAdmission {
     // At once: a node's first text, which a list composes again.
     First,
-    // Once asked for again while its key is on trial: text changed in
-    // place or drawn by a draw scope, whose strings come back only
+    // Once asked for again since the doorkeeper last forgot: text changed
+    // in place or drawn by a draw scope, whose strings come back only
     // sometimes, as a stat's do, or never, as a ticker's.
     Second,
-}
-
-// The keys of layouts on trial, the newest in place of the oldest: a text
-// asked for again while its key is here goes into the cache, so a string
-// drawn every frame keeps its second layout, and a string drawn once keeps
-// nothing, as S3-FIFO's ghost queue holds only keys.
-#[derive(Default)]
-struct TrialKeys {
-    keys: [Option<TextKey>; TRIAL_KEYS],
-    next: usize,
-}
-
-impl TrialKeys {
-    // Whether `key` is on trial, which it leaves.
-    fn take(&mut self, key: TextKey) -> bool {
-        self.keys
-            .iter_mut()
-            .find(|kept| **kept == Some(key))
-            .map(Option::take)
-            .is_some()
-    }
-
-    fn put(&mut self, key: TextKey) {
-        self.keys[self.next] = Some(key);
-        self.next = (self.next + 1) % TRIAL_KEYS;
-    }
 }
 
 /// The text and style a layout is prepared from: borrowed, which the layout
@@ -372,7 +346,10 @@ pub(crate) struct TextService {
     layouter: RefCell<TextLayouter>,
     prepared: RefCell<PassAgedCache<TextKey, SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>>>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
-    trial: RefCell<TrialKeys>,
+    // The keys of layouts missed once, by which a text missed again goes
+    // into the cache: a string drawn every frame keeps its second layout,
+    // and one drawn once keeps nothing.
+    seen: RefCell<HashBits>,
 }
 
 impl TextService {
@@ -388,7 +365,7 @@ impl TextService {
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
-            trial: RefCell::new(TrialKeys::default()),
+            seen: RefCell::default(),
         }
     }
 
@@ -398,7 +375,7 @@ impl TextService {
         self.generation
             .set(self.generation.get().wrapping_add(1).max(1));
         self.prepared.borrow_mut().clear();
-        *self.trial.borrow_mut() = TrialKeys::default();
+        *self.seen.borrow_mut() = HashBits::default();
         self.intrinsics.borrow_mut().clear();
     }
 
@@ -434,9 +411,12 @@ impl TextService {
                 let admitted = match admission {
                     CacheAdmission::First => true,
                     CacheAdmission::Second => {
-                        let mut trial = self.trial.borrow_mut();
-                        trial.take(key) || {
-                            trial.put(key);
+                        let mut hasher = FxHasher::default();
+                        key.hash(&mut hasher);
+                        let hash = hasher.finish();
+                        let mut seen = self.seen.borrow_mut();
+                        seen.contains(hash) || {
+                            seen.insert(hash);
                             false
                         }
                     }
@@ -777,8 +757,8 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
 
 // `text` laid out in `style` with lines ending only at its line breaks,
 // `style`'s sizes taken as stated, not scaled by the system font scale, as
-// a draw scope draws it: its key goes on trial, so a number drawn anew
-// each frame takes no room in the cache.
+// a draw scope draws it: the cache keeps it once it comes back, so a
+// number drawn anew each frame takes no room in it.
 pub(crate) fn prepare_resolved(
     text: &AnnotatedString,
     style: &TextStyle,

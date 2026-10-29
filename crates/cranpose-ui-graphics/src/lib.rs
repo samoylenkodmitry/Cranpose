@@ -47,6 +47,7 @@ pub mod framework_shaders;
 mod fx_hash;
 mod geometry;
 mod gradient_blur;
+mod hash_bits;
 mod image;
 /// Applies the scale, rotation and perspective of a `GraphicsLayer` to points, rectangles and
 /// quads.
@@ -84,6 +85,7 @@ pub use draw_placement::DrawPlacement;
 pub use fx_hash::*;
 pub use geometry::*;
 pub use gradient_blur::*;
+pub use hash_bits::HashBits;
 pub use image::*;
 pub use liquid_glass::*;
 pub use memory_headroom::MemoryHeadroom;

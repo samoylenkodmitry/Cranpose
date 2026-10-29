@@ -1,6 +1,6 @@
 use std::hash::{BuildHasher, Hash, Hasher};
 
-use cranpose_ui_graphics::MemoryHeadroom;
+use cranpose_ui_graphics::{HashBits, MemoryHeadroom};
 use foldhash::fast::FixedState;
 
 use crate::shaped_glyphs::{GlyphOffset, ShapedGlyph};
@@ -70,16 +70,6 @@ const MOST_WORDS: usize = 512;
 // The text bytes and glyphs the rings hold for a word.
 const TEXT_PER_WORD: usize = 16;
 const GLYPHS_PER_WORD: usize = 4;
-// 64 words of 64 bits: 4,096 words remembered.
-const HASH_BIT_WORDS: usize = 64;
-
-// A set of word hashes, one bit per hash, which forgets every hash after as
-// many have gone in as it has bits.
-#[derive(Default)]
-struct HashBits {
-    bits: Vec<u64>,
-    count: usize,
-}
 const HASH_STATE: FixedState = FixedState::with_seed(0);
 
 impl Default for WordCache {
@@ -204,29 +194,6 @@ impl WordCache {
             offsets: (!offsets.is_empty()).then(|| self.offsets.write(offsets, glyph_ring)),
         });
     }
-}
-
-impl HashBits {
-    fn contains(&self, hash: u64) -> bool {
-        let (word, mask) = bit(hash);
-        self.bits.get(word).is_some_and(|bits| bits & mask != 0)
-    }
-
-    fn insert(&mut self, hash: u64) {
-        if self.bits.is_empty() || self.count == HASH_BIT_WORDS * 64 {
-            self.bits = vec![0; HASH_BIT_WORDS];
-            self.count = 0;
-        }
-        let (word, mask) = bit(hash);
-        self.bits[word] |= mask;
-        self.count += 1;
-    }
-}
-
-// The word of a `HashBits` that holds `hash` and the bit in it.
-fn bit(hash: u64) -> (usize, u64) {
-    let bit = hash >> 52;
-    (index(bit >> 6), 1 << (bit & 63))
 }
 
 impl<T> Default for Ring<T> {
