@@ -9,11 +9,12 @@ use crate::{
     itemizer::{Itemizer, TextItem},
     layout_input::LayoutInput,
     layout_options::{TextLayoutOptions, TextOverflow},
-    line_box::{FontExtent, paragraph_line_box},
+    line_box::paragraph_line_box,
     line_breaker::{
         BreakKind, BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths,
         Wrapping, break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
     },
+    line_runs::{line_extent, place_runs},
     paragraph::{LineBreak, ResolvedTextDirection},
     script::Script,
     shaped_item::{
@@ -21,8 +22,7 @@ use crate::{
         shape_inserted, spaced_width,
     },
     shaper::{ShapedGlyph, Shaper},
-    text_layout::{LayoutLine, LineRun, Sizing, TextLayout, WidthRange, font_units},
-    typeface::Typeface,
+    text_layout::{LayoutLine, Sizing, TextLayout, WidthRange, font_units},
 };
 #[cfg(feature = "hyphenation")]
 use crate::{
@@ -527,8 +527,8 @@ impl TextLayouter {
             };
             let ellipsized = self.collect_line(input, options, resolver, (index, &line), layout);
             reorder_visually(&mut self.pieces, |piece| piece.level);
-            let (runs, width) = self.place_runs(line.visible, layout);
-            let extent = self.line_extent(input, resolver, layout, line.range.start);
+            let (runs, width) = place_runs(&self.pieces, line.visible, layout);
+            let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
             let asked = input.lengths.line_height.unwrap_or(f32::NAN);
             let line_box = paragraph_line_box(input.paragraph, extent, asked, input.lengths.grid);
             let trim_top = if index == 0 { line_box.trim_top } else { 0.0 };
@@ -608,51 +608,6 @@ impl TextLayouter {
             }
         }
         ellipsized
-    }
-
-    // Puts the line's pieces, already in visual order, into runs from its
-    // visible text's left edge; returns the runs and the visible width.
-    fn place_runs(&self, visible: usize, layout: &mut TextLayout) -> (Range<usize>, f32) {
-        let first = layout.runs.len();
-        let mut x = 0.0;
-        let mut visible_left = None;
-        let mut width = 0.0;
-        for piece in &self.pieces {
-            if piece.text.start < visible || piece.text.is_empty() {
-                visible_left.get_or_insert(x);
-                width += piece.width;
-            }
-            let space = layout.faces[piece.face].space();
-            let spaces = if piece.text.start < visible {
-                layout.glyphs[piece.glyphs.clone()]
-                    .iter()
-                    .filter(|glyph| Some(glyph.id) == space)
-                    .count()
-            } else {
-                0
-            };
-            layout.runs.push(LineRun {
-                text: piece.text.clone(),
-                glyphs: piece.glyphs.clone(),
-                face: piece.face,
-                size: piece.size,
-                scale: piece.scale,
-                spacing: piece.spacing,
-                space,
-                spaces: u16::try_from(spaces).unwrap_or(u16::MAX),
-                word_spacing: 0.0,
-                baseline_shift: piece.baseline_shift,
-                level: piece.level,
-                x,
-                width: piece.width,
-                shift: 0.0,
-            });
-            x += piece.width;
-        }
-        for run in &mut layout.runs[first..] {
-            run.x -= visible_left.unwrap_or(0.0);
-        }
-        (first..layout.runs.len(), width)
     }
 
     // Collects the pieces of a line that does not fit with an ellipsis where
@@ -843,53 +798,6 @@ impl TextLayouter {
                 });
             }
         }
-    }
-
-    // The tallest ascent and deepest descent of the typefaces on the line
-    // just collected, so a fallback font taller than the text's own font
-    // makes room for itself, as Android's fallback line spacing does. A line
-    // with no text takes the typeface of its span.
-    fn line_extent(
-        &self,
-        input: &LayoutInput<'_>,
-        resolver: &FontFamilyResolver,
-        layout: &TextLayout,
-        start: usize,
-    ) -> FontExtent {
-        let extent = |face: &Typeface, scale: f32| {
-            let metrics = face.line_metrics();
-            FontExtent::new(
-                metrics.ascent * scale,
-                -metrics.descent * scale,
-                metrics.line_gap * scale,
-            )
-        };
-        if self.pieces.is_empty() {
-            let span = input
-                .spans
-                .iter()
-                .find(|span| span.range.contains(&start))
-                .or_else(|| input.spans.last());
-            return span
-                .and_then(|span| {
-                    let face = resolver.resolve(span.font)?;
-                    Some(extent(face, scale(span, face)))
-                })
-                .unwrap_or_else(|| FontExtent::new(0.0, 0.0, 0.0));
-        }
-        // A span shifted up reaches higher above the line's baseline, and one
-        // shifted down lower, as Android widens a run's metrics by its shift.
-        self.pieces
-            .iter()
-            .fold(FontExtent::new(0.0, 0.0, 0.0), |line, piece| {
-                let face = extent(&layout.faces[piece.face], piece.scale);
-                let shift = piece.baseline_shift;
-                FontExtent::new(
-                    line.ascent.max(face.ascent + shift.max(0.0)),
-                    line.descent.max(face.descent - shift.min(0.0)),
-                    line.line_gap.max(face.line_gap),
-                )
-            })
     }
 
     // The base level of the paragraph that holds `offset`.
