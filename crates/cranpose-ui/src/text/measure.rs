@@ -27,7 +27,7 @@ const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
 // Layouts kept for one text at different widths.
 const WIDTHS_PER_TEXT: usize = 2;
-const TRIAL_LAYOUTS: usize = 8;
+const TRIAL_KEYS: usize = 8;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
@@ -237,34 +237,35 @@ enum Cached {
 pub(crate) enum CacheAdmission {
     // At once: a node's first text, which a list composes again.
     First,
-    // Once asked for again while on trial: text changed in place or drawn
-    // by a draw scope, whose strings come back only sometimes, as a stat's
-    // do, or never, as a ticker's.
+    // Once asked for again while its key is on trial: text changed in
+    // place or drawn by a draw scope, whose strings come back only
+    // sometimes, as a stat's do, or never, as a ticker's.
     Second,
 }
 
-// Layouts kept on trial, the newest in place of the oldest: one asked for
-// again while here moves into the cache, so a string drawn every frame
-// keeps its first layout, and a string drawn once leaves soon, as
-// S3-FIFO's small queue lets one-hit entries go.
+// The keys of layouts on trial, the newest in place of the oldest: a text
+// asked for again while its key is here goes into the cache, so a string
+// drawn every frame keeps its second layout, and a string drawn once keeps
+// nothing, as S3-FIFO's ghost queue holds only keys.
 #[derive(Default)]
-struct TrialLayouts {
-    slots: [Option<(TextKey, Rc<PreparedTextLayout>)>; TRIAL_LAYOUTS],
+struct TrialKeys {
+    keys: [Option<TextKey>; TRIAL_KEYS],
     next: usize,
 }
 
-impl TrialLayouts {
-    fn take(&mut self, key: TextKey) -> Option<Rc<PreparedTextLayout>> {
-        let slot = self
-            .slots
+impl TrialKeys {
+    // Whether `key` is on trial, which it leaves.
+    fn take(&mut self, key: TextKey) -> bool {
+        self.keys
             .iter_mut()
-            .find(|slot| slot.as_ref().is_some_and(|(kept, _)| *kept == key))?;
-        slot.take().map(|(_, prepared)| prepared)
+            .find(|kept| **kept == Some(key))
+            .map(Option::take)
+            .is_some()
     }
 
-    fn put(&mut self, key: TextKey, prepared: Rc<PreparedTextLayout>) {
-        self.slots[self.next] = Some((key, prepared));
-        self.next = (self.next + 1) % TRIAL_LAYOUTS;
+    fn put(&mut self, key: TextKey) {
+        self.keys[self.next] = Some(key);
+        self.next = (self.next + 1) % TRIAL_KEYS;
     }
 }
 
@@ -371,7 +372,7 @@ pub(crate) struct TextService {
     layouter: RefCell<TextLayouter>,
     prepared: RefCell<PassAgedCache<TextKey, SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>>>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
-    trial: RefCell<TrialLayouts>,
+    trial: RefCell<TrialKeys>,
 }
 
 impl TextService {
@@ -387,7 +388,7 @@ impl TextService {
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
-            trial: RefCell::new(TrialLayouts::default()),
+            trial: RefCell::new(TrialKeys::default()),
         }
     }
 
@@ -397,7 +398,7 @@ impl TextService {
         self.generation
             .set(self.generation.get().wrapping_add(1).max(1));
         self.prepared.borrow_mut().clear();
-        *self.trial.borrow_mut() = TrialLayouts::default();
+        *self.trial.borrow_mut() = TrialKeys::default();
         self.intrinsics.borrow_mut().clear();
     }
 
@@ -430,14 +431,19 @@ impl TextService {
                     remember(widths, &prepared);
                 }
             } else {
-                match admission {
-                    CacheAdmission::First => {
-                        let widths = SmallVec::from_elem(Rc::clone(&prepared), 1);
-                        self.prepared.borrow_mut().push(key, widths);
-                    }
+                let admitted = match admission {
+                    CacheAdmission::First => true,
                     CacheAdmission::Second => {
-                        self.trial.borrow_mut().put(key, Rc::clone(&prepared));
+                        let mut trial = self.trial.borrow_mut();
+                        trial.take(key) || {
+                            trial.put(key);
+                            false
+                        }
                     }
+                };
+                if admitted {
+                    let widths = SmallVec::from_elem(Rc::clone(&prepared), 1);
+                    self.prepared.borrow_mut().push(key, widths);
                 }
             }
         }
@@ -449,18 +455,8 @@ impl TextService {
     // other widths only, or nothing.
     fn cached(&self, key: TextKey, frame: TextFrame, style: &TextStyle) -> Cached {
         let mut cache = self.prepared.borrow_mut();
-        let widths = match cache.get_mut(&key) {
-            Some(widths) => widths,
-            None => {
-                let Some(tried) = self.trial.borrow_mut().take(key) else {
-                    return Cached::Missing;
-                };
-                cache.push(key, SmallVec::from_elem(tried, 1));
-                let Some(widths) = cache.get_mut(&key) else {
-                    return Cached::Missing;
-                };
-                widths
-            }
+        let Some(widths) = cache.get_mut(&key) else {
+            return Cached::Missing;
         };
         let Some(held) = widths
             .iter()
@@ -781,7 +777,7 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
 
 // `text` laid out in `style` with lines ending only at its line breaks,
 // `style`'s sizes taken as stated, not scaled by the system font scale, as
-// a draw scope draws it: the layout goes on trial, so a number drawn anew
+// a draw scope draws it: its key goes on trial, so a number drawn anew
 // each frame takes no room in the cache.
 pub(crate) fn prepare_resolved(
     text: &AnnotatedString,

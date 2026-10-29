@@ -74,8 +74,8 @@ struct TextLayoutSource {
     style: Arc<TextStyle>,
     style_hash: u64,
     options: TextLayoutOptions,
-    // When the text service's shared cache keeps the layouts: those of a
-    // text changed in place, as a ticker's is every frame, go on trial.
+    // When the text service's shared cache keeps the layouts: the keys of
+    // a text changed in place, as a ticker's is every frame, go on trial.
     admission: CacheAdmission,
 }
 

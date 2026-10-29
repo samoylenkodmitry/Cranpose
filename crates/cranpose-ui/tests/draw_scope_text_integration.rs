@@ -98,7 +98,7 @@ fn baseline_alignment_uses_the_font_s_baseline() {
 }
 
 #[test]
-fn an_unchanged_string_draws_one_layout_across_repeated_frames() {
+fn an_unchanged_string_draws_one_layout_from_its_second_frame() {
     let commands = draw_commands(|scope: &mut dyn DrawScope| {
         scope.draw_text_from(
             Point::ZERO,
@@ -119,13 +119,13 @@ fn an_unchanged_string_draws_one_layout_across_repeated_frames() {
 
     assert!(layouts[0].is_some(), "a drawn text carries its layout");
     assert!(
-        layouts.iter().all(|layout| *layout == layouts[0]),
-        "a stable string must be laid out once and drawn from that layout after that"
+        layouts[1..].iter().all(|layout| *layout == layouts[1]),
+        "a stable string goes into the cache when drawn again and draws from that layout after that"
     );
 }
 
 #[test]
-fn a_string_drawn_again_after_another_keeps_its_first_layout() {
+fn a_string_drawn_again_after_another_keeps_its_second_layout() {
     // A clock that shows a few strings by turns: each frame draws the next.
     let strings = ["10:00", "10:01", "10:02"];
     let frame = Rc::new(std::cell::Cell::new(0usize));
@@ -149,11 +149,11 @@ fn a_string_drawn_again_after_another_keeps_its_first_layout() {
             .collect()
     });
 
-    for (index, layout) in layouts.iter().enumerate().skip(strings.len()) {
+    for (index, layout) in layouts.iter().enumerate().skip(2 * strings.len()) {
         assert_eq!(
             *layout,
-            layouts[index % strings.len()],
-            "frame {index} draws the layout its string was first drawn with"
+            layouts[strings.len() + index % strings.len()],
+            "frame {index} draws the layout its string was drawn with the second time"
         );
     }
 }
