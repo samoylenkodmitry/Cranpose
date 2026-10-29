@@ -3,7 +3,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use cranpose_ui_graphics::MemoryHeadroom;
 use foldhash::fast::FixedState;
 
-use crate::shaper::ShapedGlyph;
+use crate::shaped_glyphs::{GlyphOffset, ShapedGlyph};
 
 // Shaped words kept from one shaping to the next. A direct-mapped table of
 // slots finds a word with one hash and one compare; the words' text and
@@ -24,6 +24,8 @@ pub(crate) struct WordCache {
     slots: Vec<Option<Word>>,
     texts: Ring<u8>,
     glyphs: Ring<ShapedGlyph>,
+    // The offsets of the words whose glyphs draw off the pen.
+    offsets: Ring<GlyphOffset>,
     // The words shaped once and not kept.
     seen: HashBits,
     // The words kept and then pushed out of their slots by others.
@@ -44,6 +46,7 @@ struct Word {
     text: Written,
     // Clusters count from the word's start.
     glyphs: Written,
+    offsets: Option<Written>,
 }
 
 // Where a value was written in a ring: its position counted from the ring's
@@ -85,6 +88,7 @@ impl Default for WordCache {
             slots: Vec::new(),
             texts: Ring::default(),
             glyphs: Ring::default(),
+            offsets: Ring::default(),
             seen: HashBits::default(),
             gone: HashBits::default(),
             room: FEWEST_WORDS,
@@ -96,8 +100,12 @@ impl Default for WordCache {
 
 impl WordCache {
     // The glyphs of `text` shaped with `plan`, a hash of the shaping face and
-    // plan, clusters counting from the word's start.
-    pub(crate) fn get(&mut self, plan: u64, text: &str) -> Option<&[ShapedGlyph]> {
+    // plan, clusters counting from the word's start, with their offsets.
+    pub(crate) fn get(
+        &mut self,
+        plan: u64,
+        text: &str,
+    ) -> Option<(&[ShapedGlyph], &[GlyphOffset])> {
         let hash = hash(plan, text);
         let Some(word) = self
             .slots
@@ -115,9 +123,15 @@ impl WordCache {
         if word.plan != plan || kept != text.as_bytes() {
             return None;
         }
-        let glyphs = self.glyphs.read(word.glyphs, self.room * GLYPHS_PER_WORD);
-        self.outgrown |= glyphs.is_none();
-        glyphs
+        let ring = self.room * GLYPHS_PER_WORD;
+        let glyphs = self.glyphs.read(word.glyphs, ring);
+        let offsets = match word.offsets {
+            Some(offsets) => self.offsets.read(offsets, ring),
+            None => Some(&[][..]),
+        };
+        let found = glyphs.zip(offsets);
+        self.outgrown |= found.is_none();
+        found
     }
 
     // Takes the room back to the fewest words when memory turns tight.
@@ -140,6 +154,7 @@ impl WordCache {
         self.slots = Vec::new();
         self.texts = Ring::default();
         self.glyphs = Ring::default();
+        self.offsets = Ring::default();
     }
 
     // Whether the shapes of `text` with `plan` are worth keeping: it was
@@ -153,10 +168,17 @@ impl WordCache {
         false
     }
 
-    // Keeps `glyphs`, clusters counting from the word's start, as the shapes
-    // of `text` with `plan`, in place of the word in the same slot. A word
-    // longer than a ring is not kept.
-    pub(crate) fn put(&mut self, plan: u64, text: &str, glyphs: &[ShapedGlyph]) {
+    // Keeps `glyphs`, clusters counting from the word's start, drawn at
+    // `offsets` from the pen, or at the pen when there are none, as the
+    // shapes of `text` with `plan`, in place of the word in the same slot. A
+    // word longer than a ring is not kept.
+    pub(crate) fn put(
+        &mut self,
+        plan: u64,
+        text: &str,
+        glyphs: &[ShapedGlyph],
+        offsets: &[GlyphOffset],
+    ) {
         if self.outgrown && self.headroom == MemoryHeadroom::Ample && self.room < MOST_WORDS {
             self.resize(self.room * 2);
         }
@@ -179,6 +201,7 @@ impl WordCache {
             plan,
             text: self.texts.write(text.as_bytes(), text_ring),
             glyphs: self.glyphs.write(glyphs, glyph_ring),
+            offsets: (!offsets.is_empty()).then(|| self.offsets.write(offsets, glyph_ring)),
         });
     }
 }

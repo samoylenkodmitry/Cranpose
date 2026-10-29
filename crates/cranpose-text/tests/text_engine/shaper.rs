@@ -1,6 +1,6 @@
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, FontFeature, Itemizer, ShapedGlyph, Shaper, ShapingSpan,
-    TextDirection, font_feature_settings,
+    FontFamily, FontFamilyResolver, FontFeature, Itemizer, ShapedGlyph, ShapedGlyphs, Shaper,
+    ShapingSpan, TextDirection, font_feature_settings,
 };
 
 use crate::fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, ROBOTO, span, typeface};
@@ -28,7 +28,7 @@ fn shape(
     text: &str,
     cuts: &[usize],
     shaping: Shaping<'_>,
-) -> Vec<ShapedGlyph> {
+) -> ShapedGlyphs {
     let family = FontFamily::Default;
     let mut bounds = vec![0];
     bounds.extend_from_slice(cuts);
@@ -42,7 +42,7 @@ fn shape(
         })
         .collect();
     let mut shaper = Shaper::default();
-    let mut glyphs = Vec::new();
+    let mut glyphs = ShapedGlyphs::default();
     Itemizer::default().itemize(text, TextDirection::Content, &spans, resolver, |item| {
         shaper.shape(text, &item, &spans[item.span], 0..text.len(), &mut glyphs);
     });
@@ -50,7 +50,7 @@ fn shape(
 }
 
 fn ids(glyphs: &[ShapedGlyph]) -> Vec<u32> {
-    glyphs.iter().map(|glyph| glyph.id.0).collect()
+    glyphs.iter().map(|glyph| glyph.id().0).collect()
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn arabic_joins_across_style_spans_and_runs_right_to_left() {
     let by_cluster = |glyphs: &[ShapedGlyph]| {
         let mut pairs: Vec<(u32, u32)> = glyphs
             .iter()
-            .map(|glyph| (glyph.cluster, glyph.id.0))
+            .map(|glyph| (glyph.cluster, glyph.id().0))
             .collect();
         pairs.sort_unstable();
         pairs
@@ -163,7 +163,7 @@ fn the_language_picks_local_forms() {
 type Turn<'a> = (&'a str, TextDirection, Option<&'a str>, &'a [FontFeature]);
 
 // The glyphs of each text, shaped in turn by one shaper.
-fn shape_in_turn(resolver: &FontFamilyResolver, turns: &[Turn<'_>]) -> Vec<Vec<ShapedGlyph>> {
+fn shape_in_turn(resolver: &FontFamilyResolver, turns: &[Turn<'_>]) -> Vec<ShapedGlyphs> {
     let family = FontFamily::Default;
     let mut shaper = Shaper::default();
     turns
@@ -174,7 +174,7 @@ fn shape_in_turn(resolver: &FontFamilyResolver, turns: &[Turn<'_>]) -> Vec<Vec<S
                 features,
                 ..span(0..text.len(), &family, 400)
             }];
-            let mut glyphs = Vec::new();
+            let mut glyphs = ShapedGlyphs::default();
             Itemizer::default().itemize(text, direction, &spans, resolver, |item| {
                 shaper.shape(text, &item, &spans[item.span], 0..text.len(), &mut glyphs);
             });

@@ -8,7 +8,7 @@ use crate::{
         DEJAVU, DEJAVU_MONO, DEVANAGARI_VF, MONASPACE_VF, NOTO_SANS_MERGED, ROBOTO, TEST_CONTEXTS,
         TEST_KERNS,
     },
-    harfrust_oracle::{REGULAR, Style, compare},
+    harfrust_oracle::{Placed, REGULAR, Style, compare},
 };
 
 const BOLD: Style<'static> = Style {
@@ -149,9 +149,7 @@ fn a_feature_that_reaches_plain_glyphs_shapes_them() {
     let (shaped, oracle) = compare(&mut shaper, NOTO_SANS_MERGED, text, style);
     assert_eq!(shaped, oracle);
     let (lining, _) = compare(&mut shaper, NOTO_SANS_MERGED, text, REGULAR);
-    let ids = |glyphs: &[cranpose_text::ShapedGlyph]| -> Vec<u32> {
-        glyphs.iter().map(|glyph| glyph.id.0).collect()
-    };
+    let ids = |glyphs: &[Placed]| -> Vec<u32> { glyphs.iter().map(|glyph| glyph.id).collect() };
     assert_ne!(
         ids(&shaped),
         ids(&lining),

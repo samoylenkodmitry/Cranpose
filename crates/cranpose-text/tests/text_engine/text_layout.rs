@@ -528,8 +528,9 @@ fn a_layout_from_the_glyphs_of_another_width_gives_what_a_new_one_gives() {
         "AVA Toyota 123.45 We fly over the lazy dog",
         "مرحبا بالعالم الجميل اليوم",
         "Total: مرحبا 42 bonjour\nsecond line",
-        // A combining mark draws at an offset from the pen.
-        "q\u{301}uays q\u{301}uote q\u{301}uick",
+        // A combining mark draws at an offset from the pen, and items after
+        // it draw at the pen.
+        "q\u{301}uays q\u{301}uote مرحبا q\u{301}uick fox",
     ];
     let wrapped = TextLayoutOptions::default();
     let ellipsized = TextLayoutOptions {

@@ -9,7 +9,7 @@ use crate::{
     font_family_resolver::FontFamilyResolver,
     index_range::narrow,
     itemizer::{Itemizer, TextItem},
-    laid_glyph::LaidGlyphs,
+    laid_glyphs::LaidGlyphs,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
     line_box::paragraph_line_box,
@@ -23,11 +23,12 @@ use crate::{
     paragraph_intrinsics::ParagraphIntrinsics,
     paragraph_measures::ParagraphMeasures,
     script::Script,
+    shaped_glyphs::ShapedGlyphs,
     shaped_item::{
         Piece, ShapedItem, face_index, hyphen, item_at, part_glyphs, scale, set_cluster,
         shape_inserted, spaced_width,
     },
-    shaper::{ShapedGlyph, Shaper},
+    shaper::Shaper,
     text_layout::{LayoutBody, LayoutLine, Sizing, TextLayout, WidthRange},
     typeface::Typeface,
 };
@@ -53,7 +54,7 @@ pub struct TextLayouter {
     pieces: Vec<Piece>,
     // The glyphs of the text being laid out, which keep their storage from
     // one text to the next; a layout takes them once they are all placed.
-    glyphs: Vec<ShapedGlyph>,
+    glyphs: ShapedGlyphs,
     // The faces intrinsic widths are measured in, which keep their storage
     // from one text to the next.
     faces: SmallVec<[Typeface; 1]>,
@@ -309,7 +310,7 @@ impl TextLayouter {
     // a paragraph needs.
     fn keep_glyph_room(&mut self) {
         if self.glyphs.capacity() > SCRATCH_GLYPHS {
-            self.glyphs = Vec::new();
+            self.glyphs = ShapedGlyphs::default();
         }
     }
 
@@ -793,7 +794,7 @@ impl TextLayouter {
                 )
             }
         };
-        set_cluster(&mut self.glyphs[ellipsis.glyphs.clone()], head);
+        set_cluster(&mut self.glyphs.glyphs_mut()[ellipsis.glyphs.clone()], head);
         ellipsis.text = head..head;
         self.collect_pieces(input, range.start..head, visible, layout);
         self.pieces.push(ellipsis);
@@ -858,7 +859,7 @@ impl TextLayouter {
             hyphen,
             &mut self.glyphs,
         );
-        set_cluster(&mut self.glyphs[start..], at);
+        set_cluster(&mut self.glyphs.glyphs_mut()[start..], at);
         self.pieces.push(Piece {
             width,
             text: at..at,

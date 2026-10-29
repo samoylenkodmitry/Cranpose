@@ -17,36 +17,12 @@ use crate::{
     glyph_id::GlyphId,
     itemizer::TextItem,
     plain_glyphs::PlainGlyphs,
+    shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
     shaping_span::ShapingSpan,
     typeface::Typeface,
     word_cache::WordCache,
     word_split::{SpaceCut, WordSplit, word_split},
 };
-
-/// One glyph a shaper placed, in font design units.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ShapedGlyph {
-    /// The glyph.
-    pub id: GlyphId,
-    /// The byte offset in the text of the cluster the glyph belongs to.
-    pub cluster: u32,
-    /// How far the glyph moves the pen.
-    pub advance: i32,
-    /// How far right of the pen the glyph draws.
-    pub x_offset: i32,
-    /// How far up from the baseline the glyph draws.
-    pub y_offset: i32,
-    /// Whether a line break before this glyph's cluster changes the shapes
-    /// on either side of it.
-    pub unsafe_to_break: bool,
-}
-
-impl ShapedGlyph {
-    /// The byte offset in the text of the cluster the glyph belongs to.
-    pub fn text_offset(&self) -> usize {
-        usize::try_from(self.cluster).unwrap_or(usize::MAX)
-    }
-}
 
 /// Shapes items with HarfRust. Keeps, for each typeface instance it met, the
 /// shaping font and its shape plans, the words it shaped where the font lets
@@ -133,7 +109,7 @@ impl Shaper {
         item: &TextItem<'_>,
         span: &ShapingSpan<'_>,
         context: Range<usize>,
-        glyphs: &mut Vec<ShapedGlyph>,
+        glyphs: &mut ShapedGlyphs,
     ) {
         let face = self.face(item.typeface, span.font.weight, span.font.style);
         let direction = if item.level.is_rtl() {
@@ -331,7 +307,7 @@ impl WordShaping<'_> {
         split: &WordSplit,
         word_ends: &mut Vec<usize>,
         pieces: &mut Vec<(Range<usize>, Range<usize>)>,
-        glyphs: &mut Vec<ShapedGlyph>,
+        glyphs: &mut ShapedGlyphs,
     ) {
         let after_spaces = split.cut == SpaceCut::After;
         word_ends.clear();
@@ -353,7 +329,7 @@ impl WordShaping<'_> {
                 } else {
                     glyphs.last()
                 };
-                glyph.is_some_and(|glyph| split.exceptions.contains(glyph.id.0))
+                glyph.is_some_and(|glyph| split.exceptions.contains(glyph.id().0))
             };
             let joins = pieces.last().is_some_and(|(_, previous)| {
                 if after_spaces {
@@ -376,15 +352,15 @@ impl WordShaping<'_> {
             // Words were shaped in text order; drawn right to left, the last
             // comes first.
             let end = glyphs.len();
-            glyphs[item_start..].reverse();
+            glyphs.reverse(item_start..end);
             for (_, piece) in pieces.iter() {
-                glyphs[item_start + end - piece.end..item_start + end - piece.start].reverse();
+                glyphs.reverse(item_start + end - piece.end..item_start + end - piece.start);
             }
         }
     }
     // Appends the glyphs of `word`: its plain glyphs, kept ones, or shaped
     // and kept when the word shapes the same wherever it stands.
-    fn word(&mut self, word: Range<usize>, glyphs: &mut Vec<ShapedGlyph>) {
+    fn word(&mut self, word: Range<usize>, glyphs: &mut ShapedGlyphs) {
         let Some(word_text) = self.text.get(word.clone()) else {
             return;
         };
@@ -397,8 +373,8 @@ impl WordShaping<'_> {
             return;
         }
         let keeps = stands_alone(self.text, &word, &self.context);
-        if keeps && let Some(cached) = self.words.get(self.key, word_text) {
-            append(glyphs, cached, word.start);
+        if keeps && let Some((cached, offsets)) = self.words.get(self.key, word_text) {
+            glyphs.extend_from_word(cached, offsets, offset(word.start));
             return;
         }
         let first = glyphs.len();
@@ -413,12 +389,10 @@ impl WordShaping<'_> {
         if keeps && self.words.admits(self.key, word_text) {
             let shaped: SmallVec<[ShapedGlyph; 16]> = glyphs[first..]
                 .iter()
-                .map(|glyph| ShapedGlyph {
-                    cluster: glyph.cluster - offset(word.start),
-                    ..*glyph
-                })
+                .map(|glyph| glyph.in_cluster(glyph.cluster - offset(word.start)))
                 .collect();
-            self.words.put(self.key, word_text, &shaped);
+            let offsets = glyphs.offsets().get(first..).unwrap_or_default();
+            self.words.put(self.key, word_text, &shaped, offsets);
         }
     }
 }
@@ -431,7 +405,7 @@ fn shape_range(
     text: &str,
     range: Range<usize>,
     context: Range<usize>,
-    glyphs: &mut Vec<ShapedGlyph>,
+    glyphs: &mut ShapedGlyphs,
 ) {
     let (Ok(start), Some(before), Some(content), Some(after)) = (
         u32::try_from(range.start),
@@ -460,20 +434,25 @@ fn shape_range(
             .features(setting.features),
     );
     if shaped.is_ok() {
-        glyphs.extend(
-            buffer
-                .glyph_infos()
-                .iter()
-                .zip(buffer.glyph_positions())
-                .map(|(info, position)| ShapedGlyph {
-                    id: GlyphId(info.glyph_id),
-                    cluster: start + info.cluster,
-                    advance: position.x_advance,
-                    x_offset: position.x_offset,
-                    y_offset: position.y_offset,
-                    unsafe_to_break: info.unsafe_to_break(),
-                }),
-        );
+        glyphs.reserve(buffer.len());
+        for (info, position) in buffer.glyph_infos().iter().zip(buffer.glyph_positions()) {
+            glyphs.push(
+                ShapedGlyph::new(
+                    GlyphId(info.glyph_id),
+                    start + info.cluster,
+                    position.x_advance,
+                    if info.unsafe_to_break() {
+                        BreakBefore::Unsafe
+                    } else {
+                        BreakBefore::Safe
+                    },
+                ),
+                GlyphOffset {
+                    x: position.x_offset,
+                    y: position.y_offset,
+                },
+            );
+        }
     }
 }
 
@@ -495,15 +474,6 @@ fn stands_alone(text: &str, word: &Range<usize>, context: &Range<usize>) -> bool
     let space = |at: usize| bytes.get(at) == Some(&b' ');
     (word.start == context.start || space(word.start) || space(word.start - 1))
         && (word.end == context.end || space(word.end) || space(word.end - 1))
-}
-
-// Appends `cached` glyphs of a word that starts at `start`.
-fn append(glyphs: &mut Vec<ShapedGlyph>, cached: &[ShapedGlyph], start: usize) {
-    let start = offset(start);
-    glyphs.extend(cached.iter().map(|glyph| ShapedGlyph {
-        cluster: glyph.cluster + start,
-        ..*glyph
-    }));
 }
 
 fn offset(at: usize) -> u32 {

@@ -13,8 +13,9 @@ use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
     index_range::{IndexRange, widen},
-    laid_glyph::{GlyphOffset, LaidGlyph, LaidGlyphs},
+    laid_glyphs::LaidGlyphs,
     paragraph::TextAlign,
+    shaped_glyphs::{GlyphOffset, ShapedGlyph},
     typeface::Typeface,
 };
 
@@ -168,7 +169,7 @@ impl LineRun {
     }
 
     // The run's clusters left to right.
-    fn clusters<'a>(&'a self, glyphs: &'a [LaidGlyph]) -> impl Iterator<Item = Cluster> + 'a {
+    fn clusters<'a>(&'a self, glyphs: &'a [ShapedGlyph]) -> impl Iterator<Item = Cluster> + 'a {
         let mut at = 0;
         std::iter::from_fn(move || {
             let first = glyphs.get(at)?;
@@ -197,7 +198,7 @@ impl LineRun {
     // cluster in text order starts.
     fn cluster_spans<'a>(
         &'a self,
-        glyphs: &'a [LaidGlyph],
+        glyphs: &'a [ShapedGlyph],
     ) -> impl Iterator<Item = (f32, Cluster, usize)> + 'a {
         let mut clusters = self.clusters(glyphs).peekable();
         let mut left = 0.0;
@@ -264,7 +265,7 @@ pub struct GlyphRun<'a> {
     pub typeface: &'a Typeface,
     /// The font size in pixels.
     pub size: f32,
-    glyphs: &'a [LaidGlyph],
+    glyphs: &'a [ShapedGlyph],
     offsets: Option<&'a [GlyphOffset]>,
     run: &'a LineRun,
     pen: f32,
@@ -299,7 +300,9 @@ impl GlyphRun<'_> {
                 let glyph = self.glyphs[index];
                 let drawn = self
                     .offsets
-                    .map_or_else(GlyphOffset::default, |offsets| offsets[index]);
+                    .and_then(|offsets| offsets.get(index))
+                    .copied()
+                    .unwrap_or_default();
                 let at = x + font_units(drawn.x) * run.scale;
                 x += font_units(glyph.advance) * run.scale;
                 PositionedGlyph {

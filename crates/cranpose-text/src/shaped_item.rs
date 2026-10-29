@@ -7,7 +7,8 @@ use crate::{
     itemizer::TextItem,
     layout_input::LayoutInput,
     script::Script,
-    shaper::{ShapedGlyph, Shaper},
+    shaped_glyphs::{ShapedGlyph, ShapedGlyphs},
+    shaper::Shaper,
     shaping_span::ShapingSpan,
     text_layout::font_units,
     typeface::Typeface,
@@ -80,7 +81,7 @@ pub(crate) fn shape_inserted(
     input: &LayoutInput<'_>,
     item: &TextItem<'_>,
     inserted: &str,
-    glyphs: &mut Vec<ShapedGlyph>,
+    glyphs: &mut ShapedGlyphs,
 ) -> f32 {
     let start = glyphs.len();
     let span = &input.spans[item.span];
@@ -107,13 +108,13 @@ pub(crate) fn part_glyphs(
     sub: Range<usize>,
     part: Range<usize>,
     faces: &[Typeface],
-    glyphs: &mut Vec<ShapedGlyph>,
+    glyphs: &mut ShapedGlyphs,
 ) -> Range<usize> {
     let own = &glyphs[item.glyphs.clone()];
     let cut_unsafe = |cut: usize| {
         let at = cluster_index(own, cut, item.level);
         own.get(at)
-            .is_none_or(|glyph| glyph.unsafe_to_break || glyph.text_offset() != cut)
+            .is_none_or(|glyph| glyph.unsafe_to_break() || glyph.text_offset() != cut)
     };
     let cut_inside =
         (sub.start == part.start && part.start > item.text.start && cut_unsafe(part.start))

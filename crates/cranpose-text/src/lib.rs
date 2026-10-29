@@ -28,7 +28,7 @@ pub mod hyphenator;
 mod index_range;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
-mod laid_glyph;
+mod laid_glyphs;
 /// A paragraph to lay out and the lengths of its style.
 pub mod layout_input;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
@@ -46,6 +46,7 @@ mod plain_glyphs;
 mod plain_kerning;
 /// Writing systems and the script runs of text.
 pub mod script;
+mod shaped_glyphs;
 mod shaped_item;
 /// Shaping text items into glyphs with HarfRust.
 pub mod shaper;
@@ -92,7 +93,8 @@ pub use paragraph::{
 };
 pub use paragraph_intrinsics::ParagraphIntrinsics;
 pub use script::Script;
-pub use shaper::{ShapedGlyph, Shaper};
+pub use shaped_glyphs::{GlyphOffset, ShapedGlyph, ShapedGlyphs};
+pub use shaper::Shaper;
 pub use shaping_span::ShapingSpan;
 pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,

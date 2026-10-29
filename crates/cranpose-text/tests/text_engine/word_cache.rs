@@ -9,7 +9,7 @@ use crate::{
     harfrust_oracle::{REGULAR, compare},
 };
 
-const CASES: [(&str, &str); 6] = [
+const CASES: [(&str, &str); 7] = [
     // Roboto kerns a space with the capital after it.
     (ROBOTO, "Frame To Tokyo, AV Yes. Type 1234 Tea"),
     // and a T with the space after it: those words shape with the next one.
@@ -17,6 +17,9 @@ const CASES: [(&str, &str); 6] = [
     (NOTO_SANS_MERGED, "The office affinity Ŧŧ ﬁ — fjord"),
     (DEJAVU, "AV To fi ff ffi Wa"),
     (ARABIC_VF, "مرحبا بالعالم سلام عليكم"),
+    // Marks draw off the pen, and the words run right to left; reordered,
+    // a word drawn at the pen follows them.
+    (ARABIC_VF, "سلام مَرْحَبًا بِالْعَالَمِ عليكم"),
     (DEVANAGARI_VF, "नमस्ते दुनिया क्ष त्र श्री"),
 ];
 
@@ -44,10 +47,17 @@ fn kept_words_shape_new_text_as_the_whole_run_shapes() {
     }
 }
 
-// More distinct words than the word cache first has room for.
+// More distinct words than the word cache first has room for, every other
+// one with a mark drawn off the pen.
 fn many_words() -> String {
     (0..600)
-        .map(|n| format!("w{n}x"))
+        .map(|n| {
+            if n % 2 == 0 {
+                format!("w{n}x")
+            } else {
+                format!("w{n}q\u{301}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }

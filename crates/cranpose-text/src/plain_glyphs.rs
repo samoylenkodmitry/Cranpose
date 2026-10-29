@@ -29,7 +29,8 @@ use crate::{
     glyph_id,
     plain_chars::{CharGlyph, PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
-    shaper::{ShapedGlyph, font_bytes},
+    shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
+    shaper::font_bytes,
     word_split::{chosen_script, class_index, everything, moves, single},
 };
 
@@ -192,7 +193,7 @@ impl PlainGlyphs {
         font: &Font,
         text: &str,
         range: Range<usize>,
-        glyphs: &mut Vec<ShapedGlyph>,
+        glyphs: &mut ShapedGlyphs,
     ) -> bool {
         let first = glyphs.len();
         let Some(run) = text.get(range.clone()) else {
@@ -255,19 +256,24 @@ impl PlainGlyphs {
                 PairFit::Kern(kern) => kern,
             };
             if kern != 0
-                && let Some(before) = glyphs.last_mut()
+                && let Some(before) = glyphs.glyphs_mut().last_mut()
             {
                 before.advance += kern;
             }
             previous = Some(plain);
-            glyphs.push(ShapedGlyph {
-                id: glyph_id::GlyphId(u32::from(plain.glyph)),
-                cluster: u32::try_from(range.start + at).unwrap_or(u32::MAX),
-                advance: i32::from(plain.advance),
-                x_offset: 0,
-                y_offset: 0,
-                unsafe_to_break: kern != 0,
-            });
+            glyphs.push(
+                ShapedGlyph::new(
+                    glyph_id::GlyphId(u32::from(plain.glyph)),
+                    u32::try_from(range.start + at).unwrap_or(u32::MAX),
+                    i32::from(plain.advance),
+                    if kern == 0 {
+                        BreakBefore::Safe
+                    } else {
+                        BreakBefore::Unsafe
+                    },
+                ),
+                GlyphOffset::default(),
+            );
         }
         true
     }

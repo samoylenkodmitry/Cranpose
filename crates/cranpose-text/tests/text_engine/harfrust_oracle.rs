@@ -2,8 +2,8 @@
 // splits an item into words or skips shaping.
 
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, FontFeature, Itemizer, ShapedGlyph, Shaper, ShapingSpan,
-    TextDirection, TextItem,
+    FontFamily, FontFamilyResolver, FontFeature, GlyphOffset, Itemizer, ShapedGlyphs, Shaper,
+    ShapingSpan, TextDirection, TextItem,
 };
 use harfrust::{
     Buffer, BufferFlags, Direction, Feature, Script, ShapeOptions, ShaperFont, Tag,
@@ -24,8 +24,33 @@ pub(crate) const REGULAR: Style<'static> = Style {
     features: &[],
 };
 
+// A glyph as a comparison reads it.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Placed {
+    pub(crate) id: u32,
+    cluster: u32,
+    pub(crate) advance: i32,
+    offset: GlyphOffset,
+    unsafe_to_break: bool,
+}
+
+// The glyphs the shaper placed, as a comparison reads them.
+fn placed(glyphs: &ShapedGlyphs) -> Vec<Placed> {
+    glyphs
+        .iter()
+        .enumerate()
+        .map(|(index, glyph)| Placed {
+            id: glyph.id().0,
+            cluster: glyph.cluster,
+            advance: glyph.advance,
+            offset: glyphs.offset(index),
+            unsafe_to_break: glyph.unsafe_to_break(),
+        })
+        .collect()
+}
+
 // HarfRust shaping the whole item with `features`, with the same context.
-fn whole(font: &Font, text: &str, item: &TextItem<'_>, features: &[Feature]) -> Vec<ShapedGlyph> {
+fn whole(font: &Font, text: &str, item: &TextItem<'_>, features: &[Feature]) -> Vec<Placed> {
     let mut buffer = Buffer::new();
     let mut flags = BufferFlags::empty();
     flags.set(BufferFlags::BEGINNING_OF_TEXT, item.range.start == 0);
@@ -54,12 +79,14 @@ fn whole(font: &Font, text: &str, item: &TextItem<'_>, features: &[Feature]) -> 
         .glyph_infos()
         .iter()
         .zip(buffer.glyph_positions())
-        .map(|(info, position)| ShapedGlyph {
-            id: cranpose_text::GlyphId(info.glyph_id),
+        .map(|(info, position)| Placed {
+            id: info.glyph_id,
             cluster: start + info.cluster,
             advance: position.x_advance,
-            x_offset: position.x_offset,
-            y_offset: position.y_offset,
+            offset: GlyphOffset {
+                x: position.x_offset,
+                y: position.y_offset,
+            },
             unsafe_to_break: info.unsafe_to_break(),
         })
         .collect()
@@ -72,7 +99,7 @@ pub(crate) fn compare(
     path: &str,
     text: &str,
     style: Style<'_>,
-) -> (Vec<ShapedGlyph>, Vec<ShapedGlyph>) {
+) -> (Vec<Placed>, Vec<Placed>) {
     let resolver = FontFamilyResolver::new([typeface(path)]);
     let font = Font::new(Blob::from(bytes(path)), 0).expect("the font reads");
     let has_weight = font
@@ -96,10 +123,10 @@ pub(crate) fn compare(
         features: style.features,
         ..span(0..text.len(), &family, style.weight)
     }];
-    let (mut split, mut oracle) = (Vec::new(), Vec::new());
+    let (mut split, mut oracle) = (ShapedGlyphs::default(), Vec::new());
     Itemizer::default().itemize(text, TextDirection::Content, &spans, &resolver, |item| {
         shaper.shape(text, &item, &spans[item.span], 0..text.len(), &mut split);
         oracle.extend(whole(&font, text, &item, &features));
     });
-    (split, oracle)
+    (placed(&split), oracle)
 }

@@ -1,7 +1,7 @@
 use crate::{
     layout_input::LayoutInput,
+    shaped_glyphs::ShapedGlyph,
     shaped_item::{ShapedItem, scale},
-    shaper::ShapedGlyph,
     text_layout::font_units,
     typeface::Typeface,
 };
