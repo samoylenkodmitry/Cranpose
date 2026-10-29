@@ -9,6 +9,7 @@ mod pull_to_refresh;
 mod segmented_style;
 mod selection_controls;
 mod snackbar_host;
+mod tab_bar_appearance;
 mod tab_label_extents;
 mod time_picker;
 mod tooltip;

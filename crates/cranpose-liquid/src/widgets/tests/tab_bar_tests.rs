@@ -1,5 +1,11 @@
 use super::*;
-use crate::widgets::lens_motion::tab_lens_activity_motion;
+use crate::{
+    material::Glass,
+    widgets::{
+        lens_motion::tab_lens_activity_motion,
+        tab_flight_lens::{accessory_surfaces_touch, tab_flight_tint_multiplier},
+    },
+};
 
 #[test]
 fn tab_bar_spec_normalizes_the_maximum_cell_width() {
