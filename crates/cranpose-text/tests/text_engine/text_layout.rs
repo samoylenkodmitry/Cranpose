@@ -1,6 +1,6 @@
 use cranpose_text::{
     CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle,
-    ShapingSpan, TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
+    Shaped, ShapingSpan, TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
     TextOverflow,
 };
 
@@ -455,6 +455,38 @@ fn shown(layout: &TextLayout) -> Shown {
 }
 
 #[test]
+fn a_layout_from_the_glyphs_of_another_size_gives_what_a_new_one_gives() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let family = FontFamily::Default;
+    let paragraph = ParagraphStyle::default();
+    let text = "AVA Toyota 123.45 We fly over the lazy dog";
+    let small = [span(0..text.len(), &family, 400)];
+    let large = [ShapingSpan {
+        size: 24.0,
+        ..span(0..text.len(), &family, 400)
+    }];
+    let at_small = LayoutInput {
+        text,
+        spans: &small,
+        paragraph: &paragraph,
+        lengths: ParagraphLengths::default(),
+        min_width: 0.0,
+        max_width: 90.0,
+        options: TextLayoutOptions::default(),
+    };
+    let at_large = LayoutInput {
+        spans: &large,
+        ..at_small
+    };
+    let mut layouter = TextLayouter::default();
+    // The small layout wraps, so it keeps what its lines were broken by.
+    let shaped = layouter.layout(&at_small, &resolver);
+    let fresh = TextLayouter::default().layout(&at_large, &resolver);
+    let relaid = layouter.relayout(&at_large, &resolver, Shaped::AtOtherSizes(&shaped));
+    assert_eq!(shown(&relaid), shown(&fresh));
+}
+
+#[test]
 fn a_layout_from_the_glyphs_of_another_width_gives_what_a_new_one_gives() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO), typeface(ARABIC_VF)]);
     let family = FontFamily::Default;
@@ -494,7 +526,8 @@ fn a_layout_from_the_glyphs_of_another_width_gives_what_a_new_one_gives() {
             let shaped = layouter.layout(&input(from), &resolver);
             for to in frames {
                 let fresh = TextLayouter::default().layout(&input(to), &resolver);
-                let relaid = layouter.relayout(&input(to), &resolver, &shaped);
+                let relaid =
+                    layouter.relayout(&input(to), &resolver, Shaped::AtOtherWidths(&shaped));
                 assert_eq!(
                     shown(&relaid),
                     shown(&fresh),

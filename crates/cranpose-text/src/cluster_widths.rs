@@ -8,7 +8,7 @@ use crate::{
 
 // The widths of a paragraph's clusters in text order, as running sums, so the
 // width of any range between cluster boundaries is one subtraction.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ClusterWidths {
     // The start of each cluster with the width of the text before it; the
     // last entry is the end of the text with the width of all of it.
@@ -20,7 +20,7 @@ pub(crate) struct ClusterWidths {
 }
 
 // The width of glyphs added in text order, each cluster `spacing` wider.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct ClusterTotal {
     last: Option<usize>,
     width: f32,

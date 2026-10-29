@@ -8,7 +8,7 @@ use std::{
 use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
-    LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
+    LayoutInput, ParagraphIntrinsics, Shaped, TextLayout, TextLayouter, paragraph_line_box,
 };
 use cranpose_ui_graphics::TextLayoutHandle;
 use smallvec::SmallVec;
@@ -484,6 +484,7 @@ impl TextService {
         let options = frame.options.normalized();
         let min_lines = options.min_lines;
         let Some(min_font_size_sp) = options.overflow.scale_down_min_font_size_sp() else {
+            let shaped = shaped.map(Shaped::AtOtherWidths);
             let layout = self.layout(&text, &style, frame, (units, shaped));
             return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
         };
@@ -496,7 +497,13 @@ impl TextService {
         };
         let fits =
             |layout: &TextLayout| !layout.did_overflow_height() && !layout.did_overflow_width();
-        let full = self.layout(&text, &style, frame, (units, shaped));
+        // The layout shaped before may be at a size the search chose.
+        let full = self.layout(
+            &text,
+            &style,
+            frame,
+            (units, shaped.map(Shaped::AtOtherSizes)),
+        );
         let base = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
         let min_factor = (min_font_size_sp.min(base) / base).clamp(0.0, 1.0);
         if fits(&full) || !frame.max_width.is_finite() || min_factor >= 1.0 {
@@ -509,7 +516,12 @@ impl TextService {
                 factor: units.factor * factor,
                 ..units
             };
-            self.layout(&text, &style, frame, (units, Some(&full)))
+            self.layout(
+                &text,
+                &style,
+                frame,
+                (units, Some(Shaped::AtOtherSizes(&full))),
+            )
         };
         let (mut best, mut factor) = (at(min_factor), min_factor);
         if fits(&best) {
@@ -530,13 +542,13 @@ impl TextService {
     }
 
     // One layout of `text` in `style` in `frame`, with sizes in `units`, with
-    // the glyphs of `shaped` when given.
+    // what `shaped` holds when given.
     fn layout(
         &self,
         text: &AnnotatedString,
         style: &TextStyle,
         frame: TextFrame,
-        (units, shaped): (TextUnits, Option<&TextLayout>),
+        (units, shaped): (TextUnits, Option<Shaped<'_>>),
     ) -> TextLayout {
         let paragraph = ParagraphSpans::new(text, style, units);
         let fonts = self.fonts.borrow();

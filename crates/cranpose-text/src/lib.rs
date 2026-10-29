@@ -37,11 +37,13 @@ mod line_runs;
 mod line_text;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
+mod paragraph_measures;
 mod plain_chars;
 mod plain_glyphs;
 mod plain_kerning;
 /// Writing systems and the script runs of text.
 pub mod script;
+mod shaped;
 mod shaped_item;
 /// Shaping text items into glyphs with HarfRust.
 pub mod shaper;
@@ -87,6 +89,7 @@ pub use paragraph::{
     resolve_text_direction,
 };
 pub use script::Script;
+pub use shaped::Shaped;
 pub use shaper::{ShapedGlyph, Shaper};
 pub use shaping_span::ShapingSpan;
 pub use style::{
