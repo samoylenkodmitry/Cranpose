@@ -32,9 +32,11 @@ impl TextUnits {
 // paragraph's lengths. Stretches that differ only in what does not change
 // shaping, such as color, are one span.
 pub(crate) struct ParagraphSpans<'a> {
-    stretches: SmallVec<[(Range<usize>, ShapingStyle<'a>); 4]>,
-    features: SmallVec<[FontFeature; 8]>,
-    feature_ranges: SmallVec<[Range<usize>; 4]>,
+    // Most text is one stretch with no features, which these hold without
+    // allocating or moving room for more.
+    stretches: SmallVec<[(Range<usize>, ShapingStyle<'a>); 1]>,
+    features: SmallVec<[FontFeature; 1]>,
+    feature_ranges: SmallVec<[Range<usize>; 1]>,
     units: TextUnits,
     // The paragraph's line height, indents and device pixel grid.
     pub(crate) lengths: ParagraphLengths,
@@ -136,7 +138,7 @@ impl<'a> ParagraphSpans<'a> {
 
     // The spans, with the typefaces of `resolver` setting their baseline
     // shifts.
-    pub(crate) fn spans(&self, resolver: &FontFamilyResolver) -> SmallVec<[ShapingSpan<'_>; 4]> {
+    pub(crate) fn spans(&self, resolver: &FontFamilyResolver) -> SmallVec<[ShapingSpan<'_>; 1]> {
         self.stretches
             .iter()
             .zip(&self.feature_ranges)
@@ -192,8 +194,8 @@ fn stretches<'a>(
     text: &'a AnnotatedString,
     base: ShapingStyle<'a>,
     units: TextUnits,
-) -> SmallVec<[(Range<usize>, ShapingStyle<'a>); 4]> {
-    let mut stretches: SmallVec<[(Range<usize>, ShapingStyle<'a>); 4]> = SmallVec::new();
+) -> SmallVec<[(Range<usize>, ShapingStyle<'a>); 1]> {
+    let mut stretches: SmallVec<[(Range<usize>, ShapingStyle<'a>); 1]> = SmallVec::new();
     if text.span_styles.is_empty() {
         stretches.push((0..text.text.len(), base));
         return stretches;
