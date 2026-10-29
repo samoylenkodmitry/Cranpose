@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 
 use crate::{
     density::Density,
-    text::{AnnotatedString, TextLayoutOptions, TextStyle, measure::LayoutSharing},
+    text::{AnnotatedString, TextLayoutOptions, TextStyle, measure::CacheAdmission},
 };
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
@@ -74,9 +74,9 @@ struct TextLayoutSource {
     style: Arc<TextStyle>,
     style_hash: u64,
     options: TextLayoutOptions,
-    /// Whether layouts come from the text service's shared cache. A text
-    /// changed in place, as a ticker's is every frame, lays out unshared.
-    sharing: LayoutSharing,
+    // When the text service's shared cache keeps the layouts: those of a
+    // text changed in place, as a ticker's is every frame, go on trial.
+    admission: CacheAdmission,
 }
 
 #[derive(Clone, Debug)]
@@ -93,7 +93,7 @@ impl TextPreparedLayoutOwner {
                 style,
                 style_hash,
                 options: options.normalized(),
-                sharing: LayoutSharing::Shared,
+                admission: CacheAdmission::First,
             }),
             measured_widths: Cell::new(None),
             cache: RefCell::new(SmallVec::new()),
@@ -125,7 +125,7 @@ impl TextPreparedLayoutOwner {
         }
         source.text = Rc::clone(text);
         source.options = options;
-        source.sharing = LayoutSharing::Unshared;
+        source.admission = CacheAdmission::Second;
         drop(source);
         self.cache.borrow_mut().clear();
     }
@@ -166,7 +166,7 @@ impl TextPreparedLayoutOwner {
             &source.text,
             &source.style,
             frame,
-            source.sharing,
+            source.admission,
         );
         if Arc::ptr_eq(&prepared.visual_style, &source.style) {
             let _ = prepared.visual_style_hash.set(source.style_hash);

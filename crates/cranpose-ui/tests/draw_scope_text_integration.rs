@@ -125,6 +125,40 @@ fn an_unchanged_string_draws_one_layout_across_repeated_frames() {
 }
 
 #[test]
+fn a_string_drawn_again_after_another_keeps_its_first_layout() {
+    // A clock that shows a few strings by turns: each frame draws the next.
+    let strings = ["10:00", "10:01", "10:02"];
+    let frame = Rc::new(std::cell::Cell::new(0usize));
+    let shown = Rc::clone(&frame);
+    let commands = draw_commands(move |scope: &mut dyn DrawScope| {
+        scope.draw_text_from(
+            Point::ZERO,
+            Brush::solid(Color::WHITE),
+            strings[shown.get() % strings.len()],
+            &DrawTextStyle::new(FONT_SIZE),
+        );
+    });
+
+    let layouts: Vec<_> = AppContext::new().enter(|| {
+        (0..12)
+            .map(|index| {
+                frame.set(index);
+                let primitives = execute_draw_commands(&commands, Size::new(100.0, 50.0));
+                text_primitive(&primitives).layout.clone()
+            })
+            .collect()
+    });
+
+    for (index, layout) in layouts.iter().enumerate().skip(strings.len()) {
+        assert_eq!(
+            *layout,
+            layouts[index % strings.len()],
+            "frame {index} draws the layout its string was first drawn with"
+        );
+    }
+}
+
+#[test]
 fn draw_scope_text_is_measured_at_the_size_the_style_names() {
     const TEXT: &str = "ABCD";
 

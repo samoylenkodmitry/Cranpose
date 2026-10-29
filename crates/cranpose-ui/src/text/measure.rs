@@ -26,6 +26,7 @@ const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
 const TEXT_INTRINSICS_CACHE_CAPACITY: usize = 1024;
 // Layouts kept for one text at different widths.
 const WIDTHS_PER_TEXT: usize = 2;
+const TRIAL_LAYOUTS: usize = 8;
 const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 
 /// Size of a laid-out text. Distances are in logical pixels.
@@ -186,15 +187,40 @@ impl TextKey {
     }
 }
 
-// Whether a layout goes through the text service's shared cache.
+// When the text service's shared cache keeps a layout it missed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LayoutSharing {
-    // Looked up in the cache and kept there, for text that other nodes or
-    // later passes lay out again.
-    Shared,
-    // Laid out for its node alone: text changed in place, as a ticker's is
-    // every frame, which no other text repeats.
-    Unshared,
+pub(crate) enum CacheAdmission {
+    // At once: a node's first text, which a list composes again.
+    First,
+    // Once asked for again while on trial: text changed in place or drawn
+    // by a draw scope, whose strings come back only sometimes, as a stat's
+    // do, or never, as a ticker's.
+    Second,
+}
+
+// Layouts kept on trial, the newest in place of the oldest: one asked for
+// again while here moves into the cache, so a string drawn every frame
+// keeps its first layout, and a string drawn once leaves soon, as
+// S3-FIFO's small queue lets one-hit entries go.
+#[derive(Default)]
+struct TrialLayouts {
+    slots: [Option<(TextKey, Rc<PreparedTextLayout>)>; TRIAL_LAYOUTS],
+    next: usize,
+}
+
+impl TrialLayouts {
+    fn take(&mut self, key: TextKey) -> Option<Rc<PreparedTextLayout>> {
+        let slot = self
+            .slots
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_some_and(|(kept, _)| *kept == key))?;
+        slot.take().map(|(_, prepared)| prepared)
+    }
+
+    fn put(&mut self, key: TextKey, prepared: Rc<PreparedTextLayout>) {
+        self.slots[self.next] = Some((key, prepared));
+        self.next = (self.next + 1) % TRIAL_LAYOUTS;
+    }
 }
 
 /// The text and style a layout is prepared from: borrowed, which the layout
@@ -277,6 +303,7 @@ pub(crate) struct TextService {
     layouter: RefCell<TextLayouter>,
     prepared: RefCell<PassAgedCache<TextKey, SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>>>,
     intrinsics: RefCell<PassAgedCache<TextKey, ParagraphIntrinsics>>,
+    trial: RefCell<TrialLayouts>,
 }
 
 impl TextService {
@@ -292,6 +319,7 @@ impl TextService {
             intrinsics: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_INTRINSICS_CACHE_CAPACITY,
             )),
+            trial: RefCell::new(TrialLayouts::default()),
         }
     }
 
@@ -301,6 +329,7 @@ impl TextService {
         self.generation
             .set(self.generation.get().wrapping_add(1).max(1));
         self.prepared.borrow_mut().clear();
+        *self.trial.borrow_mut() = TrialLayouts::default();
         self.intrinsics.borrow_mut().clear();
     }
 
@@ -315,13 +344,10 @@ impl TextService {
         &self,
         source: LayoutSource<'_>,
         frame: TextFrame,
-        (units, sharing): (TextUnits, LayoutSharing),
+        (units, admission): (TextUnits, CacheAdmission),
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
-        let key = match sharing {
-            LayoutSharing::Shared => TextKey::of(text, style.render_hash(), frame.options, units),
-            LayoutSharing::Unshared => None,
-        };
+        let key = TextKey::of(text, style.render_hash(), frame.options, units);
         if let Some(key) = key
             && let Some(prepared) = self.held(key, frame, style)
         {
@@ -331,10 +357,13 @@ impl TextService {
         let prepared = Rc::new(self.lay_out(text, style, frame, units));
         if let Some(key) = key {
             let mut cache = self.prepared.borrow_mut();
-            match cache.get_mut(&key) {
-                Some(widths) => remember(widths, &prepared),
-                None => {
+            match (cache.get_mut(&key), admission) {
+                (Some(widths), _) => remember(widths, &prepared),
+                (None, CacheAdmission::First) => {
                     cache.push(key, SmallVec::from_elem(Rc::clone(&prepared), 1));
+                }
+                (None, CacheAdmission::Second) => {
+                    self.trial.borrow_mut().put(key, Rc::clone(&prepared));
                 }
             }
         }
@@ -350,6 +379,11 @@ impl TextService {
         style: &TextStyle,
     ) -> Option<Rc<PreparedTextLayout>> {
         let mut cache = self.prepared.borrow_mut();
+        if cache.get_mut(&key).is_none()
+            && let Some(tried) = self.trial.borrow_mut().take(key)
+        {
+            cache.push(key, SmallVec::from_elem(tried, 1));
+        }
         let widths = cache.get_mut(&key)?;
         let held = widths
             .iter()
@@ -648,7 +682,7 @@ fn prepare_borrowed(
         service.prepare(
             LayoutSource::Borrowed { text, style },
             frame,
-            (units, LayoutSharing::Shared),
+            (units, CacheAdmission::First),
         )
     })
 }
@@ -674,18 +708,21 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
     .metrics
 }
 
-/// `text` laid out in `style` with lines ending only at its line breaks,
-/// `style`'s sizes taken as stated, not scaled by the system font scale.
+// `text` laid out in `style` with lines ending only at its line breaks,
+// `style`'s sizes taken as stated, not scaled by the system font scale, as
+// a draw scope draws it: the layout goes on trial, so a number drawn anew
+// each frame takes no room in the cache.
 pub(crate) fn prepare_resolved(
     text: &AnnotatedString,
     style: &TextStyle,
 ) -> Rc<PreparedTextLayout> {
-    prepare_borrowed(
-        text,
-        style,
-        TextFrame::unbounded(TextLayoutOptions::default()),
-        resolved_units(),
-    )
+    crate::render_state::with_text_service(|service| {
+        service.prepare(
+            LayoutSource::Borrowed { text, style },
+            TextFrame::unbounded(TextLayoutOptions::default()),
+            (resolved_units(), CacheAdmission::Second),
+        )
+    })
 }
 
 /// Measures `text` wrapped to `max_width` under `options`. `None` and widths
@@ -721,18 +758,18 @@ pub fn prepare_text_layout(
 }
 
 // Lays out `text` in `style` between the widths of `frame`, sharing them,
-// through the shared cache as `sharing` says.
+// kept by the shared cache as `admission` says.
 pub(crate) fn prepare_shared(
     text: &Rc<AnnotatedString>,
     style: &Arc<TextStyle>,
     frame: TextFrame,
-    sharing: LayoutSharing,
+    admission: CacheAdmission,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
         service.prepare(
             LayoutSource::Shared { text, style },
             frame,
-            (host_units(), sharing),
+            (host_units(), admission),
         )
     })
 }
