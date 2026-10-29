@@ -1624,9 +1624,8 @@ public class CranposeActivity extends NativeActivity {
     private static final int FOLDER_QUERY_RETRY_MS = 250;
 
     /** How many times to re-query a folder whose cursor reports
-     * {@link DocumentsContract#EXTRA_LOADING} before giving up and using
-     * whatever it returns (a network provider keeps the listing "loading" while
-     * it fetches over the wire). */
+     * {@link DocumentsContract#EXTRA_LOADING} before reporting that the provider
+     * could not finish its listing. */
     private static final int FOLDER_LOADING_ATTEMPTS = 24;
 
     /** Delay between {@link DocumentsContract#EXTRA_LOADING} re-queries, in ms
@@ -2316,11 +2315,8 @@ public class CranposeActivity extends NativeActivity {
             return false;
         }
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-        // Query this folder with retries. A slow document provider (a mounted
-        // WebDAV / cloud share) transiently fails requests; without this, one
-        // failed query would throw and abort the ENTIRE walk, so a big library
-        // over a flaky link could end up adding nothing. On persistent failure we
-        // skip just this folder and let the rest of the tree keep streaming in.
+        // Provider failures must reach the collector; an unreadable listing
+        // does not mean that the folder is empty.
         Cursor cursor = queryChildrenWithRetry(childrenUri);
         if (cursor == null) {
             return !batch.stopped();
@@ -2348,9 +2344,8 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Lists a folder's children, retrying transient provider failures (a slow
-     * cloud/WebDAV share throws intermittently). Returns {@code null} if the
-     * folder cannot be read after {@link #FOLDER_QUERY_ATTEMPTS} tries, so the
-     * caller skips just that folder instead of aborting the whole walk. */
+     * cloud/WebDAV share throws intermittently). A persistent failure is
+     * reported to the collector. Interruption returns {@code null}. */
     private Cursor queryChildrenWithRetry(Uri childrenUri) {
         String[] columns = {
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -2365,22 +2360,19 @@ public class CranposeActivity extends NativeActivity {
             Cursor cursor;
             try {
                 cursor = getContentResolver().query(childrenUri, columns, null, null, null);
+                if (cursor == null) {
+                    throw new IllegalStateException("Document provider returned no folder cursor");
+                }
             } catch (Exception error) {
                 errorAttempt++;
                 if (errorAttempt >= FOLDER_QUERY_ATTEMPTS) {
-                    android.util.Log.w(
-                            "Cranpose",
-                            "skipping unreadable folder after " + errorAttempt + " tries: "
-                                    + childrenUri + " (" + error + ")");
-                    return null;
+                    throw new IllegalStateException(
+                            "Cannot read folder after " + errorAttempt + " attempts: " + childrenUri, error);
                 }
                 if (!sleepQuietly((long) FOLDER_QUERY_RETRY_MS * errorAttempt)) {
                     return null;
                 }
                 continue;
-            }
-            if (cursor == null) {
-                return null;
             }
             // A slow network document provider (RoundSync/rclone, a mounted WebDAV
             // share) returns an EMPTY cursor immediately with EXTRA_LOADING=true
@@ -2389,9 +2381,12 @@ public class CranposeActivity extends NativeActivity {
             // now yields zero children, so the folder — even the picked root — looks
             // empty ("adds nothing"). Re-query until it stops loading (or we run out
             // of patience) instead of trusting the placeholder.
-            if (isLoading(cursor) && loadingAttempt < FOLDER_LOADING_ATTEMPTS) {
-                loadingAttempt++;
+            if (isLoading(cursor)) {
                 cursor.close();
+                if (loadingAttempt >= FOLDER_LOADING_ATTEMPTS) {
+                    throw new IllegalStateException("Document provider is still loading the folder: " + childrenUri);
+                }
+                loadingAttempt++;
                 if (!sleepQuietly(FOLDER_LOADING_POLL_MS)) {
                     return null;
                 }

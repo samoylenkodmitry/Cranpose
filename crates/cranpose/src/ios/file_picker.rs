@@ -24,7 +24,7 @@ use objc2_ui_kit::{
     UIApplication, UIDocumentPickerDelegate, UIDocumentPickerViewController, UIViewController,
     UIWindowScene,
 };
-use objc2_uniform_type_identifiers::{UTType, UTTypeDirectory, UTTypeItem};
+use objc2_uniform_type_identifiers::{UTType, UTTypeFolder, UTTypeItem};
 
 pub(crate) fn register() {
     set_platform_file_picker(Rc::new(IosFilePicker));
@@ -211,15 +211,16 @@ fn present(
 
 fn present_open(kind: Kind) -> PickerFuture<PickResult> {
     present(move |mtm| {
-        // SAFETY: `UTTypeItem`/`UTTypeDirectory` are immutable framework
+        // SAFETY: `UTTypeItem`/`UTTypeFolder` are immutable framework
         // constants.
         let ty: &UTType = match kind {
             Kind::File | Kind::Files => unsafe { UTTypeItem },
-            Kind::Folder => unsafe { UTTypeDirectory },
+            Kind::Folder => unsafe { UTTypeFolder },
         };
-        let picker = UIDocumentPickerViewController::initForOpeningContentTypes(
+        let picker = UIDocumentPickerViewController::initForOpeningContentTypes_asCopy(
             UIDocumentPickerViewController::alloc(mtm),
             &NSArray::from_slice(&[ty]),
+            false,
         );
         picker.setAllowsMultipleSelection(kind == Kind::Files);
         picker
