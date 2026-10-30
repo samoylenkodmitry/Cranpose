@@ -60,6 +60,8 @@ final class CranposeMedia {
     private AudioFocusRequest focusRequest;
     private String title = "";
     private String artist = "";
+    private String album = "";
+    private android.graphics.Bitmap artwork;
     private long durationMs = NO_DURATION;
     private boolean notificationShown = false;
     private boolean playing = false;
@@ -121,9 +123,11 @@ final class CranposeMedia {
         }
     }
 
-    void setMetadata(String newTitle, String newArtist) {
+    void setMetadata(String newTitle, String newArtist, String newAlbum, android.graphics.Bitmap newArtwork) {
         title = newTitle == null ? "" : newTitle;
         artist = newArtist == null ? "" : newArtist;
+        album = newAlbum == null ? "" : newAlbum;
+        artwork = newArtwork;
         applyMetadata();
         if (notificationShown) {
             showNotification();
@@ -137,13 +141,16 @@ final class CranposeMedia {
         session.setMetadata(new android.media.MediaMetadata.Builder()
                 .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, title)
                 .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, artist)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, album)
+                .putBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+                .putBitmap(android.media.MediaMetadata.METADATA_KEY_ART, artwork)
                 .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, durationMs)
                 .build());
     }
 
     private void showNotification() {
         notificationShown = true;
-        CranposeMediaService.start(activity, title, artist, playing, sessionToken());
+        CranposeMediaService.start(activity, playing, sessionToken());
     }
 
     private void openSession() {
