@@ -94,6 +94,22 @@ impl Itemizer {
             });
             return;
         }
+        self.itemize_mixed((text, content), paragraph, base, (spans, resolver), visit);
+    }
+
+    // The items of `content`, a paragraph of `text` with more than one span,
+    // text right to left or text past ASCII: the runs of its bidi levels,
+    // scripts and typefaces. Out of line, as most text takes the ASCII
+    // items above.
+    #[inline(never)]
+    fn itemize_mixed<'r>(
+        &mut self,
+        (text, content): (&str, &str),
+        paragraph: Range<usize>,
+        base: BidiLevel,
+        (spans, resolver): (&[ShapingSpan<'_>], &'r FontFamilyResolver),
+        visit: &mut impl FnMut(TextItem<'r>),
+    ) {
         self.levels.clear();
         level_runs(content, base, paragraph.start, &mut self.levels);
         self.scripts.clear();

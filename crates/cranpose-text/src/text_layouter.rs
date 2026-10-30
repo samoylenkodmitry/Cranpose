@@ -12,7 +12,7 @@ use crate::{
     laid_glyphs::LaidGlyphs,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
-    line_box::paragraph_line_box,
+    line_box::{LastLineBox, LineBoxInputs},
     line_breaker::{
         BreakKind, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
         break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
@@ -60,6 +60,7 @@ pub struct TextLayouter {
     // The faces intrinsic widths are measured in, which keep their storage
     // from one text to the next.
     faces: SmallVec<[Typeface; 1]>,
+    line_box: LastLineBox,
     #[cfg(feature = "hyphenation")]
     hyphenator: Hyphenator,
     // The break opportunities with the hyphenation points among them, and
@@ -216,20 +217,40 @@ impl TextLayouter {
         if lone.is_some() {
             self.measure_widths(input, &layout.faces);
         }
+        self.fill_lines(input, (&options, wrap, width), resolver, fits, layout);
+        width
+    }
+
+    // Breaks the text `fill` measured into lines of `width`, the one line it
+    // `fits` on when it does, and lays them out. Out of line: most text is
+    // one line that `fill` lays out itself, and a frame that lays out only
+    // such text runs none of this.
+    #[inline(never)]
+    fn fill_lines(
+        &mut self,
+        input: &LayoutInput<'_>,
+        (options, wrap, width): (&TextLayoutOptions, WrapWidths, f32),
+        resolver: &FontFamilyResolver,
+        fits: Option<f32>,
+        layout: &mut LayoutBody,
+    ) {
+        let text = input.text;
         if let Some(line) = fits {
-            layout.hold = Some(fitting_hold(&options, line + lengths.first_line_indent));
+            layout.hold = Some(fitting_hold(
+                options,
+                line + input.lengths.first_line_indent,
+            ));
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
         } else {
-            self.wrap_lines(input, &options, wrap, layout);
+            self.wrap_lines(input, options, wrap, layout);
         }
         layout.did_overflow_height = self.lines.len() > options.max_lines;
-        if layout.did_overflow_height && ellipsis_at(&options).is_some() {
+        if layout.did_overflow_height && ellipsis_at(options).is_some() {
             take_rest_of_paragraph(&mut self.lines, text, options.max_lines - 1);
         }
         self.lines.truncate(options.max_lines);
-        self.build_lines(input, &options, resolver, width, layout);
-        width
+        self.build_lines(input, options, resolver, width, layout);
     }
 
     // Breaks `input` into lines of the `wrap` widths, at the opportunities
@@ -644,7 +665,12 @@ impl TextLayouter {
         let (runs, width) = place_runs(&self.pieces, line.visible, layout);
         let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
         let asked = input.lengths.line_height.unwrap_or(f32::NAN);
-        let line_box = paragraph_line_box(input.paragraph, extent, asked, input.lengths.grid);
+        let line_box = self.line_box.of(LineBoxInputs::of(
+            input.paragraph,
+            extent,
+            asked,
+            input.lengths.grid,
+        ));
         let trim_top = if edges.first { line_box.trim_top } else { 0.0 };
         let trim_bottom = if edges.last {
             line_box.trim_bottom

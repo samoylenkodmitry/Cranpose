@@ -25,23 +25,25 @@ impl Script {
     // leaves out the scripts whose letters join, cursively or along a
     // headline.
     pub(crate) fn takes_letter_spacing(self) -> bool {
-        !matches!(
-            &self.0,
-            b"Arab"
-                | b"Nkoo"
-                | b"Phlp"
-                | b"Mand"
-                | b"Mong"
-                | b"Phag"
-                | b"Deva"
-                | b"Beng"
-                | b"Guru"
-                | b"Modi"
-                | b"Shrd"
-                | b"Sylo"
-                | b"Tirh"
-                | b"Ogam"
-        )
+        // The tags as words, each compared at once: a byte at a time the
+        // comparisons of a Latin item, which matches none, run long.
+        const JOINING: [u32; 14] = [
+            u32::from_ne_bytes(*b"Arab"),
+            u32::from_ne_bytes(*b"Nkoo"),
+            u32::from_ne_bytes(*b"Phlp"),
+            u32::from_ne_bytes(*b"Mand"),
+            u32::from_ne_bytes(*b"Mong"),
+            u32::from_ne_bytes(*b"Phag"),
+            u32::from_ne_bytes(*b"Deva"),
+            u32::from_ne_bytes(*b"Beng"),
+            u32::from_ne_bytes(*b"Guru"),
+            u32::from_ne_bytes(*b"Modi"),
+            u32::from_ne_bytes(*b"Shrd"),
+            u32::from_ne_bytes(*b"Sylo"),
+            u32::from_ne_bytes(*b"Tirh"),
+            u32::from_ne_bytes(*b"Ogam"),
+        ];
+        !JOINING.contains(&u32::from_ne_bytes(self.0))
     }
 
     fn of(script: UnicodeScript) -> Self {
