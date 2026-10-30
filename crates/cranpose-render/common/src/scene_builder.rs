@@ -2078,7 +2078,7 @@ fn write_node_content(
         draws,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node_from_parts(TextNodeParts::of(node_id, slices, size)) {
+    if let Some(text) = text_node_from_parts(&TextNodeParts::of(node_id, slices, size)) {
         list.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(crate::layer_recycling::boxed_text(text)),

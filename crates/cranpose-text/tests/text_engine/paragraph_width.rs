@@ -119,7 +119,10 @@ fn wrapped_text_keeps_its_width_at_the_max_widths_that_keep_its_lines() {
     }
     // Past the high end the text breaks into other lines.
     let past = layout(&resolver, LONG, (0.0, high + 1.0), 1.0, options);
-    assert!(past.line_count() != lines || past.width() != width);
+    assert_ne!(
+        (past.line_count(), past.width().to_bits()),
+        (lines, width.to_bits())
+    );
 }
 
 #[test]

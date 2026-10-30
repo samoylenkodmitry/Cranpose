@@ -72,7 +72,7 @@ pub(super) fn translate_leaf_text(
         Err(reason) => return Some(translate_bail(reason)),
     };
     let parts = TextNodeParts::of(node_id, slices, layout_state.size());
-    if !refresh_text_node(drawn_text(container)?, parts) {
+    if !refresh_text_node(drawn_text(container)?, &parts) {
         return None;
     }
     container.node_bounds = node_bounds;
@@ -132,9 +132,9 @@ fn drawn_text(layer: &mut LayerNode) -> Option<&mut TextPrimitiveNode> {
     }
 }
 
-pub(super) fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
+pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiveNode> {
     let prepared = parts.measured_layout.as_ref()?;
-    let placement = TextPlacement::of(&parts, prepared)?;
+    let placement = TextPlacement::of(parts, prepared)?;
     let visual_style = &prepared.visual_style;
     let font_size = visual_style.resolve_font_size(14.0);
     Some(TextPrimitiveNode {
@@ -161,11 +161,11 @@ pub(super) fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitive
 // a text and style that stay keep their paint, and only the box, the clip
 // and the lines change. False, leaving `drawn` as it was, when the node
 // draws no text now.
-fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: TextNodeParts) -> bool {
+fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: &TextNodeParts) -> bool {
     let Some(prepared) = parts.measured_layout.as_ref() else {
         return false;
     };
-    let Some(placement) = TextPlacement::of(&parts, prepared) else {
+    let Some(placement) = TextPlacement::of(parts, prepared) else {
         return false;
     };
     if !Rc::ptr_eq(&drawn.text, &prepared.text)
