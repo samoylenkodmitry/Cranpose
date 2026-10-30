@@ -6,13 +6,16 @@ use read_fonts::{
             CursivePos, Gpos, MarkBasePos, MarkLigPos, MarkMarkPos, PairPos, PairPosFormat1,
             PairPosFormat2, PositionSubtables, ValueRecord,
         },
-        gsub::{Gsub, LigatureSubst, ReverseChainSingleSubst, SubstitutionSubtables},
+        gsub::{
+            AlternateSubst, Gsub, LigatureSubst, MultipleSubst, ReverseChainSingleSubst,
+            SingleSubst, SubstitutionSubtables,
+        },
         layout::{
             ChainedSequenceContext, ChainedSequenceContextFormat2, ClassDef, CoverageTable,
             ScriptList, SequenceContext,
         },
     },
-    types::{GlyphId, Tag},
+    types::{BigEndian, GlyphId, GlyphId16, Tag},
 };
 
 // Where a run of text in a font may be cut into words that shape apart and
@@ -134,18 +137,155 @@ fn substitution_lookups_sides(
     };
     let features = gsub.collect_features(&single(script), &everything(), &everything())?;
     let lookups = gsub.collect_lookups(&features)?;
-    close_spaces(gsub, &lookups, spaces)?;
+    if !close_spaces(gsub, &lookups, spaces)? {
+        sides.both();
+        return Ok(());
+    }
     substitution_sides_of(gsub, &lookups, spaces, sides)
 }
 
-// Adds to `spaces` the glyphs `lookups` of `gsub` turn them into.
+// Adds to `spaces` the glyphs `lookups` of `gsub` turn them into: what a
+// substitution of one glyph makes of one, and the ligatures that join
+// spaces alone. A lookup that reads a space in a context keeps runs whole,
+// as `substitution_sides` finds, so what its nested lookups make of a space
+// never decides a split. False for a format this does not follow.
 #[inline(never)]
 fn close_spaces(
     gsub: &Gsub<'_>,
     lookups: &IntSet<u16>,
     spaces: &mut IntSet<GlyphId>,
-) -> Result<(), ReadError> {
-    gsub.closure_glyphs(lookups, spaces)
+) -> Result<bool, ReadError> {
+    let list = gsub.lookup_list()?;
+    let mut found = Vec::new();
+    loop {
+        for index in lookups.iter() {
+            let subtables = list.lookups().get(usize::from(index))?.subtables()?;
+            for space in spaces.iter() {
+                if !substitutes(&subtables, space, spaces, &mut found)? {
+                    return Ok(false);
+                }
+            }
+        }
+        let known = spaces.len();
+        for glyph in found.drain(..) {
+            spaces.insert(glyph);
+        }
+        if spaces.len() == known {
+            return Ok(true);
+        }
+    }
+}
+
+// Pushes to `found` what `subtables` turn `space` into on its own, or join
+// it into with other `spaces` alone; false for a format this does not
+// follow.
+fn substitutes(
+    subtables: &SubstitutionSubtables<'_>,
+    space: GlyphId,
+    spaces: &IntSet<GlyphId>,
+    found: &mut Vec<GlyphId>,
+) -> Result<bool, ReadError> {
+    match subtables {
+        SubstitutionSubtables::Single(subtables) => {
+            single_substitutes(subtables.iter(), space, found)
+        }
+        SubstitutionSubtables::Multiple(subtables) => {
+            for subtable in subtables.iter() {
+                let MultipleSubst::Format1(format) = subtable? else {
+                    return Ok(false);
+                };
+                if let Some(at) = format.coverage()?.get(space) {
+                    let sequence = format.sequences().get(class_index(at))?;
+                    push_glyphs(found, sequence.substitute_glyph_ids());
+                }
+            }
+            Ok(true)
+        }
+        SubstitutionSubtables::Alternate(subtables) => {
+            for subtable in subtables.iter() {
+                let AlternateSubst::Format1(format) = subtable? else {
+                    return Ok(false);
+                };
+                if let Some(at) = format.coverage()?.get(space) {
+                    let alternates = format.alternate_sets().get(class_index(at))?;
+                    push_glyphs(found, alternates.alternate_glyph_ids());
+                }
+            }
+            Ok(true)
+        }
+        SubstitutionSubtables::Ligature(subtables) => {
+            ligature_substitutes(subtables.iter(), space, spaces, found)
+        }
+        SubstitutionSubtables::Contextual(_)
+        | SubstitutionSubtables::ChainContextual(_)
+        | SubstitutionSubtables::Reverse(_)
+        | SubstitutionSubtables::EmptyExtension => Ok(true),
+    }
+}
+
+fn single_substitutes<'a>(
+    subtables: impl Iterator<Item = Result<SingleSubst<'a>, ReadError>>,
+    space: GlyphId,
+    found: &mut Vec<GlyphId>,
+) -> Result<bool, ReadError> {
+    for subtable in subtables {
+        match subtable? {
+            SingleSubst::Format1(format) => {
+                if format.coverage()?.get(space).is_some()
+                    && let Ok(glyph) = u16::try_from(space.to_u32())
+                {
+                    let glyph = glyph.wrapping_add_signed(format.delta_glyph_id());
+                    found.push(GlyphId::from(GlyphId16::new(glyph)));
+                }
+            }
+            SingleSubst::Format2(format) => {
+                if let Some(at) = format.coverage()?.get(space) {
+                    let at = class_index(at);
+                    let glyphs = format.substitute_glyph_ids();
+                    push_glyphs(found, glyphs.get(at..=at).unwrap_or_default());
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+// The ligatures that start with `space` and join `spaces` alone.
+fn ligature_substitutes<'a>(
+    subtables: impl Iterator<Item = Result<LigatureSubst<'a>, ReadError>>,
+    space: GlyphId,
+    spaces: &IntSet<GlyphId>,
+    found: &mut Vec<GlyphId>,
+) -> Result<bool, ReadError> {
+    for subtable in subtables {
+        let LigatureSubst::Format1(format) = subtable? else {
+            return Ok(false);
+        };
+        let Some(at) = format.coverage()?.get(space) else {
+            continue;
+        };
+        for ligature in format
+            .ligature_sets()
+            .get(class_index(at))?
+            .ligatures()
+            .iter()
+        {
+            let ligature = ligature?;
+            if ligature
+                .component_glyph_ids()
+                .iter()
+                .all(|glyph| spaces.contains(GlyphId::from(glyph.get())))
+            {
+                found.push(GlyphId::from(ligature.ligature_glyph()));
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn push_glyphs(found: &mut Vec<GlyphId>, glyphs: &[BigEndian<GlyphId16>]) {
+    found.extend(glyphs.iter().map(|glyph| GlyphId::from(glyph.get())));
 }
 
 // The sides on which `lookups` of `gsub` read `spaces`.
@@ -555,7 +695,7 @@ fn classes_of(classes: &ClassDef<'_>, spaces: &IntSet<GlyphId>) -> IntSet<u16> {
 }
 
 fn glyphs_mention<'a>(
-    glyphs: impl IntoIterator<Item = &'a read_fonts::types::BigEndian<read_fonts::types::GlyphId16>>,
+    glyphs: impl IntoIterator<Item = &'a BigEndian<GlyphId16>>,
     spaces: &IntSet<GlyphId>,
 ) -> bool {
     glyphs
@@ -564,7 +704,7 @@ fn glyphs_mention<'a>(
 }
 
 fn classes_mention<'a>(
-    classes: impl IntoIterator<Item = &'a read_fonts::types::BigEndian<u16>>,
+    classes: impl IntoIterator<Item = &'a BigEndian<u16>>,
     space_classes: &IntSet<u16>,
 ) -> bool {
     classes
