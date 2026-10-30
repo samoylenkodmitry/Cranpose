@@ -77,7 +77,7 @@ impl SlotTable {
         first
     }
 
-    fn own_node_records(&self, group: &GroupRecord) -> &[NodeRecord] {
+    pub(in crate::slot) fn own_node_records(&self, group: &GroupRecord) -> &[NodeRecord] {
         let start = group.node_start as usize;
         start
             .checked_add(group.node_len as usize)
@@ -90,7 +90,7 @@ impl SlotTable {
     /// by the children composed before it, and the roots of each child whose
     /// first record has that parent. A child whose first record has another
     /// parent sits inside a node of this subtree, and so do all its roots.
-    fn try_for_each_root_in<B>(
+    pub(in crate::slot) fn try_for_each_root_in<B>(
         &self,
         group_index: usize,
         parent: Option<NodeId>,

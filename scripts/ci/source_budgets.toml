@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13692
+private_docs = 13689
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 341
@@ -33,7 +33,7 @@ limit = 1000
 "apps/desktop-demo/robot-runners/robot_perf_harness.rs" = 1642
 "apps/desktop-demo/robot-runners/robot_wsz_native_window_geometry.rs" = 1811
 "apps/desktop-demo/robot-runners/scroll_stability_external_helpers.rs" = 1086
-"apps/desktop-demo/src/app.rs" = 2583
+"apps/desktop-demo/src/app.rs" = 2536
 "apps/desktop-demo/src/app/hacker_news.rs" = 2019
 "apps/desktop-demo/src/app/highlight.rs" = 1095
 "apps/desktop-demo/src/app/liquid_ui.rs" = 2365
@@ -47,8 +47,8 @@ limit = 1000
 "crates/cranpose-app-shell/src/shell_frame.rs" = 1218
 "crates/cranpose-app-shell/src/shell_input.rs" = 2067
 "crates/cranpose-capabilities/src/lib.rs" = 1069
-"crates/cranpose-core/src/composer.rs" = 2358
-"crates/cranpose-core/src/runtime.rs" = 1760
+"crates/cranpose-core/src/composer.rs" = 2130
+"crates/cranpose-core/src/runtime.rs" = 1719
 "crates/cranpose-core/src/state.rs" = 2294
 "crates/cranpose-foundation/src/lazy/lazy_list_state.rs" = 1139
 "crates/cranpose-foundation/src/modifier.rs" = 2262

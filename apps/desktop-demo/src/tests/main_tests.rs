@@ -1,7 +1,7 @@
 use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeError};
 
 use super::*;
-use crate::app::AsyncRuntimeEngine;
+use crate::app::{tab_content::ScrollableTab, AsyncRuntimeEngine};
 
 mod conditional_text_test;
 

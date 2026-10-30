@@ -25,10 +25,12 @@ use crate::{
     thread_state,
 };
 
+mod scope_runtime;
 mod state_arena;
 mod state_owners;
 mod task_slots;
 
+pub(crate) use scope_runtime::ScopeRuntime;
 pub(crate) use state_arena::{DerivedRefresh, StateArena};
 pub use state_arena::{StateArenaDebugStats, StateId};
 pub(crate) use state_owners::collecting_states;
@@ -962,49 +964,6 @@ pub struct RuntimeHandle {
     id: RuntimeId,
 }
 
-/// What a recompose scope keeps of its runtime: one word, where a
-/// [`RuntimeHandle`] takes four, on every scope of a composition. Each call
-/// does nothing once the runtime is gone, as the handle's would.
-pub(crate) struct ScopeRuntime(Weak<RuntimeInner>);
-
-impl ScopeRuntime {
-    pub(crate) fn mark_scope_recomposed(&self) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.mark_scope_recomposed();
-        }
-    }
-
-    pub(crate) fn register_invalid_scope(&self, scope: Weak<RecomposeScopeInner>) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.register_invalid_scope(scope);
-        }
-    }
-
-    pub(crate) fn unregister_state_scope(&self, id: StateId, scope_id: ScopeId) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.state_arena.unregister_scope(id, scope_id);
-        }
-    }
-
-    pub(crate) fn forget_state_scope(&self, id: StateId, scope_id: ScopeId) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.state_arena.forget_scope(id, scope_id);
-        }
-    }
-
-    pub(crate) fn increment_live_recompose_scope_count(&self) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.increment_live_recompose_scope_count();
-        }
-    }
-
-    pub(crate) fn decrement_live_recompose_scope_count(&self) {
-        if let Some(inner) = self.0.upgrade() {
-            inner.decrement_live_recompose_scope_count();
-        }
-    }
-}
-
 /// Controls a future spawned with `RuntimeHandle::spawn_ui`.
 pub struct TaskHandle {
     id: u64,
@@ -1370,8 +1329,8 @@ impl RuntimeHandle {
             .and_then(|inner| inner.take_invalidated_scopes())
     }
 
-    /// Gives back a scope list from [`Self::take_invalidated_scopes`], for
-    /// the next pass to reuse its storage.
+    /// Gives back a scope list from [`Self::take_invalidated_scopes`] for reuse.
+    #[inline]
     pub(crate) fn recycle_scopes(&self, scopes: Vec<RecomposeScope>) {
         if let Some(inner) = self.inner.upgrade() {
             inner.recycle_scopes(scopes);

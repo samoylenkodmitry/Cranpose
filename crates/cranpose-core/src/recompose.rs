@@ -1,6 +1,7 @@
 use crate::{
     Command, Composer, ComposerCore, DirtyBubble, NodeId, RecomposeScope,
     debug_scope_invalidation_sources, debug_scope_label,
+    slot::{RootBefore, SlotWriteSession},
 };
 
 #[derive(Clone, Copy)]
@@ -11,21 +12,45 @@ pub(crate) enum RecomposeChildCursor {
 }
 
 impl RecomposeChildCursor {
-    fn at_first_root(parent_hint: Option<NodeId>, first_root: Option<NodeId>) -> Self {
-        match (parent_hint, first_root) {
-            (Some(_), Some(first)) => Self::After { first, placed: 0 },
-            _ => Self::Unknown,
+    // Where the roots of the open group go in `parent_hint`: where its first
+    // root is, or after what the composition emitted there before the group
+    // when it holds none.
+    fn at_open_group(slots: &SlotWriteSession<'_>, parent_hint: Option<NodeId>) -> Self {
+        let Some(parent) = parent_hint else {
+            return Self::Unknown;
+        };
+        match slots.open_group_first_root_node() {
+            Some(first) => Self::After { first, placed: 0 },
+            None => Self::after_root_before(slots, parent),
+        }
+    }
+
+    // Where the first root of the open group goes when it holds none yet.
+    #[cold]
+    #[inline(never)]
+    fn after_root_before(slots: &SlotWriteSession<'_>, parent: NodeId) -> Self {
+        match slots.open_group_root_before(parent) {
+            Some(RootBefore::Node(previous)) => Self::After {
+                first: previous,
+                placed: 1,
+            },
+            Some(RootBefore::Nothing) => Self::At(0),
+            None => Self::Unknown,
         }
     }
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl Composer {
-    fn begin_scope_group(&self, scope: &RecomposeScope) -> Option<Option<NodeId>> {
+    fn begin_scope_group(&self, scope: &RecomposeScope) -> Option<RecomposeChildCursor> {
+        let parent_hint = scope.parent_hint();
         let started = self.with_slot_session_mut(|slots| {
-            slots
-                .begin_recompose_at_scope(scope)
-                .map(|group| (group, slots.open_group_first_root_node()))
+            slots.begin_recompose_at_scope(scope).map(|group| {
+                (
+                    group,
+                    RecomposeChildCursor::at_open_group(slots, parent_hint),
+                )
+            })
         });
         log::trace!(
             target: "cranpose::compose::recompose",
@@ -35,7 +60,7 @@ impl Composer {
             started.map(|(group, _)| group),
             debug_scope_invalidation_sources(scope.id()),
         );
-        started.map(|(_, first_root)| first_root)
+        started.map(|(_, cursor)| cursor)
     }
 
     pub(crate) fn resolve_recompose_child_cursor(&self) -> RecomposeChildCursor {
@@ -107,10 +132,9 @@ impl Composer {
             }
         }
 
-        if let Some(first_root) = self.begin_scope_group(scope) {
+        if let Some(cursor) = self.begin_scope_group(scope) {
             let parent_hint = scope.parent_hint();
             let previous_cursor = self.resolve_recompose_child_cursor();
-            let cursor = RecomposeChildCursor::at_first_root(parent_hint, first_root);
             let previous_hint = self.core.recompose_parent_hint.replace(parent_hint);
             self.core.recompose_child_cursor.set(cursor);
             let previous_restarted = self.core.restarted_scope.replace(Some(scope.clone()));

@@ -110,17 +110,16 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
 }
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{
-    CompositionPassDebugStats, SlotId,
+    CompositionPassDebugStats, MemoryApplierDebugStats, RecomposeScopeRegistryDebugStats, SlotId,
+    SlotTableDebugStats, debug_recompose_scope_registry_stats,
     runtime::{RuntimeDebugStats, StateArenaDebugStats},
     snapshot_pinning::{SnapshotPinningDebugStats, debug_snapshot_pinning_stats},
     snapshot_v2::{SnapshotV2DebugStats, debug_snapshot_v2_stats},
 };
-#[cfg(any(test, feature = "test-support"))]
-use cranpose_core::{
-    MemoryApplierDebugStats, RecomposeScopeRegistryDebugStats, SlotTableDebugStats,
-    debug_recompose_scope_registry_stats,
-};
 pub use cranpose_ui::{ImeEditorState, PlatformTextInputHandler};
+// How long a frame composes before content that a change brings, such as a
+// new screen, waits for later frames: a quarter of a 60 Hz frame.
+const PAUSABLE_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility_audit;
 #[cfg(any(test, feature = "test-support"))]
@@ -605,6 +604,7 @@ where
         let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
+        composition.set_pausable_budget(Some(PAUSABLE_BUDGET));
         let app_content = Rc::new(RefCell::new(content));
         let mut build: Box<dyn FnMut()> = Box::new(move || {
             let app_content = Rc::clone(&app_content);

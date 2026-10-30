@@ -15,6 +15,7 @@ mod payload;
 mod payload_anchors;
 mod payload_store;
 mod ranges;
+mod root_before;
 mod scopes;
 mod segments;
 mod table;
@@ -51,6 +52,7 @@ pub(in crate::slot) use ranges::{
     DirectChildRange, GroupNodeRange, GroupPayloadRange, GroupRange, NodeRange, PayloadRange,
     SubtreeRange,
 };
+pub(crate) use root_before::RootBefore;
 pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
 #[cfg(test)]

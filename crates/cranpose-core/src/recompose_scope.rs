@@ -93,6 +93,11 @@ enum ScopeFlag {
     Derivation,
     // Something other than a state invalidated the scope.
     UnknownInvalidationSource,
+    // The scope's first body waits for a later frame, in pausable content.
+    Paused,
+    // The scope belongs to pausable content that has not completed: an
+    // invalidation waits until it completes.
+    Pending,
 }
 
 impl ScopeFlag {
@@ -108,6 +113,8 @@ impl ScopeFlag {
             Self::ForceRecompose => 1 << 7,
             Self::Derivation => 1 << 8,
             Self::UnknownInvalidationSource => 1 << 9,
+            Self::Paused => 1 << 10,
+            Self::Pending => 1 << 11,
         }
     }
 }
@@ -128,6 +135,11 @@ impl ScopeFlags {
         } else {
             bits & !flag.bit()
         });
+    }
+
+    // Whether `a` or `b` is set, in one test.
+    fn either(&self, a: ScopeFlag, b: ScopeFlag) -> bool {
+        self.0.get() & (a.bit() | b.bit()) != 0
     }
 
     // Sets `flag` and says whether it was set.
@@ -505,12 +517,23 @@ impl RecomposeScope {
 
     fn enqueue_invalidation(&self) {
         self.inner.flags.set(ScopeFlag::Invalid, true);
-        if !self.is_effectively_active() {
-            return;
+        if self.is_effectively_active() && self.may_queue() {
+            self.queue_recompose();
         }
-        if !self.inner.flags.replace(ScopeFlag::Enqueued, true) {
-            self.inner.runtime.register_invalid_scope(self.downgrade());
-        }
+    }
+
+    // Whether the scope may join the recompose queue: it is not in it, and
+    // its pausable content, if any, completed.
+    fn may_queue(&self) -> bool {
+        !self
+            .inner
+            .flags
+            .either(ScopeFlag::Enqueued, ScopeFlag::Pending)
+    }
+
+    fn queue_recompose(&self) {
+        self.inner.flags.set(ScopeFlag::Enqueued, true);
+        self.inner.runtime.register_invalid_scope(self.downgrade());
     }
 
     pub(crate) fn invalidate(&self) {
@@ -781,9 +804,9 @@ impl RecomposeScope {
         self.inner.flags.set(ScopeFlag::Active, true);
         if self.inner.flags.get(ScopeFlag::Invalid)
             && self.is_effectively_active()
-            && !self.inner.flags.replace(ScopeFlag::Enqueued, true)
+            && self.may_queue()
         {
-            self.inner.runtime.register_invalid_scope(self.downgrade());
+            self.queue_recompose();
         }
     }
 
@@ -836,6 +859,31 @@ impl RecomposeScope {
 
     pub(crate) fn mark_composed_once(&self) {
         self.inner.flags.set(ScopeFlag::ComposedOnce, true);
+    }
+
+    // Whether the scope's first body waits for a later frame.
+    pub(crate) fn is_paused(&self) -> bool {
+        self.inner.flags.get(ScopeFlag::Paused)
+    }
+
+    // Sets whether the scope's first body waits, and says whether it waited
+    // already.
+    pub(crate) fn replace_paused(&self, paused: bool) -> bool {
+        self.inner.flags.replace(ScopeFlag::Paused, paused)
+    }
+
+    // Whether the scope belongs to pausable content that has not completed.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.inner.flags.get(ScopeFlag::Pending)
+    }
+
+    // Holds the scope's invalidations until its pausable content completes,
+    // or, with `false`, queues the invalidation that waited.
+    pub(crate) fn set_pending(&self, pending: bool) {
+        self.inner.flags.set(ScopeFlag::Pending, pending);
+        if !pending && self.is_invalid() {
+            self.enqueue_invalidation();
+        }
     }
 
     // Whether a change of the state `state_id` alone invalidated the scope.
