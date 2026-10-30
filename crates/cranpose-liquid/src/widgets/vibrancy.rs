@@ -36,25 +36,31 @@ enum InkPass {
     Mask,
 }
 
+// Each pass's shader is configured once: every layer that draws it shares its
+// specialization, whose override hash the renderer computes once.
 fn shader(pass: InkPass) -> RuntimeShader {
-    static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
-    let mut shader = SHADER
+    static COLOR: OnceLock<RuntimeShader> = OnceLock::new();
+    static MASK: OnceLock<RuntimeShader> = OnceLock::new();
+    let configured = match pass {
+        InkPass::Color => &COLOR,
+        InkPass::Mask => &MASK,
+    };
+    configured
         .get_or_init(|| {
             let mut shader = RuntimeShader::new(cranpose_ui_graphics::LIQUID_VIBRANCY_WGSL);
             shader.set_position_independent(true);
             shader.set_float(0, 0.9);
+            shader.set_override("VIBRANCY_MASK", f64::from(matches!(pass, InkPass::Mask)));
+            let backdrop = matches!(pass, InkPass::Color);
+            shader.set_batched_source(backdrop);
+            shader.set_substrates(if backdrop {
+                &[SubstrateSpec::Mean]
+            } else {
+                &[]
+            });
             shader
         })
-        .clone();
-    shader.set_override("VIBRANCY_MASK", f64::from(matches!(pass, InkPass::Mask)));
-    let backdrop = matches!(pass, InkPass::Color);
-    shader.set_batched_source(backdrop);
-    shader.set_substrates(if backdrop {
-        &[SubstrateSpec::Mean]
-    } else {
-        &[]
-    });
-    shader
+        .clone()
 }
 
 /// The ink shaders: the colour pass composited over the content's backdrop
