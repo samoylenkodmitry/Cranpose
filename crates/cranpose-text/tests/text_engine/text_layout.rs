@@ -4,7 +4,7 @@ use cranpose_text::{
     TextOverflow,
 };
 
-use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, lay_out, span, typeface};
+use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, TEST_WIDE, lay_out, span, typeface};
 
 fn layout(
     resolver: &FontFamilyResolver,
@@ -290,6 +290,24 @@ fn a_line_with_a_taller_fallback_font_makes_room_for_it() {
         height(&mixed),
         height(&latin)
     );
+}
+
+#[test]
+fn a_glyph_wider_than_most_fonts_draw_moves_the_pen_by_its_advance() {
+    // Cranpose Test Wide's `W` is 20,000 units wide, past what a layout
+    // keeps in eight bytes a glyph.
+    let resolver = FontFamilyResolver::new([typeface(TEST_WIDE)]);
+    let laid = unwrapped(&resolver, "aWb");
+    let starts: Vec<f32> = laid
+        .glyph_runs(0)
+        .flat_map(|run| run.positions().map(|glyph| glyph.x).collect::<Vec<_>>())
+        .collect();
+    // 16 pixels an em of 1,000 units.
+    let expected = [0.0, 8.0, 328.0];
+    assert_eq!(starts.len(), expected.len());
+    for (start, expected) in starts.iter().zip(expected) {
+        assert!((start - expected).abs() < 1e-3, "{starts:?}");
+    }
 }
 
 #[test]

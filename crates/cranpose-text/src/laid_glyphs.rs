@@ -1,26 +1,143 @@
 use std::{ops::Range, sync::Arc};
 
-use crate::shaped_glyphs::{GlyphOffset, ShapedGlyph, ShapedGlyphs};
+use crate::{
+    glyph_id::GlyphId,
+    shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
+};
 
 // The glyphs of a layout, with where the first draw from the pen when any
 // draws off it, as `ShapedGlyphs` holds them; the copies of a layout and a
 // relayout that adds no glyphs share them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LaidGlyphs {
-    glyphs: Arc<[ShapedGlyph]>,
+    glyphs: Glyphs,
     offsets: Option<Arc<[GlyphOffset]>>,
+}
+
+// A layout's glyphs: in eight bytes each when every one fits them, as the
+// glyphs of all but the widest fonts do.
+#[derive(Clone, Debug, PartialEq)]
+enum Glyphs {
+    Packed(Arc<[PackedGlyph]>),
+    Full(Arc<[ShapedGlyph]>),
+}
+
+impl Default for Glyphs {
+    fn default() -> Self {
+        Self::Packed(Arc::default())
+    }
+}
+
+// A glyph whose id fits 16 bits and whose advance fits 15.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PackedGlyph {
+    id: u16,
+    // The advance above the lowest bit, which is set when a line break
+    // before the glyph's cluster is unsafe.
+    advance: i16,
+    cluster: u32,
+}
+
+impl PackedGlyph {
+    // `glyph` in eight bytes; `None` when it does not fit them.
+    fn pack(glyph: &ShapedGlyph) -> Option<Self> {
+        let advance = i16::try_from(glyph.advance.checked_mul(2)?).ok()?;
+        Some(Self {
+            id: u16::try_from(glyph.id().0).ok()?,
+            advance: advance | i16::from(glyph.unsafe_to_break()),
+            cluster: glyph.cluster,
+        })
+    }
+
+    fn unpack(self) -> ShapedGlyph {
+        let before = if self.advance & 1 == 0 {
+            BreakBefore::Safe
+        } else {
+            BreakBefore::Unsafe
+        };
+        ShapedGlyph::new(
+            GlyphId(u32::from(self.id)),
+            self.cluster,
+            i32::from(self.advance >> 1),
+            before,
+        )
+    }
+}
+
+// Some of a layout's glyphs, as it keeps them.
+#[derive(Clone, Copy)]
+pub(crate) enum RunGlyphs<'a> {
+    Packed(&'a [PackedGlyph]),
+    Full(&'a [ShapedGlyph]),
+}
+
+impl<'a> RunGlyphs<'a> {
+    pub(crate) fn len(self) -> usize {
+        match self {
+            Self::Packed(glyphs) => glyphs.len(),
+            Self::Full(glyphs) => glyphs.len(),
+        }
+    }
+
+    pub(crate) fn get(self, index: usize) -> Option<ShapedGlyph> {
+        match self {
+            Self::Packed(glyphs) => glyphs.get(index).map(|glyph| glyph.unpack()),
+            Self::Full(glyphs) => glyphs.get(index).copied(),
+        }
+    }
+
+    pub(crate) fn iter(self) -> impl Iterator<Item = ShapedGlyph> + 'a {
+        (0..self.len()).filter_map(move |index| self.get(index))
+    }
+
+    fn slice(self, range: Range<usize>) -> Self {
+        match self {
+            Self::Packed(glyphs) => Self::Packed(&glyphs[range]),
+            Self::Full(glyphs) => Self::Full(&glyphs[range]),
+        }
+    }
 }
 
 impl LaidGlyphs {
     // Keeps `shaped`.
     pub(crate) fn new(shaped: &ShapedGlyphs) -> Self {
         let offsets = shaped.offsets();
+        let glyphs = if shaped
+            .iter()
+            .all(|glyph| PackedGlyph::pack(glyph).is_some())
+        {
+            // Packed from an iterator of known length, in one allocation.
+            Glyphs::Packed(
+                shaped
+                    .iter()
+                    .map(|glyph| PackedGlyph::pack(glyph).unwrap_or_default())
+                    .collect(),
+            )
+        } else {
+            Glyphs::Full(Arc::from(&shaped[..]))
+        };
         Self {
-            glyphs: Arc::from(&shaped[..]),
+            glyphs,
             offsets: offsets
                 .iter()
                 .any(|offset| *offset != GlyphOffset::default())
                 .then(|| Arc::from(offsets)),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.all().len()
+    }
+
+    // The glyphs of `range`.
+    pub(crate) fn run(&self, range: Range<usize>) -> RunGlyphs<'_> {
+        self.all().slice(range)
+    }
+
+    fn all(&self) -> RunGlyphs<'_> {
+        match &self.glyphs {
+            Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
+            Glyphs::Full(glyphs) => RunGlyphs::Full(glyphs),
         }
     }
 
@@ -43,22 +160,18 @@ impl LaidGlyphs {
     ) -> usize {
         let start = range.start;
         let end = start
-            + self.glyphs[range]
+            + self
+                .run(range)
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.text_offset()))
                 .count();
-        out.extend_from_slice(
-            &self.glyphs[start..end],
-            self.offsets(start..end).unwrap_or_default(),
-        );
+        let offsets = self.offsets(start..end).unwrap_or_default();
+        match self.run(start..end) {
+            RunGlyphs::Packed(glyphs) => {
+                out.extend(glyphs.iter().map(|glyph| glyph.unpack()), offsets);
+            }
+            RunGlyphs::Full(glyphs) => out.extend_from_slice(glyphs, offsets),
+        }
         end
-    }
-}
-
-impl std::ops::Deref for LaidGlyphs {
-    type Target = [ShapedGlyph];
-
-    fn deref(&self) -> &[ShapedGlyph] {
-        &self.glyphs
     }
 }

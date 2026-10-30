@@ -13,9 +13,9 @@ use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
     index_range::{IndexRange, widen},
-    laid_glyphs::LaidGlyphs,
+    laid_glyphs::{LaidGlyphs, RunGlyphs},
     paragraph::TextAlign,
-    shaped_glyphs::{GlyphOffset, ShapedGlyph},
+    shaped_glyphs::GlyphOffset,
     typeface::Typeface,
 };
 
@@ -159,7 +159,7 @@ impl LineRun {
     // `face`.
     fn clusters<'a>(
         &'a self,
-        glyphs: &'a [ShapedGlyph],
+        glyphs: RunGlyphs<'a>,
         face: &Typeface,
     ) -> impl Iterator<Item = Cluster> + 'a {
         let scale = self.scale(face);
@@ -192,7 +192,7 @@ impl LineRun {
     // cluster in text order starts.
     fn cluster_spans<'a>(
         &'a self,
-        (glyphs, face): (&'a [ShapedGlyph], &Typeface),
+        (glyphs, face): (RunGlyphs<'a>, &Typeface),
     ) -> impl Iterator<Item = (f32, Cluster, usize)> + 'a {
         let mut clusters = self.clusters(glyphs, face).peekable();
         let mut left = 0.0;
@@ -259,7 +259,7 @@ pub struct GlyphRun<'a> {
     pub typeface: &'a Typeface,
     /// The font size in pixels.
     pub size: f32,
-    glyphs: &'a [ShapedGlyph],
+    glyphs: RunGlyphs<'a>,
     offsets: Option<&'a [GlyphOffset]>,
     run: &'a LineRun,
     pen: f32,
@@ -292,8 +292,8 @@ impl GlyphRun<'_> {
             .flat_map(move |cluster| {
                 let mut x = pen + run.spacing / 2.0;
                 pen += cluster.width;
-                cluster.glyphs.map(move |index| {
-                    let glyph = self.glyphs[index];
+                cluster.glyphs.filter_map(move |index| {
+                    let glyph = self.glyphs.get(index)?;
                     let drawn = self
                         .offsets
                         .and_then(|offsets| offsets.get(index))
@@ -301,12 +301,12 @@ impl GlyphRun<'_> {
                         .unwrap_or_default();
                     let at = x + font_units(drawn.x) * scale;
                     x += font_units(glyph.advance) * scale;
-                    PositionedGlyph {
+                    Some(PositionedGlyph {
                         id: glyph.id(),
                         x: at,
                         y: baseline - font_units(drawn.y) * scale,
                         offset: cluster.offset,
-                    }
+                    })
                 })
             })
     }
@@ -368,9 +368,9 @@ impl LayoutBody {
     }
 
     // The glyphs of `run` and their typeface.
-    fn run_glyphs(&self, run: &LineRun) -> (&[ShapedGlyph], &Typeface) {
+    fn run_glyphs(&self, run: &LineRun) -> (RunGlyphs<'_>, &Typeface) {
         (
-            &self.glyphs[run.glyphs.range()],
+            self.glyphs.run(run.glyphs.range()),
             &self.faces[widen(run.face)],
         )
     }
@@ -484,7 +484,8 @@ impl LayoutBody {
             if run.text.start() >= visible_end {
                 return 0;
             }
-            let count = glyphs[run.glyphs.range()]
+            let count = glyphs
+                .run(run.glyphs.range())
                 .iter()
                 .filter(|glyph| Some(glyph.id()) == faces[widen(run.face)].space())
                 .count();
@@ -795,7 +796,7 @@ impl TextLayout {
             .map(move |run| GlyphRun {
                 typeface: &self.body.faces[widen(run.face)],
                 size: run.size,
-                glyphs: &self.body.glyphs[run.glyphs.range()],
+                glyphs: self.body.glyphs.run(run.glyphs.range()),
                 offsets: self.body.glyphs.offsets(run.glyphs.range()),
                 run,
                 pen: line.left + run.left(),

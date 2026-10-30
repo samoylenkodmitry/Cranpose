@@ -29,6 +29,7 @@ pub(crate) const TEST_CONTEXTS: &str = "crates/cranpose-text/tests/fonts/Cranpos
 pub(crate) const TEST_KERNS: &str = "crates/cranpose-text/tests/fonts/CranposeTestKerns.ttf";
 pub(crate) const TEST_SUBSTITUTIONS: &str =
     "crates/cranpose-text/tests/fonts/CranposeTestSubstitutions.ttf";
+pub(crate) const TEST_WIDE: &str = "crates/cranpose-text/tests/fonts/CranposeTestWide.ttf";
 
 // The bytes of the font at `path`, relative to the repository root.
 pub(crate) fn bytes(path: &str) -> Vec<u8> {
