@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use harfrust::{Direction, Feature, Script as ShapingScript, ShaperFont, font::Font};
+use harfrust::{Direction, Feature, Scale, Script as ShapingScript, font::Font};
 use icu_properties::{CodePointMapData, props::GraphemeClusterBreak};
 use read_fonts::{
     FontRef, TableProvider,
@@ -229,15 +229,10 @@ impl PlainGlyphs {
             chars,
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
-        // The shaping font, made for the first character the plan has not
-        // met; on the heap, off the stack of the font's first metrics,
-        // which run at the bottom of a layout.
-        let mut shaping = None;
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
             let read = || {
-                let shaping = shaping.get_or_insert_with(|| shaping_font(font));
-                let (glyph, advance) = plain_glyph(shaping, (busy, substitutes), ch)?;
+                let (glyph, advance) = plain_glyph(font, (busy, substitutes), ch)?;
                 let starts = pairs.partition_point(|&(first, _)| first < glyph);
                 Some(CharGlyph {
                     glyph,
@@ -302,9 +297,13 @@ impl PlainGlyphs {
 
 // The glyph of `ch` in `font` and its advance, when it is plain: it stands
 // as itself and maps to a glyph no lookup starts at but one of the
-// `substitutes`, which puts its glyph in place.
+// `substitutes`, which puts its glyph in place. Both are read as HarfRust
+// reads them by default, without the layout data a shaping font prepares:
+// a character the `cmap` leaves out goes to HarfRust, which also tries the
+// private use area of an Arabic symbol font.
+#[inline(never)]
 fn plain_glyph(
-    font: &ShaperFont<'_, '_>,
+    font: &Font,
     (busy, substitutes): (&IntSet<GlyphId>, &[(u32, u32)]),
     ch: char,
 ) -> Option<(u32, i32)> {
@@ -312,18 +311,18 @@ fn plain_glyph(
         return None;
     }
     let nominal = font
-        .nominal_glyph(u32::from(ch))
+        .charmap()
+        .map_unicode(ch)
         .filter(|&glyph| glyph != GlyphId::NOTDEF && !busy.contains(glyph))?
         .to_u32();
     let glyph = substitutes
         .binary_search_by_key(&nominal, |&(from, _)| from)
         .map_or(nominal, |at| substitutes[at].1);
-    Some((glyph, font.glyph_h_advance(GlyphId::new(glyph))))
-}
-
-#[inline(never)]
-fn shaping_font(font: &Font) -> Box<ShaperFont<'_, '_>> {
-    Box::new(ShaperFont::new(font))
+    let advance = font
+        .glyph_metrics()
+        .scaled(Scale::default())
+        .h_advance(GlyphId::new(glyph));
+    Some((glyph, advance.max(0)))
 }
 
 // Whether HarfBuzz shapes `script` with its default shaper, whatever the
