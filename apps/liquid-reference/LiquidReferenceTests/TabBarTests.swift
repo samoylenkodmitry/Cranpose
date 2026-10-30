@@ -14,6 +14,13 @@ class ReferenceUITests: XCTestCase {
         tree.lifetime = .keepAlways
         add(tree)
     }
+
+    // Cranpose publishes its accessibility tree after the frame that shows a
+    // change, up to four seconds later while nothing reads the tree.
+    func eventually(_ element: XCUIElement, _ predicate: NSPredicate) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: 5) == .completed
+    }
 }
 
 @MainActor
@@ -39,9 +46,9 @@ class TabBarTests: ReferenceUITests {
 
     func assertDestination(_ title: String, app: XCUIApplication) {
         let destination = app.staticTexts[title].firstMatch
-        XCTAssertTrue(destination.exists)
+        XCTAssertTrue(destination.waitForExistence(timeout: 5))
         XCTAssertLessThan(destination.frame.midY, app.frame.height * 0.75)
-        XCTAssertTrue(app.buttons[title].isSelected)
+        XCTAssertTrue(eventually(app.buttons[title], NSPredicate(format: "isSelected == true")))
     }
 
     func testTapAndRetap() {
@@ -296,11 +303,11 @@ class NativeControlTests: ReferenceUITests {
         XCTAssertTrue(enabled.exists)
         XCTAssertTrue(["0", "off"].contains(enabled.value as? String ?? ""))
         enabled.tap()
-        XCTAssertTrue(["1", "on"].contains(enabled.value as? String ?? ""))
+        XCTAssertTrue(eventually(enabled, NSPredicate(format: "value IN %@", ["1", "on"])))
         toggle.terminate()
         let segmented = launchControl("segmented")
         segmented.buttons["Saved"].tap()
-        XCTAssertTrue(segmented.buttons["Saved"].isSelected)
+        XCTAssertTrue(eventually(segmented.buttons["Saved"], NSPredicate(format: "isSelected == true")))
         waitForStableControl(segmented)
         capture("control-segmented-light-2", app: segmented)
         segmented.terminate()

@@ -372,7 +372,7 @@ pub fn LiquidSegmentedControl(
                                 description,
                                 SemanticsWidgetRole::RadioButton,
                                 index,
-                                selected,
+                                super::selection::SelectionState::of(index, selected),
                                 on_select,
                             ))
                             .focusable();
