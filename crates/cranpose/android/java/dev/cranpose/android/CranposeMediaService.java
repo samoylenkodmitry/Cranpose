@@ -30,8 +30,6 @@ import android.os.IBinder;
 public final class CranposeMediaService extends Service {
     private static final int NOTIFICATION_ID = 0x4352414d;
     private static final String CHANNEL = "cranpose.media";
-    private static final String EXTRA_TITLE = "cranpose.media.title";
-    private static final String EXTRA_ARTIST = "cranpose.media.artist";
     private static final String EXTRA_PLAYING = "cranpose.media.playing";
     private static final String EXTRA_TOKEN = "cranpose.media.token";
     private static final String ACTION_COMMAND = "cranpose.media.command";
@@ -39,10 +37,8 @@ public final class CranposeMediaService extends Service {
 
     /** Starts or updates the notification for what is playing now. */
     static void start(
-            Context context, String title, String artist, boolean playing, MediaSession.Token token) {
+            Context context, boolean playing, MediaSession.Token token) {
         Intent intent = new Intent(context, CranposeMediaService.class)
-                .putExtra(EXTRA_TITLE, title)
-                .putExtra(EXTRA_ARTIST, artist)
                 .putExtra(EXTRA_PLAYING, playing)
                 .putExtra(EXTRA_TOKEN, token);
         try {
@@ -71,10 +67,8 @@ public final class CranposeMediaService extends Service {
             CranposeActivity.onMediaCommand(intent.getIntExtra(EXTRA_COMMAND, -1), 0);
             return START_NOT_STICKY;
         }
-        String title = intent == null ? "" : String.valueOf(intent.getStringExtra(EXTRA_TITLE));
-        String artist = intent == null ? "" : String.valueOf(intent.getStringExtra(EXTRA_ARTIST));
         boolean playing = intent != null && intent.getBooleanExtra(EXTRA_PLAYING, false);
-        enterForeground(title, artist, playing, sessionToken(intent));
+        enterForeground(playing, sessionToken(intent));
         return START_NOT_STICKY;
     }
 
@@ -95,7 +89,10 @@ public final class CranposeMediaService extends Service {
     }
 
     private void enterForeground(
-            String title, String artist, boolean playing, MediaSession.Token token) {
+            boolean playing, MediaSession.Token token) {
+        android.media.MediaMetadata metadata = token == null ? null
+                : new android.media.session.MediaController(this, token).getMetadata();
+        android.media.MediaDescription description = metadata == null ? null : metadata.getDescription();
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null && manager.getNotificationChannel(CHANNEL) == null) {
             NotificationChannel channel = new NotificationChannel(
@@ -111,8 +108,10 @@ public final class CranposeMediaService extends Service {
         }
         Notification notification = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle(title.isEmpty() ? applicationLabel() : title)
-                .setContentText(artist)
+                .setContentTitle(description == null ? applicationLabel() : description.getTitle())
+                .setContentText(description == null ? "" : description.getSubtitle())
+                .setSubText(description == null ? "" : description.getDescription())
+                .setLargeIcon(description == null ? null : description.getIconBitmap())
                 .setOngoing(playing)
                 .addAction(action(
                         android.R.drawable.ic_media_previous,

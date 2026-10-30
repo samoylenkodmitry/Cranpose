@@ -437,8 +437,10 @@ public class CranposeActivity extends NativeActivity {
         runOnUiThread(() -> cranposeMedia().sessionUpdate(state, positionMs, durationMs, speed));
     }
 
-    public void cranposeMediaSetMetadata(String title, String artist) {
-        runOnUiThread(() -> cranposeMedia().setMetadata(title, artist));
+    public void cranposeMediaSetMetadata(String title, String artist, String album, byte[] artwork) {
+        android.graphics.Bitmap cover = artwork.length == 0 ? null
+                : android.graphics.BitmapFactory.decodeByteArray(artwork, 0, artwork.length);
+        runOnUiThread(() -> cranposeMedia().setMetadata(title, artist, album, cover));
     }
 
     private static native void nativeOnAccessibilityActivate(int virtualViewId);

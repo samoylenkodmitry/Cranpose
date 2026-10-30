@@ -221,11 +221,22 @@ impl MediaPlayer for AndroidMediaPlayer {
                 clear_pending_android_jni_exception(env);
                 error.to_string()
             })?;
+            let album = env
+                .new_string(&metadata.album)
+                .map_err(|error| error.to_string())?;
+            let artwork = env
+                .byte_array_from_slice(metadata.artwork.as_ref().map_or(&[], |art| &art.bytes))
+                .map_err(|error| error.to_string())?;
             env.call_method(
                 &activity,
                 jni_str!("cranposeMediaSetMetadata"),
-                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
-                &[JValue::Object(&title), JValue::Object(&artist)],
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V"),
+                &[
+                    JValue::Object(&title),
+                    JValue::Object(&artist),
+                    JValue::Object(&album),
+                    JValue::Object(&artwork),
+                ],
             )
             .map(|_| ())
             .map_err(|error| {
