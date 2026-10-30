@@ -46,6 +46,10 @@ fn dolby_audio_plays_from_original_containers() {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test waits for the audio worker outside the frame loop"
+)]
 fn play_fixture(name: &str) {
     let output: Output = Arc::new(Mutex::new(None));
     let receiver = Arc::clone(&output);

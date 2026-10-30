@@ -69,6 +69,10 @@ impl Drop for Registration {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test observes a paused worker outside the frame loop"
+)]
 fn a_paused_provider_stream_does_not_download_the_whole_track() {
     cranpose_services::set_application_id("org.cranpose.provider-stream-test")
         .expect("application id");
