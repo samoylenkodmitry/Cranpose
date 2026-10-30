@@ -35,7 +35,9 @@ use hit_graph::rebuild_tracking_hits;
 mod layer_shape;
 use layer_shape::{clip_shape, shape_clip, shaped_graphics_layer};
 mod text_node;
+mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts};
+use translate_geometry::TranslateGeometry;
 
 #[derive(Clone, Default)]
 struct BuildNodeSnapshot {
@@ -1486,51 +1488,6 @@ fn check_retained_children(
         };
     }
     Ok(())
-}
-
-#[derive(Clone, Copy)]
-struct TranslateGeometry {
-    content_offset: Point,
-    window_transform: ProjectiveTransform,
-    top_left: Point,
-    child_origin: Point,
-}
-
-impl TranslateGeometry {
-    fn new(
-        layout_state: &cranpose_ui::widgets::LayoutState,
-        graphics_layer: &GraphicsLayer,
-        local_bounds: Rect,
-        parent_abs: AbsOrigin,
-    ) -> Self {
-        let content_offset = layout_state.content_offset();
-        let top_left = Point {
-            x: parent_abs.content_origin.x + layout_state.position().x,
-            y: parent_abs.content_origin.y + layout_state.position().y,
-        };
-        let window_transform = layer_transform_to_window(
-            parent_abs.window_transform,
-            top_left,
-            local_bounds,
-            graphics_layer,
-        );
-        Self {
-            content_offset,
-            window_transform,
-            top_left,
-            child_origin: Point {
-                x: top_left.x + content_offset.x,
-                y: top_left.y + content_offset.y,
-            },
-        }
-    }
-
-    fn child_abs(self) -> AbsOrigin {
-        AbsOrigin {
-            content_origin: self.child_origin,
-            window_transform: self.window_transform,
-        }
-    }
 }
 
 /// Moves `container`'s previous children that stay into `scratch.kept`, in
