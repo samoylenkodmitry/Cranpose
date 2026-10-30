@@ -1,4 +1,5 @@
 use std::{
+    cell::OnceCell,
     hash::{BuildHasher, Hash, Hasher},
     ops::Range,
 };
@@ -63,9 +64,10 @@ struct PlanAsk {
 
 struct KeptPlan {
     plan: ShapePlan,
-    // Where runs shaped with the plan cut into words; `None` when they
-    // shape whole.
-    split: Option<WordSplit>,
+    // Where runs shaped with the plan cut into words, `None` inside when
+    // they shape whole: read when HarfRust first shapes with the plan, as a
+    // run of plain glyphs needs none.
+    split: OnceCell<Option<WordSplit>>,
     // The index in its face of the glyphs the plan leaves as they are;
     // `None` when it cannot tell.
     plain: Option<usize>,
@@ -153,6 +155,9 @@ impl Shaper {
         {
             return;
         }
+        let kept = &plans[plan];
+        kept.split
+            .get_or_init(|| face_word_split(font, kept.plan.script()));
         self.shape_with_plan(
             (face, plan),
             text,
@@ -199,7 +204,7 @@ impl Shaper {
             script,
             language: language.as_ref(),
         };
-        let Some(split) = &kept.split else {
+        let Some(split) = kept.split.get().and_then(Option::as_ref) else {
             shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
             return;
         };
@@ -258,8 +263,8 @@ impl Shaper {
             face.forget_oldest_plan();
         }
         let key = face.plan_key(direction, script, language, features);
-        let (split, plain) = face.plan_glyphs(direction, script, features);
-        face.push_plan(direction, script, language, features, (split, plain, key));
+        let plain = face.plan_glyphs(direction, script, features);
+        face.push_plan(direction, script, language, features, (plain, key));
         face.plans.len() - 1
     }
 
@@ -361,31 +366,21 @@ impl ShapingFace {
         key.finish()
     }
 
-    // The word split and the index of the plain glyphs of a plan for
-    // `direction`, `script` and `features`.
+    // The index of the plain glyphs of a plan for `direction`, `script` and
+    // `features`.
     #[inline(never)]
     fn plan_glyphs(
         &mut self,
         direction: Direction,
         script: Option<ShapingScript>,
         features: &[Feature],
-    ) -> (Option<WordSplit>, Option<usize>) {
-        let tables = layout_tables(&self.font);
-        // The split reads every language and feature of the script, so a
-        // plan kept for the script has it already.
-        let split = match self.plans.iter().find(|kept| kept.plan.script() == script) {
-            Some(kept) => kept.split.clone(),
-            None => tables
-                .as_ref()
-                .and_then(|tables| face_word_split(&self.font, tables, script)),
-        };
-        let plain = tables
-            .as_ref()
-            .and_then(|tables| PlainGlyphs::of(tables, script, direction, features));
-        (split, plain.map(|plain| self.keep_plain(plain)))
+    ) -> Option<usize> {
+        let plain = layout_tables(&self.font)
+            .and_then(|tables| PlainGlyphs::of(&tables, script, direction, features));
+        plain.map(|plain| self.keep_plain(plain))
     }
 
-    // Keeps a new plan with its word split, plain glyphs and key.
+    // Keeps a new plan with its plain glyphs and key.
     #[inline(never)]
     fn push_plan(
         &mut self,
@@ -393,14 +388,14 @@ impl ShapingFace {
         script: Option<ShapingScript>,
         language: Option<&Language>,
         features: &[Feature],
-        (split, plain, key): (Option<WordSplit>, Option<usize>, u64),
+        (plain, key): (Option<usize>, u64),
     ) {
         // A face keeps a plan or two, each a few hundred bytes: room for
         // more goes unused.
         self.plans.reserve_exact(1);
         self.plans.push(KeptPlan {
             plan: ShapePlan::new(&self.font, direction, script, language, features),
-            split,
+            split: OnceCell::new(),
             plain,
             key,
         });
@@ -634,18 +629,15 @@ pub(crate) fn font_bytes(font: &Font) -> &[u8] {
     }
 }
 
-// The word split of `font`, whose layout tables are `tables`, for runs in
-// `script`.
+// The word split of `font` for runs in `script`; `None` when they shape
+// whole.
 #[inline(never)]
-fn face_word_split(
-    font: &Font,
-    tables: &FontRef<'_>,
-    script: Option<ShapingScript>,
-) -> Option<WordSplit> {
+fn face_word_split(font: &Font, script: Option<ShapingScript>) -> Option<WordSplit> {
+    let tables = layout_tables(font)?;
     let space = font.charmap().map_unicode(' ')?;
     let tags = script.map(ShapingScript::tags);
     word_split(
-        tables,
+        &tables,
         space,
         tags.as_ref().map_or(&[], |tags| tags.as_slice()),
     )
