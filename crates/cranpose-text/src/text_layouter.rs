@@ -380,8 +380,12 @@ impl TextLayouter {
         layout.height = top;
         let grid = input.lengths.grid;
         layout.line_width = whole::ceil(layout.widest * grid) / grid;
-        let width = layout.width_between(input.min_width, input.max_width);
-        layout.align_lines(width, input.paragraph.text_align);
+        // New lines start at their indents, unstretched.
+        let align = input.paragraph.text_align;
+        if !layout.keeps_lines_at_indent(align) {
+            let width = layout.width_between(input.min_width, input.max_width);
+            layout.align_lines(width, align);
+        }
     }
 
     // The widest paragraph of the text measured last on one line, with its
@@ -683,8 +687,10 @@ impl TextLayouter {
         };
         let top = edges.top;
         let bottom = top + line_box.height - trim_top - trim_bottom;
+        let level = self.paragraph_level(input, line.range.start);
+        layout.rtl |= level.is_rtl();
         layout.lines.push(LayoutLine {
-            level: self.paragraph_level(input, line.range.start),
+            level,
             text: line.range.into(),
             visible_end: narrow(line.visible),
             runs: runs.into(),

@@ -62,6 +62,8 @@ pub(crate) struct LayoutBody {
     pub(crate) widest: f32,
     pub(crate) height: f32,
     pub(crate) did_overflow_height: bool,
+    // Whether a line runs right to left.
+    pub(crate) rtl: bool,
     // The widths at which the text breaks into the same lines; `None` when
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
@@ -382,6 +384,7 @@ impl LayoutBody {
         self.widest = 0.0;
         self.height = 0.0;
         self.did_overflow_height = false;
+        self.rtl = false;
         self.hold = None;
         self.content_width = 0.0;
         self.follows_max = false;
@@ -396,10 +399,26 @@ impl LayoutBody {
         self.lines.shrink_to_fit();
     }
 
+    // Whether `align` places every line at its indent whatever the width:
+    // the start and the left do, of lines that run left to right.
+    pub(crate) fn keeps_lines_at_indent(&self, align: TextAlign) -> bool {
+        !self.rtl
+            && matches!(
+                align,
+                TextAlign::Start | TextAlign::Left | TextAlign::Unspecified
+            )
+    }
+
     // Whether placing the lines across `width` as `align` says moves one:
     // every justified text does, and other text when a line's place across
     // the free width changes.
     fn lines_move(&self, width: f32, align: TextAlign) -> bool {
+        if self.keeps_lines_at_indent(align) {
+            return self
+                .lines
+                .iter()
+                .any(|line| line.stretch != 0.0 || line.left.to_bits() != line.indent.to_bits());
+        }
         align == TextAlign::Justify
             || self.lines.iter().any(|line| {
                 line.stretch != 0.0
@@ -542,7 +561,11 @@ impl TextLayout {
     /// [`TextLayout::align`] then gives that layout without laying the text
     /// out again.
     pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
-        let wrap = self.body.wrap_width(min_width, max_width);
+        self.holds_wrap(self.body.wrap_width(min_width, max_width))
+    }
+
+    // Whether lines that wrap at `wrap` are this layout's.
+    fn holds_wrap(&self, wrap: f32) -> bool {
         (wrap - self.wrap).abs() < HOLD_MARGIN
             || self
                 .body
@@ -591,8 +614,30 @@ impl TextLayout {
     /// `min_width` and `max_width` as `align` says, for widths the layout
     /// [holds](TextLayout::holds).
     pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
-        self.wrap = self.body.wrap_width(min_width, max_width);
-        self.width = self.body.width_at(self.wrap, min_width);
+        self.place(
+            self.body.wrap_width(min_width, max_width),
+            (min_width, max_width),
+            align,
+        );
+    }
+
+    /// [Aligns](TextLayout::align) the lines between `min_width` and
+    /// `max_width` when the layout [holds](TextLayout::holds) there; `false`,
+    /// leaving the layout as it was, when it does not.
+    pub fn try_align(&mut self, min_width: f32, max_width: f32, align: TextAlign) -> bool {
+        let wrap = self.body.wrap_width(min_width, max_width);
+        let held = self.holds_wrap(wrap);
+        if held {
+            self.place(wrap, (min_width, max_width), align);
+        }
+        held
+    }
+
+    // Places the lines, which wrap at `wrap`, across the width the
+    // paragraph takes between `(min_width, max_width)` as `align` says.
+    fn place(&mut self, wrap: f32, (min_width, max_width): (f32, f32), align: TextAlign) {
+        self.wrap = wrap;
+        self.width = self.body.width_at(wrap, min_width);
         self.did_overflow_width = self.body.widest > self.width || self.width > max_width;
         // Lines that keep their places keep the body the copies share, and
         // the id what a renderer drew of the layout goes by.

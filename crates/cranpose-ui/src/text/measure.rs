@@ -188,6 +188,21 @@ impl PreparedTextLayout {
         self.layout_handle = OnceCell::new();
     }
 
+    // `realign` when the layout breaks into the same lines between
+    // `(min_width, max_width)`; `false`, leaving it as it was, when not.
+    pub(crate) fn try_realign(
+        &mut self,
+        (min_width, max_width): (f32, f32),
+        align: TextAlign,
+    ) -> bool {
+        let held = self.layout.try_align(min_width, max_width, align);
+        if held {
+            self.max_width = max_width;
+            self.layout_handle = OnceCell::new();
+        }
+        held
+    }
+
     /// The display text as a renderer draws it. Converted once for the layout
     /// and shared after, so every frame and scene rebuild drawing this layout
     /// hands over the same allocation.

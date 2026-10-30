@@ -189,13 +189,12 @@ impl TextPreparedLayoutOwner {
             // which it breaks into the same lines in place, as a width that
             // animates asks for each frame, before the others are searched.
             if (latest.text_generation, latest.font_scale_fingerprint) == stamp
-                && latest.layout.layout.holds(widths.0, widths.1)
                 && let Some(prepared) = Rc::get_mut(&mut latest.layout)
-            {
-                prepared.realign(
+                && prepared.try_realign(
                     widths,
                     self.source.borrow().style.paragraph_style.text_align,
-                );
+                )
+            {
                 latest.min_width = widths.0;
                 latest.max_widths = prepared.max_widths_kept(widths.0);
                 return read(&latest.layout);
