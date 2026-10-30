@@ -9,10 +9,7 @@ use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap}
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size, SubcomposeLayoutNode,
 };
-use cranpose_ui_graphics::{
-    CompositingStrategy, CornerRadii, DrawPlacement, GraphicsLayer, LayerShape, RoundedCornerShape,
-    rounded_corner_alpha_mask_effect,
-};
+use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use crate::{
     NodeUpdate, SceneUpdates,
@@ -32,10 +29,10 @@ use draw_recording::{
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
 pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
+mod layer_shape;
+use layer_shape::{clip_shape, shape_clip, shaped_graphics_layer};
 mod text_node;
 use text_node::{TextNodeParts, text_node_from_parts};
-
-const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
 
 #[derive(Clone, Default)]
 struct BuildNodeSnapshot {
@@ -2769,8 +2766,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
     let has_graphics_layer = graphics_layer.is_some();
     shape_clip(
         &mut graphics_layer,
-        node.node_data.modifier_slices.clip_to_bounds(),
-        node.node_data.modifier_slices.corner_shape(),
+        clip_shape(&node.node_data.modifier_slices),
         Rect {
             x: 0.0,
             y: 0.0,
@@ -2801,89 +2797,6 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
 
 fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
     slices.text_window().is_some() || slices.viewport_window_rect().is_some()
-}
-
-/// The graphics layer of a node with `slices` and bounds `local_bounds`:
-/// the chain's own, its clip shaped as [`shape_clip`] shapes it. Lent by
-/// the slices unless the shaping changes it, and returned straight from
-/// them when nothing shapes it: a layer kept in a local first is copied out.
-#[inline]
-fn shaped_graphics_layer(
-    slices: &ModifierNodeSlices,
-    local_bounds: Rect,
-) -> Option<Cow<'_, GraphicsLayer>> {
-    match clip_corners(slices.clip_to_bounds(), slices.corner_shape(), local_bounds) {
-        None => slices.graphics_layer(),
-        Some(corners) => rounded_graphics_layer(slices, corners, local_bounds),
-    }
-}
-
-#[inline(never)]
-fn rounded_graphics_layer(
-    slices: &ModifierNodeSlices,
-    corners: (RoundedCornerShape, CornerRadii),
-    local_bounds: Rect,
-) -> Option<Cow<'_, GraphicsLayer>> {
-    let mut graphics_layer = slices.graphics_layer();
-    round_clip(&mut graphics_layer, corners, local_bounds);
-    graphics_layer
-}
-
-/// Shapes the clip of `graphics_layer`, a layer's own, to the corner shape
-/// of a layer that clips to its bounds `local_bounds`. In place: the layer
-/// moved in and out of a call is hundreds of bytes copied each way, and a
-/// lent layer is copied only when the shaping changes it.
-fn shape_clip(
-    graphics_layer: &mut Option<Cow<'_, GraphicsLayer>>,
-    clip_to_bounds: bool,
-    corner_shape: Option<RoundedCornerShape>,
-    local_bounds: Rect,
-) {
-    if let Some(corners) = clip_corners(clip_to_bounds, corner_shape, local_bounds) {
-        round_clip(graphics_layer, corners, local_bounds);
-    }
-}
-
-/// The corner shape a layer that clips to its bounds `local_bounds` rounds
-/// its clip with, and its radii there: `None` when it does not clip to its
-/// bounds or its corners are square.
-fn clip_corners(
-    clip_to_bounds: bool,
-    corner_shape: Option<RoundedCornerShape>,
-    local_bounds: Rect,
-) -> Option<(RoundedCornerShape, CornerRadii)> {
-    if !clip_to_bounds {
-        return None;
-    }
-    let corner_shape = corner_shape?;
-    let radii = corner_shape.resolve(local_bounds.width, local_bounds.height);
-    let square = radii.top_left <= f32::EPSILON
-        && radii.top_right <= f32::EPSILON
-        && radii.bottom_right <= f32::EPSILON
-        && radii.bottom_left <= f32::EPSILON;
-    (!square).then_some((corner_shape, radii))
-}
-
-/// Rounds the clip of `graphics_layer` with `corners`, as [`clip_corners`]
-/// found them for a layer at `local_bounds`.
-fn round_clip(
-    graphics_layer: &mut Option<Cow<'_, GraphicsLayer>>,
-    (corner_shape, radii): (RoundedCornerShape, CornerRadii),
-    local_bounds: Rect,
-) {
-    let properties = graphics_layer.get_or_insert_default().to_mut();
-    if let Some(existing) = properties.render_effect.take() {
-        let rounded_clip = rounded_corner_alpha_mask_effect(
-            local_bounds.width,
-            local_bounds.height,
-            radii,
-            ROUNDED_CLIP_EDGE_FEATHER,
-        );
-        properties.render_effect = Some(existing.then(rounded_clip));
-    } else {
-        properties.shape = LayerShape::Rounded(corner_shape);
-        properties.clip = true;
-    }
 }
 
 fn layer_cache_policy(layer: &GraphicsLayer, isolation: IsolationReasons) -> CachePolicy {

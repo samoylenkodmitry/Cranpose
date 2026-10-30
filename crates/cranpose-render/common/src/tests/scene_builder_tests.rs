@@ -554,7 +554,6 @@ fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
     let mut layer = Some(Cow::Owned(GraphicsLayer::default()));
     shape_clip(
         &mut layer,
-        true,
         Some(RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0)),
         Rect {
             x: 0.0,
@@ -583,7 +582,6 @@ fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
     }));
     shape_clip(
         &mut layer,
-        true,
         Some(RoundedCornerShape::uniform(10.0)),
         Rect {
             x: 0.0,
@@ -662,7 +660,7 @@ fn wrapped_card_composition(
             Modifier::empty().size_points(240.0, 120.0),
             cranpose_ui::BoxSpec::default(),
             move || {
-                let shape = LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
+                let shape = LayerShape::Rounded(RoundedCornerShape::uniform(12.0));
                 let id = cranpose_ui::Box(
                     Modifier::empty()
                         .offset(20.0, 30.0)
@@ -1538,7 +1536,7 @@ fn shadowed_scroll_rows(
     clicks: &Rc<RefCell<Vec<(usize, usize)>>>,
 ) {
     for index in 0..12usize {
-        let shape = LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
+        let shape = LayerShape::Rounded(RoundedCornerShape::uniform(12.0));
         let radius = Rc::clone(shadow_radius);
         let recorded_clicks = Rc::clone(clicks);
         let first_text = Rc::clone(first_text);
