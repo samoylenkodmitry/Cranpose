@@ -4391,3 +4391,71 @@ fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does()
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 }
+
+#[test]
+fn the_same_dirty_nodes_frame_after_frame_update_as_a_fresh_scene_does() {
+    let label: Holder<cranpose_core::MutableState<String>> = Rc::default();
+    let padding: Holder<cranpose_core::MutableState<f32>> = Rc::default();
+    let ids: Holder<(NodeId, NodeId)> = Rc::default();
+    let mut composition =
+        nested_label_composition(Rc::clone(&label), Rc::clone(&padding), Rc::clone(&ids));
+    let root = composition.root().expect("composition root");
+    let viewport = Size {
+        width: 240.0,
+        height: 200.0,
+    };
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle.clone());
+    applier.compute_layout(root, viewport).expect("layout");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
+    applier.clear_runtime_handle();
+    drop(applier);
+    let (padded, leaf) = ids.borrow().expect("the ids");
+    let label = label.borrow().as_ref().copied().expect("the label state");
+    let padding = padding
+        .borrow()
+        .as_ref()
+        .copied()
+        .expect("the padding state");
+
+    // The padded box and the text it moves change together, the next update
+    // with the same two keeps the marks of the one before; the text alone,
+    // then the box alone, as many nodes as the update before but another,
+    // make the walk mark again.
+    let both: &[(NodeId, NodeUpdate)] =
+        &[(padded, NodeUpdate::Content), (leaf, NodeUpdate::Content)];
+    let text_alone: &[(NodeId, NodeUpdate)] = &[(leaf, NodeUpdate::Content)];
+    let box_alone: &[(NodeId, NodeUpdate)] = &[(padded, NodeUpdate::Content)];
+    let frames = [
+        ("b", 4.0, both),
+        ("c", 8.0, both),
+        ("d", 8.0, text_alone),
+        ("d", 12.0, box_alone),
+        ("e", 16.0, both),
+        ("f", 20.0, both),
+    ];
+    for (text, pad, dirty) in frames {
+        label.set_value(text.to_string());
+        padding.set_value(pad);
+        composition.process_invalid_scopes().expect("recomposition");
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle.clone());
+        applier.compute_layout(root, viewport).expect("layout");
+        assert!(update_graph_from_applier(&applier, &mut graph, dirty, 1.0));
+        let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh graph");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let (mut updated_labels, mut fresh_labels) = (Vec::new(), Vec::new());
+        collect_text_labels(&graph.root, &mut updated_labels);
+        collect_text_labels(&fresh.root, &mut fresh_labels);
+        assert_eq!(updated_labels, fresh_labels, "frame {text}/{pad}");
+        assert_eq!(
+            find_layer_origin(&graph.root, leaf),
+            find_layer_origin(&fresh.root, leaf),
+            "frame {text}/{pad}: the text sits where a fresh scene puts it"
+        );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+}
