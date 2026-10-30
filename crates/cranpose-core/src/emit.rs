@@ -540,7 +540,7 @@ impl Composer {
 
     /// Queues `effect` to run after this pass has applied its node changes.
     pub fn register_side_effect(&self, effect: impl FnOnce() + 'static) {
-        self.side_effects_mut().push(Box::new(effect));
+        self.queue_side_effect(Box::new(effect));
     }
 
     /// Removes and returns the side effects queued during this pass.

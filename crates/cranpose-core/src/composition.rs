@@ -5,8 +5,8 @@ use web_time::Instant;
 
 use crate::{
     Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, ConcreteApplierHost, DIAGNOSTICS,
-    DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, RetentionPolicy, Runtime,
-    RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
+    DefaultScheduler, Key, NodeError, NodeId, PausableContent, RecomposeScope, RetentionPolicy,
+    Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
     collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
     scheduler_ref,
 };
@@ -276,7 +276,7 @@ impl<A: Applier + 'static> Composition<A> {
         let mut did_work = false;
         let mut root_render_replays = 0usize;
         loop {
-            did_work |= self.process_invalid_scopes_until_root_request()?;
+            did_work |= self.process_invalid_scopes_within_budget()?;
             if !self.take_root_render_request() {
                 return Ok(did_work);
             }
@@ -350,6 +350,14 @@ impl<A: Applier + 'static> Composition<A> {
     /// come.
     pub fn should_recompose(&self) -> bool {
         self.root_render_requested || self.runtime.has_updates()
+    }
+
+    /// Sets how long a frame's composition runs before composables that
+    /// pausable content calls for the first time wait for a later frame.
+    /// `None`, the default, composes such content in full in its pass. Each
+    /// frame still runs at least one body that waits.
+    pub fn set_pausable_budget(&self, budget: Option<std::time::Duration>) {
+        self.composer_state.pausing.set_budget(budget);
     }
 
     /// Returns a handle to the runtime this composition uses.
@@ -473,7 +481,15 @@ impl<A: Applier + 'static> Composition<A> {
         scope_groups
     }
 
-    #[expect(clippy::print_stderr, reason = "a scope telemetry threshold asks")]
+    // Recomposes within a frame's budget for pausable content: bodies that
+    // wait run after the invalid scopes while the budget lasts.
+    fn process_invalid_scopes_within_budget(&mut self) -> Result<bool, NodeError> {
+        self.composer_state.pausing.start_budget();
+        let result = self.process_invalid_scopes_until_root_request();
+        self.composer_state.pausing.end_budget(&self.runtime);
+        result
+    }
+
     fn process_invalid_scopes_until_root_request(&mut self) -> Result<bool, NodeError> {
         let runtime_handle = self.runtime_handle();
         let mut did_recompose = false;
@@ -491,84 +507,21 @@ impl<A: Applier + 'static> Composition<A> {
             }
             runtime_handle.drain_ui();
             self.dispose_forgotten_movables()?;
-            let Some(scopes) = runtime_handle.take_invalidated_scopes() else {
-                break;
+            let (scopes, batch) = match runtime_handle.take_invalidated_scopes() {
+                Some(scopes) => (scopes, Batch::Invalid),
+                None => match self.composer_state.pausing.take_resumable() {
+                    Some((content, scopes)) => (scopes, Batch::Waiting(content)),
+                    None => break,
+                },
             };
             let Some(scopes) = self.rerun_derivations(&runtime_handle, scopes) else {
                 continue;
             };
             did_recompose = true;
-            let runtime_clone = runtime_handle.clone();
             let scope_groups = self.group_scopes_by_host(scopes);
-            let mut host_group_index = 0usize;
-            while host_group_index < scope_groups.len() {
-                let (host, scopes) = &scope_groups[host_group_index];
-                let scope_telemetry_threshold_ms =
-                    DIAGNOSTICS.recompose_scope_telemetry_ms.threshold_ms();
-                let shared_state = host
-                    .runtime_state()
-                    .or_else(|| scopes.first().and_then(RecomposeScope::slots_runtime_state))
-                    .unwrap_or_else(|| Rc::clone(&self.composer_state));
-                let side_effects = {
-                    let _teardown = runtime::enter_state_teardown_scope();
-                    let composer = Composer::for_pass(
-                        self.parked_composer.take(),
-                        shared_state,
-                        Rc::clone(host),
-                        self.applier_host(),
-                        runtime_clone.clone(),
-                        self.root,
-                    );
-                    composer.parent_stack().clear();
-                    let (root, side_effects, requested_root_render, compact_applier) =
-                        composer.install(|composer| {
-                            let ((), outcome) = composer.try_with_slot_host_pass(
-                                Rc::clone(host),
-                                crate::slot::SlotPassMode::Recompose,
-                                |composer| {
-                                    for scope in scopes {
-                                        if let Some(threshold_ms) = scope_telemetry_threshold_ms {
-                                            let start = Instant::now();
-                                            composer.recompose_group(scope);
-                                            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                            if elapsed_ms >= threshold_ms {
-                                                eprintln!(
-                                                    "[recompose-scope-telemetry] scope_id={} label={:?} elapsed_ms={elapsed_ms:.3} invalidation_sources={:?}",
-                                                    scope.id(),
-                                                    debug_scope_label(scope.id()),
-                                                    debug_scope_invalidation_sources(scope.id())
-                                                );
-                                            }
-                                        } else {
-                                            composer.recompose_group(scope);
-                                        }
-                                    }
-                                },
-                            )?;
-                            let root = composer.root();
-                            let side_effects = composer.take_side_effects();
-                            let requested_root_render = composer.take_root_render_request();
-                            Ok((
-                                root,
-                                side_effects,
-                                requested_root_render,
-                                outcome.compacted,
-                            ))
-                        })?;
-                    self.apply_pass(host, &runtime_handle, &composer, &side_effects)?;
-                    if compact_applier {
-                        self.applier.compact();
-                        self.applier.borrow_dyn().clear_recycled_nodes();
-                    }
-                    if root.is_some() {
-                        self.root = root;
-                    }
-                    if requested_root_render {
-                        self.root_render_requested = true;
-                    }
-                    self.park_composer(host, composer);
-                    side_effects
-                };
+            for (index, (host, scopes)) in scope_groups.iter().enumerate() {
+                let side_effects =
+                    self.recompose_host_scopes(host, scopes, &batch, &runtime_handle)?;
                 runtime_handle.drain_ui();
                 for effect in side_effects {
                     effect();
@@ -576,16 +529,14 @@ impl<A: Applier + 'static> Composition<A> {
                 runtime_handle.drain_ui();
                 self.maybe_dump_slot_table("recompose_pass");
                 if self.root_render_requested {
-                    for (_, remaining_scopes) in scope_groups.iter().skip(host_group_index + 1) {
-                        for scope in remaining_scopes {
-                            runtime_handle.requeue_invalid_scope(scope);
-                        }
-                    }
+                    requeue_scopes(&runtime_handle, &batch, &scope_groups[index + 1..]);
                     break;
                 }
-                host_group_index += 1;
             }
             recycle_scope_groups(&runtime_handle, scope_groups);
+            if let Batch::Waiting(content) = batch {
+                self.composer_state.pausing.finish_resumed(content);
+            }
             if self.root_render_requested {
                 break;
             }
@@ -594,10 +545,73 @@ impl<A: Applier + 'static> Composition<A> {
         Ok(did_recompose)
     }
 
+    // Recomposes `scopes` of one slot host in one pass and gives back the
+    // side effects that the pass registered.
+    fn recompose_host_scopes(
+        &mut self,
+        host: &Rc<SlotsHost>,
+        scopes: &[RecomposeScope],
+        batch: &Batch,
+        runtime_handle: &RuntimeHandle,
+    ) -> Result<Vec<Box<dyn FnOnce()>>, NodeError> {
+        let shared_state = host
+            .runtime_state()
+            .or_else(|| scopes.first().and_then(RecomposeScope::slots_runtime_state))
+            .unwrap_or_else(|| Rc::clone(&self.composer_state));
+        let threshold_ms = DIAGNOSTICS.recompose_scope_telemetry_ms.threshold_ms();
+        let _teardown = runtime::enter_state_teardown_scope();
+        let composer = Composer::for_pass(
+            self.parked_composer.take(),
+            shared_state,
+            Rc::clone(host),
+            self.applier_host(),
+            runtime_handle.clone(),
+            self.root,
+        );
+        composer.parent_stack().clear();
+        let (root, side_effects, requested_root_render, compact_applier) =
+            composer.install(|composer| {
+                let ((), outcome) = composer.try_with_slot_host_pass(
+                    Rc::clone(host),
+                    crate::slot::SlotPassMode::Recompose,
+                    |composer| match (batch, threshold_ms) {
+                        (Batch::Invalid, None) => {
+                            for scope in scopes {
+                                composer.recompose_group(scope);
+                            }
+                        }
+                        (Batch::Invalid, Some(threshold_ms)) => {
+                            recompose_timed(composer, scopes, threshold_ms);
+                        }
+                        (Batch::Waiting(content), _) => {
+                            composer.resume_waiting_bodies(content, scopes);
+                        }
+                    },
+                )?;
+                let root = composer.root();
+                let side_effects = composer.take_side_effects();
+                let requested_root_render = composer.take_root_render_request();
+                Ok((root, side_effects, requested_root_render, outcome.compacted))
+            })?;
+        self.apply_pass(host, runtime_handle, &composer, &side_effects)?;
+        if compact_applier {
+            self.applier.compact();
+            self.applier.borrow_dyn().clear_recycled_nodes();
+        }
+        if root.is_some() {
+            self.root = root;
+        }
+        if requested_root_render {
+            self.root_render_requested = true;
+        }
+        self.park_composer(host, composer);
+        Ok(side_effects)
+    }
+
     /// Recomposes the scopes that state changes invalidated, until none remain or a root render is
     /// requested. Returns `true` if a pass recomposed content.
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
-        self.process_invalid_scopes_until_root_request()
+        self.process_invalid_scopes_within_budget()
     }
 
     // Derives the values of the derivations among `scopes` again and gives
@@ -681,6 +695,48 @@ impl<A: Applier + 'static> Composition<A> {
             update.apply(&mut *applier)?;
         }
         Ok(())
+    }
+}
+
+// Recomposes each scope and reports the ones that took `threshold_ms` or
+// more, as scope telemetry asks.
+#[expect(clippy::print_stderr, reason = "a scope telemetry threshold asks")]
+fn recompose_timed(composer: &Composer, scopes: &[RecomposeScope], threshold_ms: f64) {
+    for scope in scopes {
+        let start = Instant::now();
+        composer.recompose_group(scope);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        if elapsed_ms >= threshold_ms {
+            eprintln!(
+                "[recompose-scope-telemetry] scope_id={} label={:?} elapsed_ms={elapsed_ms:.3} invalidation_sources={:?}",
+                scope.id(),
+                debug_scope_label(scope.id()),
+                debug_scope_invalidation_sources(scope.id())
+            );
+        }
+    }
+}
+
+// Where the scopes of a pass come from.
+enum Batch {
+    // Scopes that state changes invalidated.
+    Invalid,
+    // Bodies of pausable content that waited for this frame.
+    Waiting(PausableContent),
+}
+
+// Leaves the scopes that a root render request cut off for the next pass;
+// bodies of pausable content wait for a later frame.
+fn requeue_scopes(
+    runtime_handle: &RuntimeHandle,
+    batch: &Batch,
+    scope_groups: &[(Rc<SlotsHost>, Vec<RecomposeScope>)],
+) {
+    for scope in scope_groups.iter().flat_map(|(_, scopes)| scopes) {
+        match batch {
+            Batch::Invalid => runtime_handle.requeue_invalid_scope(scope),
+            Batch::Waiting(content) => content.keep_waiting(scope),
+        }
     }
 }
 

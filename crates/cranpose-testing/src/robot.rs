@@ -59,6 +59,9 @@ where
     pub fn new(width: u32, height: u32, renderer: R, content: impl FnMut() + 'static) -> Self {
         let root_key = location_key(file!(), line!(), column!());
         let mut shell = AppShell::new(renderer, root_key, content);
+        // Content composes in the frame that brings it, however slow the
+        // machine that runs the test.
+        shell.set_pausable_budget(None);
         shell.set_viewport(width as f32, height as f32);
         shell.set_buffer_size(width, height);
 

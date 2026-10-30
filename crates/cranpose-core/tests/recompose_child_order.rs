@@ -143,3 +143,49 @@ fn recomposition_preserves_order_around_virtual_children() {
         ["a", "virtual-before-b", "b", "virtual-after-b"]
     );
 }
+
+#[cranpose_macros::composable]
+fn Around(show: MutableState<bool>, parent_id: Rc<Cell<Option<NodeId>>>) {
+    let parent = with_current_composer(|composer| composer.emit_node(OrderedParent::default));
+    parent_id.set(Some(parent));
+    push_parent(parent);
+    Child("before");
+    Maybe(show);
+    Child("after");
+    pop_parent();
+}
+
+#[cranpose_macros::composable]
+fn Maybe(show: MutableState<bool>) {
+    if show.get() {
+        Child("shown");
+    }
+}
+
+#[test]
+fn content_that_appears_in_an_empty_scope_takes_its_place() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let show = MutableState::with_runtime(false, composition.runtime_handle());
+    let parent_id = Rc::new(Cell::new(None));
+    let root_key = cranpose_core::location_key(file!(), line!(), column!());
+    composition
+        .render(root_key, || Around(show, Rc::clone(&parent_id)))
+        .expect("initial composition succeeds");
+    let parent = parent_id.get().expect("composition emitted its parent");
+
+    show.set(true);
+    composition
+        .process_invalid_scopes()
+        .expect("the empty scope recomposes");
+
+    assert_eq!(
+        child_labels(&mut composition, parent),
+        ["before", "shown", "after"]
+    );
+
+    show.set(false);
+    composition
+        .process_invalid_scopes()
+        .expect("the content leaves");
+    assert_eq!(child_labels(&mut composition, parent), ["before", "after"]);
+}

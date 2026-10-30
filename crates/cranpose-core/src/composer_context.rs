@@ -160,6 +160,16 @@ pub(crate) fn with_current_composer_opt<R>(f: impl FnOnce(&Composer) -> R) -> Op
     try_with_composer(f)
 }
 
+/// Runs the body of the scope that composes now once more after it ends, in
+/// this composition: for a body that changed, as it composed, what an earlier
+/// part of it composed. Does nothing outside a scope.
+#[doc(hidden)]
+pub fn recompose_current_scope_again() {
+    if let Some(scope) = with_current_composer_opt(Composer::current_recompose_scope).flatten() {
+        scope.request_pending_recompose();
+    }
+}
+
 #[doc(hidden)]
 pub fn current_recompose_scope_invalidated_only_by(
     allowed_sources: impl IntoIterator<Item = StateId>,

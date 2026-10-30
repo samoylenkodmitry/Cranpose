@@ -1,6 +1,9 @@
 // Which composable each demo tab shows, and whether it scrolls.
 
-use cranpose_ui::composable;
+use cranpose_core::MutableState;
+use cranpose_ui::{
+    composable, BoxSpec, Column, ColumnSpec, LinearArrangement, Modifier, ScrollState,
+};
 
 use super::{
     animations::AnimationsTab, async_runtime_example, composition_local_example, counter_app,
@@ -9,10 +12,57 @@ use super::{
     interactive_anim::InteractiveAnimTab, lazy_list_example, liquid_ui::LiquidUiTab,
     markdown_viewer_tab, mineswapper2, modifier_showcase_tab, performance_dashboard,
     recomposition_lab::RecompositionLabTab, recursive_layout_example, room, rotary::rotary_tab,
-    shader_rect::ShaderRectTab, shaders::ShadersTab, text_input_example,
+    shader_rect::ShaderRectTab, shaders::ShadersTab, source_view::SourcePanel, text_input_example,
     text_showcase::TextShowcaseTab, wear, web_fetch::web_fetch_example, webview, xkcd::xkcd_tab,
-    ControlsUiTab, DemoTab, HackerNewsTab, StartupSelection, WszTab, WszTabState,
+    ControlsUiTab, DemoTab, HackerNewsTab, StartupSelection, WszTab, WszTabState, DEMO_TAB_INFO,
 };
+
+#[composable]
+pub(super) fn TabContent(
+    active_tab: MutableState<DemoTab>,
+    startup: StartupSelection,
+    wsz_tab_state: WszTabState,
+    showing_source: MutableState<bool>,
+    modifier: Modifier,
+) {
+    let active = active_tab.get();
+    let title = DEMO_TAB_INFO
+        .iter()
+        .find(|info| info.tab == active)
+        .map_or("Demo", |info| info.label);
+    cranpose_ui::Box(
+        modifier.clip_to_bounds().pane_title(title),
+        BoxSpec::default(),
+        move || {
+            if showing_source.get() {
+                SourcePanel(active);
+            } else {
+                cranpose_core::with_key(&active, || {
+                    if tab_requires_scroll(active) {
+                        ScrollableTab(move || {
+                            render_active_tab(active, startup, wsz_tab_state);
+                        });
+                    } else {
+                        render_active_tab(active, startup, wsz_tab_state);
+                    }
+                });
+            }
+        },
+    );
+}
+
+#[composable]
+pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| *s);
+    let modifier = Modifier::empty()
+        .fill_max_size()
+        .vertical_scroll(scroll_state, false);
+    Column(
+        modifier,
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
+        content,
+    );
+}
 
 pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
     !matches!(

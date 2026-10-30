@@ -6,6 +6,11 @@
 //! while it draws: a running transition moves layers and recomposes nothing.
 //! Content that left is removed on the frame its exit ends, and a
 //! [`SizeTransform`] animates the container's size in layout.
+//!
+//! Content that a change brings composes as pausable content: past the
+//! frame's composition budget it composes over the next frames, and the
+//! change waits with what shows until the content is complete, so a large
+//! screen does not stop the frames that come before it.
 
 use std::{
     cell::{Cell, RefCell},
@@ -14,8 +19,8 @@ use std::{
 
 use cranpose_animation::{Animatable, AnimationType};
 use cranpose_core::{
-    MutableState, NodeId, RuntimeHandle, internal::FrameCallbackRegistration, remember,
-    with_current_composer, with_key,
+    MutableState, NodeId, PausableContent, RuntimeHandle, internal::FrameCallbackRegistration,
+    remember, with_current_composer, with_key, with_pausable_content,
 };
 use cranpose_ui_graphics::{Size, WindowCoordinates};
 use cranpose_ui_layout::{
@@ -119,8 +124,10 @@ impl EntryMotion {
             .layer(self.progress(), self.size.get(), self.container.get())
     }
 
-    /// Animates toward `target` unless it already runs there or rests there.
-    /// Composition calls it, and reads nothing it would recompose by.
+    // Animates toward `target` unless it already runs there or rests there;
+    // an animation that takes no time puts it there at once, in the frame
+    // of the change. Composition calls it, and reads nothing it would
+    // recompose by.
     fn animate_to(&self, target: f32) {
         let mut progress = self.progress.borrow_mut();
         let settled = if progress.is_running() {
@@ -128,8 +135,14 @@ impl EntryMotion {
         } else {
             progress.state().get_non_reactive()
         };
-        if (settled - target).abs() > f32::EPSILON {
-            progress.animateTo(target, self.animation.get());
+        if (settled - target).abs() <= f32::EPSILON {
+            return;
+        }
+        match self.animation.get() {
+            AnimationType::Tween(spec) if spec.duration_millis == 0 && spec.delay_millis == 0 => {
+                progress.snapTo(target);
+            }
+            animation => progress.animateTo(target, animation),
         }
     }
 
@@ -154,7 +167,23 @@ struct Entry<T> {
     id: u64,
     value: T,
     motion: Rc<EntryMotion>,
+    // The content a change brought, which may compose across frames; none
+    // for the first content, which composes at once.
+    content: Option<PausableContent>,
 }
+
+impl<T> Entry<T> {
+    fn is_complete(&self) -> bool {
+        self.content
+            .as_ref()
+            .is_none_or(PausableContent::is_complete)
+    }
+}
+
+// Tells the container's measure policy which child is content that a
+// change brought: it neither measures nor places it until it is complete.
+#[derive(Debug, PartialEq)]
+struct ChangedContent(PausableContent);
 
 type ContentFn<T> = Box<dyn FnMut(T)>;
 
@@ -172,17 +201,18 @@ struct ContentState<T> {
     /// The container's size from its last measure, where a size animation
     /// starts, and its layout direction.
     frame: Rc<Cell<ContainerFrame>>,
-    node: Cell<Option<NodeId>>,
-    /// Bumped when leaving content is removed, so the container recomposes
-    /// without it.
-    removed: MutableState<u64>,
+    node: Rc<Cell<Option<NodeId>>>,
+    // Bumped when leaving content is removed or content a change brought
+    // completes, so the container recomposes without the one or with the
+    // other.
+    entries_changed: MutableState<u64>,
     watcher: RefCell<Option<FrameCallbackRegistration>>,
 }
 
 impl<T: Clone + PartialEq + 'static> ContentState<T> {
     fn new(runtime: RuntimeHandle) -> Self {
         Self {
-            removed: MutableState::with_runtime(0, runtime.clone()),
+            entries_changed: MutableState::with_runtime(0, runtime.clone()),
             runtime,
             entries: RefCell::new(Vec::new()),
             next_id: Cell::new(0),
@@ -192,12 +222,19 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             size: RefCell::new(None),
             frame: Rc::default(),
             coordinates: Rc::default(),
-            node: Cell::new(None),
+            node: Rc::default(),
             watcher: RefCell::new(None),
         }
     }
 
-    fn push(&self, value: T, progress: f32, effects: TransitionEffects, animation: AnimationType) {
+    fn push(
+        &self,
+        value: T,
+        progress: f32,
+        effects: TransitionEffects,
+        animation: AnimationType,
+        content: Option<PausableContent>,
+    ) {
         let id = self.next_id.get();
         self.next_id.set(id.wrapping_add(1));
         self.entries.borrow_mut().push(Entry {
@@ -212,7 +249,22 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 leaving: Cell::new(false),
                 coordinates: Rc::default(),
             }),
+            content,
         });
+    }
+
+    // Content for a change to compose, which may take frames: once it
+    // completes, the container recomposes to start the change and measures
+    // again with the content it skipped until then.
+    fn changed_content(&self) -> PausableContent {
+        let changed = self.entries_changed;
+        let node = Rc::clone(&self.node);
+        PausableContent::new(move || {
+            changed.update(|count| *count = count.wrapping_add(1));
+            if let Some(node) = node.get() {
+                crate::schedule_measure_repass(node);
+            }
+        })
     }
 
     /// Gives the entry that shows the content of `value` that state, and
@@ -231,14 +283,19 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
 
     /// Brings the entries to `target`: it comes in with the transition from
     /// the previous target, everything else leaves, and a seek holds both
-    /// ends where the gesture is.
+    // ends where the gesture is. While the content of `target` is not
+    // complete, everything stays as it is and the answer is `false`.
     fn sync(
         &self,
         target: &T,
         seek: Option<&ContentSeek<T>>,
         transition: &dyn Fn(&T, &T) -> ContentTransform,
         same: &dyn Fn(&T, &T) -> bool,
-    ) {
+    ) -> bool {
+        let seek = seek.filter(|seek| !same(&seek.toward, target));
+        if !self.admit(target, seek, transition, same) {
+            return false;
+        }
         let previous = self.last_target.replace(Some(target.clone()));
         let change = previous
             .filter(|previous| !same(previous, target))
@@ -246,13 +303,6 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
         if let Some(change) = change {
             self.size_transform.set(change.size_transform);
         }
-        let first = self.entries.borrow().is_empty();
-        if !self.show(target, same) {
-            let enter = change.map_or_else(EnterTransition::none, |change| change.enter);
-            let progress = if first { 1.0 } else { 0.0 };
-            self.push(target.clone(), progress, enter.effects(), enter.animation());
-        }
-        let seek = seek.filter(|seek| !same(&seek.toward, target));
         let seeking = seek.map(|seek| (seek, transition(target, &seek.toward)));
         if let Some((seek, _)) = seeking
             && !self.show(&seek.toward, same)
@@ -262,8 +312,64 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 0.0,
                 TransitionEffects::default(),
                 AnimationType::default(),
+                Some(self.changed_content()),
             );
         }
+        self.aim(target, seeking, change, same);
+        true
+    }
+
+    // Keeps the entries that may still show and brings one for `target`.
+    // Answers whether the content of `target` is complete.
+    fn admit(
+        &self,
+        target: &T,
+        seek: Option<&ContentSeek<T>>,
+        transition: &dyn Fn(&T, &T) -> ContentTransform,
+        same: &dyn Fn(&T, &T) -> bool,
+    ) -> bool {
+        // Content that never showed leaves once no change heads for it.
+        self.entries.borrow_mut().retain(|entry| {
+            entry.is_complete()
+                || same(&entry.value, target)
+                || seek.is_some_and(|seek| same(&entry.value, &seek.toward))
+        });
+        let first = self.entries.borrow().is_empty();
+        if !self.show(target, same) {
+            let enter = self
+                .last_target
+                .borrow()
+                .as_ref()
+                .filter(|previous| !same(previous, target))
+                .map_or_else(EnterTransition::none, |previous| {
+                    transition(previous, target).enter
+                });
+            let progress = if first { 1.0 } else { 0.0 };
+            let content = (!first).then(|| self.changed_content());
+            self.push(
+                target.clone(),
+                progress,
+                enter.effects(),
+                enter.animation(),
+                content,
+            );
+        }
+        self.entries
+            .borrow()
+            .iter()
+            .find(|entry| same(&entry.value, target))
+            .is_some_and(Entry::is_complete)
+    }
+
+    // Sets each entry moving toward where `change` or the seek puts it:
+    // the content of `target` comes in and the rest leaves.
+    fn aim(
+        &self,
+        target: &T,
+        seeking: Option<(&ContentSeek<T>, ContentTransform)>,
+        change: Option<ContentTransform>,
+        same: &dyn Fn(&T, &T) -> bool,
+    ) {
         let mut entries = self.entries.borrow_mut();
         for entry in entries.iter_mut() {
             let motion = &entry.motion;
@@ -302,6 +408,19 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             let current = entries.remove(index);
             entries.push(current);
         }
+    }
+
+    // Drops content whose exit already ended, as an exit that takes no time
+    // does in the pass of its change. Says whether it dropped any.
+    fn drop_gone(&self) -> bool {
+        let mut entries = self.entries.borrow_mut();
+        let before = entries.len();
+        // The current content is last; a seek all the way does not remove it.
+        let current = entries.last().map(|entry| entry.id);
+        entries.retain(|entry| {
+            Some(entry.id) == current || !(entry.motion.leaving.get() && entry.motion.gone())
+        });
+        before != entries.len()
     }
 
     /// Notes the layout direction when a slide toward the start or the end
@@ -346,19 +465,10 @@ fn watch<T: Clone + PartialEq + 'static>(state: &Rc<ContentState<T>>) {
             return;
         };
         state.watcher.borrow_mut().take();
-        let removed = {
-            let mut entries = state.entries.borrow_mut();
-            let before = entries.len();
-            // The current content is last; a seek all the way does not
-            // remove it.
-            let current = entries.last().map(|entry| entry.id);
-            entries.retain(|entry| {
-                Some(entry.id) == current || !(entry.motion.leaving.get() && entry.motion.gone())
-            });
-            before != entries.len()
-        };
-        if removed {
-            state.removed.update(|count| *count = count.wrapping_add(1));
+        if state.drop_gone() {
+            state
+                .entries_changed
+                .update(|count| *count = count.wrapping_add(1));
         }
         if state
             .size
@@ -477,15 +587,45 @@ fn animated_content<T, F>(
     })
     .with(StateHandle::clone);
     *state.0.content.borrow_mut() = Some(Box::new(content));
-    state
+    let changed = state
         .0
         .sync(&target_state, seek.as_ref(), transition_spec, same);
+    if changed {
+        state.0.drop_gone();
+    }
     state.0.note_direction();
     watch(&state.0);
-    // Subscribes this scope to removals of content that left.
-    state.0.removed.get();
+    // Subscribes this scope to removals of content that left and to content
+    // that completed.
+    state.0.entries_changed.get();
+    // Inside a shared transition layout the container and its contents say
+    // where they are, which costs the layer fast paths; elsewhere they don't.
+    let shared = in_shared_transition();
+    let policy = ContentMeasurePolicy(state.clone());
+    let shown = state.clone();
+    let node = Layout(container_modifier(&state.0, shared), policy, move || {
+        compose_entries(&shown, shared);
+    });
+    state.0.node.set(Some(node));
+    // Content that completed as it composed changes in this pass; content it
+    // replaces at once leaves in a recomposition of this frame.
+    if !changed
+        && state
+            .0
+            .sync(&target_state, seek.as_ref(), transition_spec, same)
+    {
+        if state.0.drop_gone() {
+            cranpose_core::recompose_current_scope_again();
+        }
+        state.0.note_direction();
+        watch(&state.0);
+    }
+}
+
+// The container clips when its size transform asks, and says where it is
+// inside a shared transition layout.
+fn container_modifier<T>(state: &ContentState<T>, shared: bool) -> Modifier {
     let clip = state
-        .0
         .size_transform
         .get()
         .is_some_and(|transform| transform.clip);
@@ -494,59 +634,87 @@ fn animated_content<T, F>(
     } else {
         Modifier::empty()
     };
-    // Inside a shared transition layout the container and its contents say
-    // where they are, which costs the layer fast paths; elsewhere they don't.
-    let shared = in_shared_transition();
-    let modifier = if shared {
-        modifier.report_window_coordinates(Rc::clone(&state.0.coordinates))
+    if shared {
+        modifier.report_window_coordinates(Rc::clone(&state.coordinates))
     } else {
         modifier
+    }
+}
+
+// Composes the content of each entry, keyed by the entry, in the order the
+// entries draw. Each entry is read in a borrow of its own, which ends
+// before its content composes.
+fn compose_entries<T: Clone + PartialEq + 'static>(state: &StateHandle<T>, shared: bool) {
+    for index in 0.. {
+        let entry = state.0.entries.borrow().get(index).map(|entry| {
+            (
+                entry.id,
+                entry.value.clone(),
+                Rc::clone(&entry.motion),
+                entry.content.clone(),
+            )
+        });
+        let Some((id, value, motion, pausable)) = entry else {
+            break;
+        };
+        let state = state.clone();
+        with_key(&id, move || {
+            compose_entry(state, value, &motion, pausable, shared);
+        });
+    }
+}
+
+// Composes the content of one entry in a box that its transition moves.
+fn compose_entry<T: Clone + PartialEq + 'static>(
+    state: StateHandle<T>,
+    value: T,
+    motion: &Rc<EntryMotion>,
+    pausable: Option<PausableContent>,
+    shared: bool,
+) {
+    let layer = Rc::clone(motion);
+    let entry = Modifier::empty().report_size(Rc::clone(&motion.size));
+    let entry = match &pausable {
+        Some(content) => entry.layout_data(ChangedContent(content.clone())),
+        None => entry,
     };
-    let policy = ContentMeasurePolicy(state.clone());
-    let shown = state.clone();
-    let node = Layout(modifier, policy, move || {
-        let state = &shown;
-        let entries: Vec<(u64, T, Rc<EntryMotion>)> = state
-            .0
-            .entries
-            .borrow()
-            .iter()
-            .map(|entry| (entry.id, entry.value.clone(), Rc::clone(&entry.motion)))
-            .collect();
-        for (id, value, motion) in entries {
-            let state = state.clone();
-            with_key(&id, move || {
-                let layer = Rc::clone(&motion);
-                let entry = Modifier::empty().report_size(Rc::clone(&motion.size));
-                let entry = if shared {
-                    entry.report_window_coordinates(Rc::clone(&motion.coordinates))
-                } else {
-                    entry
-                };
-                let shared_entry = shared.then(|| SharedEntry {
-                    motion: Rc::clone(&motion),
-                    entry: Rc::clone(&motion.coordinates),
-                    container: Rc::clone(&state.0.coordinates),
-                });
-                Box(
-                    entry.graphics_layer(move || layer.layer()),
-                    BoxSpec::new(),
-                    move || {
-                        let compose = || {
-                            if let Some(content) = state.0.content.borrow_mut().as_mut() {
-                                content(value.clone());
-                            }
-                        };
-                        match shared_entry.clone() {
-                            Some(entry) => ProvideSharedEntry(entry, compose),
-                            None => compose(),
-                        }
-                    },
-                );
-            });
-        }
+    let entry = if shared {
+        entry.report_window_coordinates(Rc::clone(&motion.coordinates))
+    } else {
+        entry
+    };
+    let shared_entry = shared.then(|| SharedEntry {
+        motion: Rc::clone(motion),
+        entry: Rc::clone(&motion.coordinates),
+        container: Rc::clone(&state.0.coordinates),
     });
-    state.0.node.set(Some(node));
+    Box(
+        entry.graphics_layer(move || layer.layer()),
+        BoxSpec::new(),
+        move || {
+            let compose = || {
+                if let Some(content) = state.0.content.borrow_mut().as_mut() {
+                    content(value.clone());
+                }
+            };
+            let compose = || match shared_entry.clone() {
+                Some(entry) => ProvideSharedEntry(entry, compose),
+                None => compose(),
+            };
+            match &pausable {
+                Some(content) => with_pausable_content(content, compose),
+                None => compose(),
+            }
+        },
+    );
+}
+
+// Whether `measurable` is content a change brought that is not complete.
+fn is_composing(measurable: &dyn Measurable) -> bool {
+    measurable
+        .parent_data()
+        .layout_data::<ChangedContent>()
+        .is_some_and(|content| !content.0.is_complete())
 }
 
 /// Places every content at the top start; the container is as large as the
@@ -582,7 +750,10 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
         let mut largest = Size::ZERO;
         let mut current = Size::ZERO;
         let mut placements = Vec::with_capacity(measurables.len());
-        for measurable in measurables {
+        for measurable in measurables
+            .iter()
+            .filter(|measurable| !is_composing(measurable.as_ref()))
+        {
             let placeable = measurable.measure(loose);
             let size = Size::new(placeable.width(), placeable.height());
             largest = Size::new(
@@ -626,6 +797,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
         measurables
             .iter()
+            .filter(|measurable| !is_composing(measurable.as_ref()))
             .map(|measurable| measurable.min_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
@@ -633,6 +805,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
     fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
         measurables
             .iter()
+            .filter(|measurable| !is_composing(measurable.as_ref()))
             .map(|measurable| measurable.max_intrinsic_width(height))
             .fold(0.0, f32::max)
     }
@@ -640,6 +813,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
     fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
         measurables
             .iter()
+            .filter(|measurable| !is_composing(measurable.as_ref()))
             .map(|measurable| measurable.min_intrinsic_height(width))
             .fold(0.0, f32::max)
     }
@@ -647,6 +821,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
     fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
         measurables
             .iter()
+            .filter(|measurable| !is_composing(measurable.as_ref()))
             .map(|measurable| measurable.max_intrinsic_height(width))
             .fold(0.0, f32::max)
     }

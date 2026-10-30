@@ -5,6 +5,7 @@ mod bottom_up_layout;
 mod cjk_line_breaks;
 mod constant_modifier_builders;
 mod constant_modifier_closures;
+mod content_order;
 mod debug_and_draw_scopes;
 mod directional_layout;
 mod draw_scope_text_integration;

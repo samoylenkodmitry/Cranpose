@@ -20,6 +20,7 @@ pub(crate) struct ComposerRuntimeState {
     live_hosts: RefCell<HashMap<usize, Weak<SlotsHost>>>,
     applier_host: RefCell<Option<Weak<dyn ApplierHost>>>,
     pub(super) branch_folds: Rc<crate::slot::BranchFolds>,
+    pub(crate) pausing: crate::pausable::Pausing,
 }
 
 impl Default for ComposerRuntimeState {
@@ -31,6 +32,7 @@ impl Default for ComposerRuntimeState {
             live_hosts: RefCell::new(HashMap::default()),
             applier_host: RefCell::new(None),
             branch_folds: Rc::default(),
+            pausing: crate::pausable::Pausing::default(),
         }
     }
 }

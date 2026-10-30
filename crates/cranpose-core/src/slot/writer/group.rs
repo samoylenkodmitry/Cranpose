@@ -279,6 +279,15 @@ impl SlotWriteSession<'_> {
         self.table.first_subtree_root_node_id_at(group_index)
     }
 
+    // What the composition emitted in `parent` before the open group.
+    pub(crate) fn open_group_root_before(
+        &self,
+        parent: NodeId,
+    ) -> Option<super::super::RootBefore> {
+        let group_index = self.open_parent_index()?;
+        self.table.root_before_group(group_index, parent)
+    }
+
     pub(crate) fn begin_group(
         &mut self,
         key: GroupKey,
