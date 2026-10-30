@@ -125,7 +125,7 @@ impl TextLayouter {
         let width = self.fill(input, resolver, shaped, &mut body);
         // A layout kept holds each part in storage of its own length.
         body.shrink_to_fit();
-        TextLayout::new(body, width, input.max_width)
+        TextLayout::new(body, width, (input.min_width, input.max_width))
     }
 
     /// Lays `input` out into `layout` in place of what it held, in the
@@ -136,7 +136,7 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         layout: &mut TextLayout,
     ) {
-        layout.refill(input.max_width, |body| {
+        layout.refill((input.min_width, input.max_width), |body| {
             body.clear();
             self.shape(input, resolver, None, &mut body.faces);
             self.fill(input, resolver, None, body)
@@ -186,7 +186,7 @@ impl TextLayouter {
         );
         layout.content_width = whole::ceil(widest * lengths.grid) / lengths.grid;
         layout.follows_max = options.soft_wrap || options.overflow.is_ellipsis();
-        let width = layout.width_between(input.min_width, input.max_width);
+        let width = layout.wrap_width(input.min_width, input.max_width);
         let wrap = if options.soft_wrap {
             WrapWidths {
                 first: width - lengths.first_line_indent,
@@ -358,12 +358,13 @@ impl TextLayouter {
 
     // Ends a layout whose lines reach down to `top`: the layout takes the
     // glyphs, a text short of its minimum lines takes the height of that
-    // many of its first line, and its lines align across `width`.
+    // many of its first line, and its lines align across the paragraph's
+    // width.
     fn finish_lines(
         &mut self,
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
-        (mut top, width): (f32, f32),
+        mut top: f32,
         layout: &mut LayoutBody,
     ) {
         // A relayout that added no glyphs keeps those it took.
@@ -377,6 +378,9 @@ impl TextLayouter {
             top += (first.bottom - first.top) * lines_f32(missing);
         }
         layout.height = top;
+        let grid = input.lengths.grid;
+        layout.line_width = whole::ceil(layout.widest * grid) / grid;
+        let width = layout.width_between(input.min_width, input.max_width);
         layout.align_lines(width, input.paragraph.text_align);
     }
 
@@ -599,7 +603,7 @@ impl TextLayouter {
             let starts = starts_paragraph(input.text, layout.lines[index].text.start());
             layout.lines[index - 1].ends_paragraph = starts;
         }
-        self.finish_lines(input, options, (top, width), layout);
+        self.finish_lines(input, options, top, layout);
     }
 
     // The piece of the one item of a text: the whole item.
@@ -649,7 +653,7 @@ impl TextLayouter {
             ellipsized: false,
         };
         let top = self.push_line(input, resolver, line, edges, layout);
-        self.finish_lines(input, options, (top, width), layout);
+        self.finish_lines(input, options, top, layout);
     }
 
     // Places the pieces just collected for `line` as its runs, adds the

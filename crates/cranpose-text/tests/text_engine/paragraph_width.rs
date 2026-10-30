@@ -63,7 +63,7 @@ fn text_that_fits_takes_its_own_width_rounded_up_to_whole_device_pixels() {
 }
 
 #[test]
-fn wrapped_text_takes_the_max_width_and_a_min_width_widens_short_text() {
+fn wrapped_text_takes_its_widest_line_and_a_min_width_widens_short_text() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
 
     let wrapped = layout(
@@ -89,9 +89,37 @@ fn wrapped_text_takes_the_max_width_and_a_min_width_widens_short_text() {
     );
 
     assert!(wrapped.line_count() > 1);
-    assert_eq!(wrapped.width(), 150.0);
+    let widest = (0..wrapped.line_count())
+        .map(|line| wrapped.line_right(line) - wrapped.line_left(line))
+        .fold(0.0, f32::max);
+    assert!(widest < 150.0);
+    assert_eq!(wrapped.width(), widest.ceil());
     assert_eq!(widened.width(), 300.0);
     assert_eq!(fixed.width(), 200.0);
+}
+
+#[test]
+fn wrapped_text_keeps_its_width_at_the_max_widths_that_keep_its_lines() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let options = TextLayoutOptions::default();
+    let mut laid = layout(&resolver, LONG, (0.0, 150.0), 1.0, options);
+    let (width, lines) = (laid.width(), laid.line_count());
+
+    let (low, high) = laid.max_widths_kept(0.0);
+    assert!(low <= 150.0 && 150.0 <= high, "{low}..{high}");
+    for max_width in [low, (low + high) / 2.0, high] {
+        assert!(laid.holds(0.0, max_width), "at {max_width}");
+        laid.align(0.0, max_width, cranpose_text::TextAlign::Start);
+        let fresh = layout(&resolver, LONG, (0.0, max_width), 1.0, options);
+        assert_eq!(
+            (laid.width(), fresh.width(), fresh.line_count()),
+            (width, width, lines),
+            "at {max_width}"
+        );
+    }
+    // Past the high end the text breaks into other lines.
+    let past = layout(&resolver, LONG, (0.0, high + 1.0), 1.0, options);
+    assert!(past.line_count() != lines || past.width() != width);
 }
 
 #[test]

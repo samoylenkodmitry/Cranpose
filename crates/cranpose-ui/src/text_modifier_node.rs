@@ -52,11 +52,11 @@ impl TextPreparedLayoutCacheEntry {
     fn keeps(&self, (min_width, max_width): (f32, f32), stamp: (u64, u32)) -> bool {
         let layout = &self.layout.layout;
         let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
-        // The layout's own width breaks it into its own lines.
         same(self.min_width, min_width)
             && (self.text_generation, self.font_scale_fingerprint) == stamp
             && same(layout.width_between(min_width, max_width), layout.width())
             && same(self.layout.size().width, layout.width().min(max_width))
+            && layout.holds(min_width, max_width)
     }
 }
 

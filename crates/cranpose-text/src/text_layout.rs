@@ -31,6 +31,8 @@ pub struct TextLayout {
     // while their lines keep their places.
     body: Arc<LayoutBody>,
     width: f32,
+    // The width the lines wrap at.
+    wrap: f32,
     did_overflow_width: bool,
     id: u32,
 }
@@ -63,11 +65,15 @@ pub(crate) struct LayoutBody {
     // The widths at which the text breaks into the same lines; `None` when
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
-    // What the paragraph's width follows: its max intrinsic width rounded
-    // up to whole device pixels, and whether the widest it may be counts,
-    // which it does when lines wrap or an ellipsis cuts them.
+    // What the width the lines wrap at follows: the max intrinsic width
+    // rounded up to whole device pixels, and whether the widest the
+    // paragraph may be counts, which it does when lines wrap or an ellipsis
+    // cuts them.
     pub(crate) content_width: f32,
     pub(crate) follows_max: bool,
+    // The widest line rounded up to whole device pixels: the width of a
+    // paragraph whose lines wrap.
+    pub(crate) line_width: f32,
     // How many glyphs, from the first, shaping placed: an ellipsis's and a
     // hyphen's follow them.
     pub(crate) shaped: usize,
@@ -320,9 +326,9 @@ impl GlyphRun<'_> {
 }
 
 impl LayoutBody {
-    // The width of the paragraph between `min_width` and `max_width`, as
+    // The width the lines wrap at between `min_width` and `max_width`, as
     // Compose's `finalMaxWidth` gives it.
-    pub(crate) fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
+    pub(crate) fn wrap_width(&self, min_width: f32, max_width: f32) -> f32 {
         let max_width = if self.follows_max {
             max_width
         } else {
@@ -333,6 +339,18 @@ impl LayoutBody {
             max_width
         } else {
             self.content_width.max(min_width).min(max_width)
+        }
+    }
+
+    // The width of the paragraph between `min_width` and `max_width`: the
+    // width its lines wrap at, save that lines that wrap take the widest of
+    // them, as a label shows its lines and not the room around them.
+    pub(crate) fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
+        let wrap = self.wrap_width(min_width, max_width);
+        if self.content_width <= wrap {
+            wrap
+        } else {
+            self.line_width.max(min_width).min(wrap)
         }
     }
 
@@ -362,6 +380,7 @@ impl LayoutBody {
         self.hold = None;
         self.content_width = 0.0;
         self.follows_max = false;
+        self.line_width = 0.0;
         self.shaped = 0;
     }
 
@@ -467,29 +486,32 @@ impl LayoutBody {
 }
 
 impl TextLayout {
-    // The layout of `body`, whose lines are placed across `width`, laid out
-    // to be at most `max_width` wide.
-    pub(crate) fn new(body: LayoutBody, width: f32, max_width: f32) -> Self {
+    // The layout of `body`, whose lines wrap at `wrap`, laid out between
+    // `widths`, the narrowest and the widest it may be.
+    pub(crate) fn new(body: LayoutBody, wrap: f32, widths: (f32, f32)) -> Self {
+        let width = body.width_between(widths.0, widths.1);
         let mut layout = Self {
-            did_overflow_width: body.widest > width || width > max_width,
+            did_overflow_width: body.widest > width || width > widths.1,
             body: Arc::new(body),
             width,
+            wrap,
             id: 0,
         };
         layout.renew_id();
         layout
     }
 
-    // Lays the layout out again: `fill` fills its body, in the body's own
-    // storage when no copy shares it, and gives the width its lines are
-    // placed across; the layout is at most `max_width` wide.
-    pub(crate) fn refill(&mut self, max_width: f32, fill: impl FnOnce(&mut LayoutBody) -> f32) {
+    // Lays the layout out again between `widths`: `fill` fills its body, in
+    // the body's own storage when no copy shares it, and gives the width its
+    // lines wrap at.
+    pub(crate) fn refill(&mut self, widths: (f32, f32), fill: impl FnOnce(&mut LayoutBody) -> f32) {
         if Arc::get_mut(&mut self.body).is_none() {
             self.body = Arc::default();
         }
         let body = Arc::make_mut(&mut self.body);
-        self.width = fill(body);
-        self.did_overflow_width = body.widest > self.width || self.width > max_width;
+        self.wrap = fill(body);
+        self.width = body.width_between(widths.0, widths.1);
+        self.did_overflow_width = body.widest > self.width || self.width > widths.1;
         self.renew_id();
     }
 
@@ -515,16 +537,18 @@ impl TextLayout {
     /// [`TextLayout::align`] then gives that layout without laying the text
     /// out again.
     pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
-        let width = self.body.width_between(min_width, max_width);
-        (width - self.width).abs() < HOLD_MARGIN
-            || self.body.hold.is_some_and(|hold| {
-                hold.min + HOLD_MARGIN <= width && width + HOLD_MARGIN < hold.max
-            })
+        let wrap = self.body.wrap_width(min_width, max_width);
+        (wrap - self.wrap).abs() < HOLD_MARGIN
+            || self
+                .body
+                .hold
+                .is_some_and(|hold| hold.min + HOLD_MARGIN <= wrap && wrap + HOLD_MARGIN < hold.max)
     }
 
     /// The width the paragraph takes laid out between `min_width` and
     /// `max_width`: its max intrinsic width rounded up to whole device
-    /// pixels within them, the max when they are equal.
+    /// pixels within them, the max when they are equal, and its widest line
+    /// rounded up to whole device pixels within them when its lines wrap.
     pub fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
         self.body.width_between(min_width, max_width)
     }
@@ -532,14 +556,24 @@ impl TextLayout {
     /// The max widths, from `.0` up to and with `.1`, at which the paragraph
     /// laid out from `min_width` keeps its width and its lines: every width
     /// when its width follows no max, every width from its own when its text
-    /// fits, else only its own width.
+    /// fits, else the widths its lines wrap the same at below the width it
+    /// fits at, or only the one it wraps at when those are not known.
     pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
-        if !self.body.follows_max {
+        let body = &self.body;
+        if !body.follows_max {
             (f32::NEG_INFINITY, f32::INFINITY)
-        } else if self.width >= self.body.content_width.max(min_width) {
+        } else if self.width >= body.content_width.max(min_width) {
             (self.width, f32::INFINITY)
+        } else if let Some(hold) = body.hold {
+            let low = (hold.min + HOLD_MARGIN).max(self.width);
+            let high = (hold.max - HOLD_MARGIN).min(body.content_width).next_down();
+            if low <= high {
+                (low, high)
+            } else {
+                (self.wrap, self.wrap)
+            }
         } else {
-            (self.width, self.width)
+            (self.wrap, self.wrap)
         }
     }
 
@@ -547,6 +581,7 @@ impl TextLayout {
     /// `min_width` and `max_width` as `align` says, for widths the layout
     /// [holds](TextLayout::holds).
     pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
+        self.wrap = self.body.wrap_width(min_width, max_width);
         self.width = self.body.width_between(min_width, max_width);
         self.did_overflow_width = self.body.widest > self.width || self.width > max_width;
         // Lines that keep their places keep the body the copies share, and
@@ -751,8 +786,12 @@ impl TextLayout {
 
     /// Pushes onto `rects` the rectangles that cover the text from `start`
     /// to `end` line by line, one for each stretch of it that runs in one
-    /// direction: Compose's `getPathForRange` as rectangles.
+    /// direction, within the paragraph's width or its visible text: Compose's
+    /// `getPathForRange` as rectangles. The spaces a wrapped line ends with
+    /// hang past the widest line, which they do not widen, and cover nothing
+    /// there.
     pub fn selection_rects(&self, start: usize, end: usize, rects: &mut Vec<Rect>) {
+        let width = self.width;
         for line in &self.body.lines {
             if line.text.end() <= start || line.text.start() >= end {
                 continue;
@@ -766,7 +805,7 @@ impl TextLayout {
                         (true, Some((from, _))) => open = Some((from, x + cluster.width)),
                         (true, None) => open = Some((x, x + cluster.width)),
                         (false, Some(span)) => {
-                            push_span(rects, line, span);
+                            push_span(rects, (line, width), span);
                             open = None;
                         }
                         (false, None) => {}
@@ -774,7 +813,7 @@ impl TextLayout {
                 }
             }
             if let Some(span) = open {
-                push_span(rects, line, span);
+                push_span(rects, (line, width), span);
             }
         }
     }
@@ -840,13 +879,22 @@ fn align_fraction(align: TextAlign, level: BidiLevel) -> f32 {
 
 // Adds the rectangle of `line` from `left` to `right`, from the line's left
 // edge.
-fn push_span(rects: &mut Vec<Rect>, line: &LayoutLine, (left, right): (f32, f32)) {
-    rects.push(Rect {
-        x: line.left + left,
-        y: line.top,
-        width: right - left,
-        height: line.bottom - line.top,
-    });
+// Pushes the rectangle of `line` from `left` to `right` within the
+// paragraph's `width`, or past it as far as the line's visible text reaches.
+fn push_span(rects: &mut Vec<Rect>, (line, width): (&LayoutLine, f32), (left, right): (f32, f32)) {
+    let (low, high) = (line.left.min(0.0), width.max(line.left + line.width));
+    let (left, right) = (
+        (line.left + left).clamp(low, high),
+        (line.left + right).clamp(low, high),
+    );
+    if left < right {
+        rects.push(Rect {
+            x: left,
+            y: line.top,
+            width: right - left,
+            height: line.bottom - line.top,
+        });
+    }
 }
 
 // A distance in font design units as a float, exact for every value under

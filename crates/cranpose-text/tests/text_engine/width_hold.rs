@@ -49,10 +49,10 @@ fn held_widths(
     let mut width = from;
     while width < to {
         width += 0.25;
-        if !laid.holds(0.0, width) {
+        if !laid.holds(width, width) {
             return (held, Some(width));
         }
-        laid.align(0.0, width, paragraph.text_align);
+        laid.align(width, width, paragraph.text_align);
         let fresh = lay_out_with(resolver, text, (paragraph, lengths), width, options);
         assert_eq!(picture(&laid), picture(&fresh), "at {width}");
         held += 1;

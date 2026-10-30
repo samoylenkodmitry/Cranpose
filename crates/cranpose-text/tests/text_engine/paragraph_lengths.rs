@@ -131,13 +131,16 @@ fn indents_move_and_narrow_the_first_and_the_other_lines() {
     assert!((latin.line_left(0) - 30.0).abs() < 0.01);
     assert!((latin.line_left(1) - 10.0).abs() < 0.01);
     assert!((0..latin.line_count()).all(|line| latin.line_right(line) <= 200.0));
+    // Right to left, the indents come off the right of the paragraph's
+    // width, its widest line's.
+    let right = arabic.width();
     assert!(
-        (arabic.line_right(0) - 170.0).abs() < 0.01,
+        (arabic.line_right(0) - (right - 30.0)).abs() < 0.01,
         "{}",
         arabic.line_right(0)
     );
     assert!(
-        (arabic.line_right(1) - 190.0).abs() < 0.01,
+        (arabic.line_right(1) - (right - 10.0)).abs() < 0.01,
         "{}",
         arabic.line_right(1)
     );

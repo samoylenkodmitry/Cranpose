@@ -132,8 +132,8 @@ fn a_resizing_container_draws_what_a_scene_built_from_scratch_draws() {
     );
 }
 
-// A cell whose width the screen animates, with a label that wraps in it and
-// so takes the cell's width, as a grid of labels does.
+// A cell whose width the screen animates, with a label that fills it and so
+// takes the cell's width.
 #[composable]
 fn LabelCell(captured: Captured) {
     let width = rememberMutableStateOf(|| 80.0f32);
@@ -150,7 +150,11 @@ fn LabelCell(captured: Captured) {
                     .background(Color::BLACK),
                 BoxSpec::new().content_alignment(Alignment::CENTER),
                 || {
-                    Text("cell 123 wraps", Modifier::empty(), TextStyle::default());
+                    Text(
+                        "cell 123 wraps",
+                        Modifier::empty().fill_max_width(),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
