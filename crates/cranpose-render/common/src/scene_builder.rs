@@ -1462,7 +1462,6 @@ fn check_retained_children(
         };
         let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
         placed.kept = match dirty_nodes.get_mut(&placed.id) {
-            None if !fits && text_node::draws_text_alone(layer) => KeptChild::Resized,
             None if !fits => return Err("child resized"),
             None => KeptChild::Moved,
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {

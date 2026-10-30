@@ -12,7 +12,7 @@
 
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashSet};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
 };
@@ -513,42 +513,40 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
     }
 }
 
-/// Routes the nodes a layout pass laid out again, `scoped` and `reshaped`,
-/// and the nodes it only `moved`. A moved node, or a label `reshaped` holds,
-/// is left out when the scene update of its surface lays out its placer
-/// again: that update places every child of the placer's layer anew, so the
-/// node's own record would be found and settled there and nowhere else.
+/// Routes the nodes a layout pass laid out again, `laid_out`, and the nodes
+/// it only moved. A moved node is left out when the scene update of its
+/// surface lays out its placer again: that update places every child of the
+/// placer's layer anew, so the node's own record would be found and settled
+/// there and nowhere else.
 pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
     app: &mut ShellApp,
     surfaces: &mut [RootSurface<R>],
-    scoped: impl IntoIterator<Item = NodeId>,
-    reshaped: &[NodeId],
+    laid_out: impl IntoIterator<Item = NodeId>,
     moved: &[MovedSceneNode],
     scratch: &mut SurfaceRoutingScratch,
 ) {
-    if reshaped.is_empty() && moved.is_empty() {
-        route_nodes_by_surface(app, surfaces, scoped, SurfaceDirtyLane::Layout, scratch);
+    if moved.is_empty() {
+        route_nodes_by_surface(app, surfaces, laid_out, SurfaceDirtyLane::Layout, scratch);
         return;
     }
-    let mut laid_out = std::mem::take(&mut scratch.laid_out_nodes);
-    laid_out.clear();
-    laid_out.extend(scoped);
-    let scoped_count = laid_out.len();
-    laid_out.extend_from_slice(reshaped);
+    scratch.laid_out_starts.clear();
+    scratch.laid_out_starts.extend(
+        surfaces
+            .iter()
+            .map(|surface| surface.scoped_layout_scene_nodes.len()),
+    );
+    route_nodes_by_surface(app, surfaces, laid_out, SurfaceDirtyLane::Layout, scratch);
     let mut routed = std::mem::take(&mut scratch.moved);
     routed.clear();
     {
         let applier = app.composition.applier_mut();
         scratch.laid_out.reset(&applier);
-        for &node in &laid_out {
-            scratch.laid_out.set(&applier, node, 1);
+        for (surface, &start) in surfaces.iter().zip(&scratch.laid_out_starts) {
+            for &node in &surface.scoped_layout_scene_nodes[start..] {
+                scratch.laid_out.set(&applier, node, 1);
+            }
         }
         let marks = &scratch.laid_out;
-        let mut index = 0;
-        laid_out.retain(|&node| {
-            index += 1;
-            index <= scoped_count || !label_placed_again(&applier, node, marks)
-        });
         let window_roots = !app.app_context.window_roots().is_empty();
         // The children one node placed come together: their placer is
         // looked up once.
@@ -570,40 +568,11 @@ pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
     route_nodes_by_surface(
         app,
         surfaces,
-        laid_out.iter().copied(),
-        SurfaceDirtyLane::Layout,
-        scratch,
-    );
-    route_nodes_by_surface(
-        app,
-        surfaces,
         routed.iter().copied(),
         SurfaceDirtyLane::Moved,
         scratch,
     );
-    scratch.laid_out_nodes = laid_out;
     scratch.moved = routed;
-}
-
-// Whether `node`, which the pass resized, is a label whose placer `marks`
-// holds: a leaf that draws its text and nothing else, which the scene update
-// of the placer writes where it now lies.
-fn label_placed_again(applier: &MemoryApplier, node: NodeId, marks: &NodeMarks) -> bool {
-    let Ok(node) = applier.get_ref(node) else {
-        return false;
-    };
-    let node: &dyn std::any::Any = node;
-    node.downcast_ref::<LayoutNode>().is_some_and(|label| {
-        label.children.is_empty()
-            && !label.is_window_root()
-            && label
-                .parent()
-                .is_some_and(|placer| marks.get(applier, placer) != 0)
-            && {
-                let slices = label.modifier_slices_snapshot();
-                slices.has_text() && slices.draw_commands().is_empty()
-            }
-    })
 }
 
 /// Whether `node` is a window root, which goes to a surface of its own.

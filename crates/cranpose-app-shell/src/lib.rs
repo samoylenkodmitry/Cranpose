@@ -253,11 +253,11 @@ pub(crate) struct SurfaceRoutingScratch {
     pub(crate) seen: HashSet<(usize, NodeId)>,
     pub(crate) attachment: SceneNodeAttachmentScratch,
     pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
-    /// The nodes a layout pass laid out again, while the moved lane and the
-    /// labels it resized are routed.
+    /// The nodes a layout lane routing gave the surfaces, while the moved
+    /// lane after it is routed.
     pub(crate) laid_out: NodeMarks,
-    /// The nodes the layout lane routes.
-    pub(crate) laid_out_nodes: Vec<NodeId>,
+    /// Each surface's count of layout lane nodes before that routing.
+    pub(crate) laid_out_starts: Vec<usize>,
     /// The moved nodes the moved lane routes.
     pub(crate) moved: Vec<NodeId>,
 }

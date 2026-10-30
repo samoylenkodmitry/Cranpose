@@ -561,11 +561,11 @@ where
         // scene too: a padding that grew moves its node's children although
         // no child moved in its parent.
         let scoped = (has_scoped_repasses && !global).then_some(scoped_layout_nodes);
+        let scoped = scoped.into_iter().flatten();
         route_geometry_scene_nodes(
             &mut self.app,
             &mut self.surfaces,
-            scoped.into_iter().flatten(),
-            &self.geometry_scene_nodes.reshaped,
+            scoped.chain(self.geometry_scene_nodes.reshaped.iter().copied()),
             &self.geometry_scene_nodes.moved,
             &mut self.routing_scratch,
         );

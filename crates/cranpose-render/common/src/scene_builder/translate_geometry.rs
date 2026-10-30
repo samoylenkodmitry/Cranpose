@@ -3,9 +3,8 @@ use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, Level, LowerContext, PlacedChild, TranslateAncestorContext, placed_transform,
-    publish_retained_window_geometry, read_placed_node_data, release_for_rebuild, text_node,
-    write_node_layer,
+    AbsOrigin, PlacedChild, TranslateAncestorContext, placed_transform,
+    publish_retained_window_geometry, text_node,
 };
 use crate::{
     NodeUpdate,
@@ -102,9 +101,6 @@ pub(super) enum KeptChild {
     // The child, a label kept for new text or a new size, writes its text
     // into the layer where it now lies.
     Retexted,
-    // The child, a label no record names that only changed size, writes its
-    // text into the layer where it now lies, or is built there again.
-    Resized,
 }
 
 // Brings a child a translated container keeps to its placement among the
@@ -128,15 +124,12 @@ pub(super) fn move_kept_child(
                 publish_retained_window_geometry(applier, layer, children.parent_abs);
             }
         }
-        KeptChild::Retexted | KeptChild::Resized => {
-            write_kept_label(applier, layer, placed, children, dirty_nodes);
-        }
+        KeptChild::Retexted => write_kept_label(applier, layer, placed, children, dirty_nodes),
     }
 }
 
 // Writes the text of a label the step keeps where it now lies. A label
-// whose text cannot be written in place stays dirty for the walk beneath,
-// or is built again when no record names it.
+// whose text cannot be written in place stays dirty for the walk beneath.
 #[inline(never)]
 fn write_kept_label(
     applier: &MemoryApplier,
@@ -145,33 +138,7 @@ fn write_kept_label(
     children: TranslateAncestorContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
-    let written = text_node::retext_kept_leaf(applier, layer, children) == Some(true);
-    match placed.kept {
-        KeptChild::Retexted if written => {
-            dirty_nodes.remove(&placed.id);
-        }
-        KeptChild::Resized if !written => rebuild_kept_child(applier, layer, placed.id, children),
-        _ => {}
+    if text_node::retext_kept_leaf(applier, layer, children) == Some(true) {
+        dirty_nodes.remove(&placed.id);
     }
-}
-
-// Builds the layer of `node_id`, a child the step keeps, again from the node
-// where it now lies.
-fn rebuild_kept_child(
-    applier: &MemoryApplier,
-    layer: &mut LayerNode,
-    node_id: NodeId,
-    children: TranslateAncestorContext,
-) {
-    release_for_rebuild(layer);
-    read_placed_node_data(applier, node_id, Level::Child, |data| {
-        write_node_layer(
-            applier,
-            node_id,
-            data,
-            LowerContext::beneath(children),
-            layer,
-        );
-    });
-    layer.note_content_change(children.update);
 }
