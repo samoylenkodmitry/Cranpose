@@ -29,7 +29,7 @@ impl Default for Glyphs {
 }
 
 // A glyph whose id fits 16 bits and whose advance fits 15.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PackedGlyph {
     id: u16,
     // The advance above the lowest bit, which is set when a line break
@@ -39,14 +39,19 @@ pub(crate) struct PackedGlyph {
 }
 
 impl PackedGlyph {
-    // `glyph` in eight bytes; `None` when it does not fit them.
-    fn pack(glyph: &ShapedGlyph) -> Option<Self> {
-        let advance = i16::try_from(glyph.advance.checked_mul(2)?).ok()?;
-        Some(Self {
-            id: u16::try_from(glyph.id().0).ok()?,
-            advance: advance | i16::from(glyph.unsafe_to_break()),
+    // `glyph` in eight bytes, its id and advance cut to their low bits, and
+    // whether they fit them. No branch, so a layout's glyphs pack in one
+    // pass.
+    fn pack(glyph: &ShapedGlyph) -> (Self, bool) {
+        let id = glyph.id().0;
+        let advance = glyph.advance;
+        let fits = (id >> 16 == 0) & ((advance.wrapping_add(1 << 14) as u32) >> 15 == 0);
+        let packed = Self {
+            id: id as u16,
+            advance: ((advance as i16) << 1) | i16::from(glyph.unsafe_to_break()),
             cluster: glyph.cluster,
-        })
+        };
+        (packed, fits)
     }
 
     fn unpack(self) -> ShapedGlyph {
@@ -102,17 +107,18 @@ impl LaidGlyphs {
     // Keeps `shaped`.
     pub(crate) fn new(shaped: &ShapedGlyphs) -> Self {
         let offsets = shaped.offsets();
-        let glyphs = if shaped
+        let mut fits = true;
+        // Collected from an iterator of known length, in one allocation.
+        let packed: Arc<[PackedGlyph]> = shaped
             .iter()
-            .all(|glyph| PackedGlyph::pack(glyph).is_some())
-        {
-            // Packed from an iterator of known length, in one allocation.
-            Glyphs::Packed(
-                shaped
-                    .iter()
-                    .map(|glyph| PackedGlyph::pack(glyph).unwrap_or_default())
-                    .collect(),
-            )
+            .map(|glyph| {
+                let (packed, fit) = PackedGlyph::pack(glyph);
+                fits &= fit;
+                packed
+            })
+            .collect();
+        let glyphs = if fits {
+            Glyphs::Packed(packed)
         } else {
             Glyphs::Full(Arc::from(&shaped[..]))
         };
