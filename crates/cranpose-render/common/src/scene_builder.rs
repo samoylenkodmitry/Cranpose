@@ -1167,14 +1167,10 @@ fn try_translate_scrolled_layer(
     };
     read_node_data(applier, node_id, |data| {
         if container.wraps.is_none() {
-            return translate_layer_from_data(
-                applier,
-                container,
-                dirty_nodes,
-                ancestors,
-                data,
-                false,
-            );
+            let leaf = text_node::translate_leaf_text(container, &data, ancestors);
+            return leaf.unwrap_or_else(|| {
+                translate_layer_from_data(applier, container, dirty_nodes, ancestors, data, false)
+            });
         }
         let outer_count = data.modifier_slices.outer_draw_command_count();
         if outer_count == 0 {
@@ -2248,13 +2244,7 @@ fn write_node_content(
         draws,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node_from_parts(TextNodeParts {
-        node_id,
-        text_rect: slices.text_content_rect(size),
-        text_layout_options: slices.text_layout_options(),
-        text_pan: slices.text_pan_resolver(),
-        measured_layout: slices.measured_text_layout(),
-    }) {
+    if let Some(text) = text_node_from_parts(TextNodeParts::of(node_id, slices, size)) {
         list.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(crate::layer_recycling::boxed_text(text)),
