@@ -12,7 +12,7 @@ use read_fonts::{
         },
         layout::{
             ChainedSequenceContext, ClassDef, CoverageTable, ExtensionLookup, FeatureList,
-            LookupFlag, ScriptList, SequenceContext, Subtables,
+            FeatureVariations, LangSys, LookupFlag, ScriptList, SequenceContext, Subtables,
         },
     },
     types::{GlyphId, Tag},
@@ -72,7 +72,8 @@ impl<'a> ScriptLookups<'a> {
         let Some(script) = chosen_script(&script_list, scripts) else {
             return Ok(None);
         };
-        let tags = required(&script_list, &gsub.feature_list()?, script, features)?;
+        let languages = Languages::of(&script_list, script)?;
+        let tags = languages.required(&gsub.feature_list()?, features);
         let indices = gsub.collect_features(&single(script), &everything(), &tags)?;
         let lookups = gsub.collect_lookups(&indices)?;
         let list = LookupList::Substitution(gsub.lookup_list()?);
@@ -91,7 +92,8 @@ impl<'a> ScriptLookups<'a> {
         let Some(script) = chosen_script(&script_list, scripts) else {
             return Ok(None);
         };
-        let tags = required(&script_list, &gpos.feature_list()?, script, features)?;
+        let languages = Languages::of(&script_list, script)?;
+        let tags = languages.required(&gpos.feature_list()?, features);
         let indices = gpos.collect_features(&single(script), &everything(), &tags)?;
         let lookups = gpos.collect_lookups(&indices)?;
         let list = LookupList::Positioning(gpos.lookup_list()?);
@@ -281,36 +283,141 @@ fn chosen_script(list: &ScriptList<'_>, scripts: &[Tag]) -> Option<Tag> {
         .find(|&tag| list.index_for_tag(tag).is_some())
 }
 
-// `features` with those each language of `script` requires, which HarfBuzz
-// applies whatever features are asked.
-fn required(
-    scripts: &ScriptList<'_>,
-    features: &FeatureList<'_>,
-    script: Tag,
-    asked: &IntSet<Tag>,
-) -> Result<IntSet<Tag>, ReadError> {
-    let mut tags = asked.clone();
-    let Some(record) = scripts
-        .index_for_tag(script)
-        .and_then(|index| scripts.script_records().get(usize::from(index)))
-    else {
-        return Ok(tags);
+// The substitutions `features` apply in `gsub` for `scripts`, in order of
+// preference, in every language of the script, so in a text of any
+// language. None when the script has no default language, which a
+// language it does not list takes, and none of a feature a variation of
+// the font may swap.
+#[inline(never)]
+pub(crate) fn substitutions_everywhere(
+    gsub: &Gsub<'_>,
+    scripts: &[Tag],
+    features: &IntSet<Tag>,
+) -> Result<IntSet<u16>, ReadError> {
+    let script_list = gsub.script_list()?;
+    let Some(script) = chosen_script(&script_list, scripts) else {
+        return Ok(IntSet::empty());
     };
-    let script = record.script(scripts.offset_data())?;
-    let mut languages = vec![];
-    if let Some(language) = script.default_lang_sys() {
-        languages.push(language?);
+    let languages = Languages::of(&script_list, script)?;
+    let Some(default) = &languages.default else {
+        return Ok(IntSet::empty());
+    };
+    let feature_list = gsub.feature_list()?;
+    let varied = match gsub.feature_variations().transpose()? {
+        Some(variations) => varied_features(&variations)?,
+        None => IntSet::empty(),
+    };
+    let applied = |language| applied(language, &feature_list, features, &varied);
+    let mut everywhere = applied(default)?;
+    for language in &languages.listed {
+        everywhere.intersect(&applied(language)?);
     }
-    for record in script.lang_sys_records() {
-        languages.push(record.lang_sys(script.offset_data())?);
+    Ok(everywhere)
+}
+
+// The language systems of a script: the default one, which a language the
+// script does not list takes, and the listed ones.
+struct Languages<'a> {
+    default: Option<LangSys<'a>>,
+    listed: Vec<LangSys<'a>>,
+}
+
+impl<'a> Languages<'a> {
+    fn of(scripts: &ScriptList<'a>, script: Tag) -> Result<Self, ReadError> {
+        let mut languages = Self {
+            default: None,
+            listed: Vec::new(),
+        };
+        let Some(record) = scripts
+            .index_for_tag(script)
+            .and_then(|index| scripts.script_records().get(usize::from(index)))
+        else {
+            return Ok(languages);
+        };
+        let script = record.script(scripts.offset_data())?;
+        languages.default = script.default_lang_sys().transpose()?;
+        for record in script.lang_sys_records() {
+            languages
+                .listed
+                .push(record.lang_sys(script.offset_data())?);
+        }
+        Ok(languages)
     }
-    for language in languages {
-        let required = usize::from(language.required_feature_index());
-        if let Some(feature) = features.feature_records().get(required) {
-            tags.insert(feature.feature_tag());
+
+    // `asked` with the features each language requires, which HarfBuzz
+    // applies whatever features are asked.
+    fn required(&self, features: &FeatureList<'_>, asked: &IntSet<Tag>) -> IntSet<Tag> {
+        let mut tags = asked.clone();
+        for language in self.default.iter().chain(&self.listed) {
+            let required = usize::from(language.required_feature_index());
+            if let Some(feature) = features.feature_records().get(required) {
+                tags.insert(feature.feature_tag());
+            }
+        }
+        tags
+    }
+}
+
+// The lookups HarfBuzz applies in `language` for `asked`: those of the
+// feature it requires and of the first feature it lists of each tag asked,
+// leaving out the `varied` features.
+fn applied(
+    language: &LangSys<'_>,
+    features: &FeatureList<'_>,
+    asked: &IntSet<Tag>,
+    varied: &IntSet<u16>,
+) -> Result<IntSet<u16>, ReadError> {
+    let mut found = IntSet::empty();
+    let firsts = language.feature_indices().iter().filter(|index| {
+        features
+            .feature_records()
+            .get(usize::from(index.get()))
+            .is_some_and(|record| {
+                asked.contains(record.feature_tag()) && found.insert(record.feature_tag())
+            })
+    });
+    let mut lookups = IntSet::empty();
+    for index in std::iter::once(language.required_feature_index())
+        .chain(firsts.map(|index| index.get()))
+        .filter(|index| !varied.contains(*index))
+    {
+        let Some(record) = features.feature_records().get(usize::from(index)) else {
+            continue;
+        };
+        if record.feature_offset().is_null() {
+            continue;
+        }
+        let feature = record.feature(features.offset_data())?;
+        lookups.extend_unsorted(
+            feature
+                .lookup_list_indices()
+                .iter()
+                .map(|index| index.get()),
+        );
+    }
+    Ok(lookups)
+}
+
+// The features a variation of the font may swap or add lookups to.
+fn varied_features(variations: &FeatureVariations<'_>) -> Result<IntSet<u16>, ReadError> {
+    let mut varied = IntSet::empty();
+    for record in variations.feature_variation_records() {
+        if let Some(swaps) = record
+            .feature_table_substitution(variations.offset_data())
+            .transpose()?
+        {
+            varied.extend_unsorted(
+                swaps
+                    .substitutions()
+                    .iter()
+                    .map(|swap| swap.feature_index()),
+            );
         }
     }
-    Ok(tags)
+    for record in variations.lookup_variation_records().unwrap_or_default() {
+        varied.insert(record.feature_index());
+    }
+    Ok(varied)
 }
 
 fn single(tag: Tag) -> IntSet<Tag> {

@@ -6,7 +6,7 @@ use cranpose_text::{FontFeature, Shaper, font_feature_settings};
 use crate::{
     fonts::{
         DEJAVU, DEJAVU_MONO, DEVANAGARI_VF, MONASPACE_VF, NOTO_SANS_MERGED, ROBOTO, TEST_CONTEXTS,
-        TEST_KERNS,
+        TEST_KERNS, TEST_SUBSTITUTIONS,
     },
     harfrust_oracle::{Placed, REGULAR, Style, compare},
 };
@@ -145,6 +145,39 @@ fn a_contextual_rule_shapes_the_glyphs_it_reads() {
             assert_eq!(shaped, oracle, "{word}");
             let widened = oracle.iter().any(|glyph| glyph.advance > 500);
             assert_eq!(widened, takes_alternates, "{word}");
+        }
+    }
+}
+
+#[test]
+fn substitutions_of_one_glyph_shape_as_the_whole_run_shapes() {
+    // Cranpose Test Substitutions puts one glyph in place of another in
+    // each way a run of plain glyphs must follow or leave to HarfRust: in
+    // every language or in some, twice, into a glyph substituted again or
+    // moved, read by a rule, skipping base glyphs, in a feature a variation
+    // empties, in a script with no default language. Its `tnum` puts a
+    // tabular figure in place of `1`, which kerns with `2`. The first text
+    // is plain throughout; the second only in some of its words.
+    let tabular: Vec<FontFeature> = font_feature_settings("tnum").collect();
+    let styles = [
+        REGULAR,
+        Style {
+            weight: 400,
+            features: &tabular,
+        },
+    ];
+    let texts = [
+        "ab aab abb 12 21 1221",
+        "ab cd e f g h i j k p bl on o n t u s 12 17 71 0 \u{430}\u{430}",
+    ];
+    let mut shaper = Shaper::default();
+    // The second round shapes words the word cache keeps.
+    for _ in 0..2 {
+        for style in styles {
+            for text in texts {
+                let (shaped, oracle) = compare(&mut shaper, TEST_SUBSTITUTIONS, text, style);
+                assert_eq!(shaped, oracle, "{text} {:?}", style.features);
+            }
         }
     }
 }

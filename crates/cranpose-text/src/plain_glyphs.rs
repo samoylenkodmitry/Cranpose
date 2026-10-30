@@ -7,7 +7,7 @@ use read_fonts::{
     collections::IntSet,
     tables::{
         gpos::{PairPos, PairPosFormat1, PairPosFormat2},
-        gsub::{LigatureSubst, LigatureSubstFormat1},
+        gsub::{LigatureSubst, LigatureSubstFormat1, SingleSubst},
         layout::{
             ChainedSequenceContext, ChainedSequenceContextFormat1, ChainedSequenceContextFormat2,
             ChainedSequenceContextFormat3, ClassDef, CoverageTable, LookupFlag, SequenceContext,
@@ -22,20 +22,27 @@ use crate::{
     glyph_id,
     plain_chars::{CharGlyph, PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
-    script_lookups::{Lookup, LookupSubtable, ScriptLookups, insert_class, insert_covered},
+    script_lookups::{
+        Lookup, LookupSubtable, ScriptLookups, insert_class, insert_covered,
+        substitutions_everywhere,
+    },
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
     shaper::font_bytes,
     word_split::{class_index, moves},
 };
 
-// The glyphs of a font that a shape plan leaves as they are: no lookup of
-// the plan's features starts at them and none is a mark. A run of
-// characters that map to such glyphs shapes to their nominal glyphs at their
-// advances, so it needs no shaping, as DirectWrite's text complexity check
-// finds simple text.
+// The glyphs of a font that a shape plan leaves as they are, or puts one
+// glyph in place of: no lookup of the plan's features starts at them but a
+// substitution of one glyph that every language applies, and none is a
+// mark. A run of characters that map to such glyphs shapes to their nominal
+// glyphs, or the glyphs put in their place, at their advances, so it needs
+// no shaping, as DirectWrite's text complexity check finds simple text.
 pub(crate) struct PlainGlyphs {
     // The glyphs a lookup starts at, and the marks.
     busy: IntSet<GlyphId>,
+    // The glyphs put in place of plain glyphs, by the glyph each replaces,
+    // sorted; the glyphs put in place are plain.
+    substitutes: Box<[(u32, u32)]>,
     // The pairs of glyphs side by side that a ligature or a pair adjustment
     // starting at a plain glyph reads, sorted.
     pairs: Box<[(u32, u32)]>,
@@ -59,6 +66,11 @@ const DEFAULT_FEATURES: [&[u8; 4]; 22] = [
 struct Starts<'a> {
     busy: IntSet<GlyphId>,
     pairs: Vec<(u32, u32)>,
+    // The substitutions of one glyph that every language applies, each
+    // glyph with the glyph put in its place.
+    substitutes: Vec<(u32, u32)>,
+    // The substitution lookups every language of the script applies.
+    everywhere: IntSet<u16>,
     kerning: Vec<KernSubtable>,
     // The space, which starts every word cut before spaces: a font may
     // adjust it with the few glyphs after it it pairs with.
@@ -163,6 +175,8 @@ impl PlainGlyphs {
         let mut starts = Starts {
             busy: IntSet::empty(),
             pairs: Vec::new(),
+            substitutes: Vec::new(),
+            everywhere: IntSet::empty(),
             kerning: Vec::new(),
             space: font.cmap().ok().and_then(|cmap| cmap.map_codepoint(' ')),
             font: font.data().as_bytes(),
@@ -174,8 +188,10 @@ impl PlainGlyphs {
         starts.lookups(font, scripts, &tags)?;
         starts.pairs.sort_unstable();
         starts.pairs.dedup();
+        let substitutes = starts.substitutes();
         Some(Self {
             busy: starts.busy,
+            substitutes,
             pairs: starts.pairs.into_boxed_slice(),
             kerning: PlainKerning::new(starts.kerning),
             chars: None,
@@ -185,10 +201,13 @@ impl PlainGlyphs {
     // Whether `other` leaves the same glyphs plain and kerns them the same,
     // so the characters and pairs it meets read as this one reads them.
     pub(crate) fn reads_as(&self, other: &Self) -> bool {
-        self.busy == other.busy && self.pairs == other.pairs && self.kerning == other.kerning
+        self.busy == other.busy
+            && self.substitutes == other.substitutes
+            && self.pairs == other.pairs
+            && self.kerning == other.kerning
     }
 
-    // Appends the nominal glyphs of `range` of `text` at `font`'s advances,
+    // Appends the plain glyphs of `range` of `text` at `font`'s advances,
     // kerned as the plan kerns them, when every one is plain, and returns
     // whether it did.
     pub(crate) fn append(
@@ -204,6 +223,7 @@ impl PlainGlyphs {
         };
         let Self {
             busy,
+            substitutes,
             pairs,
             kerning,
             chars,
@@ -216,8 +236,8 @@ impl PlainGlyphs {
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
             let read = || {
-                let (glyph, advance) =
-                    plain_glyph(shaping.get_or_insert_with(|| shaping_font(font)), busy, ch)?;
+                let shaping = shaping.get_or_insert_with(|| shaping_font(font));
+                let (glyph, advance) = plain_glyph(shaping, (busy, substitutes), ch)?;
                 let starts = pairs.partition_point(|&(first, _)| first < glyph);
                 Some(CharGlyph {
                     glyph,
@@ -280,16 +300,25 @@ impl PlainGlyphs {
     }
 }
 
-// The nominal glyph of `ch` in `font` and its advance, when it is plain: it
-// stands as itself and maps to a glyph no lookup starts at.
-fn plain_glyph(font: &ShaperFont<'_, '_>, busy: &IntSet<GlyphId>, ch: char) -> Option<(u32, i32)> {
+// The glyph of `ch` in `font` and its advance, when it is plain: it stands
+// as itself and maps to a glyph no lookup starts at but one of the
+// `substitutes`, which puts its glyph in place.
+fn plain_glyph(
+    font: &ShaperFont<'_, '_>,
+    (busy, substitutes): (&IntSet<GlyphId>, &[(u32, u32)]),
+    ch: char,
+) -> Option<(u32, i32)> {
     if !stands_as_itself(ch) {
         return None;
     }
-    let glyph = font
+    let nominal = font
         .nominal_glyph(u32::from(ch))
-        .filter(|&glyph| glyph != GlyphId::NOTDEF && !busy.contains(glyph))?;
-    Some((glyph.to_u32(), font.glyph_h_advance(glyph)))
+        .filter(|&glyph| glyph != GlyphId::NOTDEF && !busy.contains(glyph))?
+        .to_u32();
+    let glyph = substitutes
+        .binary_search_by_key(&nominal, |&(from, _)| from)
+        .map_or(nominal, |at| substitutes[at].1);
+    Some((glyph, font.glyph_h_advance(GlyphId::new(glyph))))
 }
 
 #[inline(never)]
@@ -359,6 +388,7 @@ impl Starts<'_> {
         if let Ok(gsub) = font.gsub()
             && let Some(lookups) = ScriptLookups::substitutions(&gsub, scripts, features).ok()?
         {
+            self.everywhere = substitutions_everywhere(&gsub, scripts, features).ok()?;
             lookups.each(&mut |at, subtable| self.subtable(at, subtable))?;
         }
         if let Ok(gpos) = font.gpos()
@@ -370,12 +400,19 @@ impl Starts<'_> {
     }
 
     // What `subtable`, of the lookup `at`, starts at: kerning for a pair
-    // adjustment that moves only plain advances, else the glyphs it starts
-    // at, or the pairs a rule reads beside them; `None` for a format this
-    // does not read.
+    // adjustment that moves only plain advances, the glyphs put in place of
+    // others by a substitution of one glyph every language applies, else
+    // the glyphs it starts at, or the pairs a rule reads beside them; `None`
+    // for a format this does not read.
     #[inline(never)]
     fn subtable(&mut self, at: Lookup, subtable: LookupSubtable<'_>) -> Option<()> {
         let flag = at.flag;
+        if let LookupSubtable::Single(single) = &subtable
+            && !skips_glyphs(flag)
+            && self.everywhere.contains(at.index)
+        {
+            return self.substitutions(single);
+        }
         if let LookupSubtable::Pair(pair) = &subtable
             && !skips_glyphs(flag)
             && let Some(kerning) = KernSubtable::of(pair, at.index, self.font)
@@ -400,6 +437,66 @@ impl Starts<'_> {
                 Some(())
             }
         }
+    }
+
+    // Adds each glyph `single` substitutes, with the glyph it puts in its
+    // place, to the substitutes; `None` for a format this does not read.
+    fn substitutions(&mut self, single: &SingleSubst<'_>) -> Option<()> {
+        match single {
+            SingleSubst::Format1(format) => {
+                let delta = i32::from(format.delta_glyph_id());
+                for glyph in format.coverage().ok()?.iter() {
+                    let to = glyph.to_u32().wrapping_add_signed(delta) & u32::from(u16::MAX);
+                    self.substitutes.push((glyph.to_u32(), to));
+                }
+            }
+            SingleSubst::Format2(format) => {
+                let to = format.substitute_glyph_ids();
+                for (glyph, to) in format.coverage().ok()?.iter().zip(to) {
+                    self.substitutes
+                        .push((glyph.to_u32(), u32::from(to.get().to_u16())));
+                }
+            }
+            SingleSubst::Format3(_) | SingleSubst::Format4(_) => return None,
+        }
+        Some(())
+    }
+
+    // The substitutes, sorted, each of a plain glyph to a plain glyph. A
+    // glyph substituted twice, into a glyph substituted again or busy, or
+    // that a rule reads beside another, goes to the busy glyphs: the shaper
+    // takes those in the order of their lookups.
+    #[inline(never)]
+    fn substitutes(&mut self) -> Box<[(u32, u32)]> {
+        let Self {
+            busy,
+            pairs,
+            substitutes,
+            ..
+        } = self;
+        substitutes.sort_unstable();
+        let substituted = |glyph: u32| {
+            substitutes
+                .binary_search_by_key(&glyph, |&(from, _)| from)
+                .is_ok()
+        };
+        for (at, &(from, to)) in substitutes.iter().enumerate() {
+            let twice = substitutes
+                .get(at + 1)
+                .is_some_and(|&(next, _)| next == from);
+            if twice || substituted(to) || busy.contains(GlyphId::new(to)) {
+                busy.insert(GlyphId::new(from));
+            }
+        }
+        for &(first, second) in pairs.iter() {
+            for glyph in [first, second] {
+                if substituted(glyph) {
+                    busy.insert(GlyphId::new(glyph));
+                }
+            }
+        }
+        substitutes.retain(|&(from, _)| !busy.contains(GlyphId::new(from)));
+        std::mem::take(substitutes).into_boxed_slice()
     }
 
     // The pair adjustments of `pair`, which start at `coverage`, in a

@@ -27,6 +27,8 @@ pub(crate) const DEVANAGARI: &str =
 // kind, each taking wider alternates of the letters it reads.
 pub(crate) const TEST_CONTEXTS: &str = "crates/cranpose-text/tests/fonts/CranposeTestContexts.ttf";
 pub(crate) const TEST_KERNS: &str = "crates/cranpose-text/tests/fonts/CranposeTestKerns.ttf";
+pub(crate) const TEST_SUBSTITUTIONS: &str =
+    "crates/cranpose-text/tests/fonts/CranposeTestSubstitutions.ttf";
 
 // The bytes of the font at `path`, relative to the repository root.
 pub(crate) fn bytes(path: &str) -> Vec<u8> {
