@@ -1,3 +1,5 @@
+use cranpose_ui_graphics::VectorPath;
+
 use super::*;
 
 #[test]

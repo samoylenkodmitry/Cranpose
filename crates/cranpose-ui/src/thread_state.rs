@@ -9,7 +9,7 @@ use cranpose_core::{
     NodeId,
     collections::{FixedHashMap, fixed_hash_map},
 };
-use cranpose_ui_graphics::DrawTextMeasurer;
+use cranpose_ui_graphics::{DrawTextMeasurer, VectorPath};
 use cranpose_ui_layout::MeasurePolicy;
 
 use crate::{
@@ -22,6 +22,9 @@ use crate::{
     text::{TextStyle, shared_plain_text::SharedPlainText},
     unhandled_keys::KeyHandler,
 };
+
+// Each static path string with its parse, `None` when the data does not parse.
+type IconPaths = Vec<(&'static str, Option<Rc<VectorPath>>)>;
 
 pub(crate) struct ThreadCells {
     pub(crate) current_draw_node: Cell<Option<NodeId>>,
@@ -73,6 +76,8 @@ pub(crate) struct UiThreadState {
     pub(crate) active_selection: RefCell<Weak<RegistrarInner>>,
     pub(crate) recent_text_styles: RefCell<Vec<Arc<TextStyle>>>,
     pub(crate) shared_plain_texts: RefCell<cranpose_ui_graphics::ContentPool<SharedPlainText>>,
+    // Each icon's path data parsed once, for every icon that draws it.
+    pub(crate) icon_paths: RefCell<IconPaths>,
     pub(crate) pending_announcements: RefCell<Vec<Announcement>>,
     pub(crate) unhandled_key_handlers: RefCell<Vec<(u64, KeyHandler)>>,
     pub(crate) fill_width: OnceCell<Modifier>,
@@ -98,6 +103,7 @@ impl UiThreadState {
             active_selection: RefCell::new(Weak::new()),
             recent_text_styles: RefCell::new(Vec::new()),
             shared_plain_texts: RefCell::new(cranpose_ui_graphics::ContentPool::new()),
+            icon_paths: RefCell::new(Vec::new()),
             pending_announcements: RefCell::new(Vec::new()),
             unhandled_key_handlers: RefCell::new(Vec::new()),
             fill_width: OnceCell::new(),
