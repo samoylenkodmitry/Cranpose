@@ -1,8 +1,12 @@
+use cranpose_core::MemoryApplier;
 use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
-use super::AbsOrigin;
-use crate::{graph::ProjectiveTransform, layer_transform::layer_transform_to_window};
+use super::{AbsOrigin, placed_transform, publish_retained_window_geometry};
+use crate::{
+    graph::{LayerNode, ProjectiveTransform},
+    layer_transform::layer_transform_to_window,
+};
 
 #[derive(Clone, Copy)]
 pub(super) struct TranslateGeometry {
@@ -46,5 +50,34 @@ impl TranslateGeometry {
             content_origin: self.child_origin,
             window_transform: self.window_transform,
         }
+    }
+}
+
+pub(super) fn translate_retained_child(
+    layer: &mut LayerNode,
+    position: Point,
+    content_offset: Point,
+) {
+    layer.transform_to_parent = placed_transform(
+        layer.local_bounds,
+        position,
+        layer.graphics_layer.get(),
+        content_offset,
+    );
+    layer.origin_in_parent = position;
+}
+
+/// Moves a child a translated container keeps to its placement in the
+/// container laid out with `geometry`. A subtree that publishes window
+/// origins publishes them again from where it now lies.
+pub(super) fn move_kept_child(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    position: Point,
+    geometry: TranslateGeometry,
+) {
+    translate_retained_child(layer, position, geometry.content_offset);
+    if layer.has_origin_sinks {
+        publish_retained_window_geometry(applier, layer, geometry.child_abs());
     }
 }

@@ -37,7 +37,7 @@ use layer_shape::{clip_shape, shape_clip, shaped_graphics_layer};
 mod text_node;
 mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts};
-use translate_geometry::TranslateGeometry;
+use translate_geometry::{TranslateGeometry, move_kept_child, translate_retained_child};
 
 #[derive(Clone, Default)]
 struct BuildNodeSnapshot {
@@ -1829,31 +1829,6 @@ fn translate_layer_from_data(
     container.note_content_change(update);
 
     true
-}
-
-fn translate_retained_child(layer: &mut LayerNode, position: Point, content_offset: Point) {
-    layer.transform_to_parent = placed_transform(
-        layer.local_bounds,
-        position,
-        layer.graphics_layer.get(),
-        content_offset,
-    );
-    layer.origin_in_parent = position;
-}
-
-/// Moves a child a translated container keeps to its placement in the
-/// container laid out with `geometry`. A subtree that publishes window
-/// origins publishes them again from where it now lies.
-fn move_kept_child(
-    applier: &MemoryApplier,
-    layer: &mut LayerNode,
-    position: Point,
-    geometry: TranslateGeometry,
-) {
-    translate_retained_child(layer, position, geometry.content_offset);
-    if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, geometry.child_abs());
-    }
 }
 
 /// Notes that the scene update changes a layer that is a scene, a surface or
