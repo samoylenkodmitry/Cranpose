@@ -1329,8 +1329,8 @@ impl RuntimeHandle {
             .and_then(|inner| inner.take_invalidated_scopes())
     }
 
-    /// Gives back a scope list from [`Self::take_invalidated_scopes`], for
-    /// the next pass to reuse its storage.
+    /// Gives back a scope list from [`Self::take_invalidated_scopes`] for reuse.
+    #[inline]
     pub(crate) fn recycle_scopes(&self, scopes: Vec<RecomposeScope>) {
         if let Some(inner) = self.inner.upgrade() {
             inner.recycle_scopes(scopes);

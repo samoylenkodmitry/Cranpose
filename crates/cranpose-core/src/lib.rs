@@ -34,7 +34,9 @@ mod composer;
 /// a parameter.
 pub mod composer_context;
 pub(crate) use composer_context::with_current_composer_opt;
-pub use composer_context::{current_recompose_scope_invalidated_only_by, withCurrentComposer};
+pub use composer_context::{
+    current_recompose_scope_invalidated_only_by, recompose_current_scope_again, withCurrentComposer,
+};
 mod composition;
 mod composition_locals;
 pub(crate) use composition_locals::{LocalKey, LocalStackSnapshot};
@@ -96,6 +98,9 @@ pub use anchor_id::AnchorId;
 pub use node_error::NodeError;
 /// `Owned`, the handle to a value that a composition remembers.
 pub mod owned;
+mod pausable;
+#[doc(hidden)]
+pub use pausable::{PausableContent, with_pausable_content};
 pub mod platform;
 mod recompose;
 mod recompose_scope;
@@ -156,7 +161,8 @@ pub use callbacks::{
 };
 pub use composer::{
     __branch_group_scope_advance, __branch_group_scope_deferred, BranchGroupGuard,
-    CapturedCompositionContext, ComposableGroup, Composer, ScopedBranchGroupGuard, ValueSlotHandle,
+    CapturedCompositionContext, ComposableGroup, Composer, ParameterChange, ScopedBranchGroupGuard,
+    ValueSlotHandle,
 };
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, CompositionPassDebugStats, ROOT_RENDER_REPLAY_LIMIT};

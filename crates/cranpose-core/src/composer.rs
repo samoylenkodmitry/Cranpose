@@ -23,7 +23,7 @@ use crate::{
 mod composable_group;
 mod runtime_state;
 
-pub use composable_group::ComposableGroup;
+pub use composable_group::{ComposableGroup, ParameterChange};
 pub(crate) use runtime_state::ComposerRuntimeState;
 
 /// A typed reference to a value stored in a slot, made by `Composer::use_value_slot`. It is valid

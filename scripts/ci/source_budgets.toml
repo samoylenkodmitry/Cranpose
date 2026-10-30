@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13692
+private_docs = 13689
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 341

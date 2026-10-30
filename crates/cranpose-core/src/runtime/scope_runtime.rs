@@ -11,6 +11,17 @@ use crate::{RecomposeScopeInner, ScopeId};
 pub(crate) struct ScopeRuntime(pub(super) Weak<RuntimeInner>);
 
 impl ScopeRuntime {
+    // Counts a frame in which bodies of pausable content that waited run as
+    // one invalid scope, so the composition runs a pass in it, until
+    // `mark_scope_recomposed` gives it back.
+    pub(crate) fn hold_due_bodies(&self) {
+        if let Some(inner) = self.0.upgrade() {
+            inner
+                .invalid_scope_count
+                .set(inner.invalid_scope_count.get() + 1);
+        }
+    }
+
     pub(crate) fn mark_scope_recomposed(&self) {
         if let Some(inner) = self.0.upgrade() {
             inner.mark_scope_recomposed();

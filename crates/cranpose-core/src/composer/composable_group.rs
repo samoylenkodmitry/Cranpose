@@ -16,7 +16,38 @@ pub struct ComposableGroup<'a> {
     pass: Option<SlotHostPassGuard>,
     runs_body: bool,
     completed: bool,
-    skipped: Cell<bool>,
+    body: Cell<Body>,
+}
+
+/// Whether a composable call's parameters changed since its body last ran,
+/// or its scope asks to recompose.
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ParameterChange {
+    /// Nothing the body reads as a parameter changed.
+    Unchanged,
+    /// A parameter changed or the scope asks to recompose.
+    Changed,
+}
+
+impl From<bool> for ParameterChange {
+    fn from(changed: bool) -> Self {
+        if changed {
+            Self::Changed
+        } else {
+            Self::Unchanged
+        }
+    }
+}
+
+// What a composable call does with its group's body.
+#[derive(Clone, Copy)]
+enum Body {
+    Runs,
+    // What the body composed last stays.
+    Skipped,
+    // The first body waits for a later frame, in pausable content.
+    Paused,
 }
 
 impl ComposableGroup<'_> {
@@ -36,7 +67,38 @@ impl ComposableGroup<'_> {
     /// Skips the group's body: what it composed last stays. The call
     /// composes nothing more in the group before closing it.
     pub fn skip(&self) {
-        self.skipped.set(true);
+        self.body.set(Body::Skipped);
+    }
+
+    /// Registers `recompose` as the function that recomposes the group's scope,
+    /// as [`Self::set_recompose_fn`] does, and answers whether the call runs
+    /// its body: `change` says whether a parameter changed or the scope asks
+    /// to recompose. A body that does not run keeps what it composed
+    /// last, or, for a group that opened in pausable content past the
+    /// frame's budget, waits for a later frame. When the body does not run,
+    /// the call composes nothing more in the group before closing it.
+    /// Compose's `Composer.shouldExecute`.
+    pub fn should_execute(&self, change: ParameterChange, recompose: fn(&Composer)) -> bool {
+        self.scope.set_recompose_fn(recompose);
+        match self.body.get() {
+            Body::Paused => false,
+            _ if change == ParameterChange::Unchanged && self.scope.has_composed_once() => {
+                self.body.set(Body::Skipped);
+                false
+            }
+            _ => true,
+        }
+    }
+
+    // Closes a group whose first body waits for a later frame: its scope has
+    // not composed once and stays invalid until the body runs.
+    #[cold]
+    #[inline(never)]
+    fn close_paused(&self) {
+        self.scope.end_reads(BodyRun::Skipped);
+        self.composer
+            .close_group_in_active_pass(&self.host, &self.scope);
+        self.composer.hold_paused(&self.scope);
     }
 
     /// Ends the group after its body composed.
@@ -48,17 +110,25 @@ impl ComposableGroup<'_> {
 
 impl Drop for ComposableGroup<'_> {
     fn drop(&mut self) {
-        if self.completed {
-            self.scope.mark_composed_once();
-        }
-        let ran = self.completed & self.runs_body & !self.skipped.get();
-        self.scope.end_reads(BodyRun::from(ran));
-        if self.skipped.get() {
-            self.composer
-                .close_skipped_group_in_active_pass(&self.host, &self.scope);
-        } else {
-            self.composer
-                .close_group_in_active_pass(&self.host, &self.scope);
+        match self.body.get() {
+            Body::Runs => {
+                if self.completed {
+                    self.scope.mark_composed_once();
+                }
+                self.scope
+                    .end_reads(BodyRun::from(self.completed & self.runs_body));
+                self.composer
+                    .close_group_in_active_pass(&self.host, &self.scope);
+            }
+            Body::Skipped => {
+                if self.completed {
+                    self.scope.mark_composed_once();
+                }
+                self.scope.end_reads(BodyRun::Skipped);
+                self.composer
+                    .close_skipped_group_in_active_pass(&self.host, &self.scope);
+            }
+            Body::Paused => self.close_paused(),
         }
         if let Some(mut pass) = self.pass.take() {
             if self.completed
@@ -84,6 +154,9 @@ impl Composer {
         }
         let scope = RecomposeScope::new(self.runtime_handle());
         host.with_write_session(|slots| slots.set_group_scope(group, scope.clone()));
+        if self.core.shared_state.pausing.is_holding() {
+            self.hold_scope(&scope);
+        }
         scope
     }
 
@@ -180,13 +253,24 @@ impl Composer {
             pass,
             runs_body,
             completed: false,
-            skipped: Cell::new(false),
+            body: Cell::new(Body::Runs),
         }
     }
 
     #[doc(hidden)]
     pub fn __open_composable_group(&self, key: Key) -> ComposableGroup<'_> {
         self.open_group(crate::slot::GroupKeySeed::unkeyed(key))
+    }
+
+    // Opens the group of a composable that returns nothing: in pausable
+    // content past the frame's budget, its first body waits.
+    #[doc(hidden)]
+    pub fn __open_pausable_group(&self, key: Key) -> ComposableGroup<'_> {
+        let group = self.open_group(crate::slot::GroupKeySeed::unkeyed(key));
+        if self.core.shared_state.pausing.is_holding() && self.pauses_first_body(&group.scope) {
+            group.body.set(Body::Paused);
+        }
+        group
     }
 
     pub(crate) fn with_group_seed<R>(

@@ -25,6 +25,15 @@ where
         report
     }
 
+    /// Sets how long a frame composes before pausable content waits for a
+    /// later frame, as [`cranpose_core::Composition::set_pausable_budget`]
+    /// does: tests that compare frames give `None`, so content that a change
+    /// brings composes in its frame whatever the machine's speed.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_pausable_budget(&mut self, budget: Option<std::time::Duration>) {
+        self.app.composition.set_pausable_budget(budget);
+    }
+
     /// Get the current layout tree (for robot/testing)
     pub fn layout_tree(&mut self) -> Option<&LayoutTree> {
         let _app_context = self.app.app_context.enter_scope();

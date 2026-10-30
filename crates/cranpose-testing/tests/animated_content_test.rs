@@ -6,8 +6,8 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{MutableState, remember};
-use cranpose_testing::ComposeTestRule;
+use cranpose_core::{MutableState, remember, rememberMutableStateOf};
+use cranpose_testing::{ComposeTestRule, create_headless_robot_test};
 use cranpose_ui::{
     AnimatedContent, Box, BoxSpec, ContentTransform, LayoutBox, LayoutDirection, LayoutEngine,
     Modifier, ProvideLayoutDirection, Size, SizeTransform, SlideDirection, slide_in_horizontally,
@@ -314,4 +314,136 @@ fn toward_the_start_in_a_right_to_left_layout_is_toward_the_right() {
         "A comes from just past the left edge: {a}"
     );
     assert!(b > 0.0 && b < 30.0, "B heads past the right edge: {b}");
+}
+
+#[cranpose_ui::composable]
+fn Tile(effects: Rc<Cell<usize>>) {
+    cranpose_core::SideEffect(move || effects.set(effects.get() + 1));
+    Box(
+        Modifier::empty().size(Size::new(10.0, 20.0)),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[cranpose_ui::composable]
+fn Pages(target: MutableState<Page>, effects: Rc<Cell<usize>>) {
+    AnimatedContent(
+        target.get(),
+        |_, _| slide(false),
+        move |page: Page| match page {
+            Page::A => {
+                Box(
+                    Modifier::empty().size(Page::A.size()),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+            Page::B => {
+                let effects = Rc::clone(&effects);
+                cranpose_ui::Row(
+                    Modifier::empty(),
+                    cranpose_ui::RowSpec::default(),
+                    move || {
+                        for _ in 0..3 {
+                            Tile(Rc::clone(&effects));
+                        }
+                    },
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn a_change_keeps_what_shows_until_content_composing_across_frames_is_complete() {
+    let mut rule = ComposeTestRule::new();
+    rule.composition()
+        .set_pausable_budget(Some(std::time::Duration::ZERO));
+    let target = MutableState::with_runtime(Page::A, rule.runtime_handle());
+    let effects = Rc::new(Cell::new(0));
+    let tile_effects = Rc::clone(&effects);
+    rule.set_content(move || Pages(target, Rc::clone(&tile_effects)))
+        .expect("compose");
+    let mut screen = Screen {
+        rule,
+        target,
+        runs: Rc::default(),
+        a_created: Rc::default(),
+        now: 0,
+    };
+
+    screen.target.set(Page::B);
+    let mut frames = 0;
+    loop {
+        // A frame of the app shell: frame callbacks, then the scopes that
+        // are invalid and the bodies that wait, then the layout.
+        screen.now += FRAME;
+        screen
+            .rule
+            .runtime_handle()
+            .drain_frame_callbacks(screen.now);
+        screen
+            .rule
+            .composition()
+            .process_invalid_scopes()
+            .expect("recompose");
+        frames += 1;
+        if screen.shift(Page::B).is_some() {
+            break;
+        }
+        assert_eq!(screen.shift(Page::A), Some(0.0), "A shows at rest");
+        assert_eq!(effects.get(), 0, "B's effects wait for all of B");
+        assert!(frames < 10, "every frame composes more of B");
+    }
+
+    assert!(frames > 1, "B composed over several frames");
+    assert_eq!(effects.get(), 3);
+    screen.frames(40);
+    assert_eq!(
+        screen.shift(Page::B),
+        Some(0.0),
+        "B came in as a change does"
+    );
+    assert_eq!(screen.shift(Page::A), None);
+}
+
+#[test]
+fn a_screen_composing_across_frames_keeps_the_frame_schedule_asking_until_it_completes() {
+    let switch = Rc::new(Cell::new(None));
+    let slot = Rc::clone(&switch);
+    let effects = Rc::new(Cell::new(0));
+    let tile_effects = Rc::clone(&effects);
+    let mut rule = create_headless_robot_test(200, 200, move || {
+        let open = rememberMutableStateOf(|| false);
+        slot.set(Some(open));
+        let tile_effects = Rc::clone(&tile_effects);
+        cranpose_ui::Crossfade(open.get(), Default::default(), move |open: bool| {
+            if open {
+                for _ in 0..4 {
+                    Tile(Rc::clone(&tile_effects));
+                }
+            }
+        });
+    });
+    rule.wait_for_idle();
+    rule.shell_mut()
+        .set_pausable_budget(Some(std::time::Duration::ZERO));
+
+    switch.get().expect("composed").set(true);
+    let mut frames = 0;
+    // A platform runs a frame while the schedule asks for one. The tiles'
+    // effects run once all of the screen composed.
+    while effects.get() < 4 {
+        let schedule = rule.shell_mut().frame_schedule();
+        assert!(
+            schedule.needs_update || schedule.needs_frame,
+            "the shell asks for frames while the screen composes"
+        );
+        rule.advance_time(FRAME);
+        frames += 1;
+        assert!(frames < 30, "every frame composes more of the screen");
+    }
+
+    assert!(frames > 2, "the screen composed over several frames");
 }

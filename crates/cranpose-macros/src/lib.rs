@@ -623,12 +623,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             Span::mixed_site(),
         );
 
-        let recompose_setter = recompose_setter(
-            &group_ident,
-            &quote! { #recompose_fn_ident #ty_generics_turbofish },
-            &func.sig.output,
-            (&core_path, &composer_ident),
-        );
+        let recompose_fn = quote! { #recompose_fn_ident #ty_generics_turbofish };
 
         let returning = ReturningCall {
             core_path: &core_path,
@@ -643,19 +638,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             body_call: &body_call,
         };
         let helper_body = if returns_unit {
-            quote! {
-                #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let mut __changed = #current_scope_ident.should_recompose();
-                #(#param_setup)*
-                #recompose_setter
-                if !__changed && #current_scope_ident.has_composed_once() {
-                    #group_ident.skip();
-                    return;
-                }
-                #body_call
-            }
+            unit_helper_body(&returning, &param_setup, &recompose_fn)
         } else {
-            returning.helper_body(&param_setup, &recompose_setter)
+            let setter =
+                recompose_setter(&group_ident, &recompose_fn, (&core_path, &composer_ident));
+            returning.helper_body(&param_setup, &setter)
         };
 
         let recompose_fn_body = if returns_unit {
@@ -723,10 +710,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
+        let open_group = open_group_fn(returns_unit);
         let wrapped = quote!({
             #caller_key_stmt
             let #composer_ident = #core_path::__current_composer();
-            let #group_ident = #composer_ident.__open_composable_group(#key_expr);
+            let #group_ident = #composer_ident.#open_group(#key_expr);
             let #result_ident = #helper_ident(
                 &#composer_ident,
                 &#group_ident
@@ -791,24 +779,52 @@ fn returns_unit(output: &ReturnType) -> bool {
     }
 }
 
-// The statement that gives a composable's group its recompose function: a
-// plain function needs no box, vtable or call shim per composable, and one
-// that returns a value gets a wrapper that drops it.
+// The statement that gives the group of a composable that returns a value
+// its recompose function: a wrapper that drops the value.
 fn recompose_setter(
     group: &Ident,
     recompose_fn: &TokenStream2,
-    output: &ReturnType,
     (core_path, composer): (&TokenStream2, &Ident),
 ) -> TokenStream2 {
-    if returns_unit(output) {
-        quote! { #group.set_recompose_fn(#recompose_fn); }
-    } else {
-        quote! {
-            #group.set_recompose_fn(|#composer: &#core_path::Composer| {
-                let _ = #recompose_fn(#composer);
-            });
-        }
+    quote! {
+        #group.set_recompose_fn(|#composer: &#core_path::Composer| {
+            let _ = #recompose_fn(#composer);
+        });
     }
+}
+
+// The helper body of a composable that returns nothing: one call gives the
+// group its recompose function, a plain function with no box, vtable or call
+// shim per composable, and says whether the body runs. It skips the body
+// when no parameter changed, and leaves it for a later frame when the group
+// opened in pausable content past the frame's budget.
+fn unit_helper_body(
+    call: &ReturningCall<'_>,
+    param_setup: &[TokenStream2],
+    recompose_fn: &TokenStream2,
+) -> TokenStream2 {
+    let (core_path, group, current_scope) = (call.core_path, call.group, call.current_scope);
+    let (scope_label, body_call) = (call.scope_label, call.body_call);
+    quote! {
+        #core_path::debug_label_current_scope(stringify!(#scope_label));
+        let mut __changed = #current_scope.should_recompose();
+        #(#param_setup)*
+        if !#group.should_execute(__changed.into(), #recompose_fn) {
+            return;
+        }
+        #body_call
+    }
+}
+
+// The composer method that opens a composable's group: only a composable that
+// returns nothing may leave its first body for a later frame.
+fn open_group_fn(returns_unit: bool) -> Ident {
+    let name = if returns_unit {
+        "__open_pausable_group"
+    } else {
+        "__open_composable_group"
+    };
+    Ident::new(name, Span::call_site())
 }
 
 /// Parameter and return slots are keyed by call sites in generated code. With
