@@ -14,9 +14,10 @@ use crate::{
     layout_options::TextLayoutOptions,
     line_box::paragraph_line_box,
     line_breaker::{
-        BreakKind, BreakOpportunity, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths,
-        Wrapping, break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
+        BreakKind, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
+        break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
     },
+    line_hold::{fitting_hold, wrapped_hold},
     line_runs::{line_extent, place_runs},
     line_text::{LineEdges, LineText, before_hard_break, indent},
     paragraph::{LineBreak, ResolvedTextDirection},
@@ -29,12 +30,13 @@ use crate::{
         shape_inserted, spaced_width,
     },
     shaper::Shaper,
-    text_layout::{LayoutBody, LayoutLine, TextLayout, WidthRange},
+    text_layout::{LayoutBody, LayoutLine, TextLayout},
     typeface::Typeface,
 };
 #[cfg(feature = "hyphenation")]
 use crate::{
     hyphenator::Hyphenator,
+    line_breaker::BreakOpportunity,
     paragraph::{Hyphens, TextAlign},
 };
 
@@ -270,7 +272,7 @@ impl TextLayouter {
                 break_lines(&wrapping, breaks, &mut self.lines);
             }
         }
-        layout.hold = self.hold(input, options, &wrapping, breaks);
+        layout.hold = wrapped_hold(&self.lines, input, options, &wrapping, breaks);
     }
 
     /// The intrinsic widths of `input`, laid out with the typefaces of
@@ -489,35 +491,6 @@ impl TextLayouter {
                 },
             });
         }
-    }
-
-    // The widths at which breaking gives the same lines: every width when
-    // lines do not wrap, for greedy breaking the limits each line keeps its
-    // end over moved by its indent, and none for even breaking, whose lines
-    // can move with any width.
-    fn hold(
-        &self,
-        input: &LayoutInput<'_>,
-        options: &TextLayoutOptions,
-        wrapping: &Wrapping<'_>,
-        breaks: &[BreakOpportunity],
-    ) -> Option<WidthRange> {
-        if !options.soft_wrap {
-            return Some(WidthRange::ALL);
-        }
-        if !matches!(
-            input.paragraph.line_break,
-            LineBreak::Simple | LineBreak::Unspecified
-        ) {
-            return None;
-        }
-        let mut hold = WidthRange::ALL;
-        for line in &self.lines {
-            let (min, max) = wrapping.greedy_limits(line, breaks);
-            let indent = indent(input, line.text.start);
-            hold.narrow(min + indent, max + indent);
-        }
-        Some(hold)
     }
 
     // Shapes the items of `input` with the typefaces it adds to `faces`, or
@@ -961,19 +934,6 @@ impl TextLayouter {
                 },
                 |item| item.paragraph_level,
             )
-    }
-}
-
-// The hold of a text that fits on one line `line` wide with its indent:
-// any width that keeps it on one line, when it wraps.
-fn fitting_hold(options: &TextLayoutOptions, line: f32) -> WidthRange {
-    WidthRange {
-        min: if options.soft_wrap {
-            line
-        } else {
-            f32::NEG_INFINITY
-        },
-        max: f32::INFINITY,
     }
 }
 

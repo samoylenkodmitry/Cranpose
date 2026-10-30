@@ -35,6 +35,7 @@ pub mod layout_input;
 pub mod layout_options;
 pub mod line_box;
 mod line_breaker;
+mod line_hold;
 mod line_runs;
 mod line_text;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
