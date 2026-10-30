@@ -38,10 +38,7 @@ impl NodeMarks {
     /// The mark of `id`: `0` while it has none.
     #[inline]
     pub fn get(&self, applier: &MemoryApplier, id: NodeId) -> u8 {
-        match applier.resolve_node_index(id) {
-            Some(slot) => self.dense.get(slot).copied().unwrap_or(0),
-            None => self.elsewhere.get(&id).copied().unwrap_or(0),
-        }
+        self.mark_at(MarkPlace::of(applier, id))
     }
 
     /// Adds the bits of `mark` to `id`'s mark, finding its storage once,
@@ -59,35 +56,84 @@ impl NodeMarks {
     /// ```
     #[inline]
     pub fn add(&mut self, applier: &MemoryApplier, id: NodeId, mark: u8) -> u8 {
-        let Some(slot) = applier.resolve_node_index(id) else {
-            let entry = self.elsewhere.entry(id).or_insert(0);
-            let had = *entry;
-            *entry |= mark;
-            return had;
-        };
-        if slot >= self.dense.len() {
-            self.dense.resize(slot + 1, 0);
-        }
-        let Some(entry) = self.dense.get_mut(slot) else {
-            return 0;
-        };
+        let entry = self.entry_at(MarkPlace::of(applier, id));
         let had = *entry;
         *entry |= mark;
         had
     }
 
+    /// Adds the bits of `mark` to `id`'s mark and those of `ancestor_mark`
+    /// to the mark of each node above it, from its parent up to the first
+    /// that had them. Each node's storage is found once.
+    pub fn add_with_ancestors(
+        &mut self,
+        applier: &MemoryApplier,
+        id: NodeId,
+        mark: u8,
+        ancestor_mark: u8,
+    ) {
+        let mut place = MarkPlace::of(applier, id);
+        *self.entry_at(place) |= mark;
+        while let Some(parent) = applier.parent_at(place) {
+            place = MarkPlace::of(applier, parent);
+            let entry = self.entry_at(place);
+            let had = *entry;
+            *entry |= ancestor_mark;
+            if had & ancestor_mark == ancestor_mark {
+                break;
+            }
+        }
+    }
+
     /// Marks `id` with `mark`.
     #[inline]
     pub fn set(&mut self, applier: &MemoryApplier, id: NodeId, mark: u8) {
-        let Some(slot) = applier.resolve_node_index(id) else {
-            self.elsewhere.insert(id, mark);
-            return;
-        };
-        if slot >= self.dense.len() {
-            self.dense.resize(slot + 1, 0);
+        *self.entry_at(MarkPlace::of(applier, id)) = mark;
+    }
+
+    #[inline]
+    pub(crate) fn mark_at(&self, place: MarkPlace) -> u8 {
+        match place {
+            MarkPlace::Dense(slot) => self.dense.get(slot).copied().unwrap_or(0),
+            MarkPlace::Elsewhere(id) => self.elsewhere.get(&id).copied().unwrap_or(0),
         }
-        if let Some(entry) = self.dense.get_mut(slot) {
-            *entry = mark;
+    }
+
+    #[inline]
+    pub(crate) fn entry_at(&mut self, place: MarkPlace) -> &mut u8 {
+        match place {
+            MarkPlace::Dense(slot) if slot < self.dense.len() => &mut self.dense[slot],
+            _ => self.grown_entry_at(place),
         }
+    }
+
+    // The entry of a node stored past the room `reset` made, or kept apart.
+    #[cold]
+    #[inline(never)]
+    fn grown_entry_at(&mut self, place: MarkPlace) -> &mut u8 {
+        match place {
+            MarkPlace::Dense(slot) => {
+                self.dense.resize(slot + 1, 0);
+                &mut self.dense[slot]
+            }
+            MarkPlace::Elsewhere(id) => self.elsewhere.entry(id).or_insert(0),
+        }
+    }
+}
+
+// Where a node's mark is kept, and its node in the applier: the node's
+// dense storage slot, or its id for a node kept apart.
+#[derive(Clone, Copy)]
+pub(crate) enum MarkPlace {
+    Dense(usize),
+    Elsewhere(NodeId),
+}
+
+impl MarkPlace {
+    #[inline]
+    pub(crate) fn of(applier: &MemoryApplier, id: NodeId) -> Self {
+        applier
+            .resolve_node_index(id)
+            .map_or(Self::Elsewhere(id), Self::Dense)
     }
 }

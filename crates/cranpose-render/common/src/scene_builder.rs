@@ -433,6 +433,7 @@ impl DirtyWalk<'_> {
     /// The marks of the layer with `identity`: whether its node is dirty and
     /// whether its subtree may hold a dirty layer. Both for a layer without
     /// a node.
+    #[inline]
     fn marks(&self, identity: Option<NodeId>) -> u8 {
         identity.map_or(DIRTY_NODE | DIRTY_ANCESTOR, |id| {
             self.ancestry.get(self.applier, id)
@@ -647,18 +648,7 @@ fn mark_dirty_ancestry(
 ) {
     ancestry.reset(applier);
     for &node in dirty.keys() {
-        ancestry.add(applier, node, DIRTY_NODE);
-        let mut current = node;
-        while let Some(parent) = applier
-            .get_ref(current)
-            .ok()
-            .and_then(cranpose_core::Node::parent)
-        {
-            if ancestry.add(applier, parent, DIRTY_ANCESTOR) & DIRTY_ANCESTOR != 0 {
-                break;
-            }
-            current = parent;
-        }
+        ancestry.add_with_ancestors(applier, node, DIRTY_NODE, DIRTY_ANCESTOR);
     }
 }
 
