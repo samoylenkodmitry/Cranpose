@@ -458,10 +458,30 @@ fn append_surface_dirty_node(
     }
 }
 
+// Routes `nodes` to the surfaces that show them. A lane with no nodes, as
+// in most frames, returns before the routing's prologue.
+#[inline]
 pub(crate) fn route_nodes_by_surface<R: Renderer>(
     app: &mut ShellApp,
     surfaces: &mut [RootSurface<R>],
     nodes: impl IntoIterator<Item = NodeId>,
+    lane: SurfaceDirtyLane,
+    scratch: &mut SurfaceRoutingScratch,
+) {
+    let nodes = nodes.into_iter();
+    if nodes.size_hint().1 == Some(0) {
+        scratch.attached.clear();
+        scratch.owners.clear();
+        return;
+    }
+    route_batch_by_surface(app, surfaces, nodes, lane, scratch);
+}
+
+#[inline(never)]
+fn route_batch_by_surface<R: Renderer>(
+    app: &mut ShellApp,
+    surfaces: &mut [RootSurface<R>],
+    nodes: impl Iterator<Item = NodeId>,
     lane: SurfaceDirtyLane,
     scratch: &mut SurfaceRoutingScratch,
 ) {
