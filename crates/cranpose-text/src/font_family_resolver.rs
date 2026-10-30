@@ -52,7 +52,7 @@ const HUNDREDS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
 // weight is a whole hundred from 100 to 900.
 fn closest_slot(weight: u16, style: FontStyle) -> Option<usize> {
     let hundreds = usize::from(weight / 100);
-    (weight % 100 == 0 && (1..=9).contains(&hundreds))
+    (weight.is_multiple_of(100) && (1..=9).contains(&hundreds))
         .then(|| hundreds - 1 + 9 * usize::from(style == FontStyle::Italic))
 }
 
