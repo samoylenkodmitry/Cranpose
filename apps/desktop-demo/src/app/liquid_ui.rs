@@ -979,7 +979,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                                 {
                                     let anchor_sink = std::rc::Rc::clone(&anchor_sink);
                                     move || {
-                                        let pill_open = pill_open;
                                         let pill_press = cranpose_animation::animateFloatAsState(
                                             if column_gesture.is_pressed() {
                                                 1.0
@@ -1955,8 +1954,6 @@ pub fn LiquidUiTab() {
                 BoxSpec::default(),
                 move || {
                     let dark_for_chip = dark;
-                    let toggle_a = toggle_a;
-                    let toggle_b = toggle_b;
                     let slider_state = slider;
                     let segment_state = segment;
                     let chip_state = chip;
@@ -2114,84 +2111,76 @@ pub fn LiquidUiTab() {
                             );
 
                             SectionTitle("CONTROLS");
-                            LiquidCard(Modifier::empty().fill_max_width(), {
-                                let toggle_a = toggle_a;
-                                let toggle_b = toggle_b;
-                                let slider_state = slider_state;
-                                move || {
-                                    let toggle_a = toggle_a;
-                                    let toggle_b = toggle_b;
-                                    let slider_state = slider_state;
-                                    Column(
-                                        Modifier::empty().padding(16.0),
-                                        ColumnSpec::default(),
-                                        move || {
-                                            let colors = liquid_colors();
-                                            let toggle_a2 = toggle_a;
-                                            Row(
-                                                Modifier::empty().fill_max_width(),
-                                                RowSpec::default().vertical_alignment(
-                                                    VerticalAlignment::CenterVertically,
-                                                ),
-                                                move || {
-                                                    Text(
-                                                        "Wi-Fi",
-                                                        Modifier::empty().weight(1.0),
-                                                        body_style(colors.label),
-                                                    );
-                                                    let t = toggle_a2;
-                                                    LiquidToggle(
-                                                        Modifier::empty().semantics(|config| {
-                                                            config.is_clickable = true;
-                                                            config.content_description = Some(
-                                                                "Wi-Fi settings switch".to_string(),
-                                                            );
-                                                        }),
-                                                        t.get(),
-                                                        move |value| t.set(value),
-                                                    );
-                                                },
-                                            );
-                                            Box(
-                                                Modifier::empty().height(12.0),
-                                                BoxSpec::default(),
-                                                || {},
-                                            );
-                                            let toggle_b2 = toggle_b;
-                                            Row(
-                                                Modifier::empty().fill_max_width(),
-                                                RowSpec::default().vertical_alignment(
-                                                    VerticalAlignment::CenterVertically,
-                                                ),
-                                                move || {
-                                                    Text(
-                                                        "Airplane Mode",
-                                                        Modifier::empty().weight(1.0),
-                                                        body_style(colors.label),
-                                                    );
-                                                    let t = toggle_b2;
-                                                    LiquidToggle(
-                                                        Modifier::empty()
-                                                            .content_description("Airplane Mode"),
-                                                        t.get(),
-                                                        move |value| t.set(value),
-                                                    );
-                                                },
-                                            );
-                                            Box(
-                                                Modifier::empty().height(16.0),
-                                                BoxSpec::default(),
-                                                || {},
-                                            );
-                                            let s = slider_state;
-                                            LiquidSlider(
-                                                Modifier::empty().fill_max_width(),
-                                                s.get(),
-                                                move |value| s.set(value),
-                                            );
-                                        },
-                                    );
-                                }
+                            LiquidCard(Modifier::empty().fill_max_width(), move || {
+                                Column(
+                                    Modifier::empty().padding(16.0),
+                                    ColumnSpec::default(),
+                                    move || {
+                                        let colors = liquid_colors();
+                                        let toggle_a2 = toggle_a;
+                                        Row(
+                                            Modifier::empty().fill_max_width(),
+                                            RowSpec::default().vertical_alignment(
+                                                VerticalAlignment::CenterVertically,
+                                            ),
+                                            move || {
+                                                Text(
+                                                    "Wi-Fi",
+                                                    Modifier::empty().weight(1.0),
+                                                    body_style(colors.label),
+                                                );
+                                                let t = toggle_a2;
+                                                LiquidToggle(
+                                                    Modifier::empty().semantics(|config| {
+                                                        config.is_clickable = true;
+                                                        config.content_description = Some(
+                                                            "Wi-Fi settings switch".to_string(),
+                                                        );
+                                                    }),
+                                                    t.get(),
+                                                    move |value| t.set(value),
+                                                );
+                                            },
+                                        );
+                                        Box(
+                                            Modifier::empty().height(12.0),
+                                            BoxSpec::default(),
+                                            || {},
+                                        );
+                                        let toggle_b2 = toggle_b;
+                                        Row(
+                                            Modifier::empty().fill_max_width(),
+                                            RowSpec::default().vertical_alignment(
+                                                VerticalAlignment::CenterVertically,
+                                            ),
+                                            move || {
+                                                Text(
+                                                    "Airplane Mode",
+                                                    Modifier::empty().weight(1.0),
+                                                    body_style(colors.label),
+                                                );
+                                                let t = toggle_b2;
+                                                LiquidToggle(
+                                                    Modifier::empty()
+                                                        .content_description("Airplane Mode"),
+                                                    t.get(),
+                                                    move |value| t.set(value),
+                                                );
+                                            },
+                                        );
+                                        Box(
+                                            Modifier::empty().height(16.0),
+                                            BoxSpec::default(),
+                                            || {},
+                                        );
+                                        let s = slider_state;
+                                        LiquidSlider(
+                                            Modifier::empty().fill_max_width(),
+                                            s.get(),
+                                            move |value| s.set(value),
+                                        );
+                                    },
+                                );
                             });
 
                             SectionTitle("SEGMENTED");
@@ -2208,29 +2197,25 @@ pub fn LiquidUiTab() {
                             );
 
                             SectionTitle("CHIPS");
-                            Row(Modifier::empty(), RowSpec::default(), {
-                                let chip_state = chip_state;
-                                let dark_for_chip = dark_for_chip;
-                                move || {
-                                    for (index, label) in
-                                        ["All", "Recent", "Favorites"].iter().enumerate()
-                                    {
-                                        let chip_state2 = chip_state;
-                                        LiquidChip(
-                                            Modifier::empty().padding_each(0.0, 0.0, 8.0, 0.0),
-                                            chip_state.get() == index,
-                                            move || chip_state2.set(index),
-                                            (*label).into(),
-                                        );
-                                    }
-                                    let dark2 = dark_for_chip;
+                            Row(Modifier::empty(), RowSpec::default(), move || {
+                                for (index, label) in
+                                    ["All", "Recent", "Favorites"].iter().enumerate()
+                                {
+                                    let chip_state2 = chip_state;
                                     LiquidChip(
-                                        Modifier::empty(),
-                                        dark_for_chip.get(),
-                                        move || dark2.set(!dark2.get()),
-                                        "Dark mode".into(),
+                                        Modifier::empty().padding_each(0.0, 0.0, 8.0, 0.0),
+                                        chip_state.get() == index,
+                                        move || chip_state2.set(index),
+                                        (*label).into(),
                                     );
                                 }
+                                let dark2 = dark_for_chip;
+                                LiquidChip(
+                                    Modifier::empty(),
+                                    dark_for_chip.get(),
+                                    move || dark2.set(!dark2.get()),
+                                    "Dark mode".into(),
+                                );
                             });
 
                             GradientStripe(
@@ -2339,33 +2324,37 @@ pub fn LiquidUiTab() {
                         move |scope| view_mode_menu_content(scope, menu_selection),
                     );
 
-                    let tab_state = selected_tab;
-                    Box(
-                        Modifier::empty().fill_max_size().padding_each(
-                            PAGE_PADDING,
-                            0.0,
-                            PAGE_PADDING,
-                            LIQUID_TAB_BAR_BOTTOM_PADDING,
-                        ),
-                        BoxSpec::default().content_alignment(Alignment::new(
-                            HorizontalAlignment::CenterHorizontally,
-                            VerticalAlignment::Bottom,
-                        )),
-                        move || {
-                            let tab_state2 = tab_state;
-                            LiquidTabBarWithAccessory(
-                                Modifier::empty(),
-                                LiquidTabBarSpec::default(),
-                                tab_state.get(),
-                                move |index| tab_state2.set(index),
-                                tab_swipe_reference_bar,
-                                || {
-                                    LiquidTabBarSearchAccessory(|| {});
-                                },
-                            );
-                        },
-                    );
+                    LiquidUiTabBar(selected_tab);
                 },
+            );
+        },
+    );
+}
+
+// The bar reads the selection itself, so a tab change composes it again and
+// leaves the page as it is.
+#[composable]
+fn LiquidUiTabBar(selected_tab: MutableState<usize>) {
+    let selected = selected_tab.get();
+    Box(
+        Modifier::empty().fill_max_size().padding_each(
+            PAGE_PADDING,
+            0.0,
+            PAGE_PADDING,
+            LIQUID_TAB_BAR_BOTTOM_PADDING,
+        ),
+        BoxSpec::default().content_alignment(Alignment::new(
+            HorizontalAlignment::CenterHorizontally,
+            VerticalAlignment::Bottom,
+        )),
+        move || {
+            LiquidTabBarWithAccessory(
+                Modifier::empty(),
+                LiquidTabBarSpec::default(),
+                selected,
+                move |index| selected_tab.set(index),
+                tab_swipe_reference_bar,
+                || LiquidTabBarSearchAccessory(|| {}),
             );
         },
     );
