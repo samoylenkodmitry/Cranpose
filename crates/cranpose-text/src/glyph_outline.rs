@@ -69,7 +69,10 @@ impl GlyphOutline {
             scale: transform.size / f32::from(typeface.units_per_em()),
             skew: transform.skew,
         };
-        if simple_glyf::draw(font, glyph, &mut path).is_none() {
+        let simple = typeface
+            .glyf_tables()
+            .and_then(|tables| simple_glyf::draw(font, tables, glyph, &mut path));
+        if simple.is_none() {
             path.segments.clear();
             font.outline_glyphs()
                 .get(glyph)?
@@ -154,7 +157,7 @@ impl GlyphOutline {
 
 // Collects an outline's segments in pixels with y growing down, from font
 // units `scale` pixels each, slanted right by `skew` a unit of height.
-struct PathCollector {
+pub(crate) struct PathCollector {
     segments: Vec<Segment>,
     start: Point,
     pen: Point,
@@ -164,6 +167,11 @@ struct PathCollector {
 }
 
 impl PathCollector {
+    // Makes room for `segments` more pieces at once.
+    pub(crate) fn reserve(&mut self, segments: usize) {
+        self.segments.reserve(segments);
+    }
+
     fn point(&self, x: f32, y: f32) -> Point {
         point(
             (x + y * self.skew) * self.scale + self.offset.x,

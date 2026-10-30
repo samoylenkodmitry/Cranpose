@@ -15,6 +15,7 @@ use crate::{
     coverage::Coverage,
     font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
+    simple_glyf::GlyfTables,
 };
 
 /// The bytes a typeface is read from.
@@ -118,6 +119,7 @@ struct Loaded {
     variations: Box<[([u8; 4], f32)]>,
     content_hash: u64,
     coverage: OnceLock<Coverage>,
+    glyf: OnceLock<Option<GlyfTables>>,
     // The normal track of the font's `trak` table: the tracking in ems at
     // each point size it lists, ascending; empty without one.
     tracking: Box<[(f32, f32)]>,
@@ -160,6 +162,7 @@ impl Typeface {
             variations: Box::default(),
             content_hash,
             coverage: OnceLock::new(),
+            glyf: OnceLock::new(),
             tracking: normal_track(&font),
             space: space_glyph(&font),
             font,
@@ -220,6 +223,7 @@ impl Typeface {
             variations: applied.into_boxed_slice(),
             content_hash,
             coverage: OnceLock::new(),
+            glyf: OnceLock::new(),
             tracking: normal_track(&font),
             space: space_glyph(&font),
             font,
@@ -418,6 +422,15 @@ impl Typeface {
     // The font model at the typeface's instance.
     pub(crate) fn font(&self) -> &Font {
         &self.0.font
+    }
+
+    // Where the font keeps its simple glyphs, found on first use; `None`
+    // for a font the general loader draws.
+    pub(crate) fn glyf_tables(&self) -> Option<&GlyfTables> {
+        self.0
+            .glyf
+            .get_or_init(|| GlyfTables::of(&self.0.font))
+            .as_ref()
     }
 
     // The axis positions that draw the typeface at `weight` and `style`: for
