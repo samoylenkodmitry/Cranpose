@@ -363,6 +363,23 @@ impl TextService {
             let layout = self.layout(&text, &style, frame, (units, shaped));
             return PreparedTextLayout::new(text, style, layout, (frame.max_width, min_lines));
         };
+        self.lay_out_scaled_down(text, style, frame, (units, shaped), min_font_size_sp)
+    }
+
+    // Lays `text` out in `style` at the largest size from `min_font_size_sp`
+    // up that fits `frame`. Out of line: its layouts stay off the stack of
+    // the common layout, which shaping runs at the bottom of.
+    #[inline(never)]
+    fn lay_out_scaled_down(
+        &self,
+        text: Rc<AnnotatedString>,
+        style: Arc<TextStyle>,
+        frame: TextFrame,
+        (units, shaped): (TextUnits, Option<&TextLayout>),
+        min_font_size_sp: f32,
+    ) -> PreparedTextLayout {
+        let options = frame.options.normalized();
+        let min_lines = options.min_lines;
         let frame = TextFrame {
             options: TextLayoutOptions {
                 overflow: TextOverflow::Clip,

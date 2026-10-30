@@ -99,7 +99,26 @@ impl TextLayouter {
         resolver: &FontFamilyResolver,
         shaped: Option<&TextLayout>,
     ) -> TextLayout {
-        let mut body = LayoutBody::default();
+        let mut faces = SmallVec::new();
+        self.shape(input, resolver, shaped, &mut faces);
+        self.place(input, resolver, shaped, faces)
+    }
+
+    // Places the items just shaped in `faces` into a new layout. Out of
+    // line, so the layout and the placing stay off the stack of the
+    // shaping, which runs deepest.
+    #[inline(never)]
+    fn place(
+        &mut self,
+        input: &LayoutInput<'_>,
+        resolver: &FontFamilyResolver,
+        shaped: Option<&TextLayout>,
+        faces: SmallVec<[Typeface; 1]>,
+    ) -> TextLayout {
+        let mut body = LayoutBody {
+            faces,
+            ..LayoutBody::default()
+        };
         let width = self.fill(input, resolver, shaped, &mut body);
         // A layout kept holds each part in storage of its own length.
         body.shrink_to_fit();
@@ -115,12 +134,16 @@ impl TextLayouter {
         layout: &mut TextLayout,
     ) {
         layout.refill(input.max_width, |body| {
+            body.clear();
+            self.shape(input, resolver, None, &mut body.faces);
             self.fill(input, resolver, None, body)
         });
     }
 
-    // Lays `input` out into `layout`, with what `shaped` holds when given,
-    // and returns the width its lines are placed across.
+    // Lays the items just shaped of `input` out into `layout`, with what
+    // `shaped` holds when given, and returns the width its lines are placed
+    // across. Out of line, as `place` is.
+    #[inline(never)]
     fn fill(
         &mut self,
         input: &LayoutInput<'_>,
@@ -129,8 +152,6 @@ impl TextLayouter {
         layout: &mut LayoutBody,
     ) -> f32 {
         let options = input.options.normalized();
-        layout.clear();
-        self.shape(input, resolver, shaped, &mut layout.faces);
         layout.shaped = self.glyphs.len();
         layout.glyphs = shaped
             .and_then(|shaped| shaped.body().shaped_glyphs())

@@ -99,6 +99,10 @@ pub(crate) fn word_split(font: &FontRef<'_>, space: GlyphId, scripts: &[Tag]) ->
     })
 }
 
+// The walkers below run once a plan, at the bottom of a layout. Each stays
+// out of line, so the stack holds one walker's frame at a time, which a
+// microcontroller's main task has room for.
+#[inline(never)]
 fn space_sides(
     font: &FontRef<'_>,
     space: GlyphId,
@@ -118,6 +122,7 @@ fn space_sides(
 
 // Adds to `spaces` the glyphs the script's substitutions turn them into, and
 // the sides on which those substitutions read them.
+#[inline(never)]
 fn substitution_lookups_sides(
     gsub: &Gsub<'_>,
     scripts: &[Tag],
@@ -129,7 +134,28 @@ fn substitution_lookups_sides(
     };
     let features = gsub.collect_features(&single(script), &everything(), &everything())?;
     let lookups = gsub.collect_lookups(&features)?;
-    gsub.closure_glyphs(&lookups, spaces)?;
+    close_spaces(gsub, &lookups, spaces)?;
+    substitution_sides_of(gsub, &lookups, spaces, sides)
+}
+
+// Adds to `spaces` the glyphs `lookups` of `gsub` turn them into.
+#[inline(never)]
+fn close_spaces(
+    gsub: &Gsub<'_>,
+    lookups: &IntSet<u16>,
+    spaces: &mut IntSet<GlyphId>,
+) -> Result<(), ReadError> {
+    gsub.closure_glyphs(lookups, spaces)
+}
+
+// The sides on which `lookups` of `gsub` read `spaces`.
+#[inline(never)]
+fn substitution_sides_of(
+    gsub: &Gsub<'_>,
+    lookups: &IntSet<u16>,
+    spaces: &IntSet<GlyphId>,
+    sides: &mut Sides,
+) -> Result<(), ReadError> {
     let list = gsub.lookup_list()?;
     for index in lookups.iter() {
         let lookup = list.lookups().get(usize::from(index))?;
@@ -138,6 +164,7 @@ fn substitution_lookups_sides(
     Ok(())
 }
 
+#[inline(never)]
 fn positioning_lookups_sides(
     gpos: &Gpos<'_>,
     scripts: &[Tag],
@@ -148,8 +175,20 @@ fn positioning_lookups_sides(
         return Ok(());
     };
     let features = gpos.collect_features(&single(script), &everything(), &everything())?;
+    let lookups = gpos.collect_lookups(&features)?;
+    positioning_sides_of(gpos, &lookups, spaces, sides)
+}
+
+// The sides on which `lookups` of `gpos` read `spaces`.
+#[inline(never)]
+fn positioning_sides_of(
+    gpos: &Gpos<'_>,
+    lookups: &IntSet<u16>,
+    spaces: &IntSet<GlyphId>,
+    sides: &mut Sides,
+) -> Result<(), ReadError> {
     let list = gpos.lookup_list()?;
-    for index in gpos.collect_lookups(&features)?.iter() {
+    for index in lookups.iter() {
         let lookup = list.lookups().get(usize::from(index))?;
         positioning_sides(&lookup.subtables()?, spaces, sides)?;
     }
@@ -178,6 +217,7 @@ pub(crate) fn everything() -> IntSet<Tag> {
     set
 }
 
+#[inline(never)]
 fn substitution_sides(
     subtables: &SubstitutionSubtables<'_>,
     spaces: &IntSet<GlyphId>,
@@ -204,6 +244,7 @@ fn substitution_sides(
     }
 }
 
+#[inline(never)]
 fn positioning_sides(
     subtables: &PositionSubtables<'_>,
     spaces: &IntSet<GlyphId>,
@@ -233,6 +274,7 @@ fn positioning_sides(
 
 // A ligature reads a space it starts with the glyphs after it, and a space
 // among its other components with the glyphs before it.
+#[inline(never)]
 fn ligature_sides<'a>(
     subtables: impl Iterator<Item = Result<LigatureSubst<'a>, ReadError>>,
     spaces: &IntSet<GlyphId>,
@@ -262,6 +304,7 @@ fn ligature_sides<'a>(
 }
 
 // Marks both sides when one of `subtables` reads a space in a context.
+#[inline(never)]
 fn context_sides<T>(
     subtables: impl Iterator<Item = Result<T, ReadError>>,
     spaces: &IntSet<GlyphId>,
@@ -292,6 +335,7 @@ fn reverse_mentions(
     )
 }
 
+#[inline(never)]
 fn pairs_sides<'a>(
     subtables: impl Iterator<Item = Result<PairPos<'a>, ReadError>>,
     spaces: &IntSet<GlyphId>,
@@ -304,6 +348,7 @@ fn pairs_sides<'a>(
 }
 
 // A cursive attachment joins the space to both neighbors.
+#[inline(never)]
 fn cursive_sides<'a>(
     subtables: impl Iterator<Item = Result<CursivePos<'a>, ReadError>>,
     spaces: &IntSet<GlyphId>,
@@ -321,6 +366,7 @@ fn cursive_sides<'a>(
 // A mark attachment reads a space as the base with the marks after it, or
 // as a mark with the base before it. `coverages` gives a subtable's base and
 // mark coverage, `None` for a format this does not read.
+#[inline(never)]
 fn attachment_sides<'a, T>(
     subtables: impl Iterator<Item = Result<T, ReadError>>,
     spaces: &IntSet<GlyphId>,
@@ -382,6 +428,7 @@ fn pair_sides(
     }
 }
 
+#[inline(never)]
 fn glyph_pair_sides(
     format: &PairPosFormat1<'_>,
     spaces: &IntSet<GlyphId>,
@@ -406,6 +453,7 @@ fn glyph_pair_sides(
     Ok(())
 }
 
+#[inline(never)]
 fn class_pair_sides(
     format: &PairPosFormat2<'_>,
     spaces: &IntSet<GlyphId>,
@@ -423,26 +471,54 @@ fn class_pair_sides(
         // The space second: every first glyph of a row that moves with the
         // space's column.
         let column = seconds.get(space);
-        for first in coverage.iter() {
-            if moving(firsts.get(first), column)? {
-                sides.before.glyphs.insert(first);
-            }
-        }
+        firsts_moving_with(&coverage, &firsts, column, &moving, sides)?;
         if coverage.get(space).is_none() {
             continue;
         }
         // The space first: every second glyph of a column that moves in the
         // space's row; column 0 holds every glyph no class names.
         let row = firsts.get(space);
-        for class2 in 0..u32::from(format.class2_count()) {
-            if !moving(row, class2)? {
-                continue;
-            }
-            sides.after.any |= class2 == 0;
-            for (second, class) in seconds.iter() {
-                if class == class2 {
-                    sides.after.glyphs.insert(second);
-                }
+        seconds_moving_with(format.class2_count(), &seconds, row, &moving, sides)?;
+    }
+    Ok(())
+}
+
+// Adds to the glyphs before the space each glyph of `coverage` whose class
+// in `firsts` moves with `column`.
+#[inline(never)]
+fn firsts_moving_with(
+    coverage: &CoverageTable<'_>,
+    firsts: &ClassDef<'_>,
+    column: u32,
+    moving: &impl Fn(u32, u32) -> Result<bool, ReadError>,
+    sides: &mut Sides,
+) -> Result<(), ReadError> {
+    for first in coverage.iter() {
+        if moving(firsts.get(first), column)? {
+            sides.before.glyphs.insert(first);
+        }
+    }
+    Ok(())
+}
+
+// Adds to the glyphs after the space each glyph of a class of `seconds`,
+// among `count`, that moves in `row`.
+#[inline(never)]
+fn seconds_moving_with(
+    count: u16,
+    seconds: &ClassDef<'_>,
+    row: u32,
+    moving: &impl Fn(u32, u32) -> Result<bool, ReadError>,
+    sides: &mut Sides,
+) -> Result<(), ReadError> {
+    for class2 in 0..u32::from(count) {
+        if !moving(row, class2)? {
+            continue;
+        }
+        sides.after.any |= class2 == 0;
+        for (second, class) in seconds.iter() {
+            if class == class2 {
+                sides.after.glyphs.insert(second);
             }
         }
     }

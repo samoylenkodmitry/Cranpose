@@ -7,11 +7,11 @@ use read_fonts::{
     collections::IntSet,
     tables::{
         gpos::{
-            CursivePos, MarkBasePos, MarkLigPos, MarkMarkPos, PairPos, PairPosFormat1,
+            CursivePos, Gpos, MarkBasePos, MarkLigPos, MarkMarkPos, PairPos, PairPosFormat1,
             PairPosFormat2, PositionLookup, PositionSubtables, SinglePos,
         },
         gsub::{
-            AlternateSubst, LigatureSubst, LigatureSubstFormat1, MultipleSubst,
+            AlternateSubst, Gsub, LigatureSubst, LigatureSubstFormat1, MultipleSubst,
             ReverseChainSingleSubst, SingleSubst, SubstitutionLookup, SubstitutionSubtables,
         },
         layout::{
@@ -136,6 +136,7 @@ impl PlainGlyphs {
     // with `features` on top of HarfBuzz's own; `None` when the plan may
     // change glyphs this does not follow: a script with a shaper of its own,
     // right to left text, AAT or `kern` tables, or a table it cannot read.
+    #[inline(never)]
     pub(crate) fn of(
         font: &FontRef<'_>,
         script: Option<ShapingScript>,
@@ -213,16 +214,14 @@ impl PlainGlyphs {
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
         // The shaping font, made for the first character the plan has not
-        // met.
+        // met; on the heap, off the stack of the font's first metrics,
+        // which run at the bottom of a layout.
         let mut shaping = None;
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
             let read = || {
-                let (glyph, advance) = plain_glyph(
-                    shaping.get_or_insert_with(|| ShaperFont::new(font)),
-                    busy,
-                    ch,
-                )?;
+                let (glyph, advance) =
+                    plain_glyph(shaping.get_or_insert_with(|| shaping_font(font)), busy, ch)?;
                 let starts = pairs.partition_point(|&(first, _)| first < glyph);
                 Some(CharGlyph {
                     glyph,
@@ -297,6 +296,11 @@ fn plain_glyph(font: &ShaperFont<'_, '_>, busy: &IntSet<GlyphId>, ch: char) -> O
     Some((glyph.to_u32(), font.glyph_h_advance(glyph)))
 }
 
+#[inline(never)]
+fn shaping_font(font: &Font) -> Box<ShaperFont<'_, '_>> {
+    Box::new(ShaperFont::new(font))
+}
+
 // Whether HarfBuzz shapes `script` with its default shaper, whatever the
 // font: these scripts have no shaper of their own.
 fn shapes_by_default(script: ShapingScript) -> bool {
@@ -361,6 +365,10 @@ fn add_required(
     Ok(())
 }
 
+// The walkers below run once a plan, at the bottom of a layout. Each stays
+// out of line, so the stack holds one walker's frame at a time, which a
+// microcontroller's main task has room for.
+#[inline(never)]
 fn substitution_starts(
     font: &FontRef<'_>,
     scripts: &[Tag],
@@ -379,14 +387,25 @@ fn substitution_starts(
     let indices = gsub
         .collect_features(&single(script), &everything(), &tags)
         .ok()?;
+    let lookups = gsub.collect_lookups(&indices).ok()?;
+    substitution_lookups_starts(&gsub, &lookups, starts)
+}
+
+#[inline(never)]
+fn substitution_lookups_starts(
+    gsub: &Gsub<'_>,
+    lookups: &IntSet<u16>,
+    starts: &mut Starts<'_>,
+) -> Option<()> {
     let list = gsub.lookup_list().ok()?;
-    for index in gsub.collect_lookups(&indices).ok()?.iter() {
+    for index in lookups.iter() {
         let lookup = list.lookups().get(usize::from(index)).ok()?;
         substitution_lookup_starts(&lookup, starts)?;
     }
     Some(())
 }
 
+#[inline(never)]
 fn positioning_starts(
     font: &FontRef<'_>,
     scripts: &[Tag],
@@ -405,8 +424,18 @@ fn positioning_starts(
     let indices = gpos
         .collect_features(&single(script), &everything(), &tags)
         .ok()?;
+    let lookups = gpos.collect_lookups(&indices).ok()?;
+    positioning_lookups_starts(&gpos, &lookups, starts)
+}
+
+#[inline(never)]
+fn positioning_lookups_starts(
+    gpos: &Gpos<'_>,
+    lookups: &IntSet<u16>,
+    starts: &mut Starts<'_>,
+) -> Option<()> {
     let list = gpos.lookup_list().ok()?;
-    for index in gpos.collect_lookups(&indices).ok()?.iter() {
+    for index in lookups.iter() {
         let lookup = list.lookups().get(usize::from(index)).ok()?;
         positioning_lookup_starts(&lookup, index, starts)?;
     }
@@ -414,6 +443,7 @@ fn positioning_starts(
 }
 
 // Adds the font's marks to `busy`: HarfBuzz zeroes their advances.
+#[inline(never)]
 fn mark_glyphs(font: &FontRef<'_>, busy: &mut IntSet<GlyphId>) -> Option<()> {
     const MARK: u32 = 3;
     let Ok(gdef) = font.gdef() else {
@@ -433,6 +463,7 @@ fn mark_glyphs(font: &FontRef<'_>, busy: &mut IntSet<GlyphId>) -> Option<()> {
 }
 
 // Runs `start` on each of `subtables`; `None` when one does not read.
+#[inline(never)]
 fn each<T>(
     subtables: impl Iterator<Item = Result<T, ReadError>>,
     mut start: impl FnMut(T) -> Option<()>,
@@ -455,6 +486,7 @@ impl Starts<'_> {
     // space moves only with the glyphs after it it pairs with, which go to
     // the pairs, unless `flag` lets the adjustment skip glyphs between the
     // two.
+    #[inline(never)]
     fn pair_adjustments(
         &mut self,
         pair: &PairPos<'_>,
@@ -717,6 +749,7 @@ impl Starts<'_> {
 
 // Adds to `after` the glyphs a pair set of `format` at `index` in its
 // coverage moves with its first glyph; `Some(true)` when it read them.
+#[inline(never)]
 fn glyph_pairs_after(
     format: &PairPosFormat1<'_>,
     index: u32,
@@ -734,6 +767,7 @@ fn glyph_pairs_after(
 
 // Adds to `after` the glyphs of each class `format` moves with `first`'s
 // class; `Some(false)` when it moves every glyph no class names.
+#[inline(never)]
 fn class_pairs_after(
     format: &PairPosFormat2<'_>,
     first: GlyphId,
@@ -771,6 +805,7 @@ fn skips_glyphs(flag: LookupFlag) -> bool {
 
 // Covers the glyphs each of `subtables` starts at, which `start` reads;
 // `None` when one does not read.
+#[inline(never)]
 fn covers<'a, T>(
     subtables: impl Iterator<Item = Result<T, ReadError>>,
     starts: &mut Starts<'_>,
@@ -779,6 +814,7 @@ fn covers<'a, T>(
     each(subtables, |subtable| starts.cover(start(&subtable)?))
 }
 
+#[inline(never)]
 fn substitution_lookup_starts(
     lookup: &SubstitutionLookup<'_>,
     starts: &mut Starts<'_>,
@@ -811,6 +847,7 @@ fn substitution_lookup_starts(
     }
 }
 
+#[inline(never)]
 fn positioning_lookup_starts(
     lookup: &PositionLookup<'_>,
     index: u16,

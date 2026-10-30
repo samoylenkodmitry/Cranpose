@@ -144,6 +144,38 @@ impl Shaper {
                 plan
             }
         };
+        let ShapingFace {
+            font, plans, plain, ..
+        } = &mut self.faces[face];
+        // A run of plain glyphs needs neither shaping nor words.
+        if let Some(index) = plans[plan].plain
+            && plain[index].append(font, text, item.range.clone(), glyphs)
+        {
+            return;
+        }
+        self.shape_with_plan(
+            (face, plan),
+            text,
+            item,
+            (direction, script, language),
+            context,
+            glyphs,
+        );
+    }
+
+    // Shapes `item` as `shape` does, with plan `plan` of face `face`. Out of
+    // line, so the shaping font stays off the stack of the plain glyphs and
+    // of a new plan, which run at the bottom of a layout.
+    #[inline(never)]
+    fn shape_with_plan(
+        &mut self,
+        (face, plan): (usize, usize),
+        text: &str,
+        item: &TextItem<'_>,
+        (direction, script, language): (Direction, Option<ShapingScript>, Option<Language>),
+        context: Range<usize>,
+        glyphs: &mut ShapedGlyphs,
+    ) {
         let Self {
             faces,
             buffer,
@@ -157,14 +189,7 @@ impl Shaper {
         } = &mut faces[face];
         let font = &*font;
         let kept = &plans[plan];
-        let mut plain = kept.plain.map(|index| &mut plain[index]);
-        // A run of plain glyphs needs neither shaping nor words.
-        if plain
-            .as_deref_mut()
-            .is_some_and(|plain| plain.append(font, text, item.range.clone(), glyphs))
-        {
-            return;
-        }
+        let plain = kept.plain.map(|index| &mut plain[index]);
         let setting = Setting {
             font: ShaperFont::new(font),
             face: font,
@@ -200,57 +225,41 @@ impl Shaper {
         script: Option<ShapingScript>,
         language: Option<&Language>,
     ) -> usize {
-        let face = &mut self.faces[face];
-        let wanted = ShapePlanKey::new(&face.font, script, direction)
+        let kept = &self.faces[face];
+        let wanted = ShapePlanKey::new(&kept.font, script, direction)
             .language(language)
             .features(&self.features);
-        if let Some(plan) = face
+        if let Some(plan) = kept
             .plans
             .iter()
             .position(|kept| wanted.matches(&kept.plan))
         {
             return plan;
         }
+        self.new_plan(face, direction, script, language)
+    }
+
+    // Makes the plan `plan` found none of. It runs once a plan, at the bottom
+    // of a layout, so it and each of its parts stay out of line: the stack
+    // holds one part's frame at a time, which a microcontroller's main task
+    // has room for.
+    #[cold]
+    #[inline(never)]
+    fn new_plan(
+        &mut self,
+        face: usize,
+        direction: Direction,
+        script: Option<ShapingScript>,
+        language: Option<&Language>,
+    ) -> usize {
+        let features = &self.features;
+        let face = &mut self.faces[face];
         if face.plans.len() == KEPT_PLANS {
             face.forget_oldest_plan();
         }
-        let mut key = HASH_STATE.build_hasher();
-        face.content_hash.hash(&mut key);
-        for (tag, value) in &face.positions {
-            tag.hash(&mut key);
-            value.to_bits().hash(&mut key);
-        }
-        script
-            .map(|script| script.tag().to_be_bytes())
-            .hash(&mut key);
-        (direction == Direction::RightToLeft).hash(&mut key);
-        language.map(Language::as_str).hash(&mut key);
-        for feature in &self.features {
-            (
-                feature.tag.to_be_bytes(),
-                feature.value,
-                feature.start,
-                feature.end,
-            )
-                .hash(&mut key);
-        }
-        let tables = layout_tables(&face.font);
-        let split = tables
-            .as_ref()
-            .and_then(|tables| face_word_split(&face.font, tables, script));
-        let plain = tables
-            .as_ref()
-            .and_then(|tables| PlainGlyphs::of(tables, script, direction, &self.features));
-        let plain = plain.map(|plain| face.keep_plain(plain));
-        // A face keeps a plan or two, each a few hundred bytes: room for
-        // more goes unused.
-        face.plans.reserve_exact(1);
-        face.plans.push(KeptPlan {
-            plan: ShapePlan::new(&face.font, direction, script, language, &self.features),
-            split,
-            plain,
-            key: key.finish(),
-        });
+        let key = face.plan_key(direction, script, language, features);
+        let (split, plain) = face.plan_glyphs(direction, script, features);
+        face.push_plan(direction, script, language, features, (split, plain, key));
         face.plans.len() - 1
     }
 
@@ -266,6 +275,19 @@ impl Shaper {
         {
             return face;
         }
+        self.new_face(typeface, positions, content_hash)
+    }
+
+    // Makes the face `face` found none of. Out of line: the instance of a
+    // variable font takes a deeper frame than shaping does.
+    #[cold]
+    #[inline(never)]
+    fn new_face(
+        &mut self,
+        typeface: &Typeface,
+        positions: SmallVec<[([u8; 4], f32); 3]>,
+        content_hash: u64,
+    ) -> usize {
         if self.faces.len() == KEPT_FACES {
             self.faces.remove(0);
         }
@@ -306,8 +328,82 @@ impl ShapingFace {
         self.plain.len() - 1
     }
 
+    // The number that keys the words of the plan for `direction`, `script`,
+    // `language` and `features`.
+    #[inline(never)]
+    fn plan_key(
+        &self,
+        direction: Direction,
+        script: Option<ShapingScript>,
+        language: Option<&Language>,
+        features: &[Feature],
+    ) -> u64 {
+        let mut key = HASH_STATE.build_hasher();
+        self.content_hash.hash(&mut key);
+        for (tag, value) in &self.positions {
+            tag.hash(&mut key);
+            value.to_bits().hash(&mut key);
+        }
+        script
+            .map(|script| script.tag().to_be_bytes())
+            .hash(&mut key);
+        (direction == Direction::RightToLeft).hash(&mut key);
+        language.map(Language::as_str).hash(&mut key);
+        for feature in features {
+            (
+                feature.tag.to_be_bytes(),
+                feature.value,
+                feature.start,
+                feature.end,
+            )
+                .hash(&mut key);
+        }
+        key.finish()
+    }
+
+    // The word split and the index of the plain glyphs of a plan for
+    // `direction`, `script` and `features`.
+    #[inline(never)]
+    fn plan_glyphs(
+        &mut self,
+        direction: Direction,
+        script: Option<ShapingScript>,
+        features: &[Feature],
+    ) -> (Option<WordSplit>, Option<usize>) {
+        let tables = layout_tables(&self.font);
+        let split = tables
+            .as_ref()
+            .and_then(|tables| face_word_split(&self.font, tables, script));
+        let plain = tables
+            .as_ref()
+            .and_then(|tables| PlainGlyphs::of(tables, script, direction, features));
+        (split, plain.map(|plain| self.keep_plain(plain)))
+    }
+
+    // Keeps a new plan with its word split, plain glyphs and key.
+    #[inline(never)]
+    fn push_plan(
+        &mut self,
+        direction: Direction,
+        script: Option<ShapingScript>,
+        language: Option<&Language>,
+        features: &[Feature],
+        (split, plain, key): (Option<WordSplit>, Option<usize>, u64),
+    ) {
+        // A face keeps a plan or two, each a few hundred bytes: room for
+        // more goes unused.
+        self.plans.reserve_exact(1);
+        self.plans.push(KeptPlan {
+            plan: ShapePlan::new(&self.font, direction, script, language, features),
+            split,
+            plain,
+            key,
+        });
+    }
+
     // Drops the oldest plan, and its plain glyphs when no other plan has
     // them.
+    #[inline(never)]
     fn forget_oldest_plan(&mut self) {
         let Some(index) = self.plans.remove(0).plain else {
             return;
@@ -535,6 +631,7 @@ pub(crate) fn font_bytes(font: &Font) -> &[u8] {
 
 // The word split of `font`, whose layout tables are `tables`, for runs in
 // `script`.
+#[inline(never)]
 fn face_word_split(
     font: &Font,
     tables: &FontRef<'_>,
