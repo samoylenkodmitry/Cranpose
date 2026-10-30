@@ -47,6 +47,7 @@ mod plain_glyphs;
 mod plain_kerning;
 /// Writing systems and the script runs of text.
 pub mod script;
+mod script_lookups;
 mod shaped_glyphs;
 mod shaped_item;
 /// Shaping text items into glyphs with HarfRust.

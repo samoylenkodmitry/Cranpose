@@ -3,22 +3,15 @@ use std::ops::Range;
 use harfrust::{Direction, Feature, Script as ShapingScript, ShaperFont, font::Font};
 use icu_properties::{CodePointMapData, props::GraphemeClusterBreak};
 use read_fonts::{
-    FontRef, ReadError, TableProvider,
+    FontRef, TableProvider,
     collections::IntSet,
     tables::{
-        gpos::{
-            CursivePos, Gpos, MarkBasePos, MarkLigPos, MarkMarkPos, PairPos, PairPosFormat1,
-            PairPosFormat2, PositionLookup, PositionSubtables, SinglePos,
-        },
-        gsub::{
-            AlternateSubst, Gsub, LigatureSubst, LigatureSubstFormat1, MultipleSubst,
-            ReverseChainSingleSubst, SingleSubst, SubstitutionLookup, SubstitutionSubtables,
-        },
+        gpos::{PairPos, PairPosFormat1, PairPosFormat2},
+        gsub::{LigatureSubst, LigatureSubstFormat1},
         layout::{
             ChainedSequenceContext, ChainedSequenceContextFormat1, ChainedSequenceContextFormat2,
-            ChainedSequenceContextFormat3, ClassDef, CoverageTable, FeatureList, LookupFlag,
-            ScriptList, SequenceContext, SequenceContextFormat1, SequenceContextFormat2,
-            SequenceContextFormat3,
+            ChainedSequenceContextFormat3, ClassDef, CoverageTable, LookupFlag, SequenceContext,
+            SequenceContextFormat1, SequenceContextFormat2, SequenceContextFormat3,
         },
     },
     types::{BigEndian, GlyphId, GlyphId16, Tag},
@@ -29,9 +22,10 @@ use crate::{
     glyph_id,
     plain_chars::{CharGlyph, PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
+    script_lookups::{Lookup, LookupSubtable, ScriptLookups, insert_class, insert_covered},
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
     shaper::font_bytes,
-    word_split::{chosen_script, class_index, everything, moves, single},
+    word_split::{class_index, moves},
 };
 
 // The glyphs of a font that a shape plan leaves as they are: no lookup of
@@ -151,7 +145,9 @@ impl PlainGlyphs {
             return None;
         }
         let mut tags = IntSet::empty();
-        tags.extend_unsorted(DEFAULT_FEATURES.iter().map(|tag| Tag::new(tag)));
+        for tag in DEFAULT_FEATURES {
+            tags.insert(Tag::new(tag));
+        }
         // The shaper sets each feature over the whole text: it turns the
         // feature on or off, the later setting winning, as HarfBuzz takes
         // them.
@@ -163,6 +159,7 @@ impl PlainGlyphs {
             }
         }
         let scripts = script.tags();
+        let scripts = scripts.as_slice();
         let mut starts = Starts {
             busy: IntSet::empty(),
             pairs: Vec::new(),
@@ -174,8 +171,7 @@ impl PlainGlyphs {
         // The marks first: a contextual rule needs no pair with a glyph that
         // is busy already.
         mark_glyphs(font, &mut starts.busy)?;
-        substitution_starts(font, scripts.as_slice(), &tags, &mut starts)?;
-        positioning_starts(font, scripts.as_slice(), &tags, &mut starts)?;
+        starts.lookups(font, scripts, &tags)?;
         starts.pairs.sort_unstable();
         starts.pairs.dedup();
         Some(Self {
@@ -334,115 +330,10 @@ fn stands_as_itself(ch: char) -> bool {
         && ch != '\u{2044}'
 }
 
-// Adds to `tags` the features each language of `script` requires, which
-// HarfBuzz applies whatever features are asked.
-fn add_required(
-    scripts: &ScriptList<'_>,
-    features: &FeatureList<'_>,
-    script: Tag,
-    tags: &mut IntSet<Tag>,
-) -> Result<(), ReadError> {
-    let Some(index) = scripts.index_for_tag(script) else {
-        return Ok(());
-    };
-    let Some(record) = scripts.script_records().get(usize::from(index)) else {
-        return Ok(());
-    };
-    let script = record.script(scripts.offset_data())?;
-    let mut languages = vec![];
-    if let Some(language) = script.default_lang_sys() {
-        languages.push(language?);
-    }
-    for record in script.lang_sys_records() {
-        languages.push(record.lang_sys(script.offset_data())?);
-    }
-    for language in languages {
-        let required = usize::from(language.required_feature_index());
-        if let Some(feature) = features.feature_records().get(required) {
-            tags.insert(feature.feature_tag());
-        }
-    }
-    Ok(())
-}
-
-// The walkers below run once a plan, at the bottom of a layout. Each stays
-// out of line, so the stack holds one walker's frame at a time, which a
-// microcontroller's main task has room for.
-#[inline(never)]
-fn substitution_starts(
-    font: &FontRef<'_>,
-    scripts: &[Tag],
-    features: &IntSet<Tag>,
-    starts: &mut Starts<'_>,
-) -> Option<()> {
-    let Ok(gsub) = font.gsub() else {
-        return Some(());
-    };
-    let script_list = gsub.script_list().ok()?;
-    let Some(script) = chosen_script(&script_list, scripts) else {
-        return Some(());
-    };
-    let mut tags = features.clone();
-    add_required(&script_list, &gsub.feature_list().ok()?, script, &mut tags).ok()?;
-    let indices = gsub
-        .collect_features(&single(script), &everything(), &tags)
-        .ok()?;
-    let lookups = gsub.collect_lookups(&indices).ok()?;
-    substitution_lookups_starts(&gsub, &lookups, starts)
-}
-
-#[inline(never)]
-fn substitution_lookups_starts(
-    gsub: &Gsub<'_>,
-    lookups: &IntSet<u16>,
-    starts: &mut Starts<'_>,
-) -> Option<()> {
-    let list = gsub.lookup_list().ok()?;
-    for index in lookups.iter() {
-        let lookup = list.lookups().get(usize::from(index)).ok()?;
-        substitution_lookup_starts(&lookup, starts)?;
-    }
-    Some(())
-}
-
-#[inline(never)]
-fn positioning_starts(
-    font: &FontRef<'_>,
-    scripts: &[Tag],
-    features: &IntSet<Tag>,
-    starts: &mut Starts<'_>,
-) -> Option<()> {
-    let Ok(gpos) = font.gpos() else {
-        return Some(());
-    };
-    let script_list = gpos.script_list().ok()?;
-    let Some(script) = chosen_script(&script_list, scripts) else {
-        return Some(());
-    };
-    let mut tags = features.clone();
-    add_required(&script_list, &gpos.feature_list().ok()?, script, &mut tags).ok()?;
-    let indices = gpos
-        .collect_features(&single(script), &everything(), &tags)
-        .ok()?;
-    let lookups = gpos.collect_lookups(&indices).ok()?;
-    positioning_lookups_starts(&gpos, &lookups, starts)
-}
-
-#[inline(never)]
-fn positioning_lookups_starts(
-    gpos: &Gpos<'_>,
-    lookups: &IntSet<u16>,
-    starts: &mut Starts<'_>,
-) -> Option<()> {
-    let list = gpos.lookup_list().ok()?;
-    for index in lookups.iter() {
-        let lookup = list.lookups().get(usize::from(index)).ok()?;
-        positioning_lookup_starts(&lookup, index, starts)?;
-    }
-    Some(())
-}
-
-// Adds the font's marks to `busy`: HarfBuzz zeroes their advances.
+// Adds the font's marks to `busy`: HarfBuzz zeroes their advances. This
+// and the walk of the lookups run once a plan, at the bottom of a layout;
+// each stays out of line, so the stack holds one frame of them at a time,
+// which a microcontroller's main task has room for.
 #[inline(never)]
 fn mark_glyphs(font: &FontRef<'_>, busy: &mut IntSet<GlyphId>) -> Option<()> {
     const MARK: u32 = 3;
@@ -452,63 +343,86 @@ fn mark_glyphs(font: &FontRef<'_>, busy: &mut IntSet<GlyphId>) -> Option<()> {
     let Some(classes) = gdef.glyph_class_def() else {
         return Some(());
     };
-    busy.extend_unsorted(
-        classes
-            .ok()?
-            .iter()
-            .filter(|&(_, class)| class == MARK)
-            .map(|(glyph, _)| glyph),
-    );
-    Some(())
-}
-
-// Runs `start` on each of `subtables`; `None` when one does not read.
-#[inline(never)]
-fn each<T>(
-    subtables: impl Iterator<Item = Result<T, ReadError>>,
-    mut start: impl FnMut(T) -> Option<()>,
-) -> Option<()> {
-    for subtable in subtables {
-        start(subtable.ok()?)?;
-    }
+    insert_class(busy, &classes.ok()?, MARK);
     Some(())
 }
 
 impl Starts<'_> {
-    fn cover(&mut self, coverage: Result<CoverageTable<'_>, ReadError>) -> Option<()> {
-        self.busy.extend_unsorted(coverage.ok()?.iter());
+    // What the lookups `features` apply to `scripts` in `font`'s GSUB and
+    // GPOS start at.
+    fn lookups(
+        &mut self,
+        font: &FontRef<'_>,
+        scripts: &[Tag],
+        features: &IntSet<Tag>,
+    ) -> Option<()> {
+        if let Ok(gsub) = font.gsub()
+            && let Some(lookups) = ScriptLookups::substitutions(&gsub, scripts, features).ok()?
+        {
+            lookups.each(&mut |at, subtable| self.subtable(at, subtable))?;
+        }
+        if let Ok(gpos) = font.gpos()
+            && let Some(lookups) = ScriptLookups::positionings(&gpos, scripts, features).ok()?
+        {
+            lookups.each(&mut |at, subtable| self.subtable(at, subtable))?;
+        }
         Some(())
     }
 
-    // The pair adjustments of `pair`, in the lookup at `lookup` with
-    // `flag`: kerning when they move only the first glyph's advance and the
-    // two glyphs stand side by side, else the glyphs they start at. The
-    // space moves only with the glyphs after it it pairs with, which go to
-    // the pairs, unless `flag` lets the adjustment skip glyphs between the
-    // two.
+    // What `subtable`, of the lookup `at`, starts at: kerning for a pair
+    // adjustment that moves only plain advances, else the glyphs it starts
+    // at, or the pairs a rule reads beside them; `None` for a format this
+    // does not read.
     #[inline(never)]
-    fn pair_adjustments(
-        &mut self,
-        pair: &PairPos<'_>,
-        (lookup, flag): (u16, LookupFlag),
-    ) -> Option<()> {
-        if !skips_glyphs(flag)
-            && let Some(kerning) = KernSubtable::of(pair, lookup, self.font)
+    fn subtable(&mut self, at: Lookup, subtable: LookupSubtable<'_>) -> Option<()> {
+        let flag = at.flag;
+        if let LookupSubtable::Pair(pair) = &subtable
+            && !skips_glyphs(flag)
+            && let Some(kerning) = KernSubtable::of(pair, at.index, self.font)
         {
             self.kerning.push(kerning);
             return Some(());
         }
-        let coverage = match pair {
-            PairPos::Format1(format) => format.coverage(),
-            PairPos::Format2(format) => format.coverage(),
-            _ => return None,
+        let firsts = subtable.start()?.ok()?;
+        match subtable {
+            LookupSubtable::Ligature(LigatureSubst::Format1(format)) => {
+                self.ligatures(&format, &firsts, flag)
+            }
+            LookupSubtable::Pair(pair) => self.pair_adjustments(&pair, &firsts, flag),
+            LookupSubtable::Context(context) => {
+                self.rules(&firsts, flag, |starts| starts.context(&context))
+            }
+            LookupSubtable::ChainedContext(context) => {
+                self.rules(&firsts, flag, |starts| starts.chained_context(&context))
+            }
+            _ => {
+                insert_covered(&mut self.busy, &firsts);
+                Some(())
+            }
         }
-        .ok()?;
+    }
+
+    // The pair adjustments of `pair`, which start at `coverage`, in a
+    // lookup with `flag` that does not kern plain glyphs: the glyphs they
+    // start at. The space moves only with the glyphs after it it pairs
+    // with, which go to the pairs, unless `flag` lets the adjustment skip
+    // glyphs between the two.
+    #[inline(never)]
+    fn pair_adjustments(
+        &mut self,
+        pair: &PairPos<'_>,
+        coverage: &CoverageTable<'_>,
+        flag: LookupFlag,
+    ) -> Option<()> {
         let space = self
             .space
             .filter(|&space| !skips_glyphs(flag) && coverage.get(space).is_some());
-        self.busy
-            .extend_unsorted(coverage.iter().filter(|&glyph| Some(glyph) != space));
+        // The space stays as plain as it was.
+        let plain_space = space.filter(|&space| !self.busy.contains(space));
+        insert_covered(&mut self.busy, coverage);
+        if let Some(space) = plain_space {
+            self.busy.remove(space);
+        }
         let Some(space) = space else {
             return Some(());
         };
@@ -529,14 +443,21 @@ impl Starts<'_> {
         Some(())
     }
 
-    // The ligatures of `format`; one that may skip glyphs between its
-    // components, as `flag` lets it, makes its first glyph busy.
-    fn ligatures(&mut self, format: &LigatureSubstFormat1<'_>, flag: LookupFlag) -> Option<()> {
+    // The ligatures of `format`, which start at `firsts`; one that may skip
+    // glyphs between its components, as `flag` lets it, makes its first
+    // glyph busy.
+    fn ligatures(
+        &mut self,
+        format: &LigatureSubstFormat1<'_>,
+        firsts: &CoverageTable<'_>,
+        flag: LookupFlag,
+    ) -> Option<()> {
         if skips_glyphs(flag) {
-            return self.cover(format.coverage());
+            insert_covered(&mut self.busy, firsts);
+            return Some(());
         }
         let sets = format.ligature_sets();
-        for (at, first) in format.coverage().ok()?.iter().enumerate() {
+        for (at, first) in firsts.iter().enumerate() {
             for ligature in sets.get(at).ok()?.ligatures().iter() {
                 match ligature.ok()?.component_glyph_ids().first() {
                     Some(next) => self
@@ -559,16 +480,15 @@ impl Starts<'_> {
     // or reading class 0.
     fn rules(
         &mut self,
-        firsts: Start<'_>,
+        firsts: &CoverageTable<'_>,
         flag: LookupFlag,
         read: impl FnOnce(&mut Self) -> Option<()>,
     ) -> Option<()> {
-        let firsts = firsts?.ok()?;
         let (added, room) = (self.pairs.len(), self.room);
         if skips_glyphs(flag) || read(self).is_none() {
             self.pairs.truncate(added);
             self.room = room;
-            self.busy.extend_unsorted(firsts.iter());
+            insert_covered(&mut self.busy, firsts);
         }
         Some(())
     }
@@ -602,30 +522,22 @@ impl Starts<'_> {
         })
     }
 
-    fn context(&mut self, context: &SequenceContext<'_>, flag: LookupFlag) -> Option<()> {
-        self.rules(context_start(context), flag, |starts| match context {
-            SequenceContext::Format1(format) => starts.glyph_rules(format),
-            SequenceContext::Format2(format) => starts.class_rules(format),
-            SequenceContext::Format3(format) => starts.coverage_rule(format),
+    fn context(&mut self, context: &SequenceContext<'_>) -> Option<()> {
+        match context {
+            SequenceContext::Format1(format) => self.glyph_rules(format),
+            SequenceContext::Format2(format) => self.class_rules(format),
+            SequenceContext::Format3(format) => self.coverage_rule(format),
             _ => None,
-        })
+        }
     }
 
-    fn chained_context(
-        &mut self,
-        context: &ChainedSequenceContext<'_>,
-        flag: LookupFlag,
-    ) -> Option<()> {
-        self.rules(
-            chained_context_start(context),
-            flag,
-            |starts| match context {
-                ChainedSequenceContext::Format1(format) => starts.chained_glyph_rules(format),
-                ChainedSequenceContext::Format2(format) => starts.chained_class_rules(format),
-                ChainedSequenceContext::Format3(format) => starts.chained_coverage_rule(format),
-                _ => None,
-            },
-        )
+    fn chained_context(&mut self, context: &ChainedSequenceContext<'_>) -> Option<()> {
+        match context {
+            ChainedSequenceContext::Format1(format) => self.chained_glyph_rules(format),
+            ChainedSequenceContext::Format2(format) => self.chained_class_rules(format),
+            ChainedSequenceContext::Format3(format) => self.chained_coverage_rule(format),
+            _ => None,
+        }
     }
 
     fn glyph_rules(&mut self, format: &SequenceContextFormat1<'_>) -> Option<()> {
@@ -784,13 +696,7 @@ fn class_pairs_after(
         if class == 0 {
             return Some(false);
         }
-        let class = u32::try_from(class).ok()?;
-        after.extend_unsorted(
-            seconds
-                .iter()
-                .filter(|&(_, of)| of == class)
-                .map(|(glyph, _)| glyph),
-        );
+        insert_class(after, &seconds, u32::try_from(class).ok()?);
     }
     Some(true)
 }
@@ -801,168 +707,4 @@ fn skips_glyphs(flag: LookupFlag) -> bool {
     flag.to_bits()
         & (LookupFlag::IGNORE_BASE_GLYPHS.to_bits() | LookupFlag::IGNORE_LIGATURES.to_bits())
         != 0
-}
-
-// Covers the glyphs each of `subtables` starts at, which `start` reads;
-// `None` when one does not read.
-#[inline(never)]
-fn covers<'a, T>(
-    subtables: impl Iterator<Item = Result<T, ReadError>>,
-    starts: &mut Starts<'_>,
-    start: impl Fn(&T) -> Option<Result<CoverageTable<'a>, ReadError>>,
-) -> Option<()> {
-    each(subtables, |subtable| starts.cover(start(&subtable)?))
-}
-
-#[inline(never)]
-fn substitution_lookup_starts(
-    lookup: &SubstitutionLookup<'_>,
-    starts: &mut Starts<'_>,
-) -> Option<()> {
-    let flag = lookup.lookup_flag();
-    match lookup.subtables().ok()? {
-        SubstitutionSubtables::Single(subtables) => covers(subtables.iter(), starts, single_start),
-        SubstitutionSubtables::Multiple(subtables) => {
-            covers(subtables.iter(), starts, multiple_start)
-        }
-        SubstitutionSubtables::Alternate(subtables) => {
-            covers(subtables.iter(), starts, alternate_start)
-        }
-        SubstitutionSubtables::Ligature(subtables) => each(subtables.iter(), |subtable| {
-            let LigatureSubst::Format1(format) = subtable else {
-                return None;
-            };
-            starts.ligatures(&format, flag)
-        }),
-        SubstitutionSubtables::Contextual(subtables) => {
-            each(subtables.iter(), |subtable| starts.context(&subtable, flag))
-        }
-        SubstitutionSubtables::ChainContextual(subtables) => each(subtables.iter(), |subtable| {
-            starts.chained_context(&subtable, flag)
-        }),
-        SubstitutionSubtables::Reverse(subtables) => {
-            covers(subtables.iter(), starts, reverse_start)
-        }
-        SubstitutionSubtables::EmptyExtension => Some(()),
-    }
-}
-
-#[inline(never)]
-fn positioning_lookup_starts(
-    lookup: &PositionLookup<'_>,
-    index: u16,
-    starts: &mut Starts<'_>,
-) -> Option<()> {
-    let flag = lookup.lookup_flag();
-    match lookup.subtables().ok()? {
-        PositionSubtables::Single(subtables) => covers(subtables.iter(), starts, adjust_start),
-        PositionSubtables::Pair(subtables) => each(subtables.iter(), |subtable| {
-            starts.pair_adjustments(&subtable, (index, flag))
-        }),
-        PositionSubtables::Cursive(subtables) => covers(subtables.iter(), starts, cursive_start),
-        PositionSubtables::MarkToBase(subtables) => {
-            covers(subtables.iter(), starts, mark_base_start)
-        }
-        PositionSubtables::MarkToLig(subtables) => {
-            covers(subtables.iter(), starts, mark_ligature_start)
-        }
-        PositionSubtables::MarkToMark(subtables) => {
-            covers(subtables.iter(), starts, mark_mark_start)
-        }
-        PositionSubtables::Contextual(subtables) => {
-            each(subtables.iter(), |subtable| starts.context(&subtable, flag))
-        }
-        PositionSubtables::ChainContextual(subtables) => each(subtables.iter(), |subtable| {
-            starts.chained_context(&subtable, flag)
-        }),
-        PositionSubtables::EmptyExtension => Some(()),
-    }
-}
-
-// The coverage of the glyphs each kind of subtable starts at; `None` for a
-// format this does not read.
-type Start<'a> = Option<Result<CoverageTable<'a>, ReadError>>;
-
-fn single_start<'a>(subtable: &SingleSubst<'a>) -> Start<'a> {
-    match subtable {
-        SingleSubst::Format1(format) => Some(format.coverage()),
-        SingleSubst::Format2(format) => Some(format.coverage()),
-        _ => None,
-    }
-}
-
-fn multiple_start<'a>(subtable: &MultipleSubst<'a>) -> Start<'a> {
-    match subtable {
-        MultipleSubst::Format1(format) => Some(format.coverage()),
-        MultipleSubst::Format2(_) => None,
-    }
-}
-
-fn alternate_start<'a>(subtable: &AlternateSubst<'a>) -> Start<'a> {
-    match subtable {
-        AlternateSubst::Format1(format) => Some(format.coverage()),
-        AlternateSubst::Format2(_) => None,
-    }
-}
-
-fn reverse_start<'a>(subtable: &ReverseChainSingleSubst<'a>) -> Start<'a> {
-    match subtable {
-        ReverseChainSingleSubst::Format1(format) => Some(format.coverage()),
-        ReverseChainSingleSubst::Format2(_) => None,
-    }
-}
-
-fn adjust_start<'a>(subtable: &SinglePos<'a>) -> Start<'a> {
-    match subtable {
-        SinglePos::Format1(format) => Some(format.coverage()),
-        SinglePos::Format2(format) => Some(format.coverage()),
-        _ => None,
-    }
-}
-
-fn cursive_start<'a>(subtable: &CursivePos<'a>) -> Start<'a> {
-    match subtable {
-        CursivePos::Format1(format) => Some(format.coverage()),
-        CursivePos::Format2(_) => None,
-    }
-}
-
-// A mark attachment starts at the mark.
-fn mark_base_start<'a>(subtable: &MarkBasePos<'a>) -> Start<'a> {
-    match subtable {
-        MarkBasePos::Format1(format) => Some(format.mark_coverage()),
-        MarkBasePos::Format2(_) => None,
-    }
-}
-
-fn mark_ligature_start<'a>(subtable: &MarkLigPos<'a>) -> Start<'a> {
-    match subtable {
-        MarkLigPos::Format1(format) => Some(format.mark_coverage()),
-        MarkLigPos::Format2(_) => None,
-    }
-}
-
-fn mark_mark_start<'a>(subtable: &MarkMarkPos<'a>) -> Start<'a> {
-    match subtable {
-        MarkMarkPos::Format1(format) => Some(format.mark1_coverage()),
-        MarkMarkPos::Format2(_) => None,
-    }
-}
-
-fn context_start<'a>(context: &SequenceContext<'a>) -> Start<'a> {
-    match context {
-        SequenceContext::Format1(format) => Some(format.coverage()),
-        SequenceContext::Format2(format) => Some(format.coverage()),
-        SequenceContext::Format3(format) => Some(format.coverages().get(0)),
-        _ => None,
-    }
-}
-
-fn chained_context_start<'a>(context: &ChainedSequenceContext<'a>) -> Start<'a> {
-    match context {
-        ChainedSequenceContext::Format1(format) => Some(format.coverage()),
-        ChainedSequenceContext::Format2(format) => Some(format.coverage()),
-        ChainedSequenceContext::Format3(format) => Some(format.input_coverages().get(0)),
-        _ => None,
-    }
 }
