@@ -346,12 +346,7 @@ impl LayoutBody {
     // width its lines wrap at, save that lines that wrap take the widest of
     // them, as a label shows its lines and not the room around them.
     pub(crate) fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
-        self.width_at(self.wrap_width(min_width, max_width), min_width)
-    }
-
-    // The width of the paragraph whose lines wrap at `wrap`, at least
-    // `min_width` wide.
-    fn width_at(&self, wrap: f32, min_width: f32) -> f32 {
+        let wrap = self.wrap_width(min_width, max_width);
         if self.content_width <= wrap {
             wrap
         } else {
@@ -542,20 +537,7 @@ impl TextLayout {
     /// [`TextLayout::align`] then gives that layout without laying the text
     /// out again.
     pub fn holds(&self, min_width: f32, max_width: f32) -> bool {
-        self.holds_wrap(self.body.wrap_width(min_width, max_width))
-    }
-
-    /// Whether laying the text out between `min_width` and `max_width`
-    /// gives this layout: its lines [hold](TextLayout::holds) there and its
-    /// width stays.
-    pub fn stays_between(&self, min_width: f32, max_width: f32) -> bool {
         let wrap = self.body.wrap_width(min_width, max_width);
-        self.body.width_at(wrap, min_width).to_bits() == self.width.to_bits()
-            && self.holds_wrap(wrap)
-    }
-
-    // Whether lines that wrap at `wrap` are this layout's.
-    fn holds_wrap(&self, wrap: f32) -> bool {
         (wrap - self.wrap).abs() < HOLD_MARGIN
             || self
                 .body
@@ -575,14 +557,19 @@ impl TextLayout {
     /// laid out from `min_width` keeps its width and its lines: every width
     /// when its width follows no max, every width from its own when its text
     /// fits, else the widths its lines wrap the same at below the width it
-    /// fits at, or only the one it wraps at when those are not known.
+    /// fits at, or only the one it wraps at when those are not known or its
+    /// widest line is wider than that one: its width is then the one it
+    /// wraps at, and moves with it.
     pub fn max_widths_kept(&self, min_width: f32) -> (f32, f32) {
         let body = &self.body;
         if !body.follows_max {
             (f32::NEG_INFINITY, f32::INFINITY)
         } else if self.width >= body.content_width.max(min_width) {
             (self.width, f32::INFINITY)
-        } else if let Some(hold) = body.hold {
+        } else if let Some(hold) = body
+            .hold
+            .filter(|_| body.line_width.max(min_width) <= self.wrap)
+        {
             let low = (hold.min + HOLD_MARGIN).max(self.width);
             let high = (hold.max - HOLD_MARGIN).min(body.content_width).next_down();
             if low <= high {

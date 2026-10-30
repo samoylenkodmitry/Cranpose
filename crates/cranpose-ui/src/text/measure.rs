@@ -92,6 +92,22 @@ impl PreparedTextLayout {
         )
     }
 
+    // The max widths at which the text laid out from `min_width` gives this
+    // layout again: its lines, its width and its size the same.
+    pub(crate) fn max_widths_kept(&self, min_width: f32) -> cranpose_ui_layout::BoundRange {
+        let width = self.layout.width();
+        // A paragraph wider than its max measures as the max, which moves
+        // with it.
+        if self.max_width < width {
+            return cranpose_ui_layout::BoundRange::exactly(self.max_width);
+        }
+        let (low, high) = self.layout.max_widths_kept(min_width);
+        cranpose_ui_layout::BoundRange {
+            low: low.max(width),
+            high,
+        }
+    }
+
     /// Size and line count.
     pub fn metrics(&self) -> TextMetrics {
         let layout = &self.layout;

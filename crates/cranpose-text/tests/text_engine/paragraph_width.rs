@@ -102,27 +102,32 @@ fn wrapped_text_takes_its_widest_line_and_a_min_width_widens_short_text() {
 fn wrapped_text_keeps_its_width_at_the_max_widths_that_keep_its_lines() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let options = TextLayoutOptions::default();
-    let mut laid = layout(&resolver, LONG, (0.0, 150.0), 1.0, options);
-    let (width, lines) = (laid.width(), laid.line_count());
+    // The second text is a word its max cuts between its letters: its width
+    // is that max.
+    for (text, laid_at) in [(LONG, 150.0), ("three", 4.0)] {
+        let mut laid = layout(&resolver, text, (0.0, laid_at), 1.0, options);
+        let (width, lines) = (laid.width(), laid.line_count());
 
-    let (low, high) = laid.max_widths_kept(0.0);
-    assert!(low <= 150.0 && 150.0 <= high, "{low}..{high}");
-    for max_width in [low, (low + high) / 2.0, high] {
-        assert!(laid.holds(0.0, max_width), "at {max_width}");
-        laid.align(0.0, max_width, cranpose_text::TextAlign::Start);
-        let fresh = layout(&resolver, LONG, (0.0, max_width), 1.0, options);
-        assert_eq!(
-            (laid.width(), fresh.width(), fresh.line_count()),
-            (width, width, lines),
-            "at {max_width}"
+        let (low, high) = laid.max_widths_kept(0.0);
+        assert!(low <= laid_at && laid_at <= high, "{text}: {low}..{high}");
+        for max_width in [low, (low + high) / 2.0, high] {
+            assert!(laid.holds(0.0, max_width), "{text} at {max_width}");
+            laid.align(0.0, max_width, cranpose_text::TextAlign::Start);
+            let fresh = layout(&resolver, text, (0.0, max_width), 1.0, options);
+            assert_eq!(
+                (laid.width(), fresh.width(), fresh.line_count()),
+                (width, width, lines),
+                "{text} at {max_width}"
+            );
+        }
+        // Past the high end the text takes another width or other lines.
+        let past = layout(&resolver, text, (0.0, high + 1.0), 1.0, options);
+        assert_ne!(
+            (past.line_count(), past.width().to_bits()),
+            (lines, width.to_bits()),
+            "{text}"
         );
     }
-    // Past the high end the text breaks into other lines.
-    let past = layout(&resolver, LONG, (0.0, high + 1.0), 1.0, options);
-    assert_ne!(
-        (past.line_count(), past.width().to_bits()),
-        (lines, width.to_bits())
-    );
 }
 
 #[test]

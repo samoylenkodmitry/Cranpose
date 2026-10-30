@@ -41,21 +41,35 @@ const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
 #[derive(Clone, Debug)]
 struct TextPreparedLayoutCacheEntry {
     min_width: f32,
+    // The max widths at which the text laid out from `min_width` gives
+    // `layout` again.
+    max_widths: cranpose_ui_layout::BoundRange,
     text_generation: u64,
     font_scale_fingerprint: u32,
     layout: Rc<crate::text::PreparedTextLayout>,
 }
 
 impl TextPreparedLayoutCacheEntry {
+    fn new(
+        min_width: f32,
+        (text_generation, font_scale_fingerprint): (u64, u32),
+        layout: Rc<crate::text::PreparedTextLayout>,
+    ) -> Self {
+        Self {
+            min_width,
+            max_widths: layout.max_widths_kept(min_width),
+            text_generation,
+            font_scale_fingerprint,
+            layout,
+        }
+    }
+
     // Whether the layout stands for the text laid out between `min_width`
-    // and `max_width` as it is: its lines and width the same.
+    // and `max_width` as it is: its lines and size the same.
     fn keeps(&self, (min_width, max_width): (f32, f32), stamp: (u64, u32)) -> bool {
-        let layout = &self.layout.layout;
-        let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
-        same(self.min_width, min_width)
+        self.min_width.to_bits() == min_width.to_bits()
             && (self.text_generation, self.font_scale_fingerprint) == stamp
-            && same(self.layout.size().width, layout.width().min(max_width))
-            && layout.stays_between(min_width, max_width)
+            && self.max_widths.contains(max_width)
     }
 }
 
@@ -184,6 +198,7 @@ impl TextPreparedLayoutOwner {
                     source.style.paragraph_style.text_align,
                 );
                 latest.min_width = widths.0;
+                latest.max_widths = latest.layout.max_widths_kept(widths.0);
                 drop(source);
                 return read(&latest.layout);
             }
@@ -245,12 +260,7 @@ impl TextPreparedLayoutOwner {
         let mut cache = self.cache.borrow_mut();
         cache.insert(
             0,
-            TextPreparedLayoutCacheEntry {
-                min_width: widths.0,
-                text_generation: stamp.0,
-                font_scale_fingerprint: stamp.1,
-                layout: prepared,
-            },
+            TextPreparedLayoutCacheEntry::new(widths.0, stamp, prepared),
         );
         cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
         read(&cache[0].layout)
@@ -262,15 +272,7 @@ impl TextPreparedLayoutOwner {
         let stamp = crate::render_state::text_layout_stamp();
         let cache = self.cache.borrow();
         let entry = cache.iter().find(|entry| entry.keeps(widths, stamp))?;
-        let prepared = &entry.layout;
-        let size = prepared.size();
-        // A paragraph wider than its max measures as the max, which moves
-        // with it.
-        if size.width < prepared.layout.width() {
-            return Some((size, cranpose_ui_layout::BoundRange::exactly(widths.1)));
-        }
-        let (low, high) = prepared.layout.max_widths_kept(widths.0);
-        Some((size, cranpose_ui_layout::BoundRange { low, high }))
+        Some((entry.layout.size(), entry.max_widths))
     }
 
     /// The widest word of the text: see [`crate::text::measure::min_intrinsic_text_width`].
