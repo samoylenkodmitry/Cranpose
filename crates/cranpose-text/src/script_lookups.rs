@@ -12,10 +12,11 @@ use read_fonts::{
         },
         layout::{
             ChainedSequenceContext, ClassDef, CoverageTable, ExtensionLookup, FeatureList,
-            FeatureVariations, LangSys, LookupFlag, ScriptList, SequenceContext, Subtables,
+            FeatureTableSubstitutionRecord, FeatureVariations, LangSys, LookupFlag, ScriptList,
+            SequenceContext, Subtables,
         },
     },
-    types::{GlyphId, Tag},
+    types::{BigEndian, GlyphId, Tag},
 };
 
 // The lookups a shape plan's features apply in one of a font's layout
@@ -378,7 +379,7 @@ fn applied(
     });
     let mut lookups = IntSet::empty();
     for index in std::iter::once(language.required_feature_index())
-        .chain(firsts.map(|index| index.get()))
+        .chain(firsts.map(BigEndian::get))
         .filter(|index| !varied.contains(*index))
     {
         let Some(record) = features.feature_records().get(usize::from(index)) else {
@@ -388,12 +389,7 @@ fn applied(
             continue;
         }
         let feature = record.feature(features.offset_data())?;
-        lookups.extend_unsorted(
-            feature
-                .lookup_list_indices()
-                .iter()
-                .map(|index| index.get()),
-        );
+        lookups.extend_unsorted(feature.lookup_list_indices().iter().map(BigEndian::get));
     }
     Ok(lookups)
 }
@@ -410,7 +406,7 @@ fn varied_features(variations: &FeatureVariations<'_>) -> Result<IntSet<u16>, Re
                 swaps
                     .substitutions()
                     .iter()
-                    .map(|swap| swap.feature_index()),
+                    .map(FeatureTableSubstitutionRecord::feature_index),
             );
         }
     }
