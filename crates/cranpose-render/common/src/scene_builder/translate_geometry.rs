@@ -88,9 +88,24 @@ pub(super) fn translate_retained_child(
     layer.origin_in_parent = position;
 }
 
-// Moves a child a translated container keeps to its placement among the
-// container's `children`; a label kept for a content change writes its
-// text there, or stays dirty for the walk beneath. A subtree that
+// What a translated container does with the layer of a previous child it
+// places.
+#[derive(Clone, Copy)]
+pub(super) enum KeptChild {
+    // The walk beneath the container brings the layer up to date.
+    Left,
+    // The layer follows the child's placement: the child was not dirty, it
+    // only moved, which this step settles, or its layer properties or
+    // draws changed, which the walk beneath settles.
+    Moved,
+    // The child, a label kept for new text or a new size, writes its text
+    // into the layer where it now lies.
+    Retexted,
+}
+
+// Brings a child a translated container keeps to its placement among the
+// container's `children`, as `placed.kept` says. A label whose text cannot
+// be written in place stays dirty for the walk beneath. A subtree that
 // publishes window origins publishes them again from where it now lies.
 pub(super) fn move_kept_child(
     applier: &MemoryApplier,
@@ -99,15 +114,19 @@ pub(super) fn move_kept_child(
     children: TranslateAncestorContext,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
-    if dirty_nodes.get(&placed.id) == Some(&NodeUpdate::Content) {
-        if text_node::retext_kept_leaf(applier, layer, children) == Some(true) {
-            dirty_nodes.remove(&placed.id);
+    match placed.kept {
+        KeptChild::Left => {}
+        KeptChild::Moved => {
+            let position = placed.geometry.position;
+            translate_retained_child(layer, position, children.parent_content_offset);
+            if layer.has_origin_sinks {
+                publish_retained_window_geometry(applier, layer, children.parent_abs);
+            }
         }
-        return;
-    }
-    let position = placed.geometry.position;
-    translate_retained_child(layer, position, children.parent_content_offset);
-    if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, children.parent_abs);
+        KeptChild::Retexted => {
+            if text_node::retext_kept_leaf(applier, layer, children) == Some(true) {
+                dirty_nodes.remove(&placed.id);
+            }
+        }
     }
 }

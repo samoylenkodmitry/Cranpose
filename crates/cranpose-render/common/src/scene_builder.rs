@@ -37,7 +37,7 @@ use layer_shape::{clip_shape, shape_clip, shaped_graphics_layer};
 mod text_node;
 mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts};
-use translate_geometry::{TranslateGeometry, move_kept_child, translate_retained_child};
+use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
 
 #[derive(Clone, Default)]
 struct BuildNodeSnapshot {
@@ -1294,10 +1294,7 @@ struct PlacedChild {
     /// The child's index among the container's previous children; `None`
     /// for a child that enters.
     old_index: Option<usize>,
-    /// Whether the child keeps its layer and follows its placement: it was
-    /// not dirty, it only moved, which this step settles, or its layer
-    /// properties changed, which the walk beneath the container settles.
-    keeps_layer: bool,
+    kept: KeptChild,
 }
 
 /// How a translated container's placed children stand to its previous ones.
@@ -1335,7 +1332,7 @@ fn translated_children(
             id,
             geometry,
             old_index: None,
-            keeps_layer: false,
+            kept: KeptChild::Left,
         });
     }
     let children_unchanged = container.children.len() == placed_fresh.len()
@@ -1464,25 +1461,23 @@ fn check_retained_children(
             return Err("retained child slot is not a layer");
         };
         let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
-        placed.keeps_layer = match dirty_nodes.get_mut(&placed.id) {
+        placed.kept = match dirty_nodes.get_mut(&placed.id) {
             None if !fits => return Err("child resized"),
-            None => true,
+            None => KeptChild::Moved,
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {
                 *kind = NodeUpdate::Content;
-                false
+                KeptChild::Left
             }
             Some(NodeUpdate::Moved) => {
                 dirty_nodes.remove(&placed.id);
-                true
+                KeptChild::Moved
             }
             // The child moves with the others; the walk beneath the
             // container then gives it its new layer properties or draws
             // where it now lies.
-            Some(NodeUpdate::Layer | NodeUpdate::Draws) => fits,
-            // A label kept for new text or a new size writes its text where
-            // it lies, as the step moves it.
-            Some(NodeUpdate::Content) if text_node::draws_text_alone(layer) => true,
-            Some(NodeUpdate::Content | NodeUpdate::MovedLayer) => false,
+            Some(NodeUpdate::Layer | NodeUpdate::Draws) if fits => KeptChild::Moved,
+            Some(NodeUpdate::Content) if text_node::draws_text_alone(layer) => KeptChild::Retexted,
+            Some(_) => KeptChild::Left,
         };
     }
     Ok(())
@@ -1653,9 +1648,7 @@ fn reconcile_translated_children(
     let mut entering = scratch.entering.drain(..).peekable();
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
-            if placed.keeps_layer {
-                move_kept_child(applier, &mut layer, placed, children, dirty_nodes);
-            }
+            move_kept_child(applier, &mut layer, placed, children, dirty_nodes);
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
             dirty_nodes.remove(&placed.id);
@@ -1690,9 +1683,7 @@ fn reconcile_shifted_children(
         let RenderNode::Layer(layer) = child else {
             unreachable!("retained child identities were checked");
         };
-        if placed.keeps_layer {
-            move_kept_child(applier, layer, placed, children, dirty_nodes);
-        }
+        move_kept_child(applier, layer, placed, children, dirty_nodes);
     }
     if entering.is_empty() {
         return;
