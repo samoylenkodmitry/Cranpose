@@ -50,9 +50,9 @@ class NativeSliderMotionTests: ReferenceUITests {
         capture("control-motion-released", app: app)
         if component == "toggle" {
             let enabled = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Enabled")).firstMatch
-            XCTAssertTrue(["1", "on"].contains(enabled.value as? String ?? ""))
+            XCTAssertTrue(eventually(enabled, NSPredicate(format: "value IN %@", ["1", "on"])))
         } else if component == "segmented" {
-            XCTAssertTrue(app.buttons["Saved"].isSelected)
+            XCTAssertTrue(eventually(app.buttons["Saved"], NSPredicate(format: "isSelected == true")))
         }
     }
 }
