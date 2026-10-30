@@ -194,12 +194,10 @@ impl TextPreparedLayoutOwner {
             // The latest layout, which nothing else holds, takes widths at
             // which it breaks into the same lines in place, as a width that
             // animates asks for each frame, before the others are searched.
+            // Its style, equal to the source's, gives the alignment.
             if (latest.text_generation, latest.font_scale_fingerprint) == stamp
                 && let Some(prepared) = Rc::get_mut(&mut latest.layout)
-                && prepared.try_realign(
-                    widths,
-                    self.source.borrow().style.paragraph_style.text_align,
-                )
+                && prepared.try_realign(widths, prepared.visual_style.paragraph_style.text_align)
             {
                 latest.min_width = widths.0;
                 latest.max_widths = prepared.max_widths_kept(widths.0);

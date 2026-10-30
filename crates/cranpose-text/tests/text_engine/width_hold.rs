@@ -271,7 +271,13 @@ fn a_layout_aligned_without_moving_a_glyph_keeps_its_id() {
 
     laid.align(250.0, 250.0, TextAlign::Start);
     assert_eq!(laid.id(), id, "a start-aligned line stays where it was");
+    let at_start = picture(&laid);
 
     laid.align(250.0, 250.0, TextAlign::Center);
     assert_ne!(laid.id(), id, "centring moves the line");
+    let centred = laid.id();
+
+    laid.align(250.0, 250.0, TextAlign::Start);
+    assert_ne!(laid.id(), centred, "the start takes the line back");
+    assert_eq!(picture(&laid), at_start);
 }

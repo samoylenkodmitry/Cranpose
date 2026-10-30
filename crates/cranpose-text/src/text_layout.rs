@@ -68,6 +68,9 @@ pub(crate) struct LayoutBody {
     pub(crate) did_overflow_height: bool,
     // Whether a line runs right to left.
     pub(crate) rtl: bool,
+    // Whether a line sits off its indent or stretches: new lines sit at
+    // their indents, unstretched, until `align_lines` places them.
+    pub(crate) off_indent: bool,
     // The widths at which the text breaks into the same lines; `None` when
     // only its own width is known to.
     pub(crate) hold: Option<WidthRange>,
@@ -389,6 +392,7 @@ impl LayoutBody {
         self.height = 0.0;
         self.did_overflow_height = false;
         self.rtl = false;
+        self.off_indent = false;
         self.hold = None;
         self.content_width = 0.0;
         self.follows_max = false;
@@ -418,10 +422,7 @@ impl LayoutBody {
     // the free width changes.
     fn lines_move(&self, width: f32, align: TextAlign) -> bool {
         if self.keeps_lines_at_indent(align) {
-            return self
-                .lines
-                .iter()
-                .any(|line| line.stretch != 0.0 || line.left.to_bits() != line.indent.to_bits());
+            return self.off_indent;
         }
         align == TextAlign::Justify
             || self.lines.iter().any(|line| {
@@ -435,6 +436,7 @@ impl LayoutBody {
     // glyphs.
     pub(crate) fn align_lines(&mut self, width: f32, align: TextAlign) -> bool {
         let mut moved = false;
+        self.off_indent = false;
         for index in 0..self.lines.len() {
             let before = (self.lines[index].left, self.lines[index].stretch);
             self.unjustify(index);
@@ -455,6 +457,7 @@ impl LayoutBody {
             };
             moved |= line.left.to_bits() != before.0.to_bits()
                 || line.stretch.to_bits() != before.1.to_bits();
+            self.off_indent |= line.stretch != 0.0 || line.left.to_bits() != line.indent.to_bits();
         }
         moved
     }
@@ -658,9 +661,17 @@ impl TextLayout {
         self.did_overflow_width = self.body.widest > self.width || self.width > max_width;
         // Lines that keep their places keep the body the copies share, and
         // the id what a renderer drew of the layout goes by.
-        if self.body.lines_move(self.width, align)
-            && Arc::make_mut(&mut self.body).align_lines(self.width, align)
-        {
+        if self.body.lines_move(self.width, align) {
+            self.move_lines(align);
+        }
+    }
+
+    // Places the lines across the layout's width as `align` says. Out of
+    // line: as a width animates, most lines keep their places, and a call
+    // that moves none then saves no registers.
+    #[inline(never)]
+    fn move_lines(&mut self, align: TextAlign) {
+        if Arc::make_mut(&mut self.body).align_lines(self.width, align) {
             self.take_lines();
         }
     }
