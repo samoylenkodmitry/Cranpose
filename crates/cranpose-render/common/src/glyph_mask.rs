@@ -236,7 +236,7 @@ pub struct GlyphMaskCacheStats {
 pub struct GlyphMaskCache {
     masks: BoundedLruCache<GlyphMaskKey, Option<GlyphMask>>,
     rasterizer: Rasterizer,
-    hits: u64,
+    lookups: u64,
     misses: u64,
 }
 
@@ -246,7 +246,7 @@ impl GlyphMaskCache {
         Self {
             masks: BoundedLruCache::with_capacity_at_least_one(capacity),
             rasterizer: Rasterizer::new(0, 0),
-            hits: 0,
+            lookups: 0,
             misses: 0,
         }
     }
@@ -255,7 +255,7 @@ impl GlyphMaskCache {
     pub fn stats(&self) -> GlyphMaskCacheStats {
         GlyphMaskCacheStats {
             entries: self.masks.len(),
-            hits: self.hits,
+            hits: self.lookups - self.misses,
             misses: self.misses,
         }
     }
@@ -271,34 +271,38 @@ impl GlyphMaskCache {
         raster: GlyphRaster,
     ) -> Option<&GlyphMask> {
         let key = GlyphMaskKey::of(typeface, glyph, size, raster);
-        if self.masks.contains(&key) {
-            self.hits = self.hits.saturating_add(1);
-        } else {
-            self.draw(key, typeface, glyph, (size, raster));
-        }
-        self.masks.get(&key)?.as_ref()
-    }
-
-    // Draws the mask the cache lacks and keeps it under `key`. Out of line:
-    // a frame mostly draws its glyphs from the cache, and a build that keeps
-    // its drawing in fast memory keeps the lookup without this.
-    #[inline(never)]
-    fn draw(
-        &mut self,
-        key: GlyphMaskKey,
-        typeface: &Typeface,
-        glyph: GlyphId,
-        (size, raster): (f32, GlyphRaster),
-    ) {
-        self.misses = self.misses.saturating_add(1);
-        let mask = rasterize_glyph(typeface, glyph, size, raster, &mut self.rasterizer);
-        self.masks.put(key, mask);
+        let Self {
+            masks,
+            rasterizer,
+            lookups,
+            misses,
+        } = self;
+        *lookups = lookups.saturating_add(1);
+        masks
+            .find_or_insert_with(key, || {
+                drawn_mask(typeface, glyph, (size, raster), (rasterizer, misses))
+            })
+            .as_ref()
     }
 
     /// The mask under `key` if the cache holds it.
     pub fn cached(&mut self, key: &GlyphMaskKey) -> Option<&GlyphMask> {
         self.masks.get(key)?.as_ref()
     }
+}
+
+// Draws a mask the cache lacks and counts the miss. Out of line: a frame
+// mostly draws its glyphs from the cache, and a build that keeps its drawing
+// in fast memory keeps the lookup without this.
+#[inline(never)]
+fn drawn_mask(
+    typeface: &Typeface,
+    glyph: GlyphId,
+    (size, raster): (f32, GlyphRaster),
+    (rasterizer, misses): (&mut Rasterizer, &mut u64),
+) -> Option<GlyphMask> {
+    *misses = misses.saturating_add(1);
+    rasterize_glyph(typeface, glyph, size, raster, rasterizer)
 }
 
 fn usize_of(value: u32) -> usize {

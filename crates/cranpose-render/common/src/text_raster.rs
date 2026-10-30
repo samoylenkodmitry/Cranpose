@@ -171,7 +171,7 @@ fn paint_glyphs<'a>(
     let mut scratch = None;
     let cache = match glyph_cache {
         Some(cache) => cache,
-        None => scratch.insert(GlyphMaskCache::with_capacity_at_least_one(SCRATCH_MASKS)),
+        None => scratch.insert(scratch_masks()),
     };
     let motion = request.motion();
     let (rect, scale) = (request.rect, request.scale);
@@ -229,6 +229,13 @@ fn paint_glyphs<'a>(
             }
         },
     );
+}
+
+// The cache of a raster made while the renderer's is in use elsewhere. Out
+// of line, as a raster mostly has the renderer's.
+#[inline(never)]
+fn scratch_masks() -> GlyphMaskCache {
+    GlyphMaskCache::with_capacity_at_least_one(SCRATCH_MASKS)
 }
 
 // Whether `placed`, grown by `margin` pixels, overlaps a canvas `area`.

@@ -111,6 +111,21 @@ fn a_promoted_entry_survives_the_next_eviction() {
 }
 
 #[test]
+fn find_or_insert_with_makes_a_value_only_for_a_missing_key() {
+    let mut cache = cache(2);
+    assert_eq!(*cache.find_or_insert_with("a", || 1), 1);
+    assert_eq!(*cache.find_or_insert_with("b", || 2), 2);
+
+    // A hit keeps the stored value and promotes it.
+    assert_eq!(*cache.find_or_insert_with("a", || unreachable!()), 1);
+    // A miss in a full cache pushes out the least recently used entry.
+    assert_eq!(*cache.find_or_insert_with("c", || 3), 3);
+    assert!(cache.contains(&"a"));
+    assert!(!cache.contains(&"b"));
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
 fn peek_reads_without_promoting_entry() {
     let mut cache = cache(2);
     cache.push("a", 1);

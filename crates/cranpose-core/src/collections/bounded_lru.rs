@@ -145,6 +145,21 @@ where
         Some(&mut self.slot_mut(slot).value)
     }
 
+    /// Returns the value under `key`, marking the entry most recently used,
+    /// after storing the value `value` makes under it when the cache has none,
+    /// which pushes the least recently used entry out of a full cache. A hit
+    /// takes one hash lookup.
+    pub fn find_or_insert_with(&mut self, key: K, value: impl FnOnce() -> V) -> &V {
+        let slot = match self.find(&key) {
+            Some(slot) => {
+                self.promote(slot);
+                slot
+            }
+            None => self.insert_new(key, value()).0,
+        };
+        &self.slot(slot).value
+    }
+
     /// Stores `value` under `key` and marks it most recently used. Returns the entry it
     /// replaced or, when the cache was full, the least recently used entry it pushed out.
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
@@ -153,7 +168,14 @@ where
             let old_value = std::mem::replace(&mut self.slot_mut(slot).value, value);
             return Some((key, old_value));
         }
+        self.insert_new(key, value).1
+    }
 
+    // Stores `value` under `key`, which the cache lacks, as the most recently
+    // used entry: its slot, and the least recently used entry it pushed out
+    // of a full cache. Out of line, as a lookup mostly finds its entry.
+    #[inline(never)]
+    fn insert_new(&mut self, key: K, value: V) -> (u32, Option<(K, V)>) {
         let evicted = if self.index.len() == self.cap.get() {
             self.pop_lru()
         } else {
@@ -167,7 +189,7 @@ where
             hasher.hash_one(&occupied(slots, slot).key)
         });
         self.link_newest(slot);
-        evicted
+        (slot, evicted)
     }
 
     /// Stores `value` under `key` and returns the value it replaced, or the value of the least
