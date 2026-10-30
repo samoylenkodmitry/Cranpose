@@ -6,7 +6,9 @@ use crate::{
     Applier, Node, NodeError, NodeId, NodeMarks, RecycleOrigin, RecyclePool, RecycledNode,
     RuntimeHandle, bubble_passes,
     collections::map::{HashMap, HashSet},
-    layout_dirt_roots, stable_index,
+    layout_dirt_roots,
+    node_marks::MarkPlace,
+    stable_index,
 };
 
 mod applier_impl;
@@ -54,7 +56,7 @@ pub(crate) struct HighIdSlot {
 #[derive(Default)]
 pub struct SceneNodeAttachmentScratch {
     attached: NodeMarks,
-    path: Vec<NodeId>,
+    path: Vec<MarkPlace>,
 }
 
 const ATTACHED: u8 = 1;
@@ -248,23 +250,25 @@ impl MemoryApplier {
                 output.push(None);
                 continue;
             };
-            let mut current = resolved;
+            let mut current = MarkPlace::of(self, resolved);
             scratch.path.clear();
             let answer = loop {
-                match scratch.attached.get(self, current) {
+                match scratch.attached.mark_at(current) {
                     ATTACHED => break true,
                     DETACHED => break false,
                     _ => {}
                 }
                 scratch.path.push(current);
-                match self.get_mut(current).ok().and_then(|node| node.parent()) {
-                    Some(parent) if scratch.path.len() < 100_000 => current = parent,
+                match self.parent_at(current) {
+                    Some(parent) if scratch.path.len() < 100_000 => {
+                        current = MarkPlace::of(self, parent);
+                    }
                     _ => break false,
                 }
             };
             let mark = if answer { ATTACHED } else { DETACHED };
             for visited in scratch.path.drain(..) {
-                scratch.attached.set(self, visited, mark);
+                *scratch.attached.entry_at(visited) = mark;
             }
             output.push(answer.then_some(resolved));
         }
@@ -719,6 +723,16 @@ impl MemoryApplier {
                 .and_then(Option::as_deref)
                 .ok_or(NodeError::Missing { id }),
             None => self.high_id_node(id),
+        }
+    }
+
+    // The parent of the node at `place`, `None` for a root or a node that
+    // is gone.
+    #[inline]
+    pub(crate) fn parent_at(&self, place: MarkPlace) -> Option<NodeId> {
+        match place {
+            MarkPlace::Dense(slot) => self.state.nodes.get(slot)?.as_deref()?.parent(),
+            MarkPlace::Elsewhere(id) => self.high_id_node(id).ok()?.parent(),
         }
     }
 

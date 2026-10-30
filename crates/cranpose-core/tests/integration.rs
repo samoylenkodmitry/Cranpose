@@ -8,6 +8,7 @@ mod global_writes;
 mod kept_constants;
 mod lifetime_cancellation;
 mod nested_context;
+mod node_marks;
 #[path = "support/ordered_parent.rs"]
 mod ordered_parent;
 mod pausable_content;
