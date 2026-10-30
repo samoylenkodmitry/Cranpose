@@ -7,7 +7,7 @@ use std::{
 use foldhash::fast::FixedState;
 use harfrust::{
     Buffer, BufferFlags, Direction, Feature, Language, Script as ShapingScript, ShapeOptions,
-    ShapePlan, ShapePlanKey, ShaperFont, Tag,
+    ShapePlan, ShaperFont, Tag,
     font::{Font, Source, Variation},
 };
 use read_fonts::FontRef;
@@ -63,16 +63,26 @@ struct PlanAsk {
 }
 
 struct KeptPlan {
-    plan: ShapePlan,
-    // Where runs shaped with the plan cut into words, `None` inside when
-    // they shape whole: read when HarfRust first shapes with the plan, as a
-    // run of plain glyphs needs none.
-    split: OnceCell<Option<WordSplit>>,
+    // What the plan shapes runs for.
+    direction: Direction,
+    script: Option<ShapingScript>,
+    language: Option<Language>,
+    features: SmallVec<[Feature; 4]>,
+    // Made when HarfRust first shapes with the plan, as a run of plain
+    // glyphs needs neither its lookups nor its words.
+    harfrust: OnceCell<HarfRustPlan>,
     // The index in its face of the glyphs the plan leaves as they are;
     // `None` when it cannot tell.
     plain: Option<usize>,
     // The face and plan as one number, which keys the plan's words.
     key: u64,
+}
+
+// What HarfRust shapes the runs of a plan with.
+struct HarfRustPlan {
+    plan: ShapePlan,
+    // Where runs cut into words; `None` when they shape whole.
+    split: Option<WordSplit>,
 }
 
 // What one shaping call shapes with.
@@ -155,9 +165,9 @@ impl Shaper {
         {
             return;
         }
-        let kept = &plans[plan];
-        kept.split
-            .get_or_init(|| face_word_split(font, kept.plan.script()));
+        // Made here, the HarfRust plan does not take its stack under the
+        // shaping font's.
+        plans[plan].harfrust(font);
         self.shape_with_plan(
             (face, plan),
             text,
@@ -194,17 +204,18 @@ impl Shaper {
         } = &mut faces[face];
         let font = &*font;
         let kept = &plans[plan];
+        let harfrust = kept.harfrust(font);
         let plain = kept.plain.map(|index| &mut plain[index]);
         let setting = Setting {
             font: ShaperFont::new(font),
             face: font,
-            plan: &kept.plan,
+            plan: &harfrust.plan,
             features,
             direction,
             script,
             language: language.as_ref(),
         };
-        let Some(split) = kept.split.get().and_then(Option::as_ref) else {
+        let Some(split) = &harfrust.split else {
             shape_range(buffer, &setting, text, item.range.clone(), context, glyphs);
             return;
         };
@@ -221,8 +232,7 @@ impl Shaper {
     }
 
     // The index in its face of the plan for `direction`, `script`,
-    // `language` and the features just set, made when first asked for, with
-    // the face's word split for it.
+    // `language` and the features just set, made when first asked for.
     fn plan(
         &mut self,
         face: usize,
@@ -230,14 +240,11 @@ impl Shaper {
         script: Option<ShapingScript>,
         language: Option<&Language>,
     ) -> usize {
-        let kept = &self.faces[face];
-        let wanted = ShapePlanKey::new(&kept.font, script, direction)
-            .language(language)
-            .features(&self.features);
-        if let Some(plan) = kept
+        let features = &self.features;
+        if let Some(plan) = self.faces[face]
             .plans
             .iter()
-            .position(|kept| wanted.matches(&kept.plan))
+            .position(|kept| kept.is_for(direction, script, language, features))
         {
             return plan;
         }
@@ -394,8 +401,11 @@ impl ShapingFace {
         // more goes unused.
         self.plans.reserve_exact(1);
         self.plans.push(KeptPlan {
-            plan: ShapePlan::new(&self.font, direction, script, language, features),
-            split: OnceCell::new(),
+            direction,
+            script,
+            language: language.cloned(),
+            features: SmallVec::from_slice(features),
+            harfrust: OnceCell::new(),
             plain,
             key,
         });
@@ -416,6 +426,49 @@ impl ShapingFace {
             if *other > index {
                 *other -= 1;
             }
+        }
+    }
+}
+
+impl KeptPlan {
+    // Whether the plan shapes runs for `direction`, `script`, `language` and
+    // `features`. HarfRust matches its plans by these and by the font's
+    // variations, which a face fixes.
+    fn is_for(
+        &self,
+        direction: Direction,
+        script: Option<ShapingScript>,
+        language: Option<&Language>,
+        features: &[Feature],
+    ) -> bool {
+        self.direction == direction
+            && self.script == script
+            && self.language.as_ref() == language
+            && self.features.as_slice() == features
+    }
+
+    // The HarfRust plan of `font` for the runs of this plan, made on first
+    // use. Out of line, so the plan in the making stays off the frame of
+    // the shaping that asks for it.
+    #[inline(never)]
+    fn harfrust(&self, font: &Font) -> &HarfRustPlan {
+        self.harfrust.get_or_init(|| HarfRustPlan::new(font, self))
+    }
+}
+
+impl HarfRustPlan {
+    #[cold]
+    #[inline(never)]
+    fn new(font: &Font, kept: &KeptPlan) -> Self {
+        Self {
+            plan: ShapePlan::new(
+                font,
+                kept.direction,
+                kept.script,
+                kept.language.as_ref(),
+                &kept.features,
+            ),
+            split: face_word_split(font, kept.script),
         }
     }
 }
