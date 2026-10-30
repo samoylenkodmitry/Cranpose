@@ -1017,12 +1017,7 @@ fn update_layer_properties(
         if !retained_layer_matches_layout(target, &data, placement, wrapped, position) {
             return None;
         }
-        let context = LowerContext {
-            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
-            inherited_translated_content_context: ancestors.inherited_translated_content_context,
-            parent_abs: Some(ancestors.parent_abs),
-            parent_content_offset: ancestors.parent_content_offset,
-        };
+        let context = LowerContext::beneath(ancestors);
         let previous = HitGraphState::of(target);
         let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
         assign_layer(target, head);
@@ -1484,6 +1479,9 @@ fn check_retained_children(
             // container then gives it its new layer properties or draws
             // where it now lies.
             Some(NodeUpdate::Layer | NodeUpdate::Draws) => fits,
+            // A label kept for new text or a new size writes its text where
+            // it lies, as the step moves it.
+            Some(NodeUpdate::Content) if text_node::draws_text_alone(layer) => true,
             Some(NodeUpdate::Content | NodeUpdate::MovedLayer) => false,
         };
     }
@@ -1553,30 +1551,22 @@ fn recycle_children_around(
 /// beneath would otherwise build each of them a second time.
 fn build_entering_children(
     applier: &MemoryApplier,
-    container: &LayerNode,
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    geometry: TranslateGeometry,
-    inherited: (bool, u64),
+    children: TranslateAncestorContext,
 ) {
-    let (child_inherited_translated_content_context, update) = inherited;
     let entering = &mut scratch.entering;
     entering.clear();
+    let context = LowerContext::beneath(children);
     for placed in &scratch.placed_fresh {
         if placed.old_index.is_some() {
             continue;
         }
         let child_id = &placed.id;
-        let context = LowerContext {
-            inherited_motion_context_animated: container.motion_context_animated,
-            inherited_translated_content_context: child_inherited_translated_content_context,
-            parent_abs: Some(geometry.child_abs()),
-            parent_content_offset: geometry.content_offset,
-        };
         let Some(mut lowered) = lower_child(applier, *child_id, context) else {
             continue;
         };
-        lowered.note_content_change(update);
+        lowered.note_content_change(children.update);
         forget_dirty_subtree(&lowered, dirty_nodes);
         entering.push((*child_id, lowered));
     }
@@ -1644,7 +1634,7 @@ fn reconcile_translated_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     order: ChildOrder,
-    geometry: TranslateGeometry,
+    children: TranslateAncestorContext,
 ) {
     if let ChildOrder::Shifted {
         entering_before, ..
@@ -1656,7 +1646,7 @@ fn reconcile_translated_children(
             dirty_nodes,
             scratch,
             entering_before,
-            geometry,
+            children,
         );
         return;
     }
@@ -1664,7 +1654,7 @@ fn reconcile_translated_children(
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
             if placed.keeps_layer {
-                move_kept_child(applier, &mut layer, placed.geometry.position, geometry);
+                move_kept_child(applier, &mut layer, placed, children, dirty_nodes);
             }
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
@@ -1685,7 +1675,7 @@ fn reconcile_shifted_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     entering_before: usize,
-    geometry: TranslateGeometry,
+    children: TranslateAncestorContext,
 ) {
     let TranslateScratch {
         placed_fresh,
@@ -1701,7 +1691,7 @@ fn reconcile_shifted_children(
             unreachable!("retained child identities were checked");
         };
         if placed.keeps_layer {
-            move_kept_child(applier, layer, placed.geometry.position, geometry);
+            move_kept_child(applier, layer, placed, children, dirty_nodes);
         }
     }
     if entering.is_empty() {
@@ -1747,9 +1737,9 @@ fn translate_layer_from_data(
     let TranslateAncestorContext {
         inherited_motion_context_animated,
         update,
-        inherited_translated_content_context,
         parent_content_offset,
         parent_abs,
+        ..
     } = ancestors;
     let SnapshotNodeData {
         layout_state,
@@ -1789,22 +1779,14 @@ fn translate_layer_from_data(
             container.local_bounds,
             parent_abs,
         );
-        let child_inherited_translated_content_context =
-            inherited_translated_content_context || container.translated_content_context;
+        let children = geometry.children_context(container, ancestors);
         match &order {
             ChildOrder::Shifted { kept, .. } => {
                 recycle_children_around(container, kept.clone(), dirty_nodes);
             }
             ChildOrder::Mixed => recycle_leaving_children(container, scratch, dirty_nodes),
         }
-        build_entering_children(
-            applier,
-            container,
-            scratch,
-            dirty_nodes,
-            geometry,
-            (child_inherited_translated_content_context, update),
-        );
+        build_entering_children(applier, scratch, dirty_nodes, children);
 
         apply_translated_container_state(
             container,
@@ -1814,7 +1796,7 @@ fn translate_layer_from_data(
             geometry,
         );
 
-        reconcile_translated_children(applier, container, dirty_nodes, scratch, order, geometry);
+        reconcile_translated_children(applier, container, dirty_nodes, scratch, order, children);
         Ok(())
     });
     if let Err(reason) = translated {
@@ -1880,6 +1862,16 @@ impl LowerContext {
         parent_abs: Some(AbsOrigin::ROOT),
         parent_content_offset: Point { x: 0.0, y: 0.0 },
     };
+
+    // What a child lowers with beneath `ancestors`.
+    fn beneath(ancestors: TranslateAncestorContext) -> Self {
+        Self {
+            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
+            inherited_translated_content_context: ancestors.inherited_translated_content_context,
+            parent_abs: Some(ancestors.parent_abs),
+            parent_content_offset: ancestors.parent_content_offset,
+        }
+    }
 
     fn for_children(
         self,

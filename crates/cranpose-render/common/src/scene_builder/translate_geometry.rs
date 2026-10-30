@@ -1,9 +1,13 @@
-use cranpose_core::MemoryApplier;
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
-use super::{AbsOrigin, placed_transform, publish_retained_window_geometry};
+use super::{
+    AbsOrigin, PlacedChild, TranslateAncestorContext, placed_transform,
+    publish_retained_window_geometry, text_node,
+};
 use crate::{
+    NodeUpdate,
     graph::{LayerNode, ProjectiveTransform},
     layer_transform::layer_transform_to_window,
 };
@@ -45,6 +49,23 @@ impl TranslateGeometry {
         }
     }
 
+    // What the children of `container`, the layer laid out here beneath
+    // `ancestors`, take from it.
+    pub(super) fn children_context(
+        self,
+        container: &LayerNode,
+        ancestors: TranslateAncestorContext,
+    ) -> TranslateAncestorContext {
+        TranslateAncestorContext {
+            inherited_motion_context_animated: container.motion_context_animated,
+            update: ancestors.update,
+            inherited_translated_content_context: ancestors.inherited_translated_content_context
+                || container.translated_content_context,
+            parent_content_offset: self.content_offset,
+            parent_abs: self.child_abs(),
+        }
+    }
+
     pub(super) fn child_abs(self) -> AbsOrigin {
         AbsOrigin {
             content_origin: self.child_origin,
@@ -67,17 +88,26 @@ pub(super) fn translate_retained_child(
     layer.origin_in_parent = position;
 }
 
-/// Moves a child a translated container keeps to its placement in the
-/// container laid out with `geometry`. A subtree that publishes window
-/// origins publishes them again from where it now lies.
+// Moves a child a translated container keeps to its placement among the
+// container's `children`; a label kept for a content change writes its
+// text there, or stays dirty for the walk beneath. A subtree that
+// publishes window origins publishes them again from where it now lies.
 pub(super) fn move_kept_child(
     applier: &MemoryApplier,
     layer: &mut LayerNode,
-    position: Point,
-    geometry: TranslateGeometry,
+    placed: &PlacedChild,
+    children: TranslateAncestorContext,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
-    translate_retained_child(layer, position, geometry.content_offset);
+    if dirty_nodes.get(&placed.id) == Some(&NodeUpdate::Content) {
+        if text_node::retext_kept_leaf(applier, layer, children) == Some(true) {
+            dirty_nodes.remove(&placed.id);
+        }
+        return;
+    }
+    let position = placed.geometry.position;
+    translate_retained_child(layer, position, children.parent_content_offset);
     if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, geometry.child_abs());
+        publish_retained_window_geometry(applier, layer, children.parent_abs);
     }
 }

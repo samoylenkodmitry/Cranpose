@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{
     ModifierNodeSlices, PreparedTextLayout, Rect, Size, TextLayoutOptions, TextOverflow,
     TextPanResolver,
@@ -9,7 +9,7 @@ use cranpose_ui::{
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer,
     apply_translated_container_state, hit_test_from_slices, modifier_slices_have_origin_sinks,
-    translate_bail, translated_container,
+    read_node_data, translate_bail, translated_container,
 };
 use crate::{
     graph::{
@@ -91,6 +91,34 @@ pub(super) fn translate_leaf_text(
     Some(true)
 }
 
+// Writes the text of the node of `layer`, a label a translated container
+// keeps among its `children` for a content change, where the label lies.
+// `None` when the label no longer draws text alone, which leaves it to the
+// walk beneath the container.
+pub(super) fn retext_kept_leaf(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    children: TranslateAncestorContext,
+) -> Option<bool> {
+    let node_id = layer.node_id?;
+    read_node_data(applier, node_id, |data| {
+        translate_leaf_text(layer, &data, children)
+    })
+    .flatten()
+}
+
+// Whether `layer` drew its node's text and nothing else.
+pub(super) fn draws_text_alone(layer: &LayerNode) -> bool {
+    layer.wraps.is_none()
+        && matches!(
+            layer.children.as_slice(),
+            [RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Text(_),
+            })]
+        )
+}
+
 // The text `layer` drew, when it drew that and nothing else.
 fn drawn_text(layer: &mut LayerNode) -> Option<&mut TextPrimitiveNode> {
     match layer.children.as_mut_slice() {
@@ -105,88 +133,98 @@ fn drawn_text(layer: &mut LayerNode) -> Option<&mut TextPrimitiveNode> {
 }
 
 pub(super) fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
-    text_node(parts, None)
-}
-
-// Writes the text of `parts` into `drawn`, the text its node drew before,
-// which keeps its paint while its text and style stay. False, leaving
-// `drawn` as it was, when the node draws no text now.
-fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: TextNodeParts) -> bool {
-    let Some(text) = text_node(parts, Some(drawn)) else {
-        return false;
-    };
-    *drawn = text;
-    true
-}
-
-fn text_node(parts: TextNodeParts, drawn: Option<&TextPrimitiveNode>) -> Option<TextPrimitiveNode> {
-    let TextNodeParts {
-        node_id,
-        text_rect,
-        text_layout_options,
-        text_pan,
-        measured_layout,
-    } = parts;
-    let prepared = measured_layout?;
-    let options = text_layout_options.unwrap_or_default().normalized();
-    let content_width = text_rect.width.max(0.0);
-    if content_width <= 0.0 {
-        return None;
-    }
-
-    let pan_offset = text_pan
-        .as_ref()
-        .map_or(0.0, |resolve| resolve(content_width));
-    let pans_horizontally = text_pan.is_some();
-
+    let prepared = parts.measured_layout.as_ref()?;
+    let placement = TextPlacement::of(&parts, prepared)?;
     let visual_style = &prepared.visual_style;
-    // The layout aligns its lines across its own width; it draws from the
-    // content's corner.
-    let rect = Rect {
-        x: text_rect.x - pan_offset,
-        y: text_rect.y,
-        width: prepared.layout.width(),
-        height: prepared.size().height,
-    };
-    let text_bounds = Rect {
-        width: content_width,
-        height: text_rect.height.max(0.0),
-        ..text_rect
-    };
     let font_size = visual_style.resolve_font_size(14.0);
-    let clip = if options.overflow == TextOverflow::Visible && !pans_horizontally {
-        None
-    } else {
-        Some(pad_clip_rect(text_bounds))
-    };
-
     Some(TextPrimitiveNode {
-        node_id,
-        rect,
+        node_id: parts.node_id,
+        rect: placement.rect,
         text: Rc::clone(&prepared.text),
         render_text: prepared.render_text(),
         layout: prepared.layout.clone(),
         text_style: Arc::clone(visual_style),
         font_size,
-        overflow: options.overflow,
-        clip,
-        paint: match drawn {
-            Some(drawn)
-                if Rc::ptr_eq(&drawn.text, &prepared.text)
-                    && Arc::ptr_eq(&drawn.text_style, visual_style)
-                    && drawn.font_size == font_size =>
-            {
-                drawn.paint.clone()
-            }
-            _ => TextPaintCache::holding(TextPaint::of(
-                visual_style,
-                prepared.visual_style_hash(),
-                &prepared.text.span_styles,
-                font_size,
-                (prepared.render_text_hash(), prepared.text.text.is_empty()),
-            )),
-        },
+        overflow: placement.overflow,
+        clip: placement.clip,
+        paint: TextPaintCache::holding(TextPaint::of(
+            visual_style,
+            prepared.visual_style_hash(),
+            &prepared.text.span_styles,
+            font_size,
+            (prepared.render_text_hash(), prepared.text.text.is_empty()),
+        )),
     })
+}
+
+// Writes the text of `parts` into `drawn`, the text its node drew before:
+// a text and style that stay keep their paint, and only the box, the clip
+// and the lines change. False, leaving `drawn` as it was, when the node
+// draws no text now.
+fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: TextNodeParts) -> bool {
+    let Some(prepared) = parts.measured_layout.as_ref() else {
+        return false;
+    };
+    let Some(placement) = TextPlacement::of(&parts, prepared) else {
+        return false;
+    };
+    if !Rc::ptr_eq(&drawn.text, &prepared.text)
+        || !Arc::ptr_eq(&drawn.text_style, &prepared.visual_style)
+    {
+        let Some(text) = text_node_from_parts(parts) else {
+            return false;
+        };
+        *drawn = text;
+        return true;
+    }
+    drawn.rect = placement.rect;
+    drawn.clip = placement.clip;
+    drawn.overflow = placement.overflow;
+    drawn.layout = prepared.layout.clone();
+    drawn.render_text = prepared.render_text();
+    true
+}
+
+// Where a node's text draws, and the rectangle that cuts it.
+struct TextPlacement {
+    rect: Rect,
+    clip: Option<Rect>,
+    overflow: TextOverflow,
+}
+
+impl TextPlacement {
+    // Where the text of `parts`, laid out as `prepared`, draws; `None` when
+    // its node has no width to draw it in.
+    fn of(parts: &TextNodeParts, prepared: &PreparedTextLayout) -> Option<Self> {
+        let text_rect = parts.text_rect;
+        let options = parts.text_layout_options.unwrap_or_default().normalized();
+        let content_width = text_rect.width.max(0.0);
+        if content_width <= 0.0 {
+            return None;
+        }
+        let text_pan = parts.text_pan.as_ref();
+        let pan_offset = text_pan.map_or(0.0, |resolve| resolve(content_width));
+        // The layout aligns its lines across its own width; it draws from the
+        // content's corner.
+        let rect = Rect {
+            x: text_rect.x - pan_offset,
+            y: text_rect.y,
+            width: prepared.layout.width(),
+            height: prepared.size().height,
+        };
+        let text_bounds = Rect {
+            width: content_width,
+            height: text_rect.height.max(0.0),
+            ..text_rect
+        };
+        let clip = (options.overflow != TextOverflow::Visible || text_pan.is_some())
+            .then(|| pad_clip_rect(text_bounds));
+        Some(Self {
+            rect,
+            clip,
+            overflow: options.overflow,
+        })
+    }
 }
 
 fn pad_clip_rect(rect: Rect) -> Rect {
