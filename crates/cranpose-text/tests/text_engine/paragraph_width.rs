@@ -1,6 +1,6 @@
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle, TextLayout,
-    TextLayoutOptions, TextLayouter, TextOverflow,
+    FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle, TextAlign,
+    TextLayout, TextLayoutOptions, TextLayouter, TextOverflow,
 };
 
 use crate::fonts::{ROBOTO, span, typeface};
@@ -112,7 +112,7 @@ fn wrapped_text_keeps_its_width_at_the_max_widths_that_keep_its_lines() {
         assert!(low <= laid_at && laid_at <= high, "{text}: {low}..{high}");
         for max_width in [low, (low + high) / 2.0, high] {
             assert!(laid.holds(0.0, max_width), "{text} at {max_width}");
-            laid.align(0.0, max_width, cranpose_text::TextAlign::Start);
+            laid.align(0.0, max_width, TextAlign::Start);
             let fresh = layout(&resolver, text, (0.0, max_width), 1.0, options);
             assert_eq!(
                 (laid.width(), fresh.width(), fresh.line_count()),
@@ -144,4 +144,51 @@ fn unwrapped_clipped_text_keeps_its_own_width_past_the_max_and_overflows_it() {
     assert_eq!(laid.line_count(), 1);
     assert_eq!(laid.width(), natural(&laid).ceil());
     assert!(laid.did_overflow_width());
+}
+
+// How far the lines reach across spans the visible text of every line, as
+// the layout places them at their indents and as it aligns them across its
+// width.
+#[test]
+fn the_lines_reach_spans_the_visible_text_of_its_lines_wherever_they_lie() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let spanned = |laid: &TextLayout| {
+        (0..laid.line_count()).fold((f32::INFINITY, f32::NEG_INFINITY), |(left, right), line| {
+            (
+                left.min(laid.line_left(line)),
+                right.max(laid.line_right(line)),
+            )
+        })
+    };
+    for (text, width) in [(SHORT, 300.0), (LONG, 150.0)] {
+        let mut laid = layout(
+            &resolver,
+            text,
+            (width, width),
+            1.0,
+            TextLayoutOptions::default(),
+        );
+        let at_indents = laid.lines_reach();
+        assert_eq!(at_indents, spanned(&laid), "{text}");
+        for align in [
+            TextAlign::Center,
+            TextAlign::End,
+            TextAlign::Justify,
+            TextAlign::Start,
+        ] {
+            laid.align(width, width, align);
+            assert_eq!(laid.lines_reach(), spanned(&laid), "{text} {align:?}");
+        }
+        assert_eq!(laid.lines_reach(), at_indents, "{text}");
+    }
+    let mut short = layout(
+        &resolver,
+        SHORT,
+        (300.0, 300.0),
+        1.0,
+        TextLayoutOptions::default(),
+    );
+    let at_indents = short.lines_reach();
+    short.align(300.0, 300.0, TextAlign::Center);
+    assert_ne!(short.lines_reach(), at_indents, "centering moves the line");
 }

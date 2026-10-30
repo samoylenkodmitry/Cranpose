@@ -14,45 +14,28 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Point, Rect, whole};
 use smallvec::SmallVec;
 
-use crate::glyph_mask::GlyphRaster;
+use crate::{glyph_mask::GlyphRaster, text_paint::spans_cast_shadow};
 
-/// The part of `rect` in which a renderer draws the glyphs of `text` in
-/// `style`, laid out in `layout` from `rect`'s top left corner at `scale`
-/// units of `rect` a layout pixel: the visible text of its lines, widened
-/// to whole units from that corner, so that the part rasterizes on the grid
-/// the whole text does. Past `rect` where a line overflows it. All of `rect`
-/// when a span casts a shadow, which reaches past the glyphs, or when the
-/// layout has no lines.
-pub fn glyph_reach(
-    rect: Rect,
-    layout: &TextLayout,
-    (text, style): (StyledTextRef<'_>, &TextStyle),
-    scale: f32,
-) -> Rect {
-    if style.span_style.shadow.is_some()
-        || text
-            .span_styles
-            .iter()
-            .any(|span| span.item.shadow.is_some())
-    {
-        return rect;
-    }
-    let (left, right) =
-        (0..layout.line_count()).fold((f32::INFINITY, f32::NEG_INFINITY), |(left, right), line| {
-            (
-                left.min(layout.line_left(line)),
-                right.max(layout.line_right(line)),
-            )
-        });
-    if left > right {
-        return rect;
-    }
+/// The part of `rect` that the visible text of `layout`'s lines covers,
+/// `layout` drawn from `rect`'s top left corner at `scale` units of `rect` a
+/// layout pixel, widened to whole units from that corner, so that the part
+/// rasterizes on the grid the whole text does. Past `rect` where a line
+/// overflows it. A renderer draws a text's glyphs in this part, unless the
+/// text [casts a shadow](casts_shadow).
+pub fn lines_part(rect: Rect, layout: &TextLayout, scale: f32) -> Rect {
+    let (left, right) = layout.lines_reach();
     let left = whole::floor(left * scale);
     Rect {
         x: rect.x + left,
         width: whole::ceil(right * scale) - left,
         ..rect
     }
+}
+
+/// Whether `style` or a span of `text` casts a shadow, which spreads past
+/// the glyphs: a renderer draws such a text in its whole box.
+pub fn casts_shadow(text: StyledTextRef<'_>, style: &TextStyle) -> bool {
+    style.span_style.shadow.is_some() || spans_cast_shadow(text.span_styles)
 }
 
 /// A text and the styles of its ranges.

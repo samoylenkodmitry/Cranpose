@@ -35,6 +35,10 @@ pub struct TextLayout {
     wrap: f32,
     did_overflow_width: bool,
     id: u32,
+    // How far the visible text of the lines reaches across, from the left
+    // edge of the leftmost to the right edge of the rightmost. Kept beside
+    // the body, so a renderer reads it in the layout it holds.
+    reach: (f32, f32),
 }
 
 impl PartialEq for TextLayout {
@@ -521,8 +525,9 @@ impl TextLayout {
             width,
             wrap,
             id: 0,
+            reach: (0.0, 0.0),
         };
-        layout.renew_id();
+        layout.take_lines();
         layout
     }
 
@@ -537,7 +542,7 @@ impl TextLayout {
         self.wrap = fill(body);
         self.width = body.width_between(widths.0, widths.1);
         self.did_overflow_width = body.widest > self.width || self.width > widths.1;
-        self.renew_id();
+        self.take_lines();
     }
 
     // The body, which the layouter reads glyphs shaped before from.
@@ -553,8 +558,19 @@ impl TextLayout {
     }
 
     // Gives the layout a new id, its glyphs or positions changed.
-    pub(crate) fn renew_id(&mut self) {
+    // Takes the lines the body now holds in their places: a new id, and
+    // how far their visible text reaches.
+    fn take_lines(&mut self) {
         self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1);
+        self.reach = self
+            .body
+            .lines
+            .iter()
+            .map(|line| (line.left, line.right()))
+            .reduce(|(left, right), (line_left, line_right)| {
+                (left.min(line_left), right.max(line_right))
+            })
+            .unwrap_or_default();
     }
 
     /// Whether the text laid out again between `min_width` and `max_width`,
@@ -645,7 +661,7 @@ impl TextLayout {
         if self.body.lines_move(self.width, align)
             && Arc::make_mut(&mut self.body).align_lines(self.width, align)
         {
-            self.renew_id();
+            self.take_lines();
         }
     }
 
@@ -663,6 +679,13 @@ impl TextLayout {
     /// The number of lines, at least one.
     pub fn line_count(&self) -> usize {
         self.body.lines.len()
+    }
+
+    /// How far the visible text of the lines reaches across: the left edge
+    /// of the leftmost line's and the right edge of the rightmost line's,
+    /// both zero for the empty default.
+    pub fn lines_reach(&self) -> (f32, f32) {
+        self.reach
     }
 
     /// Whether the text had more lines than the line limit: Compose's

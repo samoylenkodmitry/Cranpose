@@ -145,6 +145,11 @@ pub fn spans_override_foreground(spans: &[RangeStyle<SpanStyle>]) -> bool {
         .any(|span| span_has_foreground_override(&span.item))
 }
 
+/// Whether a span casts a shadow of its own.
+pub fn spans_cast_shadow(spans: &[RangeStyle<SpanStyle>]) -> bool {
+    spans.iter().any(|span| span.item.shadow.is_some())
+}
+
 /// Whether a span gives its range a colour or a solid brush of its own.
 pub fn spans_override_foreground_color(spans: &[RangeStyle<SpanStyle>]) -> bool {
     spans
