@@ -85,18 +85,17 @@ pub(crate) type DrawnTextStyles = RecentValues<DrawnStyle, DRAWN_TEXT_STYLES>;
 pub fn drawn_text_style(style: &DrawTextStyle) -> (Arc<TextStyle>, u64) {
     crate::thread_state::with(|state| {
         let mut drawn = state.drawn_text_styles.borrow_mut();
-        let kept = drawn.find_or_keep(
-            style,
-            |kept, style| kept.draw == **style,
-            |style| {
+        let kept = match drawn.find(|kept| kept.draw == *style) {
+            Some(kept) => kept,
+            None => {
                 let text_style = text_style_for_draw_style(style);
-                DrawnStyle {
+                drawn.keep(DrawnStyle {
                     draw: style.clone(),
                     hash: text_style.render_hash(),
                     style: Arc::new(text_style),
-                }
-            },
-        );
+                })
+            }
+        };
         (Arc::clone(&kept.style), kept.hash)
     })
 }

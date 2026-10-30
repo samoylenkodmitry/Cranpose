@@ -9,24 +9,22 @@ impl<T, const N: usize> RecentValues<T, N> {
         Self(Vec::new())
     }
 
-    // The kept value that `matches` `key`, or the one `make` makes of it.
-    pub(crate) fn find_or_keep<K>(
-        &mut self,
-        key: K,
-        matches: impl Fn(&T, &K) -> bool,
-        make: impl FnOnce(K) -> T,
-    ) -> &T {
-        match self.0.iter().position(|kept| matches(kept, &key)) {
-            Some(0) => &self.0[0],
-            Some(index) => {
+    // The kept value `matches` accepts.
+    pub(crate) fn find(&mut self, matches: impl Fn(&T) -> bool) -> Option<&T> {
+        match self.0.iter().position(matches)? {
+            0 => self.0.first(),
+            index => {
                 self.0.swap(index, index - 1);
-                &self.0[index - 1]
-            }
-            None => {
-                self.0.truncate(N - 1);
-                self.0.insert(0, make(key));
-                &self.0[0]
+                self.0.get(index - 1)
             }
         }
+    }
+
+    // Keeps `value` first, in place of the last kept one when the list is
+    // full.
+    pub(crate) fn keep(&mut self, value: T) -> &T {
+        self.0.truncate(N - 1);
+        self.0.insert(0, value);
+        &self.0[0]
     }
 }

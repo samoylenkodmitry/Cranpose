@@ -535,11 +535,11 @@ pub(crate) type RecentTextStyles = RecentValues<Arc<TextStyle>, SHARED_TEXT_STYL
 /// own, kept first; the last kept one goes.
 pub(crate) fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
     crate::thread_state::with(|state| {
-        Arc::clone(state.recent_text_styles.borrow_mut().find_or_keep(
-            style,
-            |kept, style| **kept == *style,
-            Arc::new,
-        ))
+        let mut recent = state.recent_text_styles.borrow_mut();
+        if let Some(kept) = recent.find(|kept| **kept == style) {
+            return Arc::clone(kept);
+        }
+        Arc::clone(recent.keep(Arc::new(style)))
     })
 }
 
