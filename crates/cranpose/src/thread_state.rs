@@ -142,7 +142,6 @@ impl CranposeThreadState {
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub(crate) struct IosThreadState {
-    #[cfg(feature = "media-backend")]
     pub(crate) media_artwork: RefCell<Option<crate::ios::media_artwork::CachedArtwork>>,
     pub(crate) back_gesture_target:
         RefCell<Option<objc2::rc::Retained<crate::ios::back_gesture::BackGestureTarget>>>,
@@ -159,7 +158,6 @@ pub(crate) struct IosThreadState {
 impl IosThreadState {
     const fn new() -> Self {
         Self {
-            #[cfg(feature = "media-backend")]
             media_artwork: RefCell::new(None),
             back_gesture_target: RefCell::new(None),
             text_field_traits: OnceCell::new(),
