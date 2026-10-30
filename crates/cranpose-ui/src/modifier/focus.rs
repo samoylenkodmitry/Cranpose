@@ -40,7 +40,7 @@ pub enum FocusDirection {
 
 type FocusChangedCallback = Rc<dyn Fn(FocusState)>;
 
-struct FocusTargetShared {
+pub(super) struct FocusTargetShared {
     focus_state: Cell<FocusState>,
     on_focus_changed: RefCell<Option<FocusChangedCallback>>,
     /// The focus observers composed around this target.
@@ -54,6 +54,10 @@ impl FocusTargetShared {
             on_focus_changed: RefCell::new(on_focus_changed),
             observers: RefCell::new(None),
         }
+    }
+
+    pub(super) fn is_focused(&self) -> bool {
+        self.focus_state.get().is_focused()
     }
 
     fn set_focus_state(&self, state: FocusState) {
@@ -123,6 +127,10 @@ impl FocusTargetNode {
 
     pub(super) fn set_focus_state(&self, state: FocusState) {
         self.shared.set_focus_state(state);
+    }
+
+    pub(super) fn shared(&self) -> &Rc<FocusTargetShared> {
+        &self.shared
     }
 
     pub(super) fn clear_focus(&self) {

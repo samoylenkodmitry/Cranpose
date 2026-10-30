@@ -85,3 +85,45 @@ fn independent_draw_commands_keep_their_reads_beneath_a_focus_ring() {
 fn independent_graphics_layers_keep_their_reads_on_one_node() {
     assert_independent_draws(true);
 }
+
+thread_local! {
+    static PASS: RefCell<Option<MutableState<u32>>> = const { RefCell::new(None) };
+}
+
+#[composable]
+fn FocusableUnderARecomposingParent() {
+    let pass = rememberMutableStateOf(|| 0u32);
+    PASS.with(|slot| *slot.borrow_mut() = Some(pass));
+    // Reading the state composes this scope again on every change; the
+    // control it calls receives the same modifier each time.
+    if pass.get() == u32::MAX {
+        return;
+    }
+    Box(
+        Modifier::empty().size_points(100.0, 40.0).focusable(),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn a_focusable_control_keeps_its_drawing_when_its_parent_composes_again() {
+    let _guard = test_guard();
+    let mut host = CountedShell::settled(location_key(file!(), line!(), column!()), || {
+        FocusableUnderARecomposingParent();
+    });
+    host.frame();
+    let pass = PASS
+        .with(|slot| *slot.borrow())
+        .expect("the pass state is published");
+    for _ in 0..3 {
+        pass.set_value(pass.get_non_reactive() + 1);
+        host.shell.surfaces[0].renderer.visual_updates.set(0);
+        assert_eq!(host.frame(), (0, 0), "the scene keeps its structure");
+        assert_eq!(
+            host.shell.surfaces[0].renderer.visual_updates.get(),
+            0,
+            "an equal focusable modifier schedules no draw update"
+        );
+    }
+}

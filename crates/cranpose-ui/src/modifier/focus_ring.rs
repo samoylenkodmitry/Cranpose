@@ -1,11 +1,22 @@
 //! The ring a control shows while the keyboard holds focus on it, so a person
 //! who works without a pointer sees where the next Enter lands.
 
-use std::{cell::Cell, rc::Rc};
+use std::{
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
-use cranpose_ui_graphics::{Brush, Color, DrawScope, Rect, Size, Stroke};
+use cranpose_foundation::{
+    DelegatableNode, DrawModifierNode, FocusNode, FocusState, ModifierNode, ModifierNodeContext,
+    ModifierNodeElement, NodeCapabilities, NodeDrawClosure, NodeState, impl_draw_node,
+    impl_focus_node, modifier_element,
+};
+use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, Rect, Size, Stroke};
 
-use super::Modifier;
+use super::{
+    Modifier,
+    focus::{FocusTargetElement, FocusTargetNode},
+};
 use crate::focus_dispatch::keyboard_focus_visible;
 
 /// The outer line of the ring: a blue that stands out on white and on black.
@@ -57,15 +68,87 @@ impl Modifier {
     /// [`focus_target`](Self::focus_target) instead. Compose's
     /// `Modifier.focusable()`.
     pub fn focusable(self) -> Self {
-        let focused = Rc::new(Cell::new(false));
-        let seen = Rc::clone(&focused);
-        self.on_focus_changed(move |state| seen.set(state.is_focused()))
-            .draw_with_content(move |scope| {
-                scope.draw_content();
-                if focused.get() && keyboard_focus_visible() {
-                    draw_focus_ring(scope);
-                }
-            })
+        let element = FocusRingElement(FocusTargetElement::new());
+        self.then(Self::from_dyn_element(modifier_element(element)))
+    }
+}
+
+// One element for the focus target and its ring, equal from one composition
+// to the next, so a recomposition keeps the node as it is.
+#[derive(Clone, Debug, PartialEq)]
+struct FocusRingElement(FocusTargetElement);
+
+impl Hash for FocusRingElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        "focusable".hash(state);
+    }
+}
+
+impl ModifierNodeElement for FocusRingElement {
+    type Node = FocusRingNode;
+
+    fn create(&self) -> Self::Node {
+        FocusRingNode {
+            target: self.0.create(),
+        }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        self.0.update(&mut node.target);
+    }
+
+    fn inspector_name(&self) -> &'static str {
+        "focusable"
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::FOCUS | NodeCapabilities::DRAW
+    }
+}
+
+// A focus target that draws its ring over its content, reading at draw time
+// whether it holds focus.
+struct FocusRingNode {
+    target: FocusTargetNode,
+}
+
+impl DelegatableNode for FocusRingNode {
+    fn node_state(&self) -> &NodeState {
+        self.target.node_state()
+    }
+}
+
+impl ModifierNode for FocusRingNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.target.on_attach(context);
+    }
+
+    fn on_detach(&mut self) {
+        self.target.on_detach();
+    }
+
+    impl_draw_node!();
+    impl_focus_node!();
+}
+
+impl FocusNode for FocusRingNode {
+    fn focus_state(&self) -> FocusState {
+        self.target.focus_state()
+    }
+
+    fn on_focus_changed(&mut self, context: &mut dyn ModifierNodeContext, state: FocusState) {
+        self.target.on_focus_changed(context, state);
+    }
+}
+
+impl DrawModifierNode for FocusRingNode {
+    fn create_draw_closure(&self) -> Option<NodeDrawClosure> {
+        let target = Rc::clone(self.target.shared());
+        Some(Rc::new(move |scope: &mut DrawScopeDefault| {
+            if target.is_focused() && keyboard_focus_visible() {
+                draw_focus_ring(scope);
+            }
+        }))
     }
 }
 
