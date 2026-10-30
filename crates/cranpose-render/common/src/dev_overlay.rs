@@ -39,8 +39,10 @@ pub fn build_dev_overlay_graph(
     node_id: cranpose_core::NodeId,
 ) -> RenderGraph {
     let padding = 8.0;
-    let text_width = overlay.metrics.width;
-    let text_height = overlay.metrics.height;
+    let Size {
+        width: text_width,
+        height: text_height,
+    } = overlay.size();
     let x = (viewport.width - text_width - padding * 2.0).max(padding);
     let y = padding;
 

@@ -106,8 +106,8 @@ fn multiline_height_baselines_and_cursors_follow_each_lines_styled_fonts() {
     let text = mixed_text("HH\nH\nH");
     let small = prepare(&"H".into(), &base, None);
     let large = prepare(&"H".into(), &style(20.0), None);
-    let small_height = small.metrics.height;
-    let large_height = large.metrics.height;
+    let small_height = small.metrics().height;
+    let large_height = large.metrics().height;
     let small_baseline = small.layout.line_baseline(0);
     let large_baseline = large.layout.line_baseline(0);
     let expected_height = large_height + 2.0 * small_height;
@@ -119,17 +119,17 @@ fn multiline_height_baselines_and_cursors_follow_each_lines_styled_fonts() {
     assert_eq!(last_ink.len(), 2);
     assert_close((last_ink[1] - last_ink[0]) as f32, small_height);
 
-    assert_close(prepared.metrics.height, expected_height);
+    assert_close(prepared.metrics().height, expected_height);
     assert_close(
         prepared
-            .alignment_lines
+            .alignment_lines()
             .first_baseline()
             .expect("first baseline"),
         large_baseline,
     );
     assert_close(
         prepared
-            .alignment_lines
+            .alignment_lines()
             .last_baseline()
             .expect("last baseline"),
         expected_last,
@@ -162,7 +162,7 @@ fn explicit_line_heights_draw_each_line_on_its_layout_baseline() {
         let layout = &prepared.layout;
         if trim == LineHeightTrim::None {
             assert_close(layout.line_top(1) - layout.line_top(0), height);
-            assert_close(prepared.metrics.height, 2.0 * height);
+            assert_close(prepared.metrics().height, 2.0 * height);
         }
         let (bitmap, glyphs) = render(&prepared);
         // The large green H sits on the first line, the blue H on the second.
@@ -193,14 +193,14 @@ fn wrapped_lines_and_span_updates_report_the_drawn_height() {
     let small = prepare(&"H".into(), &base, None);
     let large = prepare(&"H".into(), &style(20.0), None);
     assert_close(
-        first.metrics.height,
-        large.metrics.height + small.metrics.height,
+        first.metrics().height,
+        large.metrics().height + small.metrics().height,
     );
     text.span_styles[1].item.font_size = TextUnit::Sp(30.0);
     let updated = prepare(&text, &base, None);
     assert_close(
-        updated.metrics.height,
-        prepare(&"H".into(), &style(30.0), None).metrics.height,
+        updated.metrics().height,
+        prepare(&"H".into(), &style(30.0), None).metrics().height,
     );
     assert!(line_width(&updated) > line_width(&prepare(&mixed_text("HH HH"), &base, None)));
     let (bitmap, _) = render(&updated);

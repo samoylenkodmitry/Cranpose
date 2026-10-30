@@ -162,8 +162,8 @@ impl LayoutCache {
 
 // Puts `prepared` first among the layouts of one text, keeping the newest.
 fn remember(widths: &mut Widths, prepared: &Rc<PreparedTextLayout>) {
+    widths.truncate(WIDTHS_PER_TEXT - 1);
     widths.insert(0, Rc::clone(prepared));
-    widths.truncate(WIDTHS_PER_TEXT);
 }
 
 // The layouts of draw scopes' text the last pass drew, and the pass now.

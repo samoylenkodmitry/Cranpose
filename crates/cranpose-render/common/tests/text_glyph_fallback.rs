@@ -182,7 +182,8 @@ fn assert_matches_reference(
     let actual_layout = prepare(actual, style, fonts);
     let expected_layout = prepare(expected, style, fonts);
     assert_eq!(
-        actual_layout.metrics, expected_layout.metrics,
+        actual_layout.metrics(),
+        expected_layout.metrics(),
         "the fallback text measures as the text it stands for"
     );
     assert_eq!(
@@ -419,11 +420,12 @@ fn a_prepared_text_takes_the_line_height_of_the_faces_it_draws_in() {
     let falling_back = prepared(&emoji());
 
     assert_eq!(
-        falling_back.metrics.line_height, in_latin.metrics.line_height,
+        falling_back.metrics().line_height,
+        in_latin.metrics().line_height,
         "letters the emoji face lacks draw in the Latin face, whose line they take"
     );
     assert_eq!(
-        falling_back.alignment_lines.first_baseline(),
-        in_latin.alignment_lines.first_baseline()
+        falling_back.alignment_lines().first_baseline(),
+        in_latin.alignment_lines().first_baseline()
     );
 }

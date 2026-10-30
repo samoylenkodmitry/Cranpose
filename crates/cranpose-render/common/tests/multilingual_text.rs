@@ -46,8 +46,8 @@ fn drawn(text: &str) -> Vec<AtlasGlyph> {
             Rect {
                 x: 0.0,
                 y: 0.0,
-                width: prepared.metrics.width,
-                height: prepared.metrics.height,
+                width: prepared.metrics().width,
+                height: prepared.metrics().height,
             },
             &style,
             Color::WHITE,

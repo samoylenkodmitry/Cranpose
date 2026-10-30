@@ -10,7 +10,7 @@ use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
 };
-use cranpose_ui_graphics::{MemoryHeadroom, TextLayoutHandle};
+use cranpose_ui_graphics::{MemoryHeadroom, Size, TextLayoutHandle};
 
 use super::{
     AnnotatedString, LineBox, RenderString, SpanStyle, TextAlign, TextDrawStyle, TextUnit,
@@ -49,13 +49,10 @@ pub struct PreparedTextLayout {
     pub visual_style: Arc<TextStyle>,
     /// The lines and glyphs.
     pub layout: TextLayout,
-    /// Size and line count.
-    pub metrics: TextMetrics,
-    /// The first and last baselines.
-    pub alignment_lines: cranpose_ui_layout::AlignmentLines,
-    /// True when the text did not fit: it had more lines than the line limit,
-    /// or was wider than the widest it could be.
-    pub did_overflow: bool,
+    // The widest the text could be, and the fewest lines its height covers,
+    // which its metrics follow from with its layout.
+    max_width: f32,
+    min_lines: u32,
     /// `text` as a renderer draws it, and its
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
     /// converted on first use: see [`PreparedTextLayout::render_text`].
@@ -74,20 +71,9 @@ impl PreparedTextLayout {
         layout: TextLayout,
         (max_width, min_lines): (f32, usize),
     ) -> Self {
-        let last = layout.line_count() - 1;
-        let metrics = TextMetrics {
-            width: layout.width().min(max_width),
-            height: layout.height(),
-            line_height: layout.line_bottom(0) - layout.line_top(0),
-            line_count: layout.line_count().max(min_lines),
-        };
         Self {
-            alignment_lines: cranpose_ui_layout::AlignmentLines::new(
-                Some(layout.line_baseline(0)),
-                Some(layout.line_baseline(last)),
-            ),
-            did_overflow: layout.did_overflow_height() || layout.did_overflow_width(),
-            metrics,
+            max_width,
+            min_lines: u32::try_from(min_lines).unwrap_or(u32::MAX),
             text,
             visual_style: style,
             layout,
@@ -95,6 +81,44 @@ impl PreparedTextLayout {
             visual_style_hash: OnceCell::new(),
             layout_handle: OnceCell::new(),
         }
+    }
+
+    /// The paragraph's width, within the widths it was laid out between, and
+    /// the height of all its lines together.
+    pub fn size(&self) -> Size {
+        Size::new(
+            self.layout.width().min(self.max_width),
+            self.layout.height(),
+        )
+    }
+
+    /// Size and line count.
+    pub fn metrics(&self) -> TextMetrics {
+        let layout = &self.layout;
+        let size = self.size();
+        TextMetrics {
+            width: size.width,
+            height: size.height,
+            line_height: layout.line_bottom(0) - layout.line_top(0),
+            line_count: layout
+                .line_count()
+                .max(usize::try_from(self.min_lines).unwrap_or(usize::MAX)),
+        }
+    }
+
+    /// The first and last baselines.
+    pub fn alignment_lines(&self) -> cranpose_ui_layout::AlignmentLines {
+        let layout = &self.layout;
+        cranpose_ui_layout::AlignmentLines::new(
+            Some(layout.line_baseline(0)),
+            Some(layout.line_baseline(layout.line_count() - 1)),
+        )
+    }
+
+    /// True when the text did not fit: it had more lines than the line limit,
+    /// or was wider than the widest it could be.
+    pub fn did_overflow(&self) -> bool {
+        self.layout.did_overflow_height() || self.layout.did_overflow_width()
     }
 
     // The layout as a draw scope carries it to a renderer, made once for
@@ -177,9 +201,9 @@ impl PartialEq for PreparedTextLayout {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
             && self.visual_style == other.visual_style
-            && self.metrics == other.metrics
-            && self.alignment_lines == other.alignment_lines
-            && self.did_overflow == other.did_overflow
+            && self.metrics() == other.metrics()
+            && self.alignment_lines() == other.alignment_lines()
+            && self.did_overflow() == other.did_overflow()
     }
 }
 
@@ -660,7 +684,7 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
         TextFrame::unbounded(TextLayoutOptions::default()),
         host_units(),
     )
-    .metrics
+    .metrics()
 }
 
 // `text` laid out in `style` with lines ending only at its line breaks,
@@ -695,7 +719,7 @@ pub fn measure_text_with_options(
         TextFrame::up_to(max_width, options),
         host_units(),
     )
-    .metrics
+    .metrics()
 }
 
 /// Lays `text` out in `style` wrapped to `max_width` under `options`.

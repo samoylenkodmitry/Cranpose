@@ -126,8 +126,8 @@ fn min_lines_make_room_for_lines_the_text_lacks() {
 
     let prepared = prepare("short", &sized(10.0), options, Some(100.0));
 
-    assert_eq!(prepared.metrics.line_count, 3);
-    assert_eq!(prepared.metrics.height, 30.0);
+    assert_eq!(prepared.metrics().line_count, 3);
+    assert_eq!(prepared.metrics().height, 30.0);
 }
 
 #[test]
@@ -136,8 +136,8 @@ fn scale_down_shrinks_the_font_until_the_text_fits() {
 
     let prepared = prepare("ABCDE", &sized(20.0), scaled_down_to(10.0), Some(36.0));
 
-    assert!(prepared.metrics.width <= 36.0, "{:?}", prepared.metrics);
-    assert!(!prepared.did_overflow);
+    assert!(prepared.metrics().width <= 36.0, "{:?}", prepared.metrics());
+    assert!(!prepared.did_overflow());
     let font_size = prepared.visual_style.resolve_font_size(14.0);
     assert!((10.0..20.0).contains(&font_size), "{font_size}");
 }
@@ -171,7 +171,7 @@ fn scale_down_stops_at_its_minimum_and_overflows() {
 
     let prepared = prepare("ABCDEFGHIJ", &sized(20.0), scaled_down_to(10.0), Some(12.0));
 
-    assert!(prepared.did_overflow);
+    assert!(prepared.did_overflow());
     assert_eq!(prepared.visual_style.resolve_font_size(14.0), 10.0);
 }
 
@@ -211,5 +211,5 @@ fn text_of_mixed_font_sizes_wraps_without_losing_text() {
     let layout = &prepared.layout;
     assert!(layout.line_count() > 1);
     assert_eq!(layout.line_end(layout.line_count() - 1), text.text.len());
-    assert!(!prepared.did_overflow);
+    assert!(!prepared.did_overflow());
 }

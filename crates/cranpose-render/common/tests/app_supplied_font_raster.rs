@@ -92,8 +92,8 @@ fn measured_block(fonts: &TextFonts, text: &str, style: &TextStyle) -> Measured 
         rect: Rect {
             x: 0.0,
             y: 0.0,
-            width: prepared.metrics.width,
-            height: prepared.metrics.height,
+            width: prepared.metrics().width,
+            height: prepared.metrics().height,
         },
         prepared,
     }

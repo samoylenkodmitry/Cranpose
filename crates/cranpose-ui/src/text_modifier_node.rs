@@ -53,7 +53,7 @@ impl TextPreparedLayoutCacheEntry {
         same(self.min_width, min_width)
             && (self.text_generation, self.font_scale_fingerprint) == stamp
             && same(layout.width_between(min_width, max_width), layout.width())
-            && same(self.layout.metrics.width, layout.width().min(max_width))
+            && same(self.layout.size().width, layout.width().min(max_width))
     }
 }
 
@@ -212,10 +212,10 @@ impl TextPreparedLayoutOwner {
         let cache = self.cache.borrow();
         let entry = cache.iter().find(|entry| entry.keeps(widths, stamp))?;
         let prepared = &entry.layout;
-        let size = Size::new(prepared.metrics.width, prepared.metrics.height);
+        let size = prepared.size();
         // A paragraph wider than its max measures as the max, which moves
         // with it.
-        if prepared.metrics.width < prepared.layout.width() {
+        if size.width < prepared.layout.width() {
             return Some((size, cranpose_ui_layout::BoundRange::exactly(widths.1)));
         }
         let (low, high) = prepared.layout.max_widths_kept(widths.0);
@@ -229,19 +229,13 @@ impl TextPreparedLayoutOwner {
     }
 
     fn measure_text_content(&self, widths: (f32, f32)) -> Size {
-        self.with_prepared(widths, |prepared| Size {
-            width: prepared.metrics.width,
-            height: prepared.metrics.height,
-        })
+        self.with_prepared(widths, |prepared| prepared.size())
     }
 
     fn measure_layout(&self, widths: (f32, f32)) -> (Size, cranpose_ui_layout::AlignmentLines) {
         self.measured_widths.set(Some(widths));
         self.with_prepared(widths, |prepared| {
-            (
-                Size::new(prepared.metrics.width, prepared.metrics.height),
-                prepared.alignment_lines,
-            )
+            (prepared.size(), prepared.alignment_lines())
         })
     }
 

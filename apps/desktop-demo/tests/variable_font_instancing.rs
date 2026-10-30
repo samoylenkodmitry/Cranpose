@@ -75,8 +75,8 @@ fn ink_area(fonts: &TextFonts, text: &str, style: &TextStyle) -> usize {
     let rect = Rect {
         x: 0.0,
         y: 0.0,
-        width: prepared.metrics.width,
-        height: prepared.metrics.height,
+        width: prepared.metrics().width,
+        height: prepared.metrics().height,
     };
     let mut cache = GlyphMaskCache::with_capacity_at_least_one(256);
     let mut run: Vec<AtlasGlyph> = Vec::new();

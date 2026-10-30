@@ -86,7 +86,10 @@ fn a_measured_node_exposes_the_layout_it_measured() {
             .prepared_layout_handle()
             .measured_layout()
             .expect("measured node exposes its layout");
-        (measured, (prepared.metrics.width, prepared.metrics.height))
+        (
+            measured,
+            (prepared.metrics().width, prepared.metrics().height),
+        )
     });
     assert_eq!((measured.width, measured.height), prepared);
 }

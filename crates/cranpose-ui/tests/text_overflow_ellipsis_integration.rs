@@ -53,7 +53,7 @@ fn prepared_lines(
     max_width: f32,
 ) -> (Vec<String>, bool) {
     let prepared = prepare(text, wrapped(overflow, max_lines), max_width);
-    (drawn_lines(&prepared), prepared.did_overflow)
+    (drawn_lines(&prepared), prepared.did_overflow())
 }
 
 fn sized_span_text(before: &str, font_size_sp: f32, sized: &str, after: &str) -> AnnotatedString {
@@ -191,7 +191,7 @@ fn end_ellipsis_fits_a_larger_span_on_the_last_line_within_the_width() {
     assert_eq!(drawn_lines(&prepared), ["aa BBBB\u{2026}"]);
     assert_eq!(drawn_at_size(&prepared, DOUBLE_WIDTH_SP), ["BBBB"]);
     assert!(painted_width(&prepared) <= TWELVE_CHARS_WIDE);
-    assert!(prepared.did_overflow);
+    assert!(prepared.did_overflow());
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn end_ellipsis_keeps_as_much_of_a_smaller_span_as_fits() {
         ["bbbbbbbbbbbbbbbb"]
     );
     assert_eq!(painted_width(&prepared), TWELVE_CHARS_WIDE);
-    assert!(prepared.did_overflow);
+    assert!(prepared.did_overflow());
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn start_ellipsis_keeps_the_span_styles_after_the_ellipsis() {
     assert_eq!(drawn_lines(&prepared), ["\u{2026}b cccc DD"]);
     assert_eq!(drawn_at_size(&prepared, DOUBLE_WIDTH_SP), ["DD"]);
     assert!(painted_width(&prepared) <= TWELVE_CHARS_WIDE);
-    assert!(prepared.did_overflow);
+    assert!(prepared.did_overflow());
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn middle_ellipsis_keeps_the_span_styles_on_both_sides() {
         ["aaaaaaaaaaaa", "bbbbbbbbbbb"]
     );
     assert_eq!(painted_width(&prepared), TWELVE_CHARS_WIDE);
-    assert!(prepared.did_overflow);
+    assert!(prepared.did_overflow());
 }
 
 #[test]
@@ -260,8 +260,8 @@ fn ellipsis_without_soft_wrap_lays_out_only_the_first_line() {
         );
 
         assert_eq!(drawn_lines(&prepared), [expected], "{overflow:?}");
-        assert_eq!(prepared.metrics.line_count, 1, "{overflow:?}");
-        assert!(prepared.did_overflow, "{overflow:?}");
+        assert_eq!(prepared.metrics().line_count, 1, "{overflow:?}");
+        assert!(prepared.did_overflow(), "{overflow:?}");
     }
 }
 
@@ -275,7 +275,7 @@ fn start_and_middle_ellipsis_without_soft_wrap_elide_the_first_line() {
         let prepared = prepare(text, unwrapped(overflow), TWELVE_CHARS_WIDE);
 
         assert_eq!(drawn_lines(&prepared), [expected], "{overflow:?}");
-        assert!(prepared.did_overflow, "{overflow:?}");
+        assert!(prepared.did_overflow(), "{overflow:?}");
     }
 }
 
@@ -291,7 +291,7 @@ fn ellipsis_without_soft_wrap_keeps_the_min_lines_height() {
     );
 
     assert_eq!(drawn_lines(&prepared), ["aa\u{2026}"]);
-    assert_eq!(prepared.metrics.line_count, 3);
+    assert_eq!(prepared.metrics().line_count, 3);
 }
 
 #[test]
@@ -303,5 +303,5 @@ fn clip_without_soft_wrap_keeps_every_line() {
     );
 
     assert_eq!(drawn_lines(&prepared), ["aaa", "bbb", "ccc"]);
-    assert!(!prepared.did_overflow);
+    assert!(!prepared.did_overflow());
 }

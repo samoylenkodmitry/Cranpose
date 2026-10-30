@@ -2788,7 +2788,7 @@ fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
         x: text_rect.x - pan_offset,
         y: text_rect.y,
         width: prepared.layout.width(),
-        height: prepared.metrics.height,
+        height: prepared.size().height,
     };
     let text_bounds = Rect {
         width: content_width,

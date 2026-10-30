@@ -12,8 +12,8 @@
 use std::rc::Rc;
 
 use cranpose_ui_graphics::{
-    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, MeasuredText, Size,
-    TextMeasurement, estimate_text_measurement,
+    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, MeasuredText, TextMeasurement,
+    estimate_text_measurement,
 };
 
 use super::{
@@ -118,10 +118,10 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
             TextMeasurement::empty(line_height, first_baseline)
         } else {
             TextMeasurement {
-                size: Size::new(prepared.metrics.width, prepared.metrics.height),
+                size: prepared.size(),
                 line_height,
                 first_baseline,
-                line_count: prepared.metrics.line_count,
+                line_count: prepared.metrics().line_count,
             }
         };
         MeasuredText {

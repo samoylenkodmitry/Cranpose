@@ -178,7 +178,7 @@ fn place_controls(
     viewport_size: Size,
     controls: Vec<(usize, usize, FramePacingMode)>,
 ) -> Vec<DevOverlayControl> {
-    let overlay_x = (viewport_size.width - layout.metrics.width - DEV_OVERLAY_PADDING * 2.0)
+    let overlay_x = (viewport_size.width - layout.size().width - DEV_OVERLAY_PADDING * 2.0)
         .max(DEV_OVERLAY_PADDING);
     let text_x = overlay_x + DEV_OVERLAY_PADDING / 2.0;
     let text_y = DEV_OVERLAY_PADDING + DEV_OVERLAY_PADDING / 4.0;
@@ -194,7 +194,7 @@ fn place_controls(
                 x: text_x + caret(start) - 3.0,
                 y: text_y - 3.0,
                 width: caret(end) - caret(start) + 6.0,
-                height: layout.metrics.height + 6.0,
+                height: layout.size().height + 6.0,
             },
             mode,
         })

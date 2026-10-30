@@ -105,15 +105,15 @@ fn renderer_attached_text_service_measures_long_multiline_text_with_software_lin
         )
     });
 
-    assert_eq!(prepared.metrics.line_count, 48);
+    assert_eq!(prepared.metrics().line_count, 48);
     assert!(
-        prepared.metrics.line_height > 18.0,
+        prepared.metrics().line_height > 18.0,
         "renderer-attached text service must not use fallback monospaced line height: {:?}",
-        prepared.metrics
+        prepared.metrics()
     );
     assert!(
-        prepared.metrics.height > 900.0,
+        prepared.metrics().height > 900.0,
         "48 software-measured lines should not collapse to a viewport-sized block: {:?}",
-        prepared.metrics
+        prepared.metrics()
     );
 }
