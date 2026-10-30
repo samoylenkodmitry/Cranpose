@@ -105,6 +105,10 @@ impl<'a> ScriptLookups<'a> {
     // when `visit` ends the walk or a subtable does not read.
     #[inline(never)]
     pub(crate) fn each(&self, visit: &mut Visit<'_, 'a>) -> Option<()> {
+        // Hidden from the optimizer, which otherwise makes a copy of the
+        // whole walk for each visitor it sees passed in: one copy serves
+        // them all.
+        let visit = std::hint::black_box(visit);
         for index in self.lookups.iter() {
             match &self.list {
                 LookupList::Substitution(list) => {
