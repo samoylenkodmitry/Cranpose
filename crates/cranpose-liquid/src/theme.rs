@@ -318,7 +318,7 @@ fn theme_local<T: Clone + PartialEq + 'static>(
     })
 }
 
-fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
+pub(crate) fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
     theme_local(
         |locals| &locals.colors,
         || LiquidColors::light(LiquidThemeSpec::default().accent),
