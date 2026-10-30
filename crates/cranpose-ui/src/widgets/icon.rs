@@ -1,5 +1,7 @@
 //! Generic vector icons and clickable icon buttons.
 
+use std::rc::Rc;
+
 use cranpose_core::{NodeId, rememberKeyed};
 use cranpose_ui_graphics::{Brush, Color, VectorPath};
 use cranpose_ui_layout::Alignment;
@@ -89,20 +91,16 @@ pub fn IconWith(
     spec: IconSpec,
     content_description: Option<String>,
 ) -> NodeId {
-    let parsed = rememberKeyed(path, |value| VectorPath::parse(value).ok());
     let size = spec.size;
-    let tint = spec.tint;
+    let scaled = rememberKeyed((path, size), |&(path, size)| {
+        icon_path(path).map(|parsed| Rc::new(parsed.scaled(size / ICON_VIEW_BOX)))
+    });
+    let tint = spec.tint.unwrap_or(Color(0.0, 0.0, 0.0, 1.0));
     let modifier = modifier
         .size(Size::new(size, size))
         .draw_behind(move |scope| {
-            if let Some(path) = &parsed {
-                let scaled = path.scaled(size / ICON_VIEW_BOX);
-                match tint {
-                    Some(tint) => scope.draw_vector_path(&scaled, Brush::solid(tint)),
-                    None => {
-                        scope.draw_vector_path(&scaled, Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
-                    }
-                }
+            if let Some(path) = &scaled {
+                scope.draw_vector_path(path, Brush::solid(tint));
             }
         });
     let modifier = match content_description {
@@ -114,6 +112,20 @@ pub fn IconWith(
         None => modifier,
     };
     Box(modifier, BoxSpec::default(), || {})
+}
+
+// `path` parsed once on this thread, shared by every icon that draws it. A
+// program holds a few dozen icon strings: a list costs less code than a map.
+fn icon_path(path: &'static str) -> Option<Rc<VectorPath>> {
+    crate::thread_state::with(|state| {
+        let mut paths = state.icon_paths.borrow_mut();
+        if let Some((_, parsed)) = paths.iter().find(|(known, _)| *known == path) {
+            return parsed.clone();
+        }
+        let parsed = VectorPath::parse(path).ok().map(Rc::new);
+        paths.push((path, parsed.clone()));
+        parsed
+    })
 }
 
 /// The colours an icon button paints itself with.
