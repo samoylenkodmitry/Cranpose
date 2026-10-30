@@ -152,14 +152,6 @@ impl TextPreparedLayoutOwner {
         read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
     ) -> R {
         let stamp = crate::render_state::text_layout_stamp();
-        {
-            let mut cache = self.cache.borrow_mut();
-            if let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) {
-                cache[..=index].rotate_right(1);
-                return read(&cache[0].layout);
-            }
-        }
-
         let source = self.source.borrow();
         let frame = crate::text::measure::TextFrame {
             min_width: widths.0,
@@ -167,12 +159,13 @@ impl TextPreparedLayoutOwner {
             options: source.options,
         };
         let align = source.style.paragraph_style.text_align;
-        // The latest layout, which nothing else holds, takes widths at which
-        // it breaks into the same lines in place, as a width that animates
-        // asks for each frame.
         {
             let mut cache = self.cache.borrow_mut();
+            // The latest layout, which nothing else holds, takes widths at
+            // which it breaks into the same lines in place, as a width that
+            // animates asks for each frame, before the others are searched.
             if let Some(latest) = cache.first_mut()
+                && !latest.keeps(widths, stamp)
                 && (latest.text_generation, latest.font_scale_fingerprint) == stamp
                 && latest.layout.layout.holds(widths.0, widths.1)
                 && let Some(prepared) = Rc::get_mut(&mut latest.layout)
@@ -181,6 +174,11 @@ impl TextPreparedLayoutOwner {
                 latest.min_width = widths.0;
                 drop(source);
                 return read(&latest.layout);
+            }
+            if let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) {
+                drop(source);
+                cache[..=index].rotate_right(1);
+                return read(&cache[0].layout);
             }
         }
         // A layout at new widths takes the allocation of the one the full
