@@ -346,7 +346,12 @@ impl LayoutBody {
     // width its lines wrap at, save that lines that wrap take the widest of
     // them, as a label shows its lines and not the room around them.
     pub(crate) fn width_between(&self, min_width: f32, max_width: f32) -> f32 {
-        let wrap = self.wrap_width(min_width, max_width);
+        self.width_at(self.wrap_width(min_width, max_width), min_width)
+    }
+
+    // The width of the paragraph whose lines wrap at `wrap`, at least
+    // `min_width` wide.
+    fn width_at(&self, wrap: f32, min_width: f32) -> f32 {
         if self.content_width <= wrap {
             wrap
         } else {
@@ -587,7 +592,7 @@ impl TextLayout {
     /// [holds](TextLayout::holds).
     pub fn align(&mut self, min_width: f32, max_width: f32, align: TextAlign) {
         self.wrap = self.body.wrap_width(min_width, max_width);
-        self.width = self.body.width_between(min_width, max_width);
+        self.width = self.body.width_at(self.wrap, min_width);
         self.did_overflow_width = self.body.widest > self.width || self.width > max_width;
         // Lines that keep their places keep the body the copies share, and
         // the id what a renderer drew of the layout goes by.

@@ -145,22 +145,22 @@ impl PreparedTextLayout {
             .clone()
     }
 
-    // This layout at the widths of `frame`, at which it breaks into the
-    // same lines: itself when its width there is its own, else a copy whose
+    // This layout at `widths`, at which it breaks into the same lines: itself when its width there is its own, else a copy whose
     // lines `align` places across that width. The copy keeps the text as a
     // renderer draws it and the style's hash, and takes the allocation of
     // `spare` when nothing else holds it.
     pub(crate) fn at_widths(
         self: &Rc<Self>,
-        frame: TextFrame,
+        widths: (f32, f32),
         align: TextAlign,
         spare: Option<Rc<Self>>,
     ) -> Rc<Self> {
-        let width = self.layout.width_between(frame.min_width, frame.max_width);
+        let width = self.layout.width_between(widths.0, widths.1);
         if width.to_bits() == self.layout.width().to_bits() {
             return Rc::clone(self);
         }
         let mut aligned = Self {
+            min_lines: self.min_lines,
             render_text: self.render_text.clone(),
             visual_style_hash: self.visual_style_hash.clone(),
             ..Self::new(
@@ -170,7 +170,7 @@ impl PreparedTextLayout {
                 (self.max_width, 0),
             )
         };
-        aligned.realign(frame, align);
+        aligned.realign(widths, align);
         if let Some(mut spare) = spare
             && let Some(slot) = Rc::get_mut(&mut spare)
         {
@@ -180,12 +180,11 @@ impl PreparedTextLayout {
         Rc::new(aligned)
     }
 
-    // Places the lines across the widths of `frame`, at which the layout
+    // Places the lines across `(min_width, max_width)`, at which the layout
     // breaks into the same lines, as `align` says.
-    pub(crate) fn realign(&mut self, frame: TextFrame, align: TextAlign) {
-        self.layout.align(frame.min_width, frame.max_width, align);
-        self.max_width = frame.max_width;
-        self.min_lines = u32::try_from(frame.options.normalized().min_lines).unwrap_or(u32::MAX);
+    pub(crate) fn realign(&mut self, (min_width, max_width): (f32, f32), align: TextAlign) {
+        self.layout.align(min_width, max_width, align);
+        self.max_width = max_width;
         self.layout_handle = OnceCell::new();
     }
 

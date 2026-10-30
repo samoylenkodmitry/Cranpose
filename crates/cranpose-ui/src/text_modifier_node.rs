@@ -192,14 +192,12 @@ impl TextPreparedLayoutOwner {
                 && latest.layout.layout.holds(widths.0, widths.1)
                 && let Some(prepared) = Rc::get_mut(&mut latest.layout)
             {
-                let source = self.source.borrow();
                 prepared.realign(
-                    source.frame(widths),
-                    source.style.paragraph_style.text_align,
+                    widths,
+                    self.source.borrow().style.paragraph_style.text_align,
                 );
                 latest.min_width = widths.0;
-                latest.max_widths = latest.layout.max_widths_kept(widths.0);
-                drop(source);
+                latest.max_widths = prepared.max_widths_kept(widths.0);
                 return read(&latest.layout);
             }
             if let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) {
@@ -240,7 +238,7 @@ impl TextPreparedLayoutOwner {
                 .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
                 .map(|entry| &entry.layout);
             match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
-                Some(latest) => latest.at_widths(frame, align, spare),
+                Some(latest) => latest.at_widths(widths, align, spare),
                 None => {
                     let text = crate::text::measure::SharedText {
                         text: &source.text,
