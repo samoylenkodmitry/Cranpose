@@ -3,8 +3,9 @@ use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, PlacedChild, TranslateAncestorContext, placed_transform,
-    publish_retained_window_geometry, text_node,
+    AbsOrigin, Level, LowerContext, PlacedChild, TranslateAncestorContext, placed_transform,
+    publish_retained_window_geometry, read_placed_node_data, release_for_rebuild, text_node,
+    write_node_layer,
 };
 use crate::{
     NodeUpdate,
@@ -101,11 +102,15 @@ pub(super) enum KeptChild {
     // The child, a label kept for new text or a new size, writes its text
     // into the layer where it now lies.
     Retexted,
+    // The child, a label no record names that only changed size, writes its
+    // text into the layer where it now lies, or is built there again.
+    Resized,
 }
 
 // Brings a child a translated container keeps to its placement among the
 // container's `children`, as `placed.kept` says. A label whose text cannot
-// be written in place stays dirty for the walk beneath. A subtree that
+// be written in place stays dirty for the walk beneath, or is built again
+// when no record names it. A subtree that
 // publishes window origins publishes them again from where it now lies.
 pub(super) fn move_kept_child(
     applier: &MemoryApplier,
@@ -128,5 +133,31 @@ pub(super) fn move_kept_child(
                 dirty_nodes.remove(&placed.id);
             }
         }
+        KeptChild::Resized => {
+            if text_node::retext_kept_leaf(applier, layer, children) != Some(true) {
+                rebuild_kept_child(applier, layer, placed.id, children);
+            }
+        }
     }
+}
+
+// Builds the layer of `node_id`, a child the step keeps, again from the node
+// where it now lies.
+fn rebuild_kept_child(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    node_id: NodeId,
+    children: TranslateAncestorContext,
+) {
+    release_for_rebuild(layer);
+    read_placed_node_data(applier, node_id, Level::Child, |data| {
+        write_node_layer(
+            applier,
+            node_id,
+            data,
+            LowerContext::beneath(children),
+            layer,
+        );
+    });
+    layer.note_content_change(children.update);
 }

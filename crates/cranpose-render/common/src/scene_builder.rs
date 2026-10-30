@@ -1462,6 +1462,7 @@ fn check_retained_children(
         };
         let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
         placed.kept = match dirty_nodes.get_mut(&placed.id) {
+            None if !fits && text_node::draws_text_alone(layer) => KeptChild::Resized,
             None if !fits => return Err("child resized"),
             None => KeptChild::Moved,
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {
@@ -1472,9 +1473,8 @@ fn check_retained_children(
                 dirty_nodes.remove(&placed.id);
                 KeptChild::Moved
             }
-            // The child moves with the others; the walk beneath the
-            // container then gives it its new layer properties or draws
-            // where it now lies.
+            // The child moves with the others; the walk beneath the container
+            // then gives it its new layer properties or draws where it now lies.
             Some(NodeUpdate::Layer | NodeUpdate::Draws) if fits => KeptChild::Moved,
             Some(NodeUpdate::Content) if text_node::draws_text_alone(layer) => KeptChild::Retexted,
             Some(_) => KeptChild::Left,
