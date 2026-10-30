@@ -801,6 +801,8 @@ pub struct RenderGraph {
     /// The way to the layer the last scene updates changed alone, for the
     /// next update that changes it alone.
     pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
+    // The marks of the last walk to the graph's dirty layers.
+    pub(crate) dirty_ancestry: crate::scene_builder::DirtyAncestry,
 }
 
 impl RenderGraph {
@@ -810,6 +812,7 @@ impl RenderGraph {
             root,
             update: 0,
             retained_path: None,
+            dirty_ancestry: crate::scene_builder::DirtyAncestry::default(),
         }
     }
 

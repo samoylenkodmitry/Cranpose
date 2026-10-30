@@ -29,7 +29,7 @@ use crate::{
 };
 
 mod dirty_walk;
-pub(crate) use dirty_walk::RetainedPath;
+pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;
 use draw_recording::{
@@ -286,7 +286,7 @@ fn update_dirty_nodes(
                     hit_graph_dirty,
                 };
             }
-            let walked = walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update)
+            let walked = walk_dirty_layers(applier, graph, remaining_dirty_nodes, update)
                 .map(|(report, _)| report);
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
@@ -337,8 +337,7 @@ fn update_dirty_nodes(
         };
     }
 
-    let Some((report, path)) =
-        walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update)
+    let Some((report, path)) = walk_dirty_layers(applier, graph, remaining_dirty_nodes, update)
     else {
         return GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),

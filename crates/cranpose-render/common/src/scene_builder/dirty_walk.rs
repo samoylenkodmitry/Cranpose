@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     NodeUpdate,
-    graph::{LayerNode, RenderNode},
+    graph::{LayerNode, RenderGraph, RenderNode},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -61,21 +61,25 @@ const DIRTY_NODE: u8 = 2;
 /// the walk updated, for the next update that changes that node alone.
 pub(super) fn walk_dirty_layers(
     applier: &MemoryApplier,
-    root: &mut LayerNode,
+    graph: &mut RenderGraph,
     dirty: &mut HashMap<NodeId, NodeUpdate>,
     update: u64,
 ) -> Option<(ReplaceDirtyLayersReport, Option<RetainedPath>)> {
+    let RenderGraph {
+        root,
+        dirty_ancestry: ancestry,
+        ..
+    } = graph;
     let inherited = root.translated_content_context;
     let root_children = AbsOrigin::ROOT.children_of(root);
     let lone = match dirty.keys().next() {
         Some(&node) if dirty.len() == 1 => Some(node),
         _ => None,
     };
-    let mut ancestry = crate::thread_state::with(|state| state.dirty_ancestry.take());
-    mark_dirty_ancestry(applier, dirty, &mut ancestry);
+    ancestry.mark(applier, dirty, update);
     let mut walk = DirtyWalk {
         nodes: dirty,
-        ancestry: &ancestry,
+        ancestry: &ancestry.marks,
         applier,
     };
     let walked = replace_dirty_layers_from_applier(
@@ -92,8 +96,56 @@ pub(super) fn walk_dirty_layers(
         }
         _ => None,
     };
-    crate::thread_state::with(|state| state.dirty_ancestry.set(ancestry));
     walked.map(|report| (report, path))
+}
+
+// The marks a walk set on its dirty nodes and the nodes above them, kept
+// for the next update of the graph when it changes the same nodes: as a
+// node that moves to another parent makes both parents dirty, the nodes
+// above them are where they were.
+#[derive(Clone, Default)]
+pub(crate) struct DirtyAncestry {
+    marks: NodeMarks,
+    // How many dirty nodes the marks hold.
+    nodes: usize,
+    update: u64,
+}
+
+impl DirtyAncestry {
+    // Marks the `dirty` nodes of update `update` and the nodes above them,
+    // unless the update before marked the same nodes: as many, each marked
+    // dirty.
+    #[inline]
+    fn mark(&mut self, applier: &MemoryApplier, dirty: &HashMap<NodeId, NodeUpdate>, update: u64) {
+        let kept = self.update + 1 == update
+            && self.nodes == dirty.len()
+            && dirty
+                .keys()
+                .all(|&node| self.marks.get(applier, node) & DIRTY_NODE != 0);
+        self.update = update;
+        if kept {
+            return;
+        }
+        self.nodes = dirty.len();
+        mark_ancestry(&mut self.marks, applier, dirty);
+    }
+}
+
+// Marks the `dirty` nodes and the nodes above them afresh. The marks walk
+// as a local: the frame holds their vector's fields, where a reference
+// would be loaded again after each virtual `parent` call.
+#[inline(never)]
+fn mark_ancestry(
+    marks: &mut NodeMarks,
+    applier: &MemoryApplier,
+    dirty: &HashMap<NodeId, NodeUpdate>,
+) {
+    let mut fresh = std::mem::take(marks);
+    fresh.reset(applier);
+    for &node in dirty.keys() {
+        fresh.add_with_ancestors(applier, node, DIRTY_NODE, DIRTY_ANCESTOR);
+    }
+    *marks = fresh;
 }
 
 /// The way from the root to the layer of a node that the last scene
@@ -248,17 +300,6 @@ fn update_at_step(
         updated: true,
         hit_graph_dirty,
     })
-}
-
-fn mark_dirty_ancestry(
-    applier: &MemoryApplier,
-    dirty: &HashMap<NodeId, NodeUpdate>,
-    ancestry: &mut NodeMarks,
-) {
-    ancestry.reset(applier);
-    for &node in dirty.keys() {
-        ancestry.add_with_ancestors(applier, node, DIRTY_NODE, DIRTY_ANCESTOR);
-    }
 }
 
 fn replace_dirty_layers_from_applier(
