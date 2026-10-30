@@ -3,7 +3,11 @@ use crate::{
     material::Glass,
     widgets::{
         lens_motion::tab_lens_activity_motion,
-        tab_flight_lens::{accessory_surfaces_touch, tab_flight_tint_multiplier},
+        tab_cells::tab_ink_selection,
+        tab_flight_lens::{
+            accessory_surfaces_touch, tab_flight_dynamics, tab_flight_lens_material,
+            tab_flight_tint_multiplier, tab_lens_deformed_size,
+        },
     },
 };
 
@@ -124,18 +128,6 @@ fn template_tab_keeps_artwork_size_and_label() {
     assert_eq!(tab.icon, LiquidTabIcon::Painter { painter, size });
     assert_eq!(tab.label.as_str(), "Saved");
     assert_eq!(tab.icon_style, LiquidTabIconStyle::Plain);
-}
-
-#[test]
-fn app_badge_geometry_honors_the_tab_optical_scale() {
-    let full = app_badge_geometry(1.0);
-    let corrected = app_badge_geometry(0.85);
-    assert_eq!(full.size, Size::new(20.0, 32.0));
-    assert_eq!(corrected.size, Size::new(17.0, 27.2));
-    assert!((corrected.glyph.width - 11.9).abs() < 1.0e-5);
-    assert!((corrected.corner_radius / full.corner_radius - 0.85).abs() < f32::EPSILON);
-    assert!((corrected.stripe.x / full.stripe.x - 0.85).abs() < f32::EPSILON);
-    assert!((corrected.glyph.width / full.glyph.width - 0.85).abs() < f32::EPSILON);
 }
 
 #[test]

@@ -41,7 +41,7 @@ fn payload_records_store_semantic_payload_kinds() {
         let _callback_slot = session.value_slot_with_kind(
             PayloadKind::Param,
             crate::slot::BRANCH_PATH_ROOT,
-            crate::CallbackHolder::new,
+            crate::CallbackHolder::<dyn FnMut()>::new,
         );
         let _return_slot = session.value_slot_with_kind(
             PayloadKind::Return,

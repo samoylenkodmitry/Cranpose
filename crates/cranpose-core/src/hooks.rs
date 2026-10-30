@@ -342,7 +342,7 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
                 scope.mark_derivation();
                 // A read subscribes the innermost scope with a callback: the
                 // first derivation's reads would subscribe the reader.
-                composer.set_recompose_callback(|_| {});
+                composer.set_recompose_fn(|_| {});
             }
             let runtime = composer.runtime_handle();
             let (state, rerun) = composer

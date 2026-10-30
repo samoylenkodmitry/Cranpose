@@ -110,6 +110,12 @@ fn installed_core() -> Option<Rc<ComposerCore>> {
     thread_state::try_runtimes(|state| state.current_composer.borrow().clone()).flatten()
 }
 
+// Whether this thread is composing.
+#[inline]
+pub(crate) fn has_composer() -> bool {
+    any_composer_installed() && installed_core().is_some()
+}
+
 /// Return the current thread's composer.
 pub fn current_composer() -> Option<Composer> {
     if !any_composer_installed() {

@@ -566,7 +566,6 @@ fn content_closure_branches_own_their_slots() {
 
 #[composable]
 fn indexed_content_host(index: i32, content: impl FnMut(i32) + 'static) {
-    let mut content = content;
     content(index);
 }
 

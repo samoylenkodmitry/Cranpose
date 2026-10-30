@@ -113,8 +113,6 @@ thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = const { RefCell::new(None) };
     pub static TEST_COUNTER_APP_COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
-    pub static TEST_COUNTER_APP_POINTER_DOWN_STATE: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
-    pub static TEST_COUNTER_APP_POINTER_POSITION_STATE: RefCell<Option<MutableState<Point>>> = const { RefCell::new(None) };
     pub static TEST_RECURSIVE_LAYOUT_DEPTH_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
     pub static TEST_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
     pub static TEST_LIQUID_SELECTED_TAB_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
@@ -1583,12 +1581,6 @@ fn counter_app() {
     let pointer_down = cranpose_core::rememberMutableStateOf(|| false);
     TEST_COUNTER_APP_COUNTER_STATE.with(|cell| {
         *cell.borrow_mut() = Some(counter);
-    });
-    TEST_COUNTER_APP_POINTER_DOWN_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(pointer_down);
-    });
-    TEST_COUNTER_APP_POINTER_POSITION_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(pointer_position);
     });
     let async_message = cranpose_core::rememberMutableStateOf(|| {
         "Tap \"Fetch async value\" to run background work".to_string()

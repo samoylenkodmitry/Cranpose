@@ -29,6 +29,13 @@ pub(super) struct TabContactMotion {
     local_glow_factor: RefCell<Animatable<f32>>,
 }
 
+// Each bar owns one, so two are equal only when they are the same one.
+impl PartialEq for TabContactMotion {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
 impl TabContactMotion {
     fn new(runtime: RuntimeHandle) -> Self {
         Self {

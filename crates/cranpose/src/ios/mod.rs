@@ -40,6 +40,8 @@ pub(crate) mod keyboard;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod media;
 #[cfg(feature = "renderer-wgpu")]
+pub(crate) mod media_artwork;
+#[cfg(feature = "renderer-wgpu")]
 pub(crate) mod notifier;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod pick_future;

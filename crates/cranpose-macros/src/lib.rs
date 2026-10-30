@@ -1,17 +1,25 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+use callback_param::CallbackParam;
+use held_callback::{HeldCallback, borrows};
+use packed_params::PackedParams;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
+use returning_call::ReturningCall;
 use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
+mod callback_param;
 mod constant_modifiers;
+mod held_callback;
 #[cfg(feature = "localization")]
 mod localization;
+mod packed_params;
 mod preview;
+mod returning_call;
 
 /// Localizes readable source text using the nearest localization provider.
 /// Named arguments use `name = expression`; optional literal metadata is
@@ -157,163 +165,6 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
     false
 }
 
-/// A composable call's parameters that are neither callbacks nor
-/// `impl Trait`, kept together in one slot and compared field by field: one
-/// slot lookup and one payload per call instead of one per parameter.
-struct PackedParams<'a> {
-    params: Vec<(&'a Ident, &'a Type)>,
-    /// The call's return type when it returns a value, which the call keeps
-    /// in its parameters' slot.
-    returns: Option<&'a Type>,
-}
-
-impl PackedParams<'_> {
-    fn slot() -> Ident {
-        Ident::new("__params_slot", Span::mixed_site())
-    }
-
-    /// Whether the parameters' slot also holds what the call returned.
-    fn holds_return(&self) -> bool {
-        self.returns.is_some() && !self.params.is_empty()
-    }
-
-    fn state_type(&self, core_path: &TokenStream2) -> TokenStream2 {
-        let types = self.params.iter().map(|(_, ty)| ty);
-        match self.returns {
-            Some(returns) => quote! { #core_path::ParamReturnState<(#(#types,)*), #returns> },
-            None => quote! { #core_path::ParamState<(#(#types,)*)> },
-        }
-    }
-
-    fn slot_stmt(&self, core_path: &TokenStream2, composer: &Ident) -> TokenStream2 {
-        let state = self.state_type(core_path);
-        let slot = Self::slot();
-        let key = slot_key(core_path);
-        quote! {
-            let #slot = #composer.__use_param_slot(#key, || <#state>::default());
-        }
-    }
-
-    /// `setup` led by the statements that store the parameters and mark the
-    /// call changed when any differs from the last composition. When the
-    /// slot holds the call's return, they also bind `previous` to what the
-    /// call returned last if `skippable` and nothing changed, else `None`.
-    fn with_setup(
-        &self,
-        core_path: &TokenStream2,
-        composer: &Ident,
-        (previous, skippable): (&Ident, bool),
-        mut setup: Vec<TokenStream2>,
-    ) -> Vec<TokenStream2> {
-        if self.params.is_empty() {
-            return setup;
-        }
-        let state = self.state_type(core_path);
-        let slot = Self::slot();
-        let key = slot_key(core_path);
-        let param_state = Ident::new("__param_state", Span::mixed_site());
-        let stored = Ident::new("__stored", Span::mixed_site());
-        let idents = self.params.iter().map(|(ident, _)| ident);
-        let refreshes = self.params.iter().enumerate().map(|(index, (ident, ty))| {
-            param_field_refresh(core_path, &stored, (ident, ty), index, skippable)
-        });
-        let update = quote! {
-            #param_state.update_fields(
-                || (#(::core::clone::Clone::clone(&#idents),)*),
-                |#stored| false #(| #refreshes)*,
-            )
-        };
-        let statement = if !self.holds_return() {
-            quote! {
-                let (_, #slot) = #composer.__update_param_slot(
-                    #key,
-                    || <#state>::default(),
-                    |#param_state: &mut #state| #update,
-                );
-                if #slot {
-                    __changed = true;
-                }
-            }
-        } else if skippable {
-            quote! {
-                let (#slot, #previous) = #composer.__update_param_slot(
-                    #key,
-                    || <#state>::default(),
-                    |#param_state: &mut #state| {
-                        if #update {
-                            __changed = true;
-                        }
-                        (!__changed).then(|| #param_state.returned()).flatten()
-                    },
-                );
-            }
-        } else {
-            quote! {
-                let (#slot, ()) = #composer.__update_param_slot(
-                    #key,
-                    || <#state>::default(),
-                    |#param_state: &mut #state| {
-                        if #update {
-                            __changed = true;
-                        }
-                    },
-                );
-            }
-        };
-        setup.insert(0, statement);
-        setup
-    }
-
-    /// The statement that keeps `value` as what the call returned, in the
-    /// parameters' slot.
-    fn store_return(
-        &self,
-        core_path: &TokenStream2,
-        composer: &Ident,
-        value: &Ident,
-    ) -> TokenStream2 {
-        let state = self.state_type(core_path);
-        let slot = Self::slot();
-        quote! {
-            #composer.with_slot_value_mut::<#state, _>(#slot, |state| {
-                state.store_return(::core::clone::Clone::clone(&#value));
-            });
-        }
-    }
-
-    /// `setup` led by the statement that finds the parameters' slot.
-    fn with_slot(
-        &self,
-        core_path: &TokenStream2,
-        composer: &Ident,
-        mut setup: Vec<TokenStream2>,
-    ) -> Vec<TokenStream2> {
-        if !self.params.is_empty() {
-            setup.insert(0, self.slot_stmt(core_path, composer));
-        }
-        setup
-    }
-
-    /// The statements that read the stored parameters back for a
-    /// recomposition started from the call's scope.
-    fn reads(&self, core_path: &TokenStream2, composer: &Ident) -> Vec<TokenStream2> {
-        if self.params.is_empty() {
-            return Vec::new();
-        }
-        let state = self.state_type(core_path);
-        let slot = Self::slot();
-        let param_state = Ident::new("__param_state", Span::mixed_site());
-        let idents = self.params.iter().map(|(ident, _)| ident);
-        vec![quote! {
-            let (#(#idents,)*) = #composer.with_slot_value::<#state, _>(#slot, |#param_state| {
-                #param_state
-                    .value()
-                    .expect("composable parameter missing for recomposition")
-            });
-        }]
-    }
-}
-
 /// A parameter of a `#[composable]` function.
 struct ParamInfo {
     ident: Ident,
@@ -323,200 +174,8 @@ struct ParamInfo {
     is_impl_trait: bool,
 }
 
-/// Whether a call can skip its body: a callback or `impl Trait` parameter
-/// marks every call changed.
-fn every_param_compared(param_info: &[ParamInfo], param_is_callback: &[bool]) -> bool {
-    param_info
-        .iter()
-        .zip(param_is_callback)
-        .all(|(info, is_callback)| !*is_callback && !info.is_impl_trait)
-}
-
-/// The code of a call that returns a value: it keeps what its body
-/// returned in its parameters' slot when it has packed parameters, else in
-/// a return slot of its own, and a call that skips its body returns it.
-struct ReturningCall<'a> {
-    core_path: &'a TokenStream2,
-    composer: &'a Ident,
-    group: &'a Ident,
-    current_scope: &'a Ident,
-    scope_label: &'a Ident,
-    return_ty: &'a Type,
-    slot_key: &'a TokenStream2,
-    packed: &'a PackedParams<'a>,
-    skippable: bool,
-    body_call: &'a TokenStream2,
-}
-
-impl ReturningCall<'_> {
-    /// What the call returned last, when it may skip its body.
-    fn previous() -> Ident {
-        Ident::new("__previous", Span::mixed_site())
-    }
-
-    fn value() -> Ident {
-        Ident::new("__value", Span::mixed_site())
-    }
-
-    fn return_slot() -> Ident {
-        Ident::new("__result_slot_index", Span::mixed_site())
-    }
-
-    fn slot_type(&self) -> TokenStream2 {
-        let (core_path, return_ty) = (self.core_path, self.return_ty);
-        quote! { #core_path::ReturnSlot<#return_ty> }
-    }
-
-    /// Returns what the call returned last, when it may skip its body.
-    fn skip(&self) -> Option<TokenStream2> {
-        let (group, previous) = (self.group, Self::previous());
-        let result = Ident::new("__result", Span::mixed_site());
-        (self.skippable || !self.packed.holds_return()).then(|| {
-            quote! {
-                if let ::core::option::Option::Some(#result) = #previous {
-                    #group.skip();
-                    return #result;
-                }
-            }
-        })
-    }
-
-    /// Keeps the value the body returned.
-    fn store(&self) -> TokenStream2 {
-        let (composer, value) = (self.composer, Self::value());
-        if self.packed.holds_return() {
-            return self.packed.store_return(self.core_path, composer, &value);
-        }
-        let (slot, slot_type) = (Self::return_slot(), self.slot_type());
-        quote! {
-            #composer.with_slot_value_mut::<#slot_type, _>(#slot, |slot| {
-                slot.store(::core::clone::Clone::clone(&#value));
-            });
-        }
-    }
-
-    fn helper_body(
-        &self,
-        param_setup: &[TokenStream2],
-        recompose_setter: &TokenStream2,
-    ) -> TokenStream2 {
-        let (core_path, composer, scope_label) = (self.core_path, self.composer, self.scope_label);
-        let (current_scope, return_ty, body_call) =
-            (self.current_scope, self.return_ty, self.body_call);
-        let (previous, value, slot) = (Self::previous(), Self::value(), Self::return_slot());
-        let lookup = (!self.packed.holds_return()).then(|| {
-            let (slot_key, slot_type) = (self.slot_key, self.slot_type());
-            quote! {
-                let (#slot, #previous) = #composer.__update_return_slot(
-                    #slot_key,
-                    || <#slot_type>::default(),
-                    |slot: &mut #slot_type| (!__changed).then(|| slot.get()).flatten(),
-                );
-            }
-        });
-        let (skip, store) = (self.skip(), self.store());
-        quote! {
-            #core_path::debug_label_current_scope(stringify!(#scope_label));
-            let mut __changed = #current_scope.should_recompose();
-            #(#param_setup)*
-            #recompose_setter
-            #lookup
-            #skip
-            let #value: #return_ty = #body_call;
-            #store
-            #value
-        }
-    }
-
-    fn recompose_body(
-        &self,
-        param_setup: &[TokenStream2],
-        reads: &[TokenStream2],
-        invalidate_return_consumer: &TokenStream2,
-    ) -> TokenStream2 {
-        let (composer, return_ty, body_call) = (self.composer, self.return_ty, self.body_call);
-        let lookup = (!self.packed.holds_return()).then(|| {
-            let (slot, slot_type) = (Self::return_slot(), self.slot_type());
-            quote! {
-                let #slot = #composer.__use_return_slot(|| <#slot_type>::default());
-            }
-        });
-        let (value, store) = (Self::value(), self.store());
-        quote! {
-            #(#param_setup)*
-            #lookup
-            #(#reads)*
-            let #value: #return_ty = #body_call;
-            #store
-            #invalidate_return_consumer
-            #value
-        }
-    }
-}
-
-/// The call that brings field `index` of a call's stored parameters up to
-/// date with `ident` and says whether it changed: `refresh_shared_param` for
-/// an `Rc` or `Arc`, whose unchanged allocation needs no comparison of its
-/// contents.
-/// The statement that refreshes one stored parameter. A call that cannot
-/// skip only stores it: no comparison would change what the call does.
-fn param_field_refresh(
-    core_path: &TokenStream2,
-    stored: &Ident,
-    (ident, ty): (&Ident, &Type),
-    index: usize,
-    skippable: bool,
-) -> TokenStream2 {
-    let index = syn::Index::from(index);
-    if !skippable {
-        quote! { #core_path::store_param(&mut #stored.#index, &#ident) }
-    } else if is_shared_pointer(ty) {
-        quote! { #core_path::refresh_shared_param(&mut #stored.#index, &#ident) }
-    } else {
-        quote! { #core_path::refresh_param(&mut #stored.#index, &#ident) }
-    }
-}
-
-/// Whether a parameter type is an `Rc<..>` or `Arc<..>`.
-fn is_shared_pointer(ty: &Type) -> bool {
-    match ty {
-        Type::Path(path) if path.qself.is_none() => path
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "Rc" || segment.ident == "Arc"),
-        _ => false,
-    }
-}
-
 fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
-}
-
-fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
-    if let Type::ImplTrait(impl_trait) = ty {
-        impl_trait.bounds.iter().any(|bound| {
-            if let syn::TypeParamBound::Trait(trait_bound) = bound
-                && let Some(segment) = trait_bound.path.segments.last()
-            {
-                let ident_str = segment.ident.to_string();
-                if (ident_str == "Fn" || ident_str == "FnMut")
-                    && let syn::PathArguments::Parenthesized(args) = &segment.arguments
-                {
-                    let returns_unit = match &args.output {
-                        ReturnType::Default => true,
-                        ReturnType::Type(_, ty) => {
-                            matches!(&**ty, Type::Tuple(tuple) if tuple.elems.is_empty())
-                        }
-                    };
-                    return args.inputs.is_empty() && returns_unit;
-                }
-            }
-            false
-        })
-    } else {
-        false
-    }
 }
 
 fn type_bare_generic_ident(ty: &Type) -> Option<&Ident> {
@@ -764,12 +423,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Default => syn::parse_quote! { () },
         ReturnType::Type(_, ty) => ty.as_ref().clone(),
     };
-    let returns_unit = match &func.sig.output {
-        ReturnType::Default => true,
-        ReturnType::Type(_, ty) => {
-            matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
-        }
-    };
+    let returns_unit = returns_unit(&func.sig.output);
     let invalidate_return_consumer = if returns_unit || is_node_id_return(&return_ty) {
         quote! {}
     } else {
@@ -791,9 +445,15 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let held: Vec<Option<HeldCallback>> = param_info
+        .iter()
+        .map(|info| HeldCallback::of(&info.ty, &func.sig.generics))
+        .collect();
+    // A borrowed parameter cannot be kept for a later comparison either.
     let has_unhandled_impl_trait = param_info
         .iter()
-        .any(|info| info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty));
+        .zip(&held)
+        .any(|(info, held)| (info.is_impl_trait && held.is_none()) || borrows(&info.ty));
 
     if enable_skip && !has_unhandled_impl_trait {
         let helper_ident = Ident::new(
@@ -802,14 +462,20 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         );
         let generics = func.sig.generics.clone();
 
-        let param_erased: Vec<bool> = param_info
+        let param_state_slots: Vec<Ident> = (0..param_info.len())
+            .map(|index| Ident::new(&format!("__param_state_slot{index}"), Span::mixed_site()))
+            .collect();
+        let callbacks: Vec<Option<CallbackParam>> = param_info
             .iter()
-            .map(|info| {
-                (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
-                    || (!info.is_impl_trait
-                        && type_bare_generic_ident(&info.ty).is_some()
-                        && is_generic_fn_like(&info.ty, &generics))
+            .zip(&param_state_slots)
+            .zip(&held)
+            .map(|((info, slot), held)| {
+                CallbackParam::of(&core_path, info, slot, held.as_ref(), &generics)
             })
+            .collect();
+        let param_erased: Vec<bool> = callbacks
+            .iter()
+            .map(|callback| callback.as_ref().is_some_and(CallbackParam::boxes))
             .collect();
 
         let mut strippable: std::collections::HashSet<String> = param_info
@@ -872,141 +538,68 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let helper_inputs: Vec<TokenStream2> = param_info
             .iter()
-            .zip(&param_erased)
-            .filter_map(|(info, erased)| {
-                if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
-                    None
-                } else if *erased {
-                    let ident = &info.ident;
-                    Some(quote! { #ident: ::std::boxed::Box<dyn ::core::ops::FnMut() + 'static> })
-                } else {
-                    let ident = &info.ident;
-                    let ty = &info.ty;
-                    Some(quote! { #ident: #ty })
-                }
-            })
-            .collect();
-
-        let param_state_slots: Vec<Ident> = (0..param_info.len())
-            .map(|index| Ident::new(&format!("__param_state_slot{index}"), Span::mixed_site()))
-            .collect();
-
-        let param_is_callback: Vec<bool> = param_info
-            .iter()
-            .map(|info| {
-                (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
-                    || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
-            })
-            .collect();
-
-        let param_setup: Vec<TokenStream2> = param_info
-            .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_erased)
-            .zip(&param_is_callback)
-            .map(|(((info, slot_ident), erased), is_callback)| {
-                if *is_callback {
-                    let ident = &info.ident;
-                    let update = if *erased {
-                        quote! { holder.update_boxed(#ident); }
-                    } else {
-                        quote! { holder.update(#ident); }
-                    };
-                    quote! {
-                        let (#slot_ident, ()) = #composer_ident.__update_param_slot(
-                            #slot_key,
-                            || #core_path::CallbackHolder::new(),
-                            |holder: &mut #core_path::CallbackHolder| {
-                                #update
-                            },
-                        );
-                        __changed = true;
+            .zip(&callbacks)
+            .map(|(info, callback)| {
+                let ident = &info.ident;
+                match callback.as_ref().and_then(CallbackParam::boxed_type) {
+                    Some(boxed) => quote! { #ident: ::std::boxed::Box<#boxed> },
+                    None => {
+                        let ty = &info.ty;
+                        quote! { #ident: #ty }
                     }
-                } else if info.is_impl_trait {
-                    quote! { __changed = true; }
-                } else {
-                    quote! {}
                 }
             })
             .collect();
 
-        let param_setup_recompose: Vec<TokenStream2> = param_state_slots
+        let param_setup: Vec<TokenStream2> = callbacks
             .iter()
-            .zip(&param_is_callback)
-            .filter(|(_, is_callback)| **is_callback)
-            .map(|(slot_ident, _)| {
-                quote! {
-                    let #slot_ident = #composer_ident
-                        .__use_param_slot(#slot_key, || #core_path::CallbackHolder::new());
-                }
-            })
+            .flatten()
+            .map(|callback| callback.setup(&core_path, &composer_ident))
             .collect();
-
-        let callback_rebinds: Vec<TokenStream2> = param_info
+        let param_setup_recompose: Vec<TokenStream2> = callbacks
             .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .filter(|(_, is_callback)| **is_callback)
-            .map(|((info, slot_ident), _)| {
-                let pat = &info.pat;
-                let can_add_mut = matches!(pat.as_ref(), Pat::Ident(_));
-                let binding = if can_add_mut && !info.pat_is_mut {
-                    quote! { mut #pat }
-                } else {
-                    quote! { #pat }
-                };
-                quote! {
-                    #[allow(unused_mut, reason = "only some callbacks change the binding")]
-                    let #binding = #composer_ident
-                        .with_slot_value::<#core_path::CallbackHolder, _>(
-                            #slot_ident,
-                            |holder| holder.clone_rc(),
-                        );
-                }
-            })
+            .flatten()
+            .map(|callback| callback.recompose_setup(&core_path, &composer_ident))
+            .collect();
+        let callback_rebinds: Vec<TokenStream2> = callbacks
+            .iter()
+            .flatten()
+            .map(|callback| callback.rebind(&core_path, &composer_ident))
             .collect();
 
         let body_inputs: Vec<TokenStream2> = param_info
             .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .map(|((info, slot_ident), is_callback)| {
-                if *is_callback {
-                    quote! {
-                        #slot_ident: #core_path::ValueSlotHandle<'_, #core_path::CallbackHolder>
-                    }
-                } else {
+            .zip(&callbacks)
+            .map(|(info, callback)| match callback {
+                Some(callback) => callback.body_input(&core_path),
+                None => {
                     let pat = &info.pat;
                     let ty = &info.ty;
                     quote! { #pat: #ty }
                 }
             })
             .collect();
-
-        let body_args: Vec<TokenStream2> = param_info
+        let body_args: Vec<&Ident> = param_info
             .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .map(|((info, slot_ident), is_callback)| {
-                if *is_callback {
-                    quote! { #slot_ident }
-                } else {
-                    let ident = &info.ident;
-                    quote! { #ident }
-                }
+            .zip(&callbacks)
+            .map(|(info, callback)| {
+                callback
+                    .as_ref()
+                    .map_or(&info.ident, |callback| callback.slot)
             })
             .collect();
 
         let packed = PackedParams {
             params: param_info
                 .iter()
-                .zip(&param_is_callback)
-                .filter(|(info, is_callback)| !**is_callback && !info.is_impl_trait)
+                .zip(&callbacks)
+                .filter(|(info, callback)| callback.is_none() && !info.is_impl_trait)
                 .map(|(info, _)| (&info.ident, &info.ty))
                 .collect(),
             returns: (!returns_unit).then_some(&return_ty),
         };
-        let skippable = every_param_compared(&param_info, &param_is_callback);
+        // Every parameter here is compared or is a held callback.
+        let skippable = true;
         let param_setup = packed.with_setup(
             &core_path,
             &composer_ident,
@@ -1030,17 +623,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             Span::mixed_site(),
         );
 
-        let recompose_setter = quote! {
-            {
-                #group_ident.set_recompose_callback(move |
-                    #composer_ident: &#core_path::Composer|
-                {
-                    let _ = #recompose_fn_ident #ty_generics_turbofish (
-                        #composer_ident
-                    );
-                });
-            }
-        };
+        let recompose_setter = recompose_setter(
+            &group_ident,
+            &quote! { #recompose_fn_ident #ty_generics_turbofish },
+            &func.sig.output,
+            (&core_path, &composer_ident),
+        );
 
         let returning = ReturningCall {
             core_path: &core_path,
@@ -1125,15 +713,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let wrapper_args: Vec<TokenStream2> = param_info
             .iter()
             .zip(&param_erased)
-            .filter_map(|(info, erased)| {
-                if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
-                    None
-                } else if *erased {
-                    let ident = &info.ident;
-                    Some(quote! { ::std::boxed::Box::new(#ident) })
+            .map(|(info, erased)| {
+                let ident = &info.ident;
+                if *erased {
+                    quote! { ::std::boxed::Box::new(#ident) }
                 } else {
-                    let ident = &info.ident;
-                    Some(quote! { #ident })
+                    quote! { #ident }
                 }
             })
             .collect();
@@ -1193,6 +778,36 @@ fn inject_groups(core_path: &TokenStream2, func: &mut ItemFn) {
         func.block
             .stmts
             .insert(0, syn::parse2(origin).expect("hot origin statement"));
+    }
+}
+
+// Whether a function returns `()`.
+fn returns_unit(output: &ReturnType) -> bool {
+    match output {
+        ReturnType::Default => true,
+        ReturnType::Type(_, ty) => {
+            matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
+        }
+    }
+}
+
+// The statement that gives a composable's group its recompose function: a
+// plain function needs no box, vtable or call shim per composable, and one
+// that returns a value gets a wrapper that drops it.
+fn recompose_setter(
+    group: &Ident,
+    recompose_fn: &TokenStream2,
+    output: &ReturnType,
+    (core_path, composer): (&TokenStream2, &Ident),
+) -> TokenStream2 {
+    if returns_unit(output) {
+        quote! { #group.set_recompose_fn(#recompose_fn); }
+    } else {
+        quote! {
+            #group.set_recompose_fn(|#composer: &#core_path::Composer| {
+                let _ = #recompose_fn(#composer);
+            });
+        }
     }
 }
 
