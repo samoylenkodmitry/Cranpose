@@ -36,7 +36,7 @@ mod layer_shape;
 use layer_shape::{clip_shape, shape_clip, shaped_graphics_layer};
 mod text_node;
 mod translate_geometry;
-use text_node::{TextNodeParts, text_node_from_parts};
+use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
 
 #[derive(Clone, Default)]
@@ -1167,10 +1167,7 @@ fn try_translate_scrolled_layer(
     };
     read_node_data(applier, node_id, |data| {
         if container.wraps.is_none() {
-            let leaf = text_node::translate_leaf_text(container, &data, ancestors);
-            return leaf.unwrap_or_else(|| {
-                translate_layer_from_data(applier, container, dirty_nodes, ancestors, data, false)
-            });
+            return translate_unwrapped(applier, container, dirty_nodes, ancestors, data);
         }
         let outer_count = data.modifier_slices.outer_draw_command_count();
         if outer_count == 0 {

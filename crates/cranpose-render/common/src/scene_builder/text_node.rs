@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{
     ModifierNodeSlices, PreparedTextLayout, Rect, Size, TextLayoutOptions, TextOverflow,
     TextPanResolver,
@@ -9,9 +9,10 @@ use cranpose_ui::{
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer,
     apply_translated_container_state, hit_test_from_slices, modifier_slices_have_origin_sinks,
-    read_node_data, translate_bail, translated_container,
+    read_node_data, translate_bail, translate_layer_from_data, translated_container,
 };
 use crate::{
+    NodeUpdate,
     graph::{
         LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode, TextPrimitiveNode,
     },
@@ -40,6 +41,24 @@ impl TextNodeParts {
             measured_layout: slices.measured_text_layout(),
         }
     }
+}
+
+// Brings `container`, a layer no wrapper holds, to its node's layout in
+// `data`: a label that drew its text alone takes its text and place where
+// it is, any other layer the full update.
+pub(super) fn translate_unwrapped(
+    applier: &MemoryApplier,
+    container: &mut LayerNode,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    ancestors: TranslateAncestorContext,
+    data: SnapshotNodeData<'_>,
+) -> bool {
+    if draws_text_alone(container)
+        && let Some(done) = translate_leaf_text(container, &data, ancestors)
+    {
+        return done;
+    }
+    translate_layer_from_data(applier, container, dirty_nodes, ancestors, data, false)
 }
 
 // Brings `container`, the layer of a leaf that drew its node's text and
