@@ -5,7 +5,7 @@ use read_fonts::{
     types::GlyphId as FontGlyphId,
 };
 
-use crate::{glyph_id::GlyphId, typeface::Typeface};
+use crate::{glyph_id::GlyphId, simple_glyf, typeface::Typeface};
 
 /// A glyph's outline at one size and offset, in pixels with y growing down,
 /// ready to draw as coverage. Its box holds every pixel the outline touches,
@@ -57,8 +57,8 @@ impl GlyphOutline {
     /// The outline of `glyph` of `typeface` placed as `transform` says.
     /// `None` for a glyph with no outline, such as a space.
     pub fn of(typeface: &Typeface, glyph: GlyphId, transform: OutlineTransform) -> Option<Self> {
-        let outlines = typeface.font().outline_glyphs();
-        let outline = outlines.get(FontGlyphId::new(glyph.0))?;
+        let font = typeface.font();
+        let glyph = FontGlyphId::new(glyph.0);
         // The outline comes in font units and scales in `f32`, as ab_glyph
         // scales it, so the coverage is the one the renderers drew before.
         let mut path = PathCollector {
@@ -69,13 +69,17 @@ impl GlyphOutline {
             scale: transform.size / f32::from(typeface.units_per_em()),
             skew: transform.skew,
         };
-        outline
-            .draw(
-                &DrawOptions::new().with_ppem(None),
-                DrawMemory::Scratch,
-                &mut path,
-            )
-            .ok()?;
+        if simple_glyf::draw(font, glyph, &mut path).is_none() {
+            path.segments.clear();
+            font.outline_glyphs()
+                .get(glyph)?
+                .draw(
+                    &DrawOptions::new().with_ppem(None),
+                    DrawMemory::Scratch,
+                    &mut path,
+                )
+                .ok()?;
+        }
         let (min, max) = path.bounds()?;
         let (left, top) = (whole::floor(min.x), whole::floor(min.y));
         let width = pixels(whole::ceil(max.x) - left);

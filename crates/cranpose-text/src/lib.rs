@@ -54,6 +54,7 @@ mod shaped_item;
 pub mod shaper;
 /// The stretches of a paragraph that shape alike.
 pub mod shaping_span;
+mod simple_glyf;
 /// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
 /// A paragraph laid out in lines, and Compose's `TextLayoutResult` queries.
