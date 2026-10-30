@@ -151,7 +151,7 @@ pub use blocking::{
     withBlocking,
 };
 pub use callbacks::{
-    CallbackHolder, CallbackHolder1, ParamReturnState, ParamSlot, ParamState, ReturnSlot,
+    CallbackForwarder, CallbackHolder, ParamReturnState, ParamSlot, ParamState, ReturnSlot,
     SharedParam, refresh_param, refresh_shared_param, store_param,
 };
 pub use composer::{

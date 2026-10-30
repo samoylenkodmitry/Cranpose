@@ -424,7 +424,6 @@ fn LiquidTabBarLayout(
     has_accessory: bool,
     accessory: impl FnMut() + 'static,
 ) {
-    let mut accessory = accessory;
     let count = tabs.len().max(1);
     let selected = selected.min(count - 1);
     let rtl = cranpose_ui::layout_direction().is_rtl();

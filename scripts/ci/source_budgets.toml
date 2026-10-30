@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13701
+private_docs = 13692
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 341
@@ -47,7 +47,7 @@ limit = 1000
 "crates/cranpose-app-shell/src/shell_frame.rs" = 1218
 "crates/cranpose-app-shell/src/shell_input.rs" = 2067
 "crates/cranpose-capabilities/src/lib.rs" = 1069
-"crates/cranpose-core/src/composer.rs" = 2359
+"crates/cranpose-core/src/composer.rs" = 2358
 "crates/cranpose-core/src/runtime.rs" = 1760
 "crates/cranpose-core/src/state.rs" = 2294
 "crates/cranpose-foundation/src/lazy/lazy_list_state.rs" = 1139
@@ -55,7 +55,6 @@ limit = 1000
 "crates/cranpose-liquid/src/material.rs" = 2198
 "crates/cranpose-liquid/src/widgets/menu.rs" = 1907
 "crates/cranpose-macros/src/branch_groups.rs" = 1200
-"crates/cranpose-macros/src/lib.rs" = 1234
 "crates/cranpose-render/common/src/render_contract.rs" = 1139
 "crates/cranpose-render/common/src/scene_builder.rs" = 3061
 "crates/cranpose-render/common/src/software_text_raster.rs" = 5468

@@ -1,5 +1,6 @@
 mod applier_disposal;
 mod blocking_work;
+mod callback_parameters;
 mod computed_locals;
 mod computed_state;
 mod effects_and_frames;
