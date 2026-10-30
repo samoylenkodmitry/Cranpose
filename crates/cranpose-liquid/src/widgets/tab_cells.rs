@@ -9,9 +9,10 @@ use cranpose_ui::{
 use cranpose_ui_layout::Alignment;
 
 use super::{
+    selection::SelectionState,
     tab_bar::{
         BAR_HEIGHT, BLOB_HEIGHT, BLOB_MARGIN, LiquidTab, LiquidTabIcon, LiquidTabIconStyle,
-        TAB_ICON_SIZE, TAB_LABEL_SIZE, TabGeometry, normalize_icon_scale,
+        TAB_ICON_SIZE, TAB_LABEL_SIZE, TabGeometry, TabSelect, normalize_icon_scale,
     },
     tab_flight_lens::{tab_lens_base_size, tab_lens_deformed_size},
 };
@@ -139,8 +140,37 @@ pub(super) fn tab_ink_selection(
 pub(super) struct TabCellsSpec {
     pub(super) geometry: TabGeometry,
     pub(super) base_color: Color,
-    pub(super) selected: usize,
-    pub(super) committed_selection: usize,
+}
+
+// The selection as the cells show it: the committed index, which their
+// semantics report, the tab under the lens, whose label is bold, and the
+// callback a cell's click action calls.
+#[derive(Clone, PartialEq)]
+pub(super) struct TabCellSelection {
+    pub(super) committed: cranpose_core::MutableState<usize>,
+    pub(super) visual: cranpose_core::State<usize>,
+    pub(super) select: TabSelect,
+}
+
+// A cell's label style, by whether the lens is over it.
+fn tab_label_styles(typography: &LiquidTypography, color: Color) -> [TextStyle; 2] {
+    [FontWeight::MEDIUM, FontWeight::SEMI_BOLD].map(|weight| TextStyle {
+        span_style: SpanStyle {
+            color: Some(color),
+            font_size: cranpose_ui::text::TextUnit::Sp(TAB_LABEL_SIZE),
+            font_weight: Some(weight),
+            ..typography.caption1.span_style.clone()
+        },
+        paragraph_style: cranpose_ui::text::ParagraphStyle {
+            line_height: cranpose_ui::text::TextUnit::Sp(12.0),
+            line_height_style: Some(cranpose_ui::text::LineHeightStyle {
+                alignment: cranpose_ui::text::LineHeightAlignment::Center,
+                trim: cranpose_ui::text::LineHeightTrim::None,
+                mode: cranpose_ui::text::LineHeightMode::Fixed,
+            }),
+            ..typography.caption1.paragraph_style.clone()
+        },
+    })
 }
 
 /// Where the lens's ink falls on the cells this frame, under the bar's lift.
@@ -150,7 +180,7 @@ fn lifted_ink(
     selection: super::vibrancy::InkSelection,
     transform: &cranpose_ui_graphics::GraphicsLayer,
 ) -> (super::vibrancy::InkSelection, super::vibrancy::InkGrid) {
-    let size = Size::new(geometry.width + BLOB_MARGIN * 2.0, BAR_HEIGHT);
+    let size = Size::new(geometry.pill_width(), BAR_HEIGHT);
     let mut selection = selection;
     let center = selection.bounds.x + selection.bounds.width * 0.5 + BLOB_MARGIN;
     selection.bounds.width *= transform.scale_x;
@@ -180,23 +210,23 @@ pub(super) fn TabCells(
     tabs: Rc<Vec<LiquidTab>>,
     typography: LiquidTypography,
     spec: TabCellsSpec,
-    selection: impl Fn() -> super::vibrancy::InkSelection + 'static,
+    selection: TabCellSelection,
+    ink_selection: impl Fn() -> super::vibrancy::InkSelection + 'static,
     transform: impl Fn() -> cranpose_ui_graphics::GraphicsLayer + 'static,
-    on_select: impl Fn(usize) + 'static,
 ) {
-    let on_select: Rc<dyn Fn(usize)> = Rc::new(on_select);
     let transform: Rc<dyn Fn() -> cranpose_ui_graphics::GraphicsLayer> = Rc::new(transform);
     let geometry = spec.geometry;
-    let size = Size::new(geometry.width + BLOB_MARGIN * 2.0, BAR_HEIGHT);
+    let size = Size::new(geometry.pill_width(), BAR_HEIGHT);
     let count = tabs.len();
     let ink = {
         let transform = Rc::clone(&transform);
-        move || lifted_ink(geometry, count, selection(), &transform())
+        move || lifted_ink(geometry, count, ink_selection(), &transform())
     };
+    let label_styles = Rc::new(tab_label_styles(&typography, spec.base_color));
     super::vibrancy::VibrantContent(modifier, size, spec.base_color, ink, move || {
         let tabs = Rc::clone(&tabs);
-        let typography = typography.clone();
-        let on_select = Rc::clone(&on_select);
+        let label_styles = Rc::clone(&label_styles);
+        let selection = selection.clone();
         let transform = Rc::clone(&transform);
         Box(
             Modifier::empty()
@@ -206,71 +236,88 @@ pub(super) fn TabCells(
                 .graphics_layer(move || transform()),
             BoxSpec::default(),
             move || {
-                for (index, tab) in tabs.iter().enumerate() {
-                    let color = spec.base_color;
-                    let icon_offset = tab.icon_offset;
-                    let on_select = Rc::clone(&on_select);
-                    let cell = Modifier::empty()
-                        .offset(BLOB_MARGIN + index as f32 * geometry.pitch, BLOB_MARGIN)
-                        .size(Size::new(geometry.cell_width, BLOB_HEIGHT))
-                        .stable_semantics(super::selection::selection_semantics(
-                            tab.label.to_string(),
-                            SemanticsWidgetRole::Tab,
+                // Read here, a new selection runs this loop, and only the
+                // cells whose look it changes compose again.
+                let committed = selection.committed.get();
+                let visual = selection.visual.get();
+                for index in 0..tabs.len() {
+                    TabCell(
+                        Rc::clone(&tabs),
+                        Rc::clone(&label_styles),
+                        TabCellLook {
                             index,
-                            spec.committed_selection,
-                            on_select,
-                        ))
-                        .focusable();
-                    let icon = tab.icon.clone();
-                    let icon_style = tab.icon_style;
-                    let icon_scale = tab.icon_scale;
-                    let label = tab.label.clone();
-                    let label_style = TextStyle {
-                        span_style: SpanStyle {
-                            color: Some(color),
-                            font_size: cranpose_ui::text::TextUnit::Sp(TAB_LABEL_SIZE),
-                            font_weight: Some(if spec.selected == index {
-                                FontWeight::SEMI_BOLD
-                            } else {
-                                FontWeight::MEDIUM
-                            }),
-                            ..typography.caption1.span_style.clone()
+                            geometry,
+                            color: spec.base_color,
+                            committed: SelectionState::of(index, committed),
+                            bold: visual == index,
+                            select: selection.select.clone(),
                         },
-                        paragraph_style: cranpose_ui::text::ParagraphStyle {
-                            line_height: cranpose_ui::text::TextUnit::Sp(12.0),
-                            line_height_style: Some(cranpose_ui::text::LineHeightStyle {
-                                alignment: cranpose_ui::text::LineHeightAlignment::Center,
-                                trim: cranpose_ui::text::LineHeightTrim::None,
-                                mode: cranpose_ui::text::LineHeightMode::Fixed,
-                            }),
-                            ..typography.caption1.paragraph_style.clone()
-                        },
-                    };
-                    Box(cell, BoxSpec::default(), move || {
-                        let label = label.clone();
-                        let label_style = label_style.clone();
-                        let icon = icon.clone();
-                        Box(
-                            Modifier::empty()
-                                .offset(
-                                    (geometry.cell_width - TAB_ICON_SIZE) * 0.5 + icon_offset.0,
-                                    3.0 + icon_offset.1,
-                                )
-                                .size(Size::new(TAB_ICON_SIZE, TAB_ICON_SIZE)),
-                            BoxSpec::default(),
-                            move || TabIcon(icon.clone(), icon_style, color, icon_scale),
-                        );
-                        Box(
-                            Modifier::empty()
-                                .offset(0.0, 35.0)
-                                .size(Size::new(geometry.cell_width, 12.0)),
-                            BoxSpec::default().content_alignment(Alignment::CENTER),
-                            move || {
-                                Text(label.clone(), Modifier::empty(), label_style.clone());
-                            },
-                        );
-                    });
+                    );
                 }
+            },
+        );
+    });
+}
+
+#[derive(Clone, PartialEq)]
+struct TabCellLook {
+    index: usize,
+    geometry: TabGeometry,
+    color: Color,
+    committed: SelectionState,
+    bold: bool,
+    select: TabSelect,
+}
+
+#[composable]
+fn TabCell(tabs: Rc<Vec<LiquidTab>>, label_styles: Rc<[TextStyle; 2]>, look: TabCellLook) {
+    let TabCellLook {
+        index,
+        geometry,
+        color,
+        committed,
+        bold,
+        select,
+    } = look;
+    let tab = &tabs[index];
+    let icon_offset = tab.icon_offset;
+    let cell = Modifier::empty()
+        .offset(BLOB_MARGIN + index as f32 * geometry.pitch, BLOB_MARGIN)
+        .size(Size::new(geometry.cell_width, BLOB_HEIGHT))
+        .stable_semantics(super::selection::selection_semantics(
+            tab.label.to_string(),
+            SemanticsWidgetRole::Tab,
+            index,
+            committed,
+            select.callback(),
+        ))
+        .focusable();
+    let icon = tab.icon.clone();
+    let icon_style = tab.icon_style;
+    let icon_scale = tab.icon_scale;
+    let label = tab.label.clone();
+    let label_style = label_styles[usize::from(bold)].clone();
+    Box(cell, BoxSpec::default(), move || {
+        let label = label.clone();
+        let label_style = label_style.clone();
+        let icon = icon.clone();
+        Box(
+            Modifier::empty()
+                .offset(
+                    (geometry.cell_width - TAB_ICON_SIZE) * 0.5 + icon_offset.0,
+                    3.0 + icon_offset.1,
+                )
+                .size(Size::new(TAB_ICON_SIZE, TAB_ICON_SIZE)),
+            BoxSpec::default(),
+            move || TabIcon(icon.clone(), icon_style, color, icon_scale),
+        );
+        Box(
+            Modifier::empty()
+                .offset(0.0, 35.0)
+                .size(Size::new(geometry.cell_width, 12.0)),
+            BoxSpec::default().content_alignment(Alignment::CENTER),
+            move || {
+                Text(label.clone(), Modifier::empty(), label_style.clone());
             },
         );
     });

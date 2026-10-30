@@ -51,7 +51,9 @@ impl TabLensDrawing {
 
     /// Where the lens's ink falls on the cells this frame.
     pub(super) fn selection(&self) -> super::vibrancy::InkSelection {
-        let frame = self.motion.frame(self.lens.cells, self.lens.resting_lens_x);
+        let frame = self
+            .motion
+            .frame(self.lens.cells, || self.lens.resting_lens_x());
         tab_ink_selection(
             self.lens.cells,
             frame.lens_x,
@@ -80,7 +82,9 @@ impl TabLensDrawing {
 
     /// One of the lens's two glass layers this frame: 0 under the cells, 1 over them.
     fn glass_layer(&self, layer: usize) -> cranpose_ui_graphics::GraphicsLayer {
-        let frame = self.motion.frame(self.lens.cells, self.lens.resting_lens_x);
+        let frame = self
+            .motion
+            .frame(self.lens.cells, || self.lens.resting_lens_x());
         self.layers(frame.activity)(
             cranpose_ui::current_density(),
             tab_flight_dynamics(self.lens.geometry(frame), self.lens.node(frame)),
