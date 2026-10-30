@@ -252,11 +252,15 @@ fn url_path(url: &NSURL) -> PathBuf {
 
 struct SecurityScope {
     url: Retained<NSURL>,
+    reference: RefCell<Option<String>>,
 }
 
 impl SecurityScope {
     fn new(url: Retained<NSURL>) -> Self {
-        Self { url }
+        Self {
+            url,
+            reference: RefCell::new(None),
+        }
     }
 
     /// Opens the scope until the returned access is dropped.
@@ -343,6 +347,29 @@ impl Content for IosFile {
 
     fn media_uri(&self) -> Result<String, ContentError> {
         crate::apple::media_source::reference(&self.scope.url, &self.path).map_err(map_io)
+    }
+
+    fn media_uri_async(&self) -> ContentFuture<'_, Result<String, ContentError>> {
+        Box::pin(async move {
+            let retained = self.scope.reference.borrow().clone();
+            let root = url_path(&self.scope.url);
+            let retained = if let Some(retained) = retained {
+                retained
+            } else {
+                let url = self.scope.url.retain();
+                let scope_path = root.clone();
+                let retained = cranpose_services::run_threaded(move || {
+                    crate::apple::media_source::reference(&url, &scope_path).map_err(map_io)
+                })
+                .await?;
+                *self.scope.reference.borrow_mut() = Some(retained.clone());
+                retained
+            };
+            let relative = self.path.strip_prefix(root).map_err(|_| {
+                ContentError::Io("audio file is outside the selected resource".into())
+            })?;
+            crate::apple::media_source::child_reference(&retained, relative).map_err(map_io)
+        })
     }
 
     /// The file opens inside its security scope, which stays open while the

@@ -33,10 +33,26 @@ pub(crate) fn reference(scope: &NSURL, path: &Path) -> io::Result<String> {
             options, None, None,
         )
         .map_err(|error| io::Error::other(error.to_string()))?;
+    child_reference(&format!("{PREFIX}{}/", hex(&bookmark.to_vec())), relative)
+}
+
+pub(crate) fn child_reference(folder: &str, relative: &Path) -> io::Result<String> {
+    let (bookmark, parent) = folder
+        .strip_prefix(PREFIX)
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(|| io::Error::other("invalid folder bookmark"))?;
+    let parent =
+        String::from_utf8(unhex(parent)?).map_err(|_| io::Error::other("invalid bookmark path"))?;
+    let child = Path::new(&parent).join(relative);
+    if child
+        .components()
+        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(io::Error::other("invalid bookmark path"));
+    }
     Ok(format!(
-        "{PREFIX}{}/{}",
-        hex(&bookmark.to_vec()),
-        hex(relative.to_string_lossy().as_bytes())
+        "{PREFIX}{bookmark}/{}",
+        hex(child.to_string_lossy().as_bytes())
     ))
 }
 
@@ -65,6 +81,9 @@ impl Drop for Access {
 struct BookmarkOpener;
 
 impl MediaSourceOpener for BookmarkOpener {
+    fn child_reference(&self, folder: &str, relative: &Path) -> io::Result<String> {
+        child_reference(folder, relative)
+    }
     fn reference(&self, path: &Path) -> io::Result<String> {
         let path_text = NSString::from_str(&path.to_string_lossy());
         let url = NSURL::fileURLWithPath(&path_text);

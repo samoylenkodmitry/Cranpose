@@ -133,6 +133,13 @@ pub trait Content {
         ))
     }
 
+    /// Retains a playback reference without blocking the UI on platform I/O.
+    /// Providers with filesystem access grants override this method and perform
+    /// that work on the blocking executor. No audio is read or copied.
+    fn media_uri_async(&self) -> ContentFuture<'_, Result<String, ContentError>> {
+        Box::pin(async move { self.media_uri() })
+    }
+
     /// Opens a chunked reader over the bytes.
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>>;
 
