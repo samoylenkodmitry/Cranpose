@@ -156,6 +156,18 @@ impl FontFamilyResolver {
             visit(0..text.len(), primary);
             return;
         }
+        self.fallback_runs(text, request, visit);
+    }
+
+    // `typeface_runs` of a text the primary typeface does not draw alone.
+    // Out of line, as most text it does.
+    #[inline(never)]
+    fn fallback_runs(
+        &self,
+        text: &str,
+        request: FontRequest<'_>,
+        visit: impl FnMut(Range<usize>, usize),
+    ) {
         self.fallback_chain(request).split(text, visit);
     }
 

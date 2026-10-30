@@ -128,32 +128,17 @@ impl Shaper {
         glyphs: &mut ShapedGlyphs,
     ) {
         let face = self.face(item.typeface, span.font.weight, span.font.style);
-        let direction = if item.level.is_rtl() {
-            Direction::RightToLeft
-        } else {
-            Direction::LeftToRight
-        };
-        let script = ShapingScript::from_iso15924_tag(Tag::new(&item.script.tag()));
-        let language = span.language.and_then(|tag| tag.parse::<Language>().ok());
-        self.features.clear();
-        // The layouter spaces letters by the font's `trak` table itself, at
-        // each span's size, so shaped words keep to every size.
-        self.features.push(Feature::new(Tag::new(b"trak"), 0, ..));
-        self.features.extend(
-            span.features
-                .iter()
-                .map(|feature| Feature::new(Tag::new(&feature.tag), feature.value, ..)),
-        );
         let asked = (span.language.is_none() && span.features.is_empty()).then_some(PlanAsk {
             rtl: item.level.is_rtl(),
             script: item.script.tag(),
         });
-        let plan = match self.faces[face].last.filter(|last| Some(last.0) == asked) {
-            Some((_, plan)) => plan,
+        // An item that searched the plans has its settings made, and the
+        // shaper's features set for it.
+        let (plan, settings) = match self.faces[face].last.filter(|last| Some(last.0) == asked) {
+            Some((_, plan)) => (plan, None),
             None => {
-                let plan = self.plan(face, direction, script, language.as_ref());
-                self.faces[face].last = asked.map(|asked| (asked, plan));
-                plan
+                let (plan, settings) = self.asked_plan(face, (item, span), asked);
+                (plan, Some(settings))
             }
         };
         let ShapingFace {
@@ -168,14 +153,25 @@ impl Shaper {
         // Made here, the HarfRust plan does not take its stack under the
         // shaping font's.
         plans[plan].harfrust(font);
-        self.shape_with_plan(
-            (face, plan),
-            text,
-            item,
-            (direction, script, language),
-            context,
-            glyphs,
-        );
+        self.shape_with_plan((face, plan), text, (item, span, settings), context, glyphs);
+    }
+
+    // The plan of face `face` for `item` in `span`, which did not take the
+    // face's last plan as `asked`, and the settings it searched with. Out of
+    // line: most items take the plan the item before them took, and need
+    // neither the settings nor the search.
+    #[inline(never)]
+    fn asked_plan(
+        &mut self,
+        face: usize,
+        (item, span): (&TextItem<'_>, &ShapingSpan<'_>),
+        asked: Option<PlanAsk>,
+    ) -> (usize, ShapingSettings) {
+        let settings = shaping_settings(&mut self.features, item, span);
+        let (direction, script, language) = &settings;
+        let plan = self.plan(face, *direction, *script, language.as_ref());
+        self.faces[face].last = asked.map(|asked| (asked, plan));
+        (plan, settings)
     }
 
     // Shapes `item` as `shape` does, with plan `plan` of face `face`. Out of
@@ -186,8 +182,7 @@ impl Shaper {
         &mut self,
         (face, plan): (usize, usize),
         text: &str,
-        item: &TextItem<'_>,
-        (direction, script, language): (Direction, Option<ShapingScript>, Option<Language>),
+        (item, span, settings): (&TextItem<'_>, &ShapingSpan<'_>, Option<ShapingSettings>),
         context: Range<usize>,
         glyphs: &mut ShapedGlyphs,
     ) {
@@ -199,6 +194,8 @@ impl Shaper {
             word_ends,
             pieces,
         } = self;
+        let (direction, script, language) =
+            settings.unwrap_or_else(|| shaping_settings(features, item, span));
         let ShapingFace {
             font, plans, plain, ..
         } = &mut faces[face];
@@ -326,6 +323,36 @@ impl Shaper {
         });
         self.faces.len() - 1
     }
+}
+
+// The direction, script and language an item shapes in.
+type ShapingSettings = (Direction, Option<ShapingScript>, Option<Language>);
+
+// The settings of `item`, with the features of `span` set in `features`.
+// The layouter spaces letters by the font's `trak` table itself, at each
+// span's size, so shaped words keep to every size. Out of line: only a plan
+// search and HarfRust need them, and an item makes them once.
+#[inline(never)]
+fn shaping_settings(
+    features: &mut Vec<Feature>,
+    item: &TextItem<'_>,
+    span: &ShapingSpan<'_>,
+) -> ShapingSettings {
+    let direction = if item.level.is_rtl() {
+        Direction::RightToLeft
+    } else {
+        Direction::LeftToRight
+    };
+    let script = ShapingScript::from_iso15924_tag(Tag::new(&item.script.tag()));
+    let language = span.language.and_then(|tag| tag.parse::<Language>().ok());
+    features.clear();
+    features.push(Feature::new(Tag::new(b"trak"), 0, ..));
+    features.extend(
+        span.features
+            .iter()
+            .map(|feature| Feature::new(Tag::new(&feature.tag), feature.value, ..)),
+    );
+    (direction, script, language)
 }
 
 impl ShapingFace {

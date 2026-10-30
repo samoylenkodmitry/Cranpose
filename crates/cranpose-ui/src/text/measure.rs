@@ -159,6 +159,18 @@ impl PreparedTextLayout {
         if width.to_bits() == self.layout.width().to_bits() {
             return Rc::clone(self);
         }
+        self.aligned_at(widths, align, spare)
+    }
+
+    // The copy `at_widths` makes. Out of line: the copy costs more than the
+    // call, and a layout held at its own width takes none.
+    #[inline(never)]
+    fn aligned_at(
+        self: &Rc<Self>,
+        widths: (f32, f32),
+        align: TextAlign,
+        spare: Option<Rc<Self>>,
+    ) -> Rc<Self> {
         let mut aligned = Self {
             min_lines: self.min_lines,
             render_text: self.render_text.clone(),

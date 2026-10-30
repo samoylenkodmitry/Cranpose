@@ -172,6 +172,8 @@ impl LineBoxInputs {
         }
     }
 
+    // Out of line: the layouter takes most line boxes from `LastLineBox`.
+    #[inline(never)]
     fn line_box(self) -> LineBox {
         aosp_line_box(self.style, self.extent, self.asked, self.padding, self.grid)
     }

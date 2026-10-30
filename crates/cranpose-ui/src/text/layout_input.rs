@@ -114,15 +114,15 @@ impl<'a> ParagraphSpans<'a> {
         // The style's own size is its resolved size, `Em` against 14 sp.
         let base = ShapingStyle { size, ..base };
         let mut stretches = stretches(text, base, units);
-        let mut features = SmallVec::new();
         // Most text asks for no features.
-        for stretch in &mut stretches {
-            if let Some(settings) = stretch.style.features {
-                let start = features.len();
-                features.extend(font_feature_settings(settings));
-                stretch.features = start..features.len();
-            }
-        }
+        let features = if stretches
+            .iter()
+            .any(|stretch| stretch.style.features.is_some())
+        {
+            stretch_features(&mut stretches)
+        } else {
+            SmallVec::new()
+        };
         let paragraph = &style.paragraph_style;
         let indent = paragraph.text_indent.unwrap_or_default();
         let length = |unit: TextUnit| match unit {
@@ -196,9 +196,42 @@ impl<'a> ParagraphSpans<'a> {
     }
 }
 
+// The features of `stretches` in one list, each stretch given the range of
+// its own. Out of line, as most text asks for none.
+#[inline(never)]
+fn stretch_features(stretches: &mut [Stretch<'_>]) -> SmallVec<[FontFeature; 1]> {
+    let mut features = SmallVec::new();
+    for stretch in stretches {
+        if let Some(settings) = stretch.style.features {
+            let start = features.len();
+            features.extend(font_feature_settings(settings));
+            stretch.features = start..features.len();
+        }
+    }
+    features
+}
+
 // The stretches of `text` between its span boundaries with the settings
 // each shapes with, adjacent stretches with the same settings joined.
 fn stretches<'a>(
+    text: &'a AnnotatedString,
+    base: ShapingStyle<'a>,
+    units: TextUnits,
+) -> SmallVec<[Stretch<'a>; 1]> {
+    if text.span_styles.is_empty() {
+        return SmallVec::from_buf([Stretch {
+            text: 0..text.text.len(),
+            style: base,
+            features: 0..0,
+        }]);
+    }
+    spanned_stretches(text, base, units)
+}
+
+// `stretches` of a text with span styles. Out of line, as most text has
+// none.
+#[inline(never)]
+fn spanned_stretches<'a>(
     text: &'a AnnotatedString,
     base: ShapingStyle<'a>,
     units: TextUnits,
@@ -209,10 +242,6 @@ fn stretches<'a>(
         features: 0..0,
     };
     let mut stretches: SmallVec<[Stretch<'a>; 1]> = SmallVec::new();
-    if text.span_styles.is_empty() {
-        stretches.push(stretch(0..text.text.len(), base));
-        return stretches;
-    }
     for edges in text.span_boundaries().windows(2) {
         let range = edges[0]..edges[1];
         let style = text

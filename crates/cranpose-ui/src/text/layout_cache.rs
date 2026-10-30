@@ -146,6 +146,13 @@ impl LayoutCache {
                 }
             }
         }
+        self.keep_first(key, prepared);
+    }
+
+    // Keeps `prepared` as the one layout of `key`. Out of line: a text drawn
+    // anew each frame stops before it.
+    #[inline(never)]
+    fn keep_first(&mut self, key: TextKey, prepared: &Rc<PreparedTextLayout>) {
         self.kept
             .push(key, SmallVec::from_elem(Rc::clone(prepared), 1));
     }
@@ -161,6 +168,8 @@ impl LayoutCache {
 }
 
 // Puts `prepared` first among the layouts of one text, keeping the newest.
+// Out of line, as only a text laid out at another width gets here.
+#[inline(never)]
 fn remember(widths: &mut Widths, prepared: &Rc<PreparedTextLayout>) {
     widths.truncate(WIDTHS_PER_TEXT - 1);
     widths.insert(0, Rc::clone(prepared));

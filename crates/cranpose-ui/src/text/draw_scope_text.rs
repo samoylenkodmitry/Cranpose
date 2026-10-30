@@ -87,17 +87,23 @@ pub fn drawn_text_style(style: &DrawTextStyle) -> (Arc<TextStyle>, u64) {
         let mut drawn = state.drawn_text_styles.borrow_mut();
         let kept = match drawn.find(|kept| kept.draw == *style) {
             Some(kept) => kept,
-            None => {
-                let text_style = text_style_for_draw_style(style);
-                drawn.keep(DrawnStyle {
-                    draw: style.clone(),
-                    hash: text_style.render_hash(),
-                    style: Arc::new(text_style),
-                })
-            }
+            None => drawn.keep(drawn_style(style)),
         };
         (Arc::clone(&kept.style), kept.hash)
     })
+}
+
+// `style` converted and hashed. Out of line: a frame that draws in a style
+// it drew in before runs none of it.
+#[cold]
+#[inline(never)]
+fn drawn_style(style: &DrawTextStyle) -> DrawnStyle {
+    let text_style = text_style_for_draw_style(style);
+    DrawnStyle {
+        draw: style.clone(),
+        hash: text_style.render_hash(),
+        style: Arc::new(text_style),
+    }
 }
 
 /// The line box a draw-scope style resolves to against the app's fonts: how

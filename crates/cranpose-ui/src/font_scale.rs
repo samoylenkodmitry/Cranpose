@@ -159,6 +159,16 @@ impl FontScaleCurve {
         if !sp.is_finite() {
             return sp;
         }
+        if self.knots.is_empty() {
+            return sp * self.scale;
+        }
+        self.sp_to_dp_on_knots(sp)
+    }
+
+    // `sp_to_dp` of a curve with knots. Out of line: most hosts scale fonts
+    // linearly, and every text size goes through `sp_to_dp`.
+    #[inline(never)]
+    fn sp_to_dp_on_knots(self, sp: f32) -> f32 {
         let knots = self.knots;
         let (Some(&(first_sp, first_dp)), Some(&(last_sp, last_dp))) =
             (knots.first(), knots.last())

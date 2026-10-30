@@ -95,6 +95,19 @@ impl PlainChars {
         if packed >> 32 == known {
             return None;
         }
+        self.read_char(slot, (packed, known), read)
+    }
+
+    // `char` of a character its slot does not hold, `packed` holding
+    // another or none: `read` reads it. Out of line, as text meets each
+    // character once.
+    #[inline(never)]
+    fn read_char(
+        &mut self,
+        slot: u8,
+        (packed, known): (u64, u64),
+        read: impl FnOnce() -> Option<CharGlyph>,
+    ) -> Option<PlainChar> {
         let plain = read().and_then(|read| {
             Some(PlainChar {
                 glyph: u16::try_from(read.glyph).ok()?,
@@ -122,6 +135,31 @@ impl PlainChars {
         second: PlainChar,
         read: impl FnOnce() -> PairFit,
     ) -> PairFit {
+        let number = self.row_of[usize::from(first.slot)];
+        if number != 0 {
+            match self.rows[usize::from(number - 1)][usize::from(second.slot)] {
+                UNREAD => {}
+                JOINS => return PairFit::Joins,
+                UNKERNED => return PairFit::Kern(0),
+                kerned => {
+                    let kern = self.kerns[usize::from(kerned - KERNED)];
+                    return PairFit::Kern(i32::from(kern));
+                }
+            }
+        }
+        self.read_pair(first, second, read)
+    }
+
+    // `pair` of a pair whose cell is not read yet, or whose first
+    // character has no row yet: `read` reads it. Out of line, as text meets
+    // each pair once.
+    #[inline(never)]
+    fn read_pair(
+        &mut self,
+        first: PlainChar,
+        second: PlainChar,
+        read: impl FnOnce() -> PairFit,
+    ) -> PairFit {
         let number = &mut self.row_of[usize::from(first.slot)];
         if *number == 0 {
             // A plan meets a few rows' worth of characters; room for more
@@ -130,22 +168,14 @@ impl PlainChars {
             self.rows.push([UNREAD; SLOTS]);
             *number = u8::try_from(self.rows.len()).unwrap_or(u8::MAX);
         }
-        let cell = &mut self.rows[usize::from(*number - 1)][usize::from(second.slot)];
-        match *cell {
-            UNREAD => {}
-            JOINS => return PairFit::Joins,
-            UNKERNED => return PairFit::Kern(0),
-            kerned => {
-                let kern = self.kerns[usize::from(kerned - KERNED)];
-                return PairFit::Kern(i32::from(kern));
-            }
-        }
+        let row = usize::from(*number - 1);
         let fit = read();
         // A cell holds what stands between the glyphs its slots hold now:
         // `second` took the slot of `first` from it when they share one.
         if first.slot == second.slot && first.glyph != second.glyph {
             return fit;
         }
+        let cell = &mut self.rows[row][usize::from(second.slot)];
         *cell = match fit {
             PairFit::Joins => JOINS,
             PairFit::Kern(0) => UNKERNED,

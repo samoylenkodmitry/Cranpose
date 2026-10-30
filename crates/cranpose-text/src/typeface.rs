@@ -318,6 +318,7 @@ impl Typeface {
     /// The font's line metrics at the instance, in design units: the
     /// typographic line when the font asks for it with `USE_TYPO_METRICS`,
     /// otherwise the `hhea` line, as Skia and FreeType read them.
+    #[inline(never)]
     pub fn line_metrics(&self) -> LineMetrics {
         let metrics = self.0.font.metrics();
         metrics
@@ -360,6 +361,14 @@ impl Typeface {
         if track.is_empty() || !size.is_finite() || size <= 0.0 {
             return 0.0;
         }
+        self.tracked(size)
+    }
+
+    // `tracking` of a font with a `trak` table. Out of line, as most fonts
+    // have none.
+    #[inline(never)]
+    fn tracked(&self, size: f32) -> f32 {
+        let track = &self.0.tracking;
         let above = track.partition_point(|&(point_size, _)| point_size < size);
         let em = match (
             above.checked_sub(1).map(|below| track[below]),

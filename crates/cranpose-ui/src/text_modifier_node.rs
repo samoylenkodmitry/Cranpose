@@ -213,7 +213,9 @@ impl TextPreparedLayoutOwner {
         self.prepare(widths, stamp, read)
     }
 
-    // Prepares a layout at `widths` that no cached one keeps.
+    // Prepares a layout at `widths` that no cached one keeps. Out of line:
+    // most reads take a cached layout, and each reader has its own copy.
+    #[inline(never)]
     fn prepare<R>(
         &self,
         widths: (f32, f32),
