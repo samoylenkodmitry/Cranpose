@@ -14,7 +14,10 @@ use smallvec::SmallVec;
 
 use crate::{
     density::Density,
-    text::{AnnotatedString, TextLayoutOptions, TextStyle, layout_cache::CacheAdmission},
+    text::{
+        AnnotatedString, TextLayoutOptions, TextStyle, layout_cache::CacheAdmission,
+        recent_values::RecentValues,
+    },
 };
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
@@ -522,6 +525,9 @@ impl PartialEq for TextModifierElement {
 /// How many recent text styles [`shared_text_style`] keeps.
 const SHARED_TEXT_STYLES: usize = 16;
 
+// The text styles recently composed, which [`shared_text_style`] shares.
+pub(crate) type RecentTextStyles = RecentValues<Arc<TextStyle>, SHARED_TEXT_STYLES>;
+
 /// `style` shared with the texts recently composed with an equal one, so a
 /// screen of texts in a few styles keeps a few copies, not one a text, and
 /// a node updated to an element of the same style compares pointers. A
@@ -529,22 +535,11 @@ const SHARED_TEXT_STYLES: usize = 16;
 /// own, kept first; the last kept one goes.
 pub(crate) fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
     crate::thread_state::with(|state| {
-        let mut recent = state.recent_text_styles.borrow_mut();
-        match recent.iter().position(|kept| **kept == style) {
-            Some(0) => Arc::clone(&recent[0]),
-            // One step toward the front: styles in use stay among the first
-            // compared, without moving the whole list on every hit.
-            Some(index) => {
-                recent.swap(index, index - 1);
-                Arc::clone(&recent[index - 1])
-            }
-            None => {
-                let shared = Arc::new(style);
-                recent.truncate(SHARED_TEXT_STYLES - 1);
-                recent.insert(0, Arc::clone(&shared));
-                shared
-            }
-        }
+        Arc::clone(state.recent_text_styles.borrow_mut().find_or_keep(
+            style,
+            |kept, style| **kept == *style,
+            Arc::new,
+        ))
     })
 }
 

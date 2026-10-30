@@ -6,6 +6,7 @@ pub(crate) mod layout_cache;
 mod layout_input;
 /// Text measurement, line wrapping and cursor hit testing.
 pub mod measure;
+pub(crate) mod recent_values;
 pub(crate) mod shared_plain_text;
 mod shared_text;
 #[cfg(any(test, feature = "test-helpers"))]
@@ -17,7 +18,9 @@ pub use annotated_string::{
     StringAnnotation,
 };
 pub use decoration::{Shadow, TextDecoration};
-pub use draw_scope_text::{AppContextTextMeasurer, draw_style_line_box, text_style_for_draw_style};
+pub use draw_scope_text::{
+    AppContextTextMeasurer, draw_style_line_box, drawn_text_style, text_style_for_draw_style,
+};
 pub use font::{
     FileBackedFontFamily, FontFamily, FontFile, FontStyle, FontSynthesis, FontWeight,
     LoadedTypefacePath,

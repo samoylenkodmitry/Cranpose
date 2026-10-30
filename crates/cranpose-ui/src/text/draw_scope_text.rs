@@ -9,7 +9,7 @@
 //! and the same string rasterized by the renderer are described identically,
 //! down to the cache key.
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, MeasuredText, TextMeasurement,
@@ -19,6 +19,7 @@ use cranpose_ui_graphics::{
 use super::{
     font::{FontFamily, FontStyle, FontWeight},
     line_box::LineBox,
+    recent_values::RecentValues,
     style::{SpanStyle, TextStyle},
     unit::TextUnit,
 };
@@ -61,6 +62,43 @@ pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
     }
     text_style.paragraph_style.line_height_style = style.line_height_style;
     text_style
+}
+
+// How many draw-scope styles `drawn_text_style` keeps converted.
+const DRAWN_TEXT_STYLES: usize = 8;
+
+// A draw scope's style, the text style it converts to, and that style's
+// render hash.
+pub(crate) struct DrawnStyle {
+    draw: DrawTextStyle,
+    style: Arc<TextStyle>,
+    hash: u64,
+}
+
+// The draw-scope styles recently drawn in, which [`drawn_text_style`] keeps.
+pub(crate) type DrawnTextStyles = RecentValues<DrawnStyle, DRAWN_TEXT_STYLES>;
+
+/// The [`TextStyle`] that [`text_style_for_draw_style`] builds of `style`,
+/// and its render hash, converted once while draw scopes keep drawing in an
+/// equal style: a text measured and drawn every frame neither builds nor
+/// hashes its style again.
+pub fn drawn_text_style(style: &DrawTextStyle) -> (Arc<TextStyle>, u64) {
+    crate::thread_state::with(|state| {
+        let mut drawn = state.drawn_text_styles.borrow_mut();
+        let kept = drawn.find_or_keep(
+            style,
+            |kept, style| kept.draw == **style,
+            |style| {
+                let text_style = text_style_for_draw_style(style);
+                DrawnStyle {
+                    draw: style.clone(),
+                    hash: text_style.render_hash(),
+                    style: Arc::new(text_style),
+                }
+            },
+        );
+        (Arc::clone(&kept.style), kept.hash)
+    })
 }
 
 /// The line box a draw-scope style resolves to against the app's fonts: how
@@ -134,9 +172,13 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
 // `text` in a draw scope's `style` laid out with the app's fonts, its sizes
 // taken as stated.
 fn prepare_draw_text(text: &str, style: &DrawTextStyle) -> Rc<super::PreparedTextLayout> {
-    let text_style = text_style_for_draw_style(style);
-    let annotated = super::shared_plain_annotated_string(text);
-    super::measure::prepare_resolved(&annotated, &text_style)
+    let (style, style_hash) = drawn_text_style(style);
+    let text = super::shared_plain_annotated_string(text);
+    super::measure::prepare_resolved(&super::measure::SharedText {
+        text: &text,
+        style: &style,
+        style_hash,
+    })
 }
 
 #[cfg(test)]

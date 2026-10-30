@@ -18,13 +18,12 @@ use cranpose_render_common::{
 #[cfg(test)]
 use cranpose_ui::TextOverflow;
 #[cfg(test)]
-#[cfg(test)]
 use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 use cranpose_ui::{
     LayoutBox,
-    text::{TextDrawStyle, TextStyle},
+    text::{TextDrawStyle, TextStyle, shared_plain_render_string},
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
@@ -1096,16 +1095,16 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            let style_hash = params.text_style.render_hash();
+            let render_text = shared_plain_render_string(&params.text.text);
             self.scene.push_text(TextDraw {
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
                 snap_anchor: None,
-                text: DrawnText::of(params.render_text, &params.text_style),
+                text: DrawnText::of(render_text, &params.text_style),
                 layout: params.layout,
                 color: params.color,
-                text_style: Arc::new(params.text_style),
-                style_hash,
+                text_style: params.text_style,
+                style_hash: params.style_hash,
                 font_size: params.font_size,
                 scale: params.scale,
                 clip: params.clip,

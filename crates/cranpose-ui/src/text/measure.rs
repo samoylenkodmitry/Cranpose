@@ -687,18 +687,15 @@ pub fn measure_text(text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
     .metrics()
 }
 
-// `text` laid out in `style` with lines ending only at its line breaks,
-// `style`'s sizes taken as stated, not scaled by the system font scale, as
+// `text` laid out in its style with lines ending only at its line breaks,
+// the style's sizes taken as stated, not scaled by the system font scale, as
 // a draw scope draws it: the cache keeps it while the last pass drew it,
 // and longer once it comes back, so a number drawn anew each frame takes
 // little room in it.
-pub(crate) fn prepare_resolved(
-    text: &AnnotatedString,
-    style: &TextStyle,
-) -> Rc<PreparedTextLayout> {
+pub(crate) fn prepare_resolved(text: &SharedText<'_>) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
         service.prepare(
-            LayoutSource::Borrowed { text, style },
+            LayoutSource::Shared { text, shaped: None },
             TextFrame::unbounded(TextLayoutOptions::default()),
             (resolved_units(), CacheAdmission::Drawn),
         )

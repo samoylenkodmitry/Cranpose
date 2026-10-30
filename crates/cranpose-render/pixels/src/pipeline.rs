@@ -1219,7 +1219,7 @@ pub(crate) fn push_draw_primitive(
                 layout: params.layout,
                 ink: GlyphInk::Painted,
                 color: params.color,
-                text_style: Arc::new(params.text_style),
+                text_style: params.text_style,
                 font_size: params.font_size,
                 scale: params.scale,
                 clip: params.clip,

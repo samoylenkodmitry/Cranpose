@@ -2,7 +2,6 @@ use std::{
     cell::{Cell, OnceCell, RefCell},
     num::NonZeroU64,
     rc::{Rc, Weak},
-    sync::Arc,
 };
 
 use cranpose_core::{
@@ -19,7 +18,8 @@ use crate::{
     modifier::{Modifier, ModifierNodeSlices},
     render_state::{AppContext, AppContextId},
     selection_container::RegistrarInner,
-    text::{TextStyle, shared_plain_text::SharedPlainText},
+    text::{draw_scope_text::DrawnTextStyles, shared_plain_text::SharedPlainText},
+    text_modifier_node::RecentTextStyles,
     unhandled_keys::KeyHandler,
 };
 
@@ -71,7 +71,8 @@ pub(crate) struct UiThreadState {
     pub(crate) app_context_stack: RefCell<Vec<Weak<AppContext>>>,
     pub(crate) app_contexts: RefCell<FixedHashMap<AppContextId, Weak<AppContext>>>,
     pub(crate) active_selection: RefCell<Weak<RegistrarInner>>,
-    pub(crate) recent_text_styles: RefCell<Vec<Arc<TextStyle>>>,
+    pub(crate) recent_text_styles: RefCell<RecentTextStyles>,
+    pub(crate) drawn_text_styles: RefCell<DrawnTextStyles>,
     pub(crate) shared_plain_texts: RefCell<cranpose_ui_graphics::ContentPool<SharedPlainText>>,
     pub(crate) pending_announcements: RefCell<Vec<Announcement>>,
     pub(crate) unhandled_key_handlers: RefCell<Vec<(u64, KeyHandler)>>,
@@ -96,7 +97,8 @@ impl UiThreadState {
             app_context_stack: RefCell::new(Vec::new()),
             app_contexts: RefCell::new(fixed_hash_map()),
             active_selection: RefCell::new(Weak::new()),
-            recent_text_styles: RefCell::new(Vec::new()),
+            recent_text_styles: RefCell::new(RecentTextStyles::new()),
+            drawn_text_styles: RefCell::new(DrawnTextStyles::new()),
             shared_plain_texts: RefCell::new(cranpose_ui_graphics::ContentPool::new()),
             pending_announcements: RefCell::new(Vec::new()),
             unhandled_key_handlers: RefCell::new(Vec::new()),
