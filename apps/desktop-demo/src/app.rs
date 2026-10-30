@@ -257,19 +257,6 @@ fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedStr
 }
 
 #[composable]
-pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
-    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| *s);
-    let modifier = Modifier::empty()
-        .fill_max_size()
-        .vertical_scroll(scroll_state, false);
-    Column(
-        modifier,
-        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
-        content,
-    );
-}
-
-#[composable]
 fn TabButton(tab: DemoTab, active_tab: MutableState<DemoTab>, padding: f32) {
     let is_active = active_tab.get() == tab;
     let documentation = active_tab.get() == DemoTab::Guide;
@@ -455,40 +442,6 @@ fn CompactTabPicker(active_tab: MutableState<DemoTab>, picker_open: MutableState
 }
 
 #[composable]
-fn TabContent(
-    active_tab: MutableState<DemoTab>,
-    startup: StartupSelection,
-    wsz_tab_state: WszTabState,
-    showing_source: MutableState<bool>,
-    modifier: Modifier,
-) {
-    let active = active_tab.get();
-    let title = DEMO_TAB_INFO
-        .iter()
-        .find(|info| info.tab == active)
-        .map_or("Demo", |info| info.label);
-    cranpose_ui::Box(
-        modifier.clip_to_bounds().pane_title(title),
-        BoxSpec::default(),
-        move || {
-            if showing_source.get() {
-                source_view::SourcePanel(active);
-            } else {
-                cranpose_core::with_key(&active, || {
-                    if tab_content::tab_requires_scroll(active) {
-                        ScrollableTab(move || {
-                            tab_content::render_active_tab(active, startup, wsz_tab_state);
-                        });
-                    } else {
-                        tab_content::render_active_tab(active, startup, wsz_tab_state);
-                    }
-                });
-            }
-        },
-    );
-}
-
-#[composable]
 pub fn combined_app() {
     combined_app_with_startup(StartupSelection::default());
 }
@@ -573,7 +526,7 @@ fn DemoApp(active_tab: MutableState<DemoTab>, startup: StartupSelection) {
                     if is_compact && picker_open.get() {
                         CompactTabPicker(active_tab, picker_open);
                     } else {
-                        TabContent(
+                        tab_content::TabContent(
                             active_tab,
                             startup,
                             wsz_tab_state,
