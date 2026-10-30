@@ -334,3 +334,30 @@ fn an_update_to_an_equal_style_keeps_the_layout_and_a_new_style_lays_out_again()
         "the new style lays the text out again"
     );
 }
+
+#[test]
+fn a_text_changed_in_place_gives_no_hold_until_it_measures_unchanged() {
+    let holds = in_app(|| {
+        let element = |text: &str| {
+            TextModifierElement::new(
+                Rc::new(AnnotatedString::from(text)),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+                Density::new(1.0, 1.0),
+            )
+        };
+        let mut node = element("12.50").create();
+        let constraints = Constraints::loose(200.0, f32::INFINITY);
+        let holds = |node: &TextModifierNode| {
+            let size = node.pixel_size(node.layout.measure_layout((0.0, 200.0)).0);
+            let wrapped = cranpose_ui_layout::WrappedHold { size, hold: None };
+            node.measure_hold(1.0, constraints, size, wrapped).is_some()
+        };
+        let fresh = holds(&node);
+        element("12.75").update(&mut node);
+        let changed = holds(&node);
+        let unchanged = holds(&node);
+        (fresh, changed, unchanged)
+    });
+    assert_eq!(holds, (true, false, true));
+}

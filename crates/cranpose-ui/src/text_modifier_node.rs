@@ -81,6 +81,10 @@ struct TextPreparedLayoutOwner {
     source: RefCell<TextLayoutSource>,
     measured_widths: Cell<Option<(f32, f32)>>,
     cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
+    // Whether the text changed in place since a hold was last asked of it:
+    // a text that changes as a ticker's does measures again each frame,
+    // which no hold spares, so it gives none.
+    changed: Cell<bool>,
 }
 
 /// What a text is laid out from.
@@ -124,6 +128,7 @@ impl TextPreparedLayoutOwner {
                 admission: CacheAdmission::First,
             }),
             measured_widths: Cell::new(None),
+            changed: Cell::new(false),
             cache: RefCell::new(SmallVec::new()),
         }
     }
@@ -156,6 +161,7 @@ impl TextPreparedLayoutOwner {
         source.admission = CacheAdmission::Changed;
         drop(source);
         self.cache.borrow_mut().clear();
+        self.changed.set(true);
     }
 
     fn annotated_text(&self) -> Ref<'_, Rc<AnnotatedString>> {
@@ -420,6 +426,11 @@ impl LayoutModifierNode for TextModifierNode {
         size: Size,
         _wrapped: cranpose_ui_layout::WrappedHold,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        // A text changed in place since its last hold, as a ticker's is,
+        // measures again next frame whatever the hold.
+        if self.layout.changed.take() {
+            return None;
+        }
         let (text_size, max_widths) = self.layout.cached_widths(text_widths(constraints))?;
         let text_size = self.pixel_size(text_size);
         if size != text_size {
