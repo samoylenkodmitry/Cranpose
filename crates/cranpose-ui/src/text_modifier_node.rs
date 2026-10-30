@@ -166,6 +166,15 @@ impl TextPreparedLayoutOwner {
             max_width: widths.1,
             options: source.options,
         };
+        // A layout at new widths takes the allocation of the one the full
+        // cache lets go, as a width that animates asks for one every frame.
+        let spare = {
+            let mut cache = self.cache.borrow_mut();
+            (cache.len() >= PREPARED_LAYOUT_CACHE_CAPACITY)
+                .then(|| cache.pop())
+                .flatten()
+                .map(|entry| entry.layout)
+        };
         let prepared = {
             // The cache holds layouts of this source only: the latest one, on
             // the fonts of now, takes the widths when it breaks into the same
@@ -177,7 +186,9 @@ impl TextPreparedLayoutOwner {
                 .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
                 .map(|entry| &entry.layout);
             match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
-                Some(latest) => latest.at_widths(frame, source.style.paragraph_style.text_align),
+                Some(latest) => {
+                    latest.at_widths(frame, source.style.paragraph_style.text_align, spare)
+                }
                 None => {
                     let text = crate::text::measure::SharedText {
                         text: &source.text,

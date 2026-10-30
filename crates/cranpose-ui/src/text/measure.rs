@@ -132,8 +132,14 @@ impl PreparedTextLayout {
     // This layout at the widths of `frame`, at which it breaks into the
     // same lines: itself when its width there is its own, else a copy whose
     // lines `align` places across that width. The copy keeps the text as a
-    // renderer draws it and the style's hash.
-    pub(crate) fn at_widths(self: &Rc<Self>, frame: TextFrame, align: TextAlign) -> Rc<Self> {
+    // renderer draws it and the style's hash, and takes the allocation of
+    // `spare` when nothing else holds it.
+    pub(crate) fn at_widths(
+        self: &Rc<Self>,
+        frame: TextFrame,
+        align: TextAlign,
+        spare: Option<Rc<Self>>,
+    ) -> Rc<Self> {
         let width = self.layout.width_between(frame.min_width, frame.max_width);
         if width.to_bits() == self.layout.width().to_bits() {
             return Rc::clone(self);
@@ -141,7 +147,7 @@ impl PreparedTextLayout {
         let mut layout = self.layout.clone();
         layout.align(frame.min_width, frame.max_width, align);
         let min_lines = frame.options.normalized().min_lines;
-        Rc::new(Self {
+        let aligned = Self {
             render_text: self.render_text.clone(),
             visual_style_hash: self.visual_style_hash.clone(),
             ..Self::new(
@@ -150,7 +156,14 @@ impl PreparedTextLayout {
                 layout,
                 (frame.max_width, min_lines),
             )
-        })
+        };
+        if let Some(mut spare) = spare
+            && let Some(slot) = Rc::get_mut(&mut spare)
+        {
+            *slot = aligned;
+            return spare;
+        }
+        Rc::new(aligned)
     }
 
     /// The display text as a renderer draws it. Converted once for the layout

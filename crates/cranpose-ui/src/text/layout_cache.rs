@@ -110,7 +110,7 @@ impl LayoutCache {
         else {
             return Cached::Missed(Miss::OtherWidths);
         };
-        let aligned = held.at_widths(frame, align);
+        let aligned = held.at_widths(frame, align, None);
         if !Rc::ptr_eq(&aligned, &held) {
             remember(widths, &aligned);
         }
@@ -196,7 +196,7 @@ impl DrawnLayouts {
             self.slots.swap_remove(index);
             return None;
         }
-        slot.prepared = slot.prepared.at_widths(frame, align);
+        slot.prepared = slot.prepared.at_widths(frame, align, None);
         slot.pass = pass;
         Some(Rc::clone(&slot.prepared))
     }
