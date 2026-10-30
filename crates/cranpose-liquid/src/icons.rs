@@ -2,13 +2,11 @@
 //! Apache-2.0), rasterized through [`cranpose_ui_graphics::VectorPath`] and
 //! tinted at draw time.
 
-use cranpose_core::rememberKeyed;
-use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, Size,
-    widgets::{Box, BoxSpec},
+    Modifier,
+    widgets::{IconSpec, IconWith},
 };
-use cranpose_ui_graphics::{Brush, Color, VectorPath};
+use cranpose_ui_graphics::Color;
 
 /// Path data of a chevron that points left, for [`Icon`].
 pub const CHEVRON_LEFT: &str = "M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z";
@@ -92,31 +90,14 @@ pub const GEAR: &str = SETTINGS;
 /// Path data of three horizontal lines that shorten from top to bottom, for [`Icon`].
 pub const FILTER: &str = "M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z";
 
-const ICON_VIEW_BOX: f32 = 24.0;
-
 /// A tinted vector icon. `path` is 24×24 viewBox path data (one of this
 /// module's constants or any compatible data); `size` is the rendered square
 /// in dp.
-#[composable]
+#[track_caller]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn Icon(path: &'static str, content_description: Option<String>, size: f32, color: Color) {
-    let parsed = rememberKeyed(path, |path| VectorPath::parse(path).ok());
-    let modifier = Modifier::empty()
-        .size(Size::new(size, size))
-        .draw_behind(move |scope| {
-            if let Some(path) = &parsed {
-                let scaled = path.scaled(size / ICON_VIEW_BOX);
-                scope.draw_vector_path(&scaled, Brush::solid(color));
-            }
-        });
-    let modifier = match content_description {
-        Some(description) => modifier.semantics_spec(
-            cranpose_ui::SemanticsSpec::new()
-                .content_description(description)
-                .role(cranpose_ui::SemanticsWidgetRole::Image),
-        ),
-        None => modifier,
-    };
-    Box(modifier, BoxSpec::default(), || {});
+    let spec = IconSpec::sized(size).with_tint(color);
+    IconWith(Modifier::empty(), path, spec, content_description);
 }
 
 #[cfg(test)]

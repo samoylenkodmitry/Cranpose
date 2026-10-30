@@ -271,3 +271,17 @@ const GOLDEN_COVERAGE_CHECKSUMS: [u64; 4] = [
     15_335_880_165_108_163_399,
     12_358_567_486_535_341_188,
 ];
+
+#[test]
+fn coverage_masks_at_partial_opacity_keep_every_value() {
+    let curve = "M 4 90 C 20 10 40 110 60 40 S 90 5 96 70 L 96 98 L 4 98 Z";
+    let path = VectorPath::parse(curve).expect("valid path");
+    let checksums: Vec<u64> = [0.6, 0.25]
+        .iter()
+        .map(|&opacity| mask_checksum(&path.coverage_mask(137, 109, Point::ZERO, 1.21, opacity)))
+        .collect();
+    assert_eq!(checksums, GOLDEN_PARTIAL_OPACITY_CHECKSUMS);
+}
+// The masks at partial opacity when these were recorded.
+const GOLDEN_PARTIAL_OPACITY_CHECKSUMS: [u64; 2] =
+    [655_711_438_460_080_699, 13_865_551_841_180_698_910];

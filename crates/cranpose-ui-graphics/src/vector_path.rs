@@ -181,11 +181,10 @@ impl VectorPath {
         if width == 0 || height == 0 || scale <= 0.0 {
             return mask;
         }
-        let mut edges = self.scanline_edges(origin, scale);
+        let edges = self.scanline_edges(origin, scale);
         if edges.is_empty() {
             return mask;
         }
-        edges.sort_by(|a, b| a.top.y.total_cmp(&b.top.y));
         let mut scanner = EdgeScanner::new(&edges);
         let mut row_coverage = vec![0.0f32; width];
         let subsample_weight = 1.0 / SUBSAMPLES as f32;
@@ -260,7 +259,8 @@ impl Edge {
 /// edges the current line may cross: lines only descend, so an edge enters
 /// once and leaves once.
 struct EdgeScanner<'a> {
-    edges: &'a [Edge],
+    // Each edge with the y of its top, ordered top to bottom.
+    edges: Vec<(f32, &'a Edge)>,
     next: usize,
     /// The edges the current line crosses, each with where it crosses.
     active: Vec<(f32, &'a Edge)>,
@@ -268,6 +268,8 @@ struct EdgeScanner<'a> {
 
 impl<'a> EdgeScanner<'a> {
     fn new(edges: &'a [Edge]) -> Self {
+        let mut edges: Vec<_> = edges.iter().map(|edge| (edge.top.y, edge)).collect();
+        sort_by_position(&mut edges);
         Self {
             edges,
             next: 0,
@@ -278,10 +280,10 @@ impl<'a> EdgeScanner<'a> {
     /// Where the edges cross the line at `sample_y`, left to right, each
     /// with its edge.
     fn crossings_at(&mut self, sample_y: f32) -> &[(f32, &'a Edge)] {
-        while let Some(edge) = self
+        while let Some(&(_, edge)) = self
             .edges
             .get(self.next)
-            .filter(|edge| edge.top.y <= sample_y)
+            .filter(|(top, _)| *top <= sample_y)
         {
             self.active.push((0.0, edge));
             self.next += 1;
@@ -294,10 +296,16 @@ impl<'a> EdgeScanner<'a> {
         // Each crossing is computed once, then sorted: the order barely
         // changes from one sample line to the next, which the sort finds in
         // one pass. Crossings at the same x bound an empty span either way.
-        self.active
-            .sort_unstable_by(|(a, _), (b, _)| a.total_cmp(b));
+        sort_by_position(&mut self.active);
         &self.active
     }
+}
+
+// Sorts edges by the position paired with each. Tops and crossings share this
+// one sort, so the program carries one sort's code. Edges at one position bound
+// only empty spans, so their order never changes a mask.
+fn sort_by_position(edges: &mut [(f32, &Edge)]) {
+    edges.sort_unstable_by(|(a, _), (b, _)| a.total_cmp(b));
 }
 
 impl PathFillRule {
@@ -329,11 +337,20 @@ impl PathFillRule {
 /// Writes a row's summed coverage, scaled by `opacity`, into its row of the
 /// 8-bit mask, and clears the sums for the next row.
 fn write_row_coverage(mask_row: &mut [u8], row_coverage: &mut [f32], opacity: f32) {
-    for (value, coverage) in mask_row.iter_mut().zip(row_coverage) {
-        let full = (coverage.min(1.0) * 255.0 + 0.5) as u8;
-        *value = (opacity * full as f32 + 0.5) as u8;
-        *coverage = 0.0;
+    let full = |coverage: f32| (coverage.min(1.0) * 255.0 + 0.5) as u8;
+    let pixels = mask_row.iter_mut().zip(row_coverage.iter());
+    // This close to full opacity the second rounding gives each byte back
+    // unchanged: a byte moves only once opacity is 1/510 away from 1.
+    if (opacity - 1.0).abs() <= f32::EPSILON {
+        for (value, &coverage) in pixels {
+            *value = full(coverage);
+        }
+    } else {
+        for (value, &coverage) in pixels {
+            *value = (opacity * f32::from(full(coverage)) + 0.5) as u8;
+        }
     }
+    row_coverage.fill(0.0);
 }
 
 /// Adds one horizontal span `[x0, x1)` of one sub-scanline into the row

@@ -306,6 +306,34 @@ fn runtime_shader_keeps_common_uniform_payload_inline() {
 }
 
 #[test]
+fn runtime_shader_vec4_past_the_stored_uniforms_grows_them() {
+    let mut shader = RuntimeShader::new("// test");
+    shader.set_float2(0, 1.0, 2.0);
+    shader.set_float4(1, 3.0, 4.0, 5.0, 6.0);
+    assert_eq!(shader.uniforms(), &[1.0, 3.0, 4.0, 5.0, 6.0]);
+
+    shader.set_float(18, 7.0);
+    shader.set_float4(17, 8.0, 9.0, 10.0, 11.0);
+    assert_eq!(shader.uniforms().len(), 21);
+    assert_eq!(shader.uniforms()[..5], [1.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(shader.uniforms()[17..], [8.0, 9.0, 10.0, 11.0]);
+}
+
+#[test]
+fn runtime_shaders_with_equal_uniforms_are_equal_whatever_order_grew_them() {
+    let mut set_before_growth = RuntimeShader::new("// test");
+    set_before_growth.set_float(0, 1.0);
+    set_before_growth.set_float(20, 0.0);
+    set_before_growth.set_float(0, 2.0);
+    let mut grown_first = RuntimeShader::new("// test");
+    grown_first.set_float(20, 0.0);
+    grown_first.set_float(0, 2.0);
+
+    assert_eq!(set_before_growth.uniforms(), grown_first.uniforms());
+    assert_eq!(set_before_growth, grown_first);
+}
+
+#[test]
 fn runtime_shader_try_set_reports_reserved_uniform_slots() {
     let mut shader = RuntimeShader::new("// test");
 

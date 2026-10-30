@@ -61,6 +61,7 @@ mod pointer_icon;
 mod record;
 pub mod render_effect;
 mod render_hash;
+mod runtime_shader_uniforms;
 mod shader_warm_up;
 mod shadow;
 mod shape_records;
