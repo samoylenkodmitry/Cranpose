@@ -83,6 +83,17 @@ struct TextLayoutSource {
     admission: CacheAdmission,
 }
 
+impl TextLayoutSource {
+    // The frame the text is laid out in between `widths`.
+    fn frame(&self, (min_width, max_width): (f32, f32)) -> crate::text::measure::TextFrame {
+        crate::text::measure::TextFrame {
+            min_width,
+            max_width,
+            options: self.options,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct TextPreparedLayoutHandle {
     owner: Rc<TextPreparedLayoutOwner>,
@@ -152,35 +163,49 @@ impl TextPreparedLayoutOwner {
         read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
     ) -> R {
         let stamp = crate::render_state::text_layout_stamp();
-        let source = self.source.borrow();
-        let frame = crate::text::measure::TextFrame {
-            min_width: widths.0,
-            max_width: widths.1,
-            options: source.options,
-        };
-        let align = source.style.paragraph_style.text_align;
         {
             let mut cache = self.cache.borrow_mut();
+            let Some(latest) = cache.first_mut() else {
+                drop(cache);
+                return self.prepare(widths, stamp, read);
+            };
+            if latest.keeps(widths, stamp) {
+                return read(&latest.layout);
+            }
             // The latest layout, which nothing else holds, takes widths at
             // which it breaks into the same lines in place, as a width that
             // animates asks for each frame, before the others are searched.
-            if let Some(latest) = cache.first_mut()
-                && !latest.keeps(widths, stamp)
-                && (latest.text_generation, latest.font_scale_fingerprint) == stamp
+            if (latest.text_generation, latest.font_scale_fingerprint) == stamp
                 && latest.layout.layout.holds(widths.0, widths.1)
                 && let Some(prepared) = Rc::get_mut(&mut latest.layout)
             {
-                prepared.realign(frame, align);
+                let source = self.source.borrow();
+                prepared.realign(
+                    source.frame(widths),
+                    source.style.paragraph_style.text_align,
+                );
                 latest.min_width = widths.0;
                 drop(source);
                 return read(&latest.layout);
             }
             if let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) {
-                drop(source);
                 cache[..=index].rotate_right(1);
                 return read(&cache[0].layout);
             }
         }
+        self.prepare(widths, stamp, read)
+    }
+
+    // Prepares a layout at `widths` that no cached one keeps.
+    fn prepare<R>(
+        &self,
+        widths: (f32, f32),
+        stamp: (u64, u32),
+        read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
+    ) -> R {
+        let source = self.source.borrow();
+        let frame = source.frame(widths);
+        let align = source.style.paragraph_style.text_align;
         // A layout at new widths takes the allocation of the one the full
         // cache lets go, as a width that animates asks for one every frame.
         let spare = {
