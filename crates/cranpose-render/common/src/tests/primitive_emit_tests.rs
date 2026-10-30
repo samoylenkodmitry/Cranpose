@@ -589,8 +589,7 @@ fn lowered_text_is_never_re_wrapped_against_the_box_it_was_measured_into() {
         ),
         &GraphicsLayer::default(),
     );
-    assert!(!params[0].layout_options.soft_wrap);
-    assert_eq!(params[0].layout_options.overflow, TextOverflow::Visible);
+    assert_eq!(params[0].layout.line_count(), 1);
 }
 
 #[test]

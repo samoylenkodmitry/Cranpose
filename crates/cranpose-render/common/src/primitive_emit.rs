@@ -1,8 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_ui::text::{
-    AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle, text_style_for_draw_style,
-};
+use cranpose_ui::text::{AnnotatedString, TextStyle, text_style_for_draw_style};
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer,
     ImageBitmap, ImageSampling, LineGeometry, Point, Rect, RoundedCornerShape, ShadowPrimitive,
@@ -139,8 +137,6 @@ pub struct TextDrawParams {
     pub font_size: f32,
     /// Uniform layer scale — the factor glyphs are rasterized at.
     pub scale: f32,
-    /// Layout options the text is laid out with.
-    pub layout_options: TextLayoutOptions,
     /// Clip rectangle that cuts the text, or `None` when nothing clips it.
     pub clip: Option<Rect>,
 }
@@ -589,11 +585,6 @@ fn text_draw_params(
         text_style,
         font_size: text.style.resolved_font_size(),
         scale,
-        layout_options: TextLayoutOptions {
-            soft_wrap: false,
-            overflow: TextOverflow::Visible,
-            ..TextLayoutOptions::default()
-        },
         clip,
     })
 }

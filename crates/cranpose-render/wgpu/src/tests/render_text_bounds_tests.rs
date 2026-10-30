@@ -26,7 +26,6 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
         style_hash: 0,
         font_size: 14.0,
         scale: 1.0,
-        layout_options: Default::default(),
         clip: None,
     };
     let snapped = Rect {

@@ -35,7 +35,10 @@ pub(crate) fn with_layout(
         cranpose_ui::text::prepare_text_layout(
             &node.text,
             &node.text_style,
-            node.layout_options,
+            cranpose_ui::TextLayoutOptions {
+                overflow: node.overflow,
+                ..cranpose_ui::TextLayoutOptions::default()
+            },
             Some(node.rect.width),
         )
         .layout

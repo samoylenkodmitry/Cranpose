@@ -5,7 +5,7 @@ use cranpose_render_common::graph::{
     DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
     RenderNode, TextPrimitiveNode,
 };
-use cranpose_ui::{TextLayoutOptions, TextStyle};
+use cranpose_ui::{TextLayoutOptions, TextOverflow, TextStyle};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Size, Stroke};
 
 use super::{InspectorAction, InspectorControl, InspectorMode, InspectorState};
@@ -102,7 +102,7 @@ impl Canvas {
                 layout: prepared.layout.clone(),
                 text_style: Arc::clone(&prepared.visual_style),
                 font_size,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextOverflow::Clip,
                 clip: Some(rect),
                 paint: Default::default(),
             })),

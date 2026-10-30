@@ -36,7 +36,7 @@ fn push_text_style_draws_for_test(
         layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
         font_size: 14.0,
-        layout_options: TextLayoutOptions::default(),
+        overflow: TextLayoutOptions::default().overflow,
         clip,
         paint: Default::default(),
     };
@@ -122,7 +122,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                         .clone(),
                     text_style: Default::default(),
                     font_size: 14.0,
-                    layout_options: TextLayoutOptions::default(),
+                    overflow: TextLayoutOptions::default().overflow,
                     clip: None,
                     paint: Default::default(),
                 })),

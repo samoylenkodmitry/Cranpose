@@ -640,7 +640,6 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         text_style: Arc::new(style),
         font_size: 18.0,
         scale: 1.0,
-        layout_options: TextLayoutOptions::default(),
         clip: None,
     });
 }

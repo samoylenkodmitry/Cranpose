@@ -676,7 +676,6 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             style_hash: mask_text_style.render_hash(),
             font_size: node.font_size,
             scale: text_scale,
-            layout_options: node.layout_options,
             clip: placement
                 .clip
                 .map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
@@ -716,10 +715,9 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         layout,
         text_style,
         font_size,
-        layout_options: options,
         ..
     } = node;
-    let (node_id, font_size, options) = (*node_id, *font_size, *options);
+    let (node_id, font_size) = (*node_id, *font_size);
     let text_scale = layer_uniform_scale(content_layer);
     let transformed_text_rect = apply_layer_to_rect(text_rect, rect, content_layer);
     // A box or a line of the text, in layout pixels, filled with `brush`
@@ -780,7 +778,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 style_hash: shadow_style_hash,
                 font_size,
                 scale: text_scale,
-                layout_options: options,
                 clip: text_clip,
             },
             blur_radius,
@@ -854,7 +851,6 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
             style_hash: mask_style_hash,
             font_size: node.font_size,
             scale: text_scale,
-            layout_options: node.layout_options,
             clip: text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
         });
 
@@ -883,7 +879,6 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
         style_hash: style.render_hash(),
         font_size: node.font_size,
         scale: text_scale,
-        layout_options: node.layout_options,
         clip: text_clip,
     });
 }
@@ -921,7 +916,6 @@ pub(crate) fn push_text_style_draws(
             style_hash: paint.style_hash,
             font_size: node.font_size,
             scale: layer_uniform_scale(placement.layer),
-            layout_options: node.layout_options,
             clip: placement.clip,
         });
         return;
@@ -1114,7 +1108,6 @@ pub(crate) fn push_draw_primitive(
                 style_hash,
                 font_size: params.font_size,
                 scale: params.scale,
-                layout_options: params.layout_options,
                 clip: params.clip,
             });
         }

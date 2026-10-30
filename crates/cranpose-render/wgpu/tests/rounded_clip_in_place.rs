@@ -813,7 +813,7 @@ fn text_shadow_node() -> RenderNode {
             render_text,
             text_style: std::sync::Arc::new(TextStyle::from_span_style(style)),
             font_size: 18.0,
-            layout_options: TextLayoutOptions::default(),
+            overflow: TextLayoutOptions::default().overflow,
             clip: None,
             paint: Default::default(),
             layout: Default::default(),

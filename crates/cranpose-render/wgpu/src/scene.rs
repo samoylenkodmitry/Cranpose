@@ -8,7 +8,7 @@ use cranpose_render_common::{
     graph::DrawCommandId, layer_shadow::ShadowRRect, text_paint::TextPaint,
     text_raster::TextRasterRequest,
 };
-use cranpose_ui::{TextLayoutOptions, TextStyle, text::RenderString};
+use cranpose_ui::{TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
     ImageSampling, Point, Recorded, Rect, RenderEffect, ShapeRecorder,
@@ -319,7 +319,6 @@ pub(crate) struct TextDraw {
     pub style_hash: u64,
     pub font_size: f32,
     pub scale: f32,
-    pub layout_options: TextLayoutOptions,
     pub clip: Option<Rect>,
 }
 

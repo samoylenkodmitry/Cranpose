@@ -8,8 +8,7 @@ use std::{
 
 use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
-    GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, TextLayoutOptions, TextOverflow,
-    TextStyle,
+    GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, TextOverflow, TextStyle,
     text::{AnnotatedString, RenderString, SpanStyle, TextDrawStyle},
 };
 pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
@@ -102,8 +101,8 @@ pub struct TextPrimitiveNode {
     pub text_style: std::sync::Arc<TextStyle>,
     /// Resolved font size in logical pixels.
     pub font_size: f32,
-    /// Options (overflow, soft wrap, line limits) the text was measured with.
-    pub layout_options: TextLayoutOptions,
+    /// How the text was laid out to handle text that does not fit.
+    pub overflow: TextOverflow,
     /// Rectangle that cuts the glyphs, or `None` when overflow is visible and the text does not
     /// pan.
     pub clip: Option<Rect>,
@@ -135,7 +134,7 @@ impl TextPrimitiveNode {
         let style = &self.text_style.span_style;
         let stroked =
             |style: &SpanStyle| matches!(style.draw_style, Some(TextDrawStyle::Stroke { .. }));
-        (!matches!(self.layout_options.overflow, TextOverflow::Visible)
+        (!matches!(self.overflow, TextOverflow::Visible)
             && style.shadow.is_none()
             && style
                 .baseline_shift

@@ -428,7 +428,7 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
                 ..Default::default()
             })),
             font_size: 14.0,
-            layout_options: TextLayoutOptions::default(),
+            overflow: TextLayoutOptions::default().overflow,
             clip: None,
             paint: Default::default(),
             layout: Default::default(),

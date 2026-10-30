@@ -916,7 +916,7 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::Text
         layout: Default::default(),
         text_style: Arc::clone(&style),
         font_size: 14.0,
-        layout_options: cranpose_ui::TextLayoutOptions::default(),
+        overflow: cranpose_ui::TextLayoutOptions::default().overflow,
         clip: None,
         paint: Default::default(),
     });

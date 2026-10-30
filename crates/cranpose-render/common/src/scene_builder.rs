@@ -2810,7 +2810,7 @@ fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
         layout: prepared.layout.clone(),
         text_style: std::sync::Arc::clone(visual_style),
         font_size,
-        layout_options: options,
+        overflow: options.overflow,
         clip,
         paint: TextPaintCache::holding(TextPaint::of(
             visual_style,

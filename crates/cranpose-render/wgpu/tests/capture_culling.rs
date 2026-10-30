@@ -86,7 +86,7 @@ fn straddling_page() -> Vec<RenderNode> {
                 render_text: cranpose_ui::text::shared_plain_render_string("Straddle"),
                 text_style: std::sync::Arc::new(text_style),
                 font_size: 18.0,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextLayoutOptions::default().overflow,
                 clip: None,
                 paint: Default::default(),
                 layout: Default::default(),

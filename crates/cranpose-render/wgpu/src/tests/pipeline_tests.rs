@@ -78,7 +78,7 @@ fn text_node(
         layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
         font_size,
-        layout_options,
+        overflow: layout_options.overflow,
         clip: None,
         paint: Default::default(),
     }

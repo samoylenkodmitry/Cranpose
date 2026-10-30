@@ -51,7 +51,7 @@ fn hidden_text_at(rect: Rect, clip: Option<Rect>) -> RenderNode {
                 ..Default::default()
             })),
             font_size: 18.0,
-            layout_options: TextLayoutOptions::default(),
+            overflow: TextLayoutOptions::default().overflow,
             clip,
             paint: Default::default(),
             layout: Default::default(),

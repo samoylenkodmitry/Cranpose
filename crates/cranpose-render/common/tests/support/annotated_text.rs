@@ -60,7 +60,7 @@ pub(crate) fn text_graph(
                 text: Rc::new(text),
                 font_size: style.resolve_font_size(10.0),
                 text_style: Arc::new(style),
-                layout_options: Default::default(),
+                overflow: cranpose_ui::TextLayoutOptions::default().overflow,
                 clip: Some(viewport),
                 paint: Default::default(),
             })),

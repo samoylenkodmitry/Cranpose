@@ -3,7 +3,7 @@
 
 use cranpose_core::NodeId;
 use cranpose_ui::{
-    TextLayoutOptions, TextStyle,
+    TextOverflow, TextStyle,
     text::{Shadow, SpanStyle, TextDecoration},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect};
@@ -206,7 +206,7 @@ fn text_node_with_style(
             layout: prepared.layout.clone(),
             text_style: std::sync::Arc::new(text_style),
             font_size: 14.0,
-            layout_options: TextLayoutOptions::default(),
+            overflow: TextOverflow::Clip,
             clip,
             paint: Default::default(),
         })),

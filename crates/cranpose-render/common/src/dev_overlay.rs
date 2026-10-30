@@ -86,7 +86,7 @@ pub fn build_dev_overlay_graph(
                     layout: overlay.layout.clone(),
                     text_style: std::sync::Arc::clone(&overlay.visual_style),
                     font_size: overlay.visual_style.resolve_font_size(14.0),
-                    layout_options: cranpose_ui::TextLayoutOptions::default(),
+                    overflow: cranpose_ui::TextOverflow::Clip,
                     clip: None,
                     paint: Default::default(),
                 })),
