@@ -108,10 +108,10 @@ pub(super) enum KeptChild {
 }
 
 // Brings a child a translated container keeps to its placement among the
-// container's `children`, as `placed.kept` says. A label whose text cannot
-// be written in place stays dirty for the walk beneath, or is built again
-// when no record names it. A subtree that
-// publishes window origins publishes them again from where it now lies.
+// container's `children`, as `placed.kept` says. A subtree that publishes
+// window origins publishes them again from where it now lies. Inline: most
+// kept children only move.
+#[inline]
 pub(super) fn move_kept_child(
     applier: &MemoryApplier,
     layer: &mut LayerNode,
@@ -128,16 +128,30 @@ pub(super) fn move_kept_child(
                 publish_retained_window_geometry(applier, layer, children.parent_abs);
             }
         }
-        KeptChild::Retexted => {
-            if text_node::retext_kept_leaf(applier, layer, children) == Some(true) {
-                dirty_nodes.remove(&placed.id);
-            }
+        KeptChild::Retexted | KeptChild::Resized => {
+            write_kept_label(applier, layer, placed, children, dirty_nodes);
         }
-        KeptChild::Resized => {
-            if text_node::retext_kept_leaf(applier, layer, children) != Some(true) {
-                rebuild_kept_child(applier, layer, placed.id, children);
-            }
+    }
+}
+
+// Writes the text of a label the step keeps where it now lies. A label
+// whose text cannot be written in place stays dirty for the walk beneath,
+// or is built again when no record names it.
+#[inline(never)]
+fn write_kept_label(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    placed: &PlacedChild,
+    children: TranslateAncestorContext,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+) {
+    let written = text_node::retext_kept_leaf(applier, layer, children) == Some(true);
+    match placed.kept {
+        KeptChild::Retexted if written => {
+            dirty_nodes.remove(&placed.id);
         }
+        KeptChild::Resized if !written => rebuild_kept_child(applier, layer, placed.id, children),
+        _ => {}
     }
 }
 
