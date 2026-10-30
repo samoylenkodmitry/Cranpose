@@ -44,11 +44,12 @@ impl PackedGlyph {
     // pass.
     fn pack(glyph: &ShapedGlyph) -> (Self, bool) {
         let id = glyph.id().0;
-        let advance = glyph.advance;
-        let fits = (id >> 16 == 0) & ((advance.wrapping_add(1 << 14) as u32) >> 15 == 0);
+        let advance = glyph.advance.cast_unsigned();
+        let fits = (id >> 16 == 0) & (advance.wrapping_add(1 << 14) >> 15 == 0);
         let packed = Self {
-            id: id as u16,
-            advance: ((advance as i16) << 1) | i16::from(glyph.unsafe_to_break()),
+            id: (id & 0xFFFF) as u16,
+            advance: (((advance & 0x7FFF) as u16) << 1).cast_signed()
+                | i16::from(glyph.unsafe_to_break()),
             cluster: glyph.cluster,
         };
         (packed, fits)
