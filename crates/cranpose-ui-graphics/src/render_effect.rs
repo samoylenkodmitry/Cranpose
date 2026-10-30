@@ -646,9 +646,7 @@ impl RuntimeShader {
         index: usize,
         value: f32,
     ) -> Result<(), RuntimeShaderUniformError> {
-        self.try_ensure_capacity(index, 1)?;
-        self.uniforms.set(index, value);
-        Ok(())
+        self.uniforms.try_write(index, [value])
     }
 
     /// Set a vec2 uniform at the given index (consumes indices `[index, index+1]`).
@@ -666,10 +664,7 @@ impl RuntimeShader {
         x: f32,
         y: f32,
     ) -> Result<(), RuntimeShaderUniformError> {
-        self.try_ensure_capacity(index, 2)?;
-        self.uniforms.set(index, x);
-        self.uniforms.set(index + 1, y);
-        Ok(())
+        self.uniforms.try_write(index, [x, y])
     }
 
     /// Set a vec4 uniform at the given index (consumes indices `[index..index+4]`).
@@ -689,12 +684,7 @@ impl RuntimeShader {
         z: f32,
         w: f32,
     ) -> Result<(), RuntimeShaderUniformError> {
-        self.try_ensure_capacity(index, 4)?;
-        self.uniforms.set(index, x);
-        self.uniforms.set(index + 1, y);
-        self.uniforms.set(index + 2, z);
-        self.uniforms.set(index + 3, w);
-        Ok(())
+        self.uniforms.try_write(index, [x, y, z, w])
     }
 
     /// Declares that the shader reads the reserved source region, mask and
@@ -828,39 +818,14 @@ impl RuntimeShader {
     /// Get the uniform data padded to full 256-float array (for GPU uniform buffer).
     pub fn uniforms_padded(&self) -> [f32; Self::MAX_UNIFORMS] {
         let mut padded = [0.0f32; Self::MAX_UNIFORMS];
-        let len = self.uniforms.len().min(Self::MAX_UNIFORMS);
-        padded[..len].copy_from_slice(&self.uniforms.as_slice()[..len]);
+        let stored = self.uniforms.as_slice();
+        padded[..stored.len()].copy_from_slice(stored);
         padded
     }
 
     /// Compute a hash of the shader source for pipeline caching.
     pub fn source_hash(&self) -> u64 {
         self.source_hash
-    }
-
-    fn try_ensure_capacity(
-        &mut self,
-        index: usize,
-        width: usize,
-    ) -> Result<(), RuntimeShaderUniformError> {
-        let min_len = index
-            .checked_add(width)
-            .ok_or_else(|| Self::uniform_range_error(index, width))?;
-        if min_len > Self::MAX_USER_UNIFORMS {
-            return Err(Self::uniform_range_error(index, width));
-        }
-        self.uniforms.ensure_len(min_len);
-        Ok(())
-    }
-
-    fn uniform_range_error(index: usize, width: usize) -> RuntimeShaderUniformError {
-        RuntimeShaderUniformError::OutOfUserRange {
-            index,
-            width,
-            max_user_uniforms: Self::MAX_USER_UNIFORMS,
-            reserved_start: Self::RESERVED_UNIFORM_START,
-            max_uniforms: Self::MAX_UNIFORMS,
-        }
     }
 }
 
@@ -869,7 +834,7 @@ impl PartialEq for RuntimeShader {
         self.source_hash == other.source_hash
             && (Arc::ptr_eq(&self.source, &other.source)
                 || self.source.as_ref() == other.source.as_ref())
-            && self.uniforms == other.uniforms
+            && self.uniforms.as_slice() == other.uniforms.as_slice()
             && self.overrides().len() == other.overrides().len()
             && self
                 .overrides()
