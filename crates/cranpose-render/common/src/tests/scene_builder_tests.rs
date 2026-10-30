@@ -4,15 +4,15 @@ use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListSt
 use cranpose_ui::{
     Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
     LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer, Text,
-    TextOptions, TextOverflow, TextStyle, TextWithOptions,
+    TextLayoutOptions, TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
 use cranpose_ui_graphics::{
     Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect,
 };
 
-use super::*;
-use crate::graph::DrawRunNode;
+use super::{text_node::TEXT_CLIP_PAD, *};
+use crate::graph::{DrawRunNode, TextPrimitiveNode};
 
 // Each of `ids` with the update that records it again.
 fn content(ids: &[NodeId]) -> Vec<(NodeId, NodeUpdate)> {

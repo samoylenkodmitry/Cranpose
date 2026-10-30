@@ -7,8 +7,7 @@ use std::{
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
-    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver,
+    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size, SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{
     CompositingStrategy, CornerRadii, DrawPlacement, GraphicsLayer, LayerShape, RoundedCornerShape,
@@ -20,12 +19,10 @@ use crate::{
     graph::{
         CachePolicy, ContentChanges, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
         PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-        TextPrimitiveNode,
     },
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    text_paint::{TextPaint, TextPaintCache},
 };
 
 mod draw_recording;
@@ -35,8 +32,9 @@ use draw_recording::{
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
 pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
+mod text_node;
+use text_node::{TextNodeParts, text_node_from_parts};
 
-const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
 
 #[derive(Clone, Default)]
@@ -2752,76 +2750,6 @@ fn layer_identity(layer: &LayerNode) -> Option<NodeId> {
     layer.node_id.or(layer.wraps)
 }
 
-struct TextNodeParts {
-    node_id: NodeId,
-    /// Where the text node was placed in its layout node.
-    text_rect: Rect,
-    text_layout_options: Option<TextLayoutOptions>,
-    text_pan: Option<TextPanResolver>,
-    measured_layout: Option<Rc<PreparedTextLayout>>,
-}
-
-fn text_node_from_parts(parts: TextNodeParts) -> Option<TextPrimitiveNode> {
-    let TextNodeParts {
-        node_id,
-        text_rect,
-        text_layout_options,
-        text_pan,
-        measured_layout,
-    } = parts;
-    let prepared = measured_layout?;
-    let options = text_layout_options.unwrap_or_default().normalized();
-    let content_width = text_rect.width.max(0.0);
-    if content_width <= 0.0 {
-        return None;
-    }
-
-    let pan_offset = text_pan
-        .as_ref()
-        .map_or(0.0, |resolve| resolve(content_width));
-    let pans_horizontally = text_pan.is_some();
-
-    let visual_style = &prepared.visual_style;
-    // The layout aligns its lines across its own width; it draws from the
-    // content's corner.
-    let rect = Rect {
-        x: text_rect.x - pan_offset,
-        y: text_rect.y,
-        width: prepared.layout.width(),
-        height: prepared.size().height,
-    };
-    let text_bounds = Rect {
-        width: content_width,
-        height: text_rect.height.max(0.0),
-        ..text_rect
-    };
-    let font_size = visual_style.resolve_font_size(14.0);
-    let clip = if options.overflow == TextOverflow::Visible && !pans_horizontally {
-        None
-    } else {
-        Some(pad_clip_rect(text_bounds))
-    };
-
-    Some(TextPrimitiveNode {
-        node_id,
-        rect,
-        text: Rc::clone(&prepared.text),
-        render_text: prepared.render_text(),
-        layout: prepared.layout.clone(),
-        text_style: std::sync::Arc::clone(visual_style),
-        font_size,
-        overflow: options.overflow,
-        clip,
-        paint: TextPaintCache::holding(TextPaint::of(
-            visual_style,
-            prepared.visual_style_hash(),
-            &prepared.text.span_styles,
-            font_size,
-            (prepared.render_text_hash(), prepared.text.text.is_empty()),
-        )),
-    })
-}
-
 fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> BuildNodeSnapshot {
     let placement = parent
         .map(|parent_box| Point {
@@ -2975,15 +2903,6 @@ fn isolation_reasons(layer: &GraphicsLayer) -> IsolationReasons {
         group_opacity: layer.compositing_strategy != CompositingStrategy::ModulateAlpha
             && layer.alpha < 1.0,
         blend_mode: layer.blend_mode != cranpose_ui::BlendMode::SrcOver,
-    }
-}
-
-fn pad_clip_rect(rect: Rect) -> Rect {
-    Rect {
-        x: rect.x - TEXT_CLIP_PAD,
-        y: rect.y - TEXT_CLIP_PAD,
-        width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
-        height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
     }
 }
 
