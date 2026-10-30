@@ -39,7 +39,7 @@ pub(crate) mod image_picker;
 pub(crate) mod keyboard;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod media;
-#[cfg(feature = "media-backend")]
+#[cfg(feature = "renderer-wgpu")]
 pub(crate) mod media_artwork;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod notifier;
