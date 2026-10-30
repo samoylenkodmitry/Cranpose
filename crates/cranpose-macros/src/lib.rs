@@ -454,12 +454,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Default => syn::parse_quote! { () },
         ReturnType::Type(_, ty) => ty.as_ref().clone(),
     };
-    let returns_unit = match &func.sig.output {
-        ReturnType::Default => true,
-        ReturnType::Type(_, ty) => {
-            matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
-        }
-    };
+    let returns_unit = returns_unit(&func.sig.output);
     let invalidate_return_consumer = if returns_unit || is_node_id_return(&return_ty) {
         quote! {}
     } else {
@@ -720,17 +715,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             Span::mixed_site(),
         );
 
-        let recompose_setter = quote! {
-            {
-                #group_ident.set_recompose_callback(move |
-                    #composer_ident: &#core_path::Composer|
-                {
-                    let _ = #recompose_fn_ident #ty_generics_turbofish (
-                        #composer_ident
-                    );
-                });
-            }
-        };
+        let recompose_setter = recompose_setter(
+            &group_ident,
+            &quote! { #recompose_fn_ident #ty_generics_turbofish },
+            &func.sig.output,
+            (&core_path, &composer_ident),
+        );
 
         let returning = ReturningCall {
             core_path: &core_path,
@@ -883,6 +873,36 @@ fn inject_groups(core_path: &TokenStream2, func: &mut ItemFn) {
         func.block
             .stmts
             .insert(0, syn::parse2(origin).expect("hot origin statement"));
+    }
+}
+
+// Whether a function returns `()`.
+fn returns_unit(output: &ReturnType) -> bool {
+    match output {
+        ReturnType::Default => true,
+        ReturnType::Type(_, ty) => {
+            matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
+        }
+    }
+}
+
+// The statement that gives a composable's group its recompose function: a
+// plain function needs no box, vtable or call shim per composable, and one
+// that returns a value gets a wrapper that drops it.
+fn recompose_setter(
+    group: &Ident,
+    recompose_fn: &TokenStream2,
+    output: &ReturnType,
+    (core_path, composer): (&TokenStream2, &Ident),
+) -> TokenStream2 {
+    if returns_unit(output) {
+        quote! { #group.set_recompose_fn(#recompose_fn); }
+    } else {
+        quote! {
+            #group.set_recompose_fn(|#composer: &#core_path::Composer| {
+                let _ = #recompose_fn(#composer);
+            });
+        }
     }
 }
 

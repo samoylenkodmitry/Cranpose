@@ -768,13 +768,12 @@ impl ComposableGroup<'_> {
         &self.scope
     }
 
-    /// Registers `callback` as the code that recomposes the group's scope,
-    /// as [`Composer::set_recompose_callback`] does for the current scope.
-    pub fn set_recompose_callback<F>(&self, callback: F)
-    where
-        F: FnMut(&Composer) + 'static,
-    {
-        self.scope.set_recompose_callback(callback);
+    /// Registers `body` as the function that recomposes the group's scope,
+    /// as [`Composer::set_recompose_fn`] does for the current scope: a plain
+    /// function needs no box and no call shim.
+    #[inline]
+    pub fn set_recompose_fn(&self, body: fn(&Composer)) {
+        self.scope.set_recompose_fn(body);
     }
 
     /// Skips the group's body: what it composed last stays. The call
@@ -2321,7 +2320,7 @@ impl Composer {
     /// Like `set_recompose_callback` for a plain function pointer.
     pub fn set_recompose_fn(&self, callback: fn(&Self)) {
         if let Some(scope) = self.current_recompose_scope() {
-            scope.set_boxed_recompose(Box::new(callback), None);
+            scope.set_recompose_fn(callback);
         }
     }
 

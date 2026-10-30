@@ -82,7 +82,7 @@ SECTIONS
     *(.literal._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope10reactivate* .text._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope10reactivate*)
     *(.literal._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope13run_recompose* .text._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope13run_recompose*)
     *(.literal._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope15mark_recomposed* .text._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope15mark_recomposed*)
-    *(.literal._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope19set_boxed_recompose* .text._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope19set_boxed_recompose*)
+    *(.literal._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope13set_recompose* .text._RNvM*NtCs*_13cranpose_core15recompose_scopeNt*14RecomposeScope13set_recompose*)
     *(.literal._RNvM*NtCs*_13cranpose_core23snapshot_state_observerNt*20ReadObservationStack4push* .text._RNvM*NtCs*_13cranpose_core23snapshot_state_observerNt*20ReadObservationStack4push*)
     *(.literal._RNvM*NtCs*_13cranpose_core23snapshot_state_observerNt*26SnapshotStateObserverInner20replace_observed_ids* .text._RNvM*NtCs*_13cranpose_core23snapshot_state_observerNt*26SnapshotStateObserverInner20replace_observed_ids*)
     *(.literal._RNvM*NtCs*_13cranpose_core5stateINt*12MutableStatefE7replace* .text._RNvM*NtCs*_13cranpose_core5stateINt*12MutableStatefE7replace*)

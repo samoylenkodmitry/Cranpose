@@ -1,5 +1,4 @@
 use std::{
-    any::TypeId,
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
     rc::{Rc, Weak},
@@ -25,14 +24,6 @@ impl From<bool> for BodyRun {
     fn from(ran: bool) -> Self {
         if ran { Self::Ran } else { Self::Skipped }
     }
-}
-
-/// A composable's body. The scope passes itself when it runs, so the
-/// callback needs neither a second box nor a reference back to its scope; a
-/// capture-free body records how to name its type, to be kept as is.
-struct RecomposeCallback {
-    body: Box<dyn FnMut(&Composer) + 'static>,
-    stateless_body: Option<fn() -> TypeId>,
 }
 
 fn scope_activity_epoch() -> u64 {
@@ -82,6 +73,9 @@ type OwnerLink = Cell<Option<(OwnerKind, Weak<RecomposeScopeInner>)>>;
 /// applier's nodes, which never reach it.
 const NO_PARENT_HINT: NodeId = NodeId(usize::MAX);
 
+// A hand-written body that recomposes a scope.
+type RecomposeClosure = Box<dyn FnMut(&Composer)>;
+
 // A scope's yes-or-no states. Each takes a bit of `ScopeFlags`.
 #[derive(Clone, Copy)]
 enum ScopeFlag {
@@ -90,8 +84,9 @@ enum ScopeFlag {
     Active,
     ComposedOnce,
     PendingRecompose,
-    // The recompose callback is running: it is out of `recompose` meanwhile,
-    // and the scope still recomposes what reads in it.
+    // A hand-written recompose closure is running: it is out of
+    // `recompose_closure` meanwhile, and the scope still recomposes what
+    // reads in it.
     Recomposing,
     ForceReuse,
     ForceRecompose,
@@ -152,7 +147,11 @@ pub(crate) struct RecomposeScopeInner {
     /// [`NO_PARENT_HINT`] for none.
     parent_hint: Cell<NodeId>,
     group_anchor: Cell<AnchorId>,
-    recompose: Cell<Option<RecomposeCallback>>,
+    // What runs the scope's body again: a `#[composable]` function's
+    // generated recompose function, or a hand-written closure when the
+    // function is `None`.
+    recompose: Cell<Option<fn(&Composer)>>,
+    recompose_closure: Cell<Option<RecomposeClosure>>,
     owner: OwnerLink,
     local_stack: Cell<LocalStackSnapshot>,
     #[cfg(feature = "inspection")]
@@ -238,6 +237,7 @@ impl RecomposeScopeInner {
             parent_hint: Cell::new(NO_PARENT_HINT),
             group_anchor: Cell::new(AnchorId::INVALID),
             recompose: Cell::new(None),
+            recompose_closure: Cell::new(None),
             owner: Cell::new(None),
             local_stack: Cell::new(None),
             #[cfg(feature = "inspection")]
@@ -548,71 +548,81 @@ impl RecomposeScope {
     }
 
     /// Registers `callback` as the code that recomposes the scope when state
-    /// its body read changes. A stateless body the scope reruns already
-    /// stays as it is.
+    /// its body read changes.
     pub(crate) fn set_recompose_callback<F>(&self, callback: F)
     where
         F: FnMut(&Composer) + 'static,
     {
-        let body: fn() -> TypeId = TypeId::of::<F>;
-        let stateless = size_of::<F>() == 0;
-        if stateless && self.reruns_stateless(body) {
-            return;
+        self.note_recompose_source();
+        self.inner.recompose.set(None);
+        self.inner.recompose_closure.set(Some(Box::new(callback)));
+    }
+
+    // Registers `body` as the function that recomposes the scope; the same
+    // function stays as it is.
+    #[inline]
+    pub(crate) fn set_recompose_fn(&self, body: fn(&Composer)) {
+        let same = self
+            .inner
+            .recompose
+            .get()
+            .is_some_and(|current| std::ptr::fn_addr_eq(current, body));
+        if !same {
+            self.set_recompose(body);
         }
-        self.set_boxed_recompose(Box::new(callback), stateless.then_some(body));
     }
 
     #[inline(never)]
-    pub(crate) fn set_boxed_recompose(
-        &self,
-        body: Box<dyn FnMut(&Composer) + 'static>,
-        stateless_body: Option<fn() -> TypeId>,
-    ) {
+    fn set_recompose(&self, body: fn(&Composer)) {
+        self.note_recompose_source();
+        self.inner.recompose.set(Some(body));
+        self.inner.recompose_closure.set(None);
+    }
+
+    fn note_recompose_source(&self) {
         #[cfg(feature = "inspection")]
         self.inner
             .source_trace
             .replace(source_trace::current_source_trace());
-        self.inner.recompose.set(Some(RecomposeCallback {
-            body,
-            stateless_body,
-        }));
     }
 
-    /// Whether the scope reruns the stateless body whose type `body` names.
-    /// The same function names the same type; a copy of it in another
-    /// codegen unit is told by the type itself.
-    fn reruns_stateless(&self, body: fn() -> TypeId) -> bool {
-        read_cell(&self.inner.recompose, |callback| {
-            callback
-                .as_ref()
-                .and_then(|callback| callback.stateless_body)
-                .is_some_and(|current| std::ptr::fn_addr_eq(current, body) || current() == body())
-        })
-    }
-
+    // Kept out of line: the ESP32-S3 hot-code list places it in IRAM.
+    #[inline(never)]
     pub(crate) fn run_recompose(&self, composer: &Composer) -> bool {
         #[cfg(feature = "inspection")]
         let _source_context = source_trace::restore_source_trace(&self.inner.source_trace.borrow());
-        let Some(mut callback) = self.inner.recompose.take() else {
+        let Some(body) = self.inner.recompose.get() else {
+            return self.run_recompose_closure(composer);
+        };
+        self.begin_reads();
+        body(composer);
+        self.end_reads(BodyRun::Ran);
+        true
+    }
+
+    #[inline(never)]
+    fn run_recompose_closure(&self, composer: &Composer) -> bool {
+        let Some(mut closure) = self.inner.recompose_closure.take() else {
             return false;
         };
         self.begin_reads();
         self.inner.flags.set(ScopeFlag::Recomposing, true);
-        (callback.body)(composer);
+        closure(composer);
         self.inner.flags.set(ScopeFlag::Recomposing, false);
         self.end_reads(BodyRun::Ran);
-        // The body may have stored a new callback for the scope while it ran.
-        update_cell(&self.inner.recompose, |slot| {
+        // The closure may have stored a new one for the scope while it ran.
+        update_cell(&self.inner.recompose_closure, |slot| {
             if slot.is_none() {
-                *slot = Some(callback);
+                *slot = Some(closure);
             }
         });
         true
     }
 
     pub(crate) fn has_recompose_callback(&self) -> bool {
-        self.inner.flags.get(ScopeFlag::Recomposing)
-            || read_cell(&self.inner.recompose, Option::is_some)
+        self.inner.recompose.get().is_some()
+            || self.inner.flags.get(ScopeFlag::Recomposing)
+            || read_cell(&self.inner.recompose_closure, Option::is_some)
     }
 
     /// How many scopes this one composes under.
