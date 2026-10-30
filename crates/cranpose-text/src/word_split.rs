@@ -1,10 +1,13 @@
+use std::cmp::Ordering;
+
 use read_fonts::{
     FontRef, ReadError, TableProvider,
+    array::ComputedArray,
     collections::IntSet,
     tables::{
         gpos::{
             CursivePos, MarkBasePos, MarkLigPos, MarkMarkPos, PairPos, PairPosFormat1,
-            PairPosFormat2, ValueRecord,
+            PairPosFormat2, PairValueRecord, ValueRecord,
         },
         gsub::{
             AlternateSubst, LigatureSubst, LigatureSubstFormat1, MultipleSubst,
@@ -368,21 +371,52 @@ fn glyph_pair_sides(
 ) -> Option<()> {
     let sets = format.pair_sets();
     for (at, first) in format.coverage().ok()?.iter().enumerate() {
-        for record in sets.get(at).ok()?.pair_value_records().iter() {
-            let record = record.ok()?;
-            if !moves(record.value_record1()) && !moves(record.value_record2()) {
-                continue;
+        let records = sets.get(at).ok()?.pair_value_records();
+        if spaces.contains(first) {
+            for record in records.iter() {
+                let record = record.ok()?;
+                if pair_moves(&record) {
+                    sides
+                        .after
+                        .glyphs
+                        .insert(GlyphId::from(record.second_glyph()));
+                }
             }
-            let second = GlyphId::from(record.second_glyph());
-            if spaces.contains(second) {
+        }
+        for space in spaces.iter() {
+            if pair_with(&records, space)?.is_some_and(|record| pair_moves(&record)) {
                 sides.before.glyphs.insert(first);
-            }
-            if spaces.contains(first) {
-                sides.after.glyphs.insert(second);
             }
         }
     }
     Some(())
+}
+
+// The record of `records` whose second glyph is `second`, found as the
+// shaper finds it, by a binary search of records in the order of their
+// second glyphs. `None` inside when there is none; `None` for a record that
+// does not read.
+fn pair_with<'a>(
+    records: &ComputedArray<'a, PairValueRecord<'a>>,
+    second: GlyphId,
+) -> Option<Option<PairValueRecord<'a>>> {
+    let second = second.to_u32();
+    let (mut low, mut high) = (0, records.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let record = records.get(middle).ok()?;
+        match u32::from(record.second_glyph().to_u16()).cmp(&second) {
+            Ordering::Less => low = middle + 1,
+            Ordering::Greater => high = middle,
+            Ordering::Equal => return Some(Some(record)),
+        }
+    }
+    Some(None)
+}
+
+// Whether a pair adjustment moves either glyph of its pair.
+fn pair_moves(record: &PairValueRecord<'_>) -> bool {
+    moves(record.value_record1()) || moves(record.value_record2())
 }
 
 #[inline(never)]
@@ -403,7 +437,13 @@ fn class_pair_sides(
         // The space second: every first glyph of a row that moves with the
         // space's column.
         let column = seconds.get(space);
-        firsts_moving_with(&coverage, &firsts, column, &moving, sides)?;
+        firsts_moving_with(
+            &coverage,
+            (&firsts, format.class1_count()),
+            column,
+            &moving,
+            sides,
+        )?;
         if coverage.get(space).is_none() {
             continue;
         }
@@ -416,17 +456,25 @@ fn class_pair_sides(
 }
 
 // Adds to the glyphs before the space each glyph of `coverage` whose class
-// in `firsts` moves with `column`.
+// in `firsts`, among `count`, moves with `column`. Each row's cell is read
+// once; a glyph of a class past the rows moves with nothing, as the shaper
+// reads no cell for it.
 #[inline(never)]
 fn firsts_moving_with(
     coverage: &CoverageTable<'_>,
-    firsts: &ClassDef<'_>,
+    (firsts, count): (&ClassDef<'_>, u16),
     column: u32,
     moving: &impl Fn(u32, u32) -> Option<bool>,
     sides: &mut Sides,
 ) -> Option<()> {
+    let rows = (0..u32::from(count))
+        .map(|class1| moving(class1, column))
+        .collect::<Option<Vec<bool>>>()?;
+    if !rows.contains(&true) {
+        return Some(());
+    }
     for first in coverage.iter() {
-        if moving(firsts.get(first), column)? {
+        if rows.get(class_index(firsts.get(first))) == Some(&true) {
             sides.before.glyphs.insert(first);
         }
     }

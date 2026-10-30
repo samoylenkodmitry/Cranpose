@@ -371,9 +371,14 @@ impl ShapingFace {
         features: &[Feature],
     ) -> (Option<WordSplit>, Option<usize>) {
         let tables = layout_tables(&self.font);
-        let split = tables
-            .as_ref()
-            .and_then(|tables| face_word_split(&self.font, tables, script));
+        // The split reads every language and feature of the script, so a
+        // plan kept for the script has it already.
+        let split = match self.plans.iter().find(|kept| kept.plan.script() == script) {
+            Some(kept) => kept.split.clone(),
+            None => tables
+                .as_ref()
+                .and_then(|tables| face_word_split(&self.font, tables, script)),
+        };
         let plain = tables
             .as_ref()
             .and_then(|tables| PlainGlyphs::of(tables, script, direction, features));

@@ -27,6 +27,11 @@ pub(crate) const DEVANAGARI: &str =
 // kind, each taking wider alternates of the letters it reads.
 pub(crate) const TEST_CONTEXTS: &str = "crates/cranpose-text/tests/fonts/CranposeTestContexts.ttf";
 pub(crate) const TEST_KERNS: &str = "crates/cranpose-text/tests/fonts/CranposeTestKerns.ttf";
+// Built by `scripts/fonts/make_test_space_kerns.py`: in Latin class pairs
+// move the space after T, V, W and Y and before A and L, in Cyrillic a pair
+// moves it before Te, and f and i, and a and a, join.
+pub(crate) const TEST_SPACE_KERNS: &str =
+    "crates/cranpose-text/tests/fonts/CranposeTestSpaceKerns.ttf";
 pub(crate) const TEST_SUBSTITUTIONS: &str =
     "crates/cranpose-text/tests/fonts/CranposeTestSubstitutions.ttf";
 pub(crate) const TEST_WIDE: &str = "crates/cranpose-text/tests/fonts/CranposeTestWide.ttf";

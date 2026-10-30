@@ -5,11 +5,14 @@ use cranpose_text::{
 use cranpose_ui_graphics::MemoryHeadroom;
 
 use crate::{
-    fonts::{ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, ROBOTO, span, typeface},
+    fonts::{
+        ARABIC_VF, DEJAVU, DEVANAGARI_VF, NOTO_SANS_MERGED, ROBOTO, TEST_SPACE_KERNS, span,
+        typeface,
+    },
     harfrust_oracle::{REGULAR, compare},
 };
 
-const CASES: [(&str, &str); 7] = [
+const CASES: [(&str, &str); 8] = [
     // Roboto kerns a space with the capital after it.
     (ROBOTO, "Frame To Tokyo, AV Yes. Type 1234 Tea"),
     // and a T with the space after it: those words shape with the next one.
@@ -21,6 +24,9 @@ const CASES: [(&str, &str); 7] = [
     // a word drawn at the pen follows them.
     (ARABIC_VF, "سلام مَرْحَبًا بِالْعَالَمِ عليكم"),
     (DEVANAGARI_VF, "नमस्ते दुनिया क्ष त्र श्री"),
+    // Class pairs move a space after T and before A, so those words shape
+    // with their neighbors; the ligature sends the run through HarfRust.
+    (TEST_SPACE_KERNS, "aT Tea Vb x Ay WL Yes Lo fit"),
 ];
 
 #[test]
@@ -28,6 +34,20 @@ fn words_shaped_apart_join_back_as_the_whole_run_shapes() {
     for (path, text) in CASES {
         let (split, oracle) = compare(&mut Shaper::default(), path, text, REGULAR);
         assert_eq!(split, oracle, "{path}: {text}");
+    }
+}
+
+#[test]
+fn each_script_of_a_face_splits_its_words_by_its_own_lookups() {
+    // Cranpose Test Space Kerns moves the space after T in Latin, so Latin
+    // words end with the spaces after them, and before Te in Cyrillic, so
+    // Cyrillic words start at the space before them: the plan made for the
+    // Cyrillic words splits them by the Cyrillic lookups, not by those of
+    // the Latin plan made first.
+    let mut shaper = Shaper::default();
+    for text in ["aT Tea fit", "аТ Та аа", "aT Tea fit"] {
+        let (split, oracle) = compare(&mut shaper, TEST_SPACE_KERNS, text, REGULAR);
+        assert_eq!(split, oracle, "{text}");
     }
 }
 
