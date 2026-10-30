@@ -142,7 +142,10 @@ impl PlainKerning {
         }
     }
 
-    // Whether the font may move `first`'s advance before some glyph.
+    // Whether the font may move `first`'s advance before some glyph. Out of
+    // line, as is `between`: a text's characters and pairs mostly come from
+    // the plain caches, and their reads would grow every caller.
+    #[inline(never)]
     pub(crate) fn starts(&self, font: &[u8], first: GlyphId) -> bool {
         self.subtables
             .iter()
@@ -152,6 +155,7 @@ impl PlainKerning {
     // How far the font moves `first`'s advance before `second`, in font
     // units: each lookup adds the adjustment of its first subtable that
     // applies to the pair.
+    #[inline(never)]
     pub(crate) fn between(&self, font: &[u8], first: GlyphId, second: GlyphId) -> i32 {
         let mut total = 0;
         // The lookup whose subtable applied: its later ones are not tried.

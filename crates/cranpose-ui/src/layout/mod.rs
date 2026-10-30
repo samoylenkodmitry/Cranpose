@@ -631,9 +631,9 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppCont
 }
 
 /// Names to the scene phase the parent of every node `pass` found placed and
-/// left unplaced: nothing about the node itself changed, so the geometry
-/// setters had nothing to report, yet its layer has to leave the scene. A
-/// pass unplaces nodes rarely, so it pays for this walk only when it did.
+/// left unplaced: no geometry setter reported those, yet their layers leave
+/// the scene. Out of line: a pass rarely unplaces nodes.
+#[inline(never)]
 fn record_unplaced_parents(
     applier: &mut MemoryApplier,
     root: NodeId,

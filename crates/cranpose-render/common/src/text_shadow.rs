@@ -148,6 +148,7 @@ fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
 /// Draws the shadow of the glyph `placed` on a canvas of `width` by `height`
 /// float pixels, moved and blurred as `shadow` says at `scale` device pixels
 /// a layout pixel; on whole pixels for a static text.
+#[inline(never)]
 pub(crate) fn draw_shadow_mask(
     canvas: &mut [[f32; 4]],
     (width, height): (u32, u32),

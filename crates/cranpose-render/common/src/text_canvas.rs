@@ -259,6 +259,8 @@ pub(crate) fn blend_src_over(dst: &mut [f32; 4], src: [f32; 4]) {
     dst[3] = out_alpha;
 }
 
+// Out of line, as is a glyph's shadow: most text paints solid colors.
+#[inline(never)]
 fn draw_mask_glyph(
     canvas: &mut [[f32; 4]],
     (width, height): (u32, u32),
@@ -369,6 +371,9 @@ impl<P: GlyphPixel> SolidGlyphBlend<P> for OverBlend {
 
 /// Paints the solid glyph `placed` in `ink` over an `area` of `pixels`,
 /// width by height, a row every `stride` pixels.
+// Out of line, one function a format: a display takes one byte order, and a
+// build that keeps its drawing in fast memory keeps only that one.
+#[inline(never)]
 fn draw_mask_glyph_solid<P>(
     pixels: &mut [P],
     stride: usize,

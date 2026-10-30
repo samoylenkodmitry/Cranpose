@@ -652,6 +652,13 @@ impl<A: Applier + 'static> Composition<A> {
         if ids.is_empty() {
             return Ok(());
         }
+        self.forget_movables(&ids)
+    }
+
+    // Out of line: a pass rarely forgets movable content, and the check
+    // before this runs on every pass.
+    #[inline(never)]
+    fn forget_movables(&mut self, ids: &[Key]) -> Result<(), NodeError> {
         let runtime_handle = self.runtime_handle();
         let _teardown = runtime::enter_state_teardown_scope();
         let host = self.slots_host();
@@ -662,7 +669,7 @@ impl<A: Applier + 'static> Composition<A> {
             runtime_handle.clone(),
             self.root,
         );
-        composer.install(|composer| composer.forget_movables(&ids))?;
+        composer.install(|composer| composer.forget_movables(ids))?;
         self.apply_commands_and_updates_for_host(&host, &runtime_handle, &composer)
     }
 

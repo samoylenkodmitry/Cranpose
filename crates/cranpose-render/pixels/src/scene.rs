@@ -557,7 +557,9 @@ impl RasterScene {
     // records and passed-down entries replace the old ones, and the items,
     // records and entries after them, and the records of the layers that
     // hold the subtree, move by the difference. The scene stays as it was
-    // when either subtree's passed-down entries do not lie in one run.
+    // when either subtree's passed-down entries do not lie in one run. Out of
+    // line: a frame mostly replaces a subtree of the same extent.
+    #[inline(never)]
     pub(crate) fn splice_subtree(&mut self, record: usize, from: &Self, from_record: usize) {
         let (Some((old, old_first)), Some((new, new_first))) =
             (self.subtree_span(record), from.subtree_span(from_record))
