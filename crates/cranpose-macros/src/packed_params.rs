@@ -81,7 +81,7 @@ impl PackedParams<'_> {
                     __changed = true;
                 }
             }
-        } else if skippable {
+        } else if skippable && setup.is_empty() {
             quote! {
                 let (#slot, #previous) = #composer.__update_param_slot(
                     #key,
@@ -95,6 +95,18 @@ impl PackedParams<'_> {
                 );
             }
         } else {
+            if skippable {
+                // Its callbacks, set up after this, can still change the call.
+                setup.push(quote! {
+                    let #previous = if __changed {
+                        None
+                    } else {
+                        #composer.with_slot_value::<#state, _>(#slot, |#param_state| {
+                            #param_state.returned()
+                        })
+                    };
+                });
+            }
             quote! {
                 let (#slot, ()) = #composer.__update_param_slot(
                     #key,

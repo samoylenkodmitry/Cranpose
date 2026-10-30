@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use super::{CallbackHolder, CallbackHolder1, ParamSlot};
+use super::{CallbackHolder, ParamSlot};
 use crate::{RecomposeScope, runtime::TestRuntime};
 
 #[test]
@@ -44,7 +44,11 @@ fn callback_holder_does_not_invoke_after_creator_scope_deactivation() {
     let invocations = Rc::new(Cell::new(0));
     let invocations_for_callback = Rc::clone(&invocations);
     holder.update(move || invocations_for_callback.set(invocations_for_callback.get() + 1));
-    holder.creator_scope.replace(Some(scope.clone()));
+    holder
+        .shared
+        .owner
+        .creator_scope
+        .replace(Some(scope.clone()));
     let forwarder = holder.clone_rc();
 
     forwarder();
@@ -69,7 +73,7 @@ fn callback_holder_does_not_invoke_under_inactive_creator_ancestor() {
     let invocations = Rc::new(Cell::new(0));
     let invocations_for_callback = Rc::clone(&invocations);
     holder.update(move || invocations_for_callback.set(invocations_for_callback.get() + 1));
-    holder.creator_scope.replace(Some(creator));
+    holder.shared.owner.creator_scope.replace(Some(creator));
     let forwarder = holder.clone_rc();
 
     forwarder();
@@ -85,44 +89,54 @@ fn callback_holder_does_not_invoke_under_inactive_creator_ancestor() {
 }
 
 #[test]
-fn callback_holder1_default_forwarder_is_noop() {
-    let forwarder = CallbackHolder1::<i32>::new().clone_rc();
-    forwarder(7);
+fn an_argument_callback_forwarder_does_nothing_before_a_callback_is_stored() {
+    let forwarder = CallbackHolder::<dyn FnMut(i32)>::new().forwarder();
+    forwarder.call(|callback| callback(7));
 }
 
 #[test]
-fn callback_holder1_forwarder_uses_latest_callback() {
-    let holder = CallbackHolder1::<i32>::new();
+fn an_argument_callback_forwarder_calls_the_latest_callback() {
+    let holder = CallbackHolder::<dyn FnMut(i32)>::new();
     let total = Rc::new(Cell::new(0));
-    let forwarder = holder.clone_rc();
+    let forwarder = holder.forwarder();
 
     let first_total = Rc::clone(&total);
-    holder.update(move |value| first_total.set(first_total.get() + value));
-    forwarder(2);
+    holder.update_boxed(Box::new(move |value| {
+        first_total.set(first_total.get() + value);
+    }));
+    forwarder.call(|callback| callback(2));
 
     let second_total = Rc::clone(&total);
-    holder.update(move |value| second_total.set(second_total.get() + value * 5));
-    forwarder(3);
+    holder.update_boxed(Box::new(move |value| {
+        second_total.set(second_total.get() + value * 5);
+    }));
+    forwarder.call(|callback| callback(3));
 
     assert_eq!(total.get(), 17);
 }
 
 #[test]
-fn callback_holder1_does_not_invoke_after_creator_scope_deactivation() {
+fn an_argument_callback_does_not_run_after_its_creator_scope_deactivates() {
     let runtime = TestRuntime::new();
     let scope = RecomposeScope::new_for_test(runtime.handle());
-    let holder = CallbackHolder1::<i32>::new();
+    let holder = CallbackHolder::<dyn FnMut(i32)>::new();
     let total = Rc::new(Cell::new(0));
     let total_for_callback = Rc::clone(&total);
-    holder.update(move |value| total_for_callback.set(total_for_callback.get() + value));
-    holder.creator_scope.replace(Some(scope.clone()));
-    let forwarder = holder.clone_rc();
+    holder.update_boxed(Box::new(move |value| {
+        total_for_callback.set(total_for_callback.get() + value);
+    }));
+    holder
+        .shared
+        .owner
+        .creator_scope
+        .replace(Some(scope.clone()));
+    let forwarder = holder.forwarder();
 
-    forwarder(3);
+    forwarder.call(|callback| callback(3));
     assert_eq!(total.get(), 3);
 
     scope.deactivate();
-    forwarder(5);
+    forwarder.call(|callback| callback(5));
     assert_eq!(
         total.get(),
         3,

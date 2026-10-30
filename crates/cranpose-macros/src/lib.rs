@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+use callback_param::CallbackParam;
+use held_callback::{HeldCallback, borrows};
 use packed_params::PackedParams;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -10,7 +12,9 @@ use returning_call::ReturningCall;
 use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
+mod callback_param;
 mod constant_modifiers;
+mod held_callback;
 #[cfg(feature = "localization")]
 mod localization;
 mod packed_params;
@@ -170,43 +174,8 @@ struct ParamInfo {
     is_impl_trait: bool,
 }
 
-/// Whether a call can skip its body: a callback or `impl Trait` parameter
-/// marks every call changed.
-fn every_param_compared(param_info: &[ParamInfo], param_is_callback: &[bool]) -> bool {
-    param_info
-        .iter()
-        .zip(param_is_callback)
-        .all(|(info, is_callback)| !*is_callback && !info.is_impl_trait)
-}
-
 fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
-}
-
-fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
-    if let Type::ImplTrait(impl_trait) = ty {
-        impl_trait.bounds.iter().any(|bound| {
-            if let syn::TypeParamBound::Trait(trait_bound) = bound
-                && let Some(segment) = trait_bound.path.segments.last()
-            {
-                let ident_str = segment.ident.to_string();
-                if (ident_str == "Fn" || ident_str == "FnMut")
-                    && let syn::PathArguments::Parenthesized(args) = &segment.arguments
-                {
-                    let returns_unit = match &args.output {
-                        ReturnType::Default => true,
-                        ReturnType::Type(_, ty) => {
-                            matches!(&**ty, Type::Tuple(tuple) if tuple.elems.is_empty())
-                        }
-                    };
-                    return args.inputs.is_empty() && returns_unit;
-                }
-            }
-            false
-        })
-    } else {
-        false
-    }
 }
 
 fn type_bare_generic_ident(ty: &Type) -> Option<&Ident> {
@@ -476,9 +445,15 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let held: Vec<Option<HeldCallback>> = param_info
+        .iter()
+        .map(|info| HeldCallback::of(&info.ty, &func.sig.generics))
+        .collect();
+    // A borrowed parameter cannot be kept for a later comparison either.
     let has_unhandled_impl_trait = param_info
         .iter()
-        .any(|info| info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty));
+        .zip(&held)
+        .any(|(info, held)| (info.is_impl_trait && held.is_none()) || borrows(&info.ty));
 
     if enable_skip && !has_unhandled_impl_trait {
         let helper_ident = Ident::new(
@@ -487,14 +462,20 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         );
         let generics = func.sig.generics.clone();
 
-        let param_erased: Vec<bool> = param_info
+        let param_state_slots: Vec<Ident> = (0..param_info.len())
+            .map(|index| Ident::new(&format!("__param_state_slot{index}"), Span::mixed_site()))
+            .collect();
+        let callbacks: Vec<Option<CallbackParam>> = param_info
             .iter()
-            .map(|info| {
-                (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
-                    || (!info.is_impl_trait
-                        && type_bare_generic_ident(&info.ty).is_some()
-                        && is_generic_fn_like(&info.ty, &generics))
+            .zip(&param_state_slots)
+            .zip(&held)
+            .map(|((info, slot), held)| {
+                CallbackParam::of(&core_path, info, slot, held.as_ref(), &generics)
             })
+            .collect();
+        let param_erased: Vec<bool> = callbacks
+            .iter()
+            .map(|callback| callback.as_ref().is_some_and(CallbackParam::boxes))
             .collect();
 
         let mut strippable: std::collections::HashSet<String> = param_info
@@ -557,141 +538,68 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let helper_inputs: Vec<TokenStream2> = param_info
             .iter()
-            .zip(&param_erased)
-            .filter_map(|(info, erased)| {
-                if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
-                    None
-                } else if *erased {
-                    let ident = &info.ident;
-                    Some(quote! { #ident: ::std::boxed::Box<dyn ::core::ops::FnMut() + 'static> })
-                } else {
-                    let ident = &info.ident;
-                    let ty = &info.ty;
-                    Some(quote! { #ident: #ty })
-                }
-            })
-            .collect();
-
-        let param_state_slots: Vec<Ident> = (0..param_info.len())
-            .map(|index| Ident::new(&format!("__param_state_slot{index}"), Span::mixed_site()))
-            .collect();
-
-        let param_is_callback: Vec<bool> = param_info
-            .iter()
-            .map(|info| {
-                (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
-                    || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
-            })
-            .collect();
-
-        let param_setup: Vec<TokenStream2> = param_info
-            .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_erased)
-            .zip(&param_is_callback)
-            .map(|(((info, slot_ident), erased), is_callback)| {
-                if *is_callback {
-                    let ident = &info.ident;
-                    let update = if *erased {
-                        quote! { holder.update_boxed(#ident); }
-                    } else {
-                        quote! { holder.update(#ident); }
-                    };
-                    quote! {
-                        let (#slot_ident, ()) = #composer_ident.__update_param_slot(
-                            #slot_key,
-                            || #core_path::CallbackHolder::new(),
-                            |holder: &mut #core_path::CallbackHolder| {
-                                #update
-                            },
-                        );
-                        __changed = true;
+            .zip(&callbacks)
+            .map(|(info, callback)| {
+                let ident = &info.ident;
+                match callback.as_ref().and_then(CallbackParam::boxed_type) {
+                    Some(boxed) => quote! { #ident: ::std::boxed::Box<#boxed> },
+                    None => {
+                        let ty = &info.ty;
+                        quote! { #ident: #ty }
                     }
-                } else if info.is_impl_trait {
-                    quote! { __changed = true; }
-                } else {
-                    quote! {}
                 }
             })
             .collect();
 
-        let param_setup_recompose: Vec<TokenStream2> = param_state_slots
+        let param_setup: Vec<TokenStream2> = callbacks
             .iter()
-            .zip(&param_is_callback)
-            .filter(|(_, is_callback)| **is_callback)
-            .map(|(slot_ident, _)| {
-                quote! {
-                    let #slot_ident = #composer_ident
-                        .__use_param_slot(#slot_key, || #core_path::CallbackHolder::new());
-                }
-            })
+            .flatten()
+            .map(|callback| callback.setup(&core_path, &composer_ident))
             .collect();
-
-        let callback_rebinds: Vec<TokenStream2> = param_info
+        let param_setup_recompose: Vec<TokenStream2> = callbacks
             .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .filter(|(_, is_callback)| **is_callback)
-            .map(|((info, slot_ident), _)| {
-                let pat = &info.pat;
-                let can_add_mut = matches!(pat.as_ref(), Pat::Ident(_));
-                let binding = if can_add_mut && !info.pat_is_mut {
-                    quote! { mut #pat }
-                } else {
-                    quote! { #pat }
-                };
-                quote! {
-                    #[allow(unused_mut, reason = "only some callbacks change the binding")]
-                    let #binding = #composer_ident
-                        .with_slot_value::<#core_path::CallbackHolder, _>(
-                            #slot_ident,
-                            |holder| holder.clone_rc(),
-                        );
-                }
-            })
+            .flatten()
+            .map(|callback| callback.recompose_setup(&core_path, &composer_ident))
+            .collect();
+        let callback_rebinds: Vec<TokenStream2> = callbacks
+            .iter()
+            .flatten()
+            .map(|callback| callback.rebind(&core_path, &composer_ident))
             .collect();
 
         let body_inputs: Vec<TokenStream2> = param_info
             .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .map(|((info, slot_ident), is_callback)| {
-                if *is_callback {
-                    quote! {
-                        #slot_ident: #core_path::ValueSlotHandle<'_, #core_path::CallbackHolder>
-                    }
-                } else {
+            .zip(&callbacks)
+            .map(|(info, callback)| match callback {
+                Some(callback) => callback.body_input(&core_path),
+                None => {
                     let pat = &info.pat;
                     let ty = &info.ty;
                     quote! { #pat: #ty }
                 }
             })
             .collect();
-
-        let body_args: Vec<TokenStream2> = param_info
+        let body_args: Vec<&Ident> = param_info
             .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .map(|((info, slot_ident), is_callback)| {
-                if *is_callback {
-                    quote! { #slot_ident }
-                } else {
-                    let ident = &info.ident;
-                    quote! { #ident }
-                }
+            .zip(&callbacks)
+            .map(|(info, callback)| {
+                callback
+                    .as_ref()
+                    .map_or(&info.ident, |callback| callback.slot)
             })
             .collect();
 
         let packed = PackedParams {
             params: param_info
                 .iter()
-                .zip(&param_is_callback)
-                .filter(|(info, is_callback)| !**is_callback && !info.is_impl_trait)
+                .zip(&callbacks)
+                .filter(|(info, callback)| callback.is_none() && !info.is_impl_trait)
                 .map(|(info, _)| (&info.ident, &info.ty))
                 .collect(),
             returns: (!returns_unit).then_some(&return_ty),
         };
-        let skippable = every_param_compared(&param_info, &param_is_callback);
+        // Every parameter here is compared or is a held callback.
+        let skippable = true;
         let param_setup = packed.with_setup(
             &core_path,
             &composer_ident,
@@ -805,15 +713,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let wrapper_args: Vec<TokenStream2> = param_info
             .iter()
             .zip(&param_erased)
-            .filter_map(|(info, erased)| {
-                if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
-                    None
-                } else if *erased {
-                    let ident = &info.ident;
-                    Some(quote! { ::std::boxed::Box::new(#ident) })
+            .map(|(info, erased)| {
+                let ident = &info.ident;
+                if *erased {
+                    quote! { ::std::boxed::Box::new(#ident) }
                 } else {
-                    let ident = &info.ident;
-                    Some(quote! { #ident })
+                    quote! { #ident }
                 }
             })
             .collect();
