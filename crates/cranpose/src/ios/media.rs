@@ -288,7 +288,7 @@ fn install_remote_commands() {
 }
 
 fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) {
-    unsafe {
+    on_main(|_| unsafe {
         let title = NSString::from_str(&metadata.title);
         let artist = NSString::from_str(&metadata.artist);
         let album = NSString::from_str(&metadata.album);
@@ -300,7 +300,7 @@ fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) 
         let elapsed = NSNumber::new_f64(position.as_secs_f64());
         let rate = NSNumber::new_f32(rate);
 
-        let keys: [&NSString; 6] = [
+        let mut keys: Vec<&NSString> = vec![
             MPMediaItemPropertyTitle,
             MPMediaItemPropertyArtist,
             MPMediaItemPropertyAlbumTitle,
@@ -308,7 +308,7 @@ fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) 
             MPNowPlayingInfoPropertyElapsedPlaybackTime,
             MPNowPlayingInfoPropertyPlaybackRate,
         ];
-        let values: [&AnyObject; 6] = [
+        let mut values: Vec<&AnyObject> = vec![
             title.as_ref(),
             artist.as_ref(),
             album.as_ref(),
@@ -316,9 +316,14 @@ fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) 
             elapsed.as_ref(),
             rate.as_ref(),
         ];
+        let artwork = super::media_artwork::image(metadata.artwork.as_ref());
+        if let Some(artwork) = &artwork {
+            keys.push(objc2_media_player::MPMediaItemPropertyArtwork);
+            values.push(artwork.as_ref());
+        }
         let info = NSDictionary::from_slices(&keys, &values);
         MPNowPlayingInfoCenter::defaultCenter().setNowPlayingInfo(Some(&info));
-    }
+    });
 }
 
 define_class!(

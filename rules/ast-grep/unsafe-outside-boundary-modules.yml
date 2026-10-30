@@ -75,6 +75,7 @@ ignores:
   - crates/cranpose/src/ios/image_picker.rs
   - crates/cranpose/src/ios/keyboard.rs
   - crates/cranpose/src/ios/media.rs
+  - crates/cranpose/src/ios/media_artwork.rs
   - crates/cranpose/src/ios/notifier.rs
   - crates/cranpose/src/ios/pick_future.rs
   - crates/cranpose/src/ios/scene.rs
