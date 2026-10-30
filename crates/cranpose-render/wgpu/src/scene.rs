@@ -5,11 +5,8 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    graph::DrawCommandId,
-    layer_shadow::ShadowRRect,
-    text_glyphs::{casts_shadow, lines_part},
-    text_paint::{TextPaint, spans_cast_shadow},
-    text_raster::TextRasterRequest,
+    graph::DrawCommandId, layer_shadow::ShadowRRect, text_glyphs::lines_part,
+    text_paint::TextPaint, text_raster::TextRasterRequest,
 };
 use cranpose_ui::{TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
@@ -252,16 +249,23 @@ impl DrawnText {
                 .as_ref()
                 .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
         };
-        let gradient = paints_gradient(&style.span_style)
-            || string
-                .span_styles()
-                .iter()
-                .any(|span| paints_gradient(&span.item));
+        let (gradient, shadow) = string.span_styles().iter().fold(
+            (
+                paints_gradient(&style.span_style),
+                style.span_style.shadow.is_some(),
+            ),
+            |(gradient, shadow), span| {
+                (
+                    gradient || paints_gradient(&span.item),
+                    shadow || span.item.shadow.is_some(),
+                )
+            },
+        );
         Self {
             hash: string.render_hash(),
             empty: string.is_empty(),
             gradient,
-            shadow: casts_shadow(string.as_ref().into(), style),
+            shadow,
             static_motion: style
                 .paragraph_style
                 .text_motion
@@ -273,15 +277,14 @@ impl DrawnText {
 
     /// The string of a plain text (see [`TextPaint::plain`]), its facts
     /// taken from the paint its node worked out: a plain text paints no
-    /// gradient, in its style or in a span, and its style casts no shadow.
+    /// gradient, in its style or in a span.
     pub(crate) fn plain(string: Arc<RenderString>, paint: &TextPaint) -> Self {
-        let shadow = spans_cast_shadow(string.span_styles());
         Self {
             string,
             hash: paint.text_hash,
             empty: paint.text_empty,
             gradient: false,
-            shadow,
+            shadow: paint.casts_shadow,
             static_motion: paint.static_motion,
         }
     }
