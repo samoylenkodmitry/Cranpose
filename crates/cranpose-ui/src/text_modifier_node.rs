@@ -166,6 +166,23 @@ impl TextPreparedLayoutOwner {
             max_width: widths.1,
             options: source.options,
         };
+        let align = source.style.paragraph_style.text_align;
+        // The latest layout, which nothing else holds, takes widths at which
+        // it breaks into the same lines in place, as a width that animates
+        // asks for each frame.
+        {
+            let mut cache = self.cache.borrow_mut();
+            if let Some(latest) = cache.first_mut()
+                && (latest.text_generation, latest.font_scale_fingerprint) == stamp
+                && latest.layout.layout.holds(widths.0, widths.1)
+                && let Some(prepared) = Rc::get_mut(&mut latest.layout)
+            {
+                prepared.realign(frame, align);
+                latest.min_width = widths.0;
+                drop(source);
+                return read(&latest.layout);
+            }
+        }
         // A layout at new widths takes the allocation of the one the full
         // cache lets go, as a width that animates asks for one every frame.
         let spare = {
@@ -186,9 +203,7 @@ impl TextPreparedLayoutOwner {
                 .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
                 .map(|entry| &entry.layout);
             match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
-                Some(latest) => {
-                    latest.at_widths(frame, source.style.paragraph_style.text_align, spare)
-                }
+                Some(latest) => latest.at_widths(frame, align, spare),
                 None => {
                     let text = crate::text::measure::SharedText {
                         text: &source.text,

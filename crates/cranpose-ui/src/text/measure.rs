@@ -144,19 +144,17 @@ impl PreparedTextLayout {
         if width.to_bits() == self.layout.width().to_bits() {
             return Rc::clone(self);
         }
-        let mut layout = self.layout.clone();
-        layout.align(frame.min_width, frame.max_width, align);
-        let min_lines = frame.options.normalized().min_lines;
-        let aligned = Self {
+        let mut aligned = Self {
             render_text: self.render_text.clone(),
             visual_style_hash: self.visual_style_hash.clone(),
             ..Self::new(
                 Rc::clone(&self.text),
                 Arc::clone(&self.visual_style),
-                layout,
-                (frame.max_width, min_lines),
+                self.layout.clone(),
+                (self.max_width, 0),
             )
         };
+        aligned.realign(frame, align);
         if let Some(mut spare) = spare
             && let Some(slot) = Rc::get_mut(&mut spare)
         {
@@ -164,6 +162,15 @@ impl PreparedTextLayout {
             return spare;
         }
         Rc::new(aligned)
+    }
+
+    // Places the lines across the widths of `frame`, at which the layout
+    // breaks into the same lines, as `align` says.
+    pub(crate) fn realign(&mut self, frame: TextFrame, align: TextAlign) {
+        self.layout.align(frame.min_width, frame.max_width, align);
+        self.max_width = frame.max_width;
+        self.min_lines = u32::try_from(frame.options.normalized().min_lines).unwrap_or(u32::MAX);
+        self.layout_handle = OnceCell::new();
     }
 
     /// The display text as a renderer draws it. Converted once for the layout
