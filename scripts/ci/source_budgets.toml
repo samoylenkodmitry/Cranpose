@@ -55,7 +55,6 @@ limit = 1000
 "crates/cranpose-liquid/src/material.rs" = 2198
 "crates/cranpose-liquid/src/widgets/menu.rs" = 1907
 "crates/cranpose-macros/src/branch_groups.rs" = 1200
-"crates/cranpose-macros/src/lib.rs" = 1234
 "crates/cranpose-render/common/src/render_contract.rs" = 1139
 "crates/cranpose-render/common/src/scene_builder.rs" = 3061
 "crates/cranpose-render/common/src/software_text_raster.rs" = 5468
