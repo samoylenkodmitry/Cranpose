@@ -6,6 +6,7 @@ use cranpose_render_common::{
     graph::{LayerChange, LayerNode, ProjectiveTransform},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
+    text_glyphs::glyph_reach,
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -149,6 +150,17 @@ pub(crate) struct ShadowDraw {
 }
 
 impl TextDraw {
+    // The part of `rect`, where the text draws from its top left corner,
+    // in which its glyphs draw.
+    pub(crate) fn glyph_reach(&self, rect: Rect) -> Rect {
+        glyph_reach(
+            rect,
+            &self.layout,
+            (self.text.as_ref().into(), &self.text_style),
+            self.scale,
+        )
+    }
+
     /// The text moved by `dx`, `dy`, with no clip.
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         Self {

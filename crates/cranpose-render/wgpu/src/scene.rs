@@ -5,8 +5,8 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    graph::DrawCommandId, layer_shadow::ShadowRRect, text_paint::TextPaint,
-    text_raster::TextRasterRequest,
+    graph::DrawCommandId, layer_shadow::ShadowRRect, text_glyphs::glyph_reach,
+    text_paint::TextPaint, text_raster::TextRasterRequest,
 };
 use cranpose_ui::{TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
@@ -331,6 +331,17 @@ impl TextDraw {
             rect,
             &self.text_style,
             self.color,
+            scale,
+        )
+    }
+
+    // The part of `rect`, where the text draws from its top left corner at
+    // `scale` units of `rect` a layout pixel, in which its glyphs draw.
+    pub(crate) fn glyph_reach(&self, rect: Rect, scale: f32) -> Rect {
+        glyph_reach(
+            rect,
+            &self.layout,
+            (self.text.string().as_ref().into(), &self.text_style),
             scale,
         )
     }

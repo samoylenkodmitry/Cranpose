@@ -356,15 +356,6 @@ fn text_raster_geometry_at(
     )
 }
 
-fn text_draw_is_visible_in_viewport(
-    logical_rect: Rect,
-    clip: Option<Rect>,
-    viewport: ViewportUniformParams,
-    root_scale: f32,
-) -> bool {
-    draw_rect_is_visible_in_viewport(logical_rect, clip, viewport, root_scale)
-}
-
 fn expand_rect(rect: Rect, margin_x: f32, margin_y: f32) -> Rect {
     Rect {
         x: rect.x - margin_x,
@@ -412,7 +403,12 @@ fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
 
 pub(crate) fn text_draw_bounds(text: &TextDraw, root_scale: f32) -> Option<Rect> {
     text_logical_geometry_for_draw(text, root_scale)
-        .and_then(|(logical_rect, _)| clipped_bounds(logical_rect, text.clip))
+        .and_then(|(logical_rect, _)| text_reach_bounds(text, logical_rect))
+}
+
+// Where `text`, laid in `logical_rect`, draws its glyphs within its clip.
+fn text_reach_bounds(text: &TextDraw, logical_rect: Rect) -> Option<Rect> {
+    clipped_bounds(text.glyph_reach(logical_rect, text.scale), text.clip)
 }
 
 pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Rect> {
@@ -442,7 +438,7 @@ pub(crate) fn text_draw_geometry_in_rect(
     root_scale: f32,
 ) -> Option<(Rect, f32)> {
     text_logical_geometry_for_draw(text, root_scale).filter(|(logical_rect, _)| {
-        clipped_bounds(*logical_rect, text.clip)
+        text_reach_bounds(text, *logical_rect)
             .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
     })
 }

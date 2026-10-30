@@ -22,11 +22,12 @@ use super::{
     MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS, MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
     MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
     RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
-    TextGlyphRunLookup, TurnedGlyph, ViewportUniformParams, evict_idle, for_each_visible_glyph,
+    TextGlyphRunLookup, TurnedGlyph, ViewportUniformParams, draw_rect_is_visible_in_viewport,
+    evict_idle, for_each_visible_glyph,
     glyph_atlas::{GlyphAtlasEntry, TextGlyphAtlas},
     glyph_cut_edges, glyph_rect_aligned, hash_text_draw_for_cache,
     hash_text_raster_geometry_for_cache, log_text_atlas_fallback, sampling_under,
-    scissor_rect_for_layer, shared_glyph_clip, text_draw_is_visible_in_viewport,
+    scissor_rect_for_layer, shared_glyph_clip,
     text_glyph_cache::{
         CachedGpuTextGlyphRun, CachedTextGlyphRun, CachedTextImage, TextGlyphRunCacheKey,
         TextImageCacheKey,
@@ -159,15 +160,16 @@ impl TextResources {
             .cloned()
     }
 
-    // The part of `text_draw`'s raster rect to rasterize: a static text cut
-    // by `clip` rasterizes only the part the clip shows, its glyphs outside
-    // skipped.
+    // The part of `text_draw`'s raster rect to rasterize: its glyphs' reach,
+    // of which a static text cut by `clip` rasterizes only the part the clip
+    // shows, its glyphs outside skipped.
     fn text_image_raster_rect(
         text_draw: &TextDraw,
         raster_rect: Rect,
         clip: Option<Rect>,
         root_scale: f32,
     ) -> Rect {
+        let raster_rect = text_draw.glyph_reach(raster_rect, text_draw.scale * root_scale);
         match clip {
             Some(clip) if text_draw.text.static_motion() => {
                 let device_clip = Rect {
@@ -588,11 +590,13 @@ impl TextResources {
             run_key,
             run,
         } = draw;
+        // The glyphs draw only in their reach, which the text's damage covers.
+        let reach = text_draw.glyph_reach(raster_rect, text_draw.scale * root_scale);
         let draw_rect = Rect {
-            x: raster_rect.x / root_scale,
-            y: raster_rect.y / root_scale,
-            width: raster_rect.width / root_scale,
-            height: raster_rect.height / root_scale,
+            x: reach.x / root_scale,
+            y: reach.y / root_scale,
+            width: reach.width / root_scale,
+            height: reach.height / root_scale,
         };
         let Some(scissor) = scissor_rect_for_layer(draw_rect, text_draw.clip, root_scale, viewport)
         else {
@@ -688,7 +692,7 @@ impl TextResources {
         else {
             return Ok(());
         };
-        if !text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
+        if !draw_rect_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
             return Ok(());
         }
 

@@ -403,10 +403,76 @@ fn layers_that_draw_more_or_less_show_as_a_new_screen_shows_them() {
     }
 }
 
-// A host that keeps its frame and draws only the changed areas, in strips
-// of eight rows as a board with a small buffer does, shows what a whole
-// redraw shows, every frame of a screen that changes most of itself each
-// frame and gains and loses list rows as it scrolls.
+// A frame a host keeps: the areas a framebuffer changes are drawn into it,
+// in strips of eight rows as a board with a small buffer draws them.
+struct KeptFrame {
+    width: u32,
+    kept: Vec<u8>,
+    redrawn: Vec<u8>,
+    strip: Vec<u8>,
+    areas: Vec<PixelRect>,
+}
+
+impl KeptFrame {
+    fn new(width: u32, height: u32) -> Self {
+        let bytes = (width * height * 4) as usize;
+        Self {
+            width,
+            kept: vec![0; bytes],
+            redrawn: vec![0; bytes],
+            strip: Vec::new(),
+            areas: Vec::new(),
+        }
+    }
+
+    // Draws the areas `framebuffer` changed into the kept frame, and checks
+    // that it shows what a whole redraw shows.
+    fn draw_changed_areas(&mut self, framebuffer: &mut Framebuffer, frame: u64) {
+        let width = self.width;
+        framebuffer.changed_areas(&mut self.areas);
+        for area in &self.areas {
+            for top in (area.y..area.y + area.height).step_by(8) {
+                let strip = PixelRect {
+                    y: top,
+                    height: 8.min(area.y + area.height - top),
+                    ..*area
+                };
+                self.strip
+                    .resize(strip.width as usize * strip.height as usize * 4, 0);
+                framebuffer.draw_area(strip, &mut self.strip);
+                let row_bytes = strip.width as usize * 4;
+                for (row, source) in self.strip.chunks_exact(row_bytes).enumerate() {
+                    let start = ((strip.y as usize + row) * width as usize + strip.x as usize) * 4;
+                    self.kept[start..start + row_bytes].copy_from_slice(source);
+                }
+            }
+        }
+        let whole = PixelRect {
+            x: 0,
+            y: 0,
+            width,
+            height: framebuffer.height(),
+        };
+        framebuffer.draw_area(whole, &mut self.redrawn);
+        let differing = self
+            .kept
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(self.redrawn.as_chunks::<4>().0)
+            .position(|(a, b)| a != b);
+        assert_eq!(
+            differing.map(|pixel| (pixel % width as usize, pixel / width as usize)),
+            None,
+            "frame {frame}: the kept frame differs from a whole redraw at (x, y); areas {:?}",
+            self.areas
+        );
+    }
+}
+
+// A host that keeps its frame and draws only the changed areas shows what a
+// whole redraw shows, every frame of a screen that changes most of itself
+// each frame and gains and loses list rows as it scrolls.
 #[test]
 fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
     const WIDTH: u32 = 320;
@@ -416,49 +482,130 @@ fn the_dashboard_drawn_by_changed_areas_matches_whole_redraws() {
     })
     .expect("valid surface");
     framebuffer.set_active(true);
-    let whole = PixelRect {
-        x: 0,
-        y: 0,
-        width: WIDTH,
-        height: HEIGHT,
-    };
-    let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut redrawn = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut area_pixels = Vec::new();
-    let mut areas = Vec::new();
+    let mut kept = KeptFrame::new(WIDTH, HEIGHT);
     for frame in 0..240u64 {
         framebuffer.tick(frame * 16_666_667);
         framebuffer.run_pending_tasks();
-        framebuffer.changed_areas(&mut areas);
-        for area in &areas {
-            for top in (area.y..area.y + area.height).step_by(8) {
-                let strip = PixelRect {
-                    y: top,
-                    height: 8.min(area.y + area.height - top),
-                    ..*area
-                };
-                area_pixels.resize(strip.width as usize * strip.height as usize * 4, 0);
-                framebuffer.draw_area(strip, &mut area_pixels);
-                let row_bytes = strip.width as usize * 4;
-                for (row, source) in area_pixels.chunks_exact(row_bytes).enumerate() {
-                    let start = ((strip.y as usize + row) * WIDTH as usize + strip.x as usize) * 4;
-                    kept[start..start + row_bytes].copy_from_slice(source);
-                }
-            }
-        }
-        framebuffer.draw_area(whole, &mut redrawn);
-        let differing = kept
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(redrawn.as_chunks::<4>().0)
-            .position(|(a, b)| a != b);
-        assert_eq!(
-            differing.map(|pixel| (pixel % WIDTH as usize, pixel / WIDTH as usize)),
-            None,
-            "frame {frame}: the kept frame differs from a whole redraw at (x, y); areas {areas:?}"
-        );
+        kept.draw_changed_areas(&mut framebuffer, frame);
     }
+}
+
+// A label that changes in a box as wide as the screen changes the pixels
+// across its glyphs only, wherever the box aligns them, and a kept frame
+// shows it as a whole redraw does while it grows and shrinks.
+#[test]
+fn a_changing_label_in_a_wide_box_changes_only_the_area_of_its_glyphs() {
+    const WIDTH: u32 = 240;
+    const HEIGHT: u32 = 40;
+    let held = Rc::new(Cell::new(None));
+    let sink = Rc::clone(&held);
+    let mut framebuffer =
+        Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Light, &[], move || {
+            let count = remember(|| mutableStateOf(1u32)).with(|count| *count);
+            sink.set(Some(count));
+            Column(
+                Modifier::empty().fill_max_width(),
+                ColumnSpec::default(),
+                move || {
+                    for text_align in [text::TextAlign::Start, text::TextAlign::Center] {
+                        let style = TextStyle {
+                            paragraph_style: ParagraphStyle {
+                                text_align,
+                                ..ParagraphStyle::default()
+                            },
+                            ..TextStyle::default()
+                        };
+                        Text(
+                            count.get().to_string(),
+                            Modifier::empty().fill_max_width(),
+                            style,
+                        );
+                    }
+                },
+            );
+        })
+        .expect("valid surface");
+    framebuffer.set_active(true);
+    framebuffer.tick(16_666_667);
+    let mut kept = KeptFrame::new(WIDTH, HEIGHT);
+    kept.draw_changed_areas(&mut framebuffer, 1);
+    let count = held.get().expect("the screen holds its count");
+    for (frame, value) in (2..).zip([1000, 7, 52, 52_000, 3]) {
+        count.set(value);
+        framebuffer.tick(frame * 16_666_667);
+        kept.draw_changed_areas(&mut framebuffer, frame);
+        assert!(!kept.areas.is_empty(), "frame {frame}: the label changes");
+        for area in &kept.areas {
+            assert!(
+                area.width <= WIDTH / 4,
+                "frame {frame}: {area:?} reaches past the glyphs of {value}"
+            );
+        }
+    }
+}
+
+// The rightmost column of a label in a box as wide as the screen, drawn
+// black over white with `shadow`, that is not white.
+fn rightmost_ink(shadow: Option<text::Shadow>) -> Option<u32> {
+    const WIDTH: u32 = 120;
+    const HEIGHT: u32 = 30;
+    let mut framebuffer =
+        Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Light, &[], move || {
+            let style = TextStyle {
+                span_style: SpanStyle {
+                    color: Some(Color::BLACK),
+                    shadow,
+                    ..SpanStyle::default()
+                },
+                ..TextStyle::default()
+            };
+            Box(
+                Modifier::empty().fill_max_size().background(Color::WHITE),
+                BoxSpec::default(),
+                move || {
+                    Text("1", Modifier::empty().fill_max_width(), style.clone());
+                },
+            );
+        })
+        .expect("valid surface");
+    framebuffer.set_active(true);
+    framebuffer.tick(16_666_667);
+    framebuffer.changed_areas(&mut Vec::new());
+    let mut picture = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    framebuffer.draw_area(
+        PixelRect {
+            x: 0,
+            y: 0,
+            width: WIDTH,
+            height: HEIGHT,
+        },
+        &mut picture,
+    );
+    picture
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|(_, pixel)| **pixel != [255, 255, 255, 255])
+        .map(|(index, _)| index as u32 % WIDTH)
+        .max()
+}
+
+// A blurred shadow spreads past the glyphs of its label, wherever the
+// label's box lets it.
+#[test]
+fn a_blurred_shadow_shows_past_the_glyphs_of_a_label_in_a_wide_box() {
+    let glyphs = rightmost_ink(None).expect("the label draws");
+    let shadow = text::Shadow {
+        color: Color::BLACK,
+        offset: Point::new(0.0, 0.0),
+        blur_radius: 8.0,
+    };
+    let shadowed = rightmost_ink(Some(shadow)).expect("the label draws");
+    assert!(
+        shadowed > glyphs + 4,
+        "the shadow ends at column {shadowed}, the glyphs at {glyphs}"
+    );
 }
 
 // A display of 16-bit pixels shows what the bytes show, cut to 5, 6 and 5

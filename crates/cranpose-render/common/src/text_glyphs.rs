@@ -11,10 +11,49 @@ use cranpose_ui::{
         TextDrawStyle, TextMotion, TextStyle,
     },
 };
-use cranpose_ui_graphics::{Point, whole};
+use cranpose_ui_graphics::{Point, Rect, whole};
 use smallvec::SmallVec;
 
 use crate::glyph_mask::GlyphRaster;
+
+/// The part of `rect` in which a renderer draws the glyphs of `text` in
+/// `style`, laid out in `layout` from `rect`'s top left corner at `scale`
+/// units of `rect` a layout pixel: the visible text of its lines, widened
+/// to whole units from that corner, so that the part rasterizes on the grid
+/// the whole text does. Past `rect` where a line overflows it. All of `rect`
+/// when a span casts a shadow, which reaches past the glyphs, or when the
+/// layout has no lines.
+pub fn glyph_reach(
+    rect: Rect,
+    layout: &TextLayout,
+    (text, style): (StyledTextRef<'_>, &TextStyle),
+    scale: f32,
+) -> Rect {
+    if style.span_style.shadow.is_some()
+        || text
+            .span_styles
+            .iter()
+            .any(|span| span.item.shadow.is_some())
+    {
+        return rect;
+    }
+    let (left, right) =
+        (0..layout.line_count()).fold((f32::INFINITY, f32::NEG_INFINITY), |(left, right), line| {
+            (
+                left.min(layout.line_left(line)),
+                right.max(layout.line_right(line)),
+            )
+        });
+    if left > right {
+        return rect;
+    }
+    let left = whole::floor(left * scale);
+    Rect {
+        x: rect.x + left,
+        width: whole::ceil(right * scale) - left,
+        ..rect
+    }
+}
 
 /// A text and the styles of its ranges.
 #[derive(Clone, Copy, Debug)]
