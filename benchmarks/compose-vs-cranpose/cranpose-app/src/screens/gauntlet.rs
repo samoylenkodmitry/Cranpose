@@ -55,13 +55,26 @@ pub struct GauntletLoad {
 }
 
 /// Everything a card needs that does not change while the screen lives.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct Shared {
     posts: Rc<[Rc<Post>]>,
     avatars: Rc<[Option<ImageBitmap>]>,
     tickers: Rc<[Ticker]>,
     tier: GauntletTier,
     frame: MutableState<u32>,
+}
+
+/// The lists never change, so identity decides equality, as for `Post`: a
+/// composable taking `Shared` compares it on every recomposition, and
+/// comparing the lists' contents walked all 5,000 posts each time.
+impl PartialEq for Shared {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.posts, &other.posts)
+            && Rc::ptr_eq(&self.avatars, &other.avatars)
+            && Rc::ptr_eq(&self.tickers, &other.tickers)
+            && self.tier == other.tier
+            && self.frame == other.frame
+    }
 }
 
 #[composable]
