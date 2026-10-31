@@ -10,6 +10,7 @@ use crate::{
     index_range::narrow,
     itemizer::{Itemizer, TextItem},
     laid_glyphs::LaidGlyphs,
+    layout_body::LayoutBody,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
     line_box::{LastLineBox, LineBoxInputs},
@@ -30,7 +31,7 @@ use crate::{
         shape_inserted, spaced_width,
     },
     shaper::Shaper,
-    text_layout::{LayoutBody, LayoutLine, TextLayout},
+    text_layout::{LayoutLine, TextLayout},
     typeface::Typeface,
 };
 #[cfg(feature = "hyphenation")]

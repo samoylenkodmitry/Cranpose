@@ -3,10 +3,11 @@ use std::ops::Range;
 use crate::{
     font_family_resolver::FontFamilyResolver,
     index_range::narrow,
+    layout_body::LayoutBody,
     layout_input::LayoutInput,
     line_box::FontExtent,
     shaped_item::{Piece, scale},
-    text_layout::{LayoutBody, LineRun},
+    text_layout::LineRun,
     typeface::Typeface,
 };
 

@@ -29,6 +29,7 @@ mod index_range;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
 mod laid_glyphs;
+mod layout_body;
 /// A paragraph to lay out and the lengths of its style.
 pub mod layout_input;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
