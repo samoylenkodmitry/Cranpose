@@ -40,6 +40,8 @@ pub(super) struct State {
     current_immediates_data: [u32; super::MAX_IMMEDIATES],
     end_of_pass_timestamp: Option<glow::Query>,
     clip_distance_count: u32,
+    /// The buffer of the last attribute this encoder pointed.
+    last_attribute_buffer: Option<glow::Buffer>,
 }
 
 impl Default for State {
@@ -67,6 +69,7 @@ impl Default for State {
             current_immediates_data: [0; super::MAX_IMMEDIATES],
             end_of_pass_timestamp: Default::default(),
             clip_distance_count: Default::default(),
+            last_attribute_buffer: Default::default(),
         }
     }
 }
@@ -160,29 +163,39 @@ impl super::CommandEncoder {
             }
         } else {
             let mut vbuf_mask = 0;
-            for attribute in self.state.vertex_attributes.iter() {
-                if self.state.dirty_vbuf_mask & (1 << attribute.buffer_index) == 0 {
-                    continue;
-                }
-                let (buffer_desc, vb) =
-                    match self.state.vertex_buffers[attribute.buffer_index as usize] {
-                        (Some(ref vb_desc), Some(ref vb)) => (vb_desc.clone(), vb),
-                        // Not all dirty bindings are necessarily filled. Some may be unused.
-                        (_, _) => continue,
-                    };
+            // The buffer the last attribute was pointed into is likely still
+            // bound to `ARRAY_BUFFER`, so its attributes go first: the queue
+            // then binds each other buffer once.
+            let last_buffer = self.state.last_attribute_buffer;
+            for first in [true, false] {
+                for attribute in self.state.vertex_attributes.iter() {
+                    if self.state.dirty_vbuf_mask & (1 << attribute.buffer_index) == 0 {
+                        continue;
+                    }
+                    let (buffer_desc, vb) =
+                        match self.state.vertex_buffers[attribute.buffer_index as usize] {
+                            (Some(ref vb_desc), Some(ref vb)) => (vb_desc.clone(), vb),
+                            // Not all dirty bindings are necessarily filled. Some may be unused.
+                            (_, _) => continue,
+                        };
+                    if (last_buffer == Some(vb.raw)) != first {
+                        continue;
+                    }
 
-                let mut attribute_desc = attribute.clone();
-                attribute_desc.offset += vb.offset as u32;
-                if buffer_desc.step == wgt::VertexStepMode::Instance {
-                    attribute_desc.offset += buffer_desc.stride * first_instance;
-                }
+                    let mut attribute_desc = attribute.clone();
+                    attribute_desc.offset += vb.offset as u32;
+                    if buffer_desc.step == wgt::VertexStepMode::Instance {
+                        attribute_desc.offset += buffer_desc.stride * first_instance;
+                    }
 
-                self.cmd_buffer.commands.push(C::SetVertexAttribute {
-                    buffer: Some(vb.raw),
-                    buffer_desc,
-                    attribute_desc,
-                });
-                vbuf_mask |= 1 << attribute.buffer_index;
+                    self.cmd_buffer.commands.push(C::SetVertexAttribute {
+                        buffer: Some(vb.raw),
+                        buffer_desc,
+                        attribute_desc,
+                    });
+                    self.state.last_attribute_buffer = Some(vb.raw);
+                    vbuf_mask |= 1 << attribute.buffer_index;
+                }
             }
             self.state.dirty_vbuf_mask ^= vbuf_mask;
         }
