@@ -5,6 +5,7 @@ pub mod core;
 pub(crate) mod flex_box;
 mod frame_layout_arena;
 pub(crate) mod grid;
+mod live_layout_node;
 mod measure_telemetry;
 mod measured_spare;
 mod placed_root_measurements;
@@ -34,6 +35,7 @@ use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
+use live_layout_node::{LiveLayoutNode, read_live_layout_node};
 use measured_spare::MeasuredSpare;
 use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
@@ -68,7 +70,7 @@ use crate::{
     subcompose_layout::{
         MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNode, SubcomposeLayoutNodeHandle,
     },
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
 };
 
 #[derive(Default)]
@@ -670,64 +672,6 @@ fn read_layout_node<R>(
     })
 }
 
-enum LiveLayoutNode<'a> {
-    Layout(&'a LayoutNode),
-    Subcompose(&'a SubcomposeLayoutNode),
-}
-
-impl LiveLayoutNode<'_> {
-    fn state(&self) -> LayoutState {
-        match self {
-            Self::Layout(node) => node.layout_state(),
-            Self::Subcompose(node) => node.layout_state(),
-        }
-    }
-
-    fn parent(&self) -> Option<NodeId> {
-        match self {
-            Self::Layout(node) => node.parent(),
-            Self::Subcompose(node) => node.parent(),
-        }
-    }
-
-    fn is_window_root(&self) -> bool {
-        matches!(self, Self::Layout(node) if node.is_window_root())
-    }
-
-    fn with_children<R>(&self, read: impl FnOnce(&[NodeId]) -> R) -> R {
-        match self {
-            Self::Layout(node) => read(&node.children),
-            Self::Subcompose(node) => node.with_active_children(read),
-        }
-    }
-
-    fn semantics(&self) -> Option<SemanticsConfiguration> {
-        match self {
-            Self::Layout(node) => node.semantics_configuration(),
-            Self::Subcompose(node) => node.semantics_configuration(),
-        }
-    }
-}
-
-fn read_live_layout_node<R>(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    mut read: impl FnMut(LiveLayoutNode<'_>) -> R,
-) -> Result<Option<R>, NodeError> {
-    match applier.with_node::<LayoutNode, _>(node_id, |node| read(LiveLayoutNode::Layout(node))) {
-        Ok(value) => return Ok(Some(value)),
-        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
-        Err(err) => return Err(err),
-    }
-    match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        read(LiveLayoutNode::Subcompose(node))
-    }) {
-        Ok(value) => Ok(Some(value)),
-        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
-}
-
 fn snapshot_node_data(
     applier: &mut MemoryApplier,
     node_id: NodeId,
@@ -1215,22 +1159,19 @@ struct ChildView {
 
 impl ChildView {
     /// The child, when it or a node below it changed.
-    fn of(
-        node: &dyn Node,
-        cache: &NodeCache,
-        parent_data: &dyn Fn() -> cranpose_ui_layout::ParentData,
-        placed: bool,
-    ) -> Option<Self> {
-        let self_dirty = node.needs_measure() || node.needs_layout();
-        if !self_dirty && !node.descendant_needs_layout() {
+    fn of(node: &LiveLayoutNode<'_>) -> Option<Self> {
+        let cache = node.cache();
+        let dirt = cache.dirt();
+        let self_dirty = dirt.measure || dirt.layout;
+        if !self_dirty && !dirt.descendant.layout {
             return None;
         }
         Some(Self {
             self_dirty,
-            parent_data: self_dirty.then(parent_data),
+            parent_data: self_dirty.then(|| node.parent_data()),
             cached_constraints: cache.measured_constraints(),
             read_intrinsics: cache.has_intrinsics(),
-            placed,
+            placed: node.is_placed(),
         })
     }
 }
@@ -1384,7 +1325,7 @@ impl LayoutBuilderState {
             return Ok(ChildChange::Refuse);
         };
         Ok(
-            match read_layout_child(&mut applier, child_id, ChildView::of)? {
+            match read_live_layout_node(&mut applier, child_id, |node| ChildView::of(&node))? {
                 None => ChildChange::Refuse,
                 Some(None) => ChildChange::Unchanged,
                 Some(Some(view)) => decide(view),
@@ -2030,16 +1971,9 @@ impl LayoutBuilderState {
         let Ok(mut applier) = self.applier.try_borrow_typed() else {
             return;
         };
-        if applier
-            .with_node::<LayoutNode, _>(child_id, |child| {
-                child.set_position(child.position(), Some(parent), &self.context);
-            })
-            .is_err()
-        {
-            let _ = applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
-                child.set_position(child.layout_state().position(), Some(parent), &self.context);
-            });
-        }
+        let _ = read_live_layout_node(&mut applier, child_id, |child| {
+            child.stay_placed(parent, &self.context);
+        });
     }
 
     fn visit_layout_node(
@@ -2714,41 +2648,6 @@ struct LayoutChildBinding<'a> {
     dirty: bool,
     /// Only nodes below the child are dirty.
     descendant_dirty: bool,
-}
-
-/// Reads a child that is a layout node or a subcompose node: its flags,
-/// cache, parent data and placement. `None` for another node type.
-fn read_layout_child<R>(
-    applier: &mut MemoryApplier,
-    child_id: NodeId,
-    read: impl Fn(&dyn Node, &NodeCache, &dyn Fn() -> cranpose_ui_layout::ParentData, bool) -> R,
-) -> Result<Option<R>, NodeError> {
-    match applier.with_node::<LayoutNode, _>(child_id, |child| {
-        read(
-            &*child,
-            child.cache(),
-            &|| child.parent_data(),
-            child.is_placed(),
-        )
-    }) {
-        Ok(value) => Ok(Some(value)),
-        Err(NodeError::TypeMismatch { .. }) => {
-            match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
-                read(
-                    &*child,
-                    child.cache(),
-                    &|| child.parent_data(),
-                    child.layout_state().is_placed(),
-                )
-            }) {
-                Ok(value) => Ok(Some(value)),
-                Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-                Err(err) => Err(err),
-            }
-        }
-        Err(NodeError::Missing { .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
 }
 
 /// A parent's record of one child, for each child of every parent: its

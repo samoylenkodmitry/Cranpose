@@ -1,6 +1,6 @@
 use cranpose_core::{Applier, MemoryApplier, NodeError, NodeId};
 
-use super::read_live_layout_node;
+use super::live_layout_node::read_live_layout_node;
 
 /// Proves that revealing `target` cannot scroll any ancestor in `root`'s surface.
 ///
