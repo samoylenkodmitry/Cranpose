@@ -107,6 +107,7 @@ fn shape_vertices_receive_every_record_field_from_its_column() {
         "vs_record_solid",
         "vs_record_plain_fill",
         "vs_record_clipped_fill",
+        "vs_record_rounded_fill",
         "vs_record_dithered_fill",
         "vs_record_slice",
         "vs_record_gradient_slice",
@@ -249,6 +250,7 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         "fs_main",
         "fs_solid",
         "fs_clipped_fill",
+        "fs_rounded_fill",
         "fs_plain_fill",
         "fs_dithered_fill",
         "fs_gradient_fill",
@@ -276,6 +278,12 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         fragment_input_locations(SHADER, "fs_clipped_fill").len(),
         4,
         "a clipped fill drawn flat carries its colour, rect, radii and clip"
+    );
+    assert_eq!(
+        fragment_input_locations(SHADER, "fs_rounded_fill").len(),
+        6,
+        "a fill drawn flat under a rounded clip adds the clip's radius and the interior both \
+         distance fields leave whole"
     );
     assert_eq!(
         fragment_input_locations(SHADER, "fs_plain_fill").len(),

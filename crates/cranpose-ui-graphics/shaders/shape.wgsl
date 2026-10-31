@@ -116,6 +116,56 @@ fn full_from_clipped_fill(fill: ClippedFillOutput) -> VertexOutput {
     return full_output(solid);
 }
 
+// `ClippedFillOutput` under a rounded clip: the clip's radius, and `interior`,
+// the rect inside both the fill's corners and the clip's, whose pixels the
+// fill covers whole.
+struct RoundedFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+    @location(5) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(6) @interpolate(flat) interior: vec4<f32>,
+    @location(7) @interpolate(flat) clip_radius: f32,
+}
+
+fn rounded_fill_output(full: VertexOutput) -> RoundedFillOutput {
+    let clip_radius = bitcast<f32>(full.brush.z);
+    // Inside the clip inset by its radius, and by at least half a pixel, the
+    // clip's distance field is half a pixel or more inside: its coverage is
+    // whole. A record with no clip has no clip edge to keep off.
+    let inset = max(clip_radius, 0.5);
+    let clipped = (full.clip_rect.z > 0.0) & (full.clip_rect.w > 0.0);
+    let clip_inner = select(
+        vec4<f32>(-3.0e38, -3.0e38, 3.0e38, 3.0e38),
+        vec4<f32>(full.clip_rect.xy + inset, full.clip_rect.xy + full.clip_rect.zw - inset),
+        clipped,
+    );
+    let bands = fill_bands(full.rect, full.radii);
+    let interior = vec4<f32>(max(bands.xy, clip_inner.xy), min(bands.zw, clip_inner.zw));
+    return RoundedFillOutput(
+        full.clip_position,
+        full.color,
+        full.rect,
+        full.radii,
+        full.clip_rect,
+        interior,
+        clip_radius,
+    );
+}
+
+fn full_from_rounded_fill(fill: RoundedFillOutput) -> VertexOutput {
+    var clipped: ClippedFillOutput;
+    clipped.clip_position = fill.clip_position;
+    clipped.color = fill.color;
+    clipped.rect = fill.rect;
+    clipped.radii = fill.radii;
+    clipped.clip_rect = fill.clip_rect;
+    var output = full_from_clipped_fill(clipped);
+    output.brush.z = bitcast<u32>(fill.clip_radius);
+    return output;
+}
+
 // `ClippedFillOutput` without the clip an unclipped fill has none of.
 struct PlainFillOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -981,6 +1031,16 @@ fn vs_record_clipped_fill(
 }
 
 @vertex
+fn vs_record_rounded_fill(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    input: ShapeRecordInput,
+) -> RoundedFillOutput {
+    let record = shape_record(input);
+    return rounded_fill_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+@vertex
 fn vs_record_dithered_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
@@ -1823,6 +1883,20 @@ fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_clipped_fill(input: ClippedFillOutput) -> @location(0) vec4<f32> {
     frag = full_from_clipped_fill(input);
+    return fragment();
+}
+
+// A pixel inside both the fill's corners and its clip's takes the colour
+// whole, as the full ladder would give it, without either distance field.
+@fragment
+fn fs_rounded_fill(input: RoundedFillOutput) -> @location(0) vec4<f32> {
+    let p = input.clip_position.xy + uniforms.viewport_offset;
+    let interior = input.interior;
+    let inside = (p.x >= interior.x) & (p.x <= interior.z) & (p.y >= interior.y) & (p.y <= interior.w);
+    if (!SHAPE_DISCARD & inside) {
+        return input.color;
+    }
+    frag = full_from_rounded_fill(input);
     return fragment();
 }
 
