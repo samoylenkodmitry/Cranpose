@@ -15,9 +15,8 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
-        StoreRunBatch, TargetRect, ViewportUniformParams, scissor_rect_for_rect,
-        supported_blend_mode,
+        ArenaPlacement, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage, StoreRunBatch,
+        TargetRect, ViewportUniformParams, scissor_rect_for_rect, supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
@@ -38,11 +37,13 @@ pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
 mod pass_buffers;
 mod pass_scratch;
+mod segment_run;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
 use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
+use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
 /// A render target and its size in pixels.
@@ -1115,7 +1116,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         }
         let uniform_slot = self.chunk_uniform_slot(renderer, binding);
         if self.depth.is_on() {
-            self.depth_seq = self.chunk_base.saturating_add(records);
+            self.depth_seq = self.depth_seq.saturating_add(records);
         }
         self.batches.push(Batch::Arena {
             chunk: open,
@@ -1136,14 +1137,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             self.flush(renderer, binding);
             return None;
         };
+        // The held draws, and a draw that follows, take the next record's place.
         self.cut_paint(renderer, binding, open);
-        // The held draws, and a draw that follows, sit where the chunk's next
-        // record will: its later opaque interiors hide them, its earlier ones
-        // do not. Without an open chunk a draw that follows takes the next
-        // place.
-        let base = self
-            .chunk_base
-            .saturating_add(renderer.open_arena_records());
+        let base = self.depth_seq.saturating_add(renderer.open_arena_records());
         let held = self.held.take();
         self.push_held(renderer, binding, held, Some(base));
         self.depth.is_on().then_some(base)
@@ -1159,7 +1155,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         range: std::ops::Range<usize>,
     ) {
         let viewport = ViewportUniformParams {
-            depth_base: self.chunk_base as f32,
+            depth_base: self.depth_seq as f32,
             ..binding.bound
         };
         renderer.mesh_arena_draws(
@@ -1441,14 +1437,13 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             }
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
-                self.close_chunk(renderer, run.binding);
-                let space = DrawSpace {
-                    viewport: ViewportUniformParams {
-                        depth_base: self.depth_seq as f32,
-                        ..run.viewport
-                    },
-                    scale: run.segment.scale,
-                };
+                // The chunk stays open, its paint so far drawn first; `depth_seq`
+                // moves past the stored run's places, which its later records skip.
+                if let Some(open) = self.chunk {
+                    self.cut_paint(renderer, run.binding, open);
+                }
+                let open = self.chunk.map_or(0, |_| renderer.open_arena_records());
+                let space = run.space().at_place(self.depth_seq.saturating_add(open));
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
@@ -1508,7 +1503,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                         open,
                         draw,
                         from..total,
-                        at,
+                        (at, self.depth_seq - self.chunk_base),
                         segment_clip,
                         (&mut self.pipelines, self.depth_keys.as_mut()),
                     );
@@ -1833,57 +1828,6 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         self.batches.push(Batch::Shader(prepared));
         Ok(())
     }
-}
-
-/// One segment's viewport, turn included, and what its shapes and glyphs
-/// bind while its items are batched.
-struct SegmentRun<'s, 'a> {
-    segment: &'a PassSegment<'s>,
-    viewport: ViewportUniformParams,
-    binding: SegmentBinding,
-    /// What moves the segment's device space into the binding's: whole
-    /// pixels for a member of side-by-side segments, else zero.
-    shift: [f32; 2],
-    /// A member's scissor, which its binding leaves to each draw that may
-    /// reach past it.
-    slot: Option<TargetRect>,
-}
-
-/// How an arena run's clip applies: see [`PassPrep::arena_clip`].
-struct ArenaClip {
-    paint: Option<TargetRect>,
-    tested: crate::render::SegmentClip,
-    chunk: Option<TargetRect>,
-}
-
-impl SegmentRun<'_, '_> {
-    fn space(&self) -> DrawSpace {
-        DrawSpace {
-            viewport: self.viewport,
-            scale: self.segment.scale,
-        }
-    }
-
-    /// The viewport the segment's images draw under: a member's are moved
-    /// into its binding's space.
-    fn image_viewport(&self) -> ViewportUniformParams {
-        if self.slot.is_some() {
-            self.binding.bound
-        } else {
-            self.viewport
-        }
-    }
-}
-
-/// What a segment's shape and glyph batches bind: its viewport without its
-/// turn, which its records and glyphs carry, the slot claimed for that and
-/// its scissor. Members side by side bind the target's own space without a
-/// scissor: their records and glyphs carry their offsets.
-#[derive(Clone, Copy)]
-struct SegmentBinding {
-    uniform_slot: usize,
-    bound: ViewportUniformParams,
-    scissor: Option<(u32, u32, u32, u32)>,
 }
 
 #[cfg(test)]

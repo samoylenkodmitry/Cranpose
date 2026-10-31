@@ -4,6 +4,10 @@ use cranpose_ui_graphics::{
 };
 
 use super::*;
+use crate::scene::{
+    PLACEMENT_CANONICALIZE, PLACEMENT_CLIPPED, PLACEMENT_FILTERED, PLACEMENT_PAINTED,
+    PLACEMENT_TURNED,
+};
 
 /// A shape segment of one record: its kinds' bits, blend and interior flags.
 fn shape_segment(
@@ -72,7 +76,7 @@ fn arena_draws(runs: &[(RunDraw, crate::render::ShapePipelineKey)]) -> Vec<RunDr
             chunk,
             run,
             0..records,
-            (1.0, SegmentTransform::IDENTITY, [0.0; 2]),
+            (1.0, SegmentTransform::IDENTITY, [0.0; 2], 0),
             &mut |_| *key,
             &mut wanted,
         );
@@ -459,7 +463,7 @@ fn arena_wants(
         chunk,
         run,
         window,
-        (1.0, SegmentTransform::IDENTITY, [0.0; 2]),
+        (1.0, SegmentTransform::IDENTITY, [0.0; 2], 0),
         &mut |segment| arena_key(segment),
         &mut wanted,
     );
