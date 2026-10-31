@@ -224,9 +224,7 @@ impl super::Queue {
                         )
                     }
                 } else {
-                    if let Some(location) = first_instance_location {
-                        unsafe { gl.uniform_1_u32(Some(location), first_instance) };
-                    }
+                    // `GlState::apply` set the program's first instance.
 
                     // Don't use `gl.draw_arrays` for `instance_count == 1`.
                     // Angle has a bug where it doesn't consider the instance divisor when `DYNAMIC_DRAW` is used in `draw_arrays`.
@@ -268,9 +266,7 @@ impl super::Queue {
                         )
                     }
                 } else {
-                    if let Some(location) = first_instance_location {
-                        unsafe { gl.uniform_1_u32(Some(location), first_instance) };
-                    }
+                    // `GlState::apply` set the program's first instance.
 
                     if base_vertex == 0 {
                         unsafe {
@@ -1356,7 +1352,11 @@ impl super::Queue {
             | C::ConfigureDepthStencil(_)
             | C::SetProgram(_)
             | C::BindSampler(..)
-            | C::BindTexture { .. } => {}
+            | C::BindTexture { .. }
+            | C::SetColorTarget {
+                draw_buffer_index: None,
+                ..
+            } => {}
             C::SetVertexAttribute {
                 buffer: None,
                 buffer_desc: _,
@@ -1443,81 +1443,46 @@ impl super::Queue {
                 unsafe { gl.blend_color(c[0], c[1], c[2], c[3]) };
             }
             C::SetColorTarget {
-                draw_buffer_index,
+                draw_buffer_index: Some(index),
                 desc: super::ColorTargetDesc { mask, ref blend },
             } => {
                 use wgt::ColorWrites as Cw;
-                if let Some(index) = draw_buffer_index {
-                    unsafe {
-                        gl.color_mask_draw_buffer(
-                            index,
-                            mask.contains(Cw::RED),
-                            mask.contains(Cw::GREEN),
-                            mask.contains(Cw::BLUE),
-                            mask.contains(Cw::ALPHA),
-                        )
-                    };
-                    if let Some(ref blend) = *blend {
-                        unsafe { gl.enable_draw_buffer(glow::BLEND, index) };
-                        if blend.color != blend.alpha {
-                            unsafe {
-                                gl.blend_equation_separate_draw_buffer(
-                                    index,
-                                    blend.color.equation,
-                                    blend.alpha.equation,
-                                )
-                            };
-                            unsafe {
-                                gl.blend_func_separate_draw_buffer(
-                                    index,
-                                    blend.color.src,
-                                    blend.color.dst,
-                                    blend.alpha.src,
-                                    blend.alpha.dst,
-                                )
-                            };
-                        } else {
-                            unsafe { gl.blend_equation_draw_buffer(index, blend.color.equation) };
-                            unsafe {
-                                gl.blend_func_draw_buffer(index, blend.color.src, blend.color.dst)
-                            };
-                        }
+                unsafe {
+                    gl.color_mask_draw_buffer(
+                        index,
+                        mask.contains(Cw::RED),
+                        mask.contains(Cw::GREEN),
+                        mask.contains(Cw::BLUE),
+                        mask.contains(Cw::ALPHA),
+                    )
+                };
+                if let Some(ref blend) = *blend {
+                    unsafe { gl.enable_draw_buffer(glow::BLEND, index) };
+                    if blend.color != blend.alpha {
+                        unsafe {
+                            gl.blend_equation_separate_draw_buffer(
+                                index,
+                                blend.color.equation,
+                                blend.alpha.equation,
+                            )
+                        };
+                        unsafe {
+                            gl.blend_func_separate_draw_buffer(
+                                index,
+                                blend.color.src,
+                                blend.color.dst,
+                                blend.alpha.src,
+                                blend.alpha.dst,
+                            )
+                        };
                     } else {
-                        unsafe { gl.disable_draw_buffer(glow::BLEND, index) };
+                        unsafe { gl.blend_equation_draw_buffer(index, blend.color.equation) };
+                        unsafe {
+                            gl.blend_func_draw_buffer(index, blend.color.src, blend.color.dst)
+                        };
                     }
                 } else {
-                    unsafe {
-                        gl.color_mask(
-                            mask.contains(Cw::RED),
-                            mask.contains(Cw::GREEN),
-                            mask.contains(Cw::BLUE),
-                            mask.contains(Cw::ALPHA),
-                        )
-                    };
-                    if let Some(ref blend) = *blend {
-                        unsafe { gl.enable(glow::BLEND) };
-                        if blend.color != blend.alpha {
-                            unsafe {
-                                gl.blend_equation_separate(
-                                    blend.color.equation,
-                                    blend.alpha.equation,
-                                )
-                            };
-                            unsafe {
-                                gl.blend_func_separate(
-                                    blend.color.src,
-                                    blend.color.dst,
-                                    blend.alpha.src,
-                                    blend.alpha.dst,
-                                )
-                            };
-                        } else {
-                            unsafe { gl.blend_equation(blend.color.equation) };
-                            unsafe { gl.blend_func(blend.color.src, blend.color.dst) };
-                        }
-                    } else {
-                        unsafe { gl.disable(glow::BLEND) };
-                    }
+                    unsafe { gl.disable_draw_buffer(glow::BLEND, index) };
                 }
             }
             C::BindBuffer {
@@ -1649,6 +1614,12 @@ impl crate::Queue for super::Queue {
                 }
             }
         }
+        // A draw sets its program's emulated first instance unless the
+        // context draws from a first instance of its own.
+        let emulates_first_instance = !shared
+            .private_caps
+            .contains(PrivateCapabilities::FULLY_FEATURED_INSTANCING);
+        let mut state = self.gl_state.lock();
         for cmd_buf in command_buffers.iter() {
             // The command encoder assumes a default state when encoding the command buffer.
             // Always reset the state between command_buffers to reflect this assumption. Do
@@ -1671,7 +1642,7 @@ impl crate::Queue for super::Queue {
                 }
             }
 
-            let mut state = super::gl_state::GlState::default();
+            state.reset();
             // The program in use: its link is read at its first use, so
             // the GPU process links while the encoders record.
             let mut program = None;
@@ -1679,7 +1650,11 @@ impl crate::Queue for super::Queue {
                 if let C::SetProgram(ref inner) = *command {
                     program = Some(unsafe { inner.linked(gl, &shared.unread_links) });
                 }
-                if !unsafe { state.apply(gl, command) } {
+                let first_instance = program
+                    .as_deref()
+                    .and_then(|program| program.first_instance_location.as_ref())
+                    .filter(|_| emulates_first_instance);
+                if !unsafe { state.apply(gl, command, first_instance) } {
                     unsafe {
                         self.process(
                             gl,

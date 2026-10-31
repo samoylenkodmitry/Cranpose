@@ -14,13 +14,14 @@
 //! everything it holds, after it has made the context agree with the commands
 //! it deferred.
 
-use core::ops::Range;
+use alloc::vec::Vec;
+use core::{fmt, ops::Range};
 
 use glow::HasContext;
 
 use super::{
-    AttributeDesc, Command as C, DepthState, StencilOps, VertexAttribKind, VertexBufferDesc,
-    MAX_TEXTURE_SLOTS, MAX_VERTEX_ATTRIBUTES,
+    AttributeDesc, BlendDesc, ColorTargetDesc, Command as C, DepthState, StencilOps,
+    VertexAttribKind, VertexBufferDesc, MAX_TEXTURE_SLOTS, MAX_VERTEX_ATTRIBUTES,
 };
 
 /// Uniform buffer bindings tracked by slot; a slot above them is bound
@@ -72,8 +73,9 @@ pub(super) struct GlState {
     array_buffer: Option<glow::Buffer>,
     attributes: [Attribute; MAX_VERTEX_ATTRIBUTES],
     /// Attributes an `UnsetVertexAttribute` turned off, which stay enabled
-    /// until a draw or an untracked command needs the context to agree:
-    /// the next pipeline usually enables most of them again.
+    /// until an untracked command or the end of the command buffer needs the
+    /// context to agree: the next pipeline usually enables most of them
+    /// again, and a draw reads none of them (see `apply`).
     pending_disables: u32,
     program: Option<glow::Program>,
     scissor: Option<(i32, i32, i32, i32)>,
@@ -88,13 +90,41 @@ pub(super) struct GlState {
     active_texture: Option<u32>,
     textures: [Option<BoundTexture>; MAX_TEXTURE_SLOTS],
     samplers: [Option<Option<glow::Sampler>>; MAX_TEXTURE_SLOTS],
+    /// The default draw buffer's write mask.
+    color_mask: Option<wgt::ColorWrites>,
+    blend: Option<bool>,
+    /// The color and alpha blend equations.
+    blend_equations: Option<(u32, u32)>,
+    /// The color source and destination factors, then the alpha ones.
+    blend_funcs: Option<[u32; 4]>,
+    element_buffer: Option<glow::Buffer>,
+    /// The base and max levels and the aspects each texture was last bound
+    /// with: state of the texture object, which a bind with the same ones
+    /// need not set again.
+    texture_levels: Vec<(glow::Texture, Range<u32>, crate::FormatAspects)>,
+    /// The first-instance uniform each program last drew with: state of the
+    /// program object.
+    first_instances: Vec<(glow::Program, u32)>,
+}
+
+impl fmt::Debug for GlState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GlState").finish_non_exhaustive()
+    }
 }
 
 impl GlState {
     /// Runs `command` when the tracker owns it and returns `true`; otherwise
     /// makes the context agree with what the tracker deferred, forgets what
     /// the command may change, and returns `false` for the queue to run it.
-    pub(super) unsafe fn apply(&mut self, gl: &glow::Context, command: &C) -> bool {
+    /// `first_instance` is where the program in use takes its emulated first
+    /// instance, which the tracker sets for each draw.
+    pub(super) unsafe fn apply(
+        &mut self,
+        gl: &glow::Context,
+        command: &C,
+        first_instance: Option<&glow::UniformLocation>,
+    ) -> bool {
         match *command {
             C::SetVertexAttribute {
                 buffer: Some(buffer),
@@ -212,22 +242,52 @@ impl GlState {
             },
             // Bindings of other targets and slots, and image units.
             C::BindBuffer { .. } | C::BindImage { .. } => return false,
-            // Draws read the attributes: the deferred disables land first.
-            C::Draw { .. }
-            | C::DrawIndexed { .. }
-            | C::DrawIndirect { .. }
-            | C::DrawIndexedIndirect { .. } => {
-                unsafe { self.disable_pending(gl) };
+            // The queue binds a new index buffer and notes it for its copies.
+            C::SetIndexBuffer(buffer) => {
+                if self.element_buffer == Some(buffer) {
+                    return true;
+                }
+                self.element_buffer = Some(buffer);
+                return false;
+            }
+            C::SetColorTarget {
+                draw_buffer_index: None,
+                desc: ColorTargetDesc { mask, ref blend },
+            } => unsafe { self.set_color_target(gl, mask, blend.as_ref()) },
+            // One draw buffer's own target leaves the default one unknown.
+            C::SetColorTarget {
+                draw_buffer_index: Some(_),
+                ..
+            } => {
+                self.color_mask = None;
+                self.blend = None;
+                self.blend_equations = None;
+                self.blend_funcs = None;
+                return false;
+            }
+            // A draw's program reads only the attributes its pipeline pointed,
+            // so the deferred disables wait: GL and WebGL fetch and range-check
+            // only the attributes a program reads, and an attribute left
+            // enabled keeps the live buffer it was pointed at.
+            C::Draw { first_instance: value, .. } | C::DrawIndexed { first_instance: value, .. } => {
+                if let Some(location) = first_instance {
+                    unsafe { self.set_first_instance(gl, location, value) };
+                }
+                return false;
+            }
+            // The queue sets the first instance of an indirect draw to 0.
+            C::DrawIndirect { .. } | C::DrawIndexedIndirect { .. } => {
+                if let Some(program) = self.program {
+                    self.first_instances.retain(|&(held, _)| held != program);
+                }
                 return false;
             }
             // State the tracker holds none of.
-            C::SetIndexBuffer(_)
-            | C::SetViewport { .. }
+            C::SetViewport { .. }
             | C::SetDepthBias(_)
             | C::SetAlphaToCoverage(_)
             | C::SetPrimitive(_)
             | C::SetBlendConstant(_)
-            | C::SetColorTarget { .. }
             | C::SetImmediates { .. }
             | C::SetClipDistances { .. }
             | C::InsertDebugMarker(_)
@@ -247,9 +307,23 @@ impl GlState {
         unsafe { self.disable_pending(gl) };
     }
 
+    /// Forgets everything, as a new command buffer starts with the context
+    /// in an unknown state, and keeps the lists' storage.
+    pub(super) fn reset(&mut self) {
+        let mut texture_levels = core::mem::take(&mut self.texture_levels);
+        let mut first_instances = core::mem::take(&mut self.first_instances);
+        texture_levels.clear();
+        first_instances.clear();
+        *self = Self {
+            texture_levels,
+            first_instances,
+            ..Self::default()
+        };
+    }
+
     unsafe fn forget(&mut self, gl: &glow::Context) {
         unsafe { self.disable_pending(gl) };
-        *self = Self::default();
+        self.reset();
     }
 
     unsafe fn disable_pending(&mut self, gl: &glow::Context) {
@@ -339,6 +413,15 @@ impl GlState {
             ref mip_levels,
         } = bound;
         unsafe { gl.bind_texture(target, Some(texture)) };
+        let levels = (texture, mip_levels.clone(), aspects);
+        match self.texture_levels.iter_mut().find(|(held, ..)| *held == texture) {
+            Some(held) if *held == levels => {
+                self.textures[slot as usize] = Some(bound);
+                return;
+            }
+            Some(held) => *held = levels,
+            None => self.texture_levels.push(levels),
+        }
         unsafe { gl.tex_parameter_i32(target, glow::TEXTURE_BASE_LEVEL, mip_levels.start as i32) };
         unsafe {
             gl.tex_parameter_i32(target, glow::TEXTURE_MAX_LEVEL, (mip_levels.end - 1) as i32)
@@ -365,6 +448,74 @@ impl GlState {
             }
         }
         self.textures[slot as usize] = Some(bound);
+    }
+
+    /// Sets the default draw buffer's write mask and blend, each part only
+    /// where it changes. One equation or pair of factors for both color and
+    /// alpha takes the call that sets both.
+    unsafe fn set_color_target(
+        &mut self,
+        gl: &glow::Context,
+        mask: wgt::ColorWrites,
+        blend: Option<&BlendDesc>,
+    ) {
+        use wgt::ColorWrites as Cw;
+        if self.color_mask != Some(mask) {
+            unsafe {
+                gl.color_mask(
+                    mask.contains(Cw::RED),
+                    mask.contains(Cw::GREEN),
+                    mask.contains(Cw::BLUE),
+                    mask.contains(Cw::ALPHA),
+                )
+            };
+            self.color_mask = Some(mask);
+        }
+        unsafe { Self::toggle(gl, &mut self.blend, glow::BLEND, blend.is_some()) };
+        let Some(blend) = blend else {
+            return;
+        };
+        let equations = (blend.color.equation, blend.alpha.equation);
+        if self.blend_equations != Some(equations) {
+            if equations.0 == equations.1 {
+                unsafe { gl.blend_equation(equations.0) };
+            } else {
+                unsafe { gl.blend_equation_separate(equations.0, equations.1) };
+            }
+            self.blend_equations = Some(equations);
+        }
+        let funcs = [
+            blend.color.src,
+            blend.color.dst,
+            blend.alpha.src,
+            blend.alpha.dst,
+        ];
+        if self.blend_funcs != Some(funcs) {
+            if funcs[..2] == funcs[2..] {
+                unsafe { gl.blend_func(funcs[0], funcs[1]) };
+            } else {
+                unsafe { gl.blend_func_separate(funcs[0], funcs[1], funcs[2], funcs[3]) };
+            }
+            self.blend_funcs = Some(funcs);
+        }
+    }
+
+    /// Sets the emulated first instance of the program in use at `location`,
+    /// unless that program already holds `value`.
+    unsafe fn set_first_instance(
+        &mut self,
+        gl: &glow::Context,
+        location: &glow::UniformLocation,
+        value: u32,
+    ) {
+        if let Some(program) = self.program {
+            match self.first_instances.iter_mut().find(|(held, _)| *held == program) {
+                Some((_, held)) if *held == value => return,
+                Some((_, held)) => *held = value,
+                None => self.first_instances.push((program, value)),
+            }
+        }
+        unsafe { gl.uniform_1_u32(Some(location), value) };
     }
 
     unsafe fn toggle(gl: &glow::Context, known: &mut Option<bool>, capability: u32, on: bool) {
