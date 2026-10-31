@@ -7,7 +7,7 @@ use super::{
     CapturedCompositionContext, Composer, ComposerRuntimeState, SubcomposeFrame, SubcomposeSite,
     SubcomposeStackGuard, take_subcompose_frame,
 };
-use crate::{NodeError, NodeId, RecomposeScope, SlotsHost, runtime};
+use crate::{ApplierHost, NodeError, NodeId, RecomposeScope, SlotsHost, runtime};
 
 /// Subcomposes `f` into `slots` at `site`, with the runtime state the host
 /// holds or, for a host without one, `fallback_state`'s. See
@@ -57,4 +57,24 @@ pub(super) fn subcompose_slot_at<R>(
     };
     site.flush(commands, compact_applier, side_effects)?;
     Ok((result, frame.scopes))
+}
+
+// The runtime state of a slot that a measure composes: the state of the
+// composition that composed the slot's owner, so pausable content in the
+// slot waits on that composition's frame budget and resumes in its passes;
+// for an owner that left, a new state bound to `applier`.
+pub(super) fn measure_slot_state(
+    applier: &Rc<dyn ApplierHost>,
+    context: &CapturedCompositionContext,
+) -> Rc<ComposerRuntimeState> {
+    context
+        .owner_scope
+        .as_ref()
+        .and_then(RecomposeScope::upgrade)
+        .and_then(|owner| owner.slots_runtime_state())
+        .unwrap_or_else(|| {
+            let state = Rc::new(ComposerRuntimeState::default());
+            state.bind_applier_host(applier);
+            state
+        })
 }

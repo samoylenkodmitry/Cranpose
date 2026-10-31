@@ -83,6 +83,9 @@ where
             return;
         };
         let viewport_size = self.surfaces[0].viewport_size();
+        // Content that a measure composes, as `BoxWithConstraints` composes
+        // its content, composes across frames on the frame's budget.
+        let _layout_budget = self.app.composition.open_layout_budget();
         let handle = self.app.composition.runtime_handle();
         let mut applier = self.app.composition.applier_mut();
         applier.set_runtime_handle(handle);

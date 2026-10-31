@@ -26,7 +26,7 @@ mod subcompose_slot;
 
 pub use composable_group::{ComposableGroup, ParameterChange};
 pub(crate) use runtime_state::ComposerRuntimeState;
-use subcompose_slot::subcompose_slot_at;
+use subcompose_slot::{measure_slot_state, subcompose_slot_at};
 
 /// A typed reference to a value stored in a slot, made by `Composer::use_value_slot`. It is valid
 /// for the composition pass that made it, and `Composer::with_slot_value` reads through it.
@@ -2001,11 +2001,7 @@ impl Composer {
             phase: crate::Phase::Measure,
             locals_changed: false,
         };
-        let new_state = || {
-            let state = Rc::new(ComposerRuntimeState::default());
-            state.bind_applier_host(applier);
-            state
-        };
+        let new_state = || measure_slot_state(applier, context);
         subcompose_slot_at(site, new_state, slots, Some(root), context, f)
     }
 
