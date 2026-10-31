@@ -606,10 +606,7 @@ fn the_scheme_tells_the_selection_menu_which_ink_its_surface_needs() {
         let sink = Rc::clone(&seen);
         let mut content = move || sink.set(Some(cranpose_ui::local_on_light_surface().current()));
         run_test_composition(move || {
-            LiquidTheme(
-                LiquidThemeSpec::system(scheme, Color::from_rgb_u8(0, 122, 255)),
-                &mut content,
-            );
+            LiquidTheme(LiquidThemeSpec::system(scheme), &mut content);
         });
         assert_eq!(seen.get(), Some(on_light), "{scheme:?}");
     }

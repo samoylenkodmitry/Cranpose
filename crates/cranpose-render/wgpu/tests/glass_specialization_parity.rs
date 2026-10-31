@@ -66,16 +66,13 @@ fn star_field(scope: &mut dyn DrawScope) {
 
 /// `content` over the star field, in the dark Liquid theme.
 fn night_sky(content: impl FnMut() + 'static) {
-    LiquidTheme(
-        LiquidThemeSpec::system(SchemeMode::Dark, Color::from_rgb_u8(0, 122, 255)),
-        move || {
-            Box(
-                Modifier::empty().fill_max_size().draw_behind(star_field),
-                BoxSpec::default(),
-                content,
-            );
-        },
-    );
+    LiquidTheme(LiquidThemeSpec::system(SchemeMode::Dark), move || {
+        Box(
+            Modifier::empty().fill_max_size().draw_behind(star_field),
+            BoxSpec::default(),
+            content,
+        );
+    });
 }
 
 #[composable]

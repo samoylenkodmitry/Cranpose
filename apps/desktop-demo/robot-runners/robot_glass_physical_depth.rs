@@ -171,7 +171,7 @@ pub(crate) fn main() -> ExitCode {
 #[cranpose::composable]
 fn ProbeApp() {
     LiquidTheme(
-        LiquidThemeSpec::system(SchemeMode::Dark, Color::from_rgb_u8(0, 122, 255)),
+        LiquidThemeSpec::system(SchemeMode::Dark),
         || {
             CBox(
                 Modifier::empty()

@@ -47,7 +47,7 @@ pub(crate) fn main() -> anyhow::Result<()> {
             robot.exit().expect("exit");
         })
         .try_run(|| {
-            LiquidTheme(LiquidThemeSpec::system(SchemeMode::Dark, Color::from_rgb_u8(0, 122, 255)), || {
+            LiquidTheme(LiquidThemeSpec::system(SchemeMode::Dark), || {
                 let value = rememberMutableStateOf(|| 0.5);
                 VALUE.set(Some(value));
                 Box(Modifier::empty().fill_max_size().background(Color::BLACK), BoxSpec::default(), move || {

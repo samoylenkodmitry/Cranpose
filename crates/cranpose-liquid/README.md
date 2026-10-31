@@ -36,6 +36,10 @@ or `LiquidPalette::Custom(colors)`. The system palette defaults to
 their own `is_dark` value. `LiquidTheme` applies accessibility settings to both
 sources and configures text-selection appearance from the resulting palette.
 
+Use `LiquidThemeSpec::system(SchemeMode::Dark)` for a generated palette with the
+default accent. Use `LiquidThemeSpec::system_with_accent(scheme, accent)` when
+choosing an accent color.
+
 ```rust
 use cranpose_liquid::prelude::*;
 use cranpose_ui_graphics::Color;

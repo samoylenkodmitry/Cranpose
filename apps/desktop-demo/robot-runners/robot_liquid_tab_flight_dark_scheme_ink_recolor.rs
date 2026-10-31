@@ -162,7 +162,7 @@ pub(crate) fn main() -> ExitCode {
         })
         .try_run(move || {
             LiquidTheme(
-                LiquidThemeSpec::system(SchemeMode::Dark, ACCENT),
+                LiquidThemeSpec::system_with_accent(SchemeMode::Dark, ACCENT),
                 || {
                     CBox(
                         Modifier::empty()

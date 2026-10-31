@@ -303,8 +303,13 @@ pub struct LiquidThemeSpec {
 }
 
 impl LiquidThemeSpec {
-    /// Uses generated system colors with the default typography and glass strength.
-    pub fn system(scheme: SchemeMode, accent: Color) -> Self {
+    /// Uses generated colors with the default accent, typography and glass strength.
+    pub fn system(scheme: SchemeMode) -> Self {
+        Self::system_with_accent(scheme, DEFAULT_ACCENT)
+    }
+
+    /// Uses generated colors with an explicit accent and default typography and glass strength.
+    pub fn system_with_accent(scheme: SchemeMode, accent: Color) -> Self {
         Self {
             palette: LiquidPalette::System { scheme, accent },
             typography: LiquidTypography::default(),
