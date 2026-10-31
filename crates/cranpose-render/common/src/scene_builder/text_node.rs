@@ -7,9 +7,10 @@ use cranpose_ui::{
 };
 
 use super::{
-    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer,
-    apply_translated_container_state, hit_test_from_slices, modifier_slices_have_origin_sinks,
-    read_node_data, translate_bail, translate_layer_from_data, translated_container,
+    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
+    hit_test_from_slices, modifier_slices_have_origin_sinks, read_node_data, translate_bail,
+    translate_layer::{apply_translated_container_state, translate_layer_from_data},
+    translated_container,
 };
 use crate::{
     NodeUpdate,
@@ -58,7 +59,14 @@ pub(super) fn translate_unwrapped(
     {
         return done;
     }
-    translate_layer_from_data(applier, container, dirty_nodes, ancestors, data, false)
+    translate_layer_from_data(
+        applier,
+        container,
+        dirty_nodes,
+        ancestors,
+        data,
+        Wrapping::Bare,
+    )
 }
 
 // Brings `container`, the layer of a leaf that drew its node's text and
@@ -73,25 +81,19 @@ pub(super) fn translate_leaf_text(
 ) -> Option<bool> {
     let slices = &data.modifier_slices;
     let leaf = data.children.is_empty() && !data.window_root && slices.draw_commands().is_empty();
-    if !leaf || !slices.has_text() || drawn_text(container).is_none() {
+    if !leaf || !slices.has_text() || drawn_text(&mut container.children).is_none() {
         return None;
     }
     let layout_state = &data.layout_state;
     let TranslatedContainer {
         node_id,
         node_bounds,
-    } = match translated_container(
-        container,
-        layout_state,
-        slices,
-        ancestors.inherited_motion_context_animated,
-        false,
-    ) {
+    } = match translated_container(container, layout_state, slices, ancestors, Wrapping::Bare) {
         Ok(plan) => plan,
         Err(reason) => return Some(translate_bail(reason)),
     };
     let parts = TextNodeParts::of(node_id, slices, layout_state.size());
-    if !refresh_text_node(drawn_text(container)?, &parts) {
+    if !refresh_text_node(drawn_text(&mut container.children)?, &parts) {
         return None;
     }
     container.node_bounds = node_bounds;
@@ -128,19 +130,23 @@ pub(super) fn retext_kept_leaf(
 
 // Whether `layer` drew its node's text and nothing else.
 pub(super) fn draws_text_alone(layer: &LayerNode) -> bool {
-    layer.wraps.is_none()
-        && matches!(
-            layer.children.as_slice(),
-            [RenderNode::Primitive(PrimitiveEntry {
-                phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(_),
-            })]
-        )
+    layer.wraps.is_none() && text_alone(&layer.children)
 }
 
-// The text `layer` drew, when it drew that and nothing else.
-fn drawn_text(layer: &mut LayerNode) -> Option<&mut TextPrimitiveNode> {
-    match layer.children.as_mut_slice() {
+// Whether `nodes`, what a node drew, are its text and nothing else.
+pub(super) fn text_alone(nodes: &[RenderNode]) -> bool {
+    matches!(
+        nodes,
+        [RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(_),
+        })]
+    )
+}
+
+// The text in `nodes`, what a node drew, when it drew that and nothing else.
+pub(super) fn drawn_text(nodes: &mut [RenderNode]) -> Option<&mut TextPrimitiveNode> {
+    match nodes {
         [
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -180,7 +186,7 @@ pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiv
 // a text and style that stay keep their paint, and only the box, the clip
 // and the lines change. False, leaving `drawn` as it was, when the node
 // draws no text now.
-fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: &TextNodeParts) -> bool {
+pub(super) fn refresh_text_node(drawn: &mut TextPrimitiveNode, parts: &TextNodeParts) -> bool {
     let Some(prepared) = parts.measured_layout.as_ref() else {
         return false;
     };

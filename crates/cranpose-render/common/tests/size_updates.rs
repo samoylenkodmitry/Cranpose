@@ -22,16 +22,30 @@ const BAR: Color = Color(0.4, 0.6, 1.0, 1.0);
 /// Every rectangle the layer and its descendants draw, in draw order, with
 /// its bounds in the scene.
 fn drawn(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<(Rect, DrawPrimitive)>) {
-    let transform = layer.transform_to_parent.then(parent);
+    drawn_nodes(&layer.children, layer.transform_to_parent.then(parent), out);
+}
+
+fn drawn_nodes(
+    nodes: &[RenderNode],
+    transform: ProjectiveTransform,
+    out: &mut Vec<(Rect, DrawPrimitive)>,
+) {
     let push = |out: &mut Vec<_>, primitive: DrawPrimitive| {
         if let DrawPrimitive::Rect { rect, .. } | DrawPrimitive::RoundRect { rect, .. } = &primitive
         {
             out.push((transform.bounds_for_rect(*rect), primitive));
         }
     };
-    for child in &layer.children {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => drawn(child, transform, out),
+            RenderNode::Inline(inline) => {
+                drawn_nodes(
+                    &inline.content,
+                    inline.transform_to_parent().then(transform),
+                    out,
+                );
+            }
             RenderNode::DrawRun(run) => run.primitives().for_each(|primitive| push(out, primitive)),
             RenderNode::Primitive(entry) => {
                 if let PrimitiveNode::Draw(draw) = &entry.node {
@@ -122,9 +136,20 @@ type DrawnText = (String, Rect, Option<Rect>, f32, TextPaint);
 
 fn texts(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<DrawnText>) {
     let transform = layer.transform_to_parent.then(parent);
-    for child in &layer.children {
+    nodes_texts(&layer.children, transform, out);
+}
+
+fn nodes_texts(nodes: &[RenderNode], transform: ProjectiveTransform, out: &mut Vec<DrawnText>) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => texts(child, transform, out),
+            RenderNode::Inline(inline) => {
+                nodes_texts(
+                    &inline.content,
+                    inline.transform_to_parent().then(transform),
+                    out,
+                );
+            }
             RenderNode::Primitive(entry) => {
                 if let PrimitiveNode::Text(text) = &entry.node {
                     out.push((

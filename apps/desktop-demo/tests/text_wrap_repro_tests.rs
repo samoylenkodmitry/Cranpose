@@ -25,7 +25,11 @@ fn find_box<'a>(node: &'a LayoutBox, needle: &str) -> Option<&'a LayoutBox> {
 }
 
 fn find_painted<'a>(layer: &'a LayerNode, needle: &str) -> Option<&'a TextPrimitiveNode> {
-    for child in &layer.children {
+    find_painted_in(&layer.children, needle)
+}
+
+fn find_painted_in<'a>(nodes: &'a [RenderNode], needle: &str) -> Option<&'a TextPrimitiveNode> {
+    for child in nodes {
         match child {
             RenderNode::Primitive(primitive) => {
                 if let PrimitiveNode::Text(text) = &primitive.node {
@@ -36,6 +40,11 @@ fn find_painted<'a>(layer: &'a LayerNode, needle: &str) -> Option<&'a TextPrimit
             }
             RenderNode::Layer(child_layer) => {
                 if let Some(found) = find_painted(child_layer, needle) {
+                    return Some(found);
+                }
+            }
+            RenderNode::Inline(inline) => {
+                if let Some(found) = find_painted_in(&inline.content, needle) {
                     return Some(found);
                 }
             }

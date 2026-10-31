@@ -3,7 +3,7 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    graph::{LayerChange, LayerNode, ProjectiveTransform},
+    graph::{InlineNode, LayerChange, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
     text_glyphs::{casts_shadow, lines_part},
@@ -273,6 +273,57 @@ pub(crate) struct PassedDown {
     pub translated: bool,
 }
 
+// A node of the graph a scene keeps a record of: a layer with its subtree,
+// or a node drawn in its parent's layer.
+#[derive(Clone, Copy)]
+pub(crate) enum Subtree<'a> {
+    Layer(&'a LayerNode),
+    Inline(&'a InlineNode),
+}
+
+impl<'a> Subtree<'a> {
+    // The node `child`, a child of a layer, draws, when it draws one.
+    pub(crate) fn of_child(child: &'a RenderNode) -> Option<Self> {
+        match child {
+            RenderNode::Layer(layer) => Some(Self::Layer(layer)),
+            RenderNode::Inline(inline) => Some(Self::Inline(inline)),
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
+        }
+    }
+
+    // The node and the node whose outer draws it wraps.
+    pub(crate) fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
+        match self {
+            Self::Layer(layer) => (layer.node_id, layer.wraps),
+            Self::Inline(inline) => (Some(inline.node_id), None),
+        }
+    }
+
+    // The change number, which covers the subtree.
+    pub(crate) fn change(self) -> LayerChange {
+        match self {
+            Self::Layer(layer) => layer.change,
+            Self::Inline(inline) => inline.change,
+        }
+    }
+
+    // The node's own change number, which a change beneath it leaves.
+    pub(crate) fn own_change(self) -> LayerChange {
+        match self {
+            Self::Layer(layer) => layer.own_change,
+            Self::Inline(inline) => inline.change,
+        }
+    }
+
+    // The node's placement in its parent's layer.
+    pub(crate) fn transform_to_parent(self) -> ProjectiveTransform {
+        match self {
+            Self::Layer(layer) => layer.transform_to_parent,
+            Self::Inline(inline) => inline.transform_to_parent(),
+        }
+    }
+}
+
 /// The items a layer's subtree pushed into a scene, in a run of each list,
 /// so the next scene can copy them when nothing they depend on changed.
 #[derive(Clone, Copy)]
@@ -354,16 +405,16 @@ impl RasterScene {
         }
     }
 
-    /// Opens the record of `layer`'s subtree, whose items come next, and
-    /// returns its index for [`Self::close_subtree`].
-    pub(crate) fn open_subtree(&mut self, layer: &LayerNode) -> usize {
+    /// Opens the record of `subtree`, whose items come next, and returns its
+    /// index for [`Self::close_subtree`].
+    pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
         let index = self.subtrees.len();
         let counts = self.counts();
         self.subtrees.push(SubtreeItems {
-            identity: (layer.node_id, layer.wraps),
-            change: layer.change,
-            own_change: layer.own_change,
-            transform: layer.transform_to_parent,
+            identity: subtree.identity(),
+            change: subtree.change(),
+            own_change: subtree.own_change(),
+            transform: subtree.transform_to_parent(),
             passed_down: None,
             end: index + 1,
             start: counts,

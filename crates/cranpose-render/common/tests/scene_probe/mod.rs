@@ -92,9 +92,14 @@ pub(crate) fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> Re
 }
 
 pub(crate) fn painted_solid_rect_colors(layer: &LayerNode, colors: &mut Vec<Color>) {
-    for child in &layer.children {
+    nodes_solid_rect_colors(&layer.children, colors);
+}
+
+fn nodes_solid_rect_colors(nodes: &[RenderNode], colors: &mut Vec<Color>) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => painted_solid_rect_colors(child, colors),
+            RenderNode::Inline(inline) => nodes_solid_rect_colors(&inline.content, colors),
             RenderNode::DrawRun(run) => {
                 for primitive in run.primitives() {
                     if let DrawPrimitive::Rect {

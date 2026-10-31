@@ -6,7 +6,8 @@ use cranpose_ui_graphics::{
 
 use crate::{
     graph::{
-        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+        InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+        RenderNode,
     },
     layer_composition::{layer_composite_params, local_content_layer_for},
     raster_cache::LayerRasterCacheHashes,
@@ -17,6 +18,16 @@ pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHa
         target_content: finish_hash(|state| hash_layer_target_content(layer, state)),
         effect: hash_optional_render_effect(layer.effect()),
     }
+}
+
+// The hash of what `inline` draws, in its own space.
+pub(crate) fn inline_content_hash(inline: &InlineNode) -> u64 {
+    finish_hash(|state| {
+        inline.content.len().hash(state);
+        for node in &inline.content {
+            hash_child(node, None, state);
+        }
+    })
 }
 
 pub(crate) fn layer_motion_source_content_hash(layer: &LayerNode) -> u64 {
@@ -53,25 +64,44 @@ fn hash_layer_content<H: Hasher>(
         .translated_content_context
         .then_some(layer.translated_content_offset);
     for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                0u8.hash(state);
-                hash_primitive_entry(primitive, state);
+        hash_child(child, translated_content_offset, state);
+    }
+}
+
+fn hash_child<H: Hasher>(
+    child: &RenderNode,
+    parent_translated_content_offset: Option<Point>,
+    state: &mut H,
+) {
+    match child {
+        RenderNode::Primitive(primitive) => {
+            0u8.hash(state);
+            hash_primitive_entry(primitive, state);
+        }
+        RenderNode::DrawRun(run) => {
+            2u8.hash(state);
+            match run.phase {
+                PrimitivePhase::BeforeChildren => 0u8.hash(state),
+                PrimitivePhase::AfterChildren => 1u8.hash(state),
             }
-            RenderNode::DrawRun(run) => {
-                2u8.hash(state);
-                match run.phase {
-                    PrimitivePhase::BeforeChildren => 0u8.hash(state),
-                    PrimitivePhase::AfterChildren => 1u8.hash(state),
-                }
-                run.recording.fingerprint().hash(state);
-                run.segments.start.hash(state);
-                run.segments.end.hash(state);
-            }
-            RenderNode::Layer(child_layer) => {
-                1u8.hash(state);
-                hash_child_layer_contribution(child_layer, translated_content_offset, state);
-            }
+            run.recording.fingerprint().hash(state);
+            run.segments.start.hash(state);
+            run.segments.end.hash(state);
+        }
+        RenderNode::Layer(child_layer) => {
+            1u8.hash(state);
+            hash_child_layer_contribution(child_layer, parent_translated_content_offset, state);
+        }
+        RenderNode::Inline(inline) => {
+            3u8.hash(state);
+            let offset = parent_translated_content_offset.unwrap_or_default();
+            hash_point(
+                Point::new(inline.origin.x - offset.x, inline.origin.y - offset.y),
+                state,
+            );
+            inline.node_rect().render_hash().hash(state);
+            inline.motion_context_animated.hash(state);
+            inline.content_hash().hash(state);
         }
     }
 }

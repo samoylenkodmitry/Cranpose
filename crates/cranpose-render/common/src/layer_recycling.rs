@@ -3,7 +3,9 @@
 //! frees whatever it did not take when it ends, so nothing is held between
 //! frames.
 
-use crate::graph::{LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode};
+use crate::graph::{
+    InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode,
+};
 
 #[derive(Default)]
 #[expect(
@@ -12,6 +14,7 @@ use crate::graph::{LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPri
 )]
 pub(crate) struct Pool {
     layers: Vec<Box<LayerNode>>,
+    inlines: Vec<Box<InlineNode>>,
     /// Text boxes still holding the text they drew, which the text that
     /// takes one replaces.
     texts: Vec<Box<TextPrimitiveNode>>,
@@ -26,16 +29,30 @@ impl Pool {
     }
 
     fn recycle_children(&mut self, layer: &mut LayerNode) {
-        while let Some(child) = layer.children.pop() {
-            match child {
-                RenderNode::Layer(layer) => self.recycle_layer(layer),
-                RenderNode::Primitive(PrimitiveEntry {
-                    node: PrimitiveNode::Text(text),
-                    ..
-                }) => self.texts.push(text),
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
-            }
+        self.recycle_nodes(&mut layer.children);
+    }
+
+    fn recycle_nodes(&mut self, nodes: &mut Vec<RenderNode>) {
+        while let Some(child) = nodes.pop() {
+            self.recycle_node(child);
         }
+    }
+
+    fn recycle_node(&mut self, node: RenderNode) {
+        match node {
+            RenderNode::Layer(layer) => self.recycle_layer(layer),
+            RenderNode::Inline(inline) => self.recycle_inline(inline),
+            RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Text(text),
+                ..
+            }) => self.texts.push(text),
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+        }
+    }
+
+    fn recycle_inline(&mut self, mut inline: Box<InlineNode>) {
+        self.recycle_nodes(&mut inline.content);
+        self.inlines.push(inline);
     }
 }
 
@@ -70,22 +87,29 @@ pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
     }
     crate::thread_state::with(|state| {
         let mut pool = state.layer_pool.borrow_mut();
-        let mut keep = |child| match child {
-            RenderNode::Primitive(PrimitiveEntry {
-                node: PrimitiveNode::Text(text),
-                ..
-            }) => pool.texts.push(text),
-            RenderNode::Layer(group) => pool.recycle_layer(group),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
-        };
-        children.drain(end..).for_each(&mut keep);
-        children.drain(..first_layer).for_each(keep);
+        children
+            .drain(end..)
+            .for_each(|child| pool.recycle_node(child));
+        children
+            .drain(..first_layer)
+            .for_each(|child| pool.recycle_node(child));
     });
 }
 
-/// Moves `layer`'s box, and every layer box beneath it, into the pool.
-pub(crate) fn recycle(layer: Box<LayerNode>) {
-    crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_layer(layer));
+// Moves the boxes of `node`, a child of a layer, into the pool.
+pub(crate) fn recycle_node(node: RenderNode) {
+    crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_node(node));
+}
+
+// Moves the text boxes of `inline`'s content into the pool, before the
+// content is written again in its emptied list.
+pub(crate) fn recycle_content(inline: &mut InlineNode) {
+    crate::thread_state::with(|state| {
+        state
+            .layer_pool
+            .borrow_mut()
+            .recycle_nodes(&mut inline.content);
+    });
 }
 
 /// Moves an emptied child list into the pool.
@@ -122,6 +146,12 @@ pub(crate) fn layer_box() -> Box<LayerNode> {
         .unwrap_or_default()
 }
 
+// An inline node's box with an empty content list, recycled when the pool
+// has one.
+pub(crate) fn inline_box() -> Option<Box<InlineNode>> {
+    crate::thread_state::with(|state| state.layer_pool.borrow_mut().inlines.pop())
+}
+
 /// `text` in a recycled box when the pool has one.
 pub(crate) fn boxed_text(text: TextPrimitiveNode) -> Box<TextPrimitiveNode> {
     match crate::thread_state::with(|state| state.layer_pool.borrow_mut().texts.pop()) {
@@ -138,6 +168,7 @@ pub(crate) fn release() {
     crate::thread_state::with(|state| {
         let mut pool = state.layer_pool.borrow_mut();
         pool.layers.clear();
+        pool.inlines.clear();
         pool.texts.clear();
         pool.lists.clear();
     });

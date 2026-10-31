@@ -113,9 +113,24 @@ fn update_frame(
 /// Every solid rectangle and text the graph paints, in window space.
 fn painted(layer: &LayerNode, parent: ProjectiveTransform, out: &mut Vec<(Rect, String)>) {
     let transform = layer.transform_to_parent.then(parent);
-    for child in &layer.children {
+    painted_nodes(&layer.children, transform, out);
+}
+
+fn painted_nodes(
+    nodes: &[RenderNode],
+    transform: ProjectiveTransform,
+    out: &mut Vec<(Rect, String)>,
+) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => painted(child, transform, out),
+            RenderNode::Inline(inline) => {
+                painted_nodes(
+                    &inline.content,
+                    inline.transform_to_parent().then(transform),
+                    out,
+                );
+            }
             RenderNode::DrawRun(run) => {
                 out.extend(run.primitives().filter_map(|primitive| match primitive {
                     DrawPrimitive::Rect {

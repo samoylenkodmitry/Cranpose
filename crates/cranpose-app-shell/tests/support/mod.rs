@@ -52,9 +52,20 @@ pub(crate) fn scene_signature(layer: &LayerNode, out: &mut Vec<String>) {
         "layer {:?} {:?} {:?}",
         layer.node_id, layer.local_bounds, layer.transform_to_parent
     ));
-    for child in &layer.children {
+    nodes_signature(&layer.children, out);
+}
+
+fn nodes_signature(nodes: &[RenderNode], out: &mut Vec<String>) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => scene_signature(child, out),
+            RenderNode::Inline(inline) => {
+                out.push(format!(
+                    "inline {:?} {:?} {:?}",
+                    inline.node_id, inline.origin, inline.size
+                ));
+                nodes_signature(&inline.content, out);
+            }
             RenderNode::Primitive(primitive) => match &primitive.node {
                 PrimitiveNode::Draw(draw) => out.push(format!("draw {:?}", draw.primitive)),
                 PrimitiveNode::Text(text) => {

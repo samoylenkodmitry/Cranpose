@@ -1493,10 +1493,21 @@ pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> 
     ) {
         let transform = layer.transform_to_parent.then(parent);
         let alpha = parent_alpha * layer.graphics_layer.get().map_or(1.0, |layer| layer.alpha);
-        for child in &layer.children {
+        collect_nodes(&layer.children, (transform, alpha), out);
+    }
+    fn collect_nodes(
+        nodes: &[cranpose_render_common::graph::RenderNode],
+        (transform, alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
+        out: &mut PaintedRects,
+    ) {
+        for child in nodes {
             match child {
                 cranpose_render_common::graph::RenderNode::Layer(child) => {
                     collect(child, (transform, alpha), out);
+                }
+                cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                    let transform = inline.transform_to_parent().then(transform);
+                    collect_nodes(&inline.content, (transform, alpha), out);
                 }
                 cranpose_render_common::graph::RenderNode::DrawRun(run) => {
                     out.extend(run.primitives().filter_map(|primitive| match primitive {
@@ -4297,7 +4308,14 @@ fn graph_layer_contains_rect_color(
     layer: &cranpose_render_common::graph::LayerNode,
     color: Color,
 ) -> bool {
-    for child in &layer.children {
+    nodes_contain_rect_color(&layer.children, color)
+}
+
+fn nodes_contain_rect_color(
+    nodes: &[cranpose_render_common::graph::RenderNode],
+    color: Color,
+) -> bool {
+    for child in nodes {
         match child {
             cranpose_render_common::graph::RenderNode::Primitive(entry) => {
                 if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node
@@ -4318,6 +4336,11 @@ fn graph_layer_contains_rect_color(
             }
             cranpose_render_common::graph::RenderNode::Layer(inner) => {
                 if graph_layer_contains_rect_color(inner, color) {
+                    return true;
+                }
+            }
+            cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                if nodes_contain_rect_color(&inline.content, color) {
                     return true;
                 }
             }
@@ -5773,63 +5796,76 @@ fn graph_scene_solid_rect_y(
     scene: &cranpose_render_common::graph_scene::Scene,
     color: Color,
 ) -> Option<f32> {
-    fn brush_matches(brush: &Brush, color: Color) -> bool {
-        matches!(brush, Brush::Solid(c) if (c.0 - color.0).abs() < 0.01
-            && (c.1 - color.1).abs() < 0.01
-            && (c.2 - color.2).abs() < 0.01)
-    }
+    let graph = scene.graph.as_ref()?;
+    solid_rect_y_in_layer(&graph.root, 0.0, color)
+}
 
-    fn walk(
-        layer: &cranpose_render_common::graph::LayerNode,
-        offset_y: f32,
-        color: Color,
-    ) -> Option<f32> {
-        let base = offset_y
-            + layer
-                .transform_to_parent
-                .map_point(Point { x: 0.0, y: 0.0 })
-                .y
-            + layer.content_offset.y;
-        for child in &layer.children {
-            match child {
-                cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
-                    if let Some(y) = walk(child_layer, base, color) {
-                        return Some(y);
+fn solid_brush_matches(brush: &Brush, color: Color) -> bool {
+    matches!(brush, Brush::Solid(c) if (c.0 - color.0).abs() < 0.01
+        && (c.1 - color.1).abs() < 0.01
+        && (c.2 - color.2).abs() < 0.01)
+}
+
+fn solid_rect_y_in_layer(
+    layer: &cranpose_render_common::graph::LayerNode,
+    offset_y: f32,
+    color: Color,
+) -> Option<f32> {
+    let base = offset_y
+        + layer
+            .transform_to_parent
+            .map_point(Point { x: 0.0, y: 0.0 })
+            .y
+        + layer.content_offset.y;
+    solid_rect_y_in(&layer.children, base, color)
+}
+
+fn solid_rect_y_in(
+    nodes: &[cranpose_render_common::graph::RenderNode],
+    base: f32,
+    color: Color,
+) -> Option<f32> {
+    for child in nodes {
+        match child {
+            cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
+                if let Some(y) = solid_rect_y_in_layer(child_layer, base, color) {
+                    return Some(y);
+                }
+            }
+            cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                if let Some(y) = solid_rect_y_in(&inline.content, base + inline.origin.y, color) {
+                    return Some(y);
+                }
+            }
+            cranpose_render_common::graph::RenderNode::Primitive(entry) => {
+                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
+                    match &draw.primitive {
+                        DrawPrimitive::Rect { rect, brush, .. }
+                        | DrawPrimitive::RoundRect { rect, brush, .. }
+                            if solid_brush_matches(brush, color) =>
+                        {
+                            return Some(base + rect.y);
+                        }
+                        _ => {}
                     }
                 }
-                cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                    if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
-                        match &draw.primitive {
-                            DrawPrimitive::Rect { rect, brush, .. }
-                            | DrawPrimitive::RoundRect { rect, brush, .. }
-                                if brush_matches(brush, color) =>
-                            {
-                                return Some(base + rect.y);
-                            }
-                            _ => {}
+            }
+            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                for primitive in run.primitives() {
+                    match &primitive {
+                        DrawPrimitive::Rect { rect, brush, .. }
+                        | DrawPrimitive::RoundRect { rect, brush, .. }
+                            if solid_brush_matches(brush, color) =>
+                        {
+                            return Some(base + rect.y);
                         }
-                    }
-                }
-                cranpose_render_common::graph::RenderNode::DrawRun(run) => {
-                    for primitive in run.primitives() {
-                        match &primitive {
-                            DrawPrimitive::Rect { rect, brush, .. }
-                            | DrawPrimitive::RoundRect { rect, brush, .. }
-                                if brush_matches(brush, color) =>
-                            {
-                                return Some(base + rect.y);
-                            }
-                            _ => {}
-                        }
+                        _ => {}
                     }
                 }
             }
         }
-        None
     }
-
-    let graph = scene.graph.as_ref()?;
-    walk(&graph.root, 0.0, color)
+    None
 }
 
 #[test]
@@ -5979,10 +6015,23 @@ fn graph_scene_text_y(
                 .map_point(Point { x: 0.0, y: 0.0 })
                 .y
             + layer.content_offset.y;
-        for child in &layer.children {
+        walk_nodes(&layer.children, base, needle)
+    }
+
+    fn walk_nodes(
+        nodes: &[cranpose_render_common::graph::RenderNode],
+        base: f32,
+        needle: &str,
+    ) -> Option<f32> {
+        for child in nodes {
             match child {
                 cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
                     if let Some(y) = walk(child_layer, base, needle) {
+                        return Some(y);
+                    }
+                }
+                cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                    if let Some(y) = walk_nodes(&inline.content, base + inline.origin.y, needle) {
                         return Some(y);
                     }
                 }
@@ -6061,11 +6110,14 @@ fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
 }
 
 fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -> Vec<String> {
-    fn collect(layer: &cranpose_render_common::graph::LayerNode, out: &mut Vec<String>) {
-        for child in &layer.children {
+    fn collect(nodes: &[cranpose_render_common::graph::RenderNode], out: &mut Vec<String>) {
+        for child in nodes {
             match child {
                 cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
-                    collect(child_layer, out);
+                    collect(&child_layer.children, out);
+                }
+                cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                    collect(&inline.content, out);
                 }
                 cranpose_render_common::graph::RenderNode::Primitive(entry) => {
                     if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node {
@@ -6079,7 +6131,7 @@ fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -
 
     let mut values = Vec::new();
     if let Some(graph) = &scene.graph {
-        collect(&graph.root, &mut values);
+        collect(&graph.root.children, &mut values);
     }
     values
 }
@@ -8744,6 +8796,11 @@ fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<
             }
             cranpose_render_common::graph::RenderNode::Layer(layer) => {
                 collect_layer(layer, out);
+            }
+            cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                for child in &inline.content {
+                    collect_node(child, out);
+                }
             }
         }
     }

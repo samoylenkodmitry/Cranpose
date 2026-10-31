@@ -1,7 +1,11 @@
-use cranpose_render_common::graph::PrimitivePhase;
-use cranpose_ui_graphics::{LayerShape, RoundedCornerShape};
+use cranpose_render_common::graph::{DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase};
+use cranpose_ui_graphics::{DrawPrimitive, LayerShape, RoundedCornerShape};
 
-use super::{rounded_clip_corners::RoundedClipCorners, *};
+use super::{
+    layer_motion::{ANIMATED_RASTER_STEPS_PER_OCTAVE, animated_raster_scale},
+    rounded_clip_corners::RoundedClipCorners,
+    *,
+};
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {
@@ -188,12 +192,8 @@ fn rigid_snap_distinguishes_own_draws_from_descendant_text() {
         ),
     ];
     for (children, stationary, translated) in cases {
-        let layer = LayerNode {
-            children,
-            ..Default::default()
-        };
-        assert_eq!(layer_needs_rigid_snap(&layer, false), stationary);
-        assert_eq!(layer_needs_rigid_snap(&layer, true), translated);
+        assert_eq!(content_needs_rigid_snap(&children, false), stationary);
+        assert_eq!(content_needs_rigid_snap(&children, true), translated);
     }
 }
 

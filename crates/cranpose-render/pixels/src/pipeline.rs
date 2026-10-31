@@ -1,35 +1,30 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Brush,
     graph::{
-        LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode,
-        TextPrimitiveNode, for_each_in_draw_order,
+        InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderGraph,
+        RenderNode, TextPrimitiveNode, for_each_in_draw_order,
     },
     graph_scene::RenderDiagnostics,
     hit_graph::collect_hits_from_graph,
     layer_composition::folded_layer_alpha,
-    layer_shadow::{ShadowLight, layer_shadow_geometry},
+    layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
-    primitive_emit::{
-        DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
-        draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
-    },
+    primitive_emit::resolve_clip,
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
 use cranpose_ui::{LayoutBox, text::TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, TransformOrigin, whole,
+    BlendMode, Color, ColorFilter, GraphicsLayer, Point, Rect, RenderEffect, TransformOrigin,
 };
 
 use crate::{
     draw::TextRaster,
-    scene::{ImageDraw, ItemCounts, PassedDown, RasterScene, Scene, TextDraw},
-    style::{
-        apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
-    },
+    scene::{ItemCounts, PassedDown, RasterScene, Scene, Subtree, TextDraw},
+    style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
 
@@ -147,10 +142,9 @@ struct Reuse<'a> {
 }
 
 impl Reuse<'_> {
-    /// The index of `layer`'s old record, at the cursor or one subtree on,
-    /// after a sibling before it went away.
-    fn find(&self, layer: &LayerNode) -> Option<usize> {
-        let identity = (layer.node_id, layer.wraps);
+    /// The index of the old record of the node with `identity`, at the
+    /// cursor or one subtree on, after a sibling before it went away.
+    fn find(&self, identity: (Option<NodeId>, Option<NodeId>)) -> Option<usize> {
         let records = &self.old.subtrees;
         let at = records.get(self.cursor)?;
         if at.identity == identity {
@@ -193,8 +187,8 @@ fn flush_copies(reuse: &mut Option<Reuse<'_>>, scene: &mut RasterScene) {
     }
 }
 
-fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| {
+fn contains_text_primitives(nodes: &[RenderNode]) -> bool {
+    nodes.iter().any(|child| {
         matches!(
             child,
             RenderNode::Primitive(PrimitiveEntry {
@@ -205,8 +199,8 @@ fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
     })
 }
 
-fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| {
+fn contains_draw_primitives(nodes: &[RenderNode]) -> bool {
+    nodes.iter().any(|child| {
         matches!(
             child,
             RenderNode::Primitive(PrimitiveEntry {
@@ -217,10 +211,10 @@ fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
     })
 }
 
-fn layer_needs_rigid_snap(layer: &LayerNode, translated_content_context: bool) -> bool {
+fn content_needs_rigid_snap(nodes: &[RenderNode], translated_content_context: bool) -> bool {
     (translated_content_context
-        && (layer_contains_draw_primitives(layer) || layer_contains_text_primitives(layer)))
-        || (layer_contains_text_primitives(layer) && layer_contains_draw_primitives(layer))
+        && (contains_draw_primitives(nodes) || contains_text_primitives(nodes)))
+        || (contains_text_primitives(nodes) && contains_draw_primitives(nodes))
 }
 
 fn is_render_effect_supported(_effect: &RenderEffect) -> bool {
@@ -246,128 +240,6 @@ fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnos
         log::warn!(
             "Pixels renderer does not support render/backdrop effects or non-SrcOver layer blend modes; falling back to base layer rendering"
         );
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ShadowSample {
-    expansion: f32,
-    weight: f32,
-}
-
-fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
-    if blur_radius <= f32::EPSILON {
-        return Vec::new();
-    }
-
-    let sample_count = (whole::ceil(blur_radius * 2.4) as usize).clamp(8, 36);
-    let sigma = (blur_radius * 0.5).max(1.0);
-    let mut samples = Vec::with_capacity(sample_count);
-    let mut weight_sum = 0.0f32;
-
-    for index in 0..sample_count {
-        let t0 = index as f32 / sample_count as f32;
-        let t1 = (index + 1) as f32 / sample_count as f32;
-        let center = blur_radius * (t0 + t1) * 0.5;
-        let expansion = blur_radius * t1;
-        let weight = (-0.5 * (center / sigma).powi(2)).exp().max(0.0001);
-        samples.push(ShadowSample { expansion, weight });
-        weight_sum += weight;
-    }
-
-    if weight_sum <= f32::EPSILON {
-        return vec![ShadowSample {
-            expansion: blur_radius,
-            weight: 1.0,
-        }];
-    }
-
-    for sample in &mut samples {
-        sample.weight /= weight_sum;
-    }
-
-    samples
-}
-
-fn expanded_shape_rect(shape: &crate::scene::DrawShape, expansion: f32) -> Rect {
-    Rect {
-        x: shape.rect.x - expansion,
-        y: shape.rect.y - expansion,
-        width: (shape.rect.width + expansion * 2.0).max(0.0),
-        height: (shape.rect.height + expansion * 2.0).max(0.0),
-    }
-}
-
-fn push_blurred_shape_samples(
-    scene: &mut RasterScene,
-    shape: &crate::scene::DrawShape,
-    blend_mode: BlendMode,
-    clip: Option<Rect>,
-    blur_radius: f32,
-) {
-    let samples = blur_samples(blur_radius.max(1.0));
-    if samples.is_empty() {
-        scene.push_shape(
-            shape.rect,
-            shape.brush.clone(),
-            shape.outline.rounded(),
-            clip,
-            blend_mode,
-        );
-        return;
-    }
-
-    for sample in samples.iter().rev() {
-        scene.push_shape(
-            expanded_shape_rect(shape, sample.expansion),
-            scale_brush_alpha(shape.brush.clone(), sample.weight),
-            shape.outline.rounded(),
-            clip,
-            blend_mode,
-        );
-    }
-}
-
-fn scale_color_alpha(color: Color, alpha: f32) -> Color {
-    Color(
-        color.r(),
-        color.g(),
-        color.b(),
-        (color.a() * alpha).clamp(0.0, 1.0),
-    )
-}
-
-fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
-    brush.map_colors(|color| scale_color_alpha(color, alpha))
-}
-
-fn push_layer_shadow(
-    scene: &mut RasterScene,
-    layer: &GraphicsLayer,
-    layer_bounds: RasterLayerBounds,
-    transformed_bounds: Rect,
-    clip: Option<Rect>,
-    light: ShadowLight,
-) {
-    if layer.shadow_elevation <= 0.0 {
-        return;
-    }
-    let caster = match layer.shape {
-        LayerShape::Rectangle => None,
-        LayerShape::Rounded(shape) => {
-            let scale = layer_uniform_scale(layer).max(0.1);
-            let resolved = shape.resolve(
-                layer_bounds.local_bounds.width,
-                layer_bounds.local_bounds.height,
-            );
-            Some(RoundedCornerShape::with_radii(scale_corner_radii(
-                resolved, scale,
-            )))
-        }
-    };
-    for (shadow, color) in layer_shadow_geometry(layer, transformed_bounds, caster, light).passes()
-    {
-        scene.push_shadow(shadow, color, clip);
     }
 }
 
@@ -512,10 +384,16 @@ pub(crate) fn build_raster_scene(
 /// scene's storage. The items of each subtree that `previous`, the scene of
 /// the frame before, holds for the same content in the same place are
 /// copied from it.
+mod draw_child;
 mod in_place;
+mod layer_shadow;
 mod space;
 
+#[cfg(test)]
+pub(crate) use draw_child::push_draw_primitive;
+use draw_child::render_draw_child;
 pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
+use layer_shadow::push_layer_shadow;
 use space::{push_seen_surfaces, seen_surfaces};
 
 /// The shadow light of a scene `graph` gives at `scale`.
@@ -545,7 +423,7 @@ pub(crate) fn fill_raster_scene(
         pending: None,
     });
     populate_draws_from_graph(
-        &graph.root,
+        Subtree::Layer(&graph.root),
         scene,
         &RasterTraversalContext {
             parent_transform: &ProjectiveTransform::uniform_scale(scale),
@@ -650,13 +528,11 @@ fn axis_scale(transformed: f32, local: f32) -> f32 {
     }
 }
 
-fn raster_layer_mapping(
+fn layer_raster_mapping(
     layer: &LayerNode,
     transform: &ProjectiveTransform,
     parent_content_style: &ContentStyle,
 ) -> RasterLayerMapping {
-    let transformed_bounds = transform.bounds_for_rect(layer.local_bounds);
-    let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, layer.local_bounds);
     // A draw group's layer copies the paint of the node whose draws it
     // holds, which reaches it here already.
     let content_style = if layer.draw_phase.is_some() {
@@ -664,9 +540,21 @@ fn raster_layer_mapping(
     } else {
         parent_content_style.under(&layer.graphics_layer)
     };
-    let layer_bounds =
-        RasterLayerBounds::from_transformed_bounds(transformed_bounds, layer.local_bounds);
-    let node_rect = layer.node_rect();
+    raster_layer_mapping(
+        (layer.local_bounds, layer.node_rect()),
+        transform,
+        content_style,
+    )
+}
+
+fn raster_layer_mapping(
+    (local_bounds, node_rect): (Rect, Rect),
+    transform: &ProjectiveTransform,
+    content_style: ContentStyle,
+) -> RasterLayerMapping {
+    let transformed_bounds = transform.bounds_for_rect(local_bounds);
+    let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, local_bounds);
+    let layer_bounds = RasterLayerBounds::from_transformed_bounds(transformed_bounds, local_bounds);
     let content_bounds =
         RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(node_rect), node_rect);
 
@@ -729,7 +617,7 @@ fn push_layer_shadow_of(
 /// before's scene when they did not change since, and records them for the
 /// next frame.
 fn populate_draws_from_graph(
-    layer: &LayerNode,
+    subtree: Subtree<'_>,
     scene: &mut RasterScene,
     context: &RasterTraversalContext<'_>,
     reuse: &mut Option<Reuse<'_>>,
@@ -738,13 +626,13 @@ fn populate_draws_from_graph(
     // the layer passed down then.
     let mut before = None;
     if let Some(reuse) = reuse.as_mut()
-        && let Some(index) = reuse.find(layer)
+        && let Some(index) = reuse.find(subtree.identity())
         && let Some(record) = reuse.old.subtrees.get(index)
     {
         // The layer's number covers its subtree, save its placement.
         if context.same_as_before
-            && record.change == layer.change
-            && record.transform == layer.transform_to_parent
+            && record.change == subtree.change()
+            && record.transform == subtree.transform_to_parent()
         {
             let (end, stop) = (record.end, record.stop);
             reuse.cursor = end;
@@ -755,15 +643,18 @@ fn populate_draws_from_graph(
         before = Some((record.end, record.passed_down));
     }
     flush_copies(reuse, scene);
-    let record = scene.open_subtree(layer);
-    push_layer_items(
-        layer,
-        scene,
-        context,
-        record,
-        before.and_then(|(_, passed_down)| passed_down),
-        reuse,
-    );
+    let record = scene.open_subtree(subtree);
+    match subtree {
+        Subtree::Layer(layer) => push_layer_items(
+            layer,
+            scene,
+            context,
+            record,
+            before.and_then(|(_, passed_down)| passed_down),
+            reuse,
+        ),
+        Subtree::Inline(inline) => push_inline_items(inline, scene, context),
+    }
     flush_copies(reuse, scene);
     scene.close_subtree(record);
     if let (Some(reuse), Some((end, _))) = (reuse.as_mut(), before) {
@@ -799,7 +690,7 @@ fn push_layer_surface(
         color_filter: context.parent_content_style.color_filter.clone(),
     };
     let mut items = RasterScene::new();
-    let record = items.open_subtree(layer);
+    let record = items.open_subtree(Subtree::Layer(layer));
     push_layer_items(
         layer,
         &mut items,
@@ -856,7 +747,7 @@ fn push_layer_items(
 ) {
     let diagnostics = context.diagnostics;
     let transform = layer.transform_to_parent.then(*context.parent_transform);
-    let mapping = raster_layer_mapping(layer, &transform, context.parent_content_style);
+    let mapping = layer_raster_mapping(layer, &transform, context.parent_content_style);
     let styled_content_layer;
     let raster_content_layer = if mapping.draws_plain() {
         &PLAIN_CONTENT_LAYER
@@ -916,8 +807,12 @@ fn push_layer_items(
     // Worked out at the first child layer: most layers have none.
     let mut children_same_as_before = None;
     let mut push_child =
-        |child: &RenderNode, scene: &mut RasterScene, reuse: &mut Option<Reuse<'_>>| match child {
-            RenderNode::Layer(child_layer) => {
+        |child: &RenderNode, scene: &mut RasterScene, reuse: &mut Option<Reuse<'_>>| {
+            let Some(subtree) = Subtree::of_child(child) else {
+                flush_copies(reuse, scene);
+                return render_draw_child(scene, child, primitive_context);
+            };
+            if let Subtree::Layer(child_layer) = subtree {
                 if let Some(surfaces) = seen.take_if(|_| child_layer.has_space()) {
                     flush_copies(reuse, scene);
                     push_seen_surfaces(
@@ -930,49 +825,87 @@ fn push_layer_items(
                 if drawn_by_its_scene(child_layer, in_space) {
                     return;
                 }
-                let same_as_before = *children_same_as_before.get_or_insert_with(|| {
-                    let passed_down = PassedDown {
-                        transform,
-                        alpha: mapping.content_style.alpha,
-                        color_filter: mapping.content_style.color_filter.clone(),
-                        clip: visual_clip,
-                        snap_anchor: translated_snap_anchor,
-                        translated: effective_translated_content_context,
-                    };
-                    note_passed_down(
-                        scene,
-                        record,
-                        passed_down,
-                        context,
-                        passed_down_before,
-                        reuse,
-                    )
-                });
-                populate_draws_from_graph(
-                    child_layer,
+            }
+            let same_as_before = *children_same_as_before.get_or_insert_with(|| {
+                let passed_down = PassedDown {
+                    transform,
+                    alpha: mapping.content_style.alpha,
+                    color_filter: mapping.content_style.color_filter.clone(),
+                    clip: visual_clip,
+                    snap_anchor: translated_snap_anchor,
+                    translated: effective_translated_content_context,
+                };
+                note_passed_down(
                     scene,
-                    &RasterTraversalContext {
-                        parent_transform: &transform,
-                        parent_content_style: &mapping.content_style,
-                        parent_visual_clip: visual_clip,
-                        inherited_translated_snap_anchor: translated_snap_anchor,
-                        inherited_translated_content_context: effective_translated_content_context,
-                        diagnostics,
-                        light: context.light,
-                        same_as_before,
-                        text: context.text,
-                        surface_root: false,
-                        in_space,
-                    },
+                    record,
+                    passed_down,
+                    context,
+                    passed_down_before,
                     reuse,
-                );
-            }
-            _ => {
-                flush_copies(reuse, scene);
-                render_draw_child(scene, child, primitive_context);
-            }
+                )
+            });
+            populate_draws_from_graph(
+                subtree,
+                scene,
+                &RasterTraversalContext {
+                    parent_transform: &transform,
+                    parent_content_style: &mapping.content_style,
+                    parent_visual_clip: visual_clip,
+                    inherited_translated_snap_anchor: translated_snap_anchor,
+                    inherited_translated_content_context: effective_translated_content_context,
+                    diagnostics,
+                    light: context.light,
+                    same_as_before,
+                    text: context.text,
+                    surface_root: false,
+                    in_space,
+                },
+                reuse,
+            );
         };
     for_each_in_draw_order(&layer.children, |child| push_child(child, scene, reuse));
+}
+
+// Pushes the content of `inline`, a node drawn in its parent's layer,
+// placed as the walk of its parent's children, `context`, places a child
+// layer that only moves.
+fn push_inline_items(
+    inline: &InlineNode,
+    scene: &mut RasterScene,
+    context: &RasterTraversalContext<'_>,
+) {
+    let transform = inline.transform_to_parent().then(*context.parent_transform);
+    let node_rect = inline.node_rect();
+    let content_style = context.parent_content_style.under(&GraphicsLayer::DEFAULT);
+    let mapping = raster_layer_mapping((node_rect, node_rect), &transform, content_style);
+    if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
+        return;
+    }
+    let styled_content_layer;
+    let raster_content_layer = if mapping.draws_plain() {
+        &PLAIN_CONTENT_LAYER
+    } else {
+        styled_content_layer = mapping.content_layer();
+        &styled_content_layer
+    };
+    let translated = context.inherited_translated_content_context;
+    let layer_snap_anchor = context.inherited_translated_snap_anchor.or_else(|| {
+        ((translated || !inline.motion_context_animated)
+            && content_needs_rigid_snap(&inline.content, translated))
+        .then(|| rigid_snap_anchor(mapping.layer_bounds.raster_rect(), raster_content_layer))
+        .flatten()
+    });
+    let primitive_context = PrimitiveRenderContext {
+        layer_bounds: mapping.content_bounds,
+        node_layer: raster_content_layer,
+        visual_clip: context.parent_visual_clip,
+        motion_context_animated: inline.motion_context_animated,
+        content_offset_translation: translated,
+        layer_snap_anchor,
+    };
+    for_each_in_draw_order(&inline.content, |child| {
+        render_draw_child(scene, child, primitive_context);
+    });
 }
 
 /// The surfaces `layer` draws for the eye of the scene it shows, if it shows
@@ -1030,7 +963,9 @@ fn layer_snap_anchors(
         .inherited_translated_snap_anchor
         .or(boundary_snap_anchor);
     let layer_snap_anchor = translated_snap_anchor.or_else(|| {
-        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
+        if allow_rigid_snap
+            && content_needs_rigid_snap(&layer.children, effective_translated_content_context)
+        {
             rigid_snap_anchor(mapping.layer_bounds.raster_rect(), content_layer)
         } else {
             None
@@ -1054,334 +989,6 @@ fn note_passed_down(
         && before.and_then(|at| reuse.as_ref()?.old.passed_down.get(at)) == Some(&passed_down);
     scene.note_passed_down(record, passed_down);
     same
-}
-
-/// Pushes the items of `child`, a primitive or draw run of a layer.
-fn render_draw_child(
-    scene: &mut RasterScene,
-    child: &RenderNode,
-    context: PrimitiveRenderContext<'_>,
-) {
-    match child {
-        RenderNode::Primitive(primitive) => render_graph_primitive(scene, primitive, context),
-        RenderNode::DrawRun(run) => render_graph_draw_run(scene, run, context),
-        RenderNode::Layer(_) => {}
-    }
-}
-
-fn render_graph_draw_run(
-    scene: &mut RasterScene,
-    run: &cranpose_render_common::graph::DrawRunNode,
-    context: PrimitiveRenderContext<'_>,
-) {
-    let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene.counts();
-    run.for_each_primitive(|primitive| {
-        push_draw_primitive(
-            &primitive,
-            rect,
-            context.node_layer,
-            context.visual_clip,
-            scene,
-            None,
-            context.motion_context_animated || context.content_offset_translation,
-        );
-    });
-    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
-}
-
-fn render_graph_primitive(
-    scene: &mut RasterScene,
-    primitive: &PrimitiveEntry,
-    context: PrimitiveRenderContext<'_>,
-) {
-    let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene.counts();
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            let effective_clip = resolve_primitive_clip(
-                draw.clip,
-                rect,
-                context.node_layer,
-                context.visual_clip,
-                PrimitiveClipSpace::LayerTransformed,
-            );
-            if effective_clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_draw_primitive(
-                &draw.primitive,
-                rect,
-                context.node_layer,
-                effective_clip,
-                scene,
-                None,
-                context.motion_context_animated || context.content_offset_translation,
-            );
-        }
-        PrimitiveNode::Text(text) => {
-            render_graph_text(
-                scene,
-                text,
-                context.layer_bounds,
-                context.node_layer,
-                context.visual_clip,
-            );
-        }
-    }
-    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
-}
-
-// Out of line for the walk's stack, as `push_layer_shadow_of` tells.
-#[inline(never)]
-fn render_graph_text(
-    scene: &mut RasterScene,
-    text: &TextPrimitiveNode,
-    layer_bounds: RasterLayerBounds,
-    node_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-) {
-    let rect = layer_bounds.raster_rect();
-    let text_rect = Rect {
-        x: rect.x + text.rect.x,
-        y: rect.y + text.rect.y,
-        width: text.rect.width,
-        height: text.rect.height,
-    };
-    let text_clip = resolve_primitive_clip(
-        text.clip,
-        rect,
-        node_layer,
-        visual_clip,
-        PrimitiveClipSpace::LayerTransformed,
-    );
-    if text_clip.is_some_and(|clip| clip.is_empty()) {
-        return;
-    }
-
-    let placement = TextPlacement {
-        bounds: rect,
-        text_rect,
-        layer: node_layer,
-        clip: text_clip,
-    };
-    push_text_style_draws(scene, text, placement);
-}
-
-pub(crate) fn push_draw_primitive(
-    primitive: &DrawPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    scene: &mut RasterScene,
-    blend_mode: Option<BlendMode>,
-    motion_context_animated: bool,
-) {
-    struct SceneEmitter<'a> {
-        scene: &'a mut RasterScene,
-    }
-
-    impl DrawPrimitiveSink for SceneEmitter<'_> {
-        fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_params(params);
-        }
-
-        fn push_image(&mut self, params: ImageDrawParams) {
-            self.scene.push_image(ImageDraw {
-                rect: params.rect,
-                snap_anchor: None,
-                image: params.image,
-                alpha: params.alpha,
-                color_filter: params.color_filter,
-                sampling: params.sampling,
-                clip: params.clip,
-                blend_mode: params.blend_mode,
-                src_rect: params.src_rect,
-                transform: None,
-            });
-        }
-
-        fn push_shadow(
-            &mut self,
-            shadow_primitive: &cranpose_ui_graphics::ShadowPrimitive,
-            layer_bounds: Rect,
-            layer: &GraphicsLayer,
-            clip: Option<Rect>,
-        ) {
-            push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
-        }
-
-        fn push_text(&mut self, params: TextDrawParams) {
-            self.scene.push_text(TextDraw {
-                rect: params.rect,
-                snap_anchor: None,
-                text: params.text,
-                layout: params.layout,
-                ink: GlyphInk::Painted,
-                color: params.color,
-                text_style: params.text_style,
-                font_size: params.font_size,
-                scale: params.scale,
-                clip: params.clip,
-            });
-        }
-    }
-
-    let mut emitter = SceneEmitter { scene };
-    emit_draw_primitive(
-        primitive,
-        layer_bounds,
-        layer,
-        clip,
-        &mut emitter,
-        blend_mode,
-        motion_context_animated,
-    );
-}
-
-fn push_shadow_primitive(
-    shadow_prim: &cranpose_ui_graphics::ShadowPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    scene: &mut RasterScene,
-) {
-    fn shape_pair_for_primitive(
-        prim: &DrawPrimitive,
-        layer_bounds: Rect,
-        layer: &GraphicsLayer,
-        blend_mode: BlendMode,
-    ) -> Option<(crate::scene::DrawShape, BlendMode)> {
-        let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
-        let blend_mode = params.blend_mode;
-        Some((crate::scene::DrawShape::of_params(params), blend_mode))
-    }
-
-    match shadow_prim {
-        cranpose_ui_graphics::ShadowPrimitive::Drop {
-            shape,
-            cutout,
-            blur_radius,
-            blend_mode,
-        } => {
-            let Some(shape_pair) =
-                shape_pair_for_primitive(shape, layer_bounds, layer, *blend_mode)
-            else {
-                return;
-            };
-            let cutout_pair = match cutout {
-                Some(cutout) => {
-                    let Some(pair) =
-                        shape_pair_for_primitive(cutout, layer_bounds, layer, BlendMode::DstOut)
-                    else {
-                        return;
-                    };
-                    Some(pair)
-                }
-                None => None,
-            };
-            let Some(cutout_pair) = cutout_pair else {
-                push_blurred_shape_samples(scene, &shape_pair.0, shape_pair.1, clip, *blur_radius);
-                return;
-            };
-            let samples = blur_samples(blur_radius.max(1.0));
-            if samples.is_empty() {
-                scene.push_shape(
-                    shape_pair.0.rect,
-                    shape_pair.0.brush,
-                    shape_pair.0.outline.rounded(),
-                    clip,
-                    shape_pair.1,
-                );
-                scene.push_shape(
-                    cutout_pair.0.rect,
-                    cutout_pair.0.brush,
-                    cutout_pair.0.outline.rounded(),
-                    clip,
-                    cutout_pair.1,
-                );
-                return;
-            }
-            for sample in samples.iter().rev() {
-                scene.push_shape(
-                    expanded_shape_rect(&shape_pair.0, sample.expansion),
-                    scale_brush_alpha(shape_pair.0.brush.clone(), sample.weight),
-                    shape_pair.0.outline.rounded(),
-                    clip,
-                    shape_pair.1,
-                );
-                scene.push_shape(
-                    expanded_shape_rect(&cutout_pair.0, sample.expansion),
-                    scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
-                    cutout_pair.0.outline.rounded(),
-                    clip,
-                    cutout_pair.1,
-                );
-            }
-        }
-        cranpose_ui_graphics::ShadowPrimitive::Inner {
-            fill,
-            cutout,
-            blur_radius,
-            blend_mode,
-            clip_rect,
-        } => {
-            let Some(fill_pair) = shape_pair_for_primitive(fill, layer_bounds, layer, *blend_mode)
-            else {
-                return;
-            };
-            let Some(cutout_pair) =
-                shape_pair_for_primitive(cutout, layer_bounds, layer, BlendMode::DstOut)
-            else {
-                return;
-            };
-            let abs_clip = Rect {
-                x: clip_rect.x + layer_bounds.x,
-                y: clip_rect.y + layer_bounds.y,
-                width: clip_rect.width,
-                height: clip_rect.height,
-            };
-            let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
-            let effective_clip = clip.map_or(Some(transformed_clip), |parent_clip| {
-                parent_clip.intersect(transformed_clip)
-            });
-            let samples = blur_samples(blur_radius.max(1.0));
-            if samples.is_empty() {
-                scene.push_shape(
-                    fill_pair.0.rect,
-                    fill_pair.0.brush,
-                    fill_pair.0.outline.rounded(),
-                    effective_clip,
-                    fill_pair.1,
-                );
-                scene.push_shape(
-                    cutout_pair.0.rect,
-                    cutout_pair.0.brush,
-                    cutout_pair.0.outline.rounded(),
-                    effective_clip,
-                    cutout_pair.1,
-                );
-                return;
-            }
-
-            for sample in samples.iter().rev() {
-                scene.push_shape(
-                    expanded_shape_rect(&fill_pair.0, sample.expansion),
-                    scale_brush_alpha(fill_pair.0.brush.clone(), sample.weight),
-                    fill_pair.0.outline.rounded(),
-                    effective_clip,
-                    fill_pair.1,
-                );
-                scene.push_shape(
-                    expanded_shape_rect(&cutout_pair.0, sample.expansion),
-                    scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
-                    cutout_pair.0.outline.rounded(),
-                    effective_clip,
-                    cutout_pair.1,
-                );
-            }
-        }
-    }
 }
 
 #[cfg(test)]

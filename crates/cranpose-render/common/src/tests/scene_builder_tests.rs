@@ -1,18 +1,20 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui::{
-    Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
+    Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
     LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer, Text,
     TextLayoutOptions, TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
 use cranpose_ui_graphics::{
-    Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect,
+    Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, LayerShape, RenderEffect,
 };
 
-use super::{text_node::TEXT_CLIP_PAD, *};
-use crate::graph::{DrawRunNode, TextPrimitiveNode};
+use super::{layer_shape::shape_clip, node_layer::isolation_reasons, text_node::TEXT_CLIP_PAD, *};
+use crate::graph::{
+    DrawRunNode, InlineNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, TextPrimitiveNode,
+};
 
 // Each of `ids` with the update that records it again.
 fn content(ids: &[NodeId]) -> Vec<(NodeId, NodeUpdate)> {
@@ -140,46 +142,45 @@ fn scene_read_keeps_lazy_children_stable_while_the_handle_changes() {
 }
 
 fn find_text_motion(layer: &LayerNode, label: &str) -> Option<Option<TextMotion>> {
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                let PrimitiveNode::Text(text) = &primitive.node else {
-                    continue;
-                };
-                if text.text.text == label {
-                    return Some(text.text_style.paragraph_style.text_motion);
+    fn search(nodes: &[RenderNode], label: &str) -> Option<Option<TextMotion>> {
+        nodes.iter().find_map(|child| match child {
+            RenderNode::Primitive(primitive) => match &primitive.node {
+                PrimitiveNode::Text(text) if text.text.text == label => {
+                    Some(text.text_style.paragraph_style.text_motion)
                 }
-            }
-            RenderNode::Layer(child_layer) => {
-                if let Some(motion) = find_text_motion(child_layer, label) {
-                    return Some(motion);
-                }
-            }
-            RenderNode::DrawRun(_) => {}
-        }
+                _ => None,
+            },
+            RenderNode::Layer(child_layer) => search(&child_layer.children, label),
+            RenderNode::Inline(inline) => search(&inline.content, label),
+            RenderNode::DrawRun(_) => None,
+        })
     }
 
-    None
+    search(&layer.children, label)
 }
 
 fn collect_text_labels(layer: &LayerNode, labels: &mut Vec<String>) {
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                let PrimitiveNode::Text(text) = &primitive.node else {
-                    continue;
-                };
-                labels.push(text.text.text.clone());
+    fn collect(nodes: &[RenderNode], labels: &mut Vec<String>) {
+        for child in nodes {
+            match child {
+                RenderNode::Primitive(primitive) => {
+                    if let PrimitiveNode::Text(text) = &primitive.node {
+                        labels.push(text.text.text.clone());
+                    }
+                }
+                RenderNode::Layer(child_layer) => collect(&child_layer.children, labels),
+                RenderNode::Inline(inline) => collect(&inline.content, labels),
+                RenderNode::DrawRun(_) => {}
             }
-            RenderNode::Layer(child_layer) => collect_text_labels(child_layer, labels),
-            RenderNode::DrawRun(_) => {}
         }
     }
+
+    collect(&layer.children, labels);
 }
 
 fn find_text_top(layer: &LayerNode, label: &str) -> Option<f32> {
-    fn search(layer: &LayerNode, label: &str, transform: ProjectiveTransform) -> Option<f32> {
-        for child in &layer.children {
+    fn search(nodes: &[RenderNode], label: &str, transform: ProjectiveTransform) -> Option<f32> {
+        for child in nodes {
             match child {
                 RenderNode::Primitive(primitive) => {
                     let PrimitiveNode::Text(text) = &primitive.node else {
@@ -196,7 +197,13 @@ fn find_text_top(layer: &LayerNode, label: &str) -> Option<f32> {
                 }
                 RenderNode::Layer(child_layer) => {
                     let child_transform = child_layer.transform_to_parent.then(transform);
-                    if let Some(top) = search(child_layer, label, child_transform) {
+                    if let Some(top) = search(&child_layer.children, label, child_transform) {
+                        return Some(top);
+                    }
+                }
+                RenderNode::Inline(inline) => {
+                    let child_transform = inline.transform_to_parent().then(transform);
+                    if let Some(top) = search(&inline.content, label, child_transform) {
                         return Some(top);
                     }
                 }
@@ -206,7 +213,35 @@ fn find_text_top(layer: &LayerNode, label: &str) -> Option<f32> {
         None
     }
 
-    search(layer, label, ProjectiveTransform::identity())
+    search(&layer.children, label, ProjectiveTransform::identity())
+}
+
+// Where `node`, a child node of a layer, is placed in it.
+fn node_transform(node: &RenderNode) -> ProjectiveTransform {
+    match node {
+        RenderNode::Layer(layer) => layer.transform_to_parent,
+        RenderNode::Inline(inline) => inline.transform_to_parent(),
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => panic!("expected a child node"),
+    }
+}
+
+// Whether `node`, a child node of a layer, lies in an animated motion context.
+fn node_motion_context_animated(node: &RenderNode) -> bool {
+    match node {
+        RenderNode::Layer(layer) => layer.motion_context_animated,
+        RenderNode::Inline(inline) => inline.motion_context_animated,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => panic!("expected a child node"),
+    }
+}
+
+// What `node`, a child node of a layer, draws: its layer's children or its
+// inline content.
+fn node_content(node: &RenderNode) -> &[RenderNode] {
+    match node {
+        RenderNode::Layer(layer) => &layer.children,
+        RenderNode::Inline(inline) => &inline.content,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => panic!("expected a child node"),
+    }
 }
 
 fn find_layer_by_node_id(layer: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
@@ -215,8 +250,24 @@ fn find_layer_by_node_id(layer: &LayerNode, node_id: NodeId) -> Option<&LayerNod
     }
     layer.children.iter().find_map(|child| match child {
         RenderNode::Layer(child_layer) => find_layer_by_node_id(child_layer, node_id),
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => None,
+    })
+}
+
+fn find_inline_by_node_id(layer: &LayerNode, node_id: NodeId) -> Option<&InlineNode> {
+    layer.children.iter().find_map(|child| match child {
+        RenderNode::Layer(child_layer) => find_inline_by_node_id(child_layer, node_id),
+        RenderNode::Inline(inline) => (inline.node_id == node_id).then_some(&**inline),
         RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
     })
+}
+
+// Where the node `node_id` is placed in its parent: its layer's transform,
+// or the translation that places it when it draws in its parent's layer.
+fn find_node_transform(layer: &LayerNode, node_id: NodeId) -> Option<ProjectiveTransform> {
+    find_layer_by_node_id(layer, node_id)
+        .map(|layer| layer.transform_to_parent)
+        .or_else(|| find_inline_by_node_id(layer, node_id).map(InlineNode::transform_to_parent))
 }
 
 fn find_layer_origin(layer: &LayerNode, node_id: NodeId) -> Option<Point> {
@@ -230,6 +281,12 @@ fn find_layer_origin(layer: &LayerNode, node_id: NodeId) -> Option<Point> {
                 node_id,
                 child_layer.transform_to_parent.then(transform),
             ),
+            RenderNode::Inline(inline) => (inline.node_id == node_id).then(|| {
+                inline
+                    .transform_to_parent()
+                    .then(transform)
+                    .map_point(Point::default())
+            }),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
         })
     }
@@ -259,7 +316,7 @@ fn graph_has_runtime_shader_effect(layer: &LayerNode) -> bool {
         .is_some_and(RenderEffect::contains_runtime_shader)
         || layer.children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => graph_has_runtime_shader_effect(child_layer),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => false,
         })
 }
 
@@ -410,17 +467,11 @@ fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
     let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), false);
     let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), false);
 
-    let RenderNode::Layer(static_child) = &static_graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Layer(moved_child) = &moved_graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::DrawRun(static_run) = &static_child.children[0] else {
+    let RenderNode::DrawRun(static_run) = &node_content(&static_graph.children[0])[0] else {
         panic!("expected draw run");
     };
     let static_draw = static_run.primitives().next().expect("a recorded draw");
-    let RenderNode::DrawRun(moved_run) = &moved_child.children[0] else {
+    let RenderNode::DrawRun(moved_run) = &node_content(&moved_graph.children[0])[0] else {
         panic!("expected draw run");
     };
     let moved_draw = moved_run.primitives().next().expect("a recorded draw");
@@ -471,11 +522,8 @@ fn parent_content_offset_is_encoded_in_child_transform() {
     };
 
     let graph = build_layer_node_for_test(parent, false);
-    let RenderNode::Layer(child) = &graph.children[0] else {
-        panic!("expected child layer");
-    };
 
-    let top_left = child.transform_to_parent.map_point(Point::default());
+    let top_left = node_transform(&graph.children[0]).map_point(Point::default());
     assert_eq!(top_left, Point { x: 24.0, y: -2.0 });
 }
 
@@ -520,22 +568,15 @@ fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
         false,
     );
 
-    let RenderNode::Layer(base_child) = &base.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Layer(moved_child) = &moved.children[0] else {
-        panic!("expected child layer");
-    };
-
     assert_ne!(
-        base_child.transform_to_parent.map_point(Point::default()),
-        moved_child.transform_to_parent.map_point(Point::default()),
+        node_transform(&base.children[0]).map_point(Point::default()),
+        node_transform(&moved.children[0]).map_point(Point::default()),
         "scroll offset still has to move child content visually"
     );
     assert_eq!(
-        base_child.target_content_hash(),
-        moved_child.target_content_hash(),
-        "child source content identity stays stable when only the parent scroll offset changes"
+        base.motion_source_content_hash(),
+        moved.motion_source_content_hash(),
+        "the source content identity stays stable when only the scroll offset changes"
     );
     assert_ne!(
         base.target_content_hash(),
@@ -745,7 +786,7 @@ fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space
             &entry.node,
             PrimitiveNode::Draw(draw) if matches!(draw.primitive, DrawPrimitive::Shadow(_))
         ),
-        RenderNode::Layer(_) => false,
+        RenderNode::Layer(_) | RenderNode::Inline(_) => false,
     };
     assert!(shadow_is_outer, "the outer draw is the shadow alone");
     assert!(
@@ -756,7 +797,7 @@ fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space
                 PrimitiveNode::Draw(draw)
                     if !matches!(draw.primitive, DrawPrimitive::Shadow(_))
             ),
-            RenderNode::Layer(_) => false,
+            RenderNode::Layer(_) | RenderNode::Inline(_) => false,
         }),
         "the background chained after the layer stays inside it"
     );
@@ -853,9 +894,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
-    let initial_transform = find_layer_by_node_id(&graph.root, child_id)
-        .expect("text child layer")
-        .transform_to_parent;
+    let initial_transform = find_node_transform(&graph.root, child_id).expect("text child");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -905,9 +944,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
         "sibling content should remain present, got {labels:?}"
     );
     assert_eq!(
-        find_layer_by_node_id(&graph.root, child_id)
-            .expect("updated text child layer")
-            .transform_to_parent,
+        find_node_transform(&graph.root, child_id).expect("updated text child"),
         initial_transform,
         "draw-only child replacement must preserve the retained parent placement transform"
     );
@@ -1848,11 +1885,11 @@ fn collect_layer_origins(layer: &LayerNode) -> Vec<(Option<NodeId>, Option<NodeI
 
 fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i64> {
     fn walk(
-        layer: &LayerNode,
+        nodes: &[RenderNode],
         transform: ProjectiveTransform,
         out: &mut std::collections::BTreeMap<String, i64>,
     ) {
-        for child in &layer.children {
+        for child in nodes {
             match child {
                 RenderNode::Primitive(primitive) => {
                     if let PrimitiveNode::Text(text) = &primitive.node {
@@ -1868,14 +1905,18 @@ fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i6
                 }
                 RenderNode::Layer(child_layer) => {
                     let child_transform = child_layer.transform_to_parent.then(transform);
-                    walk(child_layer, child_transform, out);
+                    walk(&child_layer.children, child_transform, out);
+                }
+                RenderNode::Inline(inline) => {
+                    let child_transform = inline.transform_to_parent().then(transform);
+                    walk(&inline.content, child_transform, out);
                 }
                 RenderNode::DrawRun(_) => {}
             }
         }
     }
     let mut out = std::collections::BTreeMap::new();
-    walk(layer, ProjectiveTransform::identity(), &mut out);
+    walk(&layer.children, ProjectiveTransform::identity(), &mut out);
     out
 }
 
@@ -2041,9 +2082,7 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
-    let scrolled_transform = find_layer_by_node_id(&graph.root, child_id)
-        .expect("scrolled child layer")
-        .transform_to_parent;
+    let scrolled_transform = find_node_transform(&graph.root, child_id).expect("scrolled child");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -2079,9 +2118,9 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
         "dirty child graph update should apply, got {:?}",
         report.update
     );
-    let updated = find_layer_by_node_id(&graph.root, child_id).expect("updated child layer");
+    let updated = find_node_transform(&graph.root, child_id).expect("updated child");
     assert_eq!(
-        updated.transform_to_parent, scrolled_transform,
+        updated, scrolled_transform,
         "dirty child replacement inside a scrolled parent must keep the parent's content-offset transform"
     );
     let mut labels = Vec::new();
@@ -2513,8 +2552,8 @@ fn overlay_draw_commands_are_tagged_after_children() {
     let RenderNode::DrawRun(behind) = &graph.children[0] else {
         panic!("expected before-children draw run");
     };
-    let RenderNode::Layer(_) = &graph.children[1] else {
-        panic!("expected child layer");
+    let (RenderNode::Layer(_) | RenderNode::Inline(_)) = &graph.children[1] else {
+        panic!("expected the child node");
     };
     let RenderNode::DrawRun(overlay) = &graph.children[2] else {
         panic!("expected after-children draw run");
@@ -2883,10 +2922,7 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
     };
 
     let graph = build_layer_node_for_test(parent, false);
-    let RenderNode::Layer(child_layer) = &graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+    let RenderNode::Primitive(text_primitive) = &node_content(&graph.children[0])[0] else {
         panic!("expected text primitive");
     };
     let PrimitiveNode::Text(text) = &text_primitive.node else {
@@ -2894,7 +2930,7 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
     };
 
     assert_eq!(text.text_style.paragraph_style.text_motion, None);
-    assert!(!child_layer.motion_context_animated);
+    assert!(!node_motion_context_animated(&graph.children[0]));
 }
 
 #[test]
@@ -2927,10 +2963,7 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
     };
 
     let graph = build_layer_node_for_test(parent, false);
-    let RenderNode::Layer(child_layer) = &graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+    let RenderNode::Primitive(text_primitive) = &node_content(&graph.children[0])[0] else {
         panic!("expected text primitive");
     };
     let PrimitiveNode::Text(text) = &text_primitive.node else {
@@ -2941,7 +2974,7 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
         text.text_style.paragraph_style.text_motion, None,
         "content_offset alone must not force text onto the translated-content motion path"
     );
-    assert!(!child_layer.motion_context_animated);
+    assert!(!node_motion_context_animated(&graph.children[0]));
 }
 
 #[test]
@@ -2980,10 +3013,7 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
     };
 
     let graph = build_layer_node_for_test(parent, false);
-    let RenderNode::Layer(child_layer) = &graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+    let RenderNode::Primitive(text_primitive) = &node_content(&graph.children[0])[0] else {
         panic!("expected text primitive");
     };
     let PrimitiveNode::Text(text) = &text_primitive.node else {
@@ -3022,10 +3052,7 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
     };
 
     let graph = build_layer_node_for_test(parent, true);
-    let RenderNode::Layer(child_layer) = &graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+    let RenderNode::Primitive(text_primitive) = &node_content(&graph.children[0])[0] else {
         panic!("expected text primitive");
     };
     let PrimitiveNode::Text(text) = &text_primitive.node else {
@@ -3034,7 +3061,7 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
 
     assert_eq!(text.text_style.paragraph_style.text_motion, None);
     assert!(graph.motion_context_animated);
-    assert!(child_layer.motion_context_animated);
+    assert!(node_motion_context_animated(&graph.children[0]));
 }
 
 #[test]
@@ -3296,10 +3323,7 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
     };
 
     let graph = build_layer_node_for_test(parent, false);
-    let RenderNode::Layer(child_layer) = &graph.children[0] else {
-        panic!("expected child layer");
-    };
-    let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+    let RenderNode::Primitive(text_primitive) = &node_content(&graph.children[0])[0] else {
         panic!("expected text primitive");
     };
     let PrimitiveNode::Text(text) = &text_primitive.node else {
@@ -3334,14 +3358,22 @@ fn find_text_primitive(
     layer: &LayerNode,
     matches: &impl Fn(&TextPrimitiveNode) -> bool,
 ) -> Option<TextPrimitiveNode> {
-    layer.children.iter().find_map(|child| match child {
-        RenderNode::Primitive(primitive) => match &primitive.node {
-            PrimitiveNode::Text(text) if matches(text) => Some(text.as_ref().clone()),
-            _ => None,
-        },
-        RenderNode::Layer(child_layer) => find_text_primitive(child_layer, matches),
-        RenderNode::DrawRun(_) => None,
-    })
+    fn search(
+        nodes: &[RenderNode],
+        matches: &impl Fn(&TextPrimitiveNode) -> bool,
+    ) -> Option<TextPrimitiveNode> {
+        nodes.iter().find_map(|child| match child {
+            RenderNode::Primitive(primitive) => match &primitive.node {
+                PrimitiveNode::Text(text) if matches(text) => Some(text.as_ref().clone()),
+                _ => None,
+            },
+            RenderNode::Layer(child_layer) => search(&child_layer.children, matches),
+            RenderNode::Inline(inline) => search(&inline.content, matches),
+            RenderNode::DrawRun(_) => None,
+        })
+    }
+
+    search(&layer.children, matches)
 }
 
 #[test]
@@ -4010,17 +4042,22 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
 }
 
 fn collect_text_nodes(layer: &LayerNode, texts: &mut Vec<TextPrimitiveNode>) {
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                if let PrimitiveNode::Text(text) = &primitive.node {
-                    texts.push(TextPrimitiveNode::clone(text));
+    fn collect(nodes: &[RenderNode], texts: &mut Vec<TextPrimitiveNode>) {
+        for child in nodes {
+            match child {
+                RenderNode::Primitive(primitive) => {
+                    if let PrimitiveNode::Text(text) = &primitive.node {
+                        texts.push(TextPrimitiveNode::clone(text));
+                    }
                 }
+                RenderNode::Layer(child_layer) => collect(&child_layer.children, texts),
+                RenderNode::Inline(inline) => collect(&inline.content, texts),
+                RenderNode::DrawRun(_) => {}
             }
-            RenderNode::Layer(child_layer) => collect_text_nodes(child_layer, texts),
-            RenderNode::DrawRun(_) => {}
         }
     }
+
+    collect(&layer.children, texts);
 }
 
 #[test]
