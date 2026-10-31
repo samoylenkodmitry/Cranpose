@@ -1049,8 +1049,8 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     continue;
                 }
                 Item::Composite(composite) => {
-                    self.flush(renderer, run.binding);
-                    self.composite_item(renderer, composite, run, scratch)?;
+                    let held = self.draw_held(renderer, run.binding);
+                    self.composite_item(renderer, (composite, held), run, scratch)?;
                 }
             }
             items.next();
@@ -1146,7 +1146,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             .saturating_add(renderer.open_arena_records());
         let held = self.held.take();
         self.push_held(renderer, binding, held, Some(base));
-        Some(base)
+        self.depth.is_on().then_some(base)
     }
 
     /// Lays out as fallback triangles the chunk's draws in `range`, just
@@ -1691,7 +1691,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     fn composite_item(
         &mut self,
         renderer: &mut GpuRenderer,
-        composite: &'s ResolvedComposite,
+        (composite, held): (&'s ResolvedComposite, Option<u32>),
         run: &SegmentRun<'s, '_>,
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
@@ -1706,7 +1706,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             return Ok(());
         };
         let dest = dest_in_target(composite.dest, offset);
-        let place = self.composite_place();
+        let place = held.or_else(|| self.composite_place());
         match &composite.kind {
             ResolvedCompositeKind::Blit {
                 alpha,
