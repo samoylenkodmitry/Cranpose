@@ -19,9 +19,18 @@
 // off, cuts the 20 bytes before it off as a free block: the hole a freed
 // block leaves is then too short for the next request of its size, and the
 // free memory ends up in holes that no request fits. A block of a larger
-// alignment is taken from the heap's plain allocation instead, that alignment
-// longer, and starts at the first aligned address past the heap block's first
-// word, where the distance back to the heap block is kept.
+// alignment is taken from the heap's plain allocation instead.
+//
+// A block aligned to 8 asks the heap for 4 bytes more. Half the heap's
+// blocks start at an address aligned to 8, and the block starts there; the
+// rest start 4 bytes off, and the block starts 4 bytes in, past a word that
+// holds 1. The word before a block the heap hands out holds the block's
+// size, whose lowest bit, the heap's mark of a free block, is clear, so the
+// word before the block tells which. With heap poisoning on, that word holds
+// the size the caller asked for, of any parity, and blocks aligned to 8 take
+// the way blocks of larger alignments take: that alignment longer, starting
+// at the first aligned address past the heap block's first word, where the
+// distance back to the heap block is kept.
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -32,22 +41,26 @@
 
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "sdkconfig.h"
 
-// Size classes: 8 to 128 bytes in steps of 8, for blocks of either alignment.
-#define CLASS_STEP 8
-#define CLASSES 16
-#define MAX_SMALL (CLASS_STEP * CLASSES)
+// Size classes up to 128 bytes: in steps of 4 for blocks of the heap's
+// alignment, as the heap rounds sizes, and of 8 for blocks aligned to 8.
+#define MAX_SMALL 128
+#define HEAP_ALIGN 4
+#define BLOCK_ALIGN 8
+#define HEAP_CLASSES (MAX_SMALL / HEAP_ALIGN)
+#define BLOCK_CLASSES (MAX_SMALL / BLOCK_ALIGN)
 // A steady frame frees a few dozen small blocks; larger lists would hold
 // memory the heap could give to others.
 #define CACHED_BYTES 2048
-#define HEAP_ALIGN 4
-#define BLOCK_ALIGN 8
-
-// The lists of blocks of the heap's alignment and of blocks aligned to 8.
-#define KINDS 2
+// What the word before a block aligned to 8 holds when the block starts 4
+// bytes into its heap block.
+#define SHIFTED_MARK 1u
 
 typedef struct {
-    void *head[KINDS][CLASSES];
+    // The lists of blocks of the heap's alignment and of blocks aligned to 8.
+    void *heap_aligned[HEAP_CLASSES];
+    void *block_aligned[BLOCK_CLASSES];
     uint16_t bytes;
     bool registered;
     // Drained: the task is being deleted, and what it frees from here on
@@ -61,14 +74,26 @@ static pthread_key_t s_cleanup_key;
 static pthread_once_t s_cleanup_once = PTHREAD_ONCE_INIT;
 static bool s_cleanup_ready;
 
-static inline int class_of(size_t size)
+// The class step of blocks of alignment `align`, which is at most 8.
+static inline size_t step_of(size_t align)
 {
-    return (int)((size + CLASS_STEP - 1) / CLASS_STEP) - 1;
+    return align > HEAP_ALIGN ? BLOCK_ALIGN : HEAP_ALIGN;
 }
 
-static inline size_t class_size(int class)
+// The step is 4 or 8: shifts by 2 or 3 take the place of a division.
+static inline unsigned shift_of(size_t step)
 {
-    return (size_t)(class + 1) * CLASS_STEP;
+    return step == HEAP_ALIGN ? 2 : 3;
+}
+
+static inline int class_of(size_t size, size_t step)
+{
+    return (int)((size + step - 1) >> shift_of(step)) - 1;
+}
+
+static inline size_t class_size(int class, size_t step)
+{
+    return (size_t)(class + 1) << shift_of(step);
 }
 
 static inline bool is_small(size_t size, size_t align)
@@ -76,33 +101,74 @@ static inline bool is_small(size_t size, size_t align)
     return size != 0 && size <= MAX_SMALL && align <= BLOCK_ALIGN;
 }
 
-static inline int kind_of(size_t align)
+// The list of the task's cache for blocks of class `class` and step `step`.
+static inline void **list_of(block_cache_t *cache, int class, size_t step)
 {
-    return align > HEAP_ALIGN;
+    return step == HEAP_ALIGN ? &cache->heap_aligned[class] : &cache->block_aligned[class];
 }
 
-static void *heap_alloc(size_t size, size_t align)
+#if CONFIG_HEAP_POISONING_DISABLED
+// Whether a block of alignment `align` takes 4 bytes more and starts where
+// its heap block's alignment lets it.
+#define MARKS_SHIFT(align) ((align) == BLOCK_ALIGN)
+#else
+#define MARKS_SHIFT(align) false
+#endif
+
+// The distance from a block aligned to 8 back to its heap block.
+static inline uint32_t mark_shift(const uint8_t *block)
 {
-    if (align <= HEAP_ALIGN) {
-        return heap_caps_malloc(size, MALLOC_CAP_DEFAULT);
-    }
-    uint8_t *heap_block = heap_caps_malloc(size + align, MALLOC_CAP_DEFAULT);
-    if (heap_block == NULL) {
-        return NULL;
+    return (((const uint32_t *)block)[-1] & SHIFTED_MARK) ? HEAP_ALIGN : 0;
+}
+
+// The block that starts where `heap_block`'s alignment lets a block of
+// alignment `align` start, with the word that says where the heap block is.
+static IRAM_ATTR uint8_t *place_block(uint8_t *heap_block, size_t align)
+{
+    if (MARKS_SHIFT(align)) {
+        if (((uintptr_t)heap_block & HEAP_ALIGN) == 0) {
+            return heap_block;
+        }
+        ((uint32_t *)heap_block)[0] = SHIFTED_MARK;
+        return heap_block + HEAP_ALIGN;
     }
     uint8_t *block = (uint8_t *)(((uintptr_t)heap_block + align) & ~(uintptr_t)(align - 1));
     ((uint32_t *)block)[-1] = (uint32_t)(block - heap_block);
     return block;
 }
 
-static void heap_free(void *ptr, size_t align)
+// The heap block of `block`, of alignment `align` past the heap's.
+static IRAM_ATTR uint8_t *heap_block_of(uint8_t *block, size_t align)
+{
+    return block - (MARKS_SHIFT(align) ? mark_shift(block) : ((uint32_t *)block)[-1]);
+}
+
+// The bytes past a block of alignment `align` past the heap's that its heap
+// block takes.
+static inline size_t extra_of(size_t align)
+{
+    return MARKS_SHIFT(align) ? HEAP_ALIGN : align;
+}
+
+static IRAM_ATTR void *heap_alloc(size_t size, size_t align)
+{
+    if (align <= HEAP_ALIGN) {
+        return heap_caps_malloc(size, MALLOC_CAP_DEFAULT);
+    }
+    uint8_t *heap_block = heap_caps_malloc(size + extra_of(align), MALLOC_CAP_DEFAULT);
+    if (heap_block == NULL) {
+        return NULL;
+    }
+    return place_block(heap_block, align);
+}
+
+static IRAM_ATTR void heap_free(void *ptr, size_t align)
 {
     if (align <= HEAP_ALIGN) {
         heap_caps_free(ptr);
         return;
     }
-    uint8_t *block = ptr;
-    heap_caps_free(block - ((uint32_t *)block)[-1]);
+    heap_caps_free(heap_block_of(ptr, align));
 }
 
 // Gives the blocks of a deleted task's lists back to the heap. ESP-IDF may
@@ -112,15 +178,16 @@ static void heap_free(void *ptr, size_t align)
 static void drain_cache(void *arg)
 {
     block_cache_t *cache = arg;
-    for (int kind = 0; kind < KINDS; kind++) {
-        for (int class = 0; class < CLASSES; class++) {
-            void *block = cache->head[kind][class];
+    for (size_t step = HEAP_ALIGN; step <= BLOCK_ALIGN; step *= 2) {
+        for (int class = 0; class < (int)(MAX_SMALL / step); class++) {
+            void **list = list_of(cache, class, step);
+            void *block = *list;
             while (block != NULL) {
                 void *next = *(void **)block;
-                heap_free(block, kind ? BLOCK_ALIGN : HEAP_ALIGN);
+                heap_free(block, step);
                 block = next;
             }
-            cache->head[kind][class] = NULL;
+            *list = NULL;
         }
     }
     cache->bytes = 0;
@@ -139,16 +206,16 @@ IRAM_ATTR void *cranpose_small_alloc(size_t size, size_t align)
     if (!is_small(size, align)) {
         return heap_alloc(size, align);
     }
-    int kind = kind_of(align);
-    int class = class_of(size);
-    block_cache_t *cache = &s_cache;
-    void *block = cache->head[kind][class];
+    size_t step = step_of(align);
+    int class = class_of(size, step);
+    void **list = list_of(&s_cache, class, step);
+    void *block = *list;
     if (block != NULL) {
-        cache->head[kind][class] = *(void **)block;
-        cache->bytes -= class_size(class);
+        *list = *(void **)block;
+        s_cache.bytes -= class_size(class, step);
         return block;
     }
-    return heap_alloc(class_size(class), kind ? BLOCK_ALIGN : HEAP_ALIGN);
+    return heap_alloc(class_size(class, step), step);
 }
 
 IRAM_ATTR void cranpose_small_free(void *ptr, size_t size, size_t align)
@@ -160,8 +227,8 @@ IRAM_ATTR void cranpose_small_free(void *ptr, size_t size, size_t align)
         heap_free(ptr, align);
         return;
     }
-    int kind = kind_of(align);
-    int class = class_of(size);
+    size_t step = step_of(align);
+    int class = class_of(size, step);
     block_cache_t *cache = &s_cache;
     if (!cache->registered) {
         // A task's first cached block: its destructor drains the lists when
@@ -169,17 +236,18 @@ IRAM_ATTR void cranpose_small_free(void *ptr, size_t size, size_t align)
         pthread_once(&s_cleanup_once, create_cleanup_key);
         cache->registered = s_cleanup_ready && pthread_setspecific(s_cleanup_key, cache) == 0;
         if (!cache->registered) {
-            heap_free(ptr, kind ? BLOCK_ALIGN : HEAP_ALIGN);
+            heap_free(ptr, step);
             return;
         }
     }
-    if (cache->closed || cache->bytes + class_size(class) > CACHED_BYTES) {
-        heap_free(ptr, kind ? BLOCK_ALIGN : HEAP_ALIGN);
+    if (cache->closed || cache->bytes + class_size(class, step) > CACHED_BYTES) {
+        heap_free(ptr, step);
         return;
     }
-    *(void **)ptr = cache->head[kind][class];
-    cache->head[kind][class] = ptr;
-    cache->bytes += class_size(class);
+    void **list = list_of(cache, class, step);
+    *(void **)ptr = *list;
+    *list = ptr;
+    cache->bytes += class_size(class, step);
 }
 
 IRAM_ATTR void *cranpose_small_realloc(void *ptr, size_t old_size, size_t align, size_t new_size)
@@ -192,17 +260,21 @@ IRAM_ATTR void *cranpose_small_realloc(void *ptr, size_t old_size, size_t align,
             return heap_caps_realloc(ptr, new_size, MALLOC_CAP_DEFAULT);
         }
         uint8_t *block = ptr;
-        uint32_t offset = ((uint32_t *)block)[-1];
-        uint8_t *heap_block = heap_caps_realloc(block - offset, new_size + align, MALLOC_CAP_DEFAULT);
+        size_t offset = (size_t)(block - heap_block_of(block, align));
+        uint8_t *heap_block =
+            heap_caps_realloc(block - offset, new_size + extra_of(align), MALLOC_CAP_DEFAULT);
         if (heap_block == NULL) {
             return NULL;
         }
-        uint8_t *moved = (uint8_t *)(((uintptr_t)heap_block + align) & ~(uintptr_t)(align - 1));
-        if (moved != heap_block + offset) {
-            memmove(moved, heap_block + offset, old_size < new_size ? old_size : new_size);
+        // The bytes move before the block's word is written: a block that
+        // starts 4 bytes in may now start where its bytes do.
+        size_t moved_offset = MARKS_SHIFT(align)
+            ? ((uintptr_t)heap_block & HEAP_ALIGN ? HEAP_ALIGN : 0)
+            : (size_t)((((uintptr_t)heap_block + align) & ~(uintptr_t)(align - 1)) - (uintptr_t)heap_block);
+        if (moved_offset != offset) {
+            memmove(heap_block + moved_offset, heap_block + offset, old_size < new_size ? old_size : new_size);
         }
-        ((uint32_t *)moved)[-1] = (uint32_t)(moved - heap_block);
-        return moved;
+        return place_block(heap_block, align);
     }
     void *moved = cranpose_small_alloc(new_size, align);
     if (moved != NULL) {
