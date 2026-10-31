@@ -4,6 +4,10 @@ use cranpose_ui_graphics::{
 };
 
 use super::*;
+use crate::scene::{
+    PLACEMENT_CANONICALIZE, PLACEMENT_CLIPPED, PLACEMENT_FILTERED, PLACEMENT_PAINTED,
+    PLACEMENT_TURNED,
+};
 
 /// A shape segment of one record: its kinds' bits, blend and interior flags.
 fn shape_segment(
