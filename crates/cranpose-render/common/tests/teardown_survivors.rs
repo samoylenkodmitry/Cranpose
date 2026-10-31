@@ -27,9 +27,20 @@ fn geometry(layer: &LayerNode, out: &mut Vec<String>) {
         "layer {:?} at {:?} bounds {:?} content {:?}",
         layer.node_id, layer.origin_in_parent, layer.local_bounds, layer.content_offset
     ));
-    for child in &layer.children {
+    nodes_geometry(&layer.children, out);
+}
+
+fn nodes_geometry(nodes: &[RenderNode], out: &mut Vec<String>) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => geometry(child, out),
+            RenderNode::Inline(inline) => {
+                out.push(format!(
+                    "inline {:?} at {:?} size {:?}",
+                    inline.node_id, inline.origin, inline.size
+                ));
+                nodes_geometry(&inline.content, out);
+            }
             RenderNode::Primitive(entry) => {
                 if let PrimitiveNode::Text(text) = &entry.node {
                     out.push(format!("text {:?} at {:?}", text.text.text, text.rect));

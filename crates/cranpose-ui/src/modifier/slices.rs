@@ -570,6 +570,15 @@ impl ModifierNodeSlices {
         }
     }
 
+    /// Whether the chain sets a graphics layer, live or fixed, without
+    /// resolving a live one as [`Self::graphics_layer`] does.
+    pub fn has_graphics_layer(&self) -> bool {
+        self.graphics_layer.is_some()
+            || self
+                .rare()
+                .is_some_and(|rare| rare.graphics_layer_resolver.is_some())
+    }
+
     /// Returns the rounded corner shape the chain sets, or `None` when it sets none.
     pub fn corner_shape(&self) -> Option<RoundedCornerShape> {
         self.corner_shape

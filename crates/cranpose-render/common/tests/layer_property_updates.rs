@@ -78,9 +78,24 @@ fn graph_output(
     texts: &mut Texts,
 ) {
     let transform = layer.transform_to_parent.then(parent_transform);
-    for child in &layer.children {
+    nodes_output(&layer.children, transform, rectangles, texts);
+}
+
+fn nodes_output(
+    nodes: &[RenderNode],
+    transform: ProjectiveTransform,
+    rectangles: &mut Rectangles,
+    texts: &mut Texts,
+) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => graph_output(child, transform, rectangles, texts),
+            RenderNode::Inline(inline) => nodes_output(
+                &inline.content,
+                inline.transform_to_parent().then(transform),
+                rectangles,
+                texts,
+            ),
             RenderNode::DrawRun(run) => {
                 let owner = run.command.map(|command| command.node_id);
                 rectangles.extend(run.primitives().filter_map(|primitive| match primitive {
@@ -131,7 +146,7 @@ fn layer_for(layer: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
     }
     layer.children.iter().find_map(|child| match child {
         RenderNode::Layer(child) => layer_for(child, node_id),
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => None,
     })
 }
 

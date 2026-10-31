@@ -201,9 +201,24 @@ fn scene_picture(layer: &LayerNode, depth: usize, out: &mut Vec<String>) {
         layer.translated_content_context,
         layer.translated_content_offset,
     ));
-    for child in &layer.children {
+    picture_nodes(&layer.children, depth, out);
+}
+
+fn picture_nodes(nodes: &[RenderNode], depth: usize, out: &mut Vec<String>) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => scene_picture(child, depth + 1, out),
+            RenderNode::Inline(inline) => {
+                out.push(format!(
+                    "{} inline {:?} origin {:?} size {:?} motion {}",
+                    depth + 1,
+                    inline.node_id,
+                    inline.origin,
+                    inline.size,
+                    inline.motion_context_animated,
+                ));
+                picture_nodes(&inline.content, depth + 1, out);
+            }
             RenderNode::Primitive(entry) => out.push(format!("{depth} primitive {entry:?}")),
             RenderNode::DrawRun(run) => {
                 for primitive in run.primitives() {

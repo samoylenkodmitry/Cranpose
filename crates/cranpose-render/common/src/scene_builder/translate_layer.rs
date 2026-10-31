@@ -13,10 +13,10 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     DrawTarget, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
-    TranslateAncestorContext, TranslateGeometry, Wrapping, children_have_origin_sinks,
-    content_layer_mut, forget_dirty_subtree, hit_test_from_slices, layer_and_node_bounds,
-    layer_identity, lower_child, modifier_slices_have_origin_sinks, move_kept_child, outer_draws,
-    placed_child_geometry, placed_transform, read_node_data, remove_dirty_descendants,
+    TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
+    children_have_origin_sinks, content_layer_mut, forget_dirty_node, hit_test_from_slices,
+    layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
+    move_kept_child, outer_draws, placed_child_geometry, placed_transform, read_node_data,
     shaped_graphics_layer, take_wrapped_layer, text_node, translate_bail, translate_unwrapped,
     write_node_content, write_wrapper,
 };
@@ -43,7 +43,7 @@ pub(super) fn translate_tracking_hits(
 
 /// Whether the hit graph reads `layer`: it is a hit target, holds one or is
 /// a 3D space, the states [`HitGraphState::dirty_against`] compares.
-fn holds_hit_geometry(layer: &LayerNode) -> bool {
+pub(super) fn holds_hit_geometry(layer: &LayerNode) -> bool {
     layer.hit_test.is_some() || layer.has_hit_targets || layer.graphics_layer.space.is_some()
 }
 
@@ -175,12 +175,12 @@ pub(crate) struct TranslateScratch {
     old_index_by_id: HashMap<NodeId, usize>,
     /// The container's previous children by their index, until each is
     /// kept or recycled.
-    retained: Vec<Option<Box<LayerNode>>>,
+    retained: Vec<Option<RenderNode>>,
     /// The previous children that stay, in their new order; `None` where a
     /// child enters.
-    kept: Vec<Option<Box<LayerNode>>>,
+    kept: Vec<Option<RenderNode>>,
     /// The children built for the step, in their new order.
-    entering: Vec<(NodeId, Box<LayerNode>)>,
+    entering: Vec<(NodeId, RenderNode)>,
 }
 
 /// A placed child of a container a scroll step translates.
@@ -236,9 +236,7 @@ fn translated_children(
             .children
             .iter()
             .zip(placed_fresh.iter())
-            .all(|(child, placed)| {
-                matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(placed.id))
-            });
+            .all(|(child, placed)| child_identity(child) == Some(placed.id));
     let order = if children_unchanged {
         for (index, placed) in placed_fresh.iter_mut().enumerate() {
             placed.old_index = Some(index);
@@ -252,10 +250,7 @@ fn translated_children(
         old_ids.clear();
         let (mut lowest, mut highest) = (NodeId(usize::MAX), NodeId(0));
         for child in &container.children {
-            let RenderNode::Layer(layer) = child else {
-                return Err("child without node id");
-            };
-            let Some(id) = layer_identity(layer) else {
+            let Some(id) = child_identity(child) else {
                 return Err("child without node id");
             };
             lowest = lowest.min(id);
@@ -353,10 +348,17 @@ fn check_retained_children(
         let Some(old_index) = placed.old_index else {
             continue;
         };
-        let RenderNode::Layer(layer) = &container.children[old_index] else {
-            return Err("retained child slot is not a layer");
+        let child = &container.children[old_index];
+        let (node_rect, text_alone) = match child {
+            RenderNode::Layer(layer) => (layer.node_rect(), text_node::draws_text_alone(layer)),
+            RenderNode::Inline(inline) => {
+                (inline.node_rect(), text_node::text_alone(&inline.content))
+            }
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
+                return Err("retained child slot is not a node");
+            }
         };
-        let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
+        let fits = Rect::from_size(placed.geometry.size) == node_rect;
         placed.kept = match dirty_nodes.get_mut(&placed.id) {
             None if !fits => return Err("child resized"),
             None => KeptChild::Moved,
@@ -371,7 +373,7 @@ fn check_retained_children(
             // The child moves with the others; the walk beneath the container
             // then gives it its new layer properties or draws where it now lies.
             Some(NodeUpdate::Layer | NodeUpdate::Draws) if fits => KeptChild::Moved,
-            Some(NodeUpdate::Content) if text_node::draws_text_alone(layer) => KeptChild::Retexted,
+            Some(NodeUpdate::Content) if text_alone => KeptChild::Retexted,
             Some(_) => KeptChild::Left,
         };
     }
@@ -397,10 +399,12 @@ fn recycle_leaving_children(
         ..
     } = scratch;
     retained.clear();
-    retained.extend(container.children.drain(..).map(|child| match child {
-        RenderNode::Layer(layer) => Some(layer),
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
-    }));
+    retained.extend(
+        container
+            .children
+            .drain(..)
+            .map(|child| child_identity(&child).is_some().then_some(child)),
+    );
     kept.clear();
     kept.extend(
         placed_fresh
@@ -408,8 +412,8 @@ fn recycle_leaving_children(
             .map(|placed| placed.old_index.and_then(|index| retained[index].take())),
     );
     for leaving in retained.drain(..).flatten() {
-        forget_dirty_subtree(&leaving, dirty_nodes);
-        crate::layer_recycling::recycle(leaving);
+        forget_dirty_node(&leaving, dirty_nodes);
+        crate::layer_recycling::recycle_node(leaving);
     }
 }
 
@@ -421,11 +425,9 @@ fn recycle_children_around(
     kept: Range<usize>,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
-    let mut recycle = |leaving| {
-        if let RenderNode::Layer(leaving) = leaving {
-            forget_dirty_subtree(&leaving, dirty_nodes);
-            crate::layer_recycling::recycle(leaving);
-        }
+    let mut recycle = |leaving: RenderNode| {
+        forget_dirty_node(&leaving, dirty_nodes);
+        crate::layer_recycling::recycle_node(leaving);
     };
     // Most steps keep every child.
     if kept.end < container.children.len() {
@@ -456,8 +458,10 @@ fn build_entering_children(
         let Some(mut lowered) = lower_child(applier, *child_id, context) else {
             continue;
         };
-        lowered.note_content_change(children.update);
-        forget_dirty_subtree(&lowered, dirty_nodes);
+        if let RenderNode::Layer(layer) = &mut lowered {
+            layer.note_content_change(children.update);
+        }
+        forget_dirty_node(&lowered, dirty_nodes);
         entering.push((*child_id, lowered));
     }
 }
@@ -542,14 +546,12 @@ fn reconcile_translated_children(
     }
     let mut entering = scratch.entering.drain(..).peekable();
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
-        if let Some(mut layer) = kept {
-            move_kept_child(applier, &mut layer, placed, children, dirty_nodes);
-            container.children.push(RenderNode::Layer(layer));
+        if let Some(mut node) = kept {
+            move_kept_child(applier, &mut node, placed, children, dirty_nodes);
+            container.children.push(node);
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
-            dirty_nodes.remove(&placed.id);
-            remove_dirty_descendants(&lowered, dirty_nodes);
-
-            container.children.push(RenderNode::Layer(lowered));
+            forget_dirty_node(&lowered, dirty_nodes);
+            container.children.push(lowered);
         }
     }
 }
@@ -575,10 +577,7 @@ fn reconcile_shifted_children(
         .iter_mut()
         .zip(&placed_fresh[entering_before..])
     {
-        let RenderNode::Layer(layer) = child else {
-            unreachable!("retained child identities were checked");
-        };
-        move_kept_child(applier, layer, placed, children, dirty_nodes);
+        move_kept_child(applier, child, placed, children, dirty_nodes);
     }
     if entering.is_empty() {
         return;
@@ -590,17 +589,16 @@ fn reconcile_shifted_children(
         .iter()
         .filter(|placed| built.next_if(|(id, _)| *id == placed.id).is_some())
         .count();
-    for (id, lowered) in entering.iter() {
-        dirty_nodes.remove(id);
-        remove_dirty_descendants(lowered, dirty_nodes);
+    for (_, lowered) in entering.iter() {
+        forget_dirty_node(lowered, dirty_nodes);
     }
-    let layer = |(_, lowered): (NodeId, Box<LayerNode>)| RenderNode::Layer(lowered);
+    let node = |(_, lowered): (NodeId, RenderNode)| lowered;
     if built_before > 0 {
         container
             .children
-            .splice(0..0, entering.drain(..built_before).map(layer));
+            .splice(0..0, entering.drain(..built_before).map(node));
     }
-    container.children.extend(entering.drain(..).map(layer));
+    container.children.extend(entering.drain(..).map(node));
 }
 
 /// Runs `f` on the thread's translate scratch where it lies, or on a new one

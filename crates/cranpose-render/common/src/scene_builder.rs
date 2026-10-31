@@ -23,6 +23,8 @@ pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_
 mod hit_graph;
 pub(crate) use hit_graph::HitGraphState;
 use hit_graph::rebuild_tracking_hits;
+mod inline_leaf;
+use inline_leaf::{lower_child, update_dirty_inline};
 mod layer_shape;
 use layer_shape::shaped_graphics_layer;
 mod text_node;
@@ -33,9 +35,9 @@ mod node_layer;
 use node_layer::{
     AbsOrigin, LayerHead, LowerContext, PlacedGeometry, assign_layer, children_have_origin_sinks,
     hit_test_from_slices, layer_and_node_bounds, layer_identity, layout_box_to_snapshot,
-    lower_child, lower_root_into, modifier_slices_have_origin_sinks, outer_draws,
-    placed_child_geometry, placed_transform, prepare_node_layer, read_node_data,
-    read_placed_node_data, take_wrapped_layer, write_node_content, write_node_layer,
+    lower_root_into, modifier_slices_have_origin_sinks, outer_draws, placed_child_geometry,
+    placed_transform, prepare_node_layer, read_node_data, read_placed_node_data,
+    slices_hit_something, take_wrapped_layer, write_node_content, write_node_layer,
     write_snapshot_layer, write_wrapper,
 };
 mod translate_layer;
@@ -740,15 +742,42 @@ fn forget_dirty_subtree(layer: &LayerNode, dirty_nodes: &mut HashMap<NodeId, Nod
     remove_dirty_descendants(layer, dirty_nodes);
 }
 
+// Takes the node of `node`, a child of a layer, and every node beneath it
+// out of `dirty_nodes`.
+fn forget_dirty_node(node: &RenderNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
+    match node {
+        RenderNode::Layer(layer) => forget_dirty_subtree(layer, dirty_nodes),
+        RenderNode::Inline(inline) => {
+            dirty_nodes.remove(&inline.node_id);
+        }
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+    }
+}
+
 fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
     for child in &layer.children {
-        let RenderNode::Layer(child_layer) = child else {
-            continue;
-        };
-        if let Some(node_id) = child_layer.node_id {
-            dirty_nodes.remove(&node_id);
+        match child {
+            RenderNode::Layer(child_layer) => {
+                if let Some(node_id) = child_layer.node_id {
+                    dirty_nodes.remove(&node_id);
+                }
+                remove_dirty_descendants(child_layer, dirty_nodes);
+            }
+            RenderNode::Inline(inline) => {
+                dirty_nodes.remove(&inline.node_id);
+            }
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
         }
-        remove_dirty_descendants(child_layer, dirty_nodes);
+    }
+}
+
+// The node a child of a layer draws: a child layer's or an inline node's,
+// `None` for the layer's own draws.
+fn child_identity(node: &RenderNode) -> Option<NodeId> {
+    match node {
+        RenderNode::Layer(layer) => layer_identity(layer),
+        RenderNode::Inline(inline) => Some(inline.node_id),
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
     }
 }
 

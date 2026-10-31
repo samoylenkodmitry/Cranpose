@@ -13,14 +13,15 @@ use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, La
 use super::{
     BuildNodeSnapshot, DrawPass, DrawTarget, Level, SnapshotNodeData, TextNodeParts,
     TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
+    inline_leaf::{lower_child, snapshot_lowers_inline},
     layer_node_capacity,
     layer_shape::{clip_shape, shape_clip},
     note_layer_lowered, note_space_change, shaped_graphics_layer, text_node_from_parts,
 };
 use crate::{
     graph::{
-        CachePolicy, ContentChanges, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
-        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+        CachePolicy, ContentChanges, HitTestNode, InlineNode, IsolationReasons, LayerNode,
+        PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
     },
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
@@ -201,7 +202,7 @@ pub(super) fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
 pub(super) fn children_have_origin_sinks(children: &[RenderNode]) -> bool {
     children.iter().any(|child| match child {
         RenderNode::Layer(child_layer) => child_layer.has_origin_sinks,
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => false,
     })
 }
 
@@ -358,13 +359,70 @@ pub(super) fn write_snapshot_layer(
             let draws = DrawTarget { layer, ..draws };
             write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
                 for child in children {
-                    let mut layer = crate::layer_recycling::layer_box();
-                    write_snapshot_layer(child, child_context, &mut layer);
-                    list.push(RenderNode::Layer(layer));
+                    list.push(lower_snapshot_child(child, child_context));
                 }
             });
         },
     );
+}
+
+// Lowers `snapshot`, a child in a layout tree snapshot, into the node its
+// parent holds: inline when it needs no layer of its own, as
+// [`super::inline_leaf::lower_child`] lowers a node of the applier.
+fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: LowerContext) -> RenderNode {
+    if !snapshot_lowers_inline(&snapshot) {
+        let mut layer = crate::layer_recycling::layer_box();
+        write_snapshot_layer(snapshot, context, &mut layer);
+        return RenderNode::Layer(layer);
+    }
+    let BuildNodeSnapshot {
+        node_id,
+        placement,
+        size,
+        content_offset,
+        slices,
+        ..
+    } = snapshot;
+    let motion_context_animated =
+        context.inherited_motion_context_animated || slices.motion_context_animated();
+    let draws = DrawTarget {
+        size,
+        motion_context_animated,
+        layer: None,
+    };
+    let mut content = Vec::new();
+    write_node_content(&mut content, node_id, &slices, draws, (0, 0), |_| {});
+    if content
+        .iter()
+        .any(|node| matches!(node, RenderNode::Layer(_)))
+    {
+        let (local_bounds, node_bounds) = layer_and_node_bounds(&slices, size);
+        let frame = NodeFrame {
+            local_bounds,
+            node_bounds,
+            placement,
+            content_offset,
+            translated_content_offset: content_offset,
+        };
+        let mut layer = crate::layer_recycling::layer_box();
+        layer.children = content;
+        assign_layer(
+            &mut layer,
+            node_layer_head(node_id, &slices, frame, None, context),
+        );
+        return RenderNode::Layer(layer);
+    }
+    let origin = Point::new(
+        placement.x + context.parent_content_offset.x,
+        placement.y + context.parent_content_offset.y,
+    );
+    let mut inline = Box::<InlineNode>::default();
+    inline.node_id = node_id;
+    inline.origin = origin;
+    inline.size = size;
+    inline.motion_context_animated = motion_context_animated;
+    inline.content = content;
+    RenderNode::Inline(inline)
 }
 
 #[derive(Clone, Copy)]
@@ -429,18 +487,6 @@ pub(super) fn lower_root_into(
         write_node_layer(applier, node_id, data, LowerContext::ROOT, target);
     })
     .is_some()
-}
-
-pub(super) fn lower_child(
-    applier: &MemoryApplier,
-    node_id: NodeId,
-    context: LowerContext,
-) -> Option<Box<LayerNode>> {
-    read_placed_node_data(applier, node_id, Level::Child, |data| {
-        let mut layer = crate::layer_recycling::layer_box();
-        write_node_layer(applier, node_id, data, context, &mut layer);
-        layer
-    })
 }
 
 /// Where a placed child sits in its parent and how large it is.
@@ -571,7 +617,7 @@ pub(super) fn layer_and_node_bounds(
 
 /// Whether a node's slices make it a hit target: a pointer input or a
 /// pointer icon.
-fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
+pub(super) fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
     !slices.pointer_inputs().is_empty() || slices.pointer_icon().is_some()
 }
 
@@ -665,7 +711,7 @@ pub(super) fn write_node_layer(
             write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
                 for &child_id in children {
                     if let Some(child) = lower_child(applier, child_id, child_context) {
-                        list.push(RenderNode::Layer(child));
+                        list.push(child);
                     }
                 }
             });

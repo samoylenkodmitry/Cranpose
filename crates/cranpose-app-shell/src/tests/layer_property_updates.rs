@@ -42,20 +42,25 @@ fn canvas_layer_position(
         cranpose_render_common::graph::RenderNode::Layer(child) => {
             canvas_layer_position(child, node_id)
         }
+        cranpose_render_common::graph::RenderNode::Inline(inline) => (inline.node_id == node_id)
+            .then(|| inline.transform_to_parent().map_point(Point::default())),
         cranpose_render_common::graph::RenderNode::Primitive(_)
         | cranpose_render_common::graph::RenderNode::DrawRun(_) => None,
     })
 }
 
 fn canvas_rect_colors(
-    layer: &cranpose_render_common::graph::LayerNode,
+    nodes: &[cranpose_render_common::graph::RenderNode],
     node_id: NodeId,
     colors: &mut Vec<Color>,
 ) {
-    for child in &layer.children {
+    for child in nodes {
         match child {
             cranpose_render_common::graph::RenderNode::Layer(child) => {
-                canvas_rect_colors(child, node_id, colors);
+                canvas_rect_colors(&child.children, node_id, colors);
+            }
+            cranpose_render_common::graph::RenderNode::Inline(inline) => {
+                canvas_rect_colors(&inline.content, node_id, colors);
             }
             cranpose_render_common::graph::RenderNode::DrawRun(run)
                 if run
@@ -89,7 +94,7 @@ fn canvas_output(
     let position =
         canvas_layer_position(&graph.root, node_id).expect("Canvas remains in the retained graph");
     let mut colors = Vec::new();
-    canvas_rect_colors(&graph.root, node_id, &mut colors);
+    canvas_rect_colors(&graph.root.children, node_id, &mut colors);
     (position, colors)
 }
 

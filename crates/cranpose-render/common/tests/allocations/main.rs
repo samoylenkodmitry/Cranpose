@@ -31,6 +31,7 @@ fn cell_ids(layer: &LayerNode) -> Vec<NodeId> {
         .iter()
         .filter_map(|child| match child {
             RenderNode::Layer(cell) => cell.node_id.or(cell.wraps),
+            RenderNode::Inline(cell) => Some(cell.node_id),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
         })
         .collect()

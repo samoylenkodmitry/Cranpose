@@ -10,7 +10,7 @@
 //! scratch scene holds one subtree at a time.
 
 use cranpose_render_common::{
-    graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode, for_each_in_draw_order},
+    graph::{ProjectiveTransform, RenderGraph, for_each_in_draw_order},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
 };
@@ -19,7 +19,7 @@ use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, sce
 use crate::{
     damage::{RunReach, add_changed_runs, merge_areas},
     draw::{ClipBounds, TextRaster},
-    scene::{RasterScene, SubtreeExtent},
+    scene::{RasterScene, Subtree, SubtreeExtent},
 };
 
 // What a walk that pushes changed layers again shares.
@@ -104,7 +104,7 @@ impl InPlaceUpdate<'_> {
             scale,
             text,
         };
-        let walked = repush.visit(&graph.root, 0, None);
+        let walked = repush.visit(Subtree::Layer(&graph.root), 0, None);
         let held = repush.held;
         merge_areas(areas);
         walked.ok()?;
@@ -117,35 +117,39 @@ impl InPlaceUpdate<'_> {
 }
 
 impl Repush<'_> {
-    /// Walks `layer`, whose old record is `record` and whose parent passed
+    /// Walks `subtree`, whose old record is `record` and whose parent passed
     /// down what the scene holds at `parent`, the root's start for `None`.
     fn visit(
         &mut self,
-        layer: &LayerNode,
+        subtree: Subtree<'_>,
         record: usize,
         parent: Option<usize>,
     ) -> Result<(), Stop> {
         let old = self.scene.subtrees.get(record).ok_or(Stop::OtherLayer)?;
-        if old.identity != (layer.node_id, layer.wraps) {
+        if old.identity != subtree.identity() {
             return Err(Stop::OtherLayer);
         }
-        let placed_as_before = old.transform == layer.transform_to_parent;
-        if old.change == layer.change && placed_as_before {
+        let placed_as_before = old.transform == subtree.transform_to_parent();
+        if old.change == subtree.change() && placed_as_before {
             return Ok(());
         }
+        // A node drawn inline has no records beneath its own.
+        let Subtree::Layer(layer) = subtree else {
+            return self.push_again(subtree, record, parent);
+        };
         // A layer that changed itself, moved, or drew its subtree without
         // records of its children, as a surface or nothing, pushes it all.
         if old.own_change != layer.own_change || !placed_as_before || old.end == record + 1 {
-            return self.push_again(layer, record, parent);
+            return self.push_again(subtree, record, parent);
         }
         let Some(passed) = old.passed_down else {
-            return self.push_again(layer, record, parent);
+            return self.push_again(subtree, record, parent);
         };
         let mut next = record + 1;
         let mut walked = Ok(());
         for_each_in_draw_order(&layer.children, |child| {
             if walked.is_ok()
-                && let RenderNode::Layer(child) = child
+                && let Some(child) = Subtree::of_child(child)
             {
                 walked = self.visit(child, next, Some(passed));
                 next = self
@@ -162,16 +166,16 @@ impl Repush<'_> {
             Ok(()) if next == self.scene.subtrees[record].end => Ok(()),
             // The child layers no longer match the records: the layer pushes
             // its whole subtree again in place of what they pushed.
-            Ok(()) | Err(Stop::OtherLayer) => self.push_again(layer, record, parent),
+            Ok(()) | Err(Stop::OtherLayer) => self.push_again(subtree, record, parent),
         }
     }
 
-    /// Pushes `layer`'s subtree into the scratch scene as the full walk
-    /// would, from what its parent passed down in the scene, adds the areas
-    /// it changes and puts it in place of its old subtree, `record`.
+    /// Pushes `subtree` into the scratch scene as the full walk would, from
+    /// what its parent passed down in the scene, adds the areas it changes
+    /// and puts it in place of its old subtree, `record`.
     fn push_again(
         &mut self,
-        layer: &LayerNode,
+        subtree: Subtree<'_>,
         record: usize,
         parent: Option<usize>,
     ) -> Result<(), Stop> {
@@ -187,7 +191,7 @@ impl Repush<'_> {
         });
         self.scratch.start = self.scene.start;
         populate_draws_from_graph(
-            layer,
+            subtree,
             self.scratch,
             &RasterTraversalContext {
                 parent_transform: &transform,

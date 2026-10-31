@@ -143,7 +143,7 @@ impl DrawPass<'_> {
                 Some(RenderNode::DrawRun(run)) => run,
                 _ => return None,
             },
-            RenderNode::Primitive(_) => return None,
+            RenderNode::Primitive(_) | RenderNode::Inline(_) => return None,
         };
         matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
     }

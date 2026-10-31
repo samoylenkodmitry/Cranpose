@@ -5,6 +5,7 @@ mod app_supplied_font_raster;
 mod draw_scope_text_raster;
 mod draw_with_content_updates;
 mod eye_walk;
+mod inline_leaves;
 mod layer_and_raster_rules;
 mod layer_property_updates;
 mod lazy_trim_scene;

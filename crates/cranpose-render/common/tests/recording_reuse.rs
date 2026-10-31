@@ -33,18 +33,16 @@ fn canvas_graph(
 }
 
 fn retained_recording(layer: &LayerNode) -> Option<CommandRecording> {
-    for child in &layer.children {
-        match child {
-            RenderNode::DrawRun(run) => return Some(run.recording.as_ref().clone()),
-            RenderNode::Layer(child) => {
-                if let Some(recording) = retained_recording(child) {
-                    return Some(recording);
-                }
-            }
-            RenderNode::Primitive(_) => {}
-        }
-    }
-    None
+    nodes_recording(&layer.children)
+}
+
+fn nodes_recording(nodes: &[RenderNode]) -> Option<CommandRecording> {
+    nodes.iter().find_map(|child| match child {
+        RenderNode::DrawRun(run) => Some(run.recording.as_ref().clone()),
+        RenderNode::Layer(child) => retained_recording(child),
+        RenderNode::Inline(inline) => nodes_recording(&inline.content),
+        RenderNode::Primitive(_) => None,
+    })
 }
 
 fn recording_colors(recording: &CommandRecording) -> Vec<Color> {

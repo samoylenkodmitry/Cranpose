@@ -59,9 +59,14 @@ fn a_text_that_changes_only_its_string_draws_each_new_string() {
 }
 
 fn text_paints(layer: &LayerNode, out: &mut Vec<(String, TextPaint)>) {
-    for child in &layer.children {
+    nodes_text_paints(&layer.children, out);
+}
+
+fn nodes_text_paints(nodes: &[RenderNode], out: &mut Vec<(String, TextPaint)>) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => text_paints(child, out),
+            RenderNode::Inline(inline) => nodes_text_paints(&inline.content, out),
             RenderNode::Primitive(entry) => {
                 if let PrimitiveNode::Text(text) = &entry.node {
                     assert_eq!(

@@ -6,7 +6,8 @@ use cranpose_ui::text::AnnotatedString;
 use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, ShadowPrimitive};
 
 use super::{
-    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode,
+    DrawPrimitiveNode, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode,
+    TextPrimitiveNode,
 };
 
 pub(super) fn layer_heap_bytes(layer: &LayerNode) -> usize {
@@ -37,6 +38,15 @@ fn render_node_heap_bytes(node: &RenderNode) -> usize {
                     .sum::<usize>()
         }
         RenderNode::Layer(layer) => size_of::<LayerNode>() + layer_heap_bytes(layer),
+        RenderNode::Inline(inline) => {
+            size_of::<InlineNode>()
+                + size_of::<RenderNode>() * inline.content.capacity()
+                + inline
+                    .content
+                    .iter()
+                    .map(render_node_heap_bytes)
+                    .sum::<usize>()
+        }
     }
 }
 

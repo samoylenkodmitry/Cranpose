@@ -53,5 +53,6 @@ pub(super) fn node_is_pixel_sensitive(node: &RenderNode) -> bool {
             direct_translation(child.transform_to_parent).is_some()
                 && layer_has_pixel_sensitive_subtree(child)
         }
+        RenderNode::Inline(inline) => inline.content.iter().any(node_is_pixel_sensitive),
     }
 }

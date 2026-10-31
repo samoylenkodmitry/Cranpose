@@ -3,7 +3,7 @@
 use std::{alloc::System, cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Instant};
 
 use cranpose_render_common::{
-    graph::{DrawRunNode, LayerNode, RenderGraph, RenderNode},
+    graph::{DrawRunNode, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
     scene_builder::{
         build_graph_from_applier, clear_command_recordings_for_tests, rebuild_graph_from_applier,
         update_graph_from_applier_report,
@@ -24,8 +24,13 @@ const WARMUP: usize = 32;
 const FRAMES: usize = 240;
 
 fn canvas_run(layer: &LayerNode) -> Option<&DrawRunNode> {
-    layer.children.iter().find_map(|child| match child {
+    nodes_canvas_run(&layer.children)
+}
+
+fn nodes_canvas_run(nodes: &[RenderNode]) -> Option<&DrawRunNode> {
+    nodes.iter().find_map(|child| match child {
         RenderNode::Layer(layer) => canvas_run(layer),
+        RenderNode::Inline(inline) => nodes_canvas_run(&inline.content),
         RenderNode::DrawRun(run) => Some(run),
         RenderNode::Primitive(_) => None,
     })
@@ -274,13 +279,14 @@ fn run_inset_recording_benchmark(arcs: usize) {
 }
 
 fn collect_runs_for_node<'a>(
-    layer: &'a LayerNode,
+    nodes: &'a [RenderNode],
     node_id: cranpose_core::NodeId,
     runs: &mut Vec<&'a DrawRunNode>,
 ) {
-    for child in &layer.children {
+    for child in nodes {
         match child {
-            RenderNode::Layer(child) => collect_runs_for_node(child, node_id, runs),
+            RenderNode::Layer(child) => collect_runs_for_node(&child.children, node_id, runs),
+            RenderNode::Inline(inline) => collect_runs_for_node(&inline.content, node_id, runs),
             RenderNode::DrawRun(run) if run.command.is_some_and(|id| id.node_id == node_id) => {
                 runs.push(run);
             }
@@ -343,7 +349,7 @@ fn run_with_content_case(arcs: usize) {
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("with-content graph");
     let initial_runs = {
         let mut runs = Vec::new();
-        collect_runs_for_node(&graph.root, parent, &mut runs);
+        collect_runs_for_node(&graph.root.children, parent, &mut runs);
         runs
     };
     assert_eq!(
@@ -359,7 +365,7 @@ fn run_with_content_case(arcs: usize) {
     let initial_fingerprint = initial_runs[0].recording.fingerprint();
     assert_eq!(initial_runs[1].recording.fingerprint(), initial_fingerprint);
     let mut content_runs = Vec::new();
-    collect_runs_for_node(&graph.root, content, &mut content_runs);
+    collect_runs_for_node(&graph.root.children, content, &mut content_runs);
     assert_eq!(
         content_runs.len(),
         1,
@@ -399,7 +405,7 @@ fn run_with_content_case(arcs: usize) {
     let stats = region.change();
     let callbacks = callback_calls.get() - callbacks_before;
     let mut runs = Vec::new();
-    collect_runs_for_node(&graph.root, parent, &mut runs);
+    collect_runs_for_node(&graph.root.children, parent, &mut runs);
     assert_eq!(runs.len(), 2);
     let behind = runs
         .iter()
@@ -460,25 +466,29 @@ fn rotation_bits(layer: &LayerNode, expected: f32) -> Option<u32> {
     }
     layer.children.iter().find_map(|child| match child {
         RenderNode::Layer(layer) => rotation_bits(layer, expected),
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => None,
     })
 }
 
 fn transform_points(layer: &LayerNode, node_id: cranpose_core::NodeId) -> Option<[u32; 4]> {
-    if layer.node_id == Some(node_id) {
-        let origin = layer.transform_to_parent.map_point(Point::default());
-        let far_corner = layer
-            .transform_to_parent
-            .map_point(Point::new(256.0, 256.0));
-        return Some([
+    let points = |transform: ProjectiveTransform| {
+        let origin = transform.map_point(Point::default());
+        let far_corner = transform.map_point(Point::new(256.0, 256.0));
+        [
             origin.x.to_bits(),
             origin.y.to_bits(),
             far_corner.x.to_bits(),
             far_corner.y.to_bits(),
-        ]);
+        ]
+    };
+    if layer.node_id == Some(node_id) {
+        return Some(points(layer.transform_to_parent));
     }
     layer.children.iter().find_map(|child| match child {
         RenderNode::Layer(layer) => transform_points(layer, node_id),
+        RenderNode::Inline(inline) => {
+            (inline.node_id == node_id).then(|| points(inline.transform_to_parent()))
+        }
         RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
     })
 }

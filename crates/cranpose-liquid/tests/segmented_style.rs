@@ -18,14 +18,24 @@ fn find_label<'a>(
     label: &str,
     filter: Option<&'a ColorFilter>,
 ) -> Option<(&'a TextPrimitiveNode, Option<&'a ColorFilter>)> {
-    let filter = layer.color_filter().or(filter);
-    layer.children.iter().find_map(|node| match node {
+    find_label_in(&layer.children, label, layer.color_filter().or(filter))
+}
+
+// The text primitive showing `label` among `nodes`, under `filter`. A node
+// drawn in its parent's layer has no filter of its own.
+fn find_label_in<'a>(
+    nodes: &'a [RenderNode],
+    label: &str,
+    filter: Option<&'a ColorFilter>,
+) -> Option<(&'a TextPrimitiveNode, Option<&'a ColorFilter>)> {
+    nodes.iter().find_map(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Text(text) if text.text.text == label => Some((text.as_ref(), filter)),
             _ => None,
         },
         RenderNode::Layer(layer) => find_label(layer, label, filter),
-        _ => None,
+        RenderNode::Inline(inline) => find_label_in(&inline.content, label, filter),
+        RenderNode::DrawRun(_) => None,
     })
 }
 

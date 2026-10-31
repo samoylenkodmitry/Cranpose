@@ -22,6 +22,8 @@ use crate::{
 
 mod heap_bytes;
 use heap_bytes::layer_heap_bytes;
+mod inline_node;
+pub use inline_node::InlineNode;
 
 /// Reasons a layer is drawn into its own offscreen buffer instead of directly into its parent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -416,28 +418,8 @@ impl LayerNode {
     /// Every string this layer and the layers below it paint, in draw order.
     pub fn painted_text(&self) -> Vec<String> {
         let mut out = Vec::new();
-        self.collect_painted_text(&mut out);
+        collect_painted_text(&self.children, &mut out);
         out
-    }
-
-    fn collect_painted_text(&self, out: &mut Vec<String>) {
-        for child in &self.children {
-            match child {
-                RenderNode::Primitive(primitive) => {
-                    if let PrimitiveNode::Text(text) = &primitive.node {
-                        out.push(text.text.text.clone());
-                    }
-                }
-                RenderNode::Layer(child) => child.collect_painted_text(out),
-                RenderNode::DrawRun(run) => {
-                    for primitive in run.primitives() {
-                        if let DrawPrimitive::Text(text) = primitive {
-                            out.push(text.text.to_string());
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Whether everything this layer and its subtree draw lies within its
@@ -457,31 +439,18 @@ impl LayerNode {
     /// describes it, stays within its bounds: it clips to them, or its draws,
     /// its texts and its children placed where they are all fit inside.
     pub fn content_draws_within_bounds(&self) -> bool {
-        if self.visual_clip_rect().is_some() {
-            return true;
-        }
-        let bounds = inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK);
-        self.children.iter().all(|child| match child {
-            RenderNode::DrawRun(run) => {
-                !run.summary.has_shadow
-                    && run
-                        .recording
-                        .bounds()
-                        .is_none_or(|drawn| rect_within(drawn, bounds))
-            }
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Text(text) => text.draws_within(bounds),
-                PrimitiveNode::Draw(_) => false,
-            },
-            RenderNode::Layer(layer) => layer.draws_within_parent(bounds),
-        })
+        self.visual_clip_rect().is_some()
+            || nodes_draw_within(
+                &self.children,
+                inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK),
+            )
     }
 
     pub(crate) fn refresh_child_facts(&mut self) {
         self.has_hit_targets = self.hit_test.is_some()
             || self.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => false,
             });
         self.contained.set(None);
         self.space.set(None);
@@ -497,7 +466,7 @@ impl LayerNode {
         let found = self.graphics_layer.space.is_some()
             || self.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => child_layer.has_space(),
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) | RenderNode::Inline(_) => false,
             });
         self.space.set(Some(found));
         found
@@ -656,6 +625,8 @@ pub enum RenderNode {
     DrawRun(DrawRunNode),
     /// A nested layer.
     Layer(Box<LayerNode>),
+    /// A layout node drawn in this layer instead of a layer of its own.
+    Inline(Box<InlineNode>),
 }
 
 impl RenderNode {
@@ -667,6 +638,7 @@ impl RenderNode {
             Self::Primitive(entry) => Some(entry.phase),
             Self::DrawRun(run) => Some(run.phase),
             Self::Layer(layer) => layer.draw_phase,
+            Self::Inline(_) => None,
         }
     }
 
@@ -822,19 +794,19 @@ impl RenderGraph {
     /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on
     /// its own.
     pub fn node_count(&self) -> usize {
-        fn count_layer(layer: &LayerNode) -> usize {
-            1 + layer
-                .children
+        fn count_nodes(nodes: &[RenderNode]) -> usize {
+            nodes
                 .iter()
                 .map(|child| match child {
                     RenderNode::Primitive(_) => 1,
                     RenderNode::DrawRun(run) => run.len(),
-                    RenderNode::Layer(child_layer) => count_layer(child_layer),
+                    RenderNode::Layer(child_layer) => 1 + count_nodes(&child_layer.children),
+                    RenderNode::Inline(inline) => 1 + count_nodes(&inline.content),
                 })
                 .sum::<usize>()
         }
 
-        count_layer(&self.root)
+        1 + count_nodes(&self.root.children)
     }
 
     /// Estimated heap memory held beneath the root layer, in bytes, for memory reports.
@@ -856,6 +828,9 @@ impl RenderGraph {
                         }
                     }
                     RenderNode::Layer(child) => collect(child, nodes),
+                    RenderNode::Inline(inline) => {
+                        nodes.insert(inline.node_id);
+                    }
                     RenderNode::Primitive(_) => {}
                 }
             }
@@ -864,6 +839,46 @@ impl RenderGraph {
         nodes.clear();
         collect(&self.root, nodes);
     }
+}
+
+fn collect_painted_text(nodes: &[RenderNode], out: &mut Vec<String>) {
+    for child in nodes {
+        match child {
+            RenderNode::Primitive(primitive) => {
+                if let PrimitiveNode::Text(text) = &primitive.node {
+                    out.push(text.text.text.clone());
+                }
+            }
+            RenderNode::Layer(child) => collect_painted_text(&child.children, out),
+            RenderNode::Inline(inline) => collect_painted_text(&inline.content, out),
+            RenderNode::DrawRun(run) => {
+                for primitive in run.primitives() {
+                    if let DrawPrimitive::Text(text) = primitive {
+                        out.push(text.text.to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Whether `nodes`, a layer's children, put nothing outside `bounds` of it.
+fn nodes_draw_within(nodes: &[RenderNode], bounds: Rect) -> bool {
+    nodes.iter().all(|child| match child {
+        RenderNode::DrawRun(run) => {
+            !run.summary.has_shadow
+                && run
+                    .recording
+                    .bounds()
+                    .is_none_or(|drawn| rect_within(drawn, bounds))
+        }
+        RenderNode::Primitive(entry) => match &entry.node {
+            PrimitiveNode::Text(text) => text.draws_within(bounds),
+            PrimitiveNode::Draw(_) => false,
+        },
+        RenderNode::Layer(layer) => layer.draws_within_parent(bounds),
+        RenderNode::Inline(inline) => inline.draws_within_parent(bounds),
+    })
 }
 
 fn inflate_rect(rect: Rect, by: f32) -> Rect {

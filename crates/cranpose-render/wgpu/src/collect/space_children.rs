@@ -10,7 +10,8 @@ use cranpose_render_common::{
 
 use super::{
     LayerMotion, LayerScene, LayerSceneRecycler, MeshChild, SceneDraw, SeenDraw, WalkContext,
-    WalkSettings, collect_child, collect_isolated_child, node_is_pixel_sensitive, push_content,
+    WalkSettings, collect_child, collect_inline, collect_isolated_child, node_is_pixel_sensitive,
+    push_content,
 };
 use crate::scene::ContentContext;
 
@@ -80,7 +81,8 @@ pub(super) fn collect_space_children(
                 !(in_space && child_layer.graphics_layer.space.is_some())
                     && collect_child(child_layer, motion, context, out, recycler)
             }
-            _ => {
+            RenderNode::Inline(inline) => collect_inline(inline, context, out),
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
                 push_content(out, child, content);
                 node_is_pixel_sensitive(child)
             }

@@ -132,9 +132,17 @@ fn hash_layer(layer: &LayerNode, hash: &mut DefaultHasher) {
         )
         .as_bytes(),
     );
-    for child in &layer.children {
+    hash_nodes(&layer.children, hash);
+}
+
+fn hash_nodes(nodes: &[RenderNode], hash: &mut DefaultHasher) {
+    for child in nodes {
         match child {
             RenderNode::Layer(child) => hash_layer(child, hash),
+            RenderNode::Inline(inline) => {
+                hash.write(format!("{:?}{:?}", inline.origin, inline.size).as_bytes());
+                hash_nodes(&inline.content, hash);
+            }
             RenderNode::DrawRun(run) => hash.write_u64(run.recording.fingerprint()),
             RenderNode::Primitive(primitive) => hash.write(format!("{primitive:?}").as_bytes()),
         }

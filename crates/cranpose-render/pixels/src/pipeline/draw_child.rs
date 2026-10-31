@@ -29,7 +29,7 @@ pub(super) fn render_draw_child(
     match child {
         RenderNode::Primitive(primitive) => render_graph_primitive(scene, primitive, context),
         RenderNode::DrawRun(run) => render_graph_draw_run(scene, run, context),
-        RenderNode::Layer(_) => {}
+        RenderNode::Layer(_) | RenderNode::Inline(_) => {}
     }
 }
 

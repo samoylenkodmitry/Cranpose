@@ -1,5 +1,5 @@
 use cranpose_render_common::{
-    graph::{DrawRunNode, LayerNode, PrimitiveNode, RenderNode},
+    graph::{DrawRunNode, InlineNode, LayerNode, PrimitiveNode, RenderNode},
     primitive_emit::resolve_clip,
 };
 use cranpose_ui_graphics::{
@@ -137,6 +137,15 @@ fn layer_admits_corners(
             .visual_clip_rect()
             .map(|rect| rect.translate(offset.x, offset.y)),
     );
+    nodes_admit_corners(&layer.children, offset, inherited_clip, corners)
+}
+
+fn nodes_admit_corners(
+    nodes: &[RenderNode],
+    offset: Point,
+    inherited_clip: Option<Rect>,
+    corners: &RoundedClipCorners,
+) -> bool {
     let check = |rect: Rect, primitive_clip: Option<Rect>| -> bool {
         let rect = rect.translate(offset.x, offset.y);
         let clip = resolve_clip(
@@ -149,8 +158,7 @@ fn layer_admits_corners(
         };
         visible.is_none_or(|visible| corners.admits(expand_rect(visible, corners.aa_margin)))
     };
-    layer
-        .children
+    nodes
         .iter()
         .all(|child| node_admits_corners(child, offset, inherited_clip, corners, &check))
 }
@@ -191,6 +199,15 @@ fn node_admits_corners(
             let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
             layer_admits_corners(child, child_offset, inherited_clip, corners)
         }
+        RenderNode::Inline(inline) => {
+            inline_stays_clear(inline, offset, corners)
+                || nodes_admit_corners(
+                    &inline.content,
+                    Point::new(offset.x + inline.origin.x, offset.y + inline.origin.y),
+                    inherited_clip,
+                    corners,
+                )
+        }
     }
 }
 
@@ -212,16 +229,16 @@ pub(super) fn content_takes_rounded_clip(
         .all(|corner| (corner - radius).abs() <= AFFINE_TOLERANCE);
     (uniform
         && layer.visual_clip_rect() == Some(clip.rect)
-        && layer_takes_corners(
-            layer,
+        && nodes_take_corners(
+            &layer.children,
             Point::default(),
             &RoundedClipCorners::of(clip, raster_scale),
         ))
     .then_some(radius)
 }
 
-fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
-    layer.children.iter().all(|node| match node {
+fn nodes_take_corners(nodes: &[RenderNode], offset: Point, corners: &RoundedClipCorners) -> bool {
+    nodes.iter().all(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw)
                 if draw.clip.is_none() && takes_rounded_clip(&draw.primitive) =>
@@ -239,6 +256,14 @@ fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCo
         },
         RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
         RenderNode::Layer(child) => child_takes_corners(child, offset, corners),
+        RenderNode::Inline(inline) => {
+            inline_stays_clear(inline, offset, corners)
+                || nodes_take_corners(
+                    &inline.content,
+                    Point::new(offset.x + inline.origin.x, offset.y + inline.origin.y),
+                    corners,
+                )
+        }
     })
 }
 
@@ -252,13 +277,29 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
         && child.graphics_layer.shadow_elevation <= 0.0
         && !child_needs_surface(child);
     match direct_translation(child.transform_to_parent) {
-        Some(translation) if plain => layer_takes_corners(
-            child,
+        Some(translation) if plain => nodes_take_corners(
+            &child.children,
             Point::new(offset.x + translation.x, offset.y + translation.y),
             corners,
         ),
         _ => false,
     }
+}
+
+// Whether everything `inline`, a node drawn in the layer at `offset`, puts
+// down stays clear of the corners: it draws within its rect, and that rect
+// does.
+fn inline_stays_clear(inline: &InlineNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    inline.draws_within_bounds()
+        && stays_clear(
+            expand_rect(
+                inline.node_rect(),
+                cranpose_render_common::graph::CONTAINED_DRAW_SLACK,
+            )
+            .translate(inline.origin.x, inline.origin.y),
+            offset,
+            corners,
+        )
 }
 
 fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {

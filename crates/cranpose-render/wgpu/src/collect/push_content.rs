@@ -19,7 +19,7 @@ pub(super) fn push_content(out: &mut LayerScene, node: &RenderNode, content: &Co
     match node {
         RenderNode::Primitive(entry) => push_primitive(out, entry, content),
         RenderNode::DrawRun(run) => push_draw_run(out, run, content),
-        RenderNode::Layer(_) => {}
+        RenderNode::Layer(_) | RenderNode::Inline(_) => {}
     }
 }
 

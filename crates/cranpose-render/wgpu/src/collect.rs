@@ -4,7 +4,7 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
     graph::{
-        CachePolicy, LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode,
+        CachePolicy, InlineNode, LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode,
         for_each_in_draw_order,
     },
     layer_composition::{
@@ -670,7 +670,7 @@ fn collect_into(
     let boundary_anchor = boundary_anchor(layer, &context, (layer_bounds, &local_layer));
     let translated_anchor = context.snap_anchor.or(boundary_anchor);
     let layer_anchor = translated_anchor.or_else(|| {
-        (allow_rigid_snap && layer_needs_rigid_snap(layer, translated))
+        (allow_rigid_snap && content_needs_rigid_snap(&layer.children, translated))
             .then(|| rigid_snap_anchor(layer_bounds, &local_layer))
             .flatten()
     });
@@ -704,7 +704,8 @@ fn collect_into(
             RenderNode::Layer(child_layer) => {
                 collect_child(child_layer, motion, child_context, out, recycler)
             }
-            _ => {
+            RenderNode::Inline(inline) => collect_inline(inline, child_context, out),
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
                 push_content(out, child, &content);
                 node_is_pixel_sensitive(child)
             }
@@ -807,6 +808,50 @@ fn collect_child(
     collect_into(child, motion, child_context, out, recycler)
 }
 
+// Collects `inline`, a node drawn in its parent's layer, under `context`,
+// the walk of its parent's children: its content takes the place, clip and
+// snap anchor a child layer that only moves would give it. Returns whether
+// it draws pixel-sensitive content.
+fn collect_inline(inline: &InlineNode, context: WalkContext<'_>, out: &mut LayerScene) -> bool {
+    let offset = Point::new(
+        context.offset.x + inline.origin.x,
+        context.offset.y + inline.origin.y,
+    );
+    let bounds = inline.node_rect().translate(offset.x, offset.y);
+    if context
+        .visual_clip
+        .is_some_and(|clip| inline.draws_within_bounds() && outside_clip(bounds, clip))
+    {
+        return context.settings.wants_pixel_sensitive
+            && inline.content.iter().any(node_is_pixel_sensitive);
+    }
+    let translated = context.translated;
+    let rigid = || rigid_snap_anchor(bounds, &GraphicsLayer::DEFAULT);
+    let inherited = context
+        .snap_anchor
+        .or_else(|| translated.then(rigid).flatten());
+    let anchor = inherited.or_else(|| {
+        ((translated || !inline.motion_context_animated)
+            && content_needs_rigid_snap(&inline.content, translated))
+        .then(rigid)
+        .flatten()
+    });
+    let content = ContentContext {
+        layer_bounds: bounds,
+        local_layer: &GraphicsLayer::DEFAULT,
+        visual_clip: context.visual_clip,
+        rounding: context.rounding,
+        anchor,
+        motion_context_animated: inline.motion_context_animated || translated,
+    };
+    let mut pixel_sensitive = false;
+    for_each_in_draw_order(&inline.content, |node| {
+        push_content(out, node, &content);
+        pixel_sensitive |= node_is_pixel_sensitive(node);
+    });
+    pixel_sensitive
+}
+
 #[inline(never)]
 fn push_direct_layer_shadow(
     child: &LayerNode,
@@ -878,24 +923,29 @@ fn collect_isolated_child(
 /// `clip`: its subtree draws within its bounds, it casts no shadow, and those
 /// bounds miss the clip.
 fn clipped_away(child: &LayerNode, bounds: Rect, clip: Option<Rect>) -> bool {
-    let Some(clip) = clip else {
-        return false;
-    };
-    let slack = cranpose_render_common::graph::CONTAINED_DRAW_SLACK;
-    child.draws_within_bounds()
-        && child.graphics_layer.shadow_elevation <= 0.0
-        && Rect {
-            x: bounds.x - slack,
-            y: bounds.y - slack,
-            width: bounds.width + slack * 2.0,
-            height: bounds.height + slack * 2.0,
-        }
-        .intersect(clip)
-        .is_none()
+    clip.is_some_and(|clip| {
+        child.draws_within_bounds()
+            && child.graphics_layer.shadow_elevation <= 0.0
+            && outside_clip(bounds, clip)
+    })
 }
 
-fn layer_needs_rigid_snap(layer: &LayerNode, translated: bool) -> bool {
-    layer.children.iter().any(|child| match child {
+// Whether `bounds`, widened by the slack a contained draw may take, miss
+// `clip`.
+fn outside_clip(bounds: Rect, clip: Rect) -> bool {
+    let slack = cranpose_render_common::graph::CONTAINED_DRAW_SLACK;
+    Rect {
+        x: bounds.x - slack,
+        y: bounds.y - slack,
+        width: bounds.width + slack * 2.0,
+        height: bounds.height + slack * 2.0,
+    }
+    .intersect(clip)
+    .is_none()
+}
+
+fn content_needs_rigid_snap(children: &[RenderNode], translated: bool) -> bool {
+    children.iter().any(|child| match child {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Text(_) => true,
             PrimitiveNode::Draw(draw) => {
@@ -908,7 +958,7 @@ fn layer_needs_rigid_snap(layer: &LayerNode, translated: bool) -> bool {
                 || run.summary.has_pixel_sensitive
                 || (translated && run.summary.has_non_shadow)
         }
-        RenderNode::Layer(_) => false,
+        RenderNode::Layer(_) | RenderNode::Inline(_) => false,
     })
 }
 

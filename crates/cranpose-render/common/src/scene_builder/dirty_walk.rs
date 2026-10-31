@@ -7,8 +7,9 @@ use cranpose_ui::Point;
 
 use super::{
     AbsOrigin, Level, LowerContext, TranslateAncestorContext, children_have_origin_sinks,
-    layer_identity, note_space_change, read_placed_node_data, rebuild_tracking_hits,
-    release_for_rebuild, remove_dirty_descendants, try_update_retained_layer, write_node_layer,
+    inline_leaf::fold_kept_leaf, layer_identity, note_space_change, read_placed_node_data,
+    rebuild_tracking_hits, release_for_rebuild, remove_dirty_descendants,
+    try_update_retained_layer, update_dirty_inline, write_node_layer,
 };
 use crate::{
     NodeUpdate,
@@ -215,8 +216,13 @@ fn path_steps(
 ) -> Option<ParentPass> {
     let translated = inherited_translated_content_context || parent.translated_content_context;
     for (index, child) in parent.children.iter().enumerate() {
-        let RenderNode::Layer(layer) = child else {
-            continue;
+        let layer = match child {
+            RenderNode::Layer(layer) => layer,
+            RenderNode::Inline(inline) if inline.node_id == node => {
+                steps.push((index, Some(node)));
+                return Some(ParentPass::of(parent, parent_children, translated));
+            }
+            RenderNode::Inline(_) | RenderNode::Primitive(_) | RenderNode::DrawRun(_) => continue,
         };
         let identity = layer_identity(layer);
         if identity == Some(node) {
@@ -266,13 +272,20 @@ pub(super) fn update_along_retained_path(
 
 /// Whether each step of `steps` from `layer` finds the layer it names.
 fn leads_to(mut layer: &LayerNode, steps: &[(usize, Option<NodeId>)]) -> bool {
-    for &(index, identity) in steps {
+    let Some((&(last, identity), way)) = steps.split_last() else {
+        return false;
+    };
+    for &(index, identity) in way {
         match layer.children.get(index) {
             Some(RenderNode::Layer(child)) if layer_identity(child) == identity => layer = child,
             _ => return false,
         }
     }
-    !steps.is_empty()
+    match layer.children.get(last) {
+        Some(RenderNode::Layer(child)) => layer_identity(child) == identity,
+        Some(RenderNode::Inline(inline)) => Some(inline.node_id) == identity,
+        Some(RenderNode::Primitive(_) | RenderNode::DrawRun(_)) | None => false,
+    }
 }
 
 /// Goes down `steps` from `layer` to the path's layer, updates it for
@@ -287,13 +300,24 @@ fn update_at_step(
     update: u64,
 ) -> Option<ReplaceDirtyLayersReport> {
     let (&(index, _), rest) = steps.split_first()?;
-    let Some(RenderNode::Layer(child)) = layer.children.get_mut(index) else {
-        return None;
-    };
-    let hit_graph_dirty = if rest.is_empty() {
-        update_dirty_layer(applier, child, path.node, kind, dirty, path.pass, update)?.0
-    } else {
-        update_at_step(applier, child, path, rest, kind, dirty, update)?.hit_graph_dirty
+    let hit_graph_dirty = match (layer.children.get_mut(index)?, rest.is_empty()) {
+        (slot @ RenderNode::Layer(_), true) => {
+            let RenderNode::Layer(child) = slot else {
+                unreachable!("the slot holds a layer");
+            };
+            let hit_graph_dirty =
+                update_dirty_layer(applier, child, path.node, kind, dirty, path.pass, update)?.0;
+            fold_kept_leaf(applier, slot, path.pass.content_offset);
+            hit_graph_dirty
+        }
+        (RenderNode::Layer(child), false) => {
+            update_at_step(applier, child, path, rest, kind, dirty, update)?.hit_graph_dirty
+        }
+        (slot @ RenderNode::Inline(_), true) => {
+            let context = path.pass.lower_context();
+            update_dirty_inline(applier, slot, path.node, kind, context, dirty)?
+        }
+        _ => return None,
     };
     note_updated_children(layer, update);
     Some(ReplaceDirtyLayersReport {
@@ -327,8 +351,13 @@ fn replace_dirty_layers_from_applier(
         if dirty.nodes.is_empty() {
             break;
         }
-        let RenderNode::Layer(child_layer) = child else {
-            continue;
+        let child_layer = match child {
+            RenderNode::Layer(child_layer) => child_layer,
+            RenderNode::Inline(_) => {
+                update_inline_child(applier, child, &mut dirty, pass, &mut report)?;
+                continue;
+            }
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => continue,
         };
 
         let identity = layer_identity(child_layer);
@@ -368,6 +397,7 @@ fn replace_dirty_layers_from_applier(
                 )?;
                 report.hit_graph_dirty |= child_report.hit_graph_dirty;
             }
+            fold_kept_leaf(applier, child, pass.content_offset);
             continue;
         }
 
@@ -392,6 +422,34 @@ fn replace_dirty_layers_from_applier(
     }
 
     Some(report)
+}
+
+// Updates `child`, an inline node, when its node is dirty, noting in
+// `report` what changed. `None` when the node's data is gone. Inline: most
+// inline nodes a walk passes are clean.
+#[inline]
+fn update_inline_child(
+    applier: &MemoryApplier,
+    child: &mut RenderNode,
+    dirty: &mut DirtyWalk<'_>,
+    pass: ParentPass,
+    report: &mut ReplaceDirtyLayersReport,
+) -> Option<()> {
+    let RenderNode::Inline(inline) = child else {
+        return Some(());
+    };
+    let node_id = inline.node_id;
+    if dirty.marks(Some(node_id)) & DIRTY_NODE == 0 {
+        return Some(());
+    }
+    let Some(kind) = dirty.nodes.remove(&node_id) else {
+        return Some(());
+    };
+    let context = pass.lower_context();
+    report.hit_graph_dirty |=
+        update_dirty_inline(applier, child, node_id, kind, context, dirty.nodes)?;
+    report.updated = true;
+    Some(())
 }
 
 /// Brings `parent`'s facts about its children up to date after scene update
@@ -424,6 +482,16 @@ impl ParentPass {
             translated_content_context,
             content_offset: parent.content_offset,
             children,
+        }
+    }
+
+    // What a child the parent lays out lowers with.
+    fn lower_context(self) -> LowerContext {
+        LowerContext {
+            inherited_motion_context_animated: self.motion_context_animated,
+            inherited_translated_content_context: self.translated_content_context,
+            parent_abs: Some(self.children),
+            parent_content_offset: self.content_offset,
         }
     }
 }
@@ -463,12 +531,7 @@ fn update_dirty_layer(
     // remains to update for them, and a dirty one would otherwise go
     // unmatched and rebuild the whole scene.
     remove_dirty_descendants(layer, dirty_nodes);
-    let context = LowerContext {
-        inherited_motion_context_animated: pass.motion_context_animated,
-        inherited_translated_content_context: pass.translated_content_context,
-        parent_abs: Some(pass.children),
-        parent_content_offset: pass.content_offset,
-    };
+    let context = pass.lower_context();
     let hit_graph_dirty = rebuild_tracking_hits(layer, |layer| {
         release_for_rebuild(layer);
         read_placed_node_data(applier, node_id, Level::Child, |data| {

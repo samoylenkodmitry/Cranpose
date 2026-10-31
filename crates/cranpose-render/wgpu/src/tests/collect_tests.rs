@@ -192,12 +192,8 @@ fn rigid_snap_distinguishes_own_draws_from_descendant_text() {
         ),
     ];
     for (children, stationary, translated) in cases {
-        let layer = LayerNode {
-            children,
-            ..Default::default()
-        };
-        assert_eq!(layer_needs_rigid_snap(&layer, false), stationary);
-        assert_eq!(layer_needs_rigid_snap(&layer, true), translated);
+        assert_eq!(content_needs_rigid_snap(&children, false), stationary);
+        assert_eq!(content_needs_rigid_snap(&children, true), translated);
     }
 }
 

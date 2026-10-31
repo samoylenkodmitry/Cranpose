@@ -188,12 +188,17 @@ fn first_zero_timestamp_and_exact_manual_frames_remain_available() {
 }
 
 fn contains_caret(layer: &LayerNode) -> bool {
+    nodes_contain_caret(&layer.children)
+}
+
+fn nodes_contain_caret(nodes: &[RenderNode]) -> bool {
     let is_caret = |primitive: &DrawPrimitive| {
         matches!(primitive,
         DrawPrimitive::Rect { brush: Brush::Solid(color), .. } if *color == Color::GREEN)
     };
-    layer.children.iter().any(|node| match node {
+    nodes.iter().any(|node| match node {
         RenderNode::Layer(child) => contains_caret(child),
+        RenderNode::Inline(inline) => nodes_contain_caret(&inline.content),
         RenderNode::DrawRun(run) => run.primitives().any(|primitive| is_caret(&primitive)),
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw) => is_caret(&draw.primitive),
