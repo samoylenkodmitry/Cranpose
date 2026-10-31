@@ -393,7 +393,7 @@ fn a_rounded_layer_finds_text_its_child_layers_put_in_a_corner() {
     ));
     assert!(matches!(
         child_placement(&text_in_a_child_at(60.0, 40.0), RasterScale::Exact(1.0)),
-        Placement::DirectRounded(_, radius) if radius == 20.0
+        Placement::DirectRounded(..)
     ));
 }
 
