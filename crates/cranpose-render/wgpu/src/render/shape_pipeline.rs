@@ -511,15 +511,14 @@ impl ShapePipelineKey {
     }
 
     /// The pipeline that lays down the opaque interiors of this key's
-    /// draws, if they have any: plain source-over draws. A turned record's
-    /// layer draws in place only under a rigid turn, which keeps the
-    /// interior's half-pixel inset from the fill's edge exact. The interior
-    /// shader reads only the tier and the turns, so every variant shares one
-    /// pipeline per tier and turns: one compile, and draws of different
-    /// variants lay their interiors down together.
+    /// draws, if they have any: plain source-over draws, under a rounded
+    /// clip within one of its bands. A turned record's layer draws in place
+    /// only under a rigid turn, which keeps the interior's half-pixel inset
+    /// exact. The interior shader reads only the tier and the turns, so
+    /// every variant shares one pipeline per tier and turns: one compile,
+    /// and draws of different variants lay their interiors down together.
     pub(crate) fn interior(self) -> Option<Self> {
         (self.depth == ShapeDepth::Tested
-            && !self.variant.rounded()
             && self.blend_mode == BlendMode::SrcOver
             && !self.variant.ablation.material
             && !self.variant.ablation.fill)

@@ -1231,11 +1231,15 @@ fn vs_record_interior(
     let radii = select(vec4<f32>(0.0), resolved_radii(record, geometry.scale), kind == RECORD_KIND_ROUND_RECT);
     var interior = fill_interior(geometry.rect, radii);
     if ((placement.flags & PLACEMENT_CLIPPED) != 0u) {
+        // A rounded clip keeps the interior to one of its bands, as
+        // `rounded_fill_interior` does for the paint.
         let clip = placement.clip;
-        interior = vec4<f32>(
-            max(interior.xy, clip.xy),
-            min(interior.zw, clip.xy + clip.zw),
-        );
+        let edges = vec4<f32>(clip.xy, clip.xy + clip.zw);
+        let side = max(placement.clip_radius, 0.5);
+        let rounded = placement.clip_radius > 0.0;
+        let across = rect_overlap(interior, select(edges, edges + vec4<f32>(side, 0.5, -side, -0.5), rounded));
+        let down = rect_overlap(interior, select(edges, edges + vec4<f32>(0.5, side, -0.5, -side), rounded));
+        interior = larger_rect(across, down);
     }
     if (interior.z <= interior.x || interior.w <= interior.y) {
         return output;
