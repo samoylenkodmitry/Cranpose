@@ -10,13 +10,13 @@ use crate::{
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
-    instant_triangles::{InstantDraw, InstantStandIn, LayerTexels},
+    instant_triangles::{InstantDraw, LayerTexels},
     lazy_resource::Pending,
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
         ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
-        StoreRunBatch, TargetRect, TurnedGlyphs, ViewportUniformParams, scissor_rect_for_rect,
+        StoreRunBatch, TargetRect, ViewportUniformParams, scissor_rect_for_rect,
         supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
@@ -36,10 +36,12 @@ use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
+mod pass_buffers;
 mod pass_scratch;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
+use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
@@ -739,49 +741,6 @@ fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
         .filter(|pair| pair[0].transform.is_identity() != pair[1].transform.is_identity())
         .count()
         >= MIXED_TURN_CHANGES
-}
-
-/// The per-frame vectors a pass fills: image and glyph geometry and draw
-/// commands, kept on the renderer between frames so they never reallocate.
-/// The quads a pass drew from its scratch, uploaded for its draws: fallback
-/// triangles, image vertices and indices, and glyph instances.
-#[derive(Default)]
-struct PassBuffers {
-    meshes: Option<crate::mesh_fallback::MeshBuffers>,
-    images: Option<ImageSlot>,
-    shadows: Option<crate::frame_graph::BufferUpload>,
-    glyphs: Option<crate::frame_graph::BufferUpload>,
-    turned_glyphs: Option<crate::frame_graph::BufferUpload>,
-    instant: Option<crate::instant_triangles::InstantBuffers>,
-}
-
-impl PassBuffers {
-    // Where the pass draws its turned glyphs from: see `TurnedGlyphs`.
-    fn turned_glyphs<'a>(&'a self, stand_in: Option<InstantStandIn<'a>>) -> TurnedGlyphs<'a> {
-        let laid = self
-            .instant
-            .as_ref()
-            .and_then(|laid| laid.glyphs(stand_in?));
-        laid.map_or(
-            TurnedGlyphs::Own(self.turned_glyphs.as_ref()),
-            TurnedGlyphs::Instant,
-        )
-    }
-
-    /// The pass's fallback triangles, with the index range of each run draw
-    /// of `meshes` that takes some.
-    fn run_meshes<'a>(
-        &'a self,
-        meshes: &'a crate::mesh_fallback::PassMeshes,
-    ) -> Option<crate::mesh_fallback::RunMeshes<'a>> {
-        self.meshes
-            .as_ref()
-            .map(|buffers| crate::mesh_fallback::RunMeshes {
-                ranges: &meshes.ranges,
-                chunks: meshes.builder.chunks(),
-                buffers,
-            })
-    }
 }
 
 /// The commands a pass's batches draw ranges of.
