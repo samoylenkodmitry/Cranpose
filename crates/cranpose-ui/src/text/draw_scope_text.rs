@@ -9,16 +9,17 @@
 //! and the same string rasterized by the renderer are described identically,
 //! down to the cache key.
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
-    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, Size, TextMeasurement,
+    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, MeasuredText, TextMeasurement,
     estimate_text_measurement,
 };
 
 use super::{
     font::{FontFamily, FontStyle, FontWeight},
     line_box::LineBox,
+    recent_values::RecentValues,
     style::{SpanStyle, TextStyle},
     unit::TextUnit,
 };
@@ -63,6 +64,48 @@ pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
     text_style
 }
 
+// How many draw-scope styles `drawn_text_style` keeps converted.
+const DRAWN_TEXT_STYLES: usize = 8;
+
+// A draw scope's style, the text style it converts to, and that style's
+// render hash.
+pub(crate) struct DrawnStyle {
+    draw: DrawTextStyle,
+    style: Arc<TextStyle>,
+    hash: u64,
+}
+
+// The draw-scope styles recently drawn in, which [`drawn_text_style`] keeps.
+pub(crate) type DrawnTextStyles = RecentValues<DrawnStyle, DRAWN_TEXT_STYLES>;
+
+/// The [`TextStyle`] that [`text_style_for_draw_style`] builds of `style`,
+/// and its render hash, converted once while draw scopes keep drawing in an
+/// equal style: a text measured and drawn every frame neither builds nor
+/// hashes its style again.
+pub fn drawn_text_style(style: &DrawTextStyle) -> (Arc<TextStyle>, u64) {
+    crate::thread_state::with(|state| {
+        let mut drawn = state.drawn_text_styles.borrow_mut();
+        let kept = match drawn.find(|kept| kept.draw == *style) {
+            Some(kept) => kept,
+            None => drawn.keep(drawn_style(style)),
+        };
+        (Arc::clone(&kept.style), kept.hash)
+    })
+}
+
+// `style` converted and hashed. Out of line: a frame that draws in a style
+// it drew in before runs none of it.
+#[cold]
+#[inline(never)]
+fn drawn_style(style: &DrawTextStyle) -> DrawnStyle {
+    let text_style = text_style_for_draw_style(style);
+    DrawnStyle {
+        draw: style.clone(),
+        hash: text_style.render_hash(),
+        style: Arc::new(text_style),
+    }
+}
+
 /// The line box a draw-scope style resolves to against the app's fonts: how
 /// tall one line is and where its baseline sits inside it.
 ///
@@ -80,9 +123,9 @@ pub fn draw_style_line_box(style: &DrawTextStyle) -> Option<LineBox> {
 
 /// Measures draw-scope text against the app's fonts.
 ///
-/// Every call lands in `super::measure::measure_resolved_text`, backed by the
-/// app context's metrics cache — so measuring an unchanged string every frame
-/// is a hash lookup, not a shaping pass.
+/// Every call lands in the app context's layout cache, so measuring an
+/// unchanged string every frame is a hash lookup, not a shaping pass, and the
+/// layout drawn is the one measured.
 ///
 /// "Resolved" is the whole point: a [`DrawTextStyle`] states final sizes, and a
 /// scene lowers a text primitive with `style.resolved_font_size()` untouched,
@@ -103,39 +146,44 @@ impl AppContextTextMeasurer {
 }
 
 impl DrawTextMeasurer for AppContextTextMeasurer {
-    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> MeasuredText {
         if crate::render_state::current_app_context().is_none() {
-            return estimate_text_measurement(text, style);
+            return MeasuredText {
+                measurement: estimate_text_measurement(text, style),
+                layout: None,
+            };
         }
-
-        let text_style = text_style_for_draw_style(style);
-        let annotated = super::shared_plain_annotated_string(text);
-        let metrics = super::measure::measure_resolved_text(&annotated, &text_style);
-        let line_height = if metrics.line_height.is_finite() && metrics.line_height > 0.0 {
-            metrics.line_height
+        let prepared = prepare_draw_text(text, style);
+        let layout = &prepared.layout;
+        let line_height = layout.line_advance();
+        let first_baseline = layout.line_baseline(0);
+        let measurement = if text.is_empty() {
+            TextMeasurement::empty(line_height, first_baseline)
         } else {
-            estimate_text_measurement(text, style).line_height
+            TextMeasurement {
+                size: prepared.size(),
+                line_height,
+                first_baseline,
+                line_count: prepared.metrics().line_count,
+            }
         };
-        let edges = super::measure::resolved_line_box(&text_style).unwrap_or_else(|| {
-            let baseline = super::measure::resolved_first_baseline(&text_style)
-                .unwrap_or_else(|| estimate_text_measurement(text, style).first_baseline);
-            LineBox::untrimmed(line_height, baseline)
-        });
-        let first_baseline = edges.first_baseline();
-
-        if text.is_empty() {
-            return TextMeasurement::empty(line_height, first_baseline);
-        }
-
-        let line_count = metrics.line_count.max(1);
-        let height = line_count as f32 * line_height - edges.trim_top - edges.trim_bottom;
-        TextMeasurement {
-            size: Size::new(metrics.width.max(0.0), height.max(0.0)),
-            line_height,
-            first_baseline,
-            line_count,
+        MeasuredText {
+            measurement,
+            layout: Some(prepared.layout_handle()),
         }
     }
+}
+
+// `text` in a draw scope's `style` laid out with the app's fonts, its sizes
+// taken as stated.
+fn prepare_draw_text(text: &str, style: &DrawTextStyle) -> Rc<super::PreparedTextLayout> {
+    let (style, style_hash) = drawn_text_style(style);
+    let text = super::shared_plain_annotated_string(text);
+    super::measure::prepare_resolved(&super::measure::SharedText {
+        text: &text,
+        style: &style,
+        style_hash,
+    })
 }
 
 #[cfg(test)]

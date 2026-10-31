@@ -13,7 +13,8 @@ use std::{
 use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Text, TextStyle, WindowRootDescriptor,
+    Alignment, Box, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Text, TextStyle,
+    WindowRootDescriptor,
 };
 use cranpose_ui_graphics::{Brush, Color, Rect, Size};
 
@@ -128,6 +129,62 @@ fn a_resizing_container_draws_what_a_scene_built_from_scratch_draws() {
     assert_eq!(
         mismatches, 0,
         "a scoped update drew other than a scene built from scratch"
+    );
+}
+
+// A cell whose width the screen animates, with a label that fills it and so
+// takes the cell's width.
+#[composable]
+fn LabelCell(captured: Captured) {
+    let width = rememberMutableStateOf(|| 80.0f32);
+    *captured.borrow_mut() = Some(width);
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(width.get())
+                    .height(48.0)
+                    .padding(1.0)
+                    .background(Color::BLACK),
+                BoxSpec::new().content_alignment(Alignment::CENTER),
+                || {
+                    Text(
+                        "cell 123 wraps",
+                        Modifier::empty().fill_max_width(),
+                        TextStyle::default(),
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn a_label_its_cell_resizes_draws_what_a_scene_built_from_scratch_draws() {
+    let captured: Captured = Rc::new(RefCell::new(None));
+    let (mut shell, checks) = checking_shell(true, {
+        let captured = Rc::clone(&captured);
+        move || LabelCell(Rc::clone(&captured))
+    });
+    shell.update();
+    let width = (*captured.borrow()).expect("the cell is composed");
+    let rebuilds_before = checks.rebuilds.get();
+    // The last widths leave the label no room, then give it back.
+    for cell_width in [78.5, 77.0, 75.5, 60.0, 2.0, 50.0] {
+        width.set(cell_width);
+        shell.update();
+    }
+    assert_eq!(
+        checks.mismatches.get(),
+        0,
+        "a resized label drew other than a scene built from scratch"
+    );
+    assert_eq!(
+        checks.rebuilds.get(),
+        rebuilds_before,
+        "resizing the cell rebuilt the whole scene"
     );
 }
 

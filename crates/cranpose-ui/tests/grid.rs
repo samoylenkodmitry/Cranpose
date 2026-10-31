@@ -2,12 +2,12 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_ui::{
     Alignment, Box, BoxSpec, IntrinsicSize, LayoutDirection, LayoutTree, Modifier,
-    ProvideLayoutDirection, Size, Text, TextStyle, set_text_measurer,
+    ProvideLayoutDirection, Size, Text,
     widgets::{FlowRow, FlowSpec, Fr, Grid, GridConfig, GridFlow, GridItem, GridTrackSize},
 };
 
 use crate::{
-    directional_layout::tagged, text_contract_measurer::ContractMeasurer,
+    directional_layout::tagged, text_contract::contract_style,
     text_measured_layout_integration::layout_composition,
 };
 
@@ -269,13 +269,12 @@ fn a_grid_reports_its_track_widths_as_its_intrinsic_width() {
                         .gap(5.0),
                     Modifier::empty().content_description("grid"),
                     || {
-                        Text("aaaa", Modifier::empty(), TextStyle::default());
+                        Text("aaaa", Modifier::empty(), contract_style());
                     },
                 );
             },
         );
     });
-    set_text_measurer(ContractMeasurer);
     let layout = layout_composition(&mut composition, Size::new(300.0, 300.0));
     assert_eq!(size(&layout, "grid").0, 49.0);
 }

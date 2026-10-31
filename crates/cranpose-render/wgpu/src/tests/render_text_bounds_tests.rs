@@ -7,12 +7,28 @@ use crate::{render::glyph_draws::glyph_clip_edges, scene::DrawnText};
 
 #[test]
 fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() {
+    let text = cranpose_ui::text::shared_plain_annotated_string("bounds");
+    let layout = cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(
+            cranpose_render_common::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver(),
+        );
+        cranpose_ui::text::prepare_text_layout(
+            &text,
+            &cranpose_ui::TextStyle::default(),
+            cranpose_ui::text::TextLayoutOptions::default(),
+            None,
+        )
+        .layout
+        .clone()
+    });
+    // The rect is as wide as the text's lines reach, so its bounds are the
+    // rect's.
     let mut draw = TextDraw {
         node_id: NodeId(1),
         rect: Rect {
             x: 10.25,
             y: 20.75,
-            width: 30.125,
+            width: layout.lines_reach().1.ceil(),
             height: 18.875,
         },
         snap_anchor: Some(SnapAnchor::rigid(Point::new(10.25, 20.75))),
@@ -20,12 +36,12 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
             cranpose_ui::text::shared_plain_render_string("bounds"),
             &cranpose_ui::TextStyle::default(),
         ),
+        layout,
         color: Color::WHITE,
         text_style: Default::default(),
         style_hash: 0,
         font_size: 14.0,
         scale: 1.0,
-        layout_options: Default::default(),
         clip: None,
     };
     let snapped = Rect {

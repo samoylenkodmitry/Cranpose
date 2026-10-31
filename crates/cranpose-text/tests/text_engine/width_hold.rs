@@ -49,10 +49,10 @@ fn held_widths(
     let mut width = from;
     while width < to {
         width += 0.25;
-        if !laid.holds(0.0, width) {
+        if !laid.holds(width, width) {
             return (held, Some(width));
         }
-        laid.align(0.0, width, paragraph.text_align);
+        laid.align(width, width, paragraph.text_align);
         let fresh = lay_out_with(resolver, text, (paragraph, lengths), width, options);
         assert_eq!(picture(&laid), picture(&fresh), "at {width}");
         held += 1;
@@ -167,6 +167,30 @@ fn text_that_does_not_wrap_holds_every_width() {
 }
 
 #[test]
+fn a_line_that_fits_by_an_ellipsis_it_does_not_show_holds_no_narrower_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let style = paragraph(TextAlign::Start, LineBreak::Simple);
+    let options = TextLayoutOptions {
+        soft_wrap: false,
+        overflow: TextOverflow::Ellipsis,
+        ..TextLayoutOptions::default()
+    };
+
+    let laid = lay_out_with(
+        &resolver,
+        "Tea",
+        (&style, lengths(0.0, 0.0)),
+        200.0,
+        options,
+    );
+    let fits = laid.line_right(0);
+
+    assert!(!laid.is_line_ellipsized(0));
+    assert!(laid.holds(0.0, fits + 1.0));
+    assert!(!laid.holds(0.0, fits - 1.0));
+}
+
+#[test]
 fn even_breaking_holds_no_other_width() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let style = paragraph(TextAlign::Start, LineBreak::Paragraph);
@@ -230,4 +254,30 @@ fn hyphenated_lines_hold_the_widths_that_keep_their_hyphenation_points() {
         from = first_not;
     }
     assert!(changes > 3, "{changes}");
+}
+
+#[test]
+fn a_layout_aligned_without_moving_a_glyph_keeps_its_id() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let start = paragraph(TextAlign::Start, LineBreak::Simple);
+    let mut laid = lay_out_with(
+        &resolver,
+        "hello world",
+        (&start, ParagraphLengths::default()),
+        300.0,
+        TextLayoutOptions::default(),
+    );
+    let id = laid.id();
+
+    laid.align(250.0, 250.0, TextAlign::Start);
+    assert_eq!(laid.id(), id, "a start-aligned line stays where it was");
+    let at_start = picture(&laid);
+
+    laid.align(250.0, 250.0, TextAlign::Center);
+    assert_ne!(laid.id(), id, "centring moves the line");
+    let centred = laid.id();
+
+    laid.align(250.0, 250.0, TextAlign::Start);
+    assert_ne!(laid.id(), centred, "the start takes the line back");
+    assert_eq!(picture(&laid), at_start);
 }

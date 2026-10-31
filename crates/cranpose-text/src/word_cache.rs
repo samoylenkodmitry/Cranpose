@@ -1,33 +1,52 @@
 use std::hash::{BuildHasher, Hash, Hasher};
 
+use cranpose_ui_graphics::{HashBits, MemoryHeadroom};
 use foldhash::fast::FixedState;
 
-use crate::shaper::ShapedGlyph;
+use crate::shaped_glyphs::{GlyphOffset, ShapedGlyph};
 
 // Shaped words kept from one shaping to the next. A direct-mapped table of
 // slots finds a word with one hash and one compare; the words' text and
-// glyphs live in two rings of fixed size, so keeping a word allocates
-// nothing: a slot names where its word was written, and the word is gone
-// once the ring has wrapped over it. A word is kept the second time it is
-// shaped, as TinyLFU's doorkeeper admits, so words seen once, such as a
-// number that changes every frame, do not push kept words out.
+// glyphs live in two rings, so keeping a word allocates nothing: a slot
+// names where its word was written, and the word is gone once the ring has
+// wrapped over it. A word is kept the second time it is shaped, as
+// TinyLFU's doorkeeper admits, so words seen once, such as a number that
+// changes every frame, do not push kept words out.
+//
+// The cache starts with room for the fewest words and doubles when it
+// misses a word it kept and lost for room, which a set of the words pushed
+// out of their slots tells, as ARC's ghost entries do, up to the most words
+// while memory is ample: a screen of a few labels keeps a few kilobytes, a
+// page of prose the whole cache. Tight memory takes it back to the fewest.
 pub(crate) struct WordCache {
     // The slots and rings are made on the first word kept, so a shaper that
     // keeps none takes no room.
     slots: Vec<Option<Word>>,
     texts: Ring<u8>,
     glyphs: Ring<ShapedGlyph>,
-    // One bit per hash of a word shaped once and not kept; cleared after as
-    // many words as it has bits, so it forgets old words.
-    seen: [u64; SEEN_WORDS],
-    seen_count: usize,
+    // The offsets of the words whose glyphs draw off the pen.
+    offsets: Ring<GlyphOffset>,
+    // The words shaped once and not kept.
+    seen: HashBits,
+    // The words kept and then pushed out of their slots by others.
+    gone: HashBits,
+    // The words there is room for: a power of two from `FEWEST_WORDS` to
+    // `MOST_WORDS`.
+    room: usize,
+    // Whether a word kept was missed for room since the room last changed.
+    outgrown: bool,
+    headroom: MemoryHeadroom,
 }
 
 struct Word {
+    // The hash of the plan and text, which tells the word the rings wrapped
+    // over from another word in its slot.
+    hash: u64,
     plan: u64,
     text: Written,
     // Clusters count from the word's start.
     glyphs: Written,
+    offsets: Option<Written>,
 }
 
 // Where a value was written in a ring: its position counted from the ring's
@@ -46,12 +65,11 @@ struct Ring<T> {
     written: u64,
 }
 
-const WORD_SLOTS: usize = 512;
-const SLOT_MASK: u64 = 511;
-// 64 words of 64 bits: 4,096 words remembered.
-const SEEN_WORDS: usize = 64;
-const TEXT_RING: usize = 8 * 1024;
-const GLYPH_RING: usize = 2048;
+const FEWEST_WORDS: usize = 64;
+const MOST_WORDS: usize = 512;
+// The text bytes and glyphs the rings hold for a word.
+const TEXT_PER_WORD: usize = 16;
+const GLYPHS_PER_WORD: usize = 4;
 const HASH_STATE: FixedState = FixedState::with_seed(0);
 
 impl Default for WordCache {
@@ -60,56 +78,120 @@ impl Default for WordCache {
             slots: Vec::new(),
             texts: Ring::default(),
             glyphs: Ring::default(),
-            seen: [0; SEEN_WORDS],
-            seen_count: 0,
+            offsets: Ring::default(),
+            seen: HashBits::default(),
+            gone: HashBits::default(),
+            room: FEWEST_WORDS,
+            outgrown: false,
+            headroom: MemoryHeadroom::Ample,
         }
     }
 }
 
 impl WordCache {
     // The glyphs of `text` shaped with `plan`, a hash of the shaping face and
-    // plan, clusters counting from the word's start.
-    pub(crate) fn get(&self, plan: u64, text: &str) -> Option<&[ShapedGlyph]> {
-        let word = self.slots.get(slot(plan, text))?.as_ref()?;
-        let kept = self.texts.read(word.text, TEXT_RING)?;
+    // plan, clusters counting from the word's start, with their offsets.
+    pub(crate) fn get(
+        &mut self,
+        plan: u64,
+        text: &str,
+    ) -> Option<(&[ShapedGlyph], &[GlyphOffset])> {
+        let hash = hash(plan, text);
+        let Some(word) = self
+            .slots
+            .get(slot(hash, self.room))
+            .and_then(Option::as_ref)
+            .filter(|word| word.hash == hash)
+        else {
+            self.outgrown |= self.gone.contains(hash);
+            return None;
+        };
+        let Some(kept) = self.texts.read(word.text, self.room * TEXT_PER_WORD) else {
+            self.outgrown = true;
+            return None;
+        };
         if word.plan != plan || kept != text.as_bytes() {
             return None;
         }
-        self.glyphs.read(word.glyphs, GLYPH_RING)
+        let ring = self.room * GLYPHS_PER_WORD;
+        let glyphs = self.glyphs.read(word.glyphs, ring);
+        let offsets = match word.offsets {
+            Some(offsets) => self.offsets.read(offsets, ring),
+            None => Some(&[][..]),
+        };
+        let found = glyphs.zip(offsets);
+        self.outgrown |= found.is_none();
+        found
+    }
+
+    // Takes the room back to the fewest words when memory turns tight.
+    pub(crate) fn set_headroom(&mut self, headroom: MemoryHeadroom) {
+        if headroom == self.headroom {
+            return;
+        }
+        self.headroom = headroom;
+        if headroom == MemoryHeadroom::Tight && self.room > FEWEST_WORDS {
+            self.resize(FEWEST_WORDS);
+        }
+    }
+
+    // Drops every word kept and makes room for `room` words when the next
+    // is kept.
+    fn resize(&mut self, room: usize) {
+        self.room = room;
+        self.outgrown = false;
+        self.gone = HashBits::default();
+        self.slots = Vec::new();
+        self.texts = Ring::default();
+        self.glyphs = Ring::default();
+        self.offsets = Ring::default();
     }
 
     // Whether the shapes of `text` with `plan` are worth keeping: it was
     // shaped before since the doorkeeper last forgot.
     pub(crate) fn admits(&mut self, plan: u64, text: &str) -> bool {
-        let bit = hash(plan, text) >> 52;
-        let (word, mask) = (index(bit >> 6), 1 << (bit & 63));
-        if self.seen[word] & mask != 0 {
+        let hash = hash(plan, text);
+        if self.seen.contains(hash) {
             return true;
         }
-        self.seen[word] |= mask;
-        self.seen_count += 1;
-        if self.seen_count == SEEN_WORDS * 64 {
-            self.seen = [0; SEEN_WORDS];
-            self.seen_count = 0;
-        }
+        self.seen.insert(hash);
         false
     }
 
-    // Keeps `glyphs`, clusters counting from the word's start, as the shapes
-    // of `text` with `plan`, in place of the word in the same slot. A word
-    // longer than a ring is not kept.
-    pub(crate) fn put(&mut self, plan: u64, text: &str, glyphs: &[ShapedGlyph]) {
-        if text.len() > TEXT_RING || glyphs.len() > GLYPH_RING {
+    // Keeps `glyphs`, clusters counting from the word's start, drawn at
+    // `offsets` from the pen, or at the pen when there are none, as the
+    // shapes of `text` with `plan`, in place of the word in the same slot. A
+    // word longer than a ring is not kept.
+    pub(crate) fn put(
+        &mut self,
+        plan: u64,
+        text: &str,
+        glyphs: &[ShapedGlyph],
+        offsets: &[GlyphOffset],
+    ) {
+        if self.outgrown && self.headroom == MemoryHeadroom::Ample && self.room < MOST_WORDS {
+            self.resize(self.room * 2);
+        }
+        let (text_ring, glyph_ring) = (self.room * TEXT_PER_WORD, self.room * GLYPHS_PER_WORD);
+        if text.len() > text_ring || glyphs.len() > glyph_ring {
             return;
         }
         if self.slots.is_empty() {
-            self.slots.resize_with(WORD_SLOTS, || None);
+            self.slots.resize_with(self.room, || None);
         }
-        let at = slot(plan, text);
+        let hash = hash(plan, text);
+        let at = slot(hash, self.room);
+        if let Some(pushed) = &self.slots[at]
+            && pushed.hash != hash
+        {
+            self.gone.insert(pushed.hash);
+        }
         self.slots[at] = Some(Word {
+            hash,
             plan,
-            text: self.texts.write(text.as_bytes(), TEXT_RING),
-            glyphs: self.glyphs.write(glyphs, GLYPH_RING),
+            text: self.texts.write(text.as_bytes(), text_ring),
+            glyphs: self.glyphs.write(glyphs, glyph_ring),
+            offsets: (!offsets.is_empty()).then(|| self.offsets.write(offsets, glyph_ring)),
         });
     }
 }
@@ -155,8 +237,9 @@ impl<T: Copy + Default> Ring<T> {
     }
 }
 
-fn slot(plan: u64, text: &str) -> usize {
-    index(hash(plan, text) & SLOT_MASK)
+// The slot of the word of `hash` in a table of `room` slots, a power of two.
+fn slot(hash: u64, room: usize) -> usize {
+    index(hash & (to_u64(room) - 1))
 }
 
 fn hash(plan: u64, text: &str) -> u64 {

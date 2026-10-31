@@ -361,67 +361,6 @@ fn text_style_render_hash_includes_visual_attributes() {
 }
 
 #[test]
-fn text_align_fraction_puts_the_slack_before_the_text_by_alignment_and_direction() {
-    let aligned = |text_align| {
-        let mut style = TextStyle::default();
-        style.paragraph_style.text_align = text_align;
-        style
-    };
-    assert_eq!(text_align_fraction(&aligned(TextAlign::Start), "abc"), 0.0);
-    assert_eq!(text_align_fraction(&aligned(TextAlign::Center), "abc"), 0.5);
-    assert_eq!(text_align_fraction(&aligned(TextAlign::End), "abc"), 1.0);
-    assert_eq!(text_align_fraction(&aligned(TextAlign::Right), "abc"), 1.0);
-    assert_eq!(
-        text_align_fraction(&aligned(TextAlign::Start), "שלום"),
-        1.0,
-        "a right-to-left paragraph starts at the right edge"
-    );
-}
-
-#[test]
-fn text_alignment_respects_physical_edges_and_paragraph_direction() {
-    let cases = [
-        (TextDirection::Ltr, "שלום", false),
-        (TextDirection::Rtl, "hello", true),
-        (TextDirection::Content, "hello", false),
-        (TextDirection::Content, "שלום", true),
-        (TextDirection::ContentOrLtr, "123.45", false),
-        (TextDirection::ContentOrRtl, "123.45", true),
-        (TextDirection::Unspecified, "hello", false),
-        (TextDirection::Unspecified, "שלום", true),
-        (TextDirection::Content, "١٢٣ Latin", false),
-        (TextDirection::Content, "\u{200f}Latin", true),
-        (TextDirection::Content, "\u{200e}שלום", false),
-        (TextDirection::Content, "\u{2067}שלום\u{2069}Latin", false),
-        (TextDirection::Content, "\u{2066}Latin\u{2069}שלום", true),
-        (TextDirection::ContentOrLtr, "١٢٣", false),
-        (TextDirection::ContentOrRtl, "١٢٣", true),
-    ];
-    let alignments = [
-        (TextAlign::Left, 0.0, 0.0),
-        (TextAlign::Right, 1.0, 1.0),
-        (TextAlign::Center, 0.5, 0.5),
-        (TextAlign::Start, 0.0, 1.0),
-        (TextAlign::End, 1.0, 0.0),
-        (TextAlign::Justify, 0.0, 1.0),
-        (TextAlign::Unspecified, 0.0, 1.0),
-    ];
-    for (text_direction, text, rtl) in cases {
-        for (text_align, ltr_fraction, rtl_fraction) in alignments {
-            let mut style = TextStyle::default();
-            style.paragraph_style.text_direction = text_direction;
-            style.paragraph_style.text_align = text_align;
-            let expected = if rtl { rtl_fraction } else { ltr_fraction };
-            assert_eq!(
-                text_align_fraction(&style, text),
-                expected,
-                "{text_align:?}, {text_direction:?}, {text:?}"
-            );
-        }
-    }
-}
-
-#[test]
 fn span_measurement_hash_ignores_paint_and_follows_metrics() {
     let spanned = |span: SpanStyle| crate::AnnotatedString {
         text: "0123".to_owned(),

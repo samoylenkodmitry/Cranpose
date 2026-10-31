@@ -1,4 +1,4 @@
-use cranpose_text::{FontFamily, FontStyle, FontWeight, Typeface, TypefaceError};
+use cranpose_text::{FontFamily, FontStyle, FontSynthesis, FontWeight, Typeface, TypefaceError};
 
 use crate::fonts::{DEVANAGARI_VF, ROBOTO, ROBOTO_BOLD, TWEMOJI, bytes, typeface};
 
@@ -112,4 +112,33 @@ fn line_metrics_come_from_the_horizontal_header() {
 
     assert!(metrics.ascent > 0.0 && metrics.descent < 0.0 && metrics.line_gap >= 0.0);
     assert_eq!(typeface(ROBOTO).units_per_em(), 2048);
+}
+
+#[test]
+fn bold_is_synthesized_from_semibold_up_for_a_face_lighter_than_semibold() {
+    let regular = typeface(ROBOTO);
+    let bold = typeface(ROBOTO_BOLD);
+    let synthesis = |face: &Typeface, weight: u16, style: FontStyle, allowed: FontSynthesis| {
+        face.synthesis(FontWeight(weight), style, allowed)
+    };
+
+    for weight in [400, 500, 599] {
+        assert!(
+            !synthesis(&regular, weight, FontStyle::Normal, FontSynthesis::All).bold,
+            "{weight}"
+        );
+    }
+    for weight in [600, 700, 900] {
+        assert!(
+            synthesis(&regular, weight, FontStyle::Normal, FontSynthesis::All).bold,
+            "{weight}"
+        );
+    }
+    assert!(!synthesis(&bold, 700, FontStyle::Normal, FontSynthesis::All).bold);
+    assert!(!synthesis(&regular, 700, FontStyle::Normal, FontSynthesis::Style).bold);
+    assert!(!synthesis(&regular, 700, FontStyle::Normal, FontSynthesis::None).bold);
+
+    assert!(synthesis(&regular, 400, FontStyle::Italic, FontSynthesis::All).italic);
+    assert!(!synthesis(&regular, 400, FontStyle::Italic, FontSynthesis::Weight).italic);
+    assert!(!synthesis(&regular, 400, FontStyle::Normal, FontSynthesis::All).italic);
 }

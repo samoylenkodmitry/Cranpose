@@ -1,13 +1,16 @@
 use std::ops::Range;
 
+use smallvec::SmallVec;
+
 use crate::{
     bidi_level::BidiLevel,
     itemizer::TextItem,
+    layout_input::LayoutInput,
     script::Script,
-    shaper::{ShapedGlyph, Shaper},
+    shaped_glyphs::{ShapedGlyph, ShapedGlyphs},
+    shaper::Shaper,
     shaping_span::ShapingSpan,
-    text_layout::{TextLayout, font_units},
-    text_layouter::LayoutInput,
+    text_layout::font_units,
     typeface::Typeface,
 };
 
@@ -78,7 +81,7 @@ pub(crate) fn shape_inserted(
     input: &LayoutInput<'_>,
     item: &TextItem<'_>,
     inserted: &str,
-    glyphs: &mut Vec<ShapedGlyph>,
+    glyphs: &mut ShapedGlyphs,
 ) -> f32 {
     let start = glyphs.len();
     let span = &input.spans[item.span];
@@ -94,23 +97,24 @@ pub(crate) fn set_cluster(glyphs: &mut [ShapedGlyph], offset: usize) {
     }
 }
 
-// The glyphs of `sub` of `item` inside `part` of a line: a slice of the
-// item's glyphs, or `sub` shaped again without the text outside `part` when
-// the item's shapes change across an edge of `part` inside it.
+// The glyphs of `sub` of `item` inside `part` of a line, among `glyphs` in
+// `faces`: a slice of the item's glyphs, or `sub` shaped again without the
+// text outside `part`, added to `glyphs`, when the item's shapes change
+// across an edge of `part` inside it.
 pub(crate) fn part_glyphs(
     shaper: &mut Shaper,
     input: &LayoutInput<'_>,
     item: &ShapedItem,
     sub: Range<usize>,
     part: Range<usize>,
-    layout: &mut TextLayout,
+    faces: &[Typeface],
+    glyphs: &mut ShapedGlyphs,
 ) -> Range<usize> {
-    let glyphs = &layout.glyphs[item.glyphs.clone()];
+    let own = &glyphs[item.glyphs.clone()];
     let cut_unsafe = |cut: usize| {
-        let at = cluster_index(glyphs, cut, item.level);
-        glyphs
-            .get(at)
-            .is_none_or(|glyph| glyph.unsafe_to_break || glyph.text_offset() != cut)
+        let at = cluster_index(own, cut, item.level);
+        own.get(at)
+            .is_none_or(|glyph| glyph.unsafe_to_break() || glyph.text_offset() != cut)
     };
     let cut_inside =
         (sub.start == part.start && part.start > item.text.start && cut_unsafe(part.start))
@@ -118,38 +122,32 @@ pub(crate) fn part_glyphs(
     if !cut_inside {
         let (low, high) = if item.level.is_rtl() {
             (
-                glyphs.partition_point(|glyph| glyph.text_offset() >= sub.end),
-                glyphs.partition_point(|glyph| glyph.text_offset() >= sub.start),
+                own.partition_point(|glyph| glyph.text_offset() >= sub.end),
+                own.partition_point(|glyph| glyph.text_offset() >= sub.start),
             )
         } else {
             (
-                glyphs.partition_point(|glyph| glyph.text_offset() < sub.start),
-                glyphs.partition_point(|glyph| glyph.text_offset() < sub.end),
+                own.partition_point(|glyph| glyph.text_offset() < sub.start),
+                own.partition_point(|glyph| glyph.text_offset() < sub.end),
             )
         };
         return item.glyphs.start + low..item.glyphs.start + high;
     }
-    let start = layout.glyphs.len();
+    let start = glyphs.len();
     let reshaped = TextItem {
         range: sub,
         level: item.level,
         paragraph_level: item.paragraph_level,
         script: item.script,
-        typeface: &layout.faces[item.face],
+        typeface: &faces[item.face],
         span: item.span,
     };
-    shaper.shape(
-        input.text,
-        &reshaped,
-        &input.spans[item.span],
-        part,
-        &mut layout.glyphs,
-    );
-    start..layout.glyphs.len()
+    shaper.shape(input.text, &reshaped, &input.spans[item.span], part, glyphs);
+    start..glyphs.len()
 }
 
 // The index of `face` in `faces`, added when missing.
-pub(crate) fn face_index(faces: &mut Vec<Typeface>, face: &Typeface) -> usize {
+pub(crate) fn face_index(faces: &mut SmallVec<[Typeface; 1]>, face: &Typeface) -> usize {
     faces
         .iter()
         .position(|known| known.same(face))
@@ -161,15 +159,19 @@ pub(crate) fn face_index(faces: &mut Vec<Typeface>, face: &Typeface) -> usize {
 
 // The width of `glyphs` at `scale`, each of their clusters `spacing` wider.
 pub(crate) fn spaced_width(glyphs: &[ShapedGlyph], scale: f32, spacing: f32) -> f32 {
-    let mut clusters = 0_u16;
-    let mut width = 0.0;
-    for (at, glyph) in glyphs.iter().enumerate() {
-        if at == 0 || glyphs[at - 1].cluster != glyph.cluster {
-            clusters = clusters.saturating_add(1);
-        }
-        width += font_units(glyph.advance) * scale;
+    let width = glyphs.iter().fold(0.0, |width, glyph| {
+        width + font_units(glyph.advance) * scale
+    });
+    // Most text has no spacing, which adds nothing whatever the clusters.
+    if spacing == 0.0 {
+        return width;
     }
-    width + spacing * f32::from(clusters)
+    let starts = glyphs
+        .windows(2)
+        .filter(|pair| pair[0].cluster != pair[1].cluster)
+        .count()
+        + usize::from(!glyphs.is_empty());
+    width + spacing * f32::from(u16::try_from(starts).unwrap_or(u16::MAX))
 }
 
 // Pixels per design unit of `face` at the size of `span`.

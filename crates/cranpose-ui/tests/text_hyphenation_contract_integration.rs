@@ -1,23 +1,21 @@
 use cranpose_ui::{
-    AppContext, ParagraphStyle, SpanStyle, TextLayoutOptions, TextOverflow, TextStyle,
-    prepare_text_layout, set_text_measurer,
-    text::{Hyphens, TextUnit},
+    AppContext, ParagraphStyle, TextLayoutOptions, TextOverflow, TextStyle, prepare_text_layout,
+    text::{AnnotatedString, Hyphens, LocaleList},
 };
 
-use crate::text_contract_measurer::ContractMeasurer;
+use crate::text_contract::{CHAR_WIDTH, contract_style, layout_lines};
 
-#[test]
-fn prepare_text_layout_uses_measurer_hyphen_contract() {
-    let app_context = AppContext::new();
-
+// The lines of `word` in English with `Hyphens.Auto`, eight characters wide.
+fn hyphenated_lines(word: &str) -> Vec<String> {
+    let base = contract_style();
     let style = TextStyle {
-        span_style: SpanStyle {
-            font_size: TextUnit::Sp(10.0),
-            ..Default::default()
+        span_style: cranpose_ui::SpanStyle {
+            locale_list: Some(LocaleList::new(vec!["en-US".to_owned()])),
+            ..base.span_style
         },
         paragraph_style: ParagraphStyle {
             hyphens: Hyphens::Auto,
-            ..Default::default()
+            ..base.paragraph_style
         },
     };
     let options = TextLayoutOptions {
@@ -26,18 +24,27 @@ fn prepare_text_layout_uses_measurer_hyphen_contract() {
         max_lines: usize::MAX,
         min_lines: 1,
     };
-
-    let prepared = app_context.enter(|| {
-        set_text_measurer(ContractMeasurer);
-        prepare_text_layout(
-            &cranpose_ui::text::AnnotatedString::from("Transformation"),
+    AppContext::new().enter(|| {
+        layout_lines(&prepare_text_layout(
+            &AnnotatedString::from(word),
             &style,
             options,
-            Some(24.0),
-        )
-    });
+            Some(8.0 * CHAR_WIDTH),
+        ))
+    })
+}
+
+#[cfg(feature = "text-hyphenation-embedded")]
+#[test]
+fn a_word_too_long_for_a_line_breaks_where_its_language_hyphenates() {
     assert_eq!(
-        prepared.text.text.lines().collect::<Vec<_>>(),
-        vec!["Tra", "nsf", "orm", "ati", "on"]
+        hyphenated_lines("Transformation"),
+        ["Trans", "forma", "tion"]
     );
+}
+
+#[cfg(not(feature = "text-hyphenation"))]
+#[test]
+fn a_word_too_long_for_a_line_breaks_between_characters_without_dictionaries() {
+    assert_eq!(hyphenated_lines("Abcdefghijklmn"), ["Abcdefgh", "ijklmn"]);
 }

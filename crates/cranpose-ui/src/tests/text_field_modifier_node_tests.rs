@@ -28,7 +28,7 @@ fn selection_rects_follow_wrapped_visual_lines() {
     let style = TextStyle::default();
     let line_height = 10.0_f32;
 
-    let rects = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 6..8);
+    let rects = range_visual_line_rects(text, &style, Some(30.0), 0.0, line_height, 6..8);
     assert_eq!(rects.len(), 1, "one visual line touched, got {rects:?}");
     assert_eq!(
         rects[0].y,
@@ -37,7 +37,7 @@ fn selection_rects_follow_wrapped_visual_lines() {
     );
     assert!(rects[0].width > 0.0);
 
-    let spanning = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 0..5);
+    let spanning = range_visual_line_rects(text, &style, Some(30.0), 0.0, line_height, 0..5);
     assert_eq!(spanning.len(), 2, "wrapped line spans two visual rows");
     assert_eq!(spanning[0].y, 0.0);
     assert_eq!(spanning[1].y, line_height);
@@ -48,45 +48,26 @@ fn tap_resolves_offset_on_wrapped_visual_line() {
     let _app_context = crate::render_state::app_context_test_scope();
     let text = "aaaaa\nbb";
     let style = TextStyle::default();
-    let line_height = 10.0_f32;
+    let line_height =
+        crate::text::measure_text(&crate::text::AnnotatedString::from("a"), &style).line_height;
 
-    let off = crate::text::offset_for_position_wrapped(
-        text,
-        &style,
-        None,
-        Some(30.0),
-        line_height,
-        8.0,
-        22.0,
-    );
+    // At 30 wide "aaaaa" wraps after three characters: the lines are "aaa",
+    // "aa" and "bb".
+    let off =
+        crate::text::offset_for_position_wrapped(text, &style, Some(30.0), 8.0, 2.5 * line_height);
     assert!(
         (6..=8).contains(&off),
         "tap on visual line 'bb' resolved to {off}, expected 6..=8"
     );
 
-    let off1 = crate::text::offset_for_position_wrapped(
-        text,
-        &style,
-        None,
-        Some(30.0),
-        line_height,
-        4.0,
-        12.0,
-    );
+    let off1 =
+        crate::text::offset_for_position_wrapped(text, &style, Some(30.0), 4.0, 1.5 * line_height);
     assert!(
         (3..=5).contains(&off1),
         "tap on wrapped 'aa' resolved to {off1}, expected 3..=5"
     );
 
-    let off2 = crate::text::offset_for_position_wrapped(
-        "hello",
-        &style,
-        None,
-        None,
-        line_height,
-        0.0,
-        0.0,
-    );
+    let off2 = crate::text::offset_for_position_wrapped("hello", &style, None, 0.0, 0.0);
     assert_eq!(off2, 0);
 }
 
@@ -773,15 +754,11 @@ fn a_padded_field_draws_its_selection_and_caret_once_inside_the_padding() {
 
         let caret = padded_field_rects(TextRange::new(5, 5));
         assert_eq!(caret.len(), 1, "one caret: {caret:?}");
-        let hello = crate::text::measure_text(
-            &crate::text::AnnotatedString::from("hello"),
-            &TextStyle::default(),
-        )
-        .width;
-        assert_eq!(
-            (caret[0].x, caret[0].y.floor()),
-            (12.0 + hello, 12.0),
-            "the caret sits after `hello`, inside the padding once"
+        // Cranpose Test Mono advances 0.6 em: five characters at 14 px.
+        let hello = 5.0 * 0.6 * 14.0;
+        assert!(
+            (caret[0].x - (12.0 + hello)).abs() < 1e-3 && (caret[0].y.floor() - 12.0).abs() < 1e-3,
+            "the caret sits after `hello`, inside the padding once: {caret:?}"
         );
     });
 }

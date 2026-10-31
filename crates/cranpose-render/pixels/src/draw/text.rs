@@ -1,6 +1,7 @@
 use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
-    software_text_raster::{self, TextPixelWindow, TextPixels, TextRasterRequest, paint_text},
+    text_canvas::{TextPixelWindow, TextPixels},
+    text_raster::{self, TextRasterRequest, paint_text},
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{Point, Rect};
@@ -20,14 +21,16 @@ pub(super) fn draw_text<P: Pixel>(
     let Some(raster_rect) = text_raster_rect(draw) else {
         return;
     };
+    // The glyphs draw only in their reach, which the text's damage covers.
+    let reach = draw.glyph_reach(raster_rect);
     // A text on whole pixels rasterizes only its part inside the target, as
     // a strip takes a few rows of it; one between pixels samples its
     // neighbours and rasterizes whole.
     let part = if raster_rect.x.fract() == 0.0 && raster_rect.y.fract() == 0.0 {
-        let Some(part) = clip_rect_to_bounds(raster_rect, None, target) else {
+        let Some(part) = clip_rect_to_bounds(reach, None, target) else {
             return;
         };
-        if paint_text_over_target(draw, raster_rect, target, text) {
+        if paint_text_over_target(draw, (raster_rect, reach), target, text) {
             return;
         }
         Rect {
@@ -37,25 +40,40 @@ pub(super) fn draw_text<P: Pixel>(
             height: (part.max_y - part.min_y) as f32,
         }
     } else {
-        raster_rect
+        reach
     };
+    draw_text_image(target, draw, (raster_rect, part), diagnostics, text);
+}
+
+// Draws `part` of `draw`, a text that covers `raster_rect`, through an image
+// of its own, as a text between pixels or one with a gradient or a shadow
+// takes. Out of line: the text most frames draw paints straight over the
+// target, and the item loop keeps only the call.
+#[inline(never)]
+fn draw_text_image<P: Pixel>(
+    target: &mut Target<'_, P>,
+    draw: &TextDraw,
+    (raster_rect, part): (Rect, Rect),
+    diagnostics: &RenderDiagnostics,
+    text: &TextRaster,
+) {
     if let Some((pixels, rect)) = rasterize_text_part(draw, raster_rect, part, text) {
         blit_rasterized_text(target, rect, draw.clip, pixels, diagnostics);
     }
 }
 
-/// Paints the part of `draw`, a text on whole pixels covering `raster_rect`,
-/// that the target and the draw's clip leave, straight over the target's
-/// pixels. Returns whether it did: a text that needs an image of its own,
-/// as a gradient or a shadow does, goes through
+/// Paints the part of `reach` that the target and the clip of `draw` leave,
+/// `draw` a text on whole pixels covering `raster_rect`, straight over the
+/// target's pixels. Returns whether it did: a text that needs an image of
+/// its own, as a gradient or a shadow does, goes through
 /// [`rasterize_text_part`] instead.
 fn paint_text_over_target<P: Pixel>(
     draw: &TextDraw,
-    raster_rect: Rect,
+    (raster_rect, reach): (Rect, Rect),
     target: &mut Target<'_, P>,
     text: &TextRaster,
 ) -> bool {
-    let Some(bounds) = clip_rect_to_bounds(raster_rect, draw.clip, target) else {
+    let Some(bounds) = clip_rect_to_bounds(reach, draw.clip, target) else {
         return true;
     };
     let first = (bounds.min_y - target.top) as usize * target.width as usize
@@ -79,7 +97,6 @@ fn paint_text_over_target<P: Pixel>(
     };
     paint_text(
         raster_request(draw, covered, raster_rect),
-        text.resources.fonts(),
         glyphs.as_deref_mut(),
         window,
     )
@@ -87,21 +104,22 @@ fn paint_text_over_target<P: Pixel>(
 
 fn raster_request(draw: &TextDraw, part: Rect, raster_rect: Rect) -> TextRasterRequest<'_> {
     TextRasterRequest::new(
+        &draw.layout,
         draw.text.as_ref(),
         part,
         &draw.text_style,
         draw.color,
-        draw.font_size,
         draw.scale,
     )
     .with_origin(Point::new(raster_rect.x, raster_rect.y))
+    .with_ink(draw.ink)
 }
 
 /// `draw` rasterized into an image of its own, straight alpha, and the
 /// rect that image covers.
 pub(crate) fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(TextPixels, Rect)> {
     let raster_rect = text_raster_rect(draw)?;
-    rasterize_text_part(draw, raster_rect, raster_rect, text)
+    rasterize_text_part(draw, raster_rect, draw.glyph_reach(raster_rect), text)
 }
 
 /// `part` of `draw`, whose text covers `raster_rect`, rasterized into an
@@ -113,9 +131,8 @@ pub(super) fn rasterize_text_part(
     text: &TextRaster,
 ) -> Option<(TextPixels, Rect)> {
     let mut glyphs = text.glyphs.try_borrow_mut().ok();
-    let pixels = software_text_raster::rasterize_text(
+    let pixels = text_raster::rasterize_text(
         raster_request(draw, part, raster_rect),
-        text.resources.fonts(),
         glyphs.as_deref_mut(),
     )?;
     let rect = Rect {

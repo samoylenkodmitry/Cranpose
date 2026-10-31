@@ -7,14 +7,15 @@ use foldhash::fast::FixedState;
 use read_fonts::{
     FontRef, TableProvider,
     model::{Blob, Font, Source, Variation, attribute::Style, name::NameId},
-    types::{GlyphId as FontGlyphId, Tag},
+    types::{Fixed, GlyphId as FontGlyphId, Tag},
 };
 use smallvec::SmallVec;
 
 use crate::{
     coverage::Coverage,
-    font::{FontFamily, FontStyle, FontWeight},
+    font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
+    simple_glyf::GlyfTables,
 };
 
 /// The bytes a typeface is read from.
@@ -87,9 +88,16 @@ pub enum TypefaceError {
 
 /// A font loaded for text at one location in its design space, with the
 /// family names, weight and style text chooses it by: Compose's `Typeface`.
-/// Clones share one load.
+/// Clones share one load; two typefaces are equal when they draw the same
+/// glyphs, from the same bytes at the same axis positions.
 #[derive(Clone)]
 pub struct Typeface(Arc<Loaded>);
+
+impl PartialEq for Typeface {
+    fn eq(&self, other: &Self) -> bool {
+        self.same(other) || self.0.content_hash == other.0.content_hash
+    }
+}
 
 struct Loaded {
     font: Font,
@@ -111,6 +119,12 @@ struct Loaded {
     variations: Box<[([u8; 4], f32)]>,
     content_hash: u64,
     coverage: OnceLock<Coverage>,
+    glyf: OnceLock<Option<GlyfTables>>,
+    // The normal track of the font's `trak` table: the tracking in ems at
+    // each point size it lists, ascending; empty without one.
+    tracking: Box<[(f32, f32)]>,
+    // The glyph of the space, whose advance justification stretches.
+    space: Option<GlyphId>,
 }
 
 impl Typeface {
@@ -148,6 +162,9 @@ impl Typeface {
             variations: Box::default(),
             content_hash,
             coverage: OnceLock::new(),
+            glyf: OnceLock::new(),
+            tracking: normal_track(&font),
+            space: space_glyph(&font),
             font,
         })))
     }
@@ -206,6 +223,9 @@ impl Typeface {
             variations: applied.into_boxed_slice(),
             content_hash,
             coverage: OnceLock::new(),
+            glyf: OnceLock::new(),
+            tracking: normal_track(&font),
+            space: space_glyph(&font),
             font,
         })))
     }
@@ -236,6 +256,27 @@ impl Typeface {
     /// `SVG` table), as emoji fonts do.
     pub fn is_color(&self) -> bool {
         self.0.is_color
+    }
+
+    /// What Compose synthesizes for text in `weight` and `style` drawn with
+    /// this typeface, as `synthesis` allows: a bold for a weight of 600 or
+    /// more when the typeface draws none that heavy, and an italic when it
+    /// draws none.
+    pub fn synthesis(
+        &self,
+        weight: FontWeight,
+        style: FontStyle,
+        synthesis: FontSynthesis,
+    ) -> Synthesis {
+        const BOLD: u16 = 600;
+        Synthesis {
+            bold: matches!(synthesis, FontSynthesis::All | FontSynthesis::Weight)
+                && weight.value() >= BOLD
+                && self.0.weights.1 < f32::from(BOLD),
+            italic: matches!(synthesis, FontSynthesis::All | FontSynthesis::Style)
+                && style == FontStyle::Italic
+                && !self.draws(FontStyle::Italic),
+        }
     }
 
     // The weights the typeface draws, lowest and highest.
@@ -281,6 +322,7 @@ impl Typeface {
     /// The font's line metrics at the instance, in design units: the
     /// typographic line when the font asks for it with `USE_TYPO_METRICS`,
     /// otherwise the `hhea` line, as Skia and FreeType read them.
+    #[inline(never)]
     pub fn line_metrics(&self) -> LineMetrics {
         let metrics = self.0.font.metrics();
         metrics
@@ -315,6 +357,36 @@ impl Typeface {
         }
     }
 
+    // The font's default tracking at `size` pixels per em, in pixels: its
+    // normal track interpolated between the point sizes it lists, held at
+    // either end; zero for a font without a `trak` table.
+    pub(crate) fn tracking(&self, size: f32) -> f32 {
+        let track = &self.0.tracking;
+        if track.is_empty() || !size.is_finite() || size <= 0.0 {
+            return 0.0;
+        }
+        self.tracked(size)
+    }
+
+    // `tracking` of a font with a `trak` table. Out of line, as most fonts
+    // have none.
+    #[inline(never)]
+    fn tracked(&self, size: f32) -> f32 {
+        let track = &self.0.tracking;
+        let above = track.partition_point(|&(point_size, _)| point_size < size);
+        let em = match (
+            above.checked_sub(1).map(|below| track[below]),
+            track.get(above),
+        ) {
+            (Some((low_size, low)), Some(&(high_size, high))) => {
+                low + (high - low) * (size - low_size) / (high_size - low_size)
+            }
+            (Some((_, em)), None) | (None, Some(&(_, em))) => em,
+            (None, None) => 0.0,
+        };
+        em * size
+    }
+
     /// The glyph the font maps `ch` to, `None` when it has none.
     pub fn glyph(&self, ch: char) -> Option<GlyphId> {
         self.0
@@ -322,6 +394,11 @@ impl Typeface {
             .charmap()
             .map_unicode(ch)
             .map(|glyph| GlyphId(glyph.to_u32()))
+    }
+
+    // The glyph of the space.
+    pub(crate) fn space(&self) -> Option<GlyphId> {
+        self.0.space
     }
 
     /// Whether the font maps `ch` to a glyph.
@@ -347,6 +424,15 @@ impl Typeface {
         &self.0.font
     }
 
+    // Where the font keeps its simple glyphs, found on first use; `None`
+    // for a font the general loader draws.
+    pub(crate) fn glyf_tables(&self) -> Option<&GlyfTables> {
+        self.0
+            .glyf
+            .get_or_init(|| GlyfTables::of(&self.0.font))
+            .as_ref()
+    }
+
     // The axis positions that draw the typeface at `weight` and `style`: for
     // a variable font read without a declaration, its `wght`, `ital` and
     // `slnt` positions; none for a registered typeface, which its declaration
@@ -370,6 +456,16 @@ impl std::fmt::Debug for Typeface {
             .field("variations", &self.0.variations)
             .finish_non_exhaustive()
     }
+}
+
+/// What a typeface lacks for a text's weight and style that is drawn in its
+/// place.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Synthesis {
+    /// A bold the typeface lacks.
+    pub bold: bool,
+    /// An italic the typeface lacks.
+    pub italic: bool,
 }
 
 /// Where a font draws an underline and a line through its text, in design
@@ -403,6 +499,34 @@ fn blob(bytes: FontBytes) -> Blob {
         FontBytes::Static(bytes) => Blob::from(bytes),
         FontBytes::Owned(bytes) => Blob::from(bytes),
     }
+}
+
+// The normal track of `font`'s `trak` table, the tracking in ems at each
+// point size it lists; empty for a font without one or with sizes out of
+// order.
+fn normal_track(font: &Font) -> Box<[(f32, f32)]> {
+    let read = || {
+        let trak = font.tables().trak().ok()?;
+        let data = trak.horiz()?.ok()?;
+        let offset_data = trak.offset_data();
+        let normal = data
+            .track_table()
+            .iter()
+            .find(|track| track.track() == Fixed::ZERO)?;
+        let values = normal.per_size_values(offset_data, data.n_sizes())?;
+        let sizes = data.size_table(offset_data)?;
+        let em = f32::from(font.units_per_em());
+        let mut points = Vec::with_capacity(sizes.len());
+        for (size, value) in sizes.iter().zip(values) {
+            let size = size.get().to_f32();
+            if size <= 0.0 || points.last().is_some_and(|&(previous, _)| size <= previous) {
+                return None;
+            }
+            points.push((size, f32::from(value.get()) / em));
+        }
+        Some(points.into_boxed_slice())
+    };
+    read().unwrap_or_default()
 }
 
 // The model's tables expose no color tables, so this reads the table
@@ -496,4 +620,10 @@ fn style_axes(font: &Font) -> SmallVec<[StyleAxis; 3]> {
         })
         .filter(|axis| matches!(&axis.tag, b"wght" | b"ital" | b"slnt"))
         .collect()
+}
+
+fn space_glyph(font: &Font) -> Option<GlyphId> {
+    font.charmap()
+        .map_unicode(' ')
+        .map(|glyph| GlyphId(glyph.to_u32()))
 }

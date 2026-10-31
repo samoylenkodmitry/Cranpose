@@ -54,6 +54,10 @@ fn snap_test_text() -> DrawPrimitive {
         text: std::rc::Rc::from("pixel"),
         style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
         brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
+        layout: crate::test_support::draw_text_layout(
+            "pixel",
+            &cranpose_ui_graphics::DrawTextStyle::new(16.0),
+        ),
     }))
 }
 
@@ -127,7 +131,6 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
         let collected = collect_root(
             &layer(children),
             0,
-            &mut crate::pipeline::UiTextLayoutResolver,
             &mut LayerMotion::default(),
             SceneCapacityHint::default(),
             1.0,
@@ -220,7 +223,6 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
             };
             let (child, _) = isolated_child(
                 &layer,
-                &mut crate::pipeline::UiTextLayoutResolver,
                 &mut LayerMotion::default(),
                 WalkContext {
                     offset: Point::new(0.3, 0.7),
@@ -449,7 +451,6 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
     let scene = collect_root(
         &parent,
         0,
-        &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -601,7 +602,6 @@ fn collected(layer: LayerNode) -> ChildLayer {
     let mut scene = collect_root(
         &root,
         0,
-        &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -826,7 +826,6 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     let collected = collect_root(
         &root,
         0,
-        &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -861,7 +860,6 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
     collect_root(
         &root,
         0,
-        &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
@@ -910,17 +908,18 @@ fn a_row_that_may_draw_past_its_bounds_is_collected_offscreen() {
 
 fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, Arc<cranpose_ui::TextStyle>) {
     let style = Arc::new(style);
-    let text = cranpose_render_common::graph::TextPrimitiveNode {
+    let text = crate::test_support::with_layout(cranpose_render_common::graph::TextPrimitiveNode {
         node_id: NodeId(5),
         rect: rect(0.0, 0.0, 80.0, 20.0),
         text: cranpose_ui::text::shared_plain_annotated_string("shared"),
         render_text: cranpose_ui::text::shared_plain_render_string("shared"),
+        layout: Default::default(),
         text_style: Arc::clone(&style),
         font_size: 14.0,
-        layout_options: cranpose_ui::TextLayoutOptions::default(),
+        overflow: cranpose_ui::TextLayoutOptions::default().overflow,
         clip: None,
         paint: Default::default(),
-    };
+    });
     let root = LayerNode {
         local_bounds: rect(0.0, 0.0, 100.0, 100.0),
         children: vec![RenderNode::Primitive(PrimitiveEntry {
@@ -938,7 +937,6 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
     let scene = collect_root(
         &root,
         0,
-        &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,

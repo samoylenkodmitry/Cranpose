@@ -1,5 +1,9 @@
 use super::*;
-use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
+use crate::{
+    Color, FontStyle, FontWeight, ImageBitmap, MeasuredText, RenderEffect, TextAlign,
+    TextVerticalAlign, align_text_block, estimate_text_measurement,
+    text_primitive::shared_text_str,
+};
 
 #[test]
 fn recorded_iterators_preserve_shapes_content_and_shadows() {
@@ -328,32 +332,6 @@ fn the_same_path_and_color_reuse_one_raster() {
         panic!("expected image primitive");
     };
     assert_ne!(first.id(), image.id());
-}
-
-#[test]
-fn vector_mask_cache_accounts_for_stored_bytes_on_insert_and_eviction() {
-    let mut cache = VectorPathMaskCache::new();
-    for key in 0..128 {
-        let image = if key % 2 == 0 {
-            ImageBitmap::from_alpha8(2, 2, [31, 116, 201], vec![127; 4])
-        } else {
-            ImageBitmap::from_rgba8(2, 2, vec![127; 16])
-        }
-        .expect("cache image");
-        cache.put(key, image);
-        assert_eq!(
-            cache.bytes,
-            cache
-                .entries
-                .iter()
-                .map(|(_, image)| image.pixels().len())
-                .sum::<usize>()
-        );
-    }
-    assert_eq!(cache.entries.len(), VECTOR_PATH_MASK_CACHE_ENTRIES);
-    assert_eq!(cache.bytes, 48 * (4 + 16));
-    assert!(cache.get(0).is_none());
-    assert!(cache.get(127).is_some());
 }
 
 #[test]
@@ -1218,18 +1196,21 @@ impl FixedAdvanceTextMeasurer {
 }
 
 impl DrawTextMeasurer for FixedAdvanceTextMeasurer {
-    fn measure_text(&self, text: &str, _style: &DrawTextStyle) -> TextMeasurement {
+    fn measure_text(&self, text: &str, _style: &DrawTextStyle) -> MeasuredText {
         self.calls.set(self.calls.get() + 1);
         let lines: Vec<&str> = text.split('\n').collect();
         let width = lines
             .iter()
             .map(|line| line.chars().count() as f32 * self.advance)
             .fold(0.0_f32, f32::max);
-        TextMeasurement {
-            size: Size::new(width, lines.len() as f32 * self.line_height),
-            line_height: self.line_height,
-            first_baseline: self.line_height * 0.75,
-            line_count: lines.len(),
+        MeasuredText {
+            measurement: TextMeasurement {
+                size: Size::new(width, lines.len() as f32 * self.line_height),
+                line_height: self.line_height,
+                first_baseline: self.line_height * 0.75,
+                line_count: lines.len(),
+            },
+            layout: None,
         }
     }
 }
@@ -1421,6 +1402,26 @@ fn empty_text_draws_nothing_and_never_measures() {
 }
 
 #[test]
+fn drawing_text_measures_it_once() {
+    let mut recording = CommandRecording::default();
+    let (mut scope, measurer) = text_scope(Size::new(100.0, 100.0), &mut recording);
+    let style = DrawTextStyle::new(16.0);
+    scope.draw_text_from(Point::ZERO, Brush::solid(Color::WHITE), "AB", &style);
+    scope.draw_text_at(
+        Rect::from_size(Size::new(80.0, 40.0)),
+        Brush::solid(Color::WHITE),
+        "CD",
+        &style,
+    );
+    assert_eq!(scope.into_primitives().len(), 2);
+    assert_eq!(
+        measurer.calls.get(),
+        2,
+        "a draw measures its text once and draws the layout measured"
+    );
+}
+
+#[test]
 fn invisible_text_draws_nothing() {
     let mut recording = CommandRecording::default();
     let (mut scope, _) = text_scope(Size::new(100.0, 100.0), &mut recording);
@@ -1469,12 +1470,15 @@ fn a_scope_without_a_measurer_falls_back_to_the_font_free_estimate() {
 fn degenerate_text_geometry_emits_nothing_and_never_panics() {
     struct DegenerateTextMeasurer;
     impl DrawTextMeasurer for DegenerateTextMeasurer {
-        fn measure_text(&self, _text: &str, _style: &DrawTextStyle) -> TextMeasurement {
-            TextMeasurement {
-                size: Size::new(f32::NAN, 0.0),
-                line_height: f32::NAN,
-                first_baseline: f32::NAN,
-                line_count: 1,
+        fn measure_text(&self, _text: &str, _style: &DrawTextStyle) -> MeasuredText {
+            MeasuredText {
+                measurement: TextMeasurement {
+                    size: Size::new(f32::NAN, 0.0),
+                    line_height: f32::NAN,
+                    first_baseline: f32::NAN,
+                    line_count: 1,
+                },
+                layout: None,
             }
         }
     }

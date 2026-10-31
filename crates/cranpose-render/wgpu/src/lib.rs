@@ -74,10 +74,10 @@ mod thread_state;
 
 use std::sync::Arc;
 
-use cranpose_render_common::{graph::RenderGraph, software_text_raster::SoftwareTextFontSet};
+use cranpose_render_common::{graph::RenderGraph, text_fonts::TextFonts};
 use cranpose_ui_graphics::Rect;
 pub use frame_packet::PresentTimings;
-pub use text_system::{WgpuTextSystem, headless_text_measurer, headless_text_measurer_with_fonts};
+pub use text_system::WgpuTextSystem;
 
 /// Platform code the present thread runs around every present to a surface,
 /// for what only the platform can do with its swapchain, such as asking the
@@ -250,21 +250,15 @@ impl WgpuRenderer {
         Self::with_text_system(WgpuTextSystem::from_fonts(fonts))
     }
 
-    /// Create a renderer over an already-parsed font set.
-    ///
-    /// Measurement and rasterization both take clones of this one set, so an
-    /// app-supplied family resolves identically on both sides.
-    pub fn with_font_set(fonts: SoftwareTextFontSet) -> Self {
-        Self::with_text_system(WgpuTextSystem::from_font_set(fonts))
+    /// Create a renderer over fonts an app already built.
+    pub fn with_text_fonts(fonts: TextFonts) -> Self {
+        Self::with_text_system(WgpuTextSystem::from_text_fonts(fonts))
     }
 
-    /// Create a renderer that measures and draws text with `text_system`.
+    /// Create a renderer that hands the app the fonts of `text_system`.
     pub fn with_text_system(text_system: WgpuTextSystem) -> Self {
         Self {
-            frontend: RendererFrontend::new(
-                text_system.render_state(),
-                text_system.software_fonts(),
-            ),
+            frontend: RendererFrontend::new(text_system.fonts().clone()),
             backend: PresentBackend::None,
             renderer_epoch: 0,
             surface_epoch: 0,
@@ -355,7 +349,6 @@ impl WgpuRenderer {
             surface_format: target.surface_format,
             adapter_backend: target.adapter_backend,
             adapter_downlevel: target.adapter_downlevel,
-            text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
             pipeline_compilation,
             on_device_lost: self.on_device_lost.clone(),

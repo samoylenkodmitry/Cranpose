@@ -1,12 +1,10 @@
-use std::rc::Rc;
-
 use cranpose_liquid::prelude::*;
 use cranpose_render_common::{
     graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode},
-    software_text_raster::{SoftwareTextFontSet, SoftwareTextMeasurer},
+    text_fonts::TextFonts,
 };
-use cranpose_testing::create_headless_robot_test_with_text_measurer;
-use cranpose_ui::{Modifier, text::TextMeasurer};
+use cranpose_testing::create_headless_robot_test_with_fonts;
+use cranpose_ui::Modifier;
 
 fn find_text<'a>(layer: &'a LayerNode, label: &str) -> Option<&'a TextPrimitiveNode> {
     layer.children.iter().find_map(|node| match node {
@@ -21,42 +19,34 @@ fn find_text<'a>(layer: &'a LayerNode, label: &str) -> Option<&'a TextPrimitiveN
 
 #[test]
 fn multilingual_tab_labels_fit_their_text_area() {
-    let fonts = SoftwareTextFontSet::from_fonts_or_default(&[
+    let fonts = TextFonts::from_fonts_or_default(&[
         include_bytes!("../../cranpose-render/common/assets/NotoSansMerged.ttf"),
         include_bytes!("../../cranpose-render/common/tests/fixtures/localization/Arabic.ttf"),
         include_bytes!("../../cranpose-render/common/tests/fixtures/localization/Devanagari.ttf"),
     ]);
-    let measurer = Rc::new(SoftwareTextMeasurer::from_font_set(fonts, 32));
-    let mut robot = create_headless_robot_test_with_text_measurer(
-        400,
-        120,
-        Rc::<SoftwareTextMeasurer>::clone(&measurer),
-        || {
-            LiquidTheme(LiquidThemeSpec::default(), || {
-                LiquidTabBar(
-                    Modifier::empty().width(390.0),
-                    LiquidTabBarSpec::default(),
-                    0,
-                    |_| {},
-                    |tabs| {
-                        for label in ["Settings", "الإعدادات", "सेटिंग्स"]
-                        {
-                            tabs.tab(icons::SEARCH, label);
-                        }
-                    },
-                );
-            });
-        },
-    );
+    let mut robot = create_headless_robot_test_with_fonts(400, 120, fonts, || {
+        LiquidTheme(LiquidThemeSpec::default(), || {
+            LiquidTabBar(
+                Modifier::empty().width(390.0),
+                LiquidTabBarSpec::default(),
+                0,
+                |_| {},
+                |tabs| {
+                    for label in ["Settings", "الإعدادات", "सेटिंग्स"] {
+                        tabs.tab(icons::SEARCH, label);
+                    }
+                },
+            );
+        });
+    });
     robot.wait_for_idle();
     let graph = robot.shell_mut().scene().graph.as_ref().expect("tab scene");
     for label in ["Settings", "الإعدادات", "सेटिंग्स"] {
         let text = find_text(&graph.root, label).expect("visible tab label");
-        let metrics = measurer.measure(&text.text, &text.text_style);
+        let height = text.layout.height();
         assert!(
-            metrics.height <= text.rect.height + 0.01,
-            "{label} needs {} pixels but its area has {}",
-            metrics.height,
+            height <= text.rect.height + 0.01,
+            "{label} needs {height} pixels but its area has {}",
             text.rect.height,
         );
     }

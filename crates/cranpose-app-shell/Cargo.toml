@@ -32,6 +32,7 @@ cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-runtime-std = { workspace = true }
 cranpose-render-common = { workspace = true }
 cranpose-ui = { workspace = true }
+cranpose-text = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-foundation = { workspace = true }
 log = "0.4"
@@ -42,6 +43,8 @@ web-time = { workspace = true }
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
 cranpose-liquid = { path = "../cranpose-liquid" }
+# Tests lay text out with Cranpose Test Mono.
+cranpose-ui = { workspace = true, features = ["test-helpers"] }
 cranpose-ui-layout = { workspace = true }
 stats_alloc = "0.1.10"
 

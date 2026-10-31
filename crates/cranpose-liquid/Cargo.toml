@@ -39,7 +39,7 @@ cranpose-services = { workspace = true, default-features = false }
 thiserror = "2.0.21"
 
 [dev-dependencies]
-cranpose-render-common = { path = "../cranpose-render/common", features = ["text-shaping"] }
+cranpose-render-common = { path = "../cranpose-render/common" }
 # Path-only (no version): cargo strips path-only dev-deps from the published
 # manifest, breaking the liquid -> testing -> cranpose -> liquid publish cycle.
 cranpose-testing = { path = "../cranpose-testing" }

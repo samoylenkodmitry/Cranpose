@@ -136,10 +136,10 @@ pub use cranpose_ui_graphics::space;
 pub use cranpose_ui_graphics::{
     BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, DashPathEffect, Dp,
     DrawScope, DrawSpecialization, DrawStyle, DrawTextStyle, DrawTransform, ExternalTexture,
-    ImageBitmap, ImageBitmapError, ImagePixelFormat, ImageSampling, Path, PlaceholderShape,
-    PointerIcon, PointerIconError, RuntimeShaderUniformError, ShaderPlaceholder, Stroke, StrokeCap,
-    StrokeJoin, SubstrateSpec, TextMeasurement, TextVerticalAlign, TileMode, WindowCoordinates,
-    glass_material_folds_enabled, set_glass_material_folds,
+    ImageBitmap, ImageBitmapError, ImagePixelFormat, ImageSampling, MemoryHeadroom, Path,
+    PlaceholderShape, PointerIcon, PointerIconError, RuntimeShaderUniformError, ShaderPlaceholder,
+    Stroke, StrokeCap, StrokeJoin, SubstrateSpec, TextMeasurement, TextVerticalAlign, TileMode,
+    WindowCoordinates, glass_material_folds_enabled, set_glass_material_folds,
 };
 pub use cranpose_ui_layout::{AlignmentLines, Axis, IntrinsicSize, Measurement};
 pub use cursor_animation::{
@@ -208,7 +208,7 @@ pub use lazy_prefetch::{
     drain_lazy_prefetch_requests, has_lazy_prefetch_requests, lazy_prefetch_pass_cost,
     set_idle_prefetch_passes, warm_prefetched_slices, with_lazy_prefetch_pass,
 };
-pub use memory_headroom::{MemoryHeadroom, current_memory_headroom, set_memory_headroom};
+pub use memory_headroom::{current_memory_headroom, set_memory_headroom};
 pub use modal::{
     ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };
@@ -303,11 +303,9 @@ pub use subcompose_layout::{
 pub use text::{
     LinkAnnotation, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
-    TextLayoutResult, TextLinePrefixWidths, TextMeasurer, TextMetrics, TextOptions, TextOverflow,
-    TextShaping, TextStyle, get_cursor_x_for_offset, get_offset_for_position, layout_text,
-    measure_text, measure_text_for_node, measure_text_with_options,
-    measure_text_with_options_for_node, prepare_text_layout, prepare_text_layout_for_node,
-    set_text_measurer,
+    TextLayoutResult, TextMetrics, TextOptions, TextOverflow, TextShaping, TextStyle,
+    get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
+    measure_text_with_options, prepare_text_layout, set_text_fonts,
 };
 pub use text_field_focus::{ImeEditorState, has_focused_field};
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};

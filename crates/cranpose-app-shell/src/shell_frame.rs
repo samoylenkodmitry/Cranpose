@@ -293,6 +293,9 @@ where
     }
 
     // Composition, the first phase of a frame: recomposes the invalid scopes.
+    // Out of line: most frames compose nothing, and the update keeps only
+    // the call.
+    #[inline(never)]
     pub(crate) fn compose_phase(&mut self) -> Composed {
         let Some(root_key) = self.app.composition.root_key() else {
             return Composed::SKIPPED;
@@ -303,10 +306,7 @@ where
             .reconcile(root_key, &mut *self.app.content)
         {
             Ok(changed) => {
-                log::trace!(
-                    target: "cranpose::input",
-                    "reconcile changed={changed}"
-                );
+                log::trace!(target: "cranpose::input", "reconcile changed={changed}");
                 if changed {
                     self.app.fps_monitor.record_recomposition();
                     if self.app.composition_tree_needs_layout() {

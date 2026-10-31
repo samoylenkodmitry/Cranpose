@@ -3,9 +3,9 @@ use std::rc::Rc;
 use cranpose_liquid::prelude::*;
 use cranpose_render_common::{
     graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode},
-    software_text_raster::{SoftwareTextFontSet, SoftwareTextMeasurer},
+    text_fonts::TextFonts,
 };
-use cranpose_testing::create_headless_robot_test_with_text_measurer;
+use cranpose_testing::create_headless_robot_test_with_fonts;
 use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{Color, ColorFilter};
 
@@ -32,12 +32,11 @@ fn find_label<'a>(
 fn robot(
     style: impl Fn(LiquidColors, LiquidTypography) -> LiquidSegmentedStyle + 'static,
 ) -> cranpose_testing::RobotTestRule<cranpose_testing::TestRenderer> {
-    let fonts = SoftwareTextFontSet::from_fonts_or_default(&[include_bytes!(
+    let fonts = TextFonts::from_fonts_or_default(&[include_bytes!(
         "../../cranpose-render/common/assets/NotoSansMerged.ttf"
     )]);
-    let measurer = Rc::new(SoftwareTextMeasurer::from_font_set(fonts, 32));
     let style = Rc::new(style);
-    create_headless_robot_test_with_text_measurer(320, 80, measurer, move || {
+    create_headless_robot_test_with_fonts(320, 80, fonts, move || {
         let style = Rc::clone(&style);
         LiquidTheme(
             LiquidThemeSpec {

@@ -15,6 +15,16 @@ fn layout(
     align: TextAlign,
     width: f32,
 ) -> TextLayout {
+    layout_between(resolver, text, spans, align, (0.0, width))
+}
+
+fn layout_between(
+    resolver: &FontFamilyResolver,
+    text: &str,
+    spans: &[ShapingSpan<'_>],
+    align: TextAlign,
+    (min_width, max_width): (f32, f32),
+) -> TextLayout {
     let paragraph = ParagraphStyle {
         text_align: align,
         ..ParagraphStyle::default()
@@ -25,8 +35,8 @@ fn layout(
             spans,
             paragraph: &paragraph,
             lengths: ParagraphLengths::default(),
-            min_width: 0.0,
-            max_width: width,
+            min_width,
+            max_width,
             options: TextLayoutOptions::default(),
         },
         resolver,
@@ -53,11 +63,13 @@ fn justified_lines_fill_the_width_except_the_last() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
 
     let laid = plain(&resolver, TEXT, TextAlign::Justify, 150.0);
+    // Wrapped lines take the widest of them, which the others stretch to.
+    let width = laid.width();
 
     let last = laid.line_count() - 1;
     assert!(last > 0);
     for line in 0..last {
-        assert!(close(laid.line_left(line), 0.0) && close(laid.line_right(line), 150.0));
+        assert!(close(laid.line_left(line), 0.0) && close(laid.line_right(line), width));
         // The last visible character ends at the right edge.
         let end = laid.line_visible_end(line);
         let last_char = TEXT
@@ -67,11 +79,53 @@ fn justified_lines_fill_the_width_except_the_last() {
             .expect("a visible character");
         let bounds = laid.bounding_box(last_char);
         assert!(
-            close(bounds.x + bounds.width, 150.0),
+            close(bounds.x + bounds.width, width),
             "line {line}: {bounds:?}"
         );
     }
-    assert!(laid.line_right(last) < 150.0);
+    assert!(laid.line_right(last) < width);
+}
+
+#[test]
+fn a_justified_line_that_fits_exactly_stretches_at_a_wider_held_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let text = "aaa bbb ccc";
+    let start = plain(&resolver, text, TextAlign::Start, 60.0);
+    assert_eq!(start.line_visible_end(0), "aaa bbb".len());
+    let exact = start.line_right(0);
+
+    // Wrapped lines stretch to a width the min fixes.
+    let family = FontFamily::Default;
+    let spans = [span(0..text.len(), &family, 400)];
+    let fixed = |width| layout_between(&resolver, text, &spans, TextAlign::Justify, (width, width));
+    let mut laid = fixed(exact);
+    assert_eq!(laid.line_visible_end(0), "aaa bbb".len());
+    assert!(close(laid.line_right(0), exact));
+    let wider = exact + 5.0;
+    assert!(laid.holds(wider, wider));
+    laid.align(wider, wider, TextAlign::Justify);
+
+    assert!(close(laid.line_right(0), wider), "{}", laid.line_right(0));
+    let fresh = fixed(wider);
+    assert!(close(laid.line_right(0), fresh.line_right(0)));
+}
+
+#[test]
+fn aligning_a_justified_layout_again_takes_its_stretch_off() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let mut laid = plain(&resolver, TEXT, TextAlign::Justify, 150.0);
+    let start = plain(&resolver, TEXT, TextAlign::Start, 150.0);
+
+    laid.align(0.0, 150.0, TextAlign::Start);
+
+    for line in 0..laid.line_count() {
+        assert!(
+            close(laid.line_right(line), start.line_right(line)),
+            "line {line}: {} against {}",
+            laid.line_right(line),
+            start.line_right(line)
+        );
+    }
 }
 
 #[test]

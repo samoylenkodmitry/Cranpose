@@ -7,25 +7,19 @@ use std::{
 
 use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
-    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
+    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size, SubcomposeLayoutNode,
 };
-use cranpose_ui_graphics::{
-    CompositingStrategy, CornerRadii, DrawPlacement, GraphicsLayer, LayerShape, RoundedCornerShape,
-    rounded_corner_alpha_mask_effect,
-};
+use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use crate::{
     NodeUpdate, SceneUpdates,
     graph::{
         CachePolicy, ContentChanges, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
         PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-        TextPrimitiveNode,
     },
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    text_paint::{TextPaint, TextPaintCache},
 };
 
 mod dirty_walk;
@@ -38,9 +32,15 @@ use draw_recording::{
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
 pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
-
-const TEXT_CLIP_PAD: f32 = 1.0;
-const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
+mod hit_graph;
+pub(crate) use hit_graph::HitGraphState;
+use hit_graph::rebuild_tracking_hits;
+mod layer_shape;
+use layer_shape::{clip_shape, shape_clip, shaped_graphics_layer};
+mod text_node;
+mod translate_geometry;
+use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
+use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
 
 #[derive(Clone, Default)]
 struct BuildNodeSnapshot {
@@ -584,12 +584,7 @@ fn update_layer_properties(
         if !retained_layer_matches_layout(target, &data, placement, wrapped, position) {
             return None;
         }
-        let context = LowerContext {
-            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
-            inherited_translated_content_context: ancestors.inherited_translated_content_context,
-            parent_abs: Some(ancestors.parent_abs),
-            parent_content_offset: ancestors.parent_content_offset,
-        };
+        let context = LowerContext::beneath(ancestors);
         let previous = HitGraphState::of(target);
         let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
         assign_layer(target, head);
@@ -739,14 +734,7 @@ fn try_translate_scrolled_layer(
     };
     read_node_data(applier, node_id, |data| {
         if container.wraps.is_none() {
-            return translate_layer_from_data(
-                applier,
-                container,
-                dirty_nodes,
-                ancestors,
-                data,
-                false,
-            );
+            return translate_unwrapped(applier, container, dirty_nodes, ancestors, data);
         }
         let outer_count = data.modifier_slices.outer_draw_command_count();
         if outer_count == 0 {
@@ -870,10 +858,7 @@ struct PlacedChild {
     /// The child's index among the container's previous children; `None`
     /// for a child that enters.
     old_index: Option<usize>,
-    /// Whether the child keeps its layer and follows its placement: it was
-    /// not dirty, it only moved, which this step settles, or its layer
-    /// properties changed, which the walk beneath the container settles.
-    keeps_layer: bool,
+    kept: KeptChild,
 }
 
 /// How a translated container's placed children stand to its previous ones.
@@ -911,7 +896,7 @@ fn translated_children(
             id,
             geometry,
             old_index: None,
-            keeps_layer: false,
+            kept: KeptChild::Left,
         });
     }
     let children_unchanged = container.children.len() == placed_fresh.len()
@@ -1040,70 +1025,25 @@ fn check_retained_children(
             return Err("retained child slot is not a layer");
         };
         let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
-        placed.keeps_layer = match dirty_nodes.get_mut(&placed.id) {
+        placed.kept = match dirty_nodes.get_mut(&placed.id) {
             None if !fits => return Err("child resized"),
-            None => true,
+            None => KeptChild::Moved,
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {
                 *kind = NodeUpdate::Content;
-                false
+                KeptChild::Left
             }
             Some(NodeUpdate::Moved) => {
                 dirty_nodes.remove(&placed.id);
-                true
+                KeptChild::Moved
             }
-            // The child moves with the others; the walk beneath the
-            // container then gives it its new layer properties or draws
-            // where it now lies.
-            Some(NodeUpdate::Layer | NodeUpdate::Draws) => fits,
-            Some(NodeUpdate::Content | NodeUpdate::MovedLayer) => false,
+            // The child moves with the others; the walk beneath the container
+            // then gives it its new layer properties or draws where it now lies.
+            Some(NodeUpdate::Layer | NodeUpdate::Draws) if fits => KeptChild::Moved,
+            Some(NodeUpdate::Content) if text_node::draws_text_alone(layer) => KeptChild::Retexted,
+            Some(_) => KeptChild::Left,
         };
     }
     Ok(())
-}
-
-#[derive(Clone, Copy)]
-struct TranslateGeometry {
-    content_offset: Point,
-    window_transform: ProjectiveTransform,
-    top_left: Point,
-    child_origin: Point,
-}
-
-impl TranslateGeometry {
-    fn new(
-        layout_state: &cranpose_ui::widgets::LayoutState,
-        graphics_layer: &GraphicsLayer,
-        local_bounds: Rect,
-        parent_abs: AbsOrigin,
-    ) -> Self {
-        let content_offset = layout_state.content_offset();
-        let top_left = Point {
-            x: parent_abs.content_origin.x + layout_state.position().x,
-            y: parent_abs.content_origin.y + layout_state.position().y,
-        };
-        let window_transform = layer_transform_to_window(
-            parent_abs.window_transform,
-            top_left,
-            local_bounds,
-            graphics_layer,
-        );
-        Self {
-            content_offset,
-            window_transform,
-            top_left,
-            child_origin: Point {
-                x: top_left.x + content_offset.x,
-                y: top_left.y + content_offset.y,
-            },
-        }
-    }
-
-    fn child_abs(self) -> AbsOrigin {
-        AbsOrigin {
-            content_origin: self.child_origin,
-            window_transform: self.window_transform,
-        }
-    }
 }
 
 /// Moves `container`'s previous children that stay into `scratch.kept`, in
@@ -1169,30 +1109,22 @@ fn recycle_children_around(
 /// beneath would otherwise build each of them a second time.
 fn build_entering_children(
     applier: &MemoryApplier,
-    container: &LayerNode,
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    geometry: TranslateGeometry,
-    inherited: (bool, u64),
+    children: TranslateAncestorContext,
 ) {
-    let (child_inherited_translated_content_context, update) = inherited;
     let entering = &mut scratch.entering;
     entering.clear();
+    let context = LowerContext::beneath(children);
     for placed in &scratch.placed_fresh {
         if placed.old_index.is_some() {
             continue;
         }
         let child_id = &placed.id;
-        let context = LowerContext {
-            inherited_motion_context_animated: container.motion_context_animated,
-            inherited_translated_content_context: child_inherited_translated_content_context,
-            parent_abs: Some(geometry.child_abs()),
-            parent_content_offset: geometry.content_offset,
-        };
         let Some(mut lowered) = lower_child(applier, *child_id, context) else {
             continue;
         };
-        lowered.note_content_change(update);
+        lowered.note_content_change(children.update);
         forget_dirty_subtree(&lowered, dirty_nodes);
         entering.push((*child_id, lowered));
     }
@@ -1260,7 +1192,7 @@ fn reconcile_translated_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     order: ChildOrder,
-    geometry: TranslateGeometry,
+    children: TranslateAncestorContext,
 ) {
     if let ChildOrder::Shifted {
         entering_before, ..
@@ -1272,16 +1204,14 @@ fn reconcile_translated_children(
             dirty_nodes,
             scratch,
             entering_before,
-            geometry,
+            children,
         );
         return;
     }
     let mut entering = scratch.entering.drain(..).peekable();
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
-            if placed.keeps_layer {
-                move_kept_child(applier, &mut layer, placed.geometry.position, geometry);
-            }
+            move_kept_child(applier, &mut layer, placed, children, dirty_nodes);
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
             dirty_nodes.remove(&placed.id);
@@ -1301,7 +1231,7 @@ fn reconcile_shifted_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     entering_before: usize,
-    geometry: TranslateGeometry,
+    children: TranslateAncestorContext,
 ) {
     let TranslateScratch {
         placed_fresh,
@@ -1316,9 +1246,7 @@ fn reconcile_shifted_children(
         let RenderNode::Layer(layer) = child else {
             unreachable!("retained child identities were checked");
         };
-        if placed.keeps_layer {
-            move_kept_child(applier, layer, placed.geometry.position, geometry);
-        }
+        move_kept_child(applier, layer, placed, children, dirty_nodes);
     }
     if entering.is_empty() {
         return;
@@ -1363,9 +1291,9 @@ fn translate_layer_from_data(
     let TranslateAncestorContext {
         inherited_motion_context_animated,
         update,
-        inherited_translated_content_context,
         parent_content_offset,
         parent_abs,
+        ..
     } = ancestors;
     let SnapshotNodeData {
         layout_state,
@@ -1405,22 +1333,14 @@ fn translate_layer_from_data(
             container.local_bounds,
             parent_abs,
         );
-        let child_inherited_translated_content_context =
-            inherited_translated_content_context || container.translated_content_context;
+        let children = geometry.children_context(container, ancestors);
         match &order {
             ChildOrder::Shifted { kept, .. } => {
                 recycle_children_around(container, kept.clone(), dirty_nodes);
             }
             ChildOrder::Mixed => recycle_leaving_children(container, scratch, dirty_nodes),
         }
-        build_entering_children(
-            applier,
-            container,
-            scratch,
-            dirty_nodes,
-            geometry,
-            (child_inherited_translated_content_context, update),
-        );
+        build_entering_children(applier, scratch, dirty_nodes, children);
 
         apply_translated_container_state(
             container,
@@ -1430,7 +1350,7 @@ fn translate_layer_from_data(
             geometry,
         );
 
-        reconcile_translated_children(applier, container, dirty_nodes, scratch, order, geometry);
+        reconcile_translated_children(applier, container, dirty_nodes, scratch, order, children);
         Ok(())
     });
     if let Err(reason) = translated {
@@ -1445,115 +1365,6 @@ fn translate_layer_from_data(
     container.note_content_change(update);
 
     true
-}
-
-fn translate_retained_child(layer: &mut LayerNode, position: Point, content_offset: Point) {
-    layer.transform_to_parent = placed_transform(
-        layer.local_bounds,
-        position,
-        layer.graphics_layer.get(),
-        content_offset,
-    );
-    layer.origin_in_parent = position;
-}
-
-/// Moves a child a translated container keeps to its placement in the
-/// container laid out with `geometry`. A subtree that publishes window
-/// origins publishes them again from where it now lies.
-fn move_kept_child(
-    applier: &MemoryApplier,
-    layer: &mut LayerNode,
-    position: Point,
-    geometry: TranslateGeometry,
-) {
-    translate_retained_child(layer, position, geometry.content_offset);
-    if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, geometry.child_abs());
-    }
-}
-
-/// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
-/// returns whether the hit geometry of the layer or of a layer under it
-/// changed; `None` when the rebuild failed. A rebuild takes in the moves and
-/// layer changes of the nodes under the layer, which its own state does not
-/// show: a sheet that slides inside a container that redraws keeps the
-/// container's state.
-fn rebuild_tracking_hits(
-    layer: &mut LayerNode,
-    rebuild: impl FnOnce(&mut LayerNode) -> bool,
-) -> Option<bool> {
-    let previous = HitGraphState::of(layer);
-    let mut descendants = crate::thread_state::with(|state| state.hit_geometry_scratch.take());
-    descendants.clear();
-    visit_hit_layers(layer, &mut |child| {
-        descendants.push(HitGraphState::of(child));
-        true
-    });
-    let dirty = rebuild(layer).then(|| {
-        let mut expected = descendants.iter();
-        previous.dirty_against(&HitGraphState::of(layer))
-            || !visit_hit_layers(layer, &mut |child| {
-                expected.next() == Some(&HitGraphState::of(child))
-            })
-            || expected.next().is_some()
-    });
-    crate::thread_state::with(|state| state.hit_geometry_scratch.set(descendants));
-    dirty
-}
-
-/// Visits the layers under `layer` that are hit targets or hold one, in draw
-/// order, while `visit` returns true; returns whether every visit did.
-fn visit_hit_layers(layer: &LayerNode, visit: &mut impl FnMut(&LayerNode) -> bool) -> bool {
-    for child in &layer.children {
-        let RenderNode::Layer(child) = child else {
-            continue;
-        };
-        if child.hit_test.is_none() && !child.has_hit_targets {
-            continue;
-        }
-        if !visit(child) || !visit_hit_layers(child, visit) {
-            return false;
-        }
-    }
-    true
-}
-
-#[derive(PartialEq)]
-pub(crate) struct HitGraphState {
-    hit_test: bool,
-    has_hit_targets: bool,
-    local_bounds: Rect,
-    node_bounds: Option<Rect>,
-    transform_to_parent: ProjectiveTransform,
-    clip_rect: Option<Rect>,
-    shape: LayerShape,
-    /// Whether the layer is a scene, a mesh surface or a 3D transform. Each
-    /// update of such a layer runs its closure again, which may move where
-    /// the surfaces of its scene take input or hide one another.
-    space: bool,
-}
-
-impl HitGraphState {
-    fn of(layer: &LayerNode) -> Self {
-        Self {
-            hit_test: layer.hit_test.is_some(),
-            has_hit_targets: layer.has_hit_targets,
-            local_bounds: layer.local_bounds,
-            node_bounds: layer.node_bounds,
-            transform_to_parent: layer.transform_to_parent,
-            clip_rect: layer.clip_rect(),
-            shape: layer.graphics_layer.shape,
-            space: layer.graphics_layer.space.is_some(),
-        }
-    }
-
-    fn dirty_against(&self, replacement: &Self) -> bool {
-        self.hit_test
-            || replacement.hit_test
-            || self.space
-            || replacement.space
-            || ((self.has_hit_targets || replacement.has_hit_targets) && self != replacement)
-    }
 }
 
 /// Notes that the scene update changes a layer that is a scene, a surface or
@@ -1605,6 +1416,16 @@ impl LowerContext {
         parent_abs: Some(AbsOrigin::ROOT),
         parent_content_offset: Point { x: 0.0, y: 0.0 },
     };
+
+    // What a child lowers with beneath `ancestors`.
+    fn beneath(ancestors: TranslateAncestorContext) -> Self {
+        Self {
+            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
+            inherited_translated_content_context: ancestors.inherited_translated_content_context,
+            parent_abs: Some(ancestors.parent_abs),
+            parent_content_offset: ancestors.parent_content_offset,
+        }
+    }
 
     fn for_children(
         self,
@@ -1820,14 +1641,7 @@ fn write_node_content(
         draws,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node_from_parts(TextNodeParts {
-        node_id,
-        text_rect: slices.text_content_rect(size),
-        text_style: slices.text_style().as_deref(),
-        text_layout_options: slices.text_layout_options(),
-        text_pan: slices.text_pan_resolver(),
-        measured_layout: slices.measured_text_layout(),
-    }) {
+    if let Some(text) = text_node_from_parts(&TextNodeParts::of(node_id, slices, size)) {
         list.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(crate::layer_recycling::boxed_text(text)),
@@ -2320,97 +2134,6 @@ fn layer_identity(layer: &LayerNode) -> Option<NodeId> {
     layer.node_id.or(layer.wraps)
 }
 
-struct TextNodeParts<'a> {
-    node_id: NodeId,
-    /// Where the text node was placed in its layout node.
-    text_rect: Rect,
-    text_style: Option<&'a TextStyle>,
-    text_layout_options: Option<TextLayoutOptions>,
-    text_pan: Option<TextPanResolver>,
-    measured_layout: Option<Rc<PreparedTextLayout>>,
-}
-
-fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
-    let TextNodeParts {
-        node_id,
-        text_rect,
-        text_style,
-        text_layout_options,
-        text_pan,
-        measured_layout,
-    } = parts;
-    let prepared = measured_layout?;
-    let default_text_style;
-    let text_style = match text_style {
-        Some(style) => style,
-        None => {
-            default_text_style = TextStyle::default();
-            &default_text_style
-        }
-    };
-    let options = text_layout_options.unwrap_or_default().normalized();
-    let content_width = text_rect.width.max(0.0);
-    if content_width <= 0.0 {
-        return None;
-    }
-
-    let pan_offset = text_pan
-        .as_ref()
-        .map_or(0.0, |resolve| resolve(content_width));
-    let pans_horizontally = text_pan.is_some();
-
-    let visual_style = &prepared.visual_style;
-    let measured_draw_width = prepared.metrics.width.max(0.0);
-    let draw_width = if options.overflow == TextOverflow::Visible || pans_horizontally {
-        measured_draw_width
-    } else {
-        measured_draw_width.min(content_width)
-    };
-    let alignment_offset = resolve_text_horizontal_offset(
-        text_style,
-        prepared.text.text.as_str(),
-        content_width,
-        prepared.metrics.width,
-    );
-    let rect = Rect {
-        x: text_rect.x + alignment_offset - pan_offset,
-        y: text_rect.y,
-        width: draw_width,
-        height: prepared.metrics.height,
-    };
-    let text_bounds = Rect {
-        width: content_width,
-        height: text_rect.height.max(0.0),
-        ..text_rect
-    };
-    let font_size = visual_style.resolve_font_size(14.0);
-    let expanded_bounds =
-        expand_text_bounds_for_baseline_shift(text_bounds, visual_style, font_size);
-    let clip = if options.overflow == TextOverflow::Visible && !pans_horizontally {
-        None
-    } else {
-        Some(pad_clip_rect(expanded_bounds))
-    };
-
-    Some(TextPrimitiveNode {
-        node_id,
-        rect,
-        text: Rc::clone(&prepared.text),
-        render_text: prepared.render_text(),
-        text_style: std::sync::Arc::clone(visual_style),
-        font_size,
-        layout_options: options,
-        clip,
-        paint: TextPaintCache::holding(TextPaint::of(
-            visual_style,
-            prepared.visual_style_hash(),
-            &prepared.text.span_styles,
-            font_size,
-            (prepared.render_text_hash(), prepared.text.text.is_empty()),
-        )),
-    })
-}
-
 fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> BuildNodeSnapshot {
     let placement = parent
         .map(|parent_box| Point {
@@ -2430,8 +2153,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
     let has_graphics_layer = graphics_layer.is_some();
     shape_clip(
         &mut graphics_layer,
-        node.node_data.modifier_slices.clip_to_bounds(),
-        node.node_data.modifier_slices.corner_shape(),
+        clip_shape(&node.node_data.modifier_slices),
         Rect {
             x: 0.0,
             y: 0.0,
@@ -2464,89 +2186,6 @@ fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
     slices.text_window().is_some() || slices.viewport_window_rect().is_some()
 }
 
-/// The graphics layer of a node with `slices` and bounds `local_bounds`:
-/// the chain's own, its clip shaped as [`shape_clip`] shapes it. Lent by
-/// the slices unless the shaping changes it, and returned straight from
-/// them when nothing shapes it: a layer kept in a local first is copied out.
-#[inline]
-fn shaped_graphics_layer(
-    slices: &ModifierNodeSlices,
-    local_bounds: Rect,
-) -> Option<Cow<'_, GraphicsLayer>> {
-    match clip_corners(slices.clip_to_bounds(), slices.corner_shape(), local_bounds) {
-        None => slices.graphics_layer(),
-        Some(corners) => rounded_graphics_layer(slices, corners, local_bounds),
-    }
-}
-
-#[inline(never)]
-fn rounded_graphics_layer(
-    slices: &ModifierNodeSlices,
-    corners: (RoundedCornerShape, CornerRadii),
-    local_bounds: Rect,
-) -> Option<Cow<'_, GraphicsLayer>> {
-    let mut graphics_layer = slices.graphics_layer();
-    round_clip(&mut graphics_layer, corners, local_bounds);
-    graphics_layer
-}
-
-/// Shapes the clip of `graphics_layer`, a layer's own, to the corner shape
-/// of a layer that clips to its bounds `local_bounds`. In place: the layer
-/// moved in and out of a call is hundreds of bytes copied each way, and a
-/// lent layer is copied only when the shaping changes it.
-fn shape_clip(
-    graphics_layer: &mut Option<Cow<'_, GraphicsLayer>>,
-    clip_to_bounds: bool,
-    corner_shape: Option<RoundedCornerShape>,
-    local_bounds: Rect,
-) {
-    if let Some(corners) = clip_corners(clip_to_bounds, corner_shape, local_bounds) {
-        round_clip(graphics_layer, corners, local_bounds);
-    }
-}
-
-/// The corner shape a layer that clips to its bounds `local_bounds` rounds
-/// its clip with, and its radii there: `None` when it does not clip to its
-/// bounds or its corners are square.
-fn clip_corners(
-    clip_to_bounds: bool,
-    corner_shape: Option<RoundedCornerShape>,
-    local_bounds: Rect,
-) -> Option<(RoundedCornerShape, CornerRadii)> {
-    if !clip_to_bounds {
-        return None;
-    }
-    let corner_shape = corner_shape?;
-    let radii = corner_shape.resolve(local_bounds.width, local_bounds.height);
-    let square = radii.top_left <= f32::EPSILON
-        && radii.top_right <= f32::EPSILON
-        && radii.bottom_right <= f32::EPSILON
-        && radii.bottom_left <= f32::EPSILON;
-    (!square).then_some((corner_shape, radii))
-}
-
-/// Rounds the clip of `graphics_layer` with `corners`, as [`clip_corners`]
-/// found them for a layer at `local_bounds`.
-fn round_clip(
-    graphics_layer: &mut Option<Cow<'_, GraphicsLayer>>,
-    (corner_shape, radii): (RoundedCornerShape, CornerRadii),
-    local_bounds: Rect,
-) {
-    let properties = graphics_layer.get_or_insert_default().to_mut();
-    if let Some(existing) = properties.render_effect.take() {
-        let rounded_clip = rounded_corner_alpha_mask_effect(
-            local_bounds.width,
-            local_bounds.height,
-            radii,
-            ROUNDED_CLIP_EDGE_FEATHER,
-        );
-        properties.render_effect = Some(existing.then(rounded_clip));
-    } else {
-        properties.shape = LayerShape::Rounded(corner_shape);
-        properties.clip = true;
-    }
-}
-
 fn layer_cache_policy(layer: &GraphicsLayer, isolation: IsolationReasons) -> CachePolicy {
     if isolation.has_any() || layer_scales_or_rotates(layer) {
         CachePolicy::Auto
@@ -2565,62 +2204,6 @@ fn isolation_reasons(layer: &GraphicsLayer) -> IsolationReasons {
             && layer.alpha < 1.0,
         blend_mode: layer.blend_mode != cranpose_ui::BlendMode::SrcOver,
     }
-}
-
-fn pad_clip_rect(rect: Rect) -> Rect {
-    Rect {
-        x: rect.x - TEXT_CLIP_PAD,
-        y: rect.y - TEXT_CLIP_PAD,
-        width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
-        height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
-    }
-}
-
-/// Grows `text_bounds` in the direction of the style's baseline shift, by the shift in pixels at
-/// `font_size`, so a clip does not cut the shifted glyphs. Returns the bounds unchanged when
-/// there is no baseline shift.
-pub fn expand_text_bounds_for_baseline_shift(
-    text_bounds: Rect,
-    text_style: &TextStyle,
-    font_size: f32,
-) -> Rect {
-    let baseline_shift_px = text_style
-        .span_style
-        .baseline_shift
-        .filter(|shift| shift.is_specified())
-        .map_or(0.0, |shift| -(shift.0 * font_size));
-    if baseline_shift_px == 0.0 {
-        return text_bounds;
-    }
-
-    if baseline_shift_px < 0.0 {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y + baseline_shift_px,
-            width: text_bounds.width,
-            height: (text_bounds.height - baseline_shift_px).max(0.0),
-        }
-    } else {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y,
-            width: text_bounds.width,
-            height: (text_bounds.height + baseline_shift_px).max(0.0),
-        }
-    }
-}
-
-fn resolve_text_horizontal_offset(
-    text_style: &TextStyle,
-    text: &str,
-    content_width: f32,
-    measured_width: f32,
-) -> f32 {
-    let remaining = (content_width - measured_width).max(0.0);
-    if remaining == 0.0 {
-        return 0.0;
-    }
-    remaining * cranpose_ui::text::text_align_fraction(text_style, text)
 }
 
 #[cfg(test)]

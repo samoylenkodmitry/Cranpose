@@ -14,7 +14,10 @@ use smallvec::SmallVec;
 
 use crate::{
     density::Density,
-    text::{AnnotatedString, TextLayoutOptions, TextStyle},
+    text::{
+        AnnotatedString, TextLayoutOptions, TextStyle, layout_cache::CacheAdmission,
+        recent_values::RecentValues,
+    },
 };
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
@@ -37,10 +40,37 @@ const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
 
 #[derive(Clone, Debug)]
 struct TextPreparedLayoutCacheEntry {
-    widths: crate::text::measure::PreparedWidths,
+    min_width: f32,
+    // The max widths at which the text laid out from `min_width` gives
+    // `layout` again.
+    max_widths: cranpose_ui_layout::BoundRange,
     text_generation: u64,
     font_scale_fingerprint: u32,
     layout: Rc<crate::text::PreparedTextLayout>,
+}
+
+impl TextPreparedLayoutCacheEntry {
+    fn new(
+        min_width: f32,
+        (text_generation, font_scale_fingerprint): (u64, u32),
+        layout: Rc<crate::text::PreparedTextLayout>,
+    ) -> Self {
+        Self {
+            min_width,
+            max_widths: layout.max_widths_kept(min_width),
+            text_generation,
+            font_scale_fingerprint,
+            layout,
+        }
+    }
+
+    // Whether the layout stands for the text laid out between `min_width`
+    // and `max_width` as it is: its lines and size the same.
+    fn keeps(&self, (min_width, max_width): (f32, f32), stamp: (u64, u32)) -> bool {
+        self.min_width.to_bits() == min_width.to_bits()
+            && (self.text_generation, self.font_scale_fingerprint) == stamp
+            && self.max_widths.contains(max_width)
+    }
 }
 
 /// A text node's text and its prepared layouts. The node and the slices
@@ -49,9 +79,12 @@ struct TextPreparedLayoutCacheEntry {
 #[derive(Debug)]
 struct TextPreparedLayoutOwner {
     source: RefCell<TextLayoutSource>,
-    node_id: Cell<Option<cranpose_core::NodeId>>,
-    measured_max_width: Cell<Option<Option<f32>>>,
+    measured_widths: Cell<Option<(f32, f32)>>,
     cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
+    // Whether the text changed in place since a hold was last asked of it:
+    // a text that changes as a ticker's does measures again each frame,
+    // which no hold spares, so it gives none.
+    changed: Cell<bool>,
 }
 
 /// What a text is laid out from.
@@ -61,9 +94,21 @@ struct TextLayoutSource {
     style: Arc<TextStyle>,
     style_hash: u64,
     options: TextLayoutOptions,
-    /// Whether layouts come from the text service's shared cache. A text
-    /// changed in place, as a ticker's is every frame, lays out unshared.
-    shares_layouts: bool,
+    // How the text service's shared cache keeps the layouts: those of a
+    // text changed in place, as a ticker's is every frame, once it comes
+    // back.
+    admission: CacheAdmission,
+}
+
+impl TextLayoutSource {
+    // The frame the text is laid out in between `widths`.
+    fn frame(&self, (min_width, max_width): (f32, f32)) -> crate::text::measure::TextFrame {
+        crate::text::measure::TextFrame {
+            min_width,
+            max_width,
+            options: self.options,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -80,10 +125,10 @@ impl TextPreparedLayoutOwner {
                 style,
                 style_hash,
                 options: options.normalized(),
-                shares_layouts: true,
+                admission: CacheAdmission::First,
             }),
-            node_id: Cell::new(None),
-            measured_max_width: Cell::new(None),
+            measured_widths: Cell::new(None),
+            changed: Cell::new(false),
             cache: RefCell::new(SmallVec::new()),
         }
     }
@@ -113,9 +158,10 @@ impl TextPreparedLayoutOwner {
         }
         source.text = Rc::clone(text);
         source.options = options;
-        source.shares_layouts = false;
+        source.admission = CacheAdmission::Changed;
         drop(source);
         self.cache.borrow_mut().clear();
+        self.changed.set(true);
     }
 
     fn annotated_text(&self) -> Ref<'_, Rc<AnnotatedString>> {
@@ -130,96 +176,106 @@ impl TextPreparedLayoutOwner {
         self.source.borrow().options
     }
 
-    fn node_id(&self) -> Option<cranpose_core::NodeId> {
-        self.node_id.get()
-    }
-
-    fn set_node_id(&self, node_id: Option<cranpose_core::NodeId>) {
-        if self.node_id.replace(node_id) != node_id {
-            self.cache.borrow_mut().clear();
-        }
-    }
-
     fn with_prepared<R>(
         &self,
-        max_width: Option<f32>,
+        widths: (f32, f32),
         read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
     ) -> R {
-        let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
-        let (text_generation, font_scale_fingerprint) = crate::render_state::text_layout_stamp();
-
+        let stamp = crate::render_state::text_layout_stamp();
         {
             let mut cache = self.cache.borrow_mut();
-            if let Some(index) = cache.iter().position(|entry| {
-                entry.widths.hold(normalized_max_width)
-                    && entry.text_generation == text_generation
-                    && entry.font_scale_fingerprint == font_scale_fingerprint
-            }) {
+            let Some(latest) = cache.first_mut() else {
+                drop(cache);
+                return self.prepare(widths, stamp, read);
+            };
+            if latest.keeps(widths, stamp) {
+                return read(&latest.layout);
+            }
+            // The latest layout, which nothing else holds, takes widths at
+            // which it breaks into the same lines in place, as a width that
+            // animates asks for each frame, before the others are searched.
+            // Its style, equal to the source's, gives the alignment.
+            if (latest.text_generation, latest.font_scale_fingerprint) == stamp
+                && let Some(prepared) = Rc::get_mut(&mut latest.layout)
+                && prepared.try_realign(widths, prepared.visual_style.paragraph_style.text_align)
+            {
+                latest.min_width = widths.0;
+                latest.max_widths = prepared.max_widths_kept(widths.0);
+                return read(&latest.layout);
+            }
+            if let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) {
                 cache[..=index].rotate_right(1);
                 return read(&cache[0].layout);
             }
         }
+        self.prepare(widths, stamp, read)
+    }
 
+    // Prepares a layout at `widths` that no cached one keeps. Out of line:
+    // most reads take a cached layout, and each reader has its own copy.
+    #[inline(never)]
+    fn prepare<R>(
+        &self,
+        widths: (f32, f32),
+        stamp: (u64, u32),
+        read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
+    ) -> R {
         let source = self.source.borrow();
-        let prepare = if source.shares_layouts {
-            crate::text::prepare_text_layout_for_node
-        } else {
-            crate::text::measure::prepare_unshared_text_layout_for_node
+        let frame = source.frame(widths);
+        let align = source.style.paragraph_style.text_align;
+        // A layout at new widths takes the allocation of the one the full
+        // cache lets go, as a width that animates asks for one every frame.
+        let spare = {
+            let mut cache = self.cache.borrow_mut();
+            (cache.len() >= PREPARED_LAYOUT_CACHE_CAPACITY)
+                .then(|| cache.pop())
+                .flatten()
+                .map(|entry| entry.layout)
         };
-        let prepared = prepare(
-            self.node_id(),
-            &source.text,
-            &source.style,
-            source.options,
-            normalized_max_width,
-        );
+        let prepared = {
+            // The cache holds layouts of this source only: the latest one, on
+            // the fonts of now, takes the widths when it breaks into the same
+            // lines there, as a width animates, or gives its glyphs to the new
+            // one.
+            let cache = self.cache.borrow();
+            let latest = cache
+                .first()
+                .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
+                .map(|entry| &entry.layout);
+            match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
+                Some(latest) => latest.at_widths(widths, align, spare),
+                None => {
+                    let text = crate::text::measure::SharedText {
+                        text: &source.text,
+                        style: &source.style,
+                        style_hash: source.style_hash,
+                    };
+                    let shaped = latest.map(|latest| &latest.layout);
+                    crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
+                }
+            }
+        };
         if Arc::ptr_eq(&prepared.visual_style, &source.style) {
             let _ = prepared.visual_style_hash.set(source.style_hash);
         }
-        let widths = crate::text::measure::PreparedWidths::of(
-            source.text.as_ref(),
-            source.options,
-            normalized_max_width,
-            &prepared,
-        );
         drop(source);
 
         let mut cache = self.cache.borrow_mut();
         cache.insert(
             0,
-            TextPreparedLayoutCacheEntry {
-                widths,
-                text_generation,
-                font_scale_fingerprint,
-                layout: prepared,
-            },
+            TextPreparedLayoutCacheEntry::new(widths.0, stamp, prepared),
         );
         cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
         read(&cache[0].layout)
     }
 
-    /// The size of the layout the cache holds for `max_width` and the max
-    /// widths that layout holds for; `None` when the cache holds none.
-    fn cached_widths(
-        &self,
-        max_width: Option<f32>,
-    ) -> Option<(Size, crate::text::measure::PreparedWidths)> {
-        let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
-        let (text_generation, font_scale_fingerprint) = crate::render_state::text_layout_stamp();
-        self.cache
-            .borrow()
-            .iter()
-            .find(|entry| {
-                entry.widths.hold(normalized_max_width)
-                    && entry.text_generation == text_generation
-                    && entry.font_scale_fingerprint == font_scale_fingerprint
-            })
-            .map(|entry| {
-                (
-                    Size::new(entry.layout.metrics.width, entry.layout.metrics.height),
-                    entry.widths,
-                )
-            })
+    /// The size of the layout the cache holds for `widths` and the max widths
+    /// that keep it; `None` when the cache holds none.
+    fn cached_widths(&self, widths: (f32, f32)) -> Option<(Size, cranpose_ui_layout::BoundRange)> {
+        let stamp = crate::render_state::text_layout_stamp();
+        let cache = self.cache.borrow();
+        let entry = cache.iter().find(|entry| entry.keeps(widths, stamp))?;
+        Some((entry.layout.size(), entry.max_widths))
     }
 
     /// The widest word of the text: see [`crate::text::measure::min_intrinsic_text_width`].
@@ -228,27 +284,21 @@ impl TextPreparedLayoutOwner {
         crate::text::measure::min_intrinsic_text_width(&source.text, &source.style)
     }
 
-    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        self.with_prepared(max_width, |prepared| Size {
-            width: prepared.metrics.width,
-            height: prepared.metrics.height,
-        })
+    fn measure_text_content(&self, widths: (f32, f32)) -> Size {
+        self.with_prepared(widths, |prepared| prepared.size())
     }
 
-    fn measure_layout(&self, max_width: Option<f32>) -> (Size, cranpose_ui_layout::AlignmentLines) {
-        self.measured_max_width.set(Some(max_width));
-        self.with_prepared(max_width, |prepared| {
-            (
-                Size::new(prepared.metrics.width, prepared.metrics.height),
-                prepared.alignment_lines,
-            )
+    fn measure_layout(&self, widths: (f32, f32)) -> (Size, cranpose_ui_layout::AlignmentLines) {
+        self.measured_widths.set(Some(widths));
+        self.with_prepared(widths, |prepared| {
+            (prepared.size(), prepared.alignment_lines())
         })
     }
 
     fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
-        self.measured_max_width
+        self.measured_widths
             .get()
-            .map(|max_width| self.with_prepared(max_width, Rc::clone))
+            .map(|widths| self.with_prepared(widths, Rc::clone))
     }
 }
 
@@ -319,8 +369,8 @@ impl TextModifierNode {
         self.layout.options()
     }
 
-    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        self.layout.measure_text_content(max_width)
+    fn measure_text_content(&self, widths: (f32, f32)) -> Size {
+        self.layout.measure_text_content(widths)
     }
 
     pub(crate) fn prepared_layout_handle(&self) -> TextPreparedLayoutHandle {
@@ -336,14 +386,9 @@ impl DelegatableNode for TextModifierNode {
 
 impl ModifierNode for TextModifierNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.layout.set_node_id(context.node_id());
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
         context.invalidate(InvalidationKind::Semantics);
-    }
-
-    fn on_detach(&mut self) {
-        self.layout.set_node_id(None);
     }
 
     fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
@@ -381,20 +426,20 @@ impl LayoutModifierNode for TextModifierNode {
         size: Size,
         _wrapped: cranpose_ui_layout::WrappedHold,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
-        let max_width = constraints
-            .max_width
-            .is_finite()
-            .then_some(constraints.max_width);
-        let (text_size, widths) = self.layout.cached_widths(max_width)?;
+        // A text changed in place since its last hold, as a ticker's is,
+        // measures again next frame whatever the hold.
+        if self.layout.changed.take() {
+            return None;
+        }
+        let (text_size, max_widths) = self.layout.cached_widths(text_widths(constraints))?;
         let text_size = self.pixel_size(text_size);
         if size != text_size {
             return None;
         }
         Some(cranpose_ui_layout::ConstraintsHold {
             width: cranpose_ui_layout::AxisHold {
-                min: cranpose_ui_layout::BoundRange::up_to(text_size.width),
-                max: cranpose_ui_layout::BoundRange::from(text_size.width)
-                    .intersect(widths.max_width_range())?,
+                min: cranpose_ui_layout::BoundRange::exactly(constraints.min_width),
+                max: cranpose_ui_layout::BoundRange::from(text_size.width).intersect(max_widths)?,
             },
             height: cranpose_ui_layout::AxisHold::sized(text_size.height),
         })
@@ -406,11 +451,7 @@ impl LayoutModifierNode for TextModifierNode {
         _measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let max_width = constraints
-            .max_width
-            .is_finite()
-            .then_some(constraints.max_width);
-        let (text_size, alignment_lines) = self.layout.measure_layout(max_width);
+        let (text_size, alignment_lines) = self.layout.measure_layout(text_widths(constraints));
         let text_size = self.pixel_size(text_size);
 
         let width = text_size
@@ -439,21 +480,34 @@ impl LayoutModifierNode for TextModifierNode {
         _height: f32,
         _density: f32,
     ) -> f32 {
-        self.pixel_size(self.measure_text_content(None)).width
+        self.pixel_size(self.measure_text_content((0.0, f32::INFINITY)))
+            .width
     }
 
     fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
-        self.pixel_size(
-            self.measure_text_content(Some(width).filter(|w| w.is_finite() && *w > 0.0)),
-        )
-        .height
+        self.pixel_size(self.measure_text_content((0.0, intrinsic_width(width))))
+            .height
     }
 
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
-        self.pixel_size(
-            self.measure_text_content(Some(width).filter(|w| w.is_finite() && *w > 0.0)),
-        )
-        .height
+        self.pixel_size(self.measure_text_content((0.0, intrinsic_width(width))))
+            .height
+    }
+}
+
+// The widths a text lays out between under `constraints`: Compose's
+// `finalConstraints` read the min and the max width.
+fn text_widths(constraints: Constraints) -> (f32, f32) {
+    (constraints.min_width.max(0.0), constraints.max_width)
+}
+
+// The max width an intrinsic height is asked at; a width that is not positive
+// and finite is no limit.
+fn intrinsic_width(width: f32) -> f32 {
+    if width.is_finite() && width > 0.0 {
+        width
+    } else {
+        f32::INFINITY
     }
 }
 
@@ -529,6 +583,9 @@ impl PartialEq for TextModifierElement {
 /// How many recent text styles [`shared_text_style`] keeps.
 const SHARED_TEXT_STYLES: usize = 16;
 
+// The text styles recently composed, which [`shared_text_style`] shares.
+pub(crate) type RecentTextStyles = RecentValues<Arc<TextStyle>, SHARED_TEXT_STYLES>;
+
 /// `style` shared with the texts recently composed with an equal one, so a
 /// screen of texts in a few styles keeps a few copies, not one a text, and
 /// a node updated to an element of the same style compares pointers. A
@@ -537,21 +594,10 @@ const SHARED_TEXT_STYLES: usize = 16;
 pub(crate) fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
     crate::thread_state::with(|state| {
         let mut recent = state.recent_text_styles.borrow_mut();
-        match recent.iter().position(|kept| **kept == style) {
-            Some(0) => Arc::clone(&recent[0]),
-            // One step toward the front: styles in use stay among the first
-            // compared, without moving the whole list on every hit.
-            Some(index) => {
-                recent.swap(index, index - 1);
-                Arc::clone(&recent[index - 1])
-            }
-            None => {
-                let shared = Arc::new(style);
-                recent.truncate(SHARED_TEXT_STYLES - 1);
-                recent.insert(0, Arc::clone(&shared));
-                shared
-            }
+        if let Some(kept) = recent.find(|kept| **kept == style) {
+            return Arc::clone(kept);
         }
+        Arc::clone(recent.keep(Arc::new(style)))
     })
 }
 

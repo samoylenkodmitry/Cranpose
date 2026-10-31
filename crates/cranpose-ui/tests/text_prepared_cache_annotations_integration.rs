@@ -1,8 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_ui::{
-    AppContext, TextLayoutOptions, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle,
-    layout_text, measure_text, prepare_text_layout, set_text_measurer,
+    AppContext, TextLayoutOptions, TextStyle, prepare_text_layout,
     text::{AnnotatedString, LinkAnnotation},
 };
 
@@ -16,74 +15,13 @@ fn annotated_with_link(annotation: &str, link: LinkAnnotation) -> AnnotatedStrin
         .to_annotated_string()
 }
 
-fn prepare(text: &AnnotatedString) -> cranpose_ui::PreparedTextLayout {
+fn prepare(text: &AnnotatedString) -> Rc<cranpose_ui::PreparedTextLayout> {
     prepare_text_layout(
         text,
         &TextStyle::default(),
         TextLayoutOptions::default(),
         None,
     )
-}
-
-struct AnnotationSensitiveMeasurer;
-
-impl TextMeasurer for AnnotationSensitiveMeasurer {
-    fn measure(&self, text: &AnnotatedString, _style: &TextStyle) -> TextMetrics {
-        let width = text.string_annotations[0].item.annotation.len() as f32;
-        TextMetrics {
-            width,
-            height: 1.0,
-            line_height: 1.0,
-            line_count: 1,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        _text: &AnnotatedString,
-        _style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        0.0
-    }
-
-    fn layout(&self, text: &AnnotatedString, _style: &TextStyle) -> TextLayoutResult {
-        let char_width = text.string_annotations[0].item.annotation.len() as f32;
-        TextLayoutResult::monospaced(&text.text, char_width, 1.0)
-    }
-}
-
-#[test]
-fn shared_measurement_caches_do_not_hide_annotations_from_custom_measurers() {
-    AppContext::new().enter(|| {
-        set_text_measurer(AnnotationSensitiveMeasurer);
-        let first = annotated_with_link(
-            "a",
-            LinkAnnotation::Url("https://example.invalid/first".into()),
-        );
-        let second = annotated_with_link(
-            "longer payload",
-            LinkAnnotation::Url("https://example.invalid/second".into()),
-        );
-
-        let first_metrics = measure_text(&first, &TextStyle::default());
-        let second_metrics = measure_text(&second, &TextStyle::default());
-        assert!(second_metrics.width > first_metrics.width);
-
-        let first_layout = layout_text(&first, &TextStyle::default());
-        let second_layout = layout_text(&second, &TextStyle::default());
-        assert!(second_layout.width > first_layout.width);
-    });
 }
 
 #[test]

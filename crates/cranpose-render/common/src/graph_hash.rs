@@ -136,7 +136,8 @@ fn hash_primitive_entry<H: Hasher>(primitive: &PrimitiveEntry, state: &mut H) {
             text.text.render_hash().hash(state);
             text.text_style.render_hash().hash(state);
             hash_f32_bits(text.font_size, state);
-            text.layout_options.hash(state);
+            text.overflow.hash(state);
+            text.layout.id().hash(state);
             hash_optional_rect(text.clip, state);
         }
     }

@@ -1,11 +1,17 @@
+use std::rc::Rc;
+
 use cranpose_render_common::Renderer;
+use cranpose_ui::{
+    PreparedTextLayout, TextLayoutOptions, TextStyle,
+    text::{AnnotatedString, prepare_text_layout},
+};
 use cranpose_ui_graphics::{Rect, Size};
 use web_time::Instant;
 
 use crate::{FramePacingMode, RootSurface, ShellApp};
 
 const DEV_OVERLAY_PADDING: f32 = 8.0;
-const DEV_OVERLAY_FONT_SIZE: f32 = 14.0;
+// What a character is taken to measure when the fields to show are picked.
 const DEV_OVERLAY_CHAR_WIDTH: f32 = 7.0;
 const DEV_OVERLAY_SEPARATOR: &str = " | ";
 const DEV_OVERLAY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -23,6 +29,8 @@ struct DevOverlayControl {
 pub(crate) struct DevOverlay {
     controls: Vec<DevOverlayControl>,
     text: String,
+    // The line laid out with the app's fonts.
+    layout: Option<Rc<PreparedTextLayout>>,
     pub(crate) last_refresh: Option<Instant>,
     viewport: Option<Size>,
 }
@@ -31,14 +39,15 @@ pub(crate) fn draw_dev_overlay<R: Renderer>(app: &ShellApp, surface: &mut RootSu
     let viewport_size = surface.viewport_size();
     let overlay = &mut surface.dev_overlay;
     overlay.refresh_for_frame_at(app, viewport_size, Instant::now());
-    surface
-        .renderer
-        .draw_dev_overlay(overlay.text.as_str(), viewport_size);
+    if let Some(layout) = &overlay.layout {
+        surface.renderer.draw_dev_overlay(layout, viewport_size);
+    }
 }
 
 impl DevOverlay {
     pub(crate) fn invalidate(&mut self) {
         self.text.clear();
+        self.layout = None;
         self.last_refresh = None;
         self.viewport = None;
     }
@@ -66,7 +75,16 @@ impl DevOverlay {
         if !self.needs_refresh(viewport_size, now) {
             return;
         }
-        self.text = self.build_text(app, viewport_size);
+        let (text, controls) = self.build_text(app, viewport_size);
+        let layout = prepare_text_layout(
+            &AnnotatedString::from(text.as_str()),
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            None,
+        );
+        self.controls = place_controls(&layout, viewport_size, controls);
+        self.layout = Some(layout);
+        self.text = text;
         self.last_refresh = Some(now);
         self.viewport = Some(viewport_size);
     }
@@ -81,9 +99,13 @@ impl DevOverlay {
         })
     }
 
-    fn build_text(&mut self, app: &ShellApp, viewport_size: Size) -> String {
-        self.controls.clear();
-
+    // The line of statistics that fits `viewport_size`, and the text each
+    // frame pacing control takes in it.
+    fn build_text(
+        &mut self,
+        app: &ShellApp,
+        viewport_size: Size,
+    ) -> (String, Vec<(usize, usize, FramePacingMode)>) {
         let stats = app.fps_monitor.stats();
         // Each field with its rank: a viewport too narrow for the whole line,
         // such as a phone browser's, drops the highest ranks first.
@@ -125,7 +147,7 @@ impl DevOverlay {
         }
 
         if !app.dev_options.frame_pacing_controls {
-            return text;
+            return (text, Vec::new());
         }
 
         text.push_str(DEV_OVERLAY_SEPARATOR);
@@ -145,29 +167,38 @@ impl DevOverlay {
             controls.push((start, text.len(), mode));
         }
 
-        let overlay_width = text.len() as f32 * DEV_OVERLAY_CHAR_WIDTH;
-        let overlay_x = (viewport_size.width - overlay_width - DEV_OVERLAY_PADDING * 2.0)
-            .max(DEV_OVERLAY_PADDING);
-        let overlay_y = DEV_OVERLAY_PADDING;
-        let text_x = overlay_x + DEV_OVERLAY_PADDING / 2.0;
-        let text_y = overlay_y + DEV_OVERLAY_PADDING / 4.0;
-        let text_height = DEV_OVERLAY_FONT_SIZE * 1.4;
-
-        self.controls = controls
-            .into_iter()
-            .map(|(start, end, mode)| DevOverlayControl {
-                bounds: Rect {
-                    x: text_x + start as f32 * DEV_OVERLAY_CHAR_WIDTH - 3.0,
-                    y: text_y - 3.0,
-                    width: (end - start) as f32 * DEV_OVERLAY_CHAR_WIDTH + 6.0,
-                    height: text_height + 6.0,
-                },
-                mode,
-            })
-            .collect();
-
-        text
+        (text, controls)
     }
+}
+
+// The bounds of each control at `controls`' text in the overlay `layout`
+// draws in a `viewport_size` window, as the renderer places the overlay.
+fn place_controls(
+    layout: &PreparedTextLayout,
+    viewport_size: Size,
+    controls: Vec<(usize, usize, FramePacingMode)>,
+) -> Vec<DevOverlayControl> {
+    let overlay_x = (viewport_size.width - layout.size().width - DEV_OVERLAY_PADDING * 2.0)
+        .max(DEV_OVERLAY_PADDING);
+    let text_x = overlay_x + DEV_OVERLAY_PADDING / 2.0;
+    let text_y = DEV_OVERLAY_PADDING + DEV_OVERLAY_PADDING / 4.0;
+    let caret = |offset| {
+        layout
+            .layout
+            .horizontal_position(offset, cranpose_text::CaretDirection::Primary)
+    };
+    controls
+        .into_iter()
+        .map(|(start, end, mode)| DevOverlayControl {
+            bounds: Rect {
+                x: text_x + caret(start) - 3.0,
+                y: text_y - 3.0,
+                width: caret(end) - caret(start) + 6.0,
+                height: layout.size().height + 6.0,
+            },
+            mode,
+        })
+        .collect()
 }
 
 /// The length of the frame pacing controls: every mode's label, a space

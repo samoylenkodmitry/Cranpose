@@ -11,6 +11,7 @@ use std::{
     cell::{Cell, RefCell},
     ops::Range,
     rc::Rc,
+    sync::Arc,
 };
 
 use cranpose_core::MutableState;
@@ -18,8 +19,9 @@ use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size, WindowCoordin
 
 use crate::{
     text::{
-        AnnotatedString, TextLayoutOptions, TextStyle, get_offset_for_position, measure_text,
-        prepare_text_layout, text_align_fraction, wrapped_line_ranges,
+        AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextStyle,
+        layout_cache::CacheAdmission,
+        measure::{SharedText, TextFrame, prepare_shared},
     },
     text_selection::{
         MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionAnchor, SelectionGranularity,
@@ -91,17 +93,10 @@ impl SelectableGeometry {
     }
 }
 
-/// One visual line of a registered text, in its content's coordinates.
-struct SelectableLine {
-    range: Range<usize>,
-    left: f32,
-    top: f32,
-}
-
 struct Selectable {
     key: u64,
     text: Rc<AnnotatedString>,
-    style: TextStyle,
+    style: Arc<TextStyle>,
     options: TextLayoutOptions,
     geometry: Rc<SelectableGeometry>,
 }
@@ -111,93 +106,37 @@ impl Selectable {
         self.text.text.len()
     }
 
-    fn wrap_width(&self) -> Option<f32> {
+    // The text laid out as the renderer draws it: as wide as its content.
+    fn layout(&self) -> Rc<PreparedTextLayout> {
         let width = self.geometry.content_size.get().width;
-        (width > 0.0).then_some(width)
-    }
-
-    fn line_height(&self) -> f32 {
-        prepare_text_layout(&self.text, &self.style, self.options, self.wrap_width())
-            .metrics
-            .line_height
-    }
-
-    /// The visual lines as the renderer lays them out: wrapped at the content
-    /// width and aligned line by line.
-    fn lines(&self, line_height: f32) -> Vec<SelectableLine> {
-        let width = self.geometry.content_size.get().width;
-        let fraction = text_align_fraction(&self.style, &self.text.text);
-        wrapped_line_ranges(
-            None,
-            &self.text,
-            &self.style,
-            self.options,
-            self.wrap_width(),
-        )
-        .into_iter()
-        .enumerate()
-        .map(|(index, range)| {
-            let line_width = self.prefix_width(range.start, range.end);
-            SelectableLine {
-                left: (width - line_width).max(0.0) * fraction,
-                top: index as f32 * line_height,
-                range,
+        let frame = if width.is_finite() && width > 0.0 {
+            TextFrame {
+                min_width: width,
+                max_width: width,
+                options: self.options,
             }
-        })
-        .collect()
-    }
-
-    fn prefix_width(&self, start: usize, end: usize) -> f32 {
-        measure_text(
-            &AnnotatedString::from(&self.text.text[start..end]),
-            &self.style,
-        )
-        .width
+        } else {
+            TextFrame::up_to(None, self.options)
+        };
+        let text = SharedText {
+            text: &self.text,
+            style: &self.style,
+            style_hash: self.style.render_hash(),
+        };
+        prepare_shared(&text, frame, CacheAdmission::First, None)
     }
 
     /// The byte offset nearest `local`, a point in the content's coordinates.
     fn offset_at(&self, local: Point) -> usize {
-        let line_height = self.line_height();
-        let lines = self.lines(line_height);
-        let Some(last) = lines.len().checked_sub(1) else {
-            return 0;
-        };
-        let index = if line_height > 0.0 {
-            ((local.y / line_height).floor().max(0.0) as usize).min(last)
-        } else {
-            0
-        };
-        let line = &lines[index];
-        let text = &self.text.text[line.range.clone()];
-        let within = get_offset_for_position(
-            &AnnotatedString::from(text),
-            &self.style,
-            local.x - line.left,
-            0.0,
-        );
-        line.range.start + within.min(text.len())
+        self.layout().layout.offset_for_position(local.x, local.y)
     }
 
     /// The highlight for bytes `start..end`, a rectangle per visual line, in
     /// the content's coordinates.
     fn highlight(&self, start: usize, end: usize) -> Vec<Rect> {
-        let line_height = self.line_height();
-        self.lines(line_height)
-            .into_iter()
-            .filter(|line| start < line.range.end && end > line.range.start)
-            .filter_map(|line| {
-                let from = start.max(line.range.start);
-                let to = end.min(line.range.end);
-                let x0 = line.left + self.prefix_width(line.range.start, from);
-                let x1 = line.left + self.prefix_width(line.range.start, to);
-                (x1 > x0).then_some(Rect {
-                    x: x0,
-                    y: line.top,
-                    width: x1 - x0,
-                    height: line_height,
-                })
-            })
-            .collect()
+        let mut rects = Vec::new();
+        self.layout().layout.selection_rects(start, end, &mut rects);
+        rects
     }
 }
 
@@ -243,7 +182,7 @@ impl SelectionRegistrar {
         &self,
         key: u64,
         text: Rc<AnnotatedString>,
-        style: TextStyle,
+        style: Arc<TextStyle>,
         options: TextLayoutOptions,
         geometry: Rc<SelectableGeometry>,
     ) {

@@ -25,23 +25,25 @@ impl Script {
     // leaves out the scripts whose letters join, cursively or along a
     // headline.
     pub(crate) fn takes_letter_spacing(self) -> bool {
-        !matches!(
-            &self.0,
-            b"Arab"
-                | b"Nkoo"
-                | b"Phlp"
-                | b"Mand"
-                | b"Mong"
-                | b"Phag"
-                | b"Deva"
-                | b"Beng"
-                | b"Guru"
-                | b"Modi"
-                | b"Shrd"
-                | b"Sylo"
-                | b"Tirh"
-                | b"Ogam"
-        )
+        // The tags as words, each compared at once: a byte at a time the
+        // comparisons of a Latin item, which matches none, run long.
+        const JOINING: [u32; 14] = [
+            u32::from_ne_bytes(*b"Arab"),
+            u32::from_ne_bytes(*b"Nkoo"),
+            u32::from_ne_bytes(*b"Phlp"),
+            u32::from_ne_bytes(*b"Mand"),
+            u32::from_ne_bytes(*b"Mong"),
+            u32::from_ne_bytes(*b"Phag"),
+            u32::from_ne_bytes(*b"Deva"),
+            u32::from_ne_bytes(*b"Beng"),
+            u32::from_ne_bytes(*b"Guru"),
+            u32::from_ne_bytes(*b"Modi"),
+            u32::from_ne_bytes(*b"Shrd"),
+            u32::from_ne_bytes(*b"Sylo"),
+            u32::from_ne_bytes(*b"Tirh"),
+            u32::from_ne_bytes(*b"Ogam"),
+        ];
+        !JOINING.contains(&u32::from_ne_bytes(self.0))
     }
 
     fn of(script: UnicodeScript) -> Self {
@@ -49,6 +51,15 @@ impl Script {
             .get(script)
             .and_then(|name| name.as_bytes().try_into().ok())
             .map_or(Self::COMMON, Self)
+    }
+}
+
+// The script of ASCII `text`: Latin when it holds a letter, else Common.
+pub(crate) fn ascii_script(text: &str) -> Script {
+    if text.bytes().any(|byte| byte.is_ascii_alphabetic()) {
+        Script::LATIN
+    } else {
+        Script::COMMON
     }
 }
 
@@ -60,12 +71,7 @@ impl Script {
 // stays in the run.
 pub(crate) fn script_runs(text: &str, offset: usize, runs: &mut Vec<(usize, Script)>) {
     if text.is_ascii() {
-        let script = if text.bytes().any(|byte| byte.is_ascii_alphabetic()) {
-            Script::LATIN
-        } else {
-            Script::COMMON
-        };
-        runs.push((offset + text.len(), script));
+        runs.push((offset + text.len(), ascii_script(text)));
         return;
     }
     let scripts = ScriptWithExtensions::new();

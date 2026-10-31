@@ -1,7 +1,8 @@
 use cranpose_core::NodeId;
-use cranpose_render_common::software_text_raster::{
-    SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasMask,
-    SoftwareGlyphAtlasPlacement,
+use cranpose_render_common::{
+    glyph_mask::{GlyphMaskKey, GlyphRaster},
+    text_atlas::AtlasGlyph,
+    text_fonts::{TextFonts, default_typeface},
 };
 use cranpose_ui::text::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::Color;
@@ -27,7 +28,6 @@ fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
         surface_format: wgpu::TextureFormat::Rgba8Unorm,
         adapter_backend: backend,
         adapter_downlevel: wgpu::DownlevelFlags::empty(),
-        text_fonts: SoftwareTextFontSet::empty(),
         renderer_epoch: 0,
         pipeline_compilation: PipelineCompilation::Inline,
         on_device_lost: None,
@@ -52,19 +52,19 @@ fn test_quads() -> [CachedTextGlyphQuad; 1] {
 
 /// A one-glyph run drawn at `x`: a white 2×2 glyph over the atlas's
 /// top-left corner.
-type TestRun = ([SoftwareGlyphAtlasPlacement; 1], [GlyphAtlasEntry; 1]);
+type TestRun = ([AtlasGlyph; 1], [GlyphAtlasEntry; 1]);
 
 fn test_run(x: i32) -> TestRun {
-    let key = SoftwareGlyphAtlasKey {
+    let key = GlyphMaskKey {
         font_hash: 0,
         glyph_id: 0,
-        scale_x_bits: 0,
-        scale_y_bits: 0,
-        embolden_px_bits: 0,
-        slant_bits: 0,
+        size_bits: 0,
+        stroke_bits: 0,
+        embolden_bits: 0,
+        skew_bits: 0,
     };
     (
-        [SoftwareGlyphAtlasPlacement {
+        [AtlasGlyph {
             key,
             x,
             y: 0,
@@ -582,25 +582,6 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
     );
 }
 
-fn fonted_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
-    let (lock, device, queue) = crate::frame_graph::upload_test_device();
-    let backend = device.adapter_info().backend;
-    let font = cranpose_render_common::software_text_raster::default_software_text_font()
-        .expect("the embedded default font");
-    let renderer = GpuRenderer::new(GpuRendererInit {
-        device: Arc::new(device),
-        queue: Arc::new(queue),
-        surface_format: wgpu::TextureFormat::Rgba8Unorm,
-        adapter_backend: backend,
-        adapter_downlevel: wgpu::DownlevelFlags::empty(),
-        text_fonts: SoftwareTextFontSet::from_font(font),
-        renderer_epoch: 0,
-        pipeline_compilation: PipelineCompilation::Inline,
-        on_device_lost: None,
-    });
-    (lock, renderer)
-}
-
 fn filled_run(x: f32, width: f32, color: Color) -> RunDraw {
     let mut recorder = cranpose_ui_graphics::ShapeRecorder::default();
     recorder.push_primitive(cranpose_ui_graphics::DrawPrimitive::Rect {
@@ -622,12 +603,27 @@ fn filled_run(x: f32, width: f32, color: Color) -> RunDraw {
 
 fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
     let style = TextStyle {
+        span_style: cranpose_ui::text::SpanStyle {
+            font_size: cranpose_ui::text::TextUnit::Sp(18.0),
+            ..Default::default()
+        },
         paragraph_style: cranpose_ui::text::ParagraphStyle {
             text_motion: Some(cranpose_ui::text::TextMotion::Static),
             ..Default::default()
         },
-        ..Default::default()
     };
+    let text = cranpose_ui::text::shared_plain_annotated_string("MM");
+    let layout = cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
+        cranpose_ui::text::prepare_text_layout(
+            &text,
+            &style,
+            TextLayoutOptions::default(),
+            Some(30.0),
+        )
+        .layout
+        .clone()
+    });
     scene.push_text(TextDraw {
         node_id: NodeId(1),
         rect: Rect {
@@ -638,12 +634,12 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         },
         snap_anchor: None,
         text: DrawnText::of(cranpose_ui::text::shared_plain_render_string("MM"), &style),
+        layout,
         color,
         style_hash: style.render_hash(),
         text_style: Arc::new(style),
         font_size: 18.0,
         scale: 1.0,
-        layout_options: TextLayoutOptions::default(),
         clip: None,
     });
 }
@@ -706,7 +702,7 @@ fn has_text_pixels(pixels: &[u8], columns: std::ops::Range<usize>, background: &
 
 #[test]
 fn labels_between_shapes_they_do_not_touch_draw_in_one_batch() {
-    let (_lock, mut renderer) = fonted_renderer();
+    let (_lock, mut renderer) = test_renderer();
     let red = Color(1.0, 0.0, 0.0, 1.0);
     let mut scene = CompositorScene::new();
     for x in [0.0, 64.0] {
@@ -732,7 +728,7 @@ fn labels_between_shapes_they_do_not_touch_draw_in_one_batch() {
 
 #[test]
 fn a_shape_over_a_label_still_draws_over_it() {
-    let (_lock, mut renderer) = fonted_renderer();
+    let (_lock, mut renderer) = test_renderer();
     let red = Color(1.0, 0.0, 0.0, 1.0);
     let blue = Color(0.0, 0.0, 1.0, 1.0);
     let mut scene = CompositorScene::new();
@@ -863,7 +859,7 @@ fn clipped_run(columns: std::ops::Range<f32>, color: Color) -> RunDraw {
 
 #[test]
 fn runs_under_different_clips_each_keep_their_own_pixels() {
-    let (_lock, mut renderer) = fonted_renderer();
+    let (_lock, mut renderer) = test_renderer();
     let red = Color(1.0, 0.0, 0.0, 1.0);
     let blue = Color(0.0, 0.0, 1.0, 1.0);
     let mut scene = CompositorScene::new();
@@ -895,24 +891,23 @@ fn runs_under_different_clips_each_keep_their_own_pixels() {
     }
 }
 
-/// A white glyph of `side` × `side` texels, glyph `id` of its font.
-fn solid_glyph(id: u32, side: usize) -> SoftwareGlyphAtlasGlyph {
-    SoftwareGlyphAtlasGlyph {
-        key: SoftwareGlyphAtlasKey {
-            font_hash: 0,
-            glyph_id: id,
-            scale_x_bits: 0,
-            scale_y_bits: 0,
-            embolden_px_bits: 0,
-            slant_bits: 0,
-        },
-        mask: SoftwareGlyphAtlasMask {
-            alpha: vec![255u8; side * side].into(),
-            width: side,
-            height: side,
-        },
+// The filled square of the embedded font at `size` pixels per em, its mask
+// in the renderer's mask cache.
+fn square_glyph(renderer: &mut GpuRenderer, size: f32) -> AtlasGlyph {
+    let typeface = default_typeface().expect("the embedded font");
+    let glyph = typeface.glyph('\u{25A0}').expect("a filled square");
+    let raster = GlyphRaster::default();
+    let mask = renderer
+        .text
+        .glyph_mask_cache
+        .mask(&typeface, glyph, size, raster)
+        .expect("a square draws a mask");
+    AtlasGlyph {
+        key: GlyphMaskKey::of(&typeface, glyph, size, raster),
         x: 0,
         y: 0,
+        width: mask.width,
+        height: mask.height,
         color: Color(1.0, 1.0, 1.0, 1.0),
     }
 }
@@ -920,24 +915,32 @@ fn solid_glyph(id: u32, side: usize) -> SoftwareGlyphAtlasGlyph {
 #[test]
 fn a_glyph_placed_before_the_atlas_fills_reaches_the_atlas_its_draws_bind() {
     let (_lock, mut renderer) = test_renderer();
+    let square = square_glyph(&mut renderer, 40.0);
     let DrawParts {
         text, mut upload, ..
     } = renderer.draw_parts();
     let placed = text
-        .glyph_atlas_entry_for(&solid_glyph(1, 2), &mut upload)
+        .glyph_atlas_entry_for(&square, &mut upload)
         .expect("the glyph fits");
     let mut run = test_run(0);
-    run.1 = [placed];
+    // Two texels from the middle of the square, which its mask fills.
+    let half = |length: usize| u16::try_from(length / 2).expect("a small glyph");
+    run.1 = [GlyphAtlasEntry {
+        x: placed.x + half(square.width),
+        y: placed.y + half(square.height),
+        width: 2,
+        height: 2,
+    }];
     let mut commands = Vec::new();
     queue_run(&mut renderer, 1, 0.0, &run, &mut commands);
-    let side = renderer.text.glyph_atlas.size() as usize;
+    let side = renderer.text.glyph_atlas.size() as f32;
+    let huge = square_glyph(&mut renderer, side * 2.0);
     let DrawParts {
         text, mut upload, ..
     } = renderer.draw_parts();
     assert!(
-        text.glyph_atlas_entry_for(&solid_glyph(2, side), &mut upload)
-            .is_err(),
-        "a glyph as large as the atlas fills it"
+        text.glyph_atlas_entry_for(&huge, &mut upload).is_err(),
+        "a glyph larger than the atlas fills it"
     );
     let target = draw_queued(&mut renderer, &commands);
     assert_white_columns(

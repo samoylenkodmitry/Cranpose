@@ -7,10 +7,22 @@ const GRID_WIDTH_PER_UNIT: f32 = 10.0;
 const SCALED_LABEL: &str = "Scaled label";
 const NEIGHBOUR_LABEL: &str = "Neighbour";
 
+// Labels at 10 sp, where a character of Cranpose Test Mono is a whole 6
+// pixels wide and a line 10 tall, so scaled sizes stay whole.
+fn label_style() -> TextStyle {
+    TextStyle {
+        span_style: cranpose_ui::text::SpanStyle {
+            font_size: cranpose_ui::text::TextUnit::Sp(10.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 #[composable]
 fn LabelsBesideAGridWideBox(grid_box: Rc<Cell<Option<NodeId>>>) {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
-        Text(SCALED_LABEL, Modifier::empty(), TextStyle::default());
+        Text(SCALED_LABEL, Modifier::empty(), label_style());
         grid_box.set(Some(cranpose_ui::SubcomposeLayout(
             Modifier::empty(),
             |scope, _constraints| {
@@ -18,7 +30,7 @@ fn LabelsBesideAGridWideBox(grid_box: Rc<Cell<Option<NodeId>>>) {
                 scope.layout(width, 1.0, [])
             },
         )));
-        Text(NEIGHBOUR_LABEL, Modifier::empty(), TextStyle::default());
+        Text(NEIGHBOUR_LABEL, Modifier::empty(), label_style());
     });
 }
 
@@ -37,9 +49,6 @@ impl Fixture {
             location_key(file!(), line!(), column!()),
             move || LabelsBesideAGridWideBox(Rc::clone(&grid_box_in_content)),
         );
-        shell
-            .app_context()
-            .set_text_measurer(StubTextMeasurer::FontSized);
         shell.update();
         let neighbour = {
             let tree = shell.layout_tree().expect("layout tree available");

@@ -458,11 +458,18 @@ impl DrawPrimitiveSink for CollectingTextSink {
 }
 
 fn text_primitive(rect: Rect, text: &str, style: DrawTextStyle) -> DrawPrimitive {
+    use cranpose_ui_graphics::DrawTextMeasurer as _;
+    let layout = cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::AppContextTextMeasurer
+            .measure_text(text, &style)
+            .layout
+    });
     DrawPrimitive::Text(Box::new(TextPrimitive {
         rect,
         text: StdRc::from(text),
         style,
         brush: Brush::solid(Color::WHITE),
+        layout,
     }))
 }
 
@@ -564,7 +571,30 @@ fn text_lowering_uses_the_same_style_translation_the_draw_scope_measured_with() 
         ),
         &GraphicsLayer::default(),
     );
-    assert_eq!(params[0].text_style, text_style_for_draw_style(&style));
+    assert_eq!(
+        *params[0].text_style,
+        cranpose_ui::text::text_style_for_draw_style(&style)
+    );
+    assert_eq!(params[0].style_hash, params[0].text_style.render_hash());
+}
+
+#[test]
+fn a_gradient_text_lowers_with_the_gradient_in_its_style_and_that_style_s_hash() {
+    let mut primitive = sample_text_primitive();
+    let DrawPrimitive::Text(text) = &mut primitive else {
+        unreachable!("the sample is a text");
+    };
+    text.brush = Brush::linear_gradient(vec![Color::WHITE, Color::BLACK]);
+    let gradient = lower_text(primitive, &GraphicsLayer::default());
+    let solid = lower_text(sample_text_primitive(), &GraphicsLayer::default());
+    assert!(gradient[0].text_style.span_style.brush.is_some());
+    assert_eq!(gradient[0].style_hash, gradient[0].text_style.render_hash());
+    assert_ne!(gradient[0].style_hash, solid[0].style_hash);
+    // The solid text still takes the style the draw scope measured with.
+    assert_eq!(
+        *solid[0].text_style,
+        cranpose_ui::text::text_style_for_draw_style(&DrawTextStyle::new(10.0))
+    );
 }
 
 #[test]
@@ -582,8 +612,7 @@ fn lowered_text_is_never_re_wrapped_against_the_box_it_was_measured_into() {
         ),
         &GraphicsLayer::default(),
     );
-    assert!(!params[0].layout_options.soft_wrap);
-    assert_eq!(params[0].layout_options.overflow, TextOverflow::Visible);
+    assert_eq!(params[0].layout.line_count(), 1);
 }
 
 #[test]

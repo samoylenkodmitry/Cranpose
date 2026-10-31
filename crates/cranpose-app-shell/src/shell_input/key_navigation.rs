@@ -212,6 +212,9 @@ where
         }
     }
 
+    // Out of line: a frame that keeps focus seldom moves it, and the frame's
+    // own code stays small.
+    #[inline(never)]
     fn move_focus_by_arrow(&mut self, direction: FocusDirection) -> bool {
         let target = self.with_layout_tree(|layout_tree| {
             cranpose_ui::arrow_focus_target(layout_tree?, direction)

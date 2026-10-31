@@ -303,7 +303,6 @@ pub(crate) fn main() -> ExitCode {
 fn content(wrap_boundary: Arc<Mutex<Option<usize>>>) {
     let annotated = AnnotatedString::from(TEXT);
     let ranges = cranpose_ui::text::wrapped_line_ranges(
-        None,
         &annotated,
         &text_style(),
         cranpose_ui::text::TextLayoutOptions::default(),

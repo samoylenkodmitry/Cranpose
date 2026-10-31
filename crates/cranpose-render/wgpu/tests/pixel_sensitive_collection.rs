@@ -40,7 +40,7 @@ fn hidden_text_at(rect: Rect, clip: Option<Rect>) -> RenderNode {
     };
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+        node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
             node_id: NodeId(51_001),
             rect,
             render_text: std::sync::Arc::new(annotated.render_string()),
@@ -51,10 +51,11 @@ fn hidden_text_at(rect: Rect, clip: Option<Rect>) -> RenderNode {
                 ..Default::default()
             })),
             font_size: 18.0,
-            layout_options: TextLayoutOptions::default(),
+            overflow: TextLayoutOptions::default().overflow,
             clip,
             paint: Default::default(),
-        })),
+            layout: Default::default(),
+        }))),
     })
 }
 
@@ -83,6 +84,7 @@ fn sensitive_text_run() -> RenderNode {
             text: Rc::from("M"),
             style: DrawTextStyle::new(18.0),
             brush: cranpose_ui_graphics::Brush::solid(Color::BLACK),
+            layout: support::draw_text_layout("M", &DrawTextStyle::new(18.0)),
         }))],
     ))
 }

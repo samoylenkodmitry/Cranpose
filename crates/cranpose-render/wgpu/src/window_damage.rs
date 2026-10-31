@@ -1160,8 +1160,8 @@ fn hash_text<H: Hasher>(text: &TextDraw, state: &mut H) {
     state.write_u64(text.text.render_hash());
     state.write_u64(text.color.render_hash());
     state.write_u64(text.style_hash);
+    state.write_u32(text.layout.id());
     hash_values([text.font_size, text.scale], state);
-    text.layout_options.hash(state);
     hash_rect(text.rect, state);
     hash_option_rect(text.clip, state);
     hash_anchor(text.snap_anchor, state);

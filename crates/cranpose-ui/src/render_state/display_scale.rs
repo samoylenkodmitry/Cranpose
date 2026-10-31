@@ -77,12 +77,6 @@ pub(crate) fn current_host_density() -> Option<(f32, crate::font_scale::FontScal
     })
 }
 
-/// The running app's font scale curve, or `None` when it leaves every size as
-/// it is, which the caller then need not read.
-pub(crate) fn current_scaling_font_scale_curve() -> Option<crate::font_scale::FontScaleCurve> {
-    with_render_state(|state| (!state.font_scale_identity.get()).then(|| state.font_scale.get()))
-}
-
 /// What a prepared text layout is valid for: the text service's generation
 /// and the font scale curve's fingerprint, read in one app context access.
 pub(crate) fn text_layout_stamp() -> (u64, u32) {

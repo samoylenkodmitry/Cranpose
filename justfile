@@ -279,9 +279,9 @@ clippy-svg:
 
 # Lint the embedded hyphenation dictionary. `text-hyphenation-embedded` is
 # off by default and no crate in the workspace ever turns it on, so
-# `just clippy` never builds `text_hyphenation.rs`'s dictionary-backed path.
+# `just clippy` never builds the dictionary-backed path.
 clippy-hyphenation:
-    cargo clippy -p cranpose-render-common --features text-hyphenation-embedded --all-targets -- -D warnings
+    cargo clippy -p cranpose-ui --features text-hyphenation-embedded --all-targets -- -D warnings
 
 # Lint the robot runners, which `just clippy` cannot reach.
 #
@@ -433,17 +433,20 @@ _size-ceiling path max what:
     fi
     echo "size budget: the {{what}} is $size bytes, within {{max}}"
 
-# The web demo's wasm after `just web`: 12.5 MiB, the size CI built on
-# 2026-10-25 (12,983,806 bytes) and about 1%.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13107200" "web demo wasm")
+# The web demo's wasm after `just web`: 13.25 MiB, the size of 2026-10-29
+# (13,784,385 bytes) and about 0.8%. The text engine of #1961 added 800 KB:
+# HarfRust shapes every script on the web and read-fonts reads every outline
+# format, in place of ttf-parser's 125 KB.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13893632" "web demo wasm")
 
-# The ESP32-S3 app image after `just esp32-build`: 2.8 MiB, the image of
-# 2026-10-25 (2,865,760 bytes) and about 2.4%. The factory partition holds
-# 8,323,072 bytes.
+# The ESP32-S3 app image after `just esp32-build`: 3.3 MiB, the image of
+# 2026-10-29 (3,366,944 bytes) and about 2.4%. The text engine of #1961 added
+# 500 KB: HarfRust shapes every script and read-fonts reads every outline
+# format. The factory partition holds 8,323,072 bytes.
 esp32-size-budget:
     mkdir -p target/esp32
     . "$HOME/export-{{esp32_toolchain}}.sh" && espflash save-image --chip esp32s3 --flash-mode dio --flash-size 8mb --partition-table {{esp32_demo}}/partitions.csv {{esp32_elf}} target/esp32/app.bin
-    just _size-ceiling target/esp32/app.bin 2936012 "ESP32-S3 app image"
+    just _size-ceiling target/esp32/app.bin 3447751 "ESP32-S3 app image"
 
 # Each feature of the framework crates built alone, so a feature that only
 # compiles beside another is found. About 12 minutes: the nightly runs it.
@@ -565,9 +568,9 @@ test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
     cargo test --profile ci -p cranpose-ui --features svg
-    cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
+    cargo test --profile ci -p cranpose-ui --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose-text --features hyphenation-embedded --test text_engine hyphenation
-    cargo clippy -p cranpose-text -p cranpose-render-common --all-targets --features cranpose-text/hyphenation-embedded,cranpose-render-common/text-hyphenation-embedded -- -D warnings
+    cargo clippy -p cranpose-text -p cranpose-ui --all-targets --features cranpose-text/hyphenation-embedded,cranpose-ui/text-hyphenation-embedded -- -D warnings
     cargo test --profile ci -p cranpose-ui --features southeast-asian-line-breaks --test integration thai_line_breaks
     cargo clippy -p cranpose-ui --all-targets --features southeast-asian-line-breaks -- -D warnings
     cargo test --profile ci -p cranpose-render-pixels --features installed-fonts,cranpose-app-shell/installed-fonts --test installed_fonts
@@ -591,13 +594,11 @@ test-localization: check-localization
     cargo test --profile ci -p cranpose-liquid --features localization
     cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration date_picker
     cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration time_picker
-    cargo test --profile ci -p cranpose-render-common --features text-shaping
     cargo test --profile ci -p cranpose-fonts --all-features
 
 # Compile and lint both localization-enabled and ordinary consumers.
 check-localization:
     cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid -p cranpose-fonts --all-targets --features cranpose-localization/tooling,cranpose-ui/localization-formatting,cranpose-liquid/localization-formatting,cranpose-fonts/arabic,cranpose-fonts/devanagari,cranpose-fonts/cjk -- -D warnings
-    cargo clippy -p cranpose-render-common --all-targets --features text-shaping -- -D warnings
     cargo check -p cranpose-ui --no-default-features
     cargo check -p cranpose --example localization --features desktop,renderer-wgpu,localization
     cargo run -p cranpose-localization --features tooling --bin cranpose-l10n -- check --catalogs crates/cranpose-ui/locales --fallback en

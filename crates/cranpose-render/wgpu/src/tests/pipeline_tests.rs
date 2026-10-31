@@ -2,8 +2,7 @@ use std::rc::Rc;
 
 use cranpose_ui::{
     TextLayoutOptions,
-    text::TextMotion,
-    text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
+    text::{TextDecoration, TextMotion},
 };
 
 use super::*;
@@ -36,47 +35,15 @@ fn shadow_casters_preserve_the_requested_cutout_blend() {
     );
 }
 
-fn synthetic_text_layout(
-    text: &str,
-    line_height: f32,
-    lines: Vec<LineLayout>,
-    glyph_layouts: Vec<GlyphLayout>,
-) -> TextLayoutResult {
-    let mut glyph_x_positions = Vec::new();
-    let mut char_to_byte = Vec::new();
-    for (byte_offset, _) in text.char_indices() {
-        glyph_x_positions.push(0.0);
-        char_to_byte.push(byte_offset);
-    }
-    glyph_x_positions.push(0.0);
-    char_to_byte.push(text.len());
-
-    let width = glyph_layouts
-        .iter()
-        .map(|glyph| (glyph.x + glyph.width).max(0.0))
-        .fold(0.0, f32::max);
-    let height = lines
-        .iter()
-        .map(|line| (line.y + line.height).max(0.0))
-        .fold(line_height.max(0.0), f32::max);
-
-    TextLayoutResult::new(
-        text,
-        TextLayoutData {
-            width,
-            height,
-            line_height,
-            glyph_x_positions,
-            char_to_byte,
-            lines,
-            glyph_layouts,
-        },
-    )
-}
-
+// Runs `block` in an app context whose text lays out with the font a
+// renderer without app fonts draws with.
 fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
-    let app_context = cranpose_ui::AppContext::new();
-    app_context.enter(block)
+    cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(
+            cranpose_render_common::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver(),
+        );
+        block()
+    })
 }
 
 fn prepare_text_layout_for_test(
@@ -84,7 +51,7 @@ fn prepare_text_layout_for_test(
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
-) -> cranpose_ui::text::PreparedTextLayout {
+) -> Rc<cranpose_ui::text::PreparedTextLayout> {
     with_test_app_context(|| prepare_text_layout(text, style, options, max_width))
 }
 
@@ -102,14 +69,16 @@ fn text_node(
     font_size: f32,
     layout_options: TextLayoutOptions,
 ) -> TextPrimitiveNode {
+    let prepared = prepare_text_layout_for_test(text, text_style, layout_options, None);
     TextPrimitiveNode {
         node_id,
         rect: Rect::EMPTY,
         text: Rc::new(text.clone()),
-        render_text: Arc::new(text.render_string()),
+        render_text: prepared.render_text(),
+        layout: prepared.layout.clone(),
         text_style: Arc::new(text_style.clone()),
         font_size,
-        layout_options,
+        overflow: layout_options.overflow,
         clip: None,
         paint: Default::default(),
     }
@@ -136,7 +105,7 @@ fn push_text_style_draws_for_test(
     placement: TextPlacement<'_>,
 ) {
     with_test_app_context(|| {
-        push_text_style_draws(scene, &mut UiTextLayoutResolver, node, placement);
+        push_text_style_draws(scene, node, placement);
     });
 }
 
@@ -312,30 +281,6 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
 
     assert_eq!(scene.hit_targets().len(), 1);
     assert!(scene.graph.is_none());
-}
-
-#[test]
-fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
-    let style = TextStyle {
-        span_style: cranpose_ui::text::SpanStyle {
-            baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let text_bounds = Rect {
-        x: 20.0,
-        y: 20.0,
-        width: 50.0,
-        height: 18.0,
-    };
-    let expanded = expand_text_bounds_for_baseline_shift(text_bounds, &style, 20.0);
-    assert!(expanded.y < text_bounds.y);
-    assert!(expanded.height > text_bounds.height);
-    assert_eq!(
-        expanded.y + expanded.height,
-        text_bounds.y + text_bounds.height
-    );
 }
 
 #[test]
@@ -663,294 +608,6 @@ fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
 }
 
 #[test]
-fn decoration_segments_from_glyph_layouts_line_through_preserves_bidi_visual_order() {
-    let style = TextStyle::default();
-    let text = cranpose_ui::text::AnnotatedString::builder()
-        .push_style(cranpose_ui::text::SpanStyle {
-            color: Some(Color::RED),
-            text_decoration: Some(TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        })
-        .append("A")
-        .pop()
-        .push_style(cranpose_ui::text::SpanStyle {
-            color: Some(Color(0.0, 0.8, 0.0, 1.0)),
-            text_decoration: Some(TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        })
-        .append("B")
-        .pop()
-        .push_style(cranpose_ui::text::SpanStyle {
-            color: Some(Color::BLUE),
-            text_decoration: Some(TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        })
-        .append("C")
-        .pop()
-        .to_annotated_string();
-
-    let layout = synthetic_text_layout(
-        "ABC",
-        12.0,
-        vec![LineLayout {
-            start_offset: 0,
-            end_offset: 3,
-            y: 0.0,
-            height: 12.0,
-        }],
-        vec![
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 0,
-                end_offset: 1,
-                x: 20.0,
-                y: 0.0,
-                width: 10.0,
-                height: 12.0,
-            },
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 1,
-                end_offset: 2,
-                x: 10.0,
-                y: 0.0,
-                width: 10.0,
-                height: 12.0,
-            },
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 2,
-                end_offset: 3,
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 12.0,
-            },
-        ],
-    );
-
-    let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
-    assert_eq!(
-        segments.len(),
-        3,
-        "each differently styled glyph should emit one segment"
-    );
-
-    let red = segments
-        .iter()
-        .find(|segment| segment.span_style.color == Some(Color::RED))
-        .expect("red segment");
-    let green = segments
-        .iter()
-        .find(|segment| segment.span_style.color == Some(Color(0.0, 0.8, 0.0, 1.0)))
-        .expect("green segment");
-    let blue = segments
-        .iter()
-        .find(|segment| segment.span_style.color == Some(Color::BLUE))
-        .expect("blue segment");
-
-    assert!((red.x_start - 20.0).abs() < f32::EPSILON);
-    assert!((green.x_start - 10.0).abs() < f32::EPSILON);
-    assert!((blue.x_start - 0.0).abs() < f32::EPSILON);
-    assert!(
-        blue.x_start < green.x_start && green.x_start < red.x_start,
-        "segments must follow visual x-order instead of logical span order"
-    );
-}
-
-#[test]
-fn decoration_segments_from_glyph_layouts_multiline_line_through_keeps_visual_line_boxes() {
-    let style = TextStyle {
-        span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        },
-        paragraph_style: cranpose_ui::ParagraphStyle {
-            text_align: cranpose_ui::text::TextAlign::End,
-            ..Default::default()
-        },
-    };
-    let text = cranpose_ui::text::AnnotatedString::from("AB\nCD");
-    let layout = synthetic_text_layout(
-        "AB\nCD",
-        12.0,
-        vec![
-            LineLayout {
-                start_offset: 0,
-                end_offset: 2,
-                y: 0.0,
-                height: 12.0,
-            },
-            LineLayout {
-                start_offset: 3,
-                end_offset: 5,
-                y: 22.0,
-                height: 18.0,
-            },
-        ],
-        vec![
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 0,
-                end_offset: 1,
-                x: 28.0,
-                y: 0.0,
-                width: 10.0,
-                height: 12.0,
-            },
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 1,
-                end_offset: 2,
-                x: 38.0,
-                y: 0.0,
-                width: 10.0,
-                height: 12.0,
-            },
-            GlyphLayout {
-                line_index: 1,
-                start_offset: 3,
-                end_offset: 4,
-                x: 6.0,
-                y: 22.0,
-                width: 10.0,
-                height: 18.0,
-            },
-            GlyphLayout {
-                line_index: 1,
-                start_offset: 4,
-                end_offset: 5,
-                x: 16.0,
-                y: 22.0,
-                width: 10.0,
-                height: 18.0,
-            },
-        ],
-    );
-
-    let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
-    assert_eq!(
-        segments.len(),
-        2,
-        "adjacent same-style glyphs should merge to one segment per visual line"
-    );
-    assert!((segments[0].x_start - 28.0).abs() < f32::EPSILON);
-    assert!((segments[0].x_end - 48.0).abs() < f32::EPSILON);
-    assert!((segments[0].line_top - 0.0).abs() < f32::EPSILON);
-    assert!((segments[0].line_height - 12.0).abs() < f32::EPSILON);
-    assert!((segments[1].x_start - 6.0).abs() < f32::EPSILON);
-    assert!((segments[1].x_end - 26.0).abs() < f32::EPSILON);
-    assert!((segments[1].line_top - 22.0).abs() < f32::EPSILON);
-    assert!((segments[1].line_height - 18.0).abs() < f32::EPSILON);
-    assert!(
-        segments[1].line_top - segments[0].line_top > 20.0,
-        "line-through boxes should preserve measured wrapped line spacing"
-    );
-}
-
-#[test]
-fn decoration_segments_from_glyph_layouts_bridge_letter_spacing_gaps() {
-    let style = TextStyle {
-        span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let text = cranpose_ui::text::AnnotatedString::from("AB");
-    let layout = synthetic_text_layout(
-        "AB",
-        12.0,
-        vec![LineLayout {
-            start_offset: 0,
-            end_offset: 2,
-            y: 0.0,
-            height: 12.0,
-        }],
-        vec![
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 0,
-                end_offset: 1,
-                x: 0.0,
-                y: 0.0,
-                width: 9.0,
-                height: 12.0,
-            },
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 1,
-                end_offset: 2,
-                x: 14.0,
-                y: 0.0,
-                width: 9.0,
-                height: 12.0,
-            },
-        ],
-    );
-
-    let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
-    assert_eq!(
-        segments.len(),
-        1,
-        "letter spacing must not split one decorated run into dashed line segments"
-    );
-    assert!((segments[0].x_start - 0.0).abs() < f32::EPSILON);
-    assert!((segments[0].x_end - 23.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn decoration_segments_from_glyph_layouts_bridge_whitespace_gaps() {
-    let style = TextStyle {
-        span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let text = cranpose_ui::text::AnnotatedString::from("A B");
-    let layout = synthetic_text_layout(
-        "A B",
-        12.0,
-        vec![LineLayout {
-            start_offset: 0,
-            end_offset: 3,
-            y: 0.0,
-            height: 12.0,
-        }],
-        vec![
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 0,
-                end_offset: 1,
-                x: 0.0,
-                y: 0.0,
-                width: 9.0,
-                height: 12.0,
-            },
-            GlyphLayout {
-                line_index: 0,
-                start_offset: 2,
-                end_offset: 3,
-                x: 18.0,
-                y: 0.0,
-                width: 9.0,
-                height: 12.0,
-            },
-        ],
-    );
-
-    let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
-    assert_eq!(
-        segments.len(),
-        1,
-        "whitespace inside one decorated run must not break line-through geometry"
-    );
-    assert!((segments[0].x_start - 0.0).abs() < f32::EPSILON);
-    assert!((segments[0].x_end - 27.0).abs() < f32::EPSILON);
-}
-
-#[test]
 fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alpha() {
     let mut scene = Scene::new();
     let style = TextStyle::default();
@@ -1025,27 +682,29 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
         height: 28.0,
     };
     let text = cranpose_ui::text::AnnotatedString::from("Shifted");
+    let base_node = text_node(
+        NodeId(24),
+        &text,
+        &base_style,
+        14.0,
+        TextLayoutOptions::default(),
+    );
+    let shifted_node = text_node(
+        NodeId(25),
+        &text,
+        &shifted_style,
+        14.0,
+        TextLayoutOptions::default(),
+    );
 
     push_text_style_draws_for_test(
         &mut base_scene,
-        &text_node(
-            NodeId(24),
-            &text,
-            &base_style,
-            14.0,
-            TextLayoutOptions::default(),
-        ),
+        &base_node,
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
     push_text_style_draws_for_test(
         &mut shifted_scene,
-        &text_node(
-            NodeId(25),
-            &text,
-            &shifted_style,
-            14.0,
-            TextLayoutOptions::default(),
-        ),
+        &shifted_node,
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
@@ -1053,8 +712,14 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
     let shifted = shape_records(&mut shifted_scene);
     assert_eq!(base.len(), 1, "base underline expected");
     assert_eq!(shifted.len(), 1, "shifted underline expected");
+    // The line grows to hold shifted text, as Android's does: the underline
+    // of superscript text sits higher above its line's baseline.
+    let below_baseline = |records: &[(cranpose_ui_graphics::ShapeRecord, Placement)],
+                          node: &TextPrimitiveNode| {
+        record_rect(&records[0]).y - node.layout.line_baseline(0)
+    };
     assert!(
-        record_rect(&shifted[0]).y < record_rect(&base[0]).y,
+        below_baseline(&shifted, &shifted_node) < below_baseline(&base, &base_node),
         "baseline shift should move decoration geometry with shifted text"
     );
 }
@@ -1090,9 +755,11 @@ fn push_text_style_draws_applies_baseline_shift() {
     );
 
     assert_eq!(scene.texts.len(), 1);
+    let layout = &scene.texts[0].layout;
+    let run = layout.glyph_runs(0).next().expect("a run of glyphs");
     assert!(
-        scene.texts[0].rect.y < rect.y,
-        "superscript baseline shift should move text up"
+        run.baseline() < layout.line_baseline(0),
+        "superscript baseline shift should move the glyphs up"
     );
 }
 
@@ -1890,7 +1557,7 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
     };
     let prepared = prepare_text_layout_for_test(&source_text, &style, options, Some(64.0));
     assert!(
-        prepared.text.text.contains('\n'),
+        prepared.layout.line_count() > 1,
         "test setup should produce wrapped multiline text: {:?}",
         prepared.text
     );
@@ -1903,7 +1570,10 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        &text_node(NodeId(27), &prepared.text, &style, 14.0, options),
+        &TextPrimitiveNode {
+            layout: prepared.layout.clone(),
+            ..text_node(NodeId(27), &prepared.text, &style, 14.0, options)
+        },
         placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
@@ -2128,6 +1798,10 @@ fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {
         text: Rc::from(text),
         style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
         brush: Brush::solid(Color::WHITE),
+        layout: crate::test_support::draw_text_layout(
+            text,
+            &cranpose_ui_graphics::DrawTextStyle::new(16.0),
+        ),
     }))
 }
 

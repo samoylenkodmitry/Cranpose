@@ -246,8 +246,8 @@ fn hash_text<H: Hasher>(text: &TextDraw, window: CaptureWindow, scale: f32, stat
     text.text.render_hash().hash(state);
     text.color.render_hash().hash(state);
     text.style_hash.hash(state);
+    text.layout.id().hash(state);
     hash_f32_for_cache(text.font_size, state);
-    text.layout_options.hash(state);
     if static_text_motion && text.text.string().text().contains('\n') {
         hash_optional_rect(window.clipped_logical(clip, scale), origin, scale, state);
     } else {

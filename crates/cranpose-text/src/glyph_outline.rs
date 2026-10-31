@@ -5,7 +5,7 @@ use read_fonts::{
     types::GlyphId as FontGlyphId,
 };
 
-use crate::{glyph_id::GlyphId, typeface::Typeface};
+use crate::{glyph_id::GlyphId, simple_glyf, typeface::Typeface};
 
 /// A glyph's outline at one size and offset, in pixels with y growing down,
 /// ready to draw as coverage. Its box holds every pixel the outline touches,
@@ -57,8 +57,8 @@ impl GlyphOutline {
     /// The outline of `glyph` of `typeface` placed as `transform` says.
     /// `None` for a glyph with no outline, such as a space.
     pub fn of(typeface: &Typeface, glyph: GlyphId, transform: OutlineTransform) -> Option<Self> {
-        let outlines = typeface.font().outline_glyphs();
-        let outline = outlines.get(FontGlyphId::new(glyph.0))?;
+        let font = typeface.font();
+        let glyph = FontGlyphId::new(glyph.0);
         // The outline comes in font units and scales in `f32`, as ab_glyph
         // scales it, so the coverage is the one the renderers drew before.
         let mut path = PathCollector {
@@ -69,13 +69,20 @@ impl GlyphOutline {
             scale: transform.size / f32::from(typeface.units_per_em()),
             skew: transform.skew,
         };
-        outline
-            .draw(
-                &DrawOptions::new().with_ppem(None),
-                DrawMemory::Scratch,
-                &mut path,
-            )
-            .ok()?;
+        let simple = typeface
+            .glyf_tables()
+            .and_then(|tables| simple_glyf::draw(font, tables, glyph, &mut path));
+        if simple.is_none() {
+            path.segments.clear();
+            font.outline_glyphs()
+                .get(glyph)?
+                .draw(
+                    &DrawOptions::new().with_ppem(None),
+                    DrawMemory::Scratch,
+                    &mut path,
+                )
+                .ok()?;
+        }
         let (min, max) = path.bounds()?;
         let (left, top) = (whole::floor(min.x), whole::floor(min.y));
         let width = pixels(whole::ceil(max.x) - left);
@@ -93,8 +100,8 @@ impl GlyphOutline {
         }
         Some(Self {
             segments: path.segments,
-            left: whole_number(left),
-            top: whole_number(top),
+            left: whole::to_i32(left),
+            top: whole::to_i32(top),
             width,
             height,
         })
@@ -150,7 +157,7 @@ impl GlyphOutline {
 
 // Collects an outline's segments in pixels with y growing down, from font
 // units `scale` pixels each, slanted right by `skew` a unit of height.
-struct PathCollector {
+pub(crate) struct PathCollector {
     segments: Vec<Segment>,
     start: Point,
     pen: Point,
@@ -160,6 +167,11 @@ struct PathCollector {
 }
 
 impl PathCollector {
+    // Makes room for `segments` more pieces at once.
+    pub(crate) fn reserve(&mut self, segments: usize) {
+        self.segments.reserve(segments);
+    }
+
     fn point(&self, x: f32, y: f32) -> Point {
         point(
             (x + y * self.skew) * self.scale + self.offset.x,
@@ -223,18 +235,9 @@ impl PathSink for PathCollector {
     }
 }
 
-// The whole number `value` holds, for a magnitude below 2^22: adding
-// 1.5 x 2^23 puts it in the low bits of the sum's mantissa, so it is the
-// difference of the two bit patterns. Glyph boxes lie far inside that range.
-fn whole_number(value: f32) -> i32 {
-    const MAGIC: f32 = 12_582_912.0;
-    let bits = i64::from((value + MAGIC).to_bits()) - i64::from(MAGIC.to_bits());
-    i32::try_from(bits).unwrap_or(0)
-}
-
 // A size in whole pixels, at least zero.
 fn pixels(value: f32) -> u32 {
-    u32::try_from(whole_number(value).max(0)).unwrap_or(0)
+    u32::try_from(whole::to_i32(value).max(0)).unwrap_or(0)
 }
 
 fn usize_of(value: u32) -> usize {

@@ -66,11 +66,18 @@ impl<V: PooledValue> ContentPool<V> {
             return read(value);
         }
         if self.values.len() >= self.sweep_at {
-            self.values.retain(|_, value| value.is_held());
-            self.sweep_at = (self.values.len() * 2).max(FIRST_SWEEP);
-            self.values.shrink_to(self.sweep_at);
+            self.sweep();
         }
         read(self.values.entry(hash).insert_entry(make()).get())
+    }
+
+    // Drops the values nothing holds. Out of line: a pool sweeps once its
+    // size doubles, and each caller of `with` would grow by the sweep.
+    #[inline(never)]
+    fn sweep(&mut self) {
+        self.values.retain(|_, value| value.is_held());
+        self.sweep_at = (self.values.len() * 2).max(FIRST_SWEEP);
+        self.values.shrink_to(self.sweep_at);
     }
 }
 

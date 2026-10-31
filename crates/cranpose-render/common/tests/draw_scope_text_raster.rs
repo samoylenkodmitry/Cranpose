@@ -1,58 +1,65 @@
 #![cfg(feature = "embedded-default-font")]
 
-use cranpose_render_common::software_text_raster::{
-    SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-    SoftwareTextMeasurer, TextRasterRequest, collect_solid_text_atlas_run,
-    software_text_font_set_from_fonts_or_default,
+use cranpose_render_common::{
+    glyph_mask::GlyphMaskCache,
+    text_atlas::{AtlasGlyph, collect_solid_text_atlas_run},
+    text_fonts::TextFonts,
+    text_raster::TextRasterRequest,
 };
-use cranpose_ui::text::{AnnotatedString, TextMeasurer, TextStyle, text_style_for_draw_style};
-use cranpose_ui_graphics::{Color, DrawTextStyle, Rect};
+use cranpose_text::TextLayout;
+use cranpose_ui::text::{
+    AppContextTextMeasurer, LineBox, TextStyle, draw_style_line_box, text_style_for_draw_style,
+};
+use cranpose_ui_graphics::{Color, DrawTextMeasurer, DrawTextStyle, Rect, TextMeasurement};
 
 const GLYPH_CACHE_CAPACITY: usize = 512;
 
-fn fonts() -> SoftwareTextFontSet {
-    software_text_font_set_from_fonts_or_default(&[])
+// What a draw scope measures and lays out for `text` in `style`, with the
+// fonts a renderer without app fonts hands its app.
+struct Measured {
+    measurement: TextMeasurement,
+    layout: TextLayout,
+    line_box: Option<LineBox>,
 }
 
-fn measurer() -> SoftwareTextMeasurer {
-    SoftwareTextMeasurer::from_font_set(fonts(), 256)
+fn measured(text: &str, style: &DrawTextStyle) -> Measured {
+    cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(TextFonts::from_fonts_or_default(&[]).resolver());
+        let measured = AppContextTextMeasurer.measure_text(text, style);
+        let handle = measured.layout.expect("an app context lays text out");
+        Measured {
+            measurement: measured.measurement,
+            layout: TextLayout::clone(&handle.downcast::<TextLayout>().expect("an engine layout")),
+            line_box: draw_style_line_box(style),
+        }
+    })
 }
 
-fn measured_block(origin: (f32, f32), text: &str, style: &DrawTextStyle) -> (Rect, TextStyle) {
-    let ui_style = text_style_for_draw_style(style);
-    let measurer = measurer();
-    let metrics = measurer.measure(&AnnotatedString::from(text), &ui_style);
-    let line_height = metrics.line_height;
-    let line_count = metrics.line_count.max(1);
+fn measured_block(origin: (f32, f32), text: &str, style: &DrawTextStyle) -> (Rect, Measured) {
+    let measured = measured(text, style);
+    let size = measured.measurement.size;
     (
         Rect {
             x: origin.0,
             y: origin.1,
-            width: metrics.width,
-            height: line_count as f32 * line_height,
+            width: size.width,
+            height: size.height,
         },
-        ui_style,
+        measured,
     )
 }
 
 fn collect(
     rect: Rect,
     text: &str,
-    ui_style: &TextStyle,
+    measured: &Measured,
     style: &DrawTextStyle,
-    cache: &mut SoftwareGlyphRasterCache,
-) -> Vec<SoftwareGlyphAtlasRunGlyph> {
+    cache: &mut GlyphMaskCache,
+) -> Vec<AtlasGlyph> {
+    let ui_style: TextStyle = text_style_for_draw_style(style);
     let mut run = Vec::new();
     collect_solid_text_atlas_run(
-        TextRasterRequest::new(
-            &AnnotatedString::from(text),
-            rect,
-            ui_style,
-            Color::WHITE,
-            style.resolved_font_size(),
-            1.0,
-        ),
-        &fonts(),
+        TextRasterRequest::new(&measured.layout, text, rect, &ui_style, Color::WHITE, 1.0),
         cache,
         &mut run,
     )
@@ -63,18 +70,17 @@ fn collect(
 #[test]
 fn every_glyph_lands_inside_the_block_measure_text_reported() {
     let style = DrawTextStyle::new(24.0);
-    let (rect, ui_style) = measured_block((40.0, 60.0), "SCORE 1234", &style);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(rect, "SCORE 1234", &ui_style, &style, &mut cache);
+    let (rect, measured) = measured_block((40.0, 60.0), "SCORE 1234", &style);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, "SCORE 1234", &measured, &style, &mut cache);
     assert!(!run.is_empty(), "the run must produce glyphs");
 
     const OVERHANG: f32 = 1.0;
     for glyph in &run {
-        let placement = glyph.placement();
-        let left = placement.x as f32;
-        let top = placement.y as f32;
-        let right = left + placement.width as f32;
-        let bottom = top + placement.height as f32;
+        let left = glyph.x as f32;
+        let top = glyph.y as f32;
+        let right = left + glyph.width as f32;
+        let bottom = top + glyph.height as f32;
         assert!(
             left >= -OVERHANG && right <= rect.width + OVERHANG,
             "glyph spans x {left}..{right}, block is 0..{}",
@@ -91,16 +97,13 @@ fn every_glyph_lands_inside_the_block_measure_text_reported() {
 #[test]
 fn a_wider_string_measures_wider_and_draws_wider() {
     let style = DrawTextStyle::new(20.0);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let mut ink_right = |text: &str| {
-        let (rect, ui_style) = measured_block((0.0, 0.0), text, &style);
-        let run = collect(rect, text, &ui_style, &style, &mut cache);
+        let (rect, measured) = measured_block((0.0, 0.0), text, &style);
+        let run = collect(rect, text, &measured, &style, &mut cache);
         let ink = run
             .iter()
-            .map(|glyph| {
-                let placement = glyph.placement();
-                placement.x as f32 + placement.width as f32
-            })
+            .map(|glyph| glyph.x as f32 + glyph.width as f32)
             .fold(0.0_f32, f32::max);
         (rect.width, ink)
     };
@@ -117,30 +120,25 @@ fn a_wider_string_measures_wider_and_draws_wider() {
 #[test]
 fn a_stable_string_rasterizes_once_and_is_served_from_the_glyph_cache_after_that() {
     let style = DrawTextStyle::new(18.0);
-    let (rect, ui_style) = measured_block((10.0, 10.0), "FPS 60", &style);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let (rect, measured) = measured_block((10.0, 10.0), "FPS 60", &style);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
 
-    let first = collect(rect, "FPS 60", &ui_style, &style, &mut cache);
-    assert!(
-        first
-            .iter()
-            .any(|glyph| matches!(glyph, SoftwareGlyphAtlasRunGlyph::New(_))),
-        "the first frame has to rasterize"
-    );
-    let rasterized_after_first = cache.stats().entries;
+    let first = collect(rect, "FPS 60", &measured, &style, &mut cache);
+    assert!(!first.is_empty());
+    let after_first = cache.stats();
+    assert!(after_first.misses > 0, "the first frame has to rasterize");
 
     for _ in 0..60 {
-        let frame = collect(rect, "FPS 60", &ui_style, &style, &mut cache);
-        assert!(
-            frame
-                .iter()
-                .all(|glyph| matches!(glyph, SoftwareGlyphAtlasRunGlyph::Cached(_))),
-            "an unchanged string must not re-rasterize a single glyph"
-        );
+        collect(rect, "FPS 60", &measured, &style, &mut cache);
     }
     assert_eq!(
+        cache.stats().misses,
+        after_first.misses,
+        "an unchanged string must not re-rasterize a single glyph"
+    );
+    assert_eq!(
         cache.stats().entries,
-        rasterized_after_first,
+        after_first.entries,
         "60 more frames must not add a mask to the cache"
     );
 }
@@ -148,11 +146,11 @@ fn a_stable_string_rasterizes_once_and_is_served_from_the_glyph_cache_after_that
 #[test]
 fn only_the_new_characters_of_a_changing_counter_rasterize() {
     let style = DrawTextStyle::new(18.0);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     for score in 0..10 {
         let text = format!("SCORE {score}");
-        let (rect, ui_style) = measured_block((0.0, 0.0), &text, &style);
-        collect(rect, &text, &ui_style, &style, &mut cache);
+        let (rect, measured) = measured_block((0.0, 0.0), &text, &style);
+        collect(rect, &text, &measured, &style, &mut cache);
     }
     assert!(
         cache.stats().entries <= 16,
@@ -165,13 +163,13 @@ fn only_the_new_characters_of_a_changing_counter_rasterize() {
 #[test]
 fn an_unknown_font_family_falls_back_to_the_framework_font() {
     let style = DrawTextStyle::new(20.0).with_font_family("No Such Family At All");
-    let (rect, ui_style) = measured_block((0.0, 0.0), "AB", &style);
+    let (rect, measured) = measured_block((0.0, 0.0), "AB", &style);
     assert!(
         rect.width > 0.0,
         "an unresolvable family must still measure against the fallback font"
     );
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(rect, "AB", &ui_style, &style, &mut cache);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, "AB", &measured, &style, &mut cache);
     assert!(
         !run.is_empty(),
         "an unresolvable family must still draw with the fallback font"
@@ -182,27 +180,26 @@ fn an_unknown_font_family_falls_back_to_the_framework_font() {
 fn characters_the_font_cannot_draw_measure_and_collect_without_panicking() {
     let text = "A\u{E000}\u{10FFFD}B";
     let style = DrawTextStyle::new(20.0);
-    let (rect, ui_style) = measured_block((0.0, 0.0), text, &style);
+    let (rect, measured) = measured_block((0.0, 0.0), text, &style);
     assert!(rect.width > 0.0 && rect.height > 0.0);
 
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(rect, text, &ui_style, &style, &mut cache);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, text, &measured, &style, &mut cache);
     assert!(!run.is_empty());
     for glyph in &run {
-        let placement = glyph.placement();
-        assert!(placement.width > 0 && placement.height > 0);
+        assert!(glyph.width > 0 && glyph.height > 0);
     }
 }
 
 #[test]
 fn multiline_text_stacks_by_the_line_height_it_was_measured_with() {
     let style = DrawTextStyle::new(16.0);
-    let (rect, ui_style) = measured_block((0.0, 0.0), "AB\nCD", &style);
+    let (rect, measured) = measured_block((0.0, 0.0), "AB\nCD", &style);
     let measured_line_height = rect.height / 2.0;
 
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(rect, "AB\nCD", &ui_style, &style, &mut cache);
-    let tops: Vec<i32> = run.iter().map(|glyph| glyph.placement().y).collect();
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, "AB\nCD", &measured, &style, &mut cache);
+    let tops: Vec<i32> = run.iter().map(|glyph| glyph.y).collect();
     let first_row = *tops.iter().min().expect("glyphs");
     let last_row = *tops.iter().max().expect("glyphs");
     let drawn_line_height = (last_row - first_row) as f32;
@@ -216,16 +213,13 @@ fn multiline_text_stacks_by_the_line_height_it_was_measured_with() {
 #[test]
 fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
     let style = DrawTextStyle::new(32.0);
-    let ui_style = text_style_for_draw_style(&style);
-    let baseline = measurer()
-        .first_baseline(&ui_style)
-        .expect("a font-backed measurer reports a baseline");
-    let (rect, _) = measured_block((0.0, 0.0), "H", &style);
+    let (rect, measured) = measured_block((0.0, 0.0), "H", &style);
+    let baseline = measured.measurement.first_baseline;
 
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(rect, "H", &ui_style, &style, &mut cache);
-    let placement = run.first().expect("one glyph").placement();
-    let ink_bottom = (placement.y + placement.height as i32) as f32;
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, "H", &measured, &style, &mut cache);
+    let glyph = run.first().expect("one glyph");
+    let ink_bottom = (glyph.y + i32::try_from(glyph.height).unwrap_or(i32::MAX)) as f32;
     assert!(
         (ink_bottom - baseline).abs() <= 1.5,
         "cap-height ink ends at {ink_bottom}, reported baseline is {baseline}"
@@ -244,13 +238,12 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
         mode: LineHeightMode::Minimum,
     });
 
-    let measurer = measurer();
-    let plain_box = measurer
-        .line_box(&text_style_for_draw_style(&plain))
-        .expect("a font-backed measurer reports a line box");
-    let styled_box = measurer
-        .line_box(&text_style_for_draw_style(&styled))
-        .expect("a font-backed measurer reports a line box");
+    let plain_box = measured("H", &plain)
+        .line_box
+        .expect("an app context reports a line box");
+    let styled_box = measured("H", &styled)
+        .line_box
+        .expect("an app context reports a line box");
 
     assert_eq!(
         plain_box.height, asked,
@@ -270,12 +263,11 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
     );
     assert_ne!(plain_box.baseline, styled_box.baseline);
 
-    let ui_style = text_style_for_draw_style(&styled);
-    let (rect, _) = measured_block((0.0, 0.0), "H", &styled);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(rect, "H", &ui_style, &styled, &mut cache);
-    let placement = run.first().expect("one glyph").placement();
-    let ink_bottom = (placement.y + placement.height as i32) as f32;
+    let (rect, measured) = measured_block((0.0, 0.0), "H", &styled);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, "H", &measured, &styled, &mut cache);
+    let glyph = run.first().expect("one glyph");
+    let ink_bottom = (glyph.y + i32::try_from(glyph.height).unwrap_or(i32::MAX)) as f32;
     assert!(
         (ink_bottom - styled_box.baseline).abs() <= 1.5,
         "cap-height ink ends at {ink_bottom}, the styled line box puts the \
@@ -290,20 +282,17 @@ fn letter_spacing_pads_a_run_with_half_a_space_at_each_edge() {
     const TRACKING: f32 = 5.0;
     let plain = DrawTextStyle::new(20.0);
     let tracked = DrawTextStyle::new(20.0).with_letter_spacing(TRACKING);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let mut spans = |style: &DrawTextStyle| {
-        let (rect, ui_style) = measured_block((0.0, 0.0), WORD, style);
-        let run = collect(rect, WORD, &ui_style, style, &mut cache);
+        let (rect, measured) = measured_block((0.0, 0.0), WORD, style);
+        let run = collect(rect, WORD, &measured, style, &mut cache);
         let left = run
             .iter()
-            .map(|glyph| glyph.placement().x as f32)
+            .map(|glyph| glyph.x as f32)
             .fold(f32::INFINITY, f32::min);
         let right = run
             .iter()
-            .map(|glyph| {
-                let placement = glyph.placement();
-                placement.x as f32 + placement.width as f32
-            })
+            .map(|glyph| glyph.x as f32 + glyph.width as f32)
             .fold(0.0_f32, f32::max);
         (rect.width, left, right)
     };

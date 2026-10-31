@@ -12,8 +12,8 @@ use cranpose_render_common::{
 use cranpose_ui::{Box, BoxSpec, Canvas, LayoutEngine, Modifier, Size, run_test_composition};
 use cranpose_ui_graphics::{
     Brush, Color, CommandRecording, DrawPlacement, DrawPrimitive, DrawScope, DrawScopeDefault,
-    DrawTextMeasurer, DrawTextStyle, EdgeInsets, GraphicsLayer, Point, ShapeRecorder, Stroke,
-    TextMeasurement, estimate_text_measurement,
+    DrawTextMeasurer, DrawTextStyle, EdgeInsets, GraphicsLayer, MeasuredText, Point, ShapeRecorder,
+    Stroke, estimate_text_measurement,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
@@ -129,8 +129,11 @@ fn run_case(arcs: usize, readers: usize) {
 struct BenchmarkTextMeasurer;
 
 impl DrawTextMeasurer for BenchmarkTextMeasurer {
-    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
-        estimate_text_measurement(text, style)
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> MeasuredText {
+        MeasuredText {
+            measurement: estimate_text_measurement(text, style),
+            layout: None,
+        }
     }
 }
 

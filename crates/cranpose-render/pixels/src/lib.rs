@@ -10,12 +10,15 @@ pub mod scene;
 pub mod sprites;
 mod style;
 mod surface;
+#[cfg(test)]
+#[path = "tests/text_draws.rs"]
+mod text_draws;
 
 pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates,
     rgb565::{Rgb565Be, Rgb565Le},
-    text_measure::{CachedFontTextMeasurer, SoftwareTextResources},
+    text_fonts::TextFonts,
 };
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
@@ -98,7 +101,7 @@ impl PixelsRenderer {
     pub fn with_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
             scene: Scene::new(),
-            text: draw::TextRaster::new(SoftwareTextResources::from_fonts(fonts)),
+            text: draw::TextRaster::new(TextFonts::from_fonts_or_default(fonts)),
             app_context: None,
         }
     }
@@ -362,28 +365,21 @@ impl Picture {
     }
 }
 
-// A frame measures again only the texts whose layout changed, and on a
-// microcontroller a measurement takes about 190 bytes.
-const MEASURED_TEXTS_KEPT: usize = 16;
-
 impl Renderer for PixelsRenderer {
     type Scene = Scene;
     type Error = std::convert::Infallible;
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        app_context.set_text_measurer(CachedFontTextMeasurer::with_text_resources(
-            self.text.resources.clone(),
-            MEASURED_TEXTS_KEPT,
-        ));
+        app_context.set_text_fonts(self.text.fonts.resolver());
         self.app_context = Some(app_context.downgrade());
     }
 
     #[cfg(feature = "installed-fonts")]
     fn apply_installed_fonts(&mut self, app_context: &cranpose_ui::AppContext) {
-        let Some(resources) = self.text.resources.with_installed_faces() else {
+        let Some(fonts) = self.text.fonts.with_installed_faces() else {
             return;
         };
-        self.text = draw::TextRaster::new(resources);
+        self.text = draw::TextRaster::new(fonts);
         let attached = self
             .app_context
             .as_ref()

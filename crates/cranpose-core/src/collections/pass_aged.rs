@@ -4,9 +4,10 @@ use std::{borrow::Borrow, hash::Hash};
 
 use super::bounded_lru::BoundedLruCache;
 
-/// Layout passes an entry may go without a lookup before it leaves. Text on
-/// screen is measured again only when its layout changes, so this is how long
-/// a list may keep an item scrolled out before measuring it anew costs a miss.
+/// Layout passes an entry may go without a lookup before it leaves, with
+/// memory to spare. Text on screen is measured again only when its layout
+/// changes, so this is how long a list may keep an item scrolled out before
+/// measuring it anew costs a miss.
 pub const IDLE_PASSES: u64 = 120;
 
 /// A value and the layout pass that last looked it up.
@@ -15,8 +16,8 @@ struct Used<V> {
     pass: u64,
 }
 
-/// A bounded LRU cache whose entries also leave once [`IDLE_PASSES`] layout
-/// passes go by without a lookup of them. A scrolling list then keeps the
+/// A bounded LRU cache whose entries also leave once a number of layout
+/// passes, such as [`IDLE_PASSES`], go by without a lookup of them. A scrolling list then keeps the
 /// measurements of the texts it shows, not of every text it has shown up to
 /// the bound.
 pub struct PassAgedCache<K, V> {
@@ -57,10 +58,20 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        self.get_mut(key).map(|value| &*value)
+    }
+
+    /// The value under `key` to change in place, marked used in the current
+    /// pass.
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let pass = self.pass;
         let used = self.entries.get_mut(key)?;
         used.pass = pass;
-        Some(&used.value)
+        Some(&mut used.value)
     }
 
     /// Stores `value` under `key`, returning the entry it replaced or the
@@ -78,16 +89,16 @@ where
     }
 
     /// Starts a layout pass: drops the entries no lookup asked for in the
-    /// last [`IDLE_PASSES`] passes, least recently used first, handing each
+    /// last `idle_passes` passes, least recently used first, handing each
     /// dropped value to `dropped`. It stops at the first entry still in use,
     /// so it costs one comparison when nothing has gone idle.
-    pub fn begin_pass(&mut self, mut dropped: impl FnMut(V)) {
+    pub fn begin_pass(&mut self, idle_passes: u64, mut dropped: impl FnMut(V)) {
         self.pass += 1;
         let pass = self.pass;
         while self
             .entries
             .peek_lru()
-            .is_some_and(|(_, used)| pass - used.pass > IDLE_PASSES)
+            .is_some_and(|(_, used)| pass - used.pass > idle_passes)
         {
             let Some((_, used)) = self.entries.pop_lru() else {
                 break;

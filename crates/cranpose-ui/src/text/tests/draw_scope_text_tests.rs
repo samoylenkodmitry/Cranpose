@@ -101,7 +101,9 @@ fn degenerate_font_sizes_are_resolved_before_they_reach_the_measurer() {
 fn measuring_without_an_app_context_falls_back_to_the_estimate() {
     let style = DrawTextStyle::new(16.0);
     assert_eq!(
-        AppContextTextMeasurer.measure_text("HELLO", &style),
+        AppContextTextMeasurer
+            .measure_text("HELLO", &style)
+            .measurement,
         estimate_text_measurement("HELLO", &style)
     );
 }

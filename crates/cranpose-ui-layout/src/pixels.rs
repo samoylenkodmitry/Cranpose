@@ -9,7 +9,15 @@ use cranpose_ui_graphics::whole;
 /// `f32::round` disagrees on exactly the negative halves, which is the case a
 /// scroll offset reaches.
 pub fn round_to_px(value: f32, density: f32) -> f32 {
-    if density <= 0.0 || !density.is_finite() || !value.is_finite() {
+    if density <= 0.0 || !density.is_finite() {
+        return value;
+    }
+    round_to_grid(value, density)
+}
+
+/// [`round_to_px`] at a density known to be finite and positive.
+pub fn round_to_grid(value: f32, density: f32) -> f32 {
+    if !value.is_finite() {
         return value;
     }
     // At density 1 the scale and the division change no bit; a chip with no
@@ -23,7 +31,15 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
 /// A length moved up onto the next whole device pixel, as Compose sizes
 /// text: a layout's size is its paragraph's, `ceil`ed, so it never clips.
 pub fn ceil_to_px(value: f32, density: f32) -> f32 {
-    if density <= 0.0 || !density.is_finite() || !value.is_finite() {
+    if density <= 0.0 || !density.is_finite() {
+        return value;
+    }
+    ceil_to_grid(value, density)
+}
+
+/// [`ceil_to_px`] at a density known to be finite and positive.
+pub fn ceil_to_grid(value: f32, density: f32) -> f32 {
+    if !value.is_finite() {
         return value;
     }
     if density == 1.0 {

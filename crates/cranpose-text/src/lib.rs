@@ -2,12 +2,15 @@
 
 /// Styled text: spans, links and string annotations.
 pub mod annotated_string;
+mod ascii_breaks;
 /// The embedding levels of the Unicode bidirectional algorithm.
 pub mod bidi_level;
+mod break_leads;
 mod cluster_widths;
 mod coverage;
 /// Text decorations (underline, line through) and text shadows.
 pub mod decoration;
+mod ellipsis_at;
 /// Font weight, style, family and synthesis settings.
 pub mod font;
 mod font_fallback;
@@ -22,21 +25,37 @@ pub mod glyph_id;
 pub mod glyph_outline;
 #[cfg(feature = "hyphenation")]
 pub mod hyphenator;
+mod index_range;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
+mod laid_glyphs;
+mod layout_body;
+/// A paragraph to lay out and the lengths of its style.
+pub mod layout_input;
 /// Options that limit lines, control wrapping and choose the overflow behavior.
 pub mod layout_options;
 pub mod line_box;
 mod line_breaker;
+mod line_hold;
+mod line_runs;
+mod line_text;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
+mod paragraph_intrinsics;
+mod paragraph_measures;
+mod plain_chars;
+mod plain_glyphs;
+mod plain_kerning;
 /// Writing systems and the script runs of text.
 pub mod script;
+mod script_lookups;
+mod shaped_glyphs;
 mod shaped_item;
 /// Shaping text items into glyphs with HarfRust.
 pub mod shaper;
 /// The stretches of a paragraph that shape alike.
 pub mod shaping_span;
+mod simple_glyf;
 /// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
 /// A paragraph laid out in lines, and Compose's `TextLayoutResult` queries.
@@ -69,25 +88,27 @@ pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
 #[cfg(feature = "hyphenation")]
 pub use hyphenator::{HyphenationError, Hyphenator};
 pub use itemizer::{Itemizer, TextItem};
+pub use layout_input::{LayoutInput, ParagraphLengths};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox, line_box, paragraph_line_box};
 pub use paragraph::{
     Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection, TextIndent,
     resolve_text_direction,
 };
+pub use paragraph_intrinsics::ParagraphIntrinsics;
 pub use script::Script;
-pub use shaper::{ShapedGlyph, Shaper};
+pub use shaped_glyphs::{GlyphOffset, ShapedGlyph, ShapedGlyphs};
+pub use shaper::Shaper;
 pub use shaping_span::ShapingSpan;
 pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
-    text_align_fraction,
 };
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
-pub use text_layouter::{LayoutInput, ParagraphIntrinsics, ParagraphLengths, TextLayouter};
+pub use text_layouter::TextLayouter;
 pub use typeface::{
-    DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Typeface, TypefaceError,
+    DecorationMetrics, FontBytes, FontFamilyKey, LineMetrics, Synthesis, Typeface, TypefaceError,
 };
 pub use unit::TextUnit;
 pub use word_boundary::word_boundary;

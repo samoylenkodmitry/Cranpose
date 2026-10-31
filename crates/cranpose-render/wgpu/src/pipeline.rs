@@ -18,15 +18,12 @@ use cranpose_render_common::{
 #[cfg(test)]
 use cranpose_ui::TextOverflow;
 #[cfg(test)]
-use cranpose_ui::layout_text;
-#[cfg(test)]
 use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 use cranpose_ui::{
     LayoutBox,
-    text::{TextDecoration, TextDrawStyle, TextStyle},
-    text_layout_result::TextLayoutResult,
+    text::{TextDrawStyle, TextStyle, shared_plain_render_string},
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
@@ -41,40 +38,18 @@ use crate::scene::{
 mod style;
 use cranpose_render_common::{
     style_shared::resolve_layer_brush,
+    text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_paint::{
-        has_visible_decoration, resolve_text_color_without_gradient_fallback,
-        spans_override_foreground, spans_override_foreground_color,
+        resolve_text_color_without_gradient_fallback, spans_override_foreground,
+        spans_override_foreground_color,
     },
 };
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
 const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
-const DECORATION_SEGMENT_MERGE_EPSILON: f32 = 0.75;
 pub(crate) const GPU_TEXT_BRUSH_EFFECT_SHADER: &str =
     cranpose_ui_graphics::framework_shaders::GPU_TEXT_BRUSH_EFFECT_WGSL;
-
-pub(crate) trait TextLayoutResolver {
-    fn layout_text(
-        &mut self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> TextLayoutResult;
-}
-
-#[cfg(test)]
-pub(crate) struct UiTextLayoutResolver;
-
-#[cfg(test)]
-impl TextLayoutResolver for UiTextLayoutResolver {
-    fn layout_text(
-        &mut self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> TextLayoutResult {
-        layout_text(text, style)
-    }
-}
 
 /// `layer`'s elevation shadow over `transformed_bounds`, cut to `clip`: its
 /// ambient and spot passes as Skia draws them, each a round rect shadow the
@@ -694,12 +669,12 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             rect: text_rect,
             snap_anchor: None,
             text: DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
+            layout: node.layout.clone(),
             color: Color(1.0, 1.0, 1.0, 0.0),
             text_style: Arc::new(mask_text_style.clone()),
             style_hash: mask_text_style.render_hash(),
             font_size: node.font_size,
             scale: text_scale,
-            layout_options: node.layout_options,
             clip: placement
                 .clip
                 .map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
@@ -722,7 +697,6 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
 
 fn emit_text_style_draws<S: TextStyleDrawSink>(
     sink: &mut S,
-    text_layout: &mut impl TextLayoutResolver,
     node: &TextPrimitiveNode,
     placement: TextPlacement<'_>,
 ) {
@@ -737,50 +711,34 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         node_id,
         text,
         render_text,
+        layout,
         text_style,
         font_size,
-        layout_options: options,
         ..
     } = node;
-    let (node_id, font_size, options) = (*node_id, *font_size, *options);
+    let (node_id, font_size) = (*node_id, *font_size);
     let text_scale = layer_uniform_scale(content_layer);
-    let baseline_shift_px = text_style
-        .span_style
-        .baseline_shift
-        .filter(|shift| shift.is_specified())
-        .map_or(0.0, |shift| -(shift.0 * font_size));
-    let shifted_text_rect = Rect {
-        x: text_rect.x,
-        y: text_rect.y + baseline_shift_px,
-        width: text_rect.width,
-        height: text_rect.height,
+    let transformed_text_rect = apply_layer_to_rect(text_rect, rect, content_layer);
+    // A box or a line of the text, in layout pixels, filled with `brush`
+    // where the node draws it.
+    let filled = |part: Rect, brush: &Brush| DrawPrimitive::Rect {
+        rect: apply_layer_to_rect(
+            part.translate(text_rect.x, text_rect.y),
+            rect,
+            content_layer,
+        ),
+        brush: apply_layer_to_brush(brush.clone(), content_layer),
+        stroke: None,
     };
-    let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, content_layer);
-    let decoration_placement = TextPlacement {
-        text_rect: shifted_text_rect,
-        ..placement
-    };
-    if let Some(background) = text_style.span_style.background {
-        let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
-        sink.push_shape(
-            DrawPrimitive::Rect {
-                rect: transformed_shifted_text_rect,
-                brush,
-                stroke: None,
-            },
-            text_clip,
-            snap_anchor,
-        );
-    }
+    let styled: cranpose_render_common::text_glyphs::StyledTextRef<'_> =
+        render_text.as_ref().into();
+    visit_text_backgrounds(layout, styled, text_style, |part, brush| {
+        sink.push_shape(filled(part, brush), text_clip, snap_anchor);
+    });
 
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
     let transformed_text_color = apply_layer_to_color(text_color, content_layer);
-    let text_brush = text_style
-        .span_style
-        .brush
-        .clone()
-        .unwrap_or_else(|| Brush::solid(text_color));
     let transformed_text_style =
         if text_style.span_style.shadow.is_none() && text_style.span_style.brush.is_none() {
             Arc::clone(text_style)
@@ -796,103 +754,102 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         };
 
     if let Some(shadow) = text_style.span_style.shadow {
-        let shadow_rect = Rect {
-            x: shifted_text_rect.x + shadow.offset.x,
-            y: shifted_text_rect.y + shadow.offset.y,
-            width: shifted_text_rect.width,
-            height: shifted_text_rect.height,
-        };
+        let shadow_rect = text_rect.translate(shadow.offset.x, shadow.offset.y);
+        // The shadow draws the glyphs in its own color, whatever the spans
+        // paint them in, and blurs them.
+        let shadow_color = apply_layer_to_color(shadow.color, content_layer);
         let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
         shadow_text_style.span_style.brush = None;
+        shadow_text_style.span_style.alpha = None;
+        shadow_text_style.span_style.color = Some(shadow_color);
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
         let shadow_style_hash = shadow_text_style.render_hash();
+        let shadow_text = Arc::new(text_for_gpu_mask(text).render_string());
         sink.push_shadow_text(
             TextDraw {
                 node_id,
                 rect: apply_layer_to_rect(shadow_rect, rect, content_layer),
                 snap_anchor: None,
-                text: DrawnText::of(Arc::clone(render_text), &shadow_text_style),
-                color: apply_layer_to_color(shadow.color, content_layer),
+                text: DrawnText::of(shadow_text, &shadow_text_style),
+                layout: layout.clone(),
+                color: shadow_color,
                 text_style: Arc::new(shadow_text_style),
                 style_hash: shadow_style_hash,
                 font_size,
                 scale: text_scale,
-                layout_options: options,
                 clip: text_clip,
             },
             blur_radius,
         );
     }
 
-    // The spans are read from the render string, whose header the draw
-    // touches anyway: a text without spans never loads `text`.
-    let spans = render_text.span_styles();
-    let decorated = !render_text.is_empty() && has_visible_decoration(spans, text_style);
-    let has_span_foreground_overrides = spans_override_foreground(spans);
-    if has_span_foreground_overrides
-        && push_span_gpu_text_material_draws(
-            sink,
-            node,
-            &placement,
-            transformed_shifted_text_rect,
+    emit_text_glyph_draws(
+        sink,
+        node,
+        &placement,
+        (
+            transformed_text_rect,
             &transformed_text_style,
             transformed_text_color,
-        )
+        ),
+    );
+
+    visit_text_lines(layout, styled, text_style, text_color, |part, brush| {
+        sink.push_shape(filled(part, brush), text_clip, snap_anchor);
+    });
+}
+
+// Pushes the glyphs of a text node in `style` over `text_rect`: through a
+// GPU effect for a gradient, in batches by material for spans that paint
+// their own way, or as one text draw.
+fn emit_text_glyph_draws<S: TextStyleDrawSink>(
+    sink: &mut S,
+    node: &TextPrimitiveNode,
+    placement: &TextPlacement<'_>,
+    (text_rect, style, color): (Rect, &Arc<TextStyle>, Color),
+) {
+    let text_clip = placement.clip;
+    let text_scale = layer_uniform_scale(placement.layer);
+    // The spans are read from the render string, whose header the draw
+    // touches anyway: a text without spans never loads `text`.
+    let spans = node.render_text.span_styles();
+    let has_span_foreground_overrides = spans_override_foreground(spans);
+    if has_span_foreground_overrides
+        && push_span_gpu_text_material_draws(sink, node, placement, text_rect, style, color)
     {
-        if decorated {
-            push_text_decorations(
-                sink,
-                text_layout,
-                decoration_placement,
-                text,
-                text_style,
-                &text_brush,
-            );
-        }
         return;
     }
 
     if !has_span_foreground_overrides
-        && let Some((effect, effect_rect)) = gpu_text_effect_for_style(
-            &transformed_text_style,
-            transformed_shifted_text_rect,
-            transformed_text_color,
-            text_scale,
-        )
+        && let Some((effect, effect_rect)) =
+            gpu_text_effect_for_style(style, text_rect, color, text_scale)
     {
         if spans_override_foreground_color(spans)
-            && push_span_gpu_text_material_draws(
-                sink,
-                node,
-                &placement,
-                transformed_shifted_text_rect,
-                &transformed_text_style,
-                transformed_text_color,
-            )
+            && push_span_gpu_text_material_draws(sink, node, placement, text_rect, style, color)
         {
             return;
         }
 
         let z_start = sink.current_z();
-        let mut mask_text_style = TextStyle::clone(&transformed_text_style);
+        let mut mask_text_style = TextStyle::clone(style);
         mask_text_style.span_style.brush = None;
         mask_text_style.span_style.alpha = None;
         mask_text_style.span_style.color = Some(Color::WHITE);
         mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
-        let mask_text = text_for_gpu_mask(text);
+        let mask_text = text_for_gpu_mask(&node.text);
         let mask_style_hash = mask_text_style.render_hash();
 
         sink.push_text(TextDraw {
-            node_id,
-            rect: transformed_shifted_text_rect,
+            node_id: node.node_id,
+            rect: text_rect,
             snap_anchor: None,
             text: DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
+            layout: node.layout.clone(),
             color: Color::WHITE,
             text_style: Arc::new(mask_text_style),
             style_hash: mask_style_hash,
-            font_size,
+            font_size: node.font_size,
             scale: text_scale,
-            layout_options: options,
             clip: text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
         });
 
@@ -907,44 +864,22 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             z_start,
             z_end,
         });
-        if decorated {
-            push_text_decorations(
-                sink,
-                text_layout,
-                decoration_placement,
-                text,
-                text_style,
-                &text_brush,
-            );
-        }
         return;
     }
 
-    let transformed_style_hash = transformed_text_style.render_hash();
     sink.push_text(TextDraw {
-        node_id,
-        rect: transformed_shifted_text_rect,
+        node_id: node.node_id,
+        rect: text_rect,
         snap_anchor: None,
-        text: DrawnText::of(Arc::clone(render_text), &transformed_text_style),
-        color: transformed_text_color,
-        text_style: transformed_text_style,
-        style_hash: transformed_style_hash,
-        font_size,
+        text: DrawnText::of(Arc::clone(&node.render_text), style),
+        layout: node.layout.clone(),
+        color,
+        text_style: Arc::clone(style),
+        style_hash: style.render_hash(),
+        font_size: node.font_size,
         scale: text_scale,
-        layout_options: options,
         clip: text_clip,
     });
-
-    if decorated {
-        push_text_decorations(
-            sink,
-            text_layout,
-            decoration_placement,
-            text,
-            text_style,
-            &text_brush,
-        );
-    }
 }
 
 // Where a text node draws: the bounds and transform of its layer, its box
@@ -963,34 +898,29 @@ pub(crate) struct TextPlacement<'a> {
 /// otherwise; each anchored to the placement's snap anchor.
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
-    text_layout: &mut impl TextLayoutResolver,
     node: &TextPrimitiveNode,
     placement: TextPlacement<'_>,
 ) {
     let paint = node.paint();
     if paint.plain {
-        let shifted_text_rect = Rect {
-            y: placement.text_rect.y + paint.baseline_shift,
-            ..placement.text_rect
-        };
         scene.push_text(TextDraw {
             node_id: node.node_id,
-            rect: apply_layer_to_rect(shifted_text_rect, placement.bounds, placement.layer),
+            rect: apply_layer_to_rect(placement.text_rect, placement.bounds, placement.layer),
             // A plain text pushes its glyphs and nothing else.
             snap_anchor: placement.snap_anchor,
             text: DrawnText::plain(Arc::clone(&node.render_text), &paint),
+            layout: node.layout.clone(),
             color: apply_layer_to_color(paint.color, placement.layer),
             text_style: Arc::clone(&node.text_style),
             style_hash: paint.style_hash,
             font_size: node.font_size,
             scale: layer_uniform_scale(placement.layer),
-            layout_options: node.layout_options,
             clip: placement.clip,
         });
         return;
     }
     let counts = crate::collect::scene_counts(scene);
-    emit_text_style_draws(scene, text_layout, node, placement);
+    emit_text_style_draws(scene, node, placement);
     crate::collect::assign_snap_anchor_since(scene, counts, placement.snap_anchor);
 }
 
@@ -1000,370 +930,9 @@ pub(crate) fn estimate_text_style_draw_bounds(
     placement: TextPlacement<'_>,
 ) -> Option<Rect> {
     let mut collector = TextBoundsCollector::default();
-    let mut text_layout = UiTextLayoutResolver;
-    emit_text_style_draws(&mut collector, &mut text_layout, node, placement);
+    emit_text_style_draws(&mut collector, node, placement);
     collector.bounds
 }
-
-// `placement.text_rect` is the text's box shifted to its baseline.
-fn push_text_decorations<S: TextStyleDrawSink>(
-    sink: &mut S,
-    text_layout: &mut impl TextLayoutResolver,
-    placement: TextPlacement<'_>,
-    annotated_text: &cranpose_ui::text::AnnotatedString,
-    global_style: &TextStyle,
-    text_brush: &Brush,
-) {
-    let TextPlacement {
-        bounds: rect,
-        text_rect,
-        layer: content_layer,
-        clip: text_clip,
-        snap_anchor,
-    } = placement;
-    let layout = text_layout.layout_text(annotated_text, global_style);
-    let mut segments =
-        decoration_segments_from_glyph_layouts(annotated_text, global_style, &layout);
-    if segments.is_empty() {
-        segments =
-            decoration_segments_from_logical_lines(text_layout, annotated_text, global_style);
-    }
-
-    for segment in segments {
-        let Some(decoration) = segment.span_style.text_decoration else {
-            continue;
-        };
-        if decoration == TextDecoration::NONE {
-            continue;
-        }
-
-        let span_width = segment.width();
-        if span_width <= 0.0 {
-            continue;
-        }
-
-        let line_height = segment.line_height.max(1.0);
-        let font_size = segment.span_style.resolve_font_size(14.0);
-        let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-        let brush = decoration_brush_for_span(&segment.span_style, text_brush, content_layer);
-        let line_top = text_rect.y + segment.line_top;
-        let segment_x = text_rect.x + segment.x_start;
-
-        if decoration.contains(TextDecoration::UNDERLINE) {
-            let underline_rect = text_decoration_rect(
-                segment_x,
-                line_top + line_height - thickness * 1.35,
-                span_width,
-                thickness,
-            );
-            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
-            sink.push_shape(
-                DrawPrimitive::Rect {
-                    rect: transformed,
-                    brush: brush.clone(),
-                    stroke: None,
-                },
-                text_clip,
-                snap_anchor,
-            );
-        }
-
-        if decoration.contains(TextDecoration::LINE_THROUGH) {
-            let strike_rect = text_decoration_rect(
-                segment_x,
-                line_top + line_height * 0.52 - thickness * 0.5,
-                span_width,
-                thickness,
-            );
-            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            sink.push_shape(
-                DrawPrimitive::Rect {
-                    rect: transformed,
-                    brush,
-                    stroke: None,
-                },
-                text_clip,
-                snap_anchor,
-            );
-        }
-    }
-}
-
-fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
-    Rect {
-        x,
-        y,
-        width,
-        height: thickness.ceil().max(1.0),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct DecorationVisualSegment {
-    line_index: usize,
-    line_top: f32,
-    line_height: f32,
-    logical_start: usize,
-    logical_end: usize,
-    x_start: f32,
-    x_end: f32,
-    span_style: cranpose_ui::text::SpanStyle,
-}
-
-impl DecorationVisualSegment {
-    fn width(&self) -> f32 {
-        (self.x_end - self.x_start).max(0.0)
-    }
-}
-
-fn decoration_segments_from_glyph_layouts(
-    text: &cranpose_ui::text::AnnotatedString,
-    global_style: &TextStyle,
-    layout: &TextLayoutResult,
-) -> Vec<DecorationVisualSegment> {
-    let mut glyph_layouts: Vec<_> = layout
-        .glyph_layouts()
-        .iter()
-        .copied()
-        .filter(|glyph| glyph.end_offset > glyph.start_offset && glyph.width.is_finite())
-        .collect();
-    if glyph_layouts.is_empty() {
-        return Vec::new();
-    }
-
-    glyph_layouts.sort_by(|a, b| {
-        a.line_index
-            .cmp(&b.line_index)
-            .then_with(|| a.x.total_cmp(&b.x))
-            .then_with(|| a.start_offset.cmp(&b.start_offset))
-            .then_with(|| a.end_offset.cmp(&b.end_offset))
-    });
-
-    let text_len = text.text.len();
-    let mut segments: Vec<DecorationVisualSegment> = Vec::new();
-    for glyph in glyph_layouts {
-        let start = glyph.start_offset.min(text_len);
-        let end = glyph.end_offset.min(text_len);
-        if start >= end {
-            continue;
-        }
-
-        let merged_style = merged_span_style_for_range(text, &global_style.span_style, start, end);
-        let Some(decoration) = merged_style.text_decoration else {
-            continue;
-        };
-        if decoration == TextDecoration::NONE {
-            continue;
-        }
-
-        let glyph_start_x = glyph.x;
-        let glyph_end_x = (glyph.x + glyph.width.max(0.0)).max(glyph_start_x);
-        if glyph_end_x <= glyph_start_x {
-            continue;
-        }
-
-        if let Some(last) = segments.last_mut() {
-            let same_line = last.line_index == glyph.line_index;
-            let same_style = last.span_style == merged_style;
-            let same_vertical_band =
-                (last.line_top - glyph.y).abs() <= DECORATION_SEGMENT_MERGE_EPSILON;
-            let touching = glyph_start_x <= last.x_end + DECORATION_SEGMENT_MERGE_EPSILON;
-            let contiguous_text_range = decoration_ranges_share_contiguous_run(
-                text,
-                last.logical_start,
-                last.logical_end,
-                start,
-                end,
-            );
-            if same_line && same_style && same_vertical_band && (touching || contiguous_text_range)
-            {
-                last.x_start = last.x_start.min(glyph_start_x);
-                last.x_end = last.x_end.max(glyph_end_x);
-                last.logical_start = last.logical_start.min(start);
-                last.logical_end = last.logical_end.max(end);
-                last.line_height = last.line_height.max(glyph.height.max(1.0));
-                continue;
-            }
-        }
-
-        segments.push(DecorationVisualSegment {
-            line_index: glyph.line_index,
-            line_top: glyph.y,
-            line_height: glyph.height.max(1.0),
-            logical_start: start,
-            logical_end: end,
-            x_start: glyph_start_x,
-            x_end: glyph_end_x,
-            span_style: merged_style,
-        });
-    }
-
-    segments
-}
-
-fn decoration_segments_from_logical_lines(
-    text_layout: &mut impl TextLayoutResolver,
-    text: &cranpose_ui::text::AnnotatedString,
-    global_style: &TextStyle,
-) -> Vec<DecorationVisualSegment> {
-    let line_height = text_layout
-        .layout_text(text, global_style)
-        .line_height
-        .max(1.0);
-    let mut line_top = 0.0;
-    let mut line_index = 0usize;
-    let mut segments: Vec<DecorationVisualSegment> = Vec::new();
-
-    for line in split_annotated_lines_for_decorations(text) {
-        let mut current_offset = 0.0;
-        for window in line.span_boundaries().windows(2) {
-            let start = window[0];
-            let end = window[1];
-            if start == end {
-                continue;
-            }
-
-            let merged_style =
-                merged_span_style_for_range(&line, &global_style.span_style, start, end);
-            let mut span_text_style = global_style.clone();
-            span_text_style.span_style = merged_style.clone();
-            let span_width = text_layout
-                .layout_text(&line.subsequence(start..end), &span_text_style)
-                .width
-                .max(0.0);
-
-            let Some(decoration) = merged_style.text_decoration else {
-                current_offset += span_width;
-                continue;
-            };
-            if decoration == TextDecoration::NONE || span_width <= 0.0 {
-                current_offset += span_width;
-                continue;
-            }
-
-            let x_start = current_offset;
-            let x_end = current_offset + span_width;
-            if let Some(last) = segments.last_mut() {
-                let same_line = last.line_index == line_index;
-                let same_style = last.span_style == merged_style;
-                let touching = x_start <= last.x_end + DECORATION_SEGMENT_MERGE_EPSILON;
-                if same_line && same_style && touching {
-                    last.x_end = last.x_end.max(x_end);
-                    last.logical_start = last.logical_start.min(start);
-                    last.logical_end = last.logical_end.max(end);
-                    current_offset += span_width;
-                    continue;
-                }
-            }
-
-            segments.push(DecorationVisualSegment {
-                line_index,
-                line_top,
-                line_height,
-                logical_start: start,
-                logical_end: end,
-                x_start,
-                x_end,
-                span_style: merged_style,
-            });
-            current_offset += span_width;
-        }
-        line_index = line_index.saturating_add(1);
-        line_top += line_height;
-    }
-
-    segments
-}
-
-fn half_open_ranges_touch_or_overlap(
-    first_start: usize,
-    first_end: usize,
-    second_start: usize,
-    second_end: usize,
-) -> bool {
-    first_start <= second_end && second_start <= first_end
-}
-
-fn decoration_ranges_share_contiguous_run(
-    text: &cranpose_ui::text::AnnotatedString,
-    first_start: usize,
-    first_end: usize,
-    second_start: usize,
-    second_end: usize,
-) -> bool {
-    if half_open_ranges_touch_or_overlap(first_start, first_end, second_start, second_end) {
-        return true;
-    }
-
-    let source = text.text.as_str();
-    let gap = if first_end <= second_start {
-        source.get(first_end..second_start)
-    } else if second_end <= first_start {
-        source.get(second_end..first_start)
-    } else {
-        None
-    };
-    gap.is_some_and(|gap| gap.chars().all(char::is_whitespace))
-}
-
-fn split_annotated_lines_for_decorations(
-    text: &cranpose_ui::text::AnnotatedString,
-) -> Vec<cranpose_ui::text::AnnotatedString> {
-    if text.text.is_empty() {
-        return vec![cranpose_ui::text::AnnotatedString::from("")];
-    }
-
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    for (idx, ch) in text.text.char_indices() {
-        if ch == '\n' {
-            lines.push(text.subsequence(start..idx));
-            start = idx + ch.len_utf8();
-        }
-    }
-    lines.push(text.subsequence(start..text.text.len()));
-    lines
-}
-
-fn resolved_alpha_multiplier(alpha: Option<f32>) -> f32 {
-    match alpha {
-        Some(value) if value.is_finite() => value.clamp(0.0, 1.0),
-        _ => 1.0,
-    }
-}
-
-fn color_with_alpha_multiplier(color: Color, alpha_multiplier: f32) -> Color {
-    Color(
-        color.r(),
-        color.g(),
-        color.b(),
-        (color.a() * alpha_multiplier).clamp(0.0, 1.0),
-    )
-}
-
-fn brush_with_alpha_multiplier(brush: Brush, alpha_multiplier: f32) -> Brush {
-    brush.map_colors(|color| color_with_alpha_multiplier(color, alpha_multiplier))
-}
-
-fn decoration_brush_for_span(
-    merged_style: &cranpose_ui::text::SpanStyle,
-    fallback_brush: &Brush,
-    content_layer: &GraphicsLayer,
-) -> Brush {
-    let brush = merged_style
-        .brush
-        .clone()
-        .or_else(|| merged_style.color.map(Brush::solid))
-        .unwrap_or_else(|| fallback_brush.clone());
-    let alpha_multiplier = resolved_alpha_multiplier(merged_style.alpha);
-    apply_layer_to_brush(
-        brush_with_alpha_multiplier(brush, alpha_multiplier),
-        content_layer,
-    )
-}
-
-#[cfg(test)]
-use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: NodeId = NodeId(0);
 
@@ -1526,18 +1095,18 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            let style_hash = params.text_style.render_hash();
+            let render_text = shared_plain_render_string(&params.text.text);
             self.scene.push_text(TextDraw {
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
                 snap_anchor: None,
-                text: DrawnText::of(params.render_text, &params.text_style),
+                text: DrawnText::of(render_text, &params.text_style),
+                layout: params.layout,
                 color: params.color,
-                text_style: Arc::new(params.text_style),
-                style_hash,
+                text_style: params.text_style,
+                style_hash: params.style_hash,
                 font_size: params.font_size,
                 scale: params.scale,
-                layout_options: params.layout_options,
                 clip: params.clip,
             });
         }

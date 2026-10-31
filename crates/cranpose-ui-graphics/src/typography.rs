@@ -362,8 +362,54 @@ impl TextMeasurement {
 /// back to [`estimate_text_measurement`], which is good enough for layout
 /// smoke tests and wrong for anything that has to line up with real glyphs.
 pub trait DrawTextMeasurer {
-    /// Returns the size and line metrics of `text` laid out in `style`.
-    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement;
+    /// `text` laid out in `style`: its size and line metrics, and the layout
+    /// measured.
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> MeasuredText;
+}
+
+/// A text a [`DrawTextMeasurer`] measured.
+#[derive(Clone)]
+pub struct MeasuredText {
+    /// The size and line metrics.
+    pub measurement: TextMeasurement,
+    /// The layout measured, which a draw scope hands its renderer so the
+    /// glyphs drawn are the ones measured. `None` from a measurer with no
+    /// layouts.
+    pub layout: Option<TextLayoutHandle>,
+}
+
+/// The layout the text system made of a text. It is opaque here, below the
+/// text system; a renderer reads it back as the text system's layout type.
+/// Two handles are equal when they hold the same layout.
+#[derive(Clone)]
+pub struct TextLayoutHandle(std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl<T: std::any::Any + Send + Sync> From<std::sync::Arc<T>> for TextLayoutHandle {
+    fn from(layout: std::sync::Arc<T>) -> Self {
+        Self(layout)
+    }
+}
+
+impl TextLayoutHandle {
+    /// The layout as a `T`, `None` when it is of another type.
+    pub fn downcast<T: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<T>> {
+        std::sync::Arc::clone(&self.0).downcast::<T>().ok()
+    }
+}
+
+impl PartialEq for TextLayoutHandle {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(
+            std::sync::Arc::as_ptr(&self.0),
+            std::sync::Arc::as_ptr(&other.0),
+        )
+    }
+}
+
+impl std::fmt::Debug for TextLayoutHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TextLayoutHandle")
+    }
 }
 
 /// Font-free estimate used when no [`DrawTextMeasurer`] is installed.

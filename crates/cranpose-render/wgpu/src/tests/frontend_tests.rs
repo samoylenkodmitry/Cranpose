@@ -5,8 +5,7 @@ use super::*;
 use crate::{WgpuTextSystem, frame_packet::FrameSceneStorage, test_support::layer_node};
 
 fn frontend() -> RendererFrontend {
-    let text_system = WgpuTextSystem::from_fonts(&[]);
-    RendererFrontend::new(text_system.render_state(), text_system.software_fonts())
+    RendererFrontend::new(WgpuTextSystem::from_fonts(&[]).fonts().clone())
 }
 
 fn graph() -> RenderGraph {

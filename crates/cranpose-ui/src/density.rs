@@ -19,7 +19,7 @@
 //! the pixel side, which is the only side where rounding means anything.
 
 use cranpose_core::{CompositionLocalProvider, StaticCompositionLocal, staticCompositionLocalOf};
-use cranpose_ui_layout::{ceil_to_px, round_to_px};
+use cranpose_ui_layout::{ceil_to_grid, round_to_grid};
 
 use crate::font_scale::FontScaleCurve;
 
@@ -94,7 +94,7 @@ impl Density {
     /// `Dp.roundToPx()`, expressed back in points: a dp length snapped to the
     /// whole device pixel Compose would give it.
     pub fn dp(self, value: f32) -> f32 {
-        round_to_px(value, self.density)
+        round_to_grid(value, self.density)
     }
 
     /// A text size in scale-independent pixels, snapped the same way.
@@ -108,7 +108,7 @@ impl Density {
 
     /// A length snapped to the nearest whole device pixel, exact halves up.
     pub fn round(self, value: f32) -> f32 {
-        round_to_px(value, self.density)
+        round_to_grid(value, self.density)
     }
 
     /// A length snapped down to a whole device pixel.
@@ -125,7 +125,7 @@ impl Density {
     /// This is what a line box does with its own height, and what a container
     /// does with a content size it must not clip.
     pub fn ceil(self, value: f32) -> f32 {
-        ceil_to_px(value, self.density)
+        ceil_to_grid(value, self.density)
     }
 
     /// Points to device pixels.

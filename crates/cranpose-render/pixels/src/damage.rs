@@ -192,6 +192,8 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
         rect,
         snap_anchor,
         text,
+        layout,
+        ink,
         color,
         text_style,
         font_size,
@@ -201,6 +203,8 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
     *rect == new.rect
         && *snap_anchor == new.snap_anchor
         && (Rc::ptr_eq(text, &new.text) || **text == *new.text)
+        && *layout == new.layout
+        && *ink == new.ink
         && (Arc::ptr_eq(text_style, &new.text_style) || **text_style == *new.text_style)
         && *color == new.color
         && *font_size == new.font_size

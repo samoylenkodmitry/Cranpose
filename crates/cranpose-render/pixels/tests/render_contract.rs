@@ -26,15 +26,14 @@ fn pixels_text_font_state_is_renderer_owned() {
     let draw_source = std::fs::read_to_string("src/draw.rs").expect("read pixels draw source");
 
     assert!(
-        !draw_source.contains("static FONT")
-            && !draw_source.contains("Lazy<Option<SoftwareTextFont>>"),
+        !draw_source.contains("static FONT") && !draw_source.contains("Lazy<Option<Typeface>>"),
         "pixels renderer text font state must not be a process-global cache"
     );
     assert!(
-        draw_source.contains("resources: SoftwareTextResources")
-            && draw_source.contains("glyphs: std::cell::RefCell<SoftwareGlyphRasterCache>")
+        draw_source.contains("fonts: TextFonts")
+            && draw_source.contains("glyphs: std::cell::RefCell<GlyphMaskCache>")
             && draw_source.contains("text: &TextRaster"),
-        "pixels text resources and glyph masks should be explicit renderer-owned draw inputs"
+        "pixels text fonts and glyph masks should be explicit renderer-owned draw inputs"
     );
 }
 

@@ -8,19 +8,19 @@ use crate::scene::{ShadowDraw, TextDraw};
 
 fn text_draw() -> TextDraw {
     TextDraw {
-        rect: Rect {
-            x: 0.25,
-            y: 0.5,
-            width: 80.0,
-            height: 20.0,
-        },
-        snap_anchor: None,
-        text: Rc::new(AnnotatedString::from("72 bpm")),
-        color: Color(1.0, 1.0, 1.0, 1.0),
-        text_style: Arc::new(TextStyle::default()),
-        font_size: 14.0,
         scale: 2.0,
-        clip: None,
+        ..crate::text_draws::text_draw(
+            Rect {
+                x: 0.25,
+                y: 0.5,
+                width: 80.0,
+                height: 20.0,
+            },
+            "72 bpm",
+            TextStyle::default(),
+            14.0,
+            Color(1.0, 1.0, 1.0, 1.0),
+        )
     }
 }
 

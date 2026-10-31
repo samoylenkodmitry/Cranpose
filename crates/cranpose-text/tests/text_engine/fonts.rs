@@ -14,6 +14,8 @@ pub(crate) const ROBOTO_BOLD: &str = "benchmarks/compose-vs-cranpose/fonts/Robot
 pub(crate) const DEJAVU: &str = "apps/desktop-demo/assets/leetcodedaily/fonts/DejaVuSans.ttf";
 pub(crate) const DEJAVU_MONO: &str =
     "apps/desktop-demo/assets/leetcodedaily/fonts/DejaVuSansMono.ttf";
+pub(crate) const MONASPACE_VF: &str =
+    "apps/desktop-demo/assets/leetcodedaily/fonts/MonaspaceKryptonVarVF.ttf";
 pub(crate) const TWEMOJI: &str = "apps/desktop-demo/assets/TwemojiMozilla.ttf";
 pub(crate) const NOTO_SANS_LATIN: &str = "apps/esp32-demo/assets/NotoSans-Latin.ttf";
 pub(crate) const NOTO_SANS_MERGED: &str = "apps/desktop-demo/assets/NotoSansMerged.ttf";
@@ -21,6 +23,18 @@ pub(crate) const ARABIC_VF: &str = "crates/cranpose-fonts/assets/NotoSansArabic-
 pub(crate) const DEVANAGARI_VF: &str = "crates/cranpose-fonts/assets/NotoSansDevanagari-VF.ttf";
 pub(crate) const DEVANAGARI: &str =
     "crates/cranpose-render/common/tests/fixtures/localization/Devanagari.ttf";
+// Built by `scripts/fonts/make_test_contexts.py`: a contextual rule of each
+// kind, each taking wider alternates of the letters it reads.
+pub(crate) const TEST_CONTEXTS: &str = "crates/cranpose-text/tests/fonts/CranposeTestContexts.ttf";
+pub(crate) const TEST_KERNS: &str = "crates/cranpose-text/tests/fonts/CranposeTestKerns.ttf";
+// Built by `scripts/fonts/make_test_space_kerns.py`: in Latin class pairs
+// move the space after T, V, W and Y and before A and L, in Cyrillic a pair
+// moves it before Te, and f and i, and a and a, join.
+pub(crate) const TEST_SPACE_KERNS: &str =
+    "crates/cranpose-text/tests/fonts/CranposeTestSpaceKerns.ttf";
+pub(crate) const TEST_SUBSTITUTIONS: &str =
+    "crates/cranpose-text/tests/fonts/CranposeTestSubstitutions.ttf";
+pub(crate) const TEST_WIDE: &str = "crates/cranpose-text/tests/fonts/CranposeTestWide.ttf";
 
 // The bytes of the font at `path`, relative to the repository root.
 pub(crate) fn bytes(path: &str) -> Vec<u8> {
@@ -46,7 +60,7 @@ pub(crate) fn span(range: Range<usize>, family: &FontFamily, weight: u16) -> Sha
         size: 16.0,
         features: &[],
         language: None,
-        letter_spacing: 0.0,
+        letter_spacing: None,
         baseline_shift: 0.0,
     }
 }

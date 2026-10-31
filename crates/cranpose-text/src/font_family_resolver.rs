@@ -40,6 +40,34 @@ pub struct FontFamilyResolver {
 struct Family {
     typefaces: Range<usize>,
     registered: Option<FontFamilyKey>,
+    // The closest typeface to each weight of a whole hundred from 100 to
+    // 900, upright then italic: what most text asks for, scored once.
+    closest: [usize; 18],
+}
+
+// The weights `closest` keeps the typefaces of.
+const HUNDREDS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+
+// Where `closest` keeps the typeface of `weight` and `style`, when the
+// weight is a whole hundred from 100 to 900.
+fn closest_slot(weight: u16, style: FontStyle) -> Option<usize> {
+    let hundreds = usize::from(weight / 100);
+    (weight.is_multiple_of(100) && (1..=9).contains(&hundreds))
+        .then(|| hundreds - 1 + 9 * usize::from(style == FontStyle::Italic))
+}
+
+// The index of the first of the numbered typefaces of a family closest to
+// `weight` and `style`, each scored once.
+fn closest<'a>(
+    members: impl Iterator<Item = (usize, &'a Typeface)>,
+    weight: u16,
+    style: FontStyle,
+) -> usize {
+    let requested = f32::from(weight);
+    members
+        .map(|(index, typeface)| (MatchScore::of(typeface, requested, style), index))
+        .min_by(|a, b| a.0.cmp(b.0))
+        .map_or(0, |(_, index)| index)
 }
 
 impl FontFamilyResolver {
@@ -62,9 +90,18 @@ impl FontFamilyResolver {
         let mut families = Vec::with_capacity(first_of_family.len());
         let mut start = 0;
         for members in numbered.chunk_by(|a, b| a.0 == b.0) {
+            let numbered = || (start..).zip(members.iter().map(|(_, typeface)| typeface));
             families.push(Family {
                 typefaces: start..start + members.len(),
                 registered: members[0].1.registered_family(),
+                closest: std::array::from_fn(|slot| {
+                    let style = if slot < 9 {
+                        FontStyle::Normal
+                    } else {
+                        FontStyle::Italic
+                    };
+                    closest(numbered(), HUNDREDS[slot % 9], style)
+                }),
             });
             start += members.len();
         }
@@ -119,6 +156,18 @@ impl FontFamilyResolver {
             visit(0..text.len(), primary);
             return;
         }
+        self.fallback_runs(text, request, visit);
+    }
+
+    // `typeface_runs` of a text the primary typeface does not draw alone.
+    // Out of line, as most text it does.
+    #[inline(never)]
+    fn fallback_runs(
+        &self,
+        text: &str,
+        request: FontRequest<'_>,
+        visit: impl FnMut(Range<usize>, usize),
+    ) {
         self.fallback_chain(request).split(text, visit);
     }
 
@@ -129,7 +178,18 @@ impl FontFamilyResolver {
             .iter()
             .find(|family| wanted.matches(self, family))
             .or_else(|| self.families.first())?;
-        self.closest(family, request).next()
+        let weight = request.weight.value();
+        Some(match closest_slot(weight, request.style) {
+            Some(slot) => family.closest[slot],
+            None => closest(
+                family
+                    .typefaces
+                    .clone()
+                    .map(|index| (index, &self.typefaces[index])),
+                weight,
+                request.style,
+            ),
+        })
     }
 
     // The closest typefaces of each family in fallback order, the requested

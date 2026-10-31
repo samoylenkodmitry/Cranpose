@@ -229,8 +229,14 @@ pub struct ApplierGuard<'a, A: Applier + ?Sized + 'static> {
 }
 
 impl<A: Applier + ?Sized + 'static> ApplierGuard<'_, A> {
-    fn flush_disposals(&mut self) -> Result<(), NodeError> {
-        self.disposals.flush(&mut *self.inner, self.dispose)
+    // Out of line: few guards have disposals to flush, and every function
+    // that drops a guard stays small.
+    #[cold]
+    #[inline(never)]
+    fn flush_disposals(&mut self) {
+        if let Err(error) = self.disposals.flush(&mut *self.inner, self.dispose) {
+            log::error!("deferred node disposal failed: {error}");
+        }
     }
 }
 
@@ -250,10 +256,8 @@ impl<A: Applier + ?Sized + 'static> DerefMut for ApplierGuard<'_, A> {
 
 impl<A: Applier + ?Sized + 'static> Drop for ApplierGuard<'_, A> {
     fn drop(&mut self) {
-        if self.disposals.pending.get()
-            && let Err(error) = self.flush_disposals()
-        {
-            log::error!("deferred node disposal failed: {error}");
+        if self.disposals.pending.get() {
+            self.flush_disposals();
         }
     }
 }

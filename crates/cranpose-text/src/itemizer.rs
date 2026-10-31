@@ -2,9 +2,10 @@ use std::ops::Range;
 
 use crate::{
     bidi_level::{BidiLevel, level_runs},
+    break_leads::find_break_lead,
     font_family_resolver::FontFamilyResolver,
     paragraph::{ResolvedTextDirection, TextDirection},
-    script::{Script, script_runs},
+    script::{Script, ascii_script, script_runs},
     shaping_span::ShapingSpan,
     typeface::Typeface,
 };
@@ -74,6 +75,41 @@ impl Itemizer {
             ResolvedTextDirection::Ltr => BidiLevel::LTR,
             ResolvedTextDirection::Rtl => BidiLevel::RTL,
         };
+        // Left to right ASCII in one span, most text, is one level and one
+        // script: its items are the runs of its typefaces.
+        if let [span] = spans
+            && base == BidiLevel::LTR
+            && content.is_ascii()
+        {
+            let script = ascii_script(content);
+            resolver.typeface_runs(content, span.font, |run, typeface| {
+                visit(TextItem {
+                    range: paragraph.start + run.start..paragraph.start + run.end,
+                    level: base,
+                    paragraph_level: base,
+                    script,
+                    typeface: &resolver.typefaces()[typeface],
+                    span: 0,
+                });
+            });
+            return;
+        }
+        self.itemize_mixed((text, content), paragraph, base, (spans, resolver), visit);
+    }
+
+    // The items of `content`, a paragraph of `text` with more than one span,
+    // text right to left or text past ASCII: the runs of its bidi levels,
+    // scripts and typefaces. Out of line, as most text takes the ASCII
+    // items above.
+    #[inline(never)]
+    fn itemize_mixed<'r>(
+        &mut self,
+        (text, content): (&str, &str),
+        paragraph: Range<usize>,
+        base: BidiLevel,
+        (spans, resolver): (&[ShapingSpan<'_>], &'r FontFamilyResolver),
+        visit: &mut impl FnMut(TextItem<'r>),
+    ) {
         self.levels.clear();
         level_runs(content, base, paragraph.start, &mut self.levels);
         self.scripts.clear();
@@ -119,22 +155,24 @@ impl Itemizer {
 // The end of the paragraph that starts at `start`: just past the next bidi
 // paragraph separator (class B: line feed, carriage return and line feed as
 // one, the information separators 1C to 1E, next line and the paragraph
-// separator), or the end of `text`.
+// separator), or the end of `text`. Found by the first byte of each, which
+// in UTF-8 starts no other character it is not part of.
 fn paragraph_end(text: &str, start: usize) -> usize {
-    let rest = text.get(start..).unwrap_or_default();
-    rest.char_indices()
-        .find(|&(_, ch)| {
-            matches!(
-                ch,
-                '\n' | '\r' | '\u{1C}'..='\u{1E}' | '\u{85}' | '\u{2029}'
-            )
-        })
-        .map_or(text.len(), |(at, ch)| {
-            let after = start + at + ch.len_utf8();
-            if ch == '\r' && text.as_bytes().get(after) == Some(&b'\n') {
-                after + 1
-            } else {
-                after
+    let bytes = text.as_bytes();
+    let mut at = start;
+    while let Some(found) = find_break_lead(bytes, at) {
+        at = found;
+        let after = match &bytes[at..] {
+            [b'\r', b'\n', ..] => at + 2,
+            [b'\n' | b'\r' | 0x1C..=0x1E, ..] => at + 1,
+            [0xC2, 0x85, ..] => at + 2,
+            [0xE2, 0x80, 0xA9, ..] => at + 3,
+            _ => {
+                at += 1;
+                continue;
             }
-        })
+        };
+        return after;
+    }
+    text.len()
 }

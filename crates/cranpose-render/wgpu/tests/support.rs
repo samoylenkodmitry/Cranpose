@@ -21,7 +21,7 @@ use cranpose_render_common::{
         CachePolicy, DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry,
         PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     },
-    software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
+    text_fonts::DEFAULT_FONT_BYTES,
 };
 use cranpose_render_wgpu::{CapturedFrame, PresentOutcome, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
@@ -34,7 +34,9 @@ use cranpose_ui_graphics::{
     liquid_glass_effect,
 };
 
-pub(crate) static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
+pub(crate) static TEST_FONT: &[u8] = DEFAULT_FONT_BYTES;
+
+pub(crate) use crate::shared_test_support::{draw_text_layout, prepared_text, with_layout};
 
 pub(crate) fn layer_node(
     node_id: Option<NodeId>,
@@ -1179,17 +1181,20 @@ pub(crate) fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) 
     });
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Text(Box::new(cranpose_render_common::graph::TextPrimitiveNode {
-            node_id: NodeId(node_id),
-            rect,
-            text: cranpose_ui::text::shared_plain_annotated_string(text),
-            render_text: cranpose_ui::text::shared_plain_render_string(text),
-            text_style: std::sync::Arc::new(style),
-            font_size,
-            layout_options: cranpose_ui::TextLayoutOptions::default(),
-            clip: None,
-            paint: Default::default(),
-        })),
+        node: PrimitiveNode::Text(Box::new(with_layout(
+            cranpose_render_common::graph::TextPrimitiveNode {
+                node_id: NodeId(node_id),
+                rect,
+                text: cranpose_ui::text::shared_plain_annotated_string(text),
+                render_text: cranpose_ui::text::shared_plain_render_string(text),
+                text_style: std::sync::Arc::new(style),
+                font_size,
+                overflow: cranpose_ui::TextLayoutOptions::default().overflow,
+                clip: None,
+                paint: Default::default(),
+                layout: Default::default(),
+            },
+        ))),
     })
 }
 

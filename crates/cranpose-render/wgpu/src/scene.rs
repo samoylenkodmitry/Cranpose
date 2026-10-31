@@ -5,10 +5,10 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    graph::DrawCommandId, layer_shadow::ShadowRRect, software_text_raster::TextRasterRequest,
-    text_paint::TextPaint,
+    graph::DrawCommandId, layer_shadow::ShadowRRect, text_glyphs::lines_part,
+    text_paint::TextPaint, text_raster::TextRasterRequest,
 };
-use cranpose_ui::{TextLayoutOptions, TextStyle, text::RenderString};
+use cranpose_ui::{TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
     ImageSampling, Point, Recorded, Rect, RenderEffect, ShapeRecorder,
@@ -237,6 +237,7 @@ pub(crate) struct DrawnText {
     hash: u64,
     empty: bool,
     gradient: bool,
+    shadow: bool,
     static_motion: bool,
 }
 
@@ -248,15 +249,23 @@ impl DrawnText {
                 .as_ref()
                 .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
         };
-        let gradient = paints_gradient(&style.span_style)
-            || string
-                .span_styles()
-                .iter()
-                .any(|span| paints_gradient(&span.item));
+        let (gradient, shadow) = string.span_styles().iter().fold(
+            (
+                paints_gradient(&style.span_style),
+                style.span_style.shadow.is_some(),
+            ),
+            |(gradient, shadow), span| {
+                (
+                    gradient || paints_gradient(&span.item),
+                    shadow || span.item.shadow.is_some(),
+                )
+            },
+        );
         Self {
             hash: string.render_hash(),
             empty: string.is_empty(),
             gradient,
+            shadow,
             static_motion: style
                 .paragraph_style
                 .text_motion
@@ -275,6 +284,7 @@ impl DrawnText {
             hash: paint.text_hash,
             empty: paint.text_empty,
             gradient: false,
+            shadow: paint.casts_shadow,
             static_motion: paint.static_motion,
         }
     }
@@ -298,6 +308,11 @@ impl DrawnText {
         self.gradient
     }
 
+    // Whether the style or a span of the string casts a shadow.
+    pub(crate) fn shadow(&self) -> bool {
+        self.shadow
+    }
+
     /// Whether the style's motion is static, so its glyphs stay on whole
     /// pixels.
     pub(crate) fn static_motion(&self) -> bool {
@@ -311,13 +326,14 @@ pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<SnapAnchor>,
     pub text: DrawnText,
+    /// The lines and glyphs, from `rect`'s top left corner.
+    pub layout: cranpose_text::TextLayout,
     pub color: Color,
     pub text_style: Arc<TextStyle>,
     /// `text_style`'s [`TextStyle::render_hash`], hashed once per text.
     pub style_hash: u64,
     pub font_size: f32,
     pub scale: f32,
-    pub layout_options: TextLayoutOptions,
     pub clip: Option<Rect>,
 }
 
@@ -325,13 +341,24 @@ impl TextDraw {
     // The text laid out in `rect` at `scale` device pixels per logical pixel.
     pub(crate) fn raster_request(&self, rect: Rect, scale: f32) -> TextRasterRequest<'_> {
         TextRasterRequest::new(
+            &self.layout,
             self.text.string().as_ref(),
             rect,
             &self.text_style,
             self.color,
-            self.font_size,
             scale,
         )
+    }
+
+    // The part of `rect`, where the text draws from its top left corner at
+    // `scale` units of `rect` a layout pixel, in which its glyphs draw: its
+    // lines, or all of it for a text that casts a shadow.
+    pub(crate) fn glyph_reach(&self, rect: Rect, scale: f32) -> Rect {
+        if self.text.shadow() {
+            rect
+        } else {
+            lines_part(rect, &self.layout, scale)
+        }
     }
 }
 

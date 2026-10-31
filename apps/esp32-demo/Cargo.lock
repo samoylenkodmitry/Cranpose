@@ -3,16 +3,6 @@
 version = 4
 
 [[package]]
-name = "ab_glyph"
-version = "0.2.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01c0457472c38ea5bd1c3b5ada5e368271cb550be7a4ca4a0b4634e9913f6cc2"
-dependencies = [
- "ab_glyph_rasterizer",
- "owned_ttf_parser",
-]
-
-[[package]]
 name = "ab_glyph_rasterizer"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -698,6 +688,7 @@ dependencies = [
  "cranpose-render-common",
  "cranpose-render-pixels",
  "cranpose-services",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
@@ -731,6 +722,7 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-render-common",
  "cranpose-runtime-std",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "log",
@@ -818,19 +810,16 @@ dependencies = [
 name = "cranpose-render-common"
 version = "0.17.2"
 dependencies = [
- "ab_glyph",
+ "ab_glyph_rasterizer",
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
- "portable-atomic",
  "smallvec",
  "thiserror 2.0.21",
  "tiny-skia",
- "ttf-parser",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -840,6 +829,7 @@ dependencies = [
  "bytemuck",
  "cranpose-core",
  "cranpose-render-common",
+ "cranpose-text",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "log",
@@ -901,7 +891,6 @@ dependencies = [
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "futures-task",
- "icu_properties",
  "log",
  "portable-atomic",
  "smallvec",
@@ -2270,15 +2259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "owned_ttf_parser"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
-dependencies = [
- "ttf-parser",
-]
-
-[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3035,12 +3015,6 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
 ]
-
-[[package]]
-name = "ttf-parser"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 
 [[package]]
 name = "typenum"

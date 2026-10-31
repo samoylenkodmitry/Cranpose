@@ -1,5 +1,11 @@
 use super::*;
 
+// The inspector's graph at `viewport`, its text laid out in an app context
+// as a frame lays it out.
+fn built(state: &mut InspectorState, viewport: Size) -> RenderGraph {
+    cranpose_ui::AppContext::new().enter(|| build(state, viewport, Rect::from_size(viewport)))
+}
+
 #[test]
 fn collapsed_control_and_panel_fit_phone_and_desktop_viewports() {
     for viewport in [
@@ -13,11 +19,11 @@ fn collapsed_control_and_panel_fit_phone_and_desktop_viewports() {
         },
     ] {
         let mut state = InspectorState::default();
-        build(&mut state, viewport, Rect::from_size(viewport));
+        built(&mut state, viewport);
         assert_eq!(state.controls.len(), 1);
         assert_eq!(state.controls[0].action, InspectorAction::Toggle);
         state.open = true;
-        build(&mut state, viewport, Rect::from_size(viewport));
+        built(&mut state, viewport);
         for control in state.controls {
             assert!(control.bounds.x >= 0.0 && control.bounds.y >= 0.0);
             assert!(control.bounds.x + control.bounds.width <= viewport.width);
@@ -37,7 +43,7 @@ fn every_mode_has_a_distinct_graph_and_only_mode_has_opaque_background() {
         mode: InspectorMode::Accessibility,
         ..Default::default()
     };
-    let graph = build(&mut state, viewport, Rect::from_size(viewport));
+    let graph = built(&mut state, viewport);
     let RenderNode::Primitive(entry) = &graph.root.children[0] else {
         panic!("opaque background")
     };
@@ -73,7 +79,7 @@ fn picking_hides_panel_to_allow_inspecting_covered_elements() {
         width: 400.0,
         height: 400.0,
     };
-    build(&mut state, viewport, Rect::from_size(viewport));
+    built(&mut state, viewport);
     assert_eq!(state.controls.len(), 1);
     assert_eq!(state.controls[0].action, InspectorAction::Pick);
 }
@@ -92,10 +98,10 @@ fn floating_positions_remain_reachable_after_resize() {
         panel_position: Some(Point { x: -50.0, y: 900.0 }),
         ..Default::default()
     };
-    build(&mut state, viewport, Rect::from_size(viewport));
+    built(&mut state, viewport);
     assert_eq!(state.launcher_position, Some(Point { x: 46.0, y: 0.0 }));
     state.open = true;
-    build(&mut state, viewport, Rect::from_size(viewport));
+    built(&mut state, viewport);
     assert_eq!(state.panel_position, Some(Point { x: 0.0, y: 16.0 }));
     for control in state.controls {
         assert!(control.bounds.x >= 0.0 && control.bounds.y >= 0.0);

@@ -228,17 +228,15 @@ pub type TextPanResolver = Rc<dyn Fn(f32) -> f32>;
 #[derive(Clone)]
 pub(crate) struct TextFieldLayoutHandle {
     state: TextFieldState,
-    node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
     wrap_width: Rc<Cell<Option<f32>>>,
     presentation: Rc<PresentationCache>,
 }
 
 impl TextFieldLayoutHandle {
     pub(crate) fn measured_layout(&self, style: &TextStyle) -> Rc<crate::text::PreparedTextLayout> {
-        crate::text::prepare_text_layout_for_node(
-            self.node_id.get(),
+        crate::text::prepare_text_layout(
             &self.presentation.get(self.state).shown,
-            &std::sync::Arc::new(style.clone()),
+            style,
             crate::text::TextLayoutOptions::default(),
             self.wrap_width.get(),
         )
@@ -248,7 +246,6 @@ impl TextFieldLayoutHandle {
 pub(crate) fn caret_visual_line_for_offset(
     text: &str,
     style: &TextStyle,
-    node_id: Option<cranpose_core::NodeId>,
     wrap_width: Option<f32>,
     offset: usize,
     affinity: crate::text_selection::LineAffinity,
@@ -258,7 +255,6 @@ pub(crate) fn caret_visual_line_for_offset(
         Some(width) if width.is_finite() && width > 0.0 => {
             let annotated = crate::text::AnnotatedString::from(text);
             let ranges = crate::text::wrapped_line_ranges(
-                node_id,
                 &annotated,
                 style,
                 crate::text::TextLayoutOptions::default(),
@@ -278,7 +274,6 @@ pub(crate) fn caret_visual_line_for_offset(
 pub(crate) fn range_visual_line_rects(
     text: &str,
     style: &TextStyle,
-    node_id: Option<cranpose_core::NodeId>,
     wrap_width: Option<f32>,
     pan: f32,
     line_height: f32,
@@ -290,7 +285,6 @@ pub(crate) fn range_visual_line_rects(
     }
     let annotated = crate::text::AnnotatedString::from(text);
     let line_ranges = crate::text::wrapped_line_ranges(
-        node_id,
         &annotated,
         style,
         crate::text::TextLayoutOptions::default(),
@@ -343,9 +337,7 @@ fn hit_test_offset(
     presentation.to_source(crate::text::offset_for_position_wrapped(
         presentation.text(),
         style,
-        refs.node_id.get(),
         refs.wrap_width.get(),
-        refs.line_height.get(),
         x,
         y,
     ))
@@ -879,7 +871,6 @@ impl TextFieldModifierNode {
     pub(crate) fn layout_handle(&self) -> TextFieldLayoutHandle {
         TextFieldLayoutHandle {
             state: self.state,
-            node_id: Rc::clone(&self.refs.node_id),
             wrap_width: Rc::clone(&self.measured_wrap_width),
             presentation: Rc::clone(&self.refs.presentation),
         }
@@ -928,17 +919,15 @@ impl TextFieldModifierNode {
 
     fn measure_text_content(&self, wrap_width: Option<f32>) -> crate::text::TextMetrics {
         let presentation = self.refs.presentation.get(self.state);
-        let node_id = self.refs.node_id.get();
         let annotated = &*presentation.shown;
         let metrics = match wrap_width {
-            Some(max_width) => crate::text::measure_text_with_options_for_node(
-                node_id,
+            Some(max_width) => crate::text::measure_text_with_options(
                 annotated,
                 &self.style,
                 crate::text::TextLayoutOptions::default(),
                 Some(max_width),
             ),
-            None => crate::text::measure_text_for_node(node_id, annotated, &self.style),
+            None => crate::text::measure_text(annotated, &self.style),
         };
         self.measured_line_height.set(metrics.line_height);
         metrics
@@ -1154,7 +1143,6 @@ impl DrawModifierNode for TextFieldModifierNode {
         let cached_line_height = Rc::clone(&self.measured_line_height);
         let measured_size = Rc::clone(&self.measured_size);
         let measured_wrap_width = Rc::clone(&self.measured_wrap_width);
-        let node_id = Rc::clone(&self.refs.node_id);
         let pan_resolver = Rc::clone(&self.cached_pan_resolver);
         let handle_controller = self.handle_controller.clone();
         let window = Rc::clone(&self.refs.window);
@@ -1224,7 +1212,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                     for line_rect in range_visual_line_rects(
                         text,
                         &style,
-                        node_id.get(),
                         measured_wrap_width.get(),
                         pan,
                         line_height,
@@ -1252,17 +1239,15 @@ impl DrawModifierNode for TextFieldModifierNode {
                 let (line_index, line_start) = caret_visual_line_for_offset(
                     text,
                     &style,
-                    node_id.get(),
                     measured_wrap_width.get(),
                     pos,
                     crate::text_selection::LineAffinity::Upstream,
                 );
-                let cursor_x = crate::text::measure_text(
+                let cursor_x = crate::text::get_cursor_x_for_offset(
                     &crate::text::AnnotatedString::from(&text[line_start..pos]),
                     &style,
-                )
-                .width
-                    - pan;
+                    pos - line_start,
+                ) - pan;
                 let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
                 let cursor_y = line_index as f32 * line_height + box_off;
 
@@ -1298,7 +1283,6 @@ impl DrawModifierNode for TextFieldModifierNode {
         let cached_line_height = Rc::clone(&self.measured_line_height);
         let measured_size = Rc::clone(&self.measured_size);
         let measured_wrap_width = Rc::clone(&self.measured_wrap_width);
-        let node_id = Rc::clone(&self.refs.node_id);
         let pan_resolver = Rc::clone(&self.cached_pan_resolver);
         let presentation_cache = Rc::clone(&self.refs.presentation);
 
@@ -1329,7 +1313,6 @@ impl DrawModifierNode for TextFieldModifierNode {
             for sel_rect in range_visual_line_rects(
                 text,
                 &style,
-                node_id.get(),
                 measured_wrap_width.get(),
                 pan,
                 line_height,

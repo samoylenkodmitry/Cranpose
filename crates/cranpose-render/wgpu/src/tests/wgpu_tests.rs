@@ -1,17 +1,10 @@
-use std::{cell::Cell, rc::Rc};
-
 use cranpose_core::NodeId;
-use cranpose_render_common::{
-    Renderer, graph::RenderNode, software_text_raster::SoftwareTextMeasurer,
-};
-use cranpose_ui::TextMeasurer;
+use cranpose_render_common::{Renderer, graph::RenderNode};
 use cranpose_ui_graphics::{GraphicsLayer, Size};
 
 use super::*;
-use crate::pipeline::TextLayoutResolver;
 
-static TEST_FONT: &[u8] =
-    cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
+static TEST_FONT: &[u8] = cranpose_render_common::text_fonts::DEFAULT_FONT_BYTES;
 
 #[path = "inspector_overlay.rs"]
 mod inspector_overlay;
@@ -19,8 +12,9 @@ mod inspector_overlay;
 #[test]
 fn dev_overlay_is_recorded_outside_app_graph() {
     let mut renderer = WgpuRenderer::new(&[]);
+    let overlay = test_support::prepared_text("240 FPS | avg 4.0ms | p95 4.5ms");
     renderer.draw_dev_overlay(
-        "240 FPS | avg 4.0ms | p95 4.5ms",
+        &overlay,
         Size {
             width: 800.0,
             height: 600.0,
@@ -57,72 +51,6 @@ fn dev_overlay_is_recorded_outside_app_graph() {
         GraphicsLayer::default().compositing_strategy,
         "dev overlay should not allocate an offscreen surface"
     );
-}
-
-struct CountingTextMeasurer {
-    inner: SoftwareTextMeasurer,
-    layout_calls: Rc<Cell<usize>>,
-}
-
-impl CountingTextMeasurer {
-    fn new(layout_calls: Rc<Cell<usize>>) -> Self {
-        Self {
-            inner: SoftwareTextMeasurer::from_fonts_or_default(&[TEST_FONT], 16),
-            layout_calls,
-        }
-    }
-}
-
-impl TextMeasurer for CountingTextMeasurer {
-    fn measure(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-    ) -> cranpose_ui::TextMetrics {
-        self.inner.measure(text, style)
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-        x: f32,
-        y: f32,
-    ) -> usize {
-        self.inner.get_offset_for_position(text, style, x, y)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-        offset: usize,
-    ) -> f32 {
-        self.inner.get_cursor_x_for_offset(text, style, offset)
-    }
-
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-    ) -> cranpose_ui::text_layout_result::TextLayoutResult {
-        self.layout_calls.set(self.layout_calls.get() + 1);
-        self.inner.layout(text, style)
-    }
-}
-
-#[test]
-fn headless_text_measurer_uses_software_text_font() {
-    let measurer = headless_text_measurer_with_fonts(&[TEST_FONT]);
-    let text = cranpose_ui::text::AnnotatedString::from("software text measurement");
-    let style = cranpose_ui::text::TextStyle::default();
-
-    let metrics = measurer.measure(&text, &style);
-    let layout = measurer.layout(&text, &style);
-
-    assert!(metrics.width > 0.0);
-    assert!(metrics.height > 0.0);
-    assert_eq!(layout.lines.len(), metrics.line_count);
 }
 
 #[test]
@@ -177,33 +105,15 @@ fn renderer_attached_text_service_measures_long_multiline_text_with_software_lin
         )
     });
 
-    assert_eq!(prepared.metrics.line_count, 48);
+    assert_eq!(prepared.metrics().line_count, 48);
     assert!(
-        prepared.metrics.line_height > 18.0,
+        prepared.metrics().line_height > 18.0,
         "renderer-attached text service must not use fallback monospaced line height: {:?}",
-        prepared.metrics
+        prepared.metrics()
     );
     assert!(
-        prepared.metrics.height > 900.0,
+        prepared.metrics().height > 900.0,
         "48 software-measured lines should not collapse to a viewport-sized block: {:?}",
-        prepared.metrics
+        prepared.metrics()
     );
-}
-
-#[test]
-fn render_text_layout_routes_through_attached_app_context_service() {
-    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    let app_context = cranpose_ui::AppContext::new();
-    renderer.attach_app_context_services(&app_context);
-    let layout_calls = Rc::new(Cell::new(0));
-    app_context.set_text_measurer(CountingTextMeasurer::new(Rc::clone(&layout_calls)));
-
-    app_context.enter(|| {
-        let text = cranpose_ui::text::AnnotatedString::from("render text");
-        let style = cranpose_ui::text::TextStyle::default();
-        let layout = renderer.frontend.text_state.layout_text(&text, &style);
-        assert!(layout.width > 0.0);
-    });
-
-    assert_eq!(layout_calls.get(), 1);
 }

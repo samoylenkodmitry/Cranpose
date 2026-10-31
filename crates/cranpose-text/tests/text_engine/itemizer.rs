@@ -50,6 +50,11 @@ fn scripts_and_fonts_split_left_to_right_text() {
         items("Hello, world!"),
         [("Hello, world!", 0, *b"Latn", "Roboto".into(), 0)]
     );
+    // Digits and punctuation alone are common to every script.
+    assert_eq!(
+        items("+0.03% 42"),
+        [("+0.03% 42", 0, *b"Zyyy", "Roboto".into(), 0)]
+    );
     assert_eq!(
         items("Hello नमस्ते"),
         [
@@ -159,4 +164,37 @@ fn style_spans_split_items() {
             ("cd", 0, *b"Latn", "DejaVu Sans".into(), 1),
         ]
     );
+}
+
+#[test]
+fn each_paragraph_separator_ends_its_paragraph_and_the_items_in_it() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let mut itemizer = Itemizer::default();
+    let default = FontFamily::Default;
+
+    // At each place in a word of eight bytes and after it, behind a tab, a
+    // degree sign and a quote mark, whose first bytes may start one.
+    for separator in [
+        "\n", "\r", "\r\n", "\u{1C}", "\u{1D}", "\u{1E}", "\u{85}", "\u{2029}",
+    ] {
+        for before in 0..18 {
+            let text = format!("\t\u{B0}\u{2019}{}{separator}b", "a".repeat(before));
+            let found: Vec<_> = items(
+                &mut itemizer,
+                &resolver,
+                &text,
+                TextDirection::Ltr,
+                &whole(&text, &default),
+            )
+            .into_iter()
+            .map(|item| item.0)
+            .collect();
+
+            assert_eq!(
+                found,
+                [&text[..text.len() - 1], "b"],
+                "{separator:?} {before}"
+            );
+        }
+    }
 }

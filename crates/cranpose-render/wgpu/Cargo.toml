@@ -39,6 +39,7 @@ installed-fonts = ["cranpose-render-common/installed-fonts"]
 cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-ui = { workspace = true }
+cranpose-text = { workspace = true }
 cranpose-core = { workspace = true }
 bytemuck = { workspace = true }
 log = "0.4"

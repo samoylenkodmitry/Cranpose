@@ -322,9 +322,9 @@ pub async fn run(
     // composes. On a Mate 20 X the gauntlet's programs started linking
     // 30-40 ms sooner, and its first content in a cold Chrome came about
     // 35 ms sooner.
-    let fonts = settings.resolve_font_set();
+    let fonts = settings.resolve_fonts();
     fold_glass_on_mobile_devices(&window);
-    let mut renderer = WgpuRenderer::with_font_set(fonts);
+    let mut renderer = WgpuRenderer::with_text_fonts(fonts);
     let (device, queue) = (Arc::new(device), Arc::new(queue));
     let device_loss = super::device_loss::WebDeviceLoss::new(
         crate::GpuContext {

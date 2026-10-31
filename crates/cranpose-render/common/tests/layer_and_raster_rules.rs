@@ -115,9 +115,9 @@ fn two_different_scales_do_not_share_one_raster_scale() {
 
 #[test]
 fn a_font_registry_rejects_fallback_bytes_that_are_not_a_font() {
-    use cranpose_render_common::font_source::SoftwareTextFontRegistry;
+    use cranpose_render_common::font_source::FontRegistry;
 
-    let mut registry = SoftwareTextFontRegistry::default();
+    let mut registry = FontRegistry::default();
     assert!(
         registry
             .register_fallback_bytes(b"not a font".to_vec())

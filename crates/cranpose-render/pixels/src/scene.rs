@@ -6,6 +6,7 @@ use cranpose_render_common::{
     graph::{LayerChange, LayerNode, ProjectiveTransform},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
+    text_glyphs::{casts_shadow, lines_part},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -111,6 +112,10 @@ pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
+    // The lines and glyphs, from `rect`'s top left corner.
+    pub layout: cranpose_text::TextLayout,
+    // Whether the glyphs paint or only their shadows.
+    pub ink: cranpose_render_common::text_raster::GlyphInk,
     pub color: Color,
     pub text_style: Arc<TextStyle>,
     pub font_size: f32,
@@ -145,6 +150,17 @@ pub(crate) struct ShadowDraw {
 }
 
 impl TextDraw {
+    // The part of `rect`, where the text draws from its top left corner,
+    // in which its glyphs draw: its lines, or all of it for a text that
+    // casts a shadow.
+    pub(crate) fn glyph_reach(&self, rect: Rect) -> Rect {
+        if casts_shadow(self.text.as_ref().into(), &self.text_style) {
+            rect
+        } else {
+            lines_part(rect, &self.layout, self.scale)
+        }
+    }
+
     /// The text moved by `dx`, `dy`, with no clip.
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
         Self {
@@ -553,7 +569,9 @@ impl RasterScene {
     // records and passed-down entries replace the old ones, and the items,
     // records and entries after them, and the records of the layers that
     // hold the subtree, move by the difference. The scene stays as it was
-    // when either subtree's passed-down entries do not lie in one run.
+    // when either subtree's passed-down entries do not lie in one run. Out of
+    // line: a frame mostly replaces a subtree of the same extent.
+    #[inline(never)]
     pub(crate) fn splice_subtree(&mut self, record: usize, from: &Self, from_record: usize) {
         let (Some((old, old_first)), Some((new, new_first))) =
             (self.subtree_span(record), from.subtree_span(from_record))

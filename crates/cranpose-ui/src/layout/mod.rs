@@ -633,9 +633,9 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppCont
 }
 
 /// Names to the scene phase the parent of every node `pass` found placed and
-/// left unplaced: nothing about the node itself changed, so the geometry
-/// setters had nothing to report, yet its layer has to leave the scene. A
-/// pass unplaces nodes rarely, so it pays for this walk only when it did.
+/// left unplaced: no geometry setter reported those, yet their layers leave
+/// the scene. Out of line: a pass rarely unplaces nodes.
+#[inline(never)]
 fn record_unplaced_parents(
     applier: &mut MemoryApplier,
     root: NodeId,
@@ -1818,11 +1818,11 @@ impl LayoutBuilderState {
         cache.get_measurement(constraints)
     }
 
-    /// Measures again the children of `node_id` that changed, at the
-    /// constraints they last had, and keeps the node's measurement when each
-    /// of them measures the same for its parent: the node's policy would
-    /// place them as before. `None` when one of them changed, and the node
-    /// has to measure again.
+    // Measures again the children of `node_id` that changed, at their last
+    // constraints, and keeps the node's measurement when each measures the
+    // same for its parent; `None` when the node has to measure again. Out of
+    // line: few frames keep a measurement, and the measure stays small.
+    #[inline(never)]
     fn keep_measurement(
         self: &Rc<Self>,
         constraints: Constraints,

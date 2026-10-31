@@ -1,17 +1,13 @@
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::{
-    RenderScene, Renderer,
-    graph::RenderGraph,
-    software_text_raster::{SoftwareTextFontSet, SoftwareTextMeasurer},
-};
+use cranpose_render_common::{RenderScene, Renderer, graph::RenderGraph, text_fonts::TextFonts};
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
 
 use crate::{PresentBackend, Scene, WgpuRenderer, WgpuRendererError, pipeline};
 
-/// Gives `app_context` the measurer its text lays out with, over `fonts`.
-fn install_text_measurer(app_context: &cranpose_ui::AppContext, fonts: &SoftwareTextFontSet) {
-    app_context.set_text_measurer(SoftwareTextMeasurer::from_font_set(fonts.clone(), 8192));
+/// Gives `app_context` the fonts its text lays out with.
+fn install_text_fonts(app_context: &cranpose_ui::AppContext, fonts: &TextFonts) {
+    app_context.set_text_fonts(fonts.resolver());
 }
 
 impl Renderer for WgpuRenderer {
@@ -19,7 +15,7 @@ impl Renderer for WgpuRenderer {
     type Error = WgpuRendererError;
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        install_text_measurer(app_context, &self.frontend.text_fonts);
+        install_text_fonts(app_context, &self.frontend.text_fonts);
         self.frontend.app_context = Some(app_context.downgrade());
     }
 
@@ -35,10 +31,8 @@ impl Renderer for WgpuRenderer {
             .and_then(std::rc::Weak::upgrade)
             .is_some_and(|attached| std::ptr::eq(&*attached, app_context));
         if attached {
-            install_text_measurer(app_context, &fonts);
+            install_text_fonts(app_context, &fonts);
         }
-        self.frontend.text_state =
-            crate::text_system::TextSystemState::from_font_set(fonts.clone());
         self.frontend.text_fonts = fonts;
     }
 
@@ -92,9 +86,10 @@ impl Renderer for WgpuRenderer {
         Ok(())
     }
 
-    fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
+    fn draw_dev_overlay(&mut self, overlay: &cranpose_ui::PreparedTextLayout, viewport: Size) {
         const DEV_OVERLAY_NODE_ID: NodeId = NodeId(usize::MAX);
-        let key = cranpose_render_common::dev_overlay::DevOverlayKey::new(text, viewport);
+        let key =
+            cranpose_render_common::dev_overlay::DevOverlayKey::new(&overlay.text.text, viewport);
         if self.frontend.dev_overlay_graph.is_some()
             && self.frontend.dev_overlay_cache.as_ref() == Some(&key)
         {
@@ -102,7 +97,7 @@ impl Renderer for WgpuRenderer {
         }
         self.frontend.fps_overlay_graph = Some(
             cranpose_render_common::dev_overlay::build_dev_overlay_graph(
-                text,
+                overlay,
                 viewport,
                 DEV_OVERLAY_NODE_ID,
             ),

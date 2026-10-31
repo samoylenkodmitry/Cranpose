@@ -1,14 +1,15 @@
 use std::path::PathBuf;
 
 use cranpose_render_common::{
-    font_source::SoftwareTextFontRegistry,
-    software_text_raster::{
-        collect_solid_text_atlas_run, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
-        SoftwareTextFontSet, SoftwareTextMeasurer, TextRasterRequest,
-    },
+    font_source::FontRegistry,
+    glyph_mask::GlyphMaskCache,
+    text_atlas::{collect_solid_text_atlas_run, AtlasGlyph},
+    text_fonts::TextFonts,
+    text_raster::TextRasterRequest,
 };
+use cranpose_text::{FontRequest, Typeface};
 use cranpose_ui::text::{
-    AnnotatedString, FontFamily, FontFile, FontStyle, FontWeight, SpanStyle, TextMeasurer,
+    AnnotatedString, FontFamily, FontFile, FontStyle, FontWeight, SpanStyle, TextLayoutOptions,
     TextStyle, TextUnit,
 };
 use cranpose_ui_graphics::{Color, Rect};
@@ -44,45 +45,48 @@ fn style_for(family: &FontFamily, weight: FontWeight) -> TextStyle {
     }
 }
 
-fn font_set(family: &FontFamily) -> SoftwareTextFontSet {
-    let mut registry = SoftwareTextFontRegistry::new();
+fn font_set(family: &FontFamily) -> TextFonts {
+    let mut registry = FontRegistry::new();
     registry
         .register_family(family)
         .expect("the demo's variable font must load");
-    registry.into_font_set(&[])
+    TextFonts::new(registry.into_typefaces(&[]))
 }
 
-fn ink_area(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) -> usize {
-    let metrics =
-        SoftwareTextMeasurer::from_font_set(fonts.clone(), 64).measure(&text.into(), style);
+// The typeface `fonts` draw `family` at `weight` with.
+fn resolved(fonts: &TextFonts, family: &FontFamily, weight: FontWeight) -> Typeface {
+    fonts
+        .resolver()
+        .resolve(FontRequest {
+            family,
+            weight,
+            style: FontStyle::Normal,
+        })
+        .cloned()
+        .expect("the family resolves")
+}
+
+fn ink_area(fonts: &TextFonts, text: &str, style: &TextStyle) -> usize {
+    let text = AnnotatedString::from(text);
+    let prepared = cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(fonts.resolver());
+        cranpose_ui::text::prepare_text_layout(&text, style, TextLayoutOptions::default(), None)
+    });
     let rect = Rect {
         x: 0.0,
         y: 0.0,
-        width: metrics.width,
-        height: metrics.line_count.max(1) as f32 * metrics.line_height,
+        width: prepared.metrics().width,
+        height: prepared.metrics().height,
     };
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(256);
-    let mut run: Vec<SoftwareGlyphAtlasRunGlyph> = Vec::new();
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(256);
+    let mut run: Vec<AtlasGlyph> = Vec::new();
     collect_solid_text_atlas_run(
-        TextRasterRequest::new(
-            &AnnotatedString::from(text),
-            rect,
-            style,
-            Color::WHITE,
-            FONT_SIZE,
-            1.0,
-        ),
-        fonts,
+        TextRasterRequest::new(&prepared.layout, &text, rect, style, Color::WHITE, 1.0),
         &mut cache,
         &mut run,
     )
     .expect("a solid single-style run must be atlasable");
-    run.iter()
-        .map(|glyph| {
-            let placement = glyph.placement();
-            placement.width * placement.height
-        })
-        .sum()
+    run.iter().map(|glyph| glyph.width * glyph.height).sum()
 }
 
 #[test]
@@ -106,12 +110,8 @@ fn instances_of_one_variable_file_do_not_share_glyph_cache_entries() {
     let family = instanced_family();
     let fonts = font_set(&family);
 
-    let regular = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
-        .expect("regular instance");
-    let bold = fonts
-        .resolve(&style_for(&family, FontWeight::BOLD))
-        .expect("bold instance");
+    let regular = resolved(&fonts, &family, FontWeight::NORMAL);
+    let bold = resolved(&fonts, &family, FontWeight::BOLD);
 
     assert_ne!(
         regular.content_hash(),
@@ -141,12 +141,12 @@ impl Drop for SystemFontDir {
     }
 }
 
-fn system_font_set(dir: &SystemFontDir, weight: FontWeight) -> SoftwareTextFontSet {
-    let mut registry = SoftwareTextFontRegistry::new();
+fn system_font_set(dir: &SystemFontDir, weight: FontWeight) -> TextFonts {
+    let mut registry = FontRegistry::new();
     registry
         .register_system_face(&dir.0, &FontFamily::SansSerif, weight, FontStyle::Normal)
         .expect("the system face must load");
-    registry.into_font_set(&[])
+    TextFonts::new(registry.into_typefaces(&[]))
 }
 
 #[test]
@@ -191,12 +191,8 @@ fn an_app_supplied_variable_face_still_instances_an_arbitrary_weight() {
     .expect("a family needs at least one file");
 
     let fonts = font_set(&family);
-    let regular = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
-        .expect("regular face");
-    let off_grid = fonts
-        .resolve(&style_for(&family, FontWeight(450)))
-        .expect("off-grid face");
+    let regular = resolved(&fonts, &family, FontWeight::NORMAL);
+    let off_grid = resolved(&fonts, &family, FontWeight(450));
 
     assert_eq!(off_grid.weight(), FontWeight(450));
     assert_ne!(
@@ -219,12 +215,8 @@ fn a_static_face_declared_at_a_weight_it_does_not_have_keeps_its_own_outlines() 
     .expect("a family needs at least one file");
 
     let fonts = font_set(&family);
-    let regular = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
-        .expect("regular face");
-    let bold = fonts
-        .resolve(&style_for(&family, FontWeight::BOLD))
-        .expect("declared bold face");
+    let regular = resolved(&fonts, &family, FontWeight::NORMAL);
+    let bold = resolved(&fonts, &family, FontWeight::BOLD);
 
     assert_eq!(regular.weight(), FontWeight::NORMAL);
     assert_eq!(bold.weight(), FontWeight::BOLD);
@@ -254,10 +246,16 @@ fn an_italic_face_of_a_variable_family_instances_the_slant_axis() {
         },
         ..Default::default()
     };
-    let upright = fonts
-        .resolve(&style_for(&family, FontWeight::NORMAL))
-        .expect("upright face");
-    let italic = fonts.resolve(&italic_style).expect("italic face");
+    let upright = resolved(&fonts, &family, FontWeight::NORMAL);
+    let italic = fonts
+        .resolver()
+        .resolve(FontRequest {
+            family: &family,
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Italic,
+        })
+        .cloned()
+        .expect("italic face");
 
     assert_eq!(italic.style(), FontStyle::Italic);
     assert_ne!(

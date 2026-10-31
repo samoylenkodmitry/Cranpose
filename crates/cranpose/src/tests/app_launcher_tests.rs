@@ -98,18 +98,18 @@ fn a_launcher_given_no_fonts_draws_in_the_embedded_face() {
     let fonts = AppLauncher::new()
         .with_title("no fonts")
         .into_settings()
-        .resolve_font_set();
-    let embedded = default_software_text_font().expect("the embedded face parses");
-    assert_eq!(fonts.faces().len(), 1);
-    assert_eq!(fonts.faces()[0].content_hash(), embedded.content_hash());
+        .resolve_fonts();
+    let embedded = default_typeface().expect("the embedded face parses");
+    assert_eq!(fonts.typefaces().len(), 1);
+    assert_eq!(fonts.typefaces()[0].content_hash(), embedded.content_hash());
 }
 
 /// Accepts only a launcher whose type says the app supplied its fonts.
-fn supplied(launcher: AppLauncher<AppFonts>) -> SoftwareTextFontSet {
+fn supplied(launcher: AppLauncher<AppFonts>) -> TextFonts {
     launcher
         .with_title("app fonts")
         .into_settings()
-        .resolve_font_set()
+        .resolve_fonts()
 }
 
 #[test]
@@ -135,14 +135,14 @@ fn every_font_method_leaves_the_embedded_face_out() {
     for launcher in launchers {
         let fonts = supplied(launcher);
         assert!(
-            fonts.faces().is_empty(),
+            fonts.typefaces().is_empty(),
             "an app that supplied fonts must never be served the embedded face"
         );
     }
     if cfg!(not(target_os = "android")) {
         assert!(
             supplied(AppLauncher::new().with_android_system_fonts())
-                .faces()
+                .typefaces()
                 .is_empty()
         );
     }
@@ -154,8 +154,8 @@ fn supplied_fonts_are_what_the_launcher_serves() {
         "../../../cranpose-render/common/assets/NotoSansBold.ttf"
     )];
     let fonts = supplied(AppLauncher::new().with_fonts(APP_FONTS));
-    assert_eq!(fonts.faces().len(), 1);
-    assert_eq!(fonts.faces()[0].weight(), FontWeight::BOLD);
+    assert_eq!(fonts.typefaces().len(), 1);
+    assert_eq!(fonts.typefaces()[0].weight(), FontWeight::BOLD);
 }
 
 #[test]

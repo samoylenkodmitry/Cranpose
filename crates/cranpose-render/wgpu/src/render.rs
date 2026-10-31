@@ -8,9 +8,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
-use cranpose_render_common::{
-    geometry::blur_reach, graph::quad_bounds, software_text_raster::SoftwareTextFontSet,
-};
+use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds};
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
 };
@@ -263,12 +261,12 @@ fn hash_text_draw_for_cache<H: Hasher>(
     state: &mut H,
 ) {
     text_draw.text.render_hash().hash(state);
+    text_draw.layout.id().hash(state);
     text_draw.style_hash.hash(state);
     text_draw.color.render_hash().hash(state);
     hash_text_gradient_phase_for_cache(text_draw, raster_rect, state);
     text_draw.font_size.to_bits().hash(state);
     text_scale.to_bits().hash(state);
-    text_draw.layout_options.hash(state);
 }
 
 pub(crate) fn hash_text_gradient_phase_for_cache<H: Hasher>(
@@ -358,15 +356,6 @@ fn text_raster_geometry_at(
     )
 }
 
-fn text_draw_is_visible_in_viewport(
-    logical_rect: Rect,
-    clip: Option<Rect>,
-    viewport: ViewportUniformParams,
-    root_scale: f32,
-) -> bool {
-    draw_rect_is_visible_in_viewport(logical_rect, clip, viewport, root_scale)
-}
-
 fn expand_rect(rect: Rect, margin_x: f32, margin_y: f32) -> Rect {
     Rect {
         x: rect.x - margin_x,
@@ -414,7 +403,12 @@ fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
 
 pub(crate) fn text_draw_bounds(text: &TextDraw, root_scale: f32) -> Option<Rect> {
     text_logical_geometry_for_draw(text, root_scale)
-        .and_then(|(logical_rect, _)| clipped_bounds(logical_rect, text.clip))
+        .and_then(|(logical_rect, _)| text_reach_bounds(text, logical_rect))
+}
+
+// Where `text`, laid in `logical_rect`, draws its glyphs within its clip.
+fn text_reach_bounds(text: &TextDraw, logical_rect: Rect) -> Option<Rect> {
+    clipped_bounds(text.glyph_reach(logical_rect, text.scale), text.clip)
 }
 
 pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Rect> {
@@ -444,7 +438,7 @@ pub(crate) fn text_draw_geometry_in_rect(
     root_scale: f32,
 ) -> Option<(Rect, f32)> {
     text_logical_geometry_for_draw(text, root_scale).filter(|(logical_rect, _)| {
-        clipped_bounds(*logical_rect, text.clip)
+        text_reach_bounds(text, *logical_rect)
             .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
     })
 }
@@ -1047,7 +1041,6 @@ pub(crate) struct GpuRendererInit {
     pub(crate) surface_format: wgpu::TextureFormat,
     pub(crate) adapter_backend: wgpu::Backend,
     pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
-    pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) renderer_epoch: u64,
     pub(crate) pipeline_compilation: PipelineCompilation,
     pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
@@ -1062,7 +1055,6 @@ impl GpuRenderer {
             surface_format: display_format,
             adapter_backend,
             adapter_downlevel,
-            text_fonts,
             renderer_epoch,
             pipeline_compilation,
             on_device_lost,
@@ -1286,7 +1278,7 @@ impl GpuRenderer {
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
-            text: TextResources::new(text_fonts, text_glyph_atlas, copy_free),
+            text: TextResources::new(text_glyph_atlas, copy_free),
             viewport_uniforms,
             run_store,
             images: ImageTextures::new(),
@@ -3762,13 +3754,6 @@ pub(crate) use frame_uploads::{DrawParts, FrameUploads};
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
 mod shape_pipeline;
-#[cfg(test)]
-pub(crate) use shape_pipeline::ShapeVariant;
-pub(crate) use shape_pipeline::{
-    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
-};
-mod text_raster_source;
-
 use glyph_atlas::{
     GlyphAtlasEntry, GlyphAtlasSlotKey, GlyphSamplers, RunAtlasEntries, TEXT_GLYPH_ATLAS_MIN_SIZE,
     TextGlyphAtlas, create_glyph_atlas_pipeline, glyph_atlas_uv_rect,
@@ -3786,17 +3771,18 @@ use shadow_cache::{
     ShadowSurfaces, device_pixel_bounds, shadow_scene, shape_shadow_surface_cache_key,
     skip_shadow_draws,
 };
+#[cfg(test)]
+pub(crate) use shape_pipeline::ShapeVariant;
 use shape_pipeline::{LINE_KINDS, shape_shader_code};
+pub(crate) use shape_pipeline::{
+    RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, create_shape_pipeline,
+};
 use text_glyph_cache::{
     CachedGpuTextGlyphRun, GlyphRunBounds, GlyphRunQuads, MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
-    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MAX_TEXT_LINE_INDEX_CACHE_ITEMS,
-    MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
-    TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
-    TextGlyphRunLookup, cached_text_glyph_instance, cached_text_glyph_quad_is_visible_in_viewport,
-    log_text_atlas_fallback,
-};
-use text_raster_source::{
-    TextRasterSource, clipped_text_raster_source_with_line_starts, line_start_offsets,
+    MAX_TEXT_GLYPH_MASK_CACHE_ITEMS, MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
+    RETAINED_TEXT_GLYPH_RUN_MIN_QUADS, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES,
+    TextGlyphRunDraw, TextGlyphRunLookup, cached_text_glyph_instance,
+    cached_text_glyph_quad_is_visible_in_viewport, log_text_atlas_fallback,
 };
 
 #[cfg(test)]

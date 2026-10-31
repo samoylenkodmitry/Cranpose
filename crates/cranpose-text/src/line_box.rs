@@ -24,6 +24,8 @@
 //! style that asks for no line height gets the font's own ascent + descent, as
 //! Compose's does, so a single line of it is exactly as tall as its font.
 
+use std::cell::Cell;
+
 use crate::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle, TextStyle,
 };
@@ -124,27 +126,93 @@ pub fn paragraph_line_box(
     asked: f32,
     grid: f32,
 ) -> LineBox {
-    let grid = if grid.is_finite() && grid > 0.0 {
-        grid
-    } else {
-        1.0
-    };
-    let asked = if style.line_height.is_unspecified() {
-        f32::NAN
-    } else {
-        asked
-    };
-    let padding = font_padding(style, extent);
-    let line_height_style = match style.line_height_style {
-        Some(line_height_style) => line_height_style,
-        None if padding > 0.0 || font_padding_asked(style) => LineHeightStyle {
-            alignment: LineHeightAlignment::Proportional,
-            trim: LineHeightTrim::None,
-            mode: LineHeightMode::Fixed,
-        },
-        None => LineHeightStyle::default(),
-    };
-    aosp_line_box(line_height_style, extent, asked, padding, grid)
+    LineBoxInputs::of(style, extent, asked, grid).line_box()
+}
+
+// What a line box follows from: the line height rules a paragraph's style
+// takes, the font's extent, the height asked for, the font padding and the
+// pixel grid.
+#[derive(Clone, Copy)]
+pub(crate) struct LineBoxInputs {
+    style: LineHeightStyle,
+    extent: FontExtent,
+    asked: f32,
+    padding: f32,
+    grid: f32,
+}
+
+impl LineBoxInputs {
+    pub(crate) fn of(style: &ParagraphStyle, extent: FontExtent, asked: f32, grid: f32) -> Self {
+        let grid = if grid.is_finite() && grid > 0.0 {
+            grid
+        } else {
+            1.0
+        };
+        let asked = if style.line_height.is_unspecified() {
+            f32::NAN
+        } else {
+            asked
+        };
+        let padding = font_padding(style, extent);
+        let line_height_style = match style.line_height_style {
+            Some(line_height_style) => line_height_style,
+            None if padding > 0.0 || font_padding_asked(style) => LineHeightStyle {
+                alignment: LineHeightAlignment::Proportional,
+                trim: LineHeightTrim::None,
+                mode: LineHeightMode::Fixed,
+            },
+            None => LineHeightStyle::default(),
+        };
+        Self {
+            style: line_height_style,
+            extent,
+            asked,
+            padding,
+            grid,
+        }
+    }
+
+    // Out of line: the layouter takes most line boxes from `LastLineBox`.
+    #[inline(never)]
+    fn line_box(self) -> LineBox {
+        aosp_line_box(self.style, self.extent, self.asked, self.padding, self.grid)
+    }
+
+    // Whether these are `other` bit for bit, a NaN asked height equal to
+    // itself.
+    fn same(&self, other: &Self) -> bool {
+        let bits = |inputs: &Self| {
+            [
+                inputs.extent.ascent,
+                inputs.extent.descent,
+                inputs.extent.line_gap,
+                inputs.asked,
+                inputs.padding,
+                inputs.grid,
+            ]
+            .map(f32::to_bits)
+        };
+        self.style == other.style && bits(self) == bits(other)
+    }
+}
+
+// The line box last made, kept for the next line of the same font and
+// style: most lines of a paragraph, and the line of a text laid out again
+// each frame, as a number that changes, need no rounding of their own.
+#[derive(Default)]
+pub(crate) struct LastLineBox(Cell<Option<(LineBoxInputs, LineBox)>>);
+
+impl LastLineBox {
+    pub(crate) fn of(&self, inputs: LineBoxInputs) -> LineBox {
+        if let Some((kept, line_box)) = self.0.get()
+            && kept.same(&inputs)
+        {
+            return line_box;
+        }
+        let line_box = inputs.line_box();
+        self.0.set(Some((inputs, line_box)));
+        line_box
+    }
 }
 
 fn font_padding_asked(style: &ParagraphStyle) -> bool {

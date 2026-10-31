@@ -77,3 +77,8 @@ caf = "caf"
 Writeable = "Writeable"
 # The ndk crate spells its appliance UI mode `UiModeType::Applicance`.
 Applicance = "Applicance"
+
+[default.extend-identifiers]
+# fontTools' module of OpenType layout tables, which scripts/fonts builds
+# test fonts with.
+otTables = "otTables"

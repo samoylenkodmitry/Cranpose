@@ -3,21 +3,12 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_core::SlotId;
 use cranpose_ui::{
     Box, BoxSpec, LayoutBox, Modifier, Row, RowSpec, Size, SubcomposeLayoutScope,
-    SubcomposeMeasureScope, Text, TextMeasurer, TextMetrics, TextStyle,
-    text::{
-        AnnotatedString, LineBox, LineHeightAlignment, LineHeightStyle, LineHeightTrim, SpanStyle,
-        TextUnit,
-    },
-    text_layout_result::TextLayoutResult,
+    SubcomposeMeasureScope, Text, TextStyle,
+    text::{LineHeightAlignment, LineHeightStyle, LineHeightTrim, SpanStyle, TextUnit},
 };
 use cranpose_ui_layout::{Placement, VerticalAlignment};
 
-use crate::{
-    text_contract_measurer::ContractMeasurer,
-    text_measured_layout_integration::{lay_out_in_column_with_measurer, layout_composition},
-};
-
-struct BaselineMeasurer;
+use crate::text_measured_layout_integration::{lay_out_in_column, layout_composition};
 
 #[derive(Clone, Copy, PartialEq)]
 enum CustomBaselinePolicy {
@@ -81,77 +72,19 @@ fn custom_baseline_layout(modifier: Modifier, subcompose: bool) {
     }
 }
 
-impl TextMeasurer for BaselineMeasurer {
-    fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
-        let size = style.resolve_font_size(10.0);
-        let (line_count, columns) = text
-            .text
-            .split('\n')
-            .fold((0usize, 0usize), |(count, width), line| {
-                (count + 1, width.max(line.chars().count()))
-            });
-        let width = columns as f32 * size * 0.5;
-        let line = self.line_box(style).expect("fixture line metrics");
-        TextMetrics {
-            width,
-            height: line.block_height(line_count),
-            line_height: line.height,
-            line_count,
-        }
-    }
-
-    fn line_box(&self, style: &TextStyle) -> Option<LineBox> {
-        let size = style.resolve_font_size(10.0);
-        let trimmed = !style
-            .paragraph_style
-            .line_height_style
-            .is_some_and(|line| line.trim == LineHeightTrim::None);
-        let trim = if trimmed { size * 0.3 } else { 0.0 };
-        Some(LineBox {
-            height: size * 1.6,
-            baseline: size * 1.1,
-            trim_top: trim,
-            trim_bottom: trim,
-        })
-    }
-
-    fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
-        self.line_box(style).map(|line| line.baseline)
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &AnnotatedString,
-        style: &TextStyle,
-        x: f32,
-        y: f32,
-    ) -> usize {
-        ContractMeasurer.get_offset_for_position(text, style, x, y)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &AnnotatedString,
-        style: &TextStyle,
-        offset: usize,
-    ) -> f32 {
-        ContractMeasurer.get_cursor_x_for_offset(text, style, offset)
-    }
-
-    fn layout(&self, text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-        let size = style.resolve_font_size(10.0);
-        TextLayoutResult::monospaced(&text.text, size * 0.5, size * 1.6)
-    }
-}
-
+// Cranpose Test Mono, ascent 0.8 em and descent 0.2, in lines 1.6 em tall:
+// trimmed, as a style is by default, a line's baseline is 0.8 em from its
+// top; untrimmed and centred, 1.1 em.
 fn style(size: f32) -> TextStyle {
-    TextStyle {
+    let mut style = TextStyle {
         span_style: SpanStyle {
             font_size: TextUnit::Sp(size),
             ..Default::default()
         },
         ..Default::default()
-    }
+    };
+    style.paragraph_style.line_height = TextUnit::Em(1.6);
+    style
 }
 
 fn find_text<'a>(node: &'a LayoutBox, text: &str) -> Option<&'a LayoutBox> {
@@ -179,7 +112,7 @@ fn baseline_row(
     untrimmed: bool,
     inspect: impl FnOnce(&LayoutBox, f32, f32),
 ) {
-    lay_out_in_column_with_measurer(
+    lay_out_in_column(
         move || {
             Row(Modifier::empty(), RowSpec::default(), move || {
                 let small_modifier = small_modifier();
@@ -216,7 +149,6 @@ fn baseline_row(
                 );
             });
         },
-        BaselineMeasurer,
         |layout| {
             let row = layout.root().children.first().expect("row in column");
             inspect(row, text_top(row, small_text), text_top(row, "large"));
@@ -290,7 +222,7 @@ fn row_aligns_the_drawn_baselines_when_line_leading_is_retained() {
 
 #[test]
 fn subcomposed_layout_can_align_to_the_last_drawn_line_inside_padding_and_offset() {
-    lay_out_in_column_with_measurer(
+    lay_out_in_column(
         || {
             Row(Modifier::empty(), RowSpec::default(), || {
                 cranpose_ui::SubcomposeLayout(
@@ -339,7 +271,6 @@ fn subcomposed_layout_can_align_to_the_last_drawn_line_inside_padding_and_offset
                 Text("large", Modifier::empty().align_by_baseline(), style(20.0));
             });
         },
-        BaselineMeasurer,
         |layout| {
             let row = layout.root().children.first().expect("row in column");
             let source = text_top(row, "small\nsecond");
@@ -354,7 +285,7 @@ fn subcomposed_layout_can_align_to_the_last_drawn_line_inside_padding_and_offset
 
 #[test]
 fn missing_baselines_fall_back_to_top_and_the_outermost_row_alignment_wins() {
-    lay_out_in_column_with_measurer(
+    lay_out_in_column(
         || {
             Row(
                 Modifier::empty().height(40.0),
@@ -384,7 +315,6 @@ fn missing_baselines_fall_back_to_top_and_the_outermost_row_alignment_wins() {
                 },
             );
         },
-        BaselineMeasurer,
         |layout| {
             let row = layout.root().children.first().expect("row in column");
             assert_eq!(row.children[0].rect.y, row.rect.y);
@@ -396,7 +326,7 @@ fn missing_baselines_fall_back_to_top_and_the_outermost_row_alignment_wins() {
 
 #[test]
 fn editable_text_aligns_with_a_label_baseline() {
-    lay_out_in_column_with_measurer(
+    lay_out_in_column(
         || {
             Row(Modifier::empty(), RowSpec::default(), || {
                 let state = cranpose_core::remember(|| {
@@ -414,7 +344,6 @@ fn editable_text_aligns_with_a_label_baseline() {
                 Text("large", Modifier::empty().align_by_baseline(), style(20.0));
             });
         },
-        BaselineMeasurer,
         |layout| {
             let row = layout.root().children.first().expect("row in column");
             assert_eq!(text_top(row, "small") + 8.0, text_top(row, "large") + 16.0);
@@ -443,7 +372,6 @@ fn row_updates_baselines_after_font_changes_and_retains_them_across_parent_resiz
             },
         );
     });
-    cranpose_ui::set_text_measurer(BaselineMeasurer);
     let font = font_handle.get().expect("font state");
     for (size, viewport) in [(10.0, 300.0), (10.0, 400.0), (30.0, 400.0), (10.0, 300.0)] {
         font.set_value(size);
@@ -465,7 +393,7 @@ fn row_updates_baselines_after_font_changes_and_retains_them_across_parent_resiz
 #[test]
 fn custom_layouts_can_report_baselines_through_padding_and_parent_wrappers() {
     for (subcompose, wrapped) in [(false, false), (false, true), (true, false), (true, true)] {
-        lay_out_in_column_with_measurer(
+        lay_out_in_column(
             move || {
                 Row(Modifier::empty(), RowSpec::default(), move || {
                     let modifier = Modifier::empty()
@@ -482,7 +410,6 @@ fn custom_layouts_can_report_baselines_through_padding_and_parent_wrappers() {
                     Text("large", Modifier::empty().align_by_baseline(), style(20.0));
                 });
             },
-            BaselineMeasurer,
             |layout| {
                 let row = layout.root().children.first().expect("row in column");
                 assert_eq!(text_top(row, "large"), 11.0);
@@ -497,7 +424,7 @@ fn reordered_custom_placements_inherit_the_baselines_of_the_drawn_children() {
         CustomBaselinePolicy::Reordered,
         CustomBaselinePolicy::DirectPlacement,
     ] {
-        lay_out_in_column_with_measurer(
+        lay_out_in_column(
             move || {
                 Row(Modifier::empty(), RowSpec::default(), move || {
                     cranpose_ui::Layout(Modifier::empty().align_by_baseline(), policy, || {
@@ -511,7 +438,6 @@ fn reordered_custom_placements_inherit_the_baselines_of_the_drawn_children() {
                     );
                 });
             },
-            BaselineMeasurer,
             |layout| {
                 let row = layout.root().children.first().expect("row in column");
                 assert_eq!(text_top(row, "small"), 38.0);

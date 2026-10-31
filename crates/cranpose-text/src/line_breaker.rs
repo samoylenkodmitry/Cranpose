@@ -5,7 +5,10 @@ use icu_segmenter::{
     options::{LineBreakOptions, LineBreakStrictness},
 };
 
-use crate::{cluster_widths::ClusterWidths, paragraph::LineBreak};
+use crate::{
+    ascii_breaks::ascii_breaks, break_leads::find_break_lead, cluster_widths::ClusterWidths,
+    paragraph::LineBreak,
+};
 
 // A place a line may end: the byte offset where the next line starts, and
 // how a line ends there.
@@ -88,12 +91,18 @@ fn segmenter(strictness: LineBreakStrictness) -> LineSegmenterBorrowed<'static> 
 impl LineBreaker {
     // Replaces `breaks` with the opportunities of `text` for the line break
     // preset `line_break`, ascending; the last is the end of the text.
+    // ASCII text breaks the same at every strictness, by rules that need no
+    // segmenter tables.
     pub(crate) fn opportunities(
         &self,
         text: &str,
         line_break: LineBreak,
         breaks: &mut Vec<BreakOpportunity>,
     ) {
+        if text.is_ascii() {
+            ascii_breaks(text.as_bytes(), breaks);
+            return;
+        }
         let segmenter = match line_break {
             LineBreak::Paragraph => self.strict,
             LineBreak::Heading => self.loose,
@@ -147,6 +156,12 @@ impl Wrapping<'_> {
         }
     }
 
+    // The width a line starting at `start` wraps at, and the width of the
+    // text before it.
+    fn line_start(&self, start: usize) -> (f32, f32) {
+        (self.limit(start), self.widths.before(start))
+    }
+
     // The width of the line from `start` to `end` without its trailing
     // whitespace, which hangs past the line's end.
     fn line_width(&self, start: usize, end: usize) -> f32 {
@@ -166,13 +181,16 @@ impl Wrapping<'_> {
     ) -> usize {
         let mut fit = None;
         let mut index = 0;
+        // The width the line wraps at and the width of the text before it.
+        let (mut limit, mut before) = self.line_start(start);
         while let Some(&opportunity) = breaks.get(index) {
-            let width = self.limit(start);
-            if self.line_width(start, opportunity.offset) <= width {
+            let visible = visible_end(self.text, start, opportunity.offset);
+            if self.widths.before(visible) - before <= limit {
                 match opportunity.kind {
                     BreakKind::Hard => {
                         lines.push(BrokenLine::plain(start..opportunity.offset));
                         start = opportunity.offset;
+                        (limit, before) = self.line_start(start);
                         fit = None;
                     }
                     BreakKind::Soft => fit = Some(opportunity.offset),
@@ -180,12 +198,13 @@ impl Wrapping<'_> {
                 }
                 index += 1;
             } else {
-                let line = match fit.take() {
+                let ended = match fit.take() {
                     Some(end) => BrokenLine::plain(start..end),
-                    None => self.cut_word(start, &breaks[..index], opportunity.offset, width),
+                    None => self.cut_word(start, &breaks[..index], opportunity.offset, limit),
                 };
-                start = line.text.end;
-                lines.push(line);
+                start = ended.text.end;
+                (limit, before) = self.line_start(start);
+                lines.push(ended);
             }
         }
         start
@@ -444,11 +463,21 @@ fn is_hyphen(opportunity: &BreakOpportunity) -> bool {
     matches!(opportunity.kind, BreakKind::Hyphen { .. })
 }
 
-// Whether `text` holds a hard line break.
+// Whether `text` holds a hard line break, found by the first byte of each,
+// which in UTF-8 starts no other character it is not part of.
 pub(crate) fn has_hard_break(text: &str) -> bool {
-    text.contains([
-        '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
-    ])
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while let Some(found) = find_break_lead(bytes, at) {
+        if matches!(
+            &bytes[found..],
+            [b'\n' | b'\r' | 0x0B | 0x0C, ..] | [0xC2, 0x85, ..] | [0xE2, 0x80, 0xA8 | 0xA9, ..]
+        ) {
+            return true;
+        }
+        at = found + 1;
+    }
+    false
 }
 
 // Whether `offset` starts a paragraph: the text's start, or just after a hard
@@ -461,8 +490,18 @@ pub(crate) fn starts_paragraph(text: &str, offset: usize) -> bool {
 
 // The end of the text from `start` to `end` before its trailing whitespace.
 pub(crate) fn visible_end(text: &str, start: usize, end: usize) -> usize {
-    text.get(start..end)
-        .map_or(end, |part| start + part.trim_end().len())
+    let Some(part) = text.get(start..end) else {
+        return end;
+    };
+    // Most text ends in a visible ASCII character, which no whitespace is.
+    if part
+        .as_bytes()
+        .last()
+        .is_some_and(|&byte| byte > b' ' && byte.is_ascii())
+    {
+        return end;
+    }
+    start + part.trim_end().len()
 }
 
 // The characters after which UAX #14 ends a line: the classes BK, CR, LF and

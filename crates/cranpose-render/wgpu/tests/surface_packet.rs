@@ -159,7 +159,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
         .expect("direct frame should render");
 
     renderer.scene_mut().graph = Some(direct_graph());
-    renderer.draw_dev_overlay("FPS 60.0", viewport);
+    renderer.draw_dev_overlay(&support::prepared_text("FPS 60.0"), viewport);
     let with_overlay = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("direct frame with overlay should render");
@@ -169,7 +169,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
     );
 
     renderer.scene_mut().graph = Some(shadowed_root_graph(CachePolicy::None));
-    renderer.draw_dev_overlay("FPS 60.0", viewport);
+    renderer.draw_dev_overlay(&support::prepared_text("FPS 60.0"), viewport);
     renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("surface frame with overlay should render");

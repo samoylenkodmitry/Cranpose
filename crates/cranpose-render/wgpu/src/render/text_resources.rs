@@ -1,18 +1,18 @@
-//! The renderer's text state: its fonts, the caches from text to pixels, the
+//! The renderer's text state: the caches from laid-out text to pixels, the
 //! glyph atlas and the scratch the text draws reuse.
 
 use std::{
-    borrow::Cow,
     cell::Cell,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
 use cranpose_core::{collections::bounded_lru::BoundedLruCache, hash::default as default_hash};
-use cranpose_render_common::software_text_raster::{
-    SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph,
-    SoftwareGlyphRasterCache, SoftwareTextFontSet, TextPixels, collect_solid_text_atlas_run,
-    rasterize_text,
+use cranpose_render_common::{
+    glyph_mask::GlyphMaskCache,
+    text_atlas::{AtlasGlyph, collect_solid_text_atlas_run},
+    text_canvas::TextPixels,
+    text_raster::rasterize_text,
 };
 use cranpose_ui_graphics::{FxHasher, ImageBitmap, ImageSampling, Point, Rect};
 
@@ -20,18 +20,17 @@ use super::{
     DrawSpace, FrameUploads, GlyphAtlasSlotKey, GlyphDrawCmd, GlyphExtent, GlyphInstances,
     GlyphQuads, GlyphRunBounds, GlyphRunQuads, GlyphSamplers, ImageBatch, ImageTextures,
     MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS, MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
-    MAX_TEXT_IMAGE_CACHE_ITEMS, MAX_TEXT_LINE_INDEX_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
-    RETAINED_TEXT_GLYPH_RUN_MIN_QUADS, RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES,
-    TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw, TextGlyphRunLookup, TextRasterSource,
-    TurnedGlyph, ViewportUniformParams, clipped_text_raster_source_with_line_starts, evict_idle,
-    for_each_visible_glyph,
+    MAX_TEXT_IMAGE_CACHE_ITEMS, MIN_TEXT_GLYPH_RUN_CACHE_ITEMS, RETAINED_TEXT_GLYPH_RUN_MIN_QUADS,
+    RunAtlasEntries, TEXT_GLYPH_GPU_RUN_IDLE_FRAMES, TEXT_GLYPH_RUN_IDLE_FRAMES, TextGlyphRunDraw,
+    TextGlyphRunLookup, TurnedGlyph, ViewportUniformParams, draw_rect_is_visible_in_viewport,
+    evict_idle, for_each_visible_glyph,
     glyph_atlas::{GlyphAtlasEntry, TextGlyphAtlas},
     glyph_cut_edges, glyph_rect_aligned, hash_text_draw_for_cache,
     hash_text_raster_geometry_for_cache, log_text_atlas_fallback, sampling_under,
-    scissor_rect_for_layer, shared_glyph_clip, text_draw_is_visible_in_viewport,
+    scissor_rect_for_layer, shared_glyph_clip,
     text_glyph_cache::{
         CachedGpuTextGlyphRun, CachedTextGlyphRun, CachedTextImage, TextGlyphRunCacheKey,
-        TextImageCacheKey, TextLineIndexCache,
+        TextImageCacheKey,
     },
     text_raster_geometry_at, text_raster_geometry_for_draw,
 };
@@ -44,7 +43,6 @@ use crate::{
 };
 
 pub(crate) struct TextResources {
-    pub(super) fonts: SoftwareTextFontSet,
     pub(super) image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
     pub(super) glyph_atlas: TextGlyphAtlas,
     pub(super) glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
@@ -53,21 +51,15 @@ pub(crate) struct TextResources {
     pub(super) glyph_run_arena: GlyphRunArena,
     pub(super) glyph_run_frame: u64,
     pub(super) glyph_runs_drawn: usize,
-    pub(super) glyph_mask_cache: SoftwareGlyphRasterCache,
-    pub(super) line_index_cache: TextLineIndexCache,
-    pub(super) scratch_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
+    pub(super) glyph_mask_cache: GlyphMaskCache,
+    pub(super) scratch_glyph_run: Vec<AtlasGlyph>,
     pub(super) scratch_glyph_entries: Vec<GlyphAtlasEntry>,
     pub(super) run_glyph_scratch: RunGlyphScratch,
 }
 
 impl TextResources {
-    pub(super) fn new(
-        fonts: SoftwareTextFontSet,
-        glyph_atlas: TextGlyphAtlas,
-        copy_free: UploadMode,
-    ) -> Self {
+    pub(super) fn new(glyph_atlas: TextGlyphAtlas, copy_free: UploadMode) -> Self {
         Self {
-            fonts,
             image_cache: BoundedLruCache::with_capacity_at_least_one(MAX_TEXT_IMAGE_CACHE_ITEMS),
             glyph_atlas,
             glyph_run_cache: BoundedLruCache::with_capacity_at_least_one(
@@ -79,10 +71,9 @@ impl TextResources {
             glyph_run_arena: GlyphRunArena::new(copy_free),
             glyph_run_frame: 0,
             glyph_runs_drawn: 0,
-            glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
+            glyph_mask_cache: GlyphMaskCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
             ),
-            line_index_cache: TextLineIndexCache::new(MAX_TEXT_LINE_INDEX_CACHE_ITEMS),
             scratch_glyph_run: Vec::new(),
             scratch_glyph_entries: Vec::new(),
             run_glyph_scratch: RunGlyphScratch::default(),
@@ -94,15 +85,6 @@ impl TextResources {
     /// frame drew for [`TEXT_GLYPH_RUN_IDLE_FRAMES`] the CPU cache, and the
     /// arena takes back the quads dropped retained runs held.
     pub(super) fn begin_text_glyph_run_frame(&mut self) {
-        #[cfg(feature = "installed-fonts")]
-        if let Some(fonts) = self.fonts.with_installed_faces() {
-            // Text drawn before the install may show a missing glyph where an
-            // installed face now has one.
-            self.fonts = fonts;
-            self.image_cache.clear();
-            self.glyph_run_cache.clear();
-            self.glyph_gpu_run_cache.clear();
-        }
         self.glyph_run_frame += 1;
         let frame = self.glyph_run_frame;
         let demand = std::mem::take(&mut self.glyph_runs_drawn).saturating_mul(2);
@@ -159,12 +141,7 @@ impl TextResources {
         rasterize_text(
             text_draw
                 .raster_request(raster_rect, text_scale)
-                .with_origin(if text_draw.text.string().span_styles().is_empty() {
-                    Point::new(raster_rect.x, raster_rect.y)
-                } else {
-                    source_origin
-                }),
-            &self.fonts,
+                .with_origin(source_origin),
             Some(&mut self.glyph_mask_cache),
         )
         .and_then(TextPixels::into_image)
@@ -183,50 +160,30 @@ impl TextResources {
             .cloned()
     }
 
-    fn text_image_raster_source<'a>(
-        &mut self,
-        text_draw: &'a TextDraw,
-        logical_rect: Rect,
+    // The part of `text_draw`'s raster rect to rasterize: its glyphs' reach,
+    // of which a static text cut by `clip` rasterizes only the part the clip
+    // shows, its glyphs outside skipped.
+    fn text_image_raster_rect(
+        text_draw: &TextDraw,
         raster_rect: Rect,
         clip: Option<Rect>,
         root_scale: f32,
-    ) -> TextRasterSource<'a> {
-        let Some(clip) = clip else {
-            return TextRasterSource {
-                draw: Cow::Borrowed(text_draw),
-                raster_rect,
-            };
-        };
-        if !text_draw.text.static_motion() || text_draw.text.string().text().find('\n').is_none() {
-            return TextRasterSource {
-                draw: Cow::Borrowed(text_draw),
-                raster_rect,
-            };
+    ) -> Rect {
+        let raster_rect = text_draw.glyph_reach(raster_rect, text_draw.scale * root_scale);
+        match clip {
+            Some(clip) if text_draw.text.static_motion() => {
+                let device_clip = Rect {
+                    x: (clip.x * root_scale).floor(),
+                    y: (clip.y * root_scale).floor(),
+                    width: ((clip.x + clip.width) * root_scale).ceil()
+                        - (clip.x * root_scale).floor(),
+                    height: ((clip.y + clip.height) * root_scale).ceil()
+                        - (clip.y * root_scale).floor(),
+                };
+                raster_rect.intersect(device_clip).unwrap_or(raster_rect)
+            }
+            _ => raster_rect,
         }
-
-        if !text_draw.text.string().span_styles().is_empty() {
-            let device_clip = Rect {
-                x: (clip.x * root_scale).floor(),
-                y: (clip.y * root_scale).floor(),
-                width: ((clip.x + clip.width) * root_scale).ceil() - (clip.x * root_scale).floor(),
-                height: ((clip.y + clip.height) * root_scale).ceil()
-                    - (clip.y * root_scale).floor(),
-            };
-            return TextRasterSource {
-                draw: Cow::Borrowed(text_draw),
-                raster_rect: raster_rect.intersect(device_clip).unwrap_or(raster_rect),
-            };
-        }
-
-        let line_starts = self.line_index_cache.line_starts(text_draw.text.string());
-        clipped_text_raster_source_with_line_starts(
-            text_draw,
-            logical_rect,
-            raster_rect,
-            clip,
-            root_scale,
-            line_starts.as_ref(),
-        )
     }
 
     /// The run of `text_draw` from the cache, or collected into
@@ -238,7 +195,7 @@ impl TextResources {
         raster_rect: Rect,
         text_scale: f32,
         run_key: TextGlyphRunCacheKey,
-        collected_run: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
+        collected_run: &mut Vec<AtlasGlyph>,
         frame_stats: &FrameStats,
     ) -> Option<TextGlyphRunLookup> {
         let atlas_generation = self.glyph_atlas.generation();
@@ -258,7 +215,6 @@ impl TextResources {
         collected_run.clear();
         if collect_solid_text_atlas_run(
             text_draw.raster_request(raster_rect, text_scale),
-            &self.fonts,
             &mut self.glyph_mask_cache,
             collected_run,
         )
@@ -267,12 +223,9 @@ impl TextResources {
             log_text_atlas_fallback(text_draw);
             return None;
         }
-        let Some(glyphs) = RunGlyphs::of(
-            collected_run
-                .iter()
-                .map(SoftwareGlyphAtlasRunGlyph::placement),
-            &mut self.run_glyph_scratch,
-        ) else {
+        let Some(glyphs) =
+            RunGlyphs::of(collected_run.iter().copied(), &mut self.run_glyph_scratch)
+        else {
             log_text_atlas_fallback(text_draw);
             return None;
         };
@@ -339,7 +292,7 @@ impl TextResources {
 
     fn glyph_atlas_entry_for_cached(
         &mut self,
-        glyph: &SoftwareGlyphAtlasPlacement,
+        glyph: &AtlasGlyph,
         frame_stats: &FrameStats,
     ) -> Option<GlyphAtlasEntry> {
         let entry = self
@@ -349,12 +302,26 @@ impl TextResources {
         Some(entry)
     }
 
+    /// Writes the glyphs the pass placed in the atlas to its texture, ahead
+    /// of the submit that draws them.
+    pub(crate) fn flush_glyph_uploads(&mut self, upload: &mut FrameUploads<'_>) {
+        self.glyph_atlas.flush_uploads(upload.queue, upload.stats);
+    }
+
+    // The atlas entry of `glyph`, its mask uploaded from the mask cache when
+    // the atlas lacks it. An atlas that fills is reset and the run fails.
     pub(super) fn glyph_atlas_entry_for(
         &mut self,
-        glyph: &SoftwareGlyphAtlasGlyph,
+        glyph: &AtlasGlyph,
         upload: &mut FrameUploads<'_>,
     ) -> Result<GlyphAtlasEntry, String> {
-        if let Some(entry) = self.glyph_atlas.upload_glyph(glyph, upload.stats) {
+        if let Some(entry) = self.glyph_atlas_entry_for_cached(glyph, upload.stats) {
+            return Ok(entry);
+        }
+        let Some(mask) = self.glyph_mask_cache.cached(&glyph.key) else {
+            return Err("text glyph placement has no retained raster mask".to_string());
+        };
+        if let Some(entry) = self.glyph_atlas.upload_glyph((glyph, mask), upload.stats) {
             return Ok(entry);
         }
 
@@ -372,27 +339,6 @@ impl TextResources {
         Err("text glyph atlas filled and was reset".to_string())
     }
 
-    /// Writes the glyphs the pass placed in the atlas to its texture, ahead
-    /// of the submit that draws them.
-    pub(crate) fn flush_glyph_uploads(&mut self, upload: &mut FrameUploads<'_>) {
-        self.glyph_atlas.flush_uploads(upload.queue, upload.stats);
-    }
-
-    fn glyph_atlas_entry_for_placement(
-        &mut self,
-        glyph: &SoftwareGlyphAtlasPlacement,
-        upload: &mut FrameUploads<'_>,
-    ) -> Result<GlyphAtlasEntry, String> {
-        if let Some(entry) = self.glyph_atlas_entry_for_cached(glyph, upload.stats) {
-            return Ok(entry);
-        }
-
-        let Some(upload_glyph) = self.glyph_mask_cache.atlas_glyph_for_placement(glyph) else {
-            return Err("text glyph placement has no retained raster mask".to_string());
-        };
-        self.glyph_atlas_entry_for(&upload_glyph, upload)
-    }
-
     /// The atlas entries of a run's drawing glyphs: of `cached_glyph_run`,
     /// which holds only those, or of the drawing glyphs of `collected_run`,
     /// a run just collected, whose new glyphs are uploaded here.
@@ -401,7 +347,7 @@ impl TextResources {
         run_key: TextGlyphRunCacheKey,
         atlas_generation: u64,
         cached_glyph_run: Option<&RunGlyphs>,
-        collected_run: &[SoftwareGlyphAtlasRunGlyph],
+        collected_run: &[AtlasGlyph],
         entries: &mut Vec<GlyphAtlasEntry>,
         upload: &mut FrameUploads<'_>,
     ) -> Result<Rc<[GlyphAtlasEntry]>, String> {
@@ -411,24 +357,17 @@ impl TextResources {
             for glyph in glyph_run.iter() {
                 entries.push(
                     seen.entry((&mut *self, &mut *upload), &glyph, |text, upload| {
-                        text.glyph_atlas_entry_for_placement(&glyph, upload)
+                        text.glyph_atlas_entry_for(&glyph, upload)
                     })?,
                 );
             }
         } else {
-            for run_glyph in collected_run {
-                entries.push(seen.entry(
-                    (&mut *self, &mut *upload),
-                    &run_glyph.placement(),
-                    |text, upload| match run_glyph {
-                        SoftwareGlyphAtlasRunGlyph::Cached(placement) => {
-                            text.glyph_atlas_entry_for_placement(placement, upload)
-                        }
-                        SoftwareGlyphAtlasRunGlyph::New(glyph) => {
-                            text.glyph_atlas_entry_for(glyph, upload)
-                        }
-                    },
-                )?);
+            for glyph in collected_run {
+                entries.push(
+                    seen.entry((&mut *self, &mut *upload), glyph, |text, upload| {
+                        text.glyph_atlas_entry_for(glyph, upload)
+                    })?,
+                );
             }
         }
 
@@ -640,10 +579,7 @@ impl TextResources {
         &mut self,
         draw: TextGlyphRunDraw<'_>,
         (viewport, root_scale): (ViewportUniformParams, f32),
-        (collected_run, generated_entries): (
-            &[SoftwareGlyphAtlasRunGlyph],
-            &mut Vec<GlyphAtlasEntry>,
-        ),
+        (collected_run, generated_entries): (&[AtlasGlyph], &mut Vec<GlyphAtlasEntry>),
         glyph_instances: &mut GlyphInstances,
         glyph_cmds: &mut Vec<GlyphDrawCmd>,
         upload: &mut FrameUploads<'_>,
@@ -654,11 +590,13 @@ impl TextResources {
             run_key,
             run,
         } = draw;
+        // The glyphs draw only in their reach, which the text's damage covers.
+        let reach = text_draw.glyph_reach(raster_rect, text_draw.scale * root_scale);
         let draw_rect = Rect {
-            x: raster_rect.x / root_scale,
-            y: raster_rect.y / root_scale,
-            width: raster_rect.width / root_scale,
-            height: raster_rect.height / root_scale,
+            x: reach.x / root_scale,
+            y: reach.y / root_scale,
+            width: reach.width / root_scale,
+            height: reach.height / root_scale,
         };
         let Some(scissor) = scissor_rect_for_layer(draw_rect, text_draw.clip, root_scale, viewport)
         else {
@@ -754,19 +692,14 @@ impl TextResources {
         else {
             return Ok(());
         };
-        if !text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
+        if !draw_rect_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
             return Ok(());
         }
 
-        let raster_source =
-            self.text_image_raster_source(text_draw, logical_rect, raster_rect, clip, root_scale);
-        let source_draw = raster_source.draw.as_ref();
-        let source_raster_rect = raster_source.raster_rect;
-        let source_origin = if source_draw.text.string().span_styles().is_empty() {
-            Point::new(source_raster_rect.x, source_raster_rect.y)
-        } else {
-            Point::new(raster_rect.x, raster_rect.y)
-        };
+        let source_draw = text_draw;
+        let source_raster_rect =
+            Self::text_image_raster_rect(text_draw, raster_rect, clip, root_scale);
+        let source_origin = Point::new(raster_rect.x, raster_rect.y);
 
         let mut cache_key = Self::text_image_cache_key(
             source_draw,
@@ -774,17 +707,16 @@ impl TextResources {
             text_scale,
             static_text_motion,
         );
-        if !source_draw.text.string().span_styles().is_empty() {
-            let mut state = default_hash::new();
-            cache_key.0.hash(&mut state);
-            (source_origin.x - source_raster_rect.x)
-                .to_bits()
-                .hash(&mut state);
-            (source_origin.y - source_raster_rect.y)
-                .to_bits()
-                .hash(&mut state);
-            cache_key = TextImageCacheKey(state.finish());
-        }
+        // A part of the text rasterizes its glyphs from the text's corner.
+        let mut state = default_hash::new();
+        cache_key.0.hash(&mut state);
+        (source_origin.x - source_raster_rect.x)
+            .to_bits()
+            .hash(&mut state);
+        (source_origin.y - source_raster_rect.y)
+            .to_bits()
+            .hash(&mut state);
+        cache_key = TextImageCacheKey(state.finish());
         let image = if let Some(cached) = self.image_cache.get(&cache_key) {
             upload
                 .stats

@@ -1,17 +1,23 @@
 #![cfg(feature = "embedded-default-font")]
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use cranpose_render_common::{
-    font_source::SoftwareTextFontRegistry,
-    software_text_raster::{
-        SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-        SoftwareTextMeasurer, TextRasterRequest, collect_solid_text_atlas_run,
-        default_software_text_font,
-    },
+    font_source::FontRegistry,
+    glyph_mask::GlyphMaskCache,
+    text_atlas::{AtlasGlyph, collect_solid_text_atlas_run},
+    text_fonts::{TextFonts, default_typeface},
+    text_raster::TextRasterRequest,
 };
-use cranpose_ui::text::{
-    AnnotatedString, FontFamily, FontFile, FontWeight, SpanStyle, TextMeasurer, TextStyle, TextUnit,
+use cranpose_ui::{
+    PreparedTextLayout,
+    text::{
+        AnnotatedString, FontFamily, FontFile, FontWeight, SpanStyle, TextLayoutOptions, TextStyle,
+        TextUnit,
+    },
 };
 use cranpose_ui_graphics::{Color, Rect};
 
@@ -43,15 +49,15 @@ fn app_family(dir: &Path) -> FontFamily {
     .expect("a family needs at least one file")
 }
 
-fn font_set(family: &FontFamily) -> SoftwareTextFontSet {
+fn font_set(family: &FontFamily) -> TextFonts {
     font_set_beside(family, &[])
 }
 
 /// `family` registered beside faces the app handed over as bytes.
-fn font_set_beside(family: &FontFamily, bytes: &[&'static [u8]]) -> SoftwareTextFontSet {
-    let mut registry = SoftwareTextFontRegistry::new();
+fn font_set_beside(family: &FontFamily, bytes: &[&'static [u8]]) -> TextFonts {
+    let mut registry = FontRegistry::new();
     let _ = registry.register_family(family);
-    registry.into_font_set(bytes)
+    TextFonts::new(registry.into_typefaces(bytes))
 }
 
 fn style_for(family: &FontFamily, weight: FontWeight) -> TextStyle {
@@ -66,35 +72,49 @@ fn style_for(family: &FontFamily, weight: FontWeight) -> TextStyle {
     }
 }
 
-fn measured_block(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) -> Rect {
-    let metrics =
-        SoftwareTextMeasurer::from_font_set(fonts.clone(), 256).measure(&text.into(), style);
-    Rect {
-        x: 0.0,
-        y: 0.0,
-        width: metrics.width,
-        height: metrics.line_count.max(1) as f32 * metrics.line_height,
+// `text` in `style` laid out with `fonts`, and the block it measures.
+struct Measured {
+    rect: Rect,
+    prepared: Rc<PreparedTextLayout>,
+}
+
+fn measured_block(fonts: &TextFonts, text: &str, style: &TextStyle) -> Measured {
+    let prepared = cranpose_ui::AppContext::new().enter(|| {
+        cranpose_ui::text::set_text_fonts(fonts.resolver());
+        cranpose_ui::text::prepare_text_layout(
+            &AnnotatedString::from(text),
+            style,
+            TextLayoutOptions::default(),
+            None,
+        )
+    });
+    Measured {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: prepared.metrics().width,
+            height: prepared.metrics().height,
+        },
+        prepared,
     }
 }
 
 fn collect(
-    fonts: &SoftwareTextFontSet,
-    rect: Rect,
+    measured: &Measured,
     text: &str,
     style: &TextStyle,
-    cache: &mut SoftwareGlyphRasterCache,
-) -> Vec<SoftwareGlyphAtlasRunGlyph> {
+    cache: &mut GlyphMaskCache,
+) -> Vec<AtlasGlyph> {
     let mut run = Vec::new();
     collect_solid_text_atlas_run(
         TextRasterRequest::new(
-            &AnnotatedString::from(text),
-            rect,
+            &measured.prepared.layout,
+            text,
+            measured.rect,
             style,
             Color::WHITE,
-            FONT_SIZE,
             1.0,
         ),
-        fonts,
         cache,
         &mut run,
     )
@@ -102,12 +122,9 @@ fn collect(
     run
 }
 
-fn ink_width(run: &[SoftwareGlyphAtlasRunGlyph]) -> f32 {
+fn ink_width(run: &[AtlasGlyph]) -> f32 {
     run.iter()
-        .map(|glyph| {
-            let placement = glyph.placement();
-            placement.x as f32 + placement.width as f32
-        })
+        .map(|glyph| glyph.x as f32 + glyph.width as f32)
         .fold(0.0_f32, f32::max)
 }
 
@@ -118,27 +135,26 @@ fn an_app_supplied_family_draws_in_the_face_it_was_measured_with() {
     let fonts = font_set(&family);
     let style = style_for(&family, FontWeight::NORMAL);
 
-    let rect = measured_block(&fonts, "SCORE 1234", &style);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(&fonts, rect, "SCORE 1234", &style, &mut cache);
+    let block = measured_block(&fonts, "SCORE 1234", &style);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(&block, "SCORE 1234", &style, &mut cache);
     assert!(!run.is_empty(), "the app face must produce glyphs");
 
     const OVERHANG: f32 = 1.0;
     for glyph in &run {
-        let placement = glyph.placement();
-        let right = (placement.x + placement.width as i32) as f32;
-        let bottom = (placement.y + placement.height as i32) as f32;
+        let right = (glyph.x + i32::try_from(glyph.width).unwrap_or(i32::MAX)) as f32;
+        let bottom = (glyph.y + i32::try_from(glyph.height).unwrap_or(i32::MAX)) as f32;
         assert!(
-            placement.x as f32 >= -OVERHANG && right <= rect.width + OVERHANG,
+            glyph.x as f32 >= -OVERHANG && right <= block.rect.width + OVERHANG,
             "glyph spans x {}..{right}, measured block is 0..{}",
-            placement.x,
-            rect.width
+            glyph.x,
+            block.rect.width
         );
         assert!(
-            placement.y as f32 >= -OVERHANG && bottom <= rect.height + OVERHANG,
+            glyph.y as f32 >= -OVERHANG && bottom <= block.rect.height + OVERHANG,
             "glyph spans y {}..{bottom}, measured block is 0..{}",
-            placement.y,
-            rect.height
+            glyph.y,
+            block.rect.height
         );
     }
 }
@@ -151,22 +167,18 @@ fn the_requested_weight_picks_its_own_face_for_both_measuring_and_drawing() {
     let regular = style_for(&family, FontWeight::NORMAL);
     let bold = style_for(&family, FontWeight::BOLD);
 
-    let regular_rect = measured_block(&fonts, "Weighted", &regular);
-    let bold_rect = measured_block(&fonts, "Weighted", &bold);
+    let regular_block = measured_block(&fonts, "Weighted", &regular);
+    let bold_block = measured_block(&fonts, "Weighted", &bold);
     assert!(
-        bold_rect.width > regular_rect.width,
-        "the bold face must measure wider: regular={regular_rect:?} bold={bold_rect:?}"
+        bold_block.rect.width > regular_block.rect.width,
+        "the bold face must measure wider: regular={:?} bold={:?}",
+        regular_block.rect,
+        bold_block.rect
     );
 
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let regular_ink = ink_width(&collect(
-        &fonts,
-        regular_rect,
-        "Weighted",
-        &regular,
-        &mut cache,
-    ));
-    let bold_ink = ink_width(&collect(&fonts, bold_rect, "Weighted", &bold, &mut cache));
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let regular_ink = ink_width(&collect(&regular_block, "Weighted", &regular, &mut cache));
+    let bold_ink = ink_width(&collect(&bold_block, "Weighted", &bold, &mut cache));
     assert!(
         bold_ink > regular_ink,
         "the drawn run must follow the measured face: regular={regular_ink} bold={bold_ink}"
@@ -179,30 +191,25 @@ fn a_stable_string_in_an_app_supplied_font_rasterizes_once() {
     let family = app_family(&dir);
     let fonts = font_set(&family);
     let style = style_for(&family, FontWeight::NORMAL);
-    let rect = measured_block(&fonts, "FPS 60", &style);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let block = measured_block(&fonts, "FPS 60", &style);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
 
-    let first = collect(&fonts, rect, "FPS 60", &style, &mut cache);
-    assert!(
-        first
-            .iter()
-            .any(|glyph| matches!(glyph, SoftwareGlyphAtlasRunGlyph::New(_))),
-        "the first frame has to rasterize"
-    );
-    let entries_after_first = cache.stats().entries;
+    let first = collect(&block, "FPS 60", &style, &mut cache);
+    assert!(!first.is_empty());
+    let after_first = cache.stats();
+    assert!(after_first.misses > 0, "the first frame has to rasterize");
 
     for _ in 0..60 {
-        let frame = collect(&fonts, rect, "FPS 60", &style, &mut cache);
-        assert!(
-            frame
-                .iter()
-                .all(|glyph| matches!(glyph, SoftwareGlyphAtlasRunGlyph::Cached(_))),
-            "an unchanged string must not re-rasterize a single glyph"
-        );
+        collect(&block, "FPS 60", &style, &mut cache);
     }
     assert_eq!(
+        cache.stats().misses,
+        after_first.misses,
+        "an unchanged string must not re-rasterize a single glyph"
+    );
+    assert_eq!(
         cache.stats().entries,
-        entries_after_first,
+        after_first.entries,
         "60 more frames must not add a mask to the cache"
     );
 }
@@ -214,31 +221,28 @@ fn the_two_weights_of_one_family_keep_separate_glyph_cache_entries() {
     let fonts = font_set(&family);
     let regular = style_for(&family, FontWeight::NORMAL);
     let bold = style_for(&family, FontWeight::BOLD);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
 
     collect(
-        &fonts,
-        measured_block(&fonts, "AB", &regular),
+        &measured_block(&fonts, "AB", &regular),
         "AB",
         &regular,
         &mut cache,
     );
-    let after_regular = cache.stats().entries;
+    let after_regular = cache.stats();
     let bold_run = collect(
-        &fonts,
-        measured_block(&fonts, "AB", &bold),
+        &measured_block(&fonts, "AB", &bold),
         "AB",
         &bold,
         &mut cache,
     );
 
+    assert!(!bold_run.is_empty());
     assert!(
-        bold_run
-            .iter()
-            .any(|glyph| matches!(glyph, SoftwareGlyphAtlasRunGlyph::New(_))),
+        cache.stats().misses > after_regular.misses,
         "the bold face draws different outlines and must not reuse the regular masks"
     );
-    assert!(cache.stats().entries > after_regular);
+    assert!(cache.stats().entries > after_regular.entries);
 }
 
 #[test]
@@ -251,14 +255,14 @@ fn a_family_whose_files_are_missing_still_draws_in_another_app_face() {
     let fonts = font_set_beside(&family, &[REGULAR]);
     let style = style_for(&family, FontWeight::NORMAL);
 
-    let rect = measured_block(&fonts, "Fallback", &style);
+    let block = measured_block(&fonts, "Fallback", &style);
     assert!(
-        rect.width > 0.0,
+        block.rect.width > 0.0,
         "an unloadable family must still measure against the fallback font"
     );
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     assert!(
-        !collect(&fonts, rect, "Fallback", &style, &mut cache).is_empty(),
+        !collect(&block, "Fallback", &style, &mut cache).is_empty(),
         "an unloadable family must still draw with the fallback font"
     );
 }
@@ -275,10 +279,10 @@ fn a_corrupt_font_file_leaves_the_family_on_another_app_face() {
     let fonts = font_set_beside(&family, &[REGULAR]);
     let style = style_for(&family, FontWeight::NORMAL);
 
-    let rect = measured_block(&fonts, "Corrupt", &style);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    assert!(rect.width > 0.0);
-    assert!(!collect(&fonts, rect, "Corrupt", &style, &mut cache).is_empty());
+    let block = measured_block(&fonts, "Corrupt", &style);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    assert!(block.rect.width > 0.0);
+    assert!(!collect(&block, "Corrupt", &style, &mut cache).is_empty());
 }
 
 #[test]
@@ -289,22 +293,19 @@ fn characters_the_app_face_cannot_draw_measure_and_collect_without_panicking() {
     let style = style_for(&family, FontWeight::NORMAL);
     let text = "A\u{E000}\u{10FFFD}B";
 
-    let rect = measured_block(&fonts, text, &style);
-    assert!(rect.width > 0.0 && rect.height > 0.0);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(&fonts, rect, text, &style, &mut cache);
+    let block = measured_block(&fonts, text, &style);
+    assert!(block.rect.width > 0.0 && block.rect.height > 0.0);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(&block, text, &style, &mut cache);
     assert!(!run.is_empty());
     for glyph in &run {
-        let placement = glyph.placement();
-        assert!(placement.width > 0 && placement.height > 0);
+        assert!(glyph.width > 0 && glyph.height > 0);
     }
 }
 
 #[test]
 fn the_embedded_face_measures_and_draws_on_its_own() {
-    let fonts = SoftwareTextFontSet::from_font(
-        default_software_text_font().expect("the embedded face parses"),
-    );
+    let fonts = TextFonts::new(vec![default_typeface().expect("the embedded face parses")]);
     let style = TextStyle {
         span_style: SpanStyle {
             font_size: TextUnit::Sp(FONT_SIZE),
@@ -313,10 +314,10 @@ fn the_embedded_face_measures_and_draws_on_its_own() {
         ..Default::default()
     };
 
-    let rect = measured_block(&fonts, "Fallback", &style);
-    assert!(rect.width > 0.0);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    assert!(!collect(&fonts, rect, "Fallback", &style, &mut cache).is_empty());
+    let block = measured_block(&fonts, "Fallback", &style);
+    assert!(block.rect.width > 0.0);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    assert!(!collect(&block, "Fallback", &style, &mut cache).is_empty());
 }
 
 /// One glyph of [`full_glyph_count_font`]: a square of 800 units.
@@ -340,7 +341,7 @@ fn a_font_with_the_most_glyphs_a_font_can_hold_draws_from_a_file() {
 #[test]
 fn a_font_with_the_most_glyphs_a_font_can_hold_draws_from_bytes() {
     let bytes: &'static [u8] = Box::leak(full_glyph_count_font().into_boxed_slice());
-    let fonts = SoftwareTextFontRegistry::new().into_font_set(&[bytes]);
+    let fonts = TextFonts::new(FontRegistry::new().into_typefaces(&[bytes]));
     let style = TextStyle {
         span_style: SpanStyle {
             font_size: TextUnit::Sp(FONT_SIZE),
@@ -363,13 +364,13 @@ fn a_font_with_the_most_glyphs_a_font_can_hold_draws_each_weight() {
     .expect("a family needs at least one file");
     let fonts = font_set(&family);
     let text = SQUARE.to_string();
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let mut ink = |weight| {
         let style = style_for(&family, weight);
-        let rect = measured_block(&fonts, &text, &style);
-        collect(&fonts, rect, &text, &style, &mut cache)
+        let block = measured_block(&fonts, &text, &style);
+        collect(&block, &text, &style, &mut cache)
             .iter()
-            .map(|glyph| glyph.placement().width)
+            .map(|glyph| glyph.width)
             .max()
             .unwrap_or(0)
     };
@@ -384,20 +385,18 @@ fn a_font_with_the_most_glyphs_a_font_can_hold_draws_each_weight() {
     );
 }
 
-fn assert_draws_the_square(fonts: &SoftwareTextFontSet, style: &TextStyle) {
+fn assert_draws_the_square(fonts: &TextFonts, style: &TextStyle) {
     let text = SQUARE.to_string();
-    let rect = measured_block(fonts, &text, style);
-    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let run = collect(fonts, rect, &text, style, &mut cache);
+    let block = measured_block(fonts, &text, style);
+    let mut cache = GlyphMaskCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(&block, &text, style, &mut cache);
     // 800 units of an em of 1000 at 20 px.
     assert!(
-        run.iter().any(|glyph| {
-            let placement = glyph.placement();
-            placement.width >= 15 && placement.height >= 15
-        }),
+        run.iter()
+            .any(|glyph| glyph.width >= 15 && glyph.height >= 15),
         "the square must draw: {:?}",
         run.iter()
-            .map(|glyph| (glyph.placement().width, glyph.placement().height))
+            .map(|glyph| (glyph.width, glyph.height))
             .collect::<Vec<_>>()
     );
 }
@@ -454,8 +453,11 @@ fn full_glyph_count_font() -> Vec<u8> {
     // At weight 900 the square's left side moves 300 units left and its right
     // side 300 units right; the four phantom points stay.
     let mut variation = Vec::new();
-    // One tuple: its 18 bytes of deltas start at byte 10, at the axis' end.
-    be16(&mut variation, &[1, 10, 18, 0x8000, 0x4000]);
+    // One tuple with its own point numbers, its 19 bytes of point numbers
+    // and deltas starting at byte 10, at the axis' end.
+    be16(&mut variation, &[1, 10, 19, 0xA000, 0x4000]);
+    // A point count of zero: every point moves.
+    variation.push(0);
     // Eight x deltas in words, then eight y deltas of zero.
     variation.push(0x40 | 7);
     be16(&mut variation, &[-300, 300, 300, -300, 0, 0, 0, 0]);

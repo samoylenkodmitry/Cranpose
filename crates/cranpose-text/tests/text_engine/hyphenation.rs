@@ -162,6 +162,36 @@ fn even_breaking_hyphenates_a_word_when_that_evens_the_lines() {
 }
 
 #[test]
+fn a_relayout_at_a_wider_width_hyphenates_only_the_words_wider_than_its_lines() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let text = "a understanding";
+    let family = FontFamily::Default;
+    let spans = [span(0..text.len(), &family, 400)];
+    let paragraph = ParagraphStyle {
+        hyphens: Hyphens::Auto,
+        line_break: LineBreak::Simple,
+        ..ParagraphStyle::default()
+    };
+    let input = |max_width| LayoutInput {
+        text,
+        spans: &spans,
+        paragraph: &paragraph,
+        lengths: ParagraphLengths::default(),
+        min_width: 0.0,
+        max_width,
+        options: TextLayoutOptions::default(),
+    };
+    let mut layouter = TextLayouter::default();
+    let narrow = layouter.layout(&input(unbroken(&resolver, "understand")), &resolver);
+    assert_eq!(lines(&narrow, text), ["a ", "under", "standing"]);
+
+    let wide = unbroken(&resolver, "understanding") + 0.5;
+    let relaid = layouter.relayout(&input(wide), &resolver, &narrow);
+
+    assert_eq!(lines(&relaid, text), ["a ", "understanding"]);
+}
+
+#[test]
 fn a_dictionary_for_a_locale_without_patterns_is_refused() {
     let mut layouter = TextLayouter::default();
 

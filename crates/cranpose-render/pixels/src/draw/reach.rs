@@ -110,11 +110,11 @@ impl RasterScene {
 
 /// The pixels of `window` that the rasterized `draw` can reach.
 pub(super) fn text_bounds(draw: &TextDraw, window: ClipBounds) -> Option<ClipBounds> {
-    let raster_rect = text_raster_rect(draw)?;
+    let lines = draw.glyph_reach(text_raster_rect(draw)?);
     let reach = Rect {
-        width: whole::ceil(raster_rect.width).max(1.0),
-        height: whole::ceil(raster_rect.height).max(1.0),
-        ..raster_rect
+        width: whole::ceil(lines.width).max(1.0),
+        height: whole::ceil(lines.height).max(1.0),
+        ..lines
     };
     clip_rect_to_window(reach, draw.clip, window)
 }

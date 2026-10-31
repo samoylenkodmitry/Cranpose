@@ -4,15 +4,15 @@ use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListSt
 use cranpose_ui::{
     Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
     LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer, Text,
-    TextOptions, TextOverflow, TextStyle, TextWithOptions,
+    TextLayoutOptions, TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
 use cranpose_ui_graphics::{
     Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect,
 };
 
-use super::*;
-use crate::graph::DrawRunNode;
+use super::{text_node::TEXT_CLIP_PAD, *};
+use crate::graph::{DrawRunNode, TextPrimitiveNode};
 
 // Each of `ids` with the update that records it again.
 fn content(ids: &[NodeId]) -> Vec<(NodeId, NodeUpdate)> {
@@ -554,7 +554,6 @@ fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
     let mut layer = Some(Cow::Owned(GraphicsLayer::default()));
     shape_clip(
         &mut layer,
-        true,
         Some(RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0)),
         Rect {
             x: 0.0,
@@ -583,7 +582,6 @@ fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
     }));
     shape_clip(
         &mut layer,
-        true,
         Some(RoundedCornerShape::uniform(10.0)),
         Rect {
             x: 0.0,
@@ -662,7 +660,7 @@ fn wrapped_card_composition(
             Modifier::empty().size_points(240.0, 120.0),
             cranpose_ui::BoxSpec::default(),
             move || {
-                let shape = LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
+                let shape = LayerShape::Rounded(RoundedCornerShape::uniform(12.0));
                 let id = cranpose_ui::Box(
                     Modifier::empty()
                         .offset(20.0, 30.0)
@@ -1538,7 +1536,7 @@ fn shadowed_scroll_rows(
     clicks: &Rc<RefCell<Vec<(usize, usize)>>>,
 ) {
     for index in 0..12usize {
-        let shape = LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
+        let shape = LayerShape::Rounded(RoundedCornerShape::uniform(12.0));
         let radius = Rc::clone(shadow_radius);
         let recorded_clicks = Rc::clone(clicks);
         let first_text = Rc::clone(first_text);
@@ -2670,8 +2668,8 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
         .expect("clipped overflow should produce a clip rect");
 
     assert!(
-        text.rect.x > 0.0,
-        "RTL start alignment should shift the text rect within the available width"
+        text.rect.x + text.layout.line_left(0) > 0.0,
+        "RTL start alignment should shift the line within the available width"
     );
     assert!(
         clip.y < text.rect.y,
@@ -2718,11 +2716,12 @@ fn text_node_alignment_obeys_physical_and_relative_edges() {
             } else {
                 ltr
             };
-            let expected = (180.0 - text.rect.width) * fraction;
+            let line_width = text.layout.line_right(0) - text.layout.line_left(0);
+            let expected = (180.0 - line_width) * fraction;
+            let left = text.rect.x + text.layout.line_left(0);
             assert!(
-                (text.rect.x - expected).abs() < 0.001,
-                "{alignment:?}, {direction:?}: expected x={expected}, got {}",
-                text.rect.x
+                (left - expected).abs() < 0.001,
+                "{alignment:?}, {direction:?}: expected the line at x={expected}, got {left}"
             );
         }
     }
@@ -2739,31 +2738,7 @@ fn first_text_primitive(layer: &LayerNode) -> &TextPrimitiveNode {
 }
 
 #[test]
-fn text_alignment_without_positive_slack_keeps_the_origin() {
-    for text_align in [
-        TextAlign::Left,
-        TextAlign::Right,
-        TextAlign::Center,
-        TextAlign::Start,
-        TextAlign::End,
-        TextAlign::Justify,
-        TextAlign::Unspecified,
-    ] {
-        let mut style = TextStyle::default();
-        style.paragraph_style.text_align = text_align;
-        style.paragraph_style.text_direction = TextDirection::Rtl;
-        for (content_width, measured_width) in [(0.0, 0.0), (40.0, 40.0), (40.0, 80.0)] {
-            assert_eq!(
-                resolve_text_horizontal_offset(&style, "hello", content_width, measured_width),
-                0.0,
-                "{text_align:?}, content={content_width}, measured={measured_width}"
-            );
-        }
-    }
-}
-
-#[test]
-fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
+fn a_clipped_text_draws_in_its_layout_box_and_keeps_the_clip_padding() {
     let options = TextLayoutOptions {
         overflow: TextOverflow::Clip,
         ..Default::default()
@@ -2783,9 +2758,10 @@ fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
     let text = first_text_primitive(&graph);
     let clip = text.clip.expect("clipped text should keep a clip rect");
 
-    assert!(
-        text.rect.width < 320.0,
-        "text raster bounds should track measured glyph width instead of full content width"
+    assert_eq!(
+        text.rect.width,
+        text.layout.width(),
+        "a text in a node of a fixed width lays out as wide as the node"
     );
     assert_eq!(
         clip.width, 322.0,
@@ -3389,8 +3365,8 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
                 },
             );
         });
-        cranpose_ui::text::set_text_measurer(
-            crate::software_text_raster::SoftwareTextMeasurer::from_fonts_or_default(&[], 8192),
+        cranpose_ui::text::set_text_fonts(
+            crate::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver(),
         );
 
         let root = composition.root().expect("composition root");
@@ -3414,12 +3390,6 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
         assert!(
             measured_height > 60.0,
             "test setup expects a genuinely multi-line paragraph, got {measured_height}"
-        );
-        assert!(
-            body_box.rect.width < 245.0,
-            "test setup expects the node to be placed at its own measured width, \
-             not the full constraint, got {}",
-            body_box.rect.width
         );
 
         let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
@@ -3451,26 +3421,38 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
     });
 }
 
+// The text of each line of `layout` of `text`, an ellipsized line ending
+// in `…`.
+fn layout_lines(layout: &cranpose_text::TextLayout, text: &str) -> Vec<String> {
+    (0..layout.line_count())
+        .map(|line| {
+            let shown = text
+                .get(layout.line_start(line)..layout.line_visible_end(line))
+                .unwrap_or_default();
+            if layout.is_line_ellipsized(line) {
+                format!("{shown}\u{2026}")
+            } else {
+                shown.to_owned()
+            }
+        })
+        .collect()
+}
+
 struct PaintedParagraph {
-    available_width: f32,
-    node_width: f32,
-    measured: String,
-    rewrapped_at_node_width: String,
-    rewrapped_at_available_width: String,
-    painted_from_applier: String,
-    painted_from_layout_tree: String,
+    measured: Vec<String>,
+    rewrapped_at_available_width: Vec<String>,
+    painted_from_applier: Vec<String>,
+    painted_from_layout_tree: Vec<String>,
 }
 
 impl PaintedParagraph {
     fn assert_paints_measured_lines(&self, context: &str) {
-        let measured = self.measured.lines().collect::<Vec<_>>();
         for (graph, painted) in [
             ("applier graph", &self.painted_from_applier),
             ("layout tree graph", &self.painted_from_layout_tree),
         ] {
             assert_eq!(
-                painted.lines().collect::<Vec<_>>(),
-                measured,
+                painted, &self.measured,
                 "{context}: the {graph} must paint the lines layout measured"
             );
         }
@@ -3512,8 +3494,8 @@ fn paint_body(
             move || body(),
         );
     });
-    cranpose_ui::text::set_text_measurer(
-        crate::software_text_raster::SoftwareTextMeasurer::from_fonts_or_default(&[], 8192),
+    cranpose_ui::text::set_text_fonts(
+        crate::text_fonts::TextFonts::from_fonts_or_default(&[]).resolver(),
     );
 
     let root = composition.root().expect("composition root");
@@ -3531,35 +3513,27 @@ fn paint_body(
         .expect("layout");
     let body_box = find_text_box(layout.root(), WRAPPING_BODY).expect("measured paragraph box");
     let body_id = body_box.node_id;
-    let node_width = body_box.rect.width;
     let painted_text = |graph: &RenderGraph| {
-        find_text_primitive(&graph.root, &|text| text.node_id == body_id)
-            .expect("painted paragraph")
-            .text
-            .text
-            .clone()
+        let painted = find_text_primitive(&graph.root, &|text| text.node_id == body_id)
+            .expect("painted paragraph");
+        layout_lines(&painted.layout, &painted.text.text)
     };
     let painted_from_layout_tree = painted_text(&build_graph_from_layout_tree(layout.root(), 1.0));
 
     let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
     let prepare_at = |width: f32| {
-        cranpose_ui::text::prepare_text_layout(
+        let prepared = cranpose_ui::text::prepare_text_layout(
             &AnnotatedString::from(WRAPPING_BODY),
             &TextStyle::default(),
             options,
             Some(width),
-        )
-        .text
-        .text
-        .clone()
+        );
+        layout_lines(&prepared.layout, WRAPPING_BODY)
     };
 
     PaintedParagraph {
-        available_width: AVAILABLE_WIDTH,
-        node_width,
         measured: prepare_at(text_width),
-        rewrapped_at_node_width: prepare_at(node_width),
         rewrapped_at_available_width: prepare_at(AVAILABLE_WIDTH),
         painted_from_applier: painted_text(&graph),
         painted_from_layout_tree,
@@ -3567,7 +3541,7 @@ fn paint_body(
 }
 
 #[test]
-fn shrink_wrapped_ellipsis_paragraph_under_its_line_limit_paints_the_lines_it_measured() {
+fn an_ellipsis_paragraph_under_its_line_limit_paints_the_lines_it_measured() {
     let options = TextOptions {
         overflow: TextOverflow::Ellipsis,
         max_lines: Some(8),
@@ -3576,18 +3550,13 @@ fn shrink_wrapped_ellipsis_paragraph_under_its_line_limit_paints_the_lines_it_me
     let paragraph = paint_paragraph(Modifier::empty(), options, 245.0);
 
     assert!(
-        paragraph.node_width < paragraph.available_width,
-        "test setup expects the node at its own measured width, got {}",
-        paragraph.node_width
-    );
-    assert!(
-        !paragraph.measured.contains('\u{2026}'),
-        "test setup expects the paragraph to stay under its line limit: {:?}",
+        paragraph.measured.len() > 1
+            && !paragraph
+                .measured
+                .iter()
+                .any(|line| line.ends_with('\u{2026}')),
+        "test setup expects the paragraph to wrap and stay under its line limit: {:?}",
         paragraph.measured
-    );
-    assert_ne!(
-        paragraph.rewrapped_at_node_width, paragraph.measured,
-        "test setup expects re-wrapping at the node's own width to move a word"
     );
     paragraph.assert_paints_measured_lines("ellipsis, max_lines 8");
 }
@@ -3620,19 +3589,15 @@ fn width_limited_text_field_paints_the_lines_it_measured() {
 }
 
 #[test]
-fn shrink_wrapped_text_field_paints_the_lines_it_measured() {
+fn an_unconstrained_text_field_paints_the_lines_it_measured() {
     let field = paint_text_field(Modifier::empty(), 245.0);
 
     assert!(
-        field.node_width < field.available_width,
-        "test setup expects the field at its own measured width, got {}",
-        field.node_width
+        field.measured.len() > 1,
+        "test setup expects the field to wrap: {:?}",
+        field.measured
     );
-    assert_ne!(
-        field.rewrapped_at_node_width, field.measured,
-        "test setup expects re-wrapping at the field's own width to move a word"
-    );
-    field.assert_paints_measured_lines("text field, shrink-wrapped");
+    field.assert_paints_measured_lines("text field, unconstrained");
 }
 
 struct TestWindow(Size);

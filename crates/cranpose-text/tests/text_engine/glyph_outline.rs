@@ -1,7 +1,20 @@
 use ab_glyph::{Font as _, FontRef, PxScale, point};
-use cranpose_text::{GlyphOutline, OutlineTransform};
+use cranpose_text::{
+    FontFamily, FontStyle, FontWeight, GlyphId, GlyphOutline, OutlineSegment, OutlineTransform,
+    Typeface,
+};
+use cranpose_ui_graphics::Point;
+use read_fonts::{
+    model::{
+        Blob, Font, Variation,
+        glyph::outline::{DrawMemory, DrawOptions, PathSink},
+    },
+    types::{GlyphId as FontGlyphId, Tag},
+};
 
-use crate::fonts::{DEVANAGARI_VF, ROBOTO, bytes, typeface};
+use crate::fonts::{
+    ARABIC_VF, DEJAVU, DEVANAGARI_VF, MONASPACE_VF, NOTO_SANS_LATIN, ROBOTO, bytes, typeface,
+};
 
 // A whole pixel count or position as a float.
 fn float(value: i32) -> f32 {
@@ -86,4 +99,152 @@ fn a_space_has_no_outline() {
         )
         .is_none()
     );
+}
+
+// An outline read-fonts draws in font units with y growing down, from the
+// corner of its box: what `GlyphOutline` gives at one pixel a unit.
+#[derive(Default)]
+struct UnitOutline {
+    segments: Vec<OutlineSegment>,
+    start: Point,
+    pen: Point,
+}
+
+impl UnitOutline {
+    fn of(font: &Font, glyph: u32) -> Option<(Vec<OutlineSegment>, (i32, i32))> {
+        let mut outline = Self::default();
+        font.outline_glyphs()
+            .get(FontGlyphId::new(glyph))?
+            .draw(&DrawOptions::new(), DrawMemory::Scratch, &mut outline)
+            .ok()?;
+        let points = || {
+            outline.segments.iter().flat_map(|segment| match *segment {
+                OutlineSegment::Line(a, b) => [a, b, b, b],
+                OutlineSegment::Quad(a, b, c) => [a, b, c, c],
+                OutlineSegment::Cubic(a, b, c, d) => [a, b, c, d],
+            })
+        };
+        let left = points().map(|at| at.x).reduce(f32::min)?.floor();
+        let top = points().map(|at| at.y).reduce(f32::min)?.floor();
+        let moved = |at: Point| Point::new(at.x - left, at.y - top);
+        let segments = outline
+            .segments
+            .iter()
+            .map(|segment| match *segment {
+                OutlineSegment::Line(a, b) => OutlineSegment::Line(moved(a), moved(b)),
+                OutlineSegment::Quad(a, b, c) => OutlineSegment::Quad(moved(a), moved(b), moved(c)),
+                OutlineSegment::Cubic(a, b, c, d) => {
+                    OutlineSegment::Cubic(moved(a), moved(b), moved(c), moved(d))
+                }
+            })
+            .collect();
+        Some((segments, (whole(left), whole(top))))
+    }
+}
+
+impl PathSink for UnitOutline {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = Point::new(x, -y);
+        self.pen = self.start;
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let to = Point::new(x, -y);
+        self.segments.push(OutlineSegment::Line(self.pen, to));
+        self.pen = to;
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        let to = Point::new(x, -y);
+        self.segments
+            .push(OutlineSegment::Quad(self.pen, Point::new(cx0, -cy0), to));
+        self.pen = to;
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let to = Point::new(x, -y);
+        self.segments.push(OutlineSegment::Cubic(
+            self.pen,
+            Point::new(cx0, -cy0),
+            Point::new(cx1, -cy1),
+            to,
+        ));
+        self.pen = to;
+    }
+
+    fn close(&mut self) {
+        if self.pen != self.start {
+            self.segments
+                .push(OutlineSegment::Line(self.pen, self.start));
+        }
+        self.pen = self.start;
+    }
+}
+
+fn whole(value: f32) -> i32 {
+    format!("{value}")
+        .parse()
+        .expect("a box corner is a whole number")
+}
+
+// Every glyph of `face` draws the outline read-fonts draws of `font`, the
+// same font at the same location.
+fn assert_outlines_match(path: &str, face: &Typeface, font: &Font) {
+    let size = f32::from(face.units_per_em());
+    for glyph in 0..font.num_glyphs() {
+        let ours = GlyphOutline::of(
+            face,
+            GlyphId(glyph),
+            OutlineTransform {
+                size,
+                ..OutlineTransform::default()
+            },
+        )
+        .map(|outline| {
+            (
+                outline.segments().collect::<Vec<_>>(),
+                (outline.left(), outline.top()),
+            )
+        });
+        assert!(
+            ours == UnitOutline::of(font, glyph),
+            "{path}: glyph {glyph}"
+        );
+    }
+}
+
+#[test]
+fn every_glyph_draws_the_outline_read_fonts_draws() {
+    for path in [
+        ROBOTO,
+        DEJAVU,
+        NOTO_SANS_LATIN,
+        MONASPACE_VF,
+        ARABIC_VF,
+        DEVANAGARI_VF,
+    ] {
+        let font = Font::new(Blob::from(bytes(path)), 0).expect("the font reads");
+        assert_outlines_match(path, &typeface(path), &font);
+    }
+}
+
+#[test]
+fn every_glyph_of_a_variable_instance_draws_the_outline_read_fonts_draws() {
+    let family = FontFamily::named("Instance");
+    for path in [MONASPACE_VF, ARABIC_VF, DEVANAGARI_VF] {
+        let face = Typeface::from_registered(
+            &family,
+            FontWeight::new(400),
+            FontStyle::Normal,
+            bytes(path),
+            &[(*b"wght", 700.0)],
+        )
+        .expect("the font has a weight axis");
+        let font = Font::new(Blob::from(bytes(path)), 0)
+            .expect("the font reads")
+            .instance_builder()
+            .variations([Variation::new(Tag::new(b"wght"), 700.0)])
+            .build();
+        assert_outlines_match(path, &face, &font);
+    }
 }

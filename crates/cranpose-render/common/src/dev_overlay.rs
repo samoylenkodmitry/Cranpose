@@ -31,19 +31,18 @@ impl DevOverlayKey {
     }
 }
 
-/// Build the dev-overlay graph: a translucent pill with the stats text in
-/// the top-right corner, sized with fixed monospace-ish metrics so the
-/// overlay never depends on renderer text measurement.
+/// Build the dev-overlay graph: a translucent pill with the stats text, laid
+/// out in `overlay`, in the top-right corner.
 pub fn build_dev_overlay_graph(
-    text: &str,
+    overlay: &cranpose_ui::PreparedTextLayout,
     viewport: Size,
     node_id: cranpose_core::NodeId,
 ) -> RenderGraph {
     let padding = 8.0;
-    let font_size = 14.0;
-    let char_width = 7.0;
-    let text_width = text.len() as f32 * char_width;
-    let text_height = font_size * 1.4;
+    let Size {
+        width: text_width,
+        height: text_height,
+    } = overlay.size();
     let x = (viewport.width - text_width - padding * 2.0).max(padding);
     let y = padding;
 
@@ -84,11 +83,12 @@ pub fn build_dev_overlay_graph(
                         width: text_width,
                         height: text_height,
                     },
-                    text: cranpose_ui::text::shared_plain_annotated_string(text),
-                    render_text: cranpose_ui::text::shared_plain_render_string(text),
-                    text_style: Default::default(),
-                    font_size,
-                    layout_options: cranpose_ui::TextLayoutOptions::default(),
+                    text: std::rc::Rc::clone(&overlay.text),
+                    render_text: overlay.render_text(),
+                    layout: overlay.layout.clone(),
+                    text_style: std::sync::Arc::clone(&overlay.visual_style),
+                    font_size: overlay.visual_style.resolve_font_size(14.0),
+                    overflow: cranpose_ui::TextOverflow::Clip,
                     clip: None,
                     paint: Default::default(),
                 })),

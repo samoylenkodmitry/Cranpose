@@ -83,49 +83,66 @@ impl Composer {
             }
         };
 
-        if let Some(found) = adopted {
-            let id = found.id;
-            if log::log_enabled!(target: "cranpose::compose::emit", log::Level::Trace) {
-                let (scope_id, scope_label) = self.trace_scope();
-                log::trace!(
+        let Some(found) = adopted else {
+            return self.emit_new_node::<N>(source, make_node);
+        };
+        let id = found.id;
+        if log::log_enabled!(target: "cranpose::compose::emit", log::Level::Trace) {
+            self.trace_reused_node::<N>(id);
+        }
+        self.attach_to_parent(id);
+        let parent_id = self.planned_node_parent(id);
+        let recorded =
+            self.with_slot_session_mut(|slots| slots.adopt_node_record(found, parent_id, source));
+        match recorded {
+            NodeSlotUpdate::Reused {
+                id: recorded_id,
+                generation,
+            } => {
+                debug_assert_eq!(recorded_id, id);
+                debug_assert_eq!(generation, found.generation);
+            }
+            NodeSlotUpdate::Inserted { .. } => {
+                log::warn!(
                     target: "cranpose::compose::emit",
-                    "reusing node #{id} as {} [scope_id={scope_id} scope_label={scope_label:?}]",
-                    std::any::type_name::<N>(),
+                    "slot writer inserted node #{id} while reusing the same node identity",
                 );
             }
-            self.attach_to_parent(id);
-            let parent_id = self.planned_node_parent(id);
-            let recorded = self
-                .with_slot_session_mut(|slots| slots.adopt_node_record(found, parent_id, source));
-            match recorded {
-                NodeSlotUpdate::Reused {
-                    id: recorded_id,
-                    generation,
-                } => {
-                    debug_assert_eq!(recorded_id, id);
-                    debug_assert_eq!(generation, found.generation);
-                }
-                NodeSlotUpdate::Inserted { .. } => {
-                    log::warn!(
-                        target: "cranpose::compose::emit",
-                        "slot writer inserted node #{id} while reusing the same node identity",
-                    );
-                }
-                NodeSlotUpdate::Replaced {
-                    old_id,
-                    old_generation,
-                    ..
-                } => {
-                    log::warn!(
-                        target: "cranpose::compose::emit",
-                        "slot writer replaced node #{old_id} while reusing node #{id}",
-                    );
-                    self.queue_replaced_slot_node_removal(old_id, old_generation);
-                }
+            NodeSlotUpdate::Replaced {
+                old_id,
+                old_generation,
+                ..
+            } => {
+                log::warn!(
+                    target: "cranpose::compose::emit",
+                    "slot writer replaced node #{old_id} while reusing node #{id}",
+                );
+                self.queue_replaced_slot_node_removal(old_id, old_generation);
             }
-            return id;
         }
+        id
+    }
 
+    #[cold]
+    #[inline(never)]
+    fn trace_reused_node<N: Node + 'static>(&self, id: NodeId) {
+        let (scope_id, scope_label) = self.trace_scope();
+        log::trace!(
+            target: "cranpose::compose::emit",
+            "reusing node #{id} as {} [scope_id={scope_id} scope_label={scope_label:?}]",
+            std::any::type_name::<N>(),
+        );
+    }
+
+    // Makes the node `make_node` gives and records it at `source`. Out of
+    // line: a composition that reuses its nodes never runs it, and the emit
+    // of every node stays small.
+    #[inline(never)]
+    fn emit_new_node<N: Node + 'static>(
+        &self,
+        source: crate::Key,
+        make_node: impl FnOnce(&mut dyn Applier) -> EmittedNode,
+    ) -> NodeId {
         let (id, generation) = {
             let mut applier = self.borrow_applier();
             let emitted = make_node(&mut *applier);

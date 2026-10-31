@@ -150,7 +150,7 @@ fn compose_basic_text_group(
         Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
             registrar,
             Rc::clone(&current),
-            TextStyle::clone(&style),
+            Arc::clone(&style),
             options,
         )),
         None => modifier,

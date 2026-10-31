@@ -17,7 +17,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
-    ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive,
+    ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive, Size,
 };
 use support::{brush_rect, solid_rect};
 
@@ -1899,7 +1899,7 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
             ),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                     node_id: NodeId(201),
                     rect: Rect {
                         x: 20.0,
@@ -1915,10 +1915,11 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
                         ..Default::default()
                     })),
                     font_size: 14.0,
-                    layout_options: TextLayoutOptions::default(),
+                    overflow: TextLayoutOptions::default().overflow,
                     clip: None,
                     paint: Default::default(),
-                })),
+                    layout: Default::default(),
+                }))),
             }),
             gradient_dstout_rect(
                 Rect {
@@ -2758,7 +2759,7 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(99),
                 rect: Rect {
                     x: 0.0,
@@ -2773,10 +2774,11 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
                     ..Default::default()
                 })),
                 font_size: 16.0,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextLayoutOptions::default().overflow,
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let wrapper = layer(
@@ -3047,7 +3049,7 @@ fn translation_only_wrapper_with_text_style_fixture(
             ),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                     node_id: NodeId(1),
                     rect: Rect {
                         x: 4.0,
@@ -3059,10 +3061,11 @@ fn translation_only_wrapper_with_text_style_fixture(
                     render_text: cranpose_ui::text::shared_plain_render_string("Text"),
                     text_style: std::sync::Arc::new(text_style),
                     font_size: 14.0,
-                    layout_options: TextLayoutOptions::default(),
+                    overflow: TextLayoutOptions::default().overflow,
                     clip: None,
                     paint: Default::default(),
-                })),
+                    layout: Default::default(),
+                }))),
             }),
         ],
     );
@@ -3119,7 +3122,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(101),
                 rect: Rect {
                     x: 0.0,
@@ -3131,10 +3134,11 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
                 render_text: std::sync::Arc::new(showcase_multispan_text().render_string()),
                 text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle::default())),
                 font_size: 16.0,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextLayoutOptions::default().overflow,
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let wrapper = layer(
@@ -3196,7 +3200,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
             }),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                     node_id: NodeId(102),
                     rect: Rect {
                         x: 8.0,
@@ -3210,10 +3214,11 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
                         SpanStyle::default(),
                     )),
                     font_size: 16.0,
-                    layout_options: TextLayoutOptions::default(),
+                    overflow: TextLayoutOptions::default().overflow,
                     clip: None,
                     paint: Default::default(),
-                })),
+                    layout: Default::default(),
+                }))),
             }),
         ],
     );
@@ -3264,7 +3269,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(103),
                 rect: Rect {
                     x: 8.0,
@@ -3276,10 +3281,11 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
                 render_text: std::sync::Arc::new(showcase_multispan_text().render_string()),
                 text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle::default())),
                 font_size: 16.0,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextLayoutOptions::default().overflow,
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
     let wrapper = layer(
@@ -3323,7 +3329,7 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(77),
                 rect: Rect {
                     x: 0.0,
@@ -3345,10 +3351,11 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
                     ..Default::default()
                 })),
                 font_size: 20.0,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextLayoutOptions::default().overflow,
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         })],
     );
 
@@ -3379,11 +3386,6 @@ fn crisp_icon_bitmap() -> ImageBitmap {
 
 fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
     let icon = crisp_icon_bitmap();
-    let text_style = TextStyle::from_span_style(SpanStyle {
-        color: Some(Color::WHITE),
-        font_size: TextUnit::Sp(15.0),
-        ..Default::default()
-    });
     let icon_leaf = layer(
         Rect {
             x: 0.0,
@@ -3422,25 +3424,12 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         },
         ProjectiveTransform::translation(47.0, 12.0),
         GraphicsLayer::default(),
-        vec![RenderNode::Primitive(PrimitiveEntry {
-            phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                node_id: NodeId(104),
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 44.0,
-                    height: 22.0,
-                },
-                text: cranpose_ui::text::shared_plain_annotated_string("Meta"),
-                render_text: cranpose_ui::text::shared_plain_render_string("Meta"),
-                text_style: std::sync::Arc::new(text_style),
-                font_size: 15.0,
-                layout_options: TextLayoutOptions::default(),
-                clip: None,
-                paint: Default::default(),
-            })),
-        })],
+        vec![support::text_node(
+            104,
+            "Meta",
+            Rect::from_size(Size::new(44.0, 22.0)),
+            15.0,
+        )],
     );
     let alpha_surface = layer(
         Rect {

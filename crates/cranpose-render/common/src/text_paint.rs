@@ -33,6 +33,9 @@ pub struct TextPaint {
     /// Whether the style's motion is static, so its glyphs stay on whole
     /// pixels.
     pub static_motion: bool,
+    /// Whether the style or a span casts a shadow, which spreads past the
+    /// glyphs.
+    pub casts_shadow: bool,
 }
 
 impl TextPaint {
@@ -47,6 +50,7 @@ impl TextPaint {
         (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
+        let spans = SpanPaint::of(spans);
         let plain = span_style.background.is_none()
             && span_style.shadow.is_none()
             && span_style.brush.is_none()
@@ -54,8 +58,9 @@ impl TextPaint {
                 span_style.draw_style,
                 Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0
             )
-            && !spans_override_foreground(spans)
-            && !has_visible_decoration(spans, style);
+            && !spans.foreground
+            && !decorates(span_style.text_decoration)
+            && !spans.decoration;
         Self {
             plain,
             color: resolve_text_color_without_gradient_fallback(style, Color::WHITE),
@@ -71,8 +76,40 @@ impl TextPaint {
                 .text_motion
                 .unwrap_or(TextMotion::Static)
                 == TextMotion::Static,
+            casts_shadow: span_style.shadow.is_some() || spans.shadow,
         }
     }
+}
+
+// What the spans of a text paint of their own.
+struct SpanPaint {
+    // A span paints its range with a gradient, an alpha or a draw style.
+    foreground: bool,
+    // A span draws a visible decoration.
+    decoration: bool,
+    // A span casts a shadow.
+    shadow: bool,
+}
+
+impl SpanPaint {
+    // What `spans` paint, found in one pass.
+    fn of(spans: &[RangeStyle<SpanStyle>]) -> Self {
+        let none = Self {
+            foreground: false,
+            decoration: false,
+            shadow: false,
+        };
+        spans.iter().fold(none, |paint, span| Self {
+            foreground: paint.foreground | span_has_foreground_override(&span.item),
+            decoration: paint.decoration | decorates(span.item.text_decoration),
+            shadow: paint.shadow | span.item.shadow.is_some(),
+        })
+    }
+}
+
+// Whether `decoration` draws a line.
+fn decorates(decoration: Option<TextDecoration>) -> bool {
+    decoration.is_some_and(|decoration| decoration != TextDecoration::NONE)
 }
 
 /// A text node's [`TextPaint`], set when the scene builds the node or when a
@@ -145,18 +182,14 @@ pub fn spans_override_foreground(spans: &[RangeStyle<SpanStyle>]) -> bool {
         .any(|span| span_has_foreground_override(&span.item))
 }
 
+/// Whether a span casts a shadow of its own.
+pub fn spans_cast_shadow(spans: &[RangeStyle<SpanStyle>]) -> bool {
+    spans.iter().any(|span| span.item.shadow.is_some())
+}
+
 /// Whether a span gives its range a colour or a solid brush of its own.
 pub fn spans_override_foreground_color(spans: &[RangeStyle<SpanStyle>]) -> bool {
     spans
         .iter()
         .any(|span| span.item.color.is_some() || matches!(span.item.brush, Some(Brush::Solid(_))))
-}
-
-/// Whether the style or a span draws an underline or a line-through.
-pub fn has_visible_decoration(spans: &[RangeStyle<SpanStyle>], global_style: &TextStyle) -> bool {
-    let visible = |decoration: Option<TextDecoration>| {
-        decoration.is_some_and(|decoration| decoration != TextDecoration::NONE)
-    };
-    visible(global_style.span_style.text_decoration)
-        || spans.iter().any(|span| visible(span.item.text_decoration))
 }

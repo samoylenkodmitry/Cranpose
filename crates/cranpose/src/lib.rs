@@ -139,12 +139,12 @@ pub use cranpose_fonts::DEVANAGARI as DEVANAGARI_FONT_PACK;
 ))]
 pub use cranpose_fonts::FontPack;
 pub use cranpose_render_common::font_source::{
-    ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
+    ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, FontRegistry,
 };
 #[cfg(feature = "installed-fonts")]
 pub use cranpose_render_common::installed_fonts::{install_font_bytes, install_font_file};
 /// Shared font data accepted by [`AppLauncher::with_font_face_bytes`].
-pub use cranpose_render_common::software_text_raster::FontBytes;
+pub use cranpose_text::FontBytes;
 pub use host_environment::{host_density, system_font_directory};
 /// The JNI types the [`android_main!`] exports name.
 #[cfg(all(feature = "android", target_os = "android"))]

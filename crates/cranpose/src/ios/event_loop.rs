@@ -487,8 +487,8 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         self.platform.set_scale_factor(scale_factor);
         self.refresh_environment(&window);
 
-        let fonts = self.settings.resolve_font_set();
-        let mut renderer = WgpuRenderer::with_font_set(fonts);
+        let fonts = self.settings.resolve_fonts();
+        let mut renderer = WgpuRenderer::with_text_fonts(fonts);
         let loss_proxy = self.event_proxy.clone();
         renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
         renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(

@@ -16,9 +16,28 @@ fn layout(
     width: f32,
     letter_spacing: f32,
 ) -> TextLayout {
+    let options = TextLayoutOptions::default();
+    layout_with(
+        resolver,
+        text,
+        paragraph,
+        lengths,
+        (width, letter_spacing),
+        options,
+    )
+}
+
+fn layout_with(
+    resolver: &FontFamilyResolver,
+    text: &str,
+    paragraph: &ParagraphStyle,
+    lengths: ParagraphLengths,
+    (width, letter_spacing): (f32, f32),
+    options: TextLayoutOptions,
+) -> TextLayout {
     let family = FontFamily::Default;
     let spans = [ShapingSpan {
-        letter_spacing,
+        letter_spacing: Some(letter_spacing),
         ..span(0..text.len(), &family, 400)
     }];
     TextLayouter::default().layout(
@@ -29,7 +48,7 @@ fn layout(
             lengths,
             min_width: 0.0,
             max_width: width,
-            options: TextLayoutOptions::default(),
+            options,
         },
         resolver,
     )
@@ -104,6 +123,25 @@ fn trimming_takes_the_leading_off_the_first_top_and_the_last_bottom() {
     assert!(trimmed.line_baseline(0) < full.line_baseline(0));
 }
 
+#[test]
+fn min_lines_of_a_trimmed_text_add_whole_line_advances() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let style = line_height(LineHeightTrim::Both);
+    let three = layout(&resolver, "a\na\na", &style, tall(), 120.0, 0.0);
+
+    let options = TextLayoutOptions {
+        min_lines: 3,
+        ..TextLayoutOptions::default()
+    };
+    let short = layout_with(&resolver, "a", &style, tall(), (120.0, 0.0), options);
+
+    let advance = three.line_baseline(1) - three.line_baseline(0);
+    assert!((advance - 40.0).abs() < 0.01, "advance {advance}");
+    assert!((short.line_advance() - advance).abs() < 0.01);
+    let (short, three) = (short.height(), three.height());
+    assert!((short - three).abs() < 0.01, "{short} against {three}");
+}
+
 fn line_count(laid: &TextLayout) -> f32 {
     f32::from(u16::try_from(laid.line_count()).expect("few lines"))
 }
@@ -131,15 +169,44 @@ fn indents_move_and_narrow_the_first_and_the_other_lines() {
     assert!((latin.line_left(0) - 30.0).abs() < 0.01);
     assert!((latin.line_left(1) - 10.0).abs() < 0.01);
     assert!((0..latin.line_count()).all(|line| latin.line_right(line) <= 200.0));
+    // Right to left, the indents come off the right of the paragraph's
+    // width, its widest line's.
+    let right = arabic.width();
     assert!(
-        (arabic.line_right(0) - 170.0).abs() < 0.01,
+        (arabic.line_right(0) - (right - 30.0)).abs() < 0.01,
         "{}",
         arabic.line_right(0)
     );
     assert!(
-        (arabic.line_right(1) - 190.0).abs() < 0.01,
+        (arabic.line_right(1) - (right - 10.0)).abs() < 0.01,
         "{}",
         arabic.line_right(1)
+    );
+}
+
+#[test]
+fn a_line_alone_starts_at_the_first_line_indent() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let lengths = ParagraphLengths {
+        first_line_indent: 30.0,
+        rest_line_indent: 10.0,
+        ..ParagraphLengths::default()
+    };
+
+    let laid = layout(
+        &resolver,
+        "Tea",
+        &ParagraphStyle::default(),
+        lengths,
+        200.0,
+        0.0,
+    );
+
+    assert_eq!(laid.line_count(), 1);
+    assert!(
+        (laid.line_left(0) - 30.0).abs() < 0.01,
+        "{}",
+        laid.line_left(0)
     );
 }
 

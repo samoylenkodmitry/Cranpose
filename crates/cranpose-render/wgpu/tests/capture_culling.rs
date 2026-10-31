@@ -79,17 +79,18 @@ fn straddling_page() -> Vec<RenderNode> {
         ),
         RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node: PrimitiveNode::Text(Box::new(support::with_layout(TextPrimitiveNode {
                 node_id: NodeId(7),
                 rect: rect(GLASS.x - 40.0, GLASS.y + 20.0, 90.0, 24.0),
                 text: cranpose_ui::text::shared_plain_annotated_string("Straddle"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Straddle"),
                 text_style: std::sync::Arc::new(text_style),
                 font_size: 18.0,
-                layout_options: TextLayoutOptions::default(),
+                overflow: TextLayoutOptions::default().overflow,
                 clip: None,
                 paint: Default::default(),
-            })),
+                layout: Default::default(),
+            }))),
         }),
         support::draw_node(
             DrawPrimitive::Image {

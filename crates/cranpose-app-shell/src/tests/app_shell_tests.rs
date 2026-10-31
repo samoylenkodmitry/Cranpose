@@ -752,148 +752,18 @@ impl RenderScene for MutableRecordingScene {
     }
 }
 
-#[derive(Clone, Copy)]
-enum StubTextMeasurer {
-    Fixed(f32),
-    FontSized,
-}
-
-impl StubTextMeasurer {
-    fn width(self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
-        match self {
-            Self::Fixed(width) => width,
-            Self::FontSized => text.text.chars().count() as f32 * style.resolve_font_size(14.0),
-        }
-    }
-
-    fn char_width_and_line_height(self, style: &TextStyle) -> (f32, f32) {
-        match self {
-            Self::Fixed(width) => (width, 1.0),
-            Self::FontSized => {
-                let size = style.resolve_font_size(14.0);
-                (size, size)
-            }
-        }
-    }
-}
-
-impl cranpose_ui::TextMeasurer for StubTextMeasurer {
-    fn measure(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> cranpose_ui::TextMetrics {
-        let (_, line_height) = self.char_width_and_line_height(style);
-        cranpose_ui::TextMetrics {
-            width: self.width(text, style),
-            height: line_height,
-            line_height,
-            line_count: 1,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        _text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
-        _x: f32,
-        _y: f32,
-    ) -> usize {
-        0
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-        _offset: usize,
-    ) -> f32 {
-        self.width(text, style)
-    }
-
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> cranpose_ui::TextLayoutResult {
-        let (char_width, line_height) = self.char_width_and_line_height(style);
-        cranpose_ui::TextLayoutResult::monospaced(&text.text, char_width, line_height)
-    }
-}
-
-struct CountingFixedWidthTextMeasurer {
-    width: f32,
-    measure_calls: Rc<Cell<usize>>,
-}
-
-impl CountingFixedWidthTextMeasurer {
-    fn new(width: f32, measure_calls: Rc<Cell<usize>>) -> Self {
-        Self {
-            width,
-            measure_calls,
-        }
-    }
-}
-
-impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
-    fn measure(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> cranpose_ui::TextMetrics {
-        self.measure_calls.set(self.measure_calls.get() + 1);
-        StubTextMeasurer::Fixed(self.width).measure(text, style)
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-        x: f32,
-        y: f32,
-    ) -> usize {
-        StubTextMeasurer::Fixed(self.width).get_offset_for_position(text, style, x, y)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-        offset: usize,
-    ) -> f32 {
-        StubTextMeasurer::Fixed(self.width).get_cursor_x_for_offset(text, style, offset)
-    }
-
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &TextStyle,
-    ) -> cranpose_ui::TextLayoutResult {
-        StubTextMeasurer::Fixed(self.width).layout(text, style)
-    }
-}
-
 #[derive(Default)]
 struct TestRenderer {
     scene: TestScene,
-    text_width: Option<f32>,
-    text_measure_calls: Option<Rc<Cell<usize>>>,
+    fonts: Option<cranpose_render_common::text_fonts::TextFonts>,
 }
 
 impl TestRenderer {
-    fn with_text_width(width: f32) -> Self {
+    // A renderer that hands its app `fonts`.
+    fn with_fonts(fonts: cranpose_render_common::text_fonts::TextFonts) -> Self {
         Self {
             scene: TestScene,
-            text_width: Some(width),
-            text_measure_calls: None,
-        }
-    }
-
-    fn with_counting_text_width(width: f32, measure_calls: Rc<Cell<usize>>) -> Self {
-        Self {
-            scene: TestScene,
-            text_width: Some(width),
-            text_measure_calls: Some(measure_calls),
+            fonts: Some(fonts),
         }
     }
 }
@@ -903,15 +773,8 @@ impl Renderer for TestRenderer {
     type Error = ();
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        if let Some(text_width) = self.text_width {
-            if let Some(measure_calls) = self.text_measure_calls.clone() {
-                app_context.set_text_measurer(CountingFixedWidthTextMeasurer::new(
-                    text_width,
-                    measure_calls,
-                ));
-            } else {
-                app_context.set_text_measurer(StubTextMeasurer::Fixed(text_width));
-            }
+        if let Some(fonts) = &self.fonts {
+            app_context.set_text_fonts(fonts.resolver());
         }
     }
 
@@ -1397,21 +1260,32 @@ fn pointer_event_clock_supports_realtime_and_exact_sampling() {
     );
 }
 
-#[test]
-fn two_app_shells_do_not_share_text_measurers() {
-    let _guard = test_guard();
-    reset_public_render_state_for_test();
-
+// The fonts of two app shells: Cranpose Test Mono, and the font a renderer
+// without app fonts draws with.
+fn two_shells() -> (AppShell<TestRenderer>, AppShell<TestRenderer>) {
     let first = AppShell::new(
-        TestRenderer::with_text_width(11.0),
+        TestRenderer::with_fonts(cranpose_render_common::text_fonts::TextFonts::new(
+            cranpose_ui::text::test_fonts().typefaces().to_vec(),
+        )),
         location_key(file!(), line!(), column!()),
         || {},
     );
     let second = AppShell::new(
-        TestRenderer::with_text_width(29.0),
+        TestRenderer::with_fonts(
+            cranpose_render_common::text_fonts::TextFonts::from_fonts_or_default(&[]),
+        ),
         location_key(file!(), line!(), column!()),
         || {},
     );
+    (first, second)
+}
+
+#[test]
+fn two_app_shells_lay_text_out_with_their_own_fonts() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let (first, second) = two_shells();
     let text = cranpose_ui::text::AnnotatedString::from("same text");
     let style = TextStyle::default();
 
@@ -1422,9 +1296,10 @@ fn two_app_shells_do_not_share_text_measurers() {
     let first_width_again =
         first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
 
-    assert_eq!(first_width, 11.0);
-    assert_eq!(second_width, 29.0);
-    assert_eq!(first_width_again, 11.0);
+    // Nine characters of 0.6 em at 14 pixels, rounded up to a whole pixel.
+    assert_eq!(first_width, 76.0);
+    assert_ne!(second_width, first_width);
+    assert_eq!(first_width_again, first_width);
 }
 
 #[test]
@@ -1432,46 +1307,21 @@ fn two_app_shells_have_independent_text_caches() {
     let _guard = test_guard();
     reset_public_render_state_for_test();
 
-    let first_calls = Rc::new(Cell::new(0));
-    let second_calls = Rc::new(Cell::new(0));
-    let first = AppShell::new(
-        TestRenderer::with_counting_text_width(11.0, Rc::clone(&first_calls)),
-        location_key(file!(), line!(), column!()),
-        || {},
-    );
-    let second = AppShell::new(
-        TestRenderer::with_counting_text_width(29.0, Rc::clone(&second_calls)),
-        location_key(file!(), line!(), column!()),
-        || {},
-    );
+    let (first, second) = two_shells();
     let text = cranpose_ui::text::AnnotatedString::from("same cached text");
     let style = TextStyle::default();
+    let prepare = || cranpose_ui::prepare_text_layout(&text, &style, Default::default(), None);
 
-    let first_width =
-        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
-    let first_width_again =
-        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
-    let second_width =
-        second.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
-    let second_width_again =
-        second.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
-    let first_width_after_second =
-        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let first_layout = first.debug_enter_app_context(prepare);
+    let first_layout_again = first.debug_enter_app_context(prepare);
+    let second_layout = second.debug_enter_app_context(prepare);
+    let first_layout_after_second = first.debug_enter_app_context(prepare);
 
-    assert_eq!(first_width, 11.0);
-    assert_eq!(first_width_again, 11.0);
-    assert_eq!(second_width, 29.0);
-    assert_eq!(second_width_again, 29.0);
-    assert_eq!(first_width_after_second, 11.0);
-    assert_eq!(
-        first_calls.get(),
-        1,
-        "first shell should reuse its own text cache and not be invalidated by measuring in the second shell"
-    );
-    assert_eq!(
-        second_calls.get(),
-        1,
-        "second shell should populate and reuse an independent text cache"
+    assert!(Rc::ptr_eq(&first_layout, &first_layout_again));
+    assert!(!Rc::ptr_eq(&first_layout, &second_layout));
+    assert!(
+        Rc::ptr_eq(&first_layout, &first_layout_after_second),
+        "the first shell keeps its layout while the second lays the same text out"
     );
 }
 
@@ -1624,8 +1474,10 @@ impl Renderer for CountingRenderer {
         Ok(())
     }
 
-    fn draw_dev_overlay(&mut self, text: &str, _viewport: Size) {
-        self.overlay_texts.borrow_mut().push(text.to_string());
+    fn draw_dev_overlay(&mut self, overlay: &cranpose_ui::PreparedTextLayout, _viewport: Size) {
+        self.overlay_texts
+            .borrow_mut()
+            .push(overlay.text.text.clone());
     }
 }
 

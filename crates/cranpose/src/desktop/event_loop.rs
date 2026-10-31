@@ -5200,7 +5200,7 @@ impl ApplicationHandler for App {
                 .set_system_theme(system_theme_from_winit(theme));
         }
 
-        let text_system = WgpuTextSystem::from_font_set(self.settings.resolve_font_set());
+        let text_system = WgpuTextSystem::from_text_fonts(self.settings.resolve_fonts());
         let initial_scale = window.scale_factor();
         let renderer = wgpu_renderer_for_surface(
             text_system.clone(),

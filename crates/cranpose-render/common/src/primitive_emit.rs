@@ -1,8 +1,6 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
-use cranpose_ui::text::{
-    AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle, text_style_for_draw_style,
-};
+use cranpose_ui::text::{AnnotatedString, TextStyle, drawn_text_style};
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer,
     ImageBitmap, ImageSampling, LineGeometry, Point, Rect, RoundedCornerShape, ShadowPrimitive,
@@ -127,18 +125,18 @@ pub struct TextDrawParams {
     pub rect: Rect,
     /// The text to draw.
     pub text: Rc<AnnotatedString>,
-    /// `text` as a renderer's draws carry it across threads.
-    pub render_text: std::sync::Arc<cranpose_ui::text::RenderString>,
+    /// The lines and glyphs, from `rect`'s top left corner.
+    pub layout: cranpose_text::TextLayout,
     /// Color that fills the glyphs.
     pub color: Color,
     /// Style the text is drawn with.
-    pub text_style: TextStyle,
+    pub text_style: Arc<TextStyle>,
+    /// `text_style`'s render hash.
+    pub style_hash: u64,
     /// Font size in logical pixels, before `scale` is applied.
     pub font_size: f32,
     /// Uniform layer scale — the factor glyphs are rasterized at.
     pub scale: f32,
-    /// Layout options the text is laid out with.
-    pub layout_options: TextLayoutOptions,
     /// Clip rectangle that cuts the text, or `None` when nothing clips it.
     pub clip: Option<Rect>,
 }
@@ -537,6 +535,13 @@ fn text_draw_params(
     if text.text.is_empty() {
         return None;
     }
+    // A text no text system laid out draws nothing.
+    let layout = cranpose_text::TextLayout::clone(
+        &*text
+            .layout
+            .as_ref()?
+            .downcast::<cranpose_text::TextLayout>()?,
+    );
     let draw_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
     let rect = apply_layer_to_rect(draw_rect, layer_bounds, layer);
     if !(rect.width > 0.0 && rect.height > 0.0) {
@@ -546,7 +551,7 @@ fn text_draw_params(
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let mut text_style = text_style_for_draw_style(&text.style);
+    let (mut text_style, mut style_hash) = drawn_text_style(&text.style);
     // A gradient fills the glyphs through the style's brush, as a `Text`
     // composable's does, laid over the text's extent.
     let color = match text.brush {
@@ -558,7 +563,9 @@ fn text_draw_params(
                 .first()
                 .copied()
                 .unwrap_or(Color::TRANSPARENT);
-            text_style.span_style.brush = Some(gradient);
+            let style = Arc::make_mut(&mut text_style);
+            style.span_style.brush = Some(gradient);
+            style_hash = style.render_hash();
             first
         }
     };
@@ -574,16 +581,12 @@ fn text_draw_params(
     Some(TextDrawParams {
         rect,
         text: cranpose_ui::text::shared_plain_annotated_string(text.text.as_ref()),
-        render_text: cranpose_ui::text::shared_plain_render_string(text.text.as_ref()),
+        layout,
         color,
         text_style,
+        style_hash,
         font_size: text.style.resolved_font_size(),
         scale,
-        layout_options: TextLayoutOptions {
-            soft_wrap: false,
-            overflow: TextOverflow::Visible,
-            ..TextLayoutOptions::default()
-        },
         clip,
     })
 }

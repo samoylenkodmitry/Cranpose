@@ -2,9 +2,8 @@ use std::{hash::Hash, rc::Rc};
 
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::{
-    software_text_raster::{
-        SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
-    },
+    glyph_mask::{GlyphMask, GlyphMaskKey},
+    text_atlas::AtlasGlyph,
     text_mask_gamma::TextLuminance,
 };
 use cranpose_ui_graphics::{BlendMode, Color};
@@ -118,12 +117,12 @@ pub(super) struct GlyphSamplers<'a> {
 /// text it is drawn in, so one glyph in light and dark text takes two slots.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct GlyphAtlasSlotKey {
-    glyph: SoftwareGlyphAtlasKey,
+    glyph: GlyphMaskKey,
     luminance: TextLuminance,
 }
 
 impl GlyphAtlasSlotKey {
-    pub(super) fn new(glyph: SoftwareGlyphAtlasKey, color: Color) -> Self {
+    pub(super) fn new(glyph: GlyphMaskKey, color: Color) -> Self {
         Self {
             glyph,
             luminance: TextLuminance::of_color(color),
@@ -154,7 +153,7 @@ impl RunAtlasEntries {
     pub(super) fn entry<'u>(
         &mut self,
         (text, upload): (&mut TextResources, &mut FrameUploads<'u>),
-        glyph: &SoftwareGlyphAtlasPlacement,
+        glyph: &AtlasGlyph,
         look_up: impl FnOnce(
             &mut TextResources,
             &mut FrameUploads<'u>,
@@ -342,7 +341,7 @@ impl TextGlyphAtlas {
     /// `None` when the atlas is full.
     pub(super) fn upload_glyph(
         &mut self,
-        glyph: &SoftwareGlyphAtlasGlyph,
+        (glyph, mask): (&AtlasGlyph, &GlyphMask),
         frame_stats: &mut gpu_stats::FrameStats,
     ) -> Option<GlyphAtlasEntry> {
         let key = GlyphAtlasSlotKey::new(glyph.key, glyph.color);
@@ -351,14 +350,12 @@ impl TextGlyphAtlas {
             return Some(entry);
         }
 
-        let width = u32::try_from(glyph.mask.width).ok()?;
-        let height = u32::try_from(glyph.mask.height).ok()?;
+        let width = u32::try_from(mask.width).ok()?;
+        let height = u32::try_from(mask.height).ok()?;
         let entry = self.allocate(width, height)?;
         let correction = key.luminance.correction();
         self.pending_coverage.extend(
-            glyph
-                .mask
-                .alpha
+            mask.alpha
                 .iter()
                 .map(|&coverage| correction.apply(coverage)),
         );

@@ -15,11 +15,10 @@ use cranpose_render_common::{
         DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
         draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
     },
+    text_decoration::{visit_text_backgrounds, visit_text_lines},
+    text_raster::GlyphInk,
 };
-use cranpose_ui::{
-    LayoutBox, measure_text,
-    text::{TextDecoration, TextStyle},
-};
+use cranpose_ui::{LayoutBox, text::TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
     RenderEffect, RoundedCornerShape, TransformOrigin, whole,
@@ -409,25 +408,23 @@ fn push_text_style_draws(
     placement: TextPlacement<'_>,
 ) {
     let (rect, node_layer, text_clip) = (placement.bounds, placement.layer, placement.clip);
-    let (text, text_style, font_size) = (&node.text, &node.text_style, node.font_size);
-    let baseline_shift_px = text_style
-        .span_style
-        .baseline_shift
-        .filter(|shift| shift.is_specified())
-        .map_or(0.0, |shift| -(shift.0 * font_size));
-    let shifted_text_rect = placement.text_rect.translate(0.0, baseline_shift_px);
-    let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, node_layer);
+    let (text, text_style, layout) = (&node.text, &node.text_style, &node.layout);
+    let text_rect = placement.text_rect;
+    let transformed_text_rect = apply_layer_to_rect(text_rect, rect, node_layer);
+    // A line or a box of the text, in layout pixels, where the node draws it.
+    let placed = |part: Rect| {
+        apply_layer_to_rect(part.translate(text_rect.x, text_rect.y), rect, node_layer)
+    };
 
-    if let Some(background) = text_style.span_style.background {
-        let brush = apply_layer_to_brush(Brush::solid(background), node_layer);
+    visit_text_backgrounds(layout, text.as_ref().into(), text_style, |part, brush| {
         scene.push_shape(
-            transformed_shifted_text_rect,
-            brush,
+            placed(part),
+            apply_layer_to_brush(brush.clone(), node_layer),
             None,
             text_clip,
             BlendMode::SrcOver,
         );
-    }
+    });
 
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
@@ -447,179 +444,58 @@ fn push_text_style_draws(
                 .map(|brush| apply_layer_to_brush(brush, node_layer));
             Arc::new(style)
         };
-    let text_brush = transformed_text_style
-        .span_style
-        .brush
-        .clone()
-        .unwrap_or_else(|| Brush::solid(transformed_text_color));
 
     if let Some(shadow) = text_style.span_style.shadow {
-        let shadow_rect = shifted_text_rect.translate(shadow.offset.x, shadow.offset.y);
-        let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, node_layer);
-        let transformed_shadow_color = apply_layer_to_color(shadow.color, node_layer);
+        let shadow_rect = text_rect.translate(shadow.offset.x, shadow.offset.y);
         let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
-        shadow_text_style.span_style.brush = None;
         shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
-            color: transformed_shadow_color,
+            color: apply_layer_to_color(shadow.color, node_layer),
             offset: Point::new(0.0, 0.0),
             blur_radius: shadow.blur_radius,
         });
         scene.push_text(TextDraw {
-            rect: transformed_shadow_rect,
+            rect: apply_layer_to_rect(shadow_rect, rect, node_layer),
             snap_anchor: None,
             text: Rc::clone(text),
+            layout: layout.clone(),
             color: Color::TRANSPARENT,
             text_style: Arc::new(shadow_text_style),
-            font_size,
+            font_size: node.font_size,
             scale: layer_uniform_scale(node_layer),
+            ink: GlyphInk::Hidden,
             clip: text_clip,
         });
     }
 
     scene.push_text(TextDraw {
-        rect: transformed_shifted_text_rect,
+        rect: transformed_text_rect,
         snap_anchor: None,
         text: Rc::clone(text),
+        layout: layout.clone(),
         color: transformed_text_color,
         text_style: transformed_text_style,
-        font_size,
+        font_size: node.font_size,
         scale: layer_uniform_scale(node_layer),
+        ink: GlyphInk::Painted,
         clip: text_clip,
     });
 
-    let decoration_placement = TextPlacement {
-        text_rect: shifted_text_rect,
-        ..placement
-    };
-    push_text_decorations(scene, decoration_placement, text, text_style, &text_brush);
-}
-
-// `placement.text_rect` is the text's box shifted to its baseline.
-fn push_text_decorations(
-    scene: &mut RasterScene,
-    placement: TextPlacement<'_>,
-    annotated_text: &cranpose_ui::text::AnnotatedString,
-    global_style: &TextStyle,
-    text_brush: &Brush,
-) {
-    let (rect, text_rect) = (placement.bounds, placement.text_rect);
-    let (content_layer, text_clip) = (placement.layer, placement.clip);
-    // A span draws a line only when its style or a span over it has one;
-    // without any, measuring the spans finds nothing to draw.
-    let decorated = |style: &cranpose_ui::text::SpanStyle| {
-        style
-            .text_decoration
-            .is_some_and(|decoration| decoration != TextDecoration::NONE)
-    };
-    if annotated_text.is_empty()
-        || !(decorated(&global_style.span_style)
-            || annotated_text
-                .span_styles
-                .iter()
-                .any(|span| decorated(&span.item)))
-    {
-        return;
-    }
-
-    let boundaries = annotated_text.span_boundaries();
-    let text_str = annotated_text.text.as_str();
-
-    let mut current_offset: f32 = 0.0;
-
-    for window in boundaries.windows(2) {
-        let start = window[0];
-        let end = window[1];
-        if start == end {
-            continue;
-        }
-
-        let slice = &text_str[start..end];
-        let mut merged_style = global_style.span_style.clone();
-        for span in &annotated_text.span_styles {
-            if span.range.start <= start && span.range.end >= end {
-                merged_style = merged_style.merge(&span.item);
-            }
-        }
-
-        let mut span_text_style = global_style.clone();
-        span_text_style.span_style = merged_style.clone();
-
-        let span_width = measure_text(
-            &cranpose_ui::text::AnnotatedString::from(slice),
-            &span_text_style,
-        )
-        .width
-        .max(0.0);
-
-        let Some(decoration) = merged_style.text_decoration else {
-            current_offset += span_width;
-            continue;
-        };
-
-        if decoration == TextDecoration::NONE || span_width <= 0.0 {
-            current_offset += span_width;
-            continue;
-        }
-
-        let font_size = span_text_style.resolve_font_size(14.0);
-        let line_height = cranpose_ui::text::text_line_box(&span_text_style)
-            .map_or_else(
-                || span_text_style.resolve_line_height(14.0, font_size),
-                |line_box| line_box.block_height(1),
-            )
-            .max(1.0);
-        let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-        let brush = merged_style.brush.clone().unwrap_or_else(|| {
-            merged_style
-                .color
-                .map_or_else(|| text_brush.clone(), Brush::solid)
-        });
-
-        let line_top = text_rect.y;
-
-        if decoration.contains(TextDecoration::UNDERLINE) {
-            let underline_rect = text_decoration_rect(
-                text_rect.x + current_offset,
-                line_top + line_height - thickness * 1.35,
-                span_width,
-                thickness,
-            );
-            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
+    visit_text_lines(
+        layout,
+        text.as_ref().into(),
+        text_style,
+        text_color,
+        |part, brush| {
             scene.push_pixel_snapped_shape(
-                transformed,
-                brush.clone(),
+                placed(part),
+                apply_layer_to_brush(brush.clone(), node_layer),
                 None,
                 text_clip,
                 BlendMode::SrcOver,
             );
-        }
-
-        if decoration.contains(TextDecoration::LINE_THROUGH) {
-            let strike_rect = text_decoration_rect(
-                text_rect.x + current_offset,
-                line_top + line_height * 0.52 - thickness * 0.5,
-                span_width,
-                thickness,
-            );
-            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            scene.push_pixel_snapped_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
-        }
-
-        current_offset += span_width;
-    }
+        },
+    );
 }
-
-fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
-    Rect {
-        x,
-        y,
-        width,
-        height: whole::ceil(thickness).max(1.0),
-    }
-}
-
-#[cfg(test)]
-use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
 pub(crate) fn build_raster_scene(
     graph: &RenderGraph,
@@ -1340,8 +1216,10 @@ pub(crate) fn push_draw_primitive(
                 rect: params.rect,
                 snap_anchor: None,
                 text: params.text,
+                layout: params.layout,
+                ink: GlyphInk::Painted,
                 color: params.color,
-                text_style: Arc::new(params.text_style),
+                text_style: params.text_style,
                 font_size: params.font_size,
                 scale: params.scale,
                 clip: params.clip,
