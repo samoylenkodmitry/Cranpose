@@ -1352,7 +1352,11 @@ impl super::Queue {
             | C::ConfigureDepthStencil(_)
             | C::SetProgram(_)
             | C::BindSampler(..)
-            | C::BindTexture { .. } => {}
+            | C::BindTexture { .. }
+            | C::SetColorTarget {
+                draw_buffer_index: None,
+                ..
+            } => {}
             C::SetVertexAttribute {
                 buffer: None,
                 buffer_desc: _,
@@ -1439,81 +1443,46 @@ impl super::Queue {
                 unsafe { gl.blend_color(c[0], c[1], c[2], c[3]) };
             }
             C::SetColorTarget {
-                draw_buffer_index,
+                draw_buffer_index: Some(index),
                 desc: super::ColorTargetDesc { mask, ref blend },
             } => {
                 use wgt::ColorWrites as Cw;
-                if let Some(index) = draw_buffer_index {
-                    unsafe {
-                        gl.color_mask_draw_buffer(
-                            index,
-                            mask.contains(Cw::RED),
-                            mask.contains(Cw::GREEN),
-                            mask.contains(Cw::BLUE),
-                            mask.contains(Cw::ALPHA),
-                        )
-                    };
-                    if let Some(ref blend) = *blend {
-                        unsafe { gl.enable_draw_buffer(glow::BLEND, index) };
-                        if blend.color != blend.alpha {
-                            unsafe {
-                                gl.blend_equation_separate_draw_buffer(
-                                    index,
-                                    blend.color.equation,
-                                    blend.alpha.equation,
-                                )
-                            };
-                            unsafe {
-                                gl.blend_func_separate_draw_buffer(
-                                    index,
-                                    blend.color.src,
-                                    blend.color.dst,
-                                    blend.alpha.src,
-                                    blend.alpha.dst,
-                                )
-                            };
-                        } else {
-                            unsafe { gl.blend_equation_draw_buffer(index, blend.color.equation) };
-                            unsafe {
-                                gl.blend_func_draw_buffer(index, blend.color.src, blend.color.dst)
-                            };
-                        }
+                unsafe {
+                    gl.color_mask_draw_buffer(
+                        index,
+                        mask.contains(Cw::RED),
+                        mask.contains(Cw::GREEN),
+                        mask.contains(Cw::BLUE),
+                        mask.contains(Cw::ALPHA),
+                    )
+                };
+                if let Some(ref blend) = *blend {
+                    unsafe { gl.enable_draw_buffer(glow::BLEND, index) };
+                    if blend.color != blend.alpha {
+                        unsafe {
+                            gl.blend_equation_separate_draw_buffer(
+                                index,
+                                blend.color.equation,
+                                blend.alpha.equation,
+                            )
+                        };
+                        unsafe {
+                            gl.blend_func_separate_draw_buffer(
+                                index,
+                                blend.color.src,
+                                blend.color.dst,
+                                blend.alpha.src,
+                                blend.alpha.dst,
+                            )
+                        };
                     } else {
-                        unsafe { gl.disable_draw_buffer(glow::BLEND, index) };
+                        unsafe { gl.blend_equation_draw_buffer(index, blend.color.equation) };
+                        unsafe {
+                            gl.blend_func_draw_buffer(index, blend.color.src, blend.color.dst)
+                        };
                     }
                 } else {
-                    unsafe {
-                        gl.color_mask(
-                            mask.contains(Cw::RED),
-                            mask.contains(Cw::GREEN),
-                            mask.contains(Cw::BLUE),
-                            mask.contains(Cw::ALPHA),
-                        )
-                    };
-                    if let Some(ref blend) = *blend {
-                        unsafe { gl.enable(glow::BLEND) };
-                        if blend.color != blend.alpha {
-                            unsafe {
-                                gl.blend_equation_separate(
-                                    blend.color.equation,
-                                    blend.alpha.equation,
-                                )
-                            };
-                            unsafe {
-                                gl.blend_func_separate(
-                                    blend.color.src,
-                                    blend.color.dst,
-                                    blend.alpha.src,
-                                    blend.alpha.dst,
-                                )
-                            };
-                        } else {
-                            unsafe { gl.blend_equation(blend.color.equation) };
-                            unsafe { gl.blend_func(blend.color.src, blend.color.dst) };
-                        }
-                    } else {
-                        unsafe { gl.disable(glow::BLEND) };
-                    }
+                    unsafe { gl.disable_draw_buffer(glow::BLEND, index) };
                 }
             }
             C::BindBuffer {

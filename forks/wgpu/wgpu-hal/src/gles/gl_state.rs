@@ -20,8 +20,8 @@ use core::{fmt, ops::Range};
 use glow::HasContext;
 
 use super::{
-    AttributeDesc, ColorTargetDesc, Command as C, DepthState, StencilOps, VertexAttribKind,
-    VertexBufferDesc, MAX_TEXTURE_SLOTS, MAX_VERTEX_ATTRIBUTES,
+    AttributeDesc, BlendDesc, ColorTargetDesc, Command as C, DepthState, StencilOps,
+    VertexAttribKind, VertexBufferDesc, MAX_TEXTURE_SLOTS, MAX_VERTEX_ATTRIBUTES,
 };
 
 /// Uniform buffer bindings tracked by slot; a slot above them is bound
@@ -90,8 +90,13 @@ pub(super) struct GlState {
     active_texture: Option<u32>,
     textures: [Option<BoundTexture>; MAX_TEXTURE_SLOTS],
     samplers: [Option<Option<glow::Sampler>>; MAX_TEXTURE_SLOTS],
-    /// The default draw buffer's write mask and blend.
-    color_target: Option<ColorTargetDesc>,
+    /// The default draw buffer's write mask.
+    color_mask: Option<wgt::ColorWrites>,
+    blend: Option<bool>,
+    /// The color and alpha blend equations.
+    blend_equations: Option<(u32, u32)>,
+    /// The color source and destination factors, then the alpha ones.
+    blend_funcs: Option<[u32; 4]>,
     element_buffer: Option<glow::Buffer>,
     /// The base and max levels and the aspects each texture was last bound
     /// with: state of the texture object, which a bind with the same ones
@@ -245,15 +250,19 @@ impl GlState {
                 self.element_buffer = Some(buffer);
                 return false;
             }
-            // The queue sets a new color target of the default draw buffer.
             C::SetColorTarget {
                 draw_buffer_index: None,
-                ref desc,
+                desc: ColorTargetDesc { mask, ref blend },
+            } => unsafe { self.set_color_target(gl, mask, blend.as_ref()) },
+            // One draw buffer's own target leaves the default one unknown.
+            C::SetColorTarget {
+                draw_buffer_index: Some(_),
+                ..
             } => {
-                if self.color_target.as_ref() == Some(desc) {
-                    return true;
-                }
-                self.color_target = Some(desc.clone());
+                self.color_mask = None;
+                self.blend = None;
+                self.blend_equations = None;
+                self.blend_funcs = None;
                 return false;
             }
             // A draw's program reads only the attributes its pipeline pointed,
@@ -279,7 +288,6 @@ impl GlState {
             | C::SetAlphaToCoverage(_)
             | C::SetPrimitive(_)
             | C::SetBlendConstant(_)
-            | C::SetColorTarget { .. }
             | C::SetImmediates { .. }
             | C::SetClipDistances { .. }
             | C::InsertDebugMarker(_)
@@ -440,6 +448,56 @@ impl GlState {
             }
         }
         self.textures[slot as usize] = Some(bound);
+    }
+
+    /// Sets the default draw buffer's write mask and blend, each part only
+    /// where it changes. One equation or pair of factors for both color and
+    /// alpha takes the call that sets both.
+    unsafe fn set_color_target(
+        &mut self,
+        gl: &glow::Context,
+        mask: wgt::ColorWrites,
+        blend: Option<&BlendDesc>,
+    ) {
+        use wgt::ColorWrites as Cw;
+        if self.color_mask != Some(mask) {
+            unsafe {
+                gl.color_mask(
+                    mask.contains(Cw::RED),
+                    mask.contains(Cw::GREEN),
+                    mask.contains(Cw::BLUE),
+                    mask.contains(Cw::ALPHA),
+                )
+            };
+            self.color_mask = Some(mask);
+        }
+        unsafe { Self::toggle(gl, &mut self.blend, glow::BLEND, blend.is_some()) };
+        let Some(blend) = blend else {
+            return;
+        };
+        let equations = (blend.color.equation, blend.alpha.equation);
+        if self.blend_equations != Some(equations) {
+            if equations.0 == equations.1 {
+                unsafe { gl.blend_equation(equations.0) };
+            } else {
+                unsafe { gl.blend_equation_separate(equations.0, equations.1) };
+            }
+            self.blend_equations = Some(equations);
+        }
+        let funcs = [
+            blend.color.src,
+            blend.color.dst,
+            blend.alpha.src,
+            blend.alpha.dst,
+        ];
+        if self.blend_funcs != Some(funcs) {
+            if funcs[..2] == funcs[2..] {
+                unsafe { gl.blend_func(funcs[0], funcs[1]) };
+            } else {
+                unsafe { gl.blend_func_separate(funcs[0], funcs[1], funcs[2], funcs[3]) };
+            }
+            self.blend_funcs = Some(funcs);
+        }
     }
 
     /// Sets the emulated first instance of the program in use at `location`,
