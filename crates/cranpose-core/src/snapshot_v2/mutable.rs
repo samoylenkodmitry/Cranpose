@@ -6,53 +6,6 @@ use crate::{
     state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateRecord},
 };
 
-pub(super) fn find_record_by_id(
-    head: &Rc<StateRecord>,
-    target: SnapshotId,
-) -> Option<Rc<StateRecord>> {
-    let mut cursor = Some(Rc::clone(head));
-    while let Some(record) = cursor {
-        if !record.is_tombstone() && record.snapshot_id() == target {
-            return Some(record);
-        }
-        cursor = record.next();
-    }
-    None
-}
-
-pub(super) fn find_previous_record(
-    head: &Rc<StateRecord>,
-    base_snapshot_id: SnapshotId,
-    invalid: &SnapshotIdSet,
-) -> (Option<Rc<StateRecord>>, bool) {
-    let mut cursor = Some(Rc::clone(head));
-    let mut best: Option<Rc<StateRecord>> = None;
-    let mut fallback: Option<Rc<StateRecord>> = None;
-    let mut found_base = false;
-
-    while let Some(record) = cursor {
-        if !record.is_tombstone() {
-            let id = record.snapshot_id();
-            let is_valid = id <= base_snapshot_id && !invalid.get(id);
-            if is_valid {
-                found_base = true;
-                let replace = best
-                    .as_ref()
-                    .is_none_or(|current| current.snapshot_id() < id);
-                if replace {
-                    best = Some(Rc::clone(&record));
-                }
-            }
-            if fallback.is_none() {
-                fallback = Some(Rc::clone(&record));
-            }
-        }
-        cursor = record.next();
-    }
-
-    (best.or(fallback), found_base)
-}
-
 enum ApplyOperation {
     PromoteChild {
         object_id: ObjectId,
@@ -289,14 +242,14 @@ impl MutableSnapshot {
         let mut operations: Vec<ApplyOperation> = Vec::with_capacity(modified_objects.len());
 
         for (obj_id, state, writer_id) in &modified_objects {
-            let head = state.first_record();
-            let Some(applied) = find_record_by_id(&head, *writer_id) else {
+            let records = state.records();
+            let Some(applied) = records.live_at(*writer_id) else {
                 return SnapshotApplyResult::Failure;
             };
 
-            let Some(current) =
-                crate::state::readable_record_for(&head, parent_snapshot_id, &next_invalid)
-                    .or_else(|| state.try_readable_record(parent_snapshot_id, &parent_invalid))
+            let Some(current) = records
+                .readable(parent_snapshot_id, &next_invalid)
+                .or_else(|| state.try_readable_record(parent_snapshot_id, &parent_invalid))
             else {
                 log::error!(
                     "MutableSnapshot::apply missing parent readable record (object_id={obj_id:?}, parent_snapshot_id={parent_snapshot_id})"
@@ -304,8 +257,7 @@ impl MutableSnapshot {
                 return SnapshotApplyResult::Failure;
             };
             let this_invalid = self.state.invalid.borrow();
-            let (previous_opt, found_base) =
-                find_previous_record(&head, self.base_parent_id, &this_invalid);
+            let (previous_opt, found_base) = records.previous(self.base_parent_id, &this_invalid);
             drop(this_invalid);
             let Some(previous) = previous_opt else {
                 return SnapshotApplyResult::Failure;
@@ -382,7 +334,7 @@ impl MutableSnapshot {
                     if state.promote_record(writer_id).is_err() {
                         return SnapshotApplyResult::Failure;
                     }
-                    let new_head_id = state.first_record().snapshot_id();
+                    let new_head_id = state.records().head().snapshot_id();
                     applied_info.push((object_id, state, new_head_id));
                 }
                 ApplyOperation::PromoteExisting {
@@ -395,7 +347,7 @@ impl MutableSnapshot {
                         return SnapshotApplyResult::Failure;
                     }
                     applied.tombstone_retiring_value();
-                    let new_head_id = state.first_record().snapshot_id();
+                    let new_head_id = state.records().head().snapshot_id();
                     applied_info.push((object_id, state, new_head_id));
                 }
                 ApplyOperation::CommitMerged {

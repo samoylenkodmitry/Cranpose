@@ -102,7 +102,7 @@ impl StateObject for TestStateObject {
         ObjectId(self.id)
     }
 
-    fn first_record(&self) -> Rc<StateRecord> {
+    fn records(&self) -> &crate::state::RecordChain {
         unimplemented!("Not needed for observer tests")
     }
 
@@ -119,10 +119,6 @@ impl StateObject for TestStateObject {
         _snapshot_id: SnapshotId,
         _invalid: &SnapshotIdSet,
     ) -> Rc<StateRecord> {
-        unimplemented!("Not needed for observer tests")
-    }
-
-    fn prepend_state_record(&self, _record: Rc<StateRecord>) {
         unimplemented!("Not needed for observer tests")
     }
 
