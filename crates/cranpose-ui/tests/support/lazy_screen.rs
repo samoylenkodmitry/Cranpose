@@ -6,8 +6,9 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui::{
-    AppContext, Column, ColumnSpec, HeadlessRenderer, LayoutEngine, LazyColumn, LazyColumnSpec,
-    MemoryHeadroom, Modifier, RenderOp, Size, Text, TextStyle, composable, set_memory_headroom,
+    AppContext, Column, ColumnSpec, HeadlessRenderer, LayoutEngine, LayoutNode, LazyColumn,
+    LazyColumnSpec, MemoryHeadroom, Modifier, RenderOp, Size, Text, TextStyle, composable,
+    set_memory_headroom,
 };
 
 pub(crate) struct LazyScreen {
@@ -110,6 +111,13 @@ impl LazyScreen {
     // The nodes the composition keeps, the rows' in the reuse pool included.
     pub(crate) fn nodes(&mut self) -> usize {
         self.composition.applier_mut().len()
+    }
+
+    // The layout nodes that left the composition and wait to be reused.
+    pub(crate) fn recycled_layout_nodes(&mut self) -> usize {
+        self.composition
+            .applier_mut()
+            .debug_recycled_node_count_for::<LayoutNode>()
     }
 }
 
