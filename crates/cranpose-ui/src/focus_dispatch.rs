@@ -73,6 +73,10 @@ impl FocusInvalidationManager {
         self.focus_targets.contains_key(&node_id)
     }
 
+    fn has_focus_targets(&self) -> bool {
+        !self.focus_targets.is_empty()
+    }
+
     fn focus_target_handles(&self, node_id: NodeId) -> Vec<Rc<dyn FocusTargetHandle>> {
         self.focus_targets
             .get(&node_id)
@@ -178,6 +182,10 @@ impl FocusInvalidationState {
 
     pub(crate) fn has_focus_target(&self, node_id: NodeId) -> bool {
         self.manager.borrow().has_focus_target(node_id)
+    }
+
+    fn has_focus_targets(&self) -> bool {
+        self.manager.borrow().has_focus_targets()
     }
 
     pub(crate) fn clear_active_focus(&self) -> bool {
@@ -349,6 +357,12 @@ pub(crate) fn request_focus(node_id: NodeId) -> bool {
 /// Whether `node_id` registered a focus target in this app context.
 pub(crate) fn has_focus_target(node_id: NodeId) -> bool {
     crate::render_state::with_focus_dispatch(|state| state.has_focus_target(node_id))
+}
+
+/// Whether any node registered a focus target in this app context: with
+/// none, no search for a target to focus can find one.
+pub fn has_focus_targets() -> bool {
+    crate::render_state::with_focus_dispatch(FocusInvalidationState::has_focus_targets)
 }
 
 pub(crate) fn request_focus_in_context(node_id: NodeId) -> bool {

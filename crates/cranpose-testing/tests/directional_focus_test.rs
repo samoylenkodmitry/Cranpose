@@ -586,6 +586,54 @@ fn a_dpad_window_gives_focus_to_a_target_after_each_layout() {
 }
 
 #[test]
+fn a_dpad_window_with_no_target_focuses_the_first_one_a_later_layout_places() {
+    use cranpose_app_shell::AppShell;
+    use cranpose_core::location_key;
+
+    let shown: Rc<RefCell<Option<MutableState<bool>>>> = Rc::default();
+    let captured = Rc::clone(&shown);
+    let focused = Focused::default();
+    let seen = Rc::clone(&focused);
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let state = remember(|| mutableStateOf(false)).with(|state| *state);
+            captured.replace(Some(state));
+            let focused = Rc::clone(&seen);
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                Box(
+                    Modifier::empty().size(Size::new(60.0, 40.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+                if state.get() {
+                    cell("late", &focused);
+                }
+            });
+        },
+    );
+    shell.set_viewport(200.0, 200.0);
+    shell.set_buffer_size(200, 200);
+    shell.set_dpad_navigation(true);
+    shell.update();
+    shell.update();
+    assert_eq!(
+        *focused.borrow(),
+        None,
+        "a screen with no target focuses none"
+    );
+
+    shown.borrow().expect("composed").set(true);
+    shell.update();
+    assert_eq!(
+        *focused.borrow(),
+        Some("late"),
+        "the layout that places the first target focuses it"
+    );
+}
+
+#[test]
 fn an_arrow_with_no_target_that_way_scrolls_the_page_by_half() {
     use std::cell::Cell;
 
