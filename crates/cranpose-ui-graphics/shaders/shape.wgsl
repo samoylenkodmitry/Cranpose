@@ -166,6 +166,60 @@ fn full_from_rounded_fill(fill: RoundedFillOutput) -> VertexOutput {
     return output;
 }
 
+// `RoundedFillOutput` for a stroke: in place of the interior its hole (see
+// `stroke_hole`), and its stroke vector, whose unused z carries the clip's
+// radius.
+struct RoundedStrokeOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+    @location(5) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(6) @interpolate(flat) hole: vec4<f32>,
+    @location(8) @interpolate(flat) stroke_params: vec4<f32>,
+}
+
+// Where the stroke `sdf_stroked_rounded_rect` draws for `rect`, `radii` and
+// `width` covers no pixel, as the half sizes about the rect's centre of two
+// rects: the inner edge's rect inset by half a pixel, and across (xy) or
+// down (zw) also by its largest radius. There the inner distance field is
+// half a pixel or more inside, so the stroke's is half a pixel or more
+// outside. A negative half size leaves that rect empty.
+fn stroke_hole(rect: vec4<f32>, radii: vec4<f32>, width: f32) -> vec4<f32> {
+    let hw = vec2<f32>(max(width * 0.5, 0.0));
+    let half_size = rect.zw * 0.5;
+    let inner = max(max(half_size - hw, vec2<f32>(0.0)) - hw, vec2<f32>(0.0));
+    let inner_radii = max(radii - hw.xxxx, vec4<f32>(0.0));
+    let inset = max(max(max(inner_radii.x, inner_radii.y), max(inner_radii.z, inner_radii.w)), 0.5);
+    return vec4<f32>(inner - vec2<f32>(inset, 0.5), inner - vec2<f32>(0.5, inset));
+}
+
+fn rounded_stroke_output(full: VertexOutput) -> RoundedStrokeOutput {
+    let hole = stroke_hole(full.rect, full.radii, full.stroke_params.x);
+    return RoundedStrokeOutput(
+        full.clip_position,
+        full.color,
+        full.rect,
+        full.radii,
+        full.clip_rect,
+        hole,
+        vec4<f32>(full.stroke_params.xy, bitcast<f32>(full.brush.z), 0.0),
+    );
+}
+
+fn full_from_rounded_stroke(stroke: RoundedStrokeOutput) -> VertexOutput {
+    var clipped: ClippedFillOutput;
+    clipped.clip_position = stroke.clip_position;
+    clipped.color = stroke.color;
+    clipped.rect = stroke.rect;
+    clipped.radii = stroke.radii;
+    clipped.clip_rect = stroke.clip_rect;
+    var output = full_from_clipped_fill(clipped);
+    output.stroke_params = vec4<f32>(stroke.stroke_params.xy, 0.0, 0.0);
+    output.brush.z = bitcast<u32>(stroke.stroke_params.z);
+    return output;
+}
+
 // `ClippedFillOutput` without the clip an unclipped fill has none of.
 struct PlainFillOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -1041,6 +1095,16 @@ fn vs_record_rounded_fill(
 }
 
 @vertex
+fn vs_record_rounded_stroke(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    input: ShapeRecordInput,
+) -> RoundedStrokeOutput {
+    let record = shape_record(input);
+    return rounded_stroke_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+@vertex
 fn vs_record_dithered_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
@@ -1897,6 +1961,19 @@ fn fs_rounded_fill(input: RoundedFillOutput) -> @location(0) vec4<f32> {
         return input.color;
     }
     frag = full_from_rounded_fill(input);
+    return fragment();
+}
+
+// A pixel in a stroke's hole is discarded, as the full ladder discards it,
+// before either distance field.
+@fragment
+fn fs_rounded_stroke(input: RoundedStrokeOutput) -> @location(0) vec4<f32> {
+    let p = input.clip_position.xy + uniforms.viewport_offset;
+    let q = abs(p - (input.rect.xy + input.rect.zw * 0.5));
+    if (!SHAPE_FLAT & (all(q <= input.hole.xy) | all(q <= input.hole.zw))) {
+        discard;
+    }
+    frag = full_from_rounded_stroke(input);
     return fragment();
 }
 
