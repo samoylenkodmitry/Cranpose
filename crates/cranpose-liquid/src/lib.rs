@@ -4,9 +4,10 @@
 pub mod appearance;
 pub mod dynamics;
 pub mod icons;
+mod inverted_colors;
 pub mod material;
 pub mod motion;
-mod provide_liquid_colors;
+mod palette;
 pub mod theme;
 mod thread_state;
 pub mod widgets;
@@ -20,7 +21,7 @@ pub use material::{
     set_glass_light_direction,
 };
 pub use motion::{LiquidMotion, liquid_press_scale};
-pub use provide_liquid_colors::ProvideLiquidColors;
+pub use palette::LiquidPalette;
 pub use theme::{
     LiquidColors, LiquidSegmentedStyle, LiquidTheme, LiquidThemeSpec, LiquidTypography,
     ProvideLiquidSegmentedStyle, SchemeMode, liquid_colors, liquid_glass_tint_amount,
@@ -31,7 +32,7 @@ pub use widgets::*;
 /// Everything an app needs to build Liquid UI.
 pub mod prelude {
     pub use crate::{
-        ProvideLiquidColors,
+        LiquidPalette,
         appearance::{GlassTintAmount, InvalidGlassTintAmount},
         dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics},
         icons,

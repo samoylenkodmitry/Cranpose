@@ -101,10 +101,7 @@ fn rim_peak_at_angle(frame: &CapturedFrame, cx: f32, cy: f32, radius: f32, theta
 #[composable]
 fn TabBarScene() {
     LiquidTheme(
-        LiquidThemeSpec {
-            scheme: SchemeMode::Light,
-            ..LiquidThemeSpec::default()
-        },
+        LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 122, 255)),
         move || {
             Box(
                 Modifier::empty()

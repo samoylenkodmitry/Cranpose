@@ -607,10 +607,7 @@ fn the_scheme_tells_the_selection_menu_which_ink_its_surface_needs() {
         let mut content = move || sink.set(Some(cranpose_ui::local_on_light_surface().current()));
         run_test_composition(move || {
             LiquidTheme(
-                LiquidThemeSpec {
-                    scheme,
-                    ..Default::default()
-                },
+                LiquidThemeSpec::system(scheme, Color::from_rgb_u8(0, 122, 255)),
                 &mut content,
             );
         });

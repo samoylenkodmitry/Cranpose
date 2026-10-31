@@ -6,11 +6,13 @@ use std::cell::OnceCell;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
-use cranpose_services::isSystemInDarkTheme;
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui_graphics::Color;
 
-use crate::appearance::GlassTintAmount;
+use crate::{
+    appearance::GlassTintAmount,
+    palette::{DEFAULT_ACCENT, LiquidPalette},
+};
 
 /// Whether the theme follows the OS appearance or is pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -127,12 +129,18 @@ impl LiquidColors {
     /// secondary and tertiary labels, the separator, the fills and the glass
     /// edge move toward the label color, and the off toggle darkens.
     pub fn with_more_contrast(mut self) -> Self {
-        self.secondary_label = self.secondary_label.with_alpha(0.9);
-        self.tertiary_label = self.tertiary_label.with_alpha(0.7);
-        self.separator = self.separator.with_alpha(0.6);
-        self.fill = self.fill.with_alpha(0.32);
-        self.secondary_fill = self.secondary_fill.with_alpha(0.24);
-        self.glass_stroke = self.glass_stroke.with_alpha(0.9);
+        self.secondary_label = self
+            .secondary_label
+            .with_alpha(self.secondary_label.a().max(0.9));
+        self.tertiary_label = self
+            .tertiary_label
+            .with_alpha(self.tertiary_label.a().max(0.7));
+        self.separator = self.separator.with_alpha(self.separator.a().max(0.6));
+        self.fill = self.fill.with_alpha(self.fill.a().max(0.32));
+        self.secondary_fill = self
+            .secondary_fill
+            .with_alpha(self.secondary_fill.a().max(0.24));
+        self.glass_stroke = self.glass_stroke.with_alpha(self.glass_stroke.a().max(0.9));
         self.toggle_off = if self.is_dark {
             Color::from_rgb_u8(142, 142, 147)
         } else {
@@ -284,23 +292,21 @@ impl LiquidSegmentedStyle {
 }
 
 /// Theme configuration passed to [`LiquidTheme`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct LiquidThemeSpec {
-    /// Whether the theme follows the OS appearance or is pinned to light or dark.
-    pub scheme: SchemeMode,
-    /// Accent color (iOS system blue by default).
-    pub accent: Color,
+    /// Generated system colors or a complete custom palette.
+    pub palette: LiquidPalette,
     /// The text styles of the theme.
     pub typography: LiquidTypography,
     /// Tint amount used by the floating navigation surfaces.
     pub glass_tint_amount: GlassTintAmount,
 }
 
-impl Default for LiquidThemeSpec {
-    fn default() -> Self {
+impl LiquidThemeSpec {
+    /// Uses generated system colors with the default typography and glass strength.
+    pub fn system(scheme: SchemeMode, accent: Color) -> Self {
         Self {
-            scheme: SchemeMode::Auto,
-            accent: Color::from_rgb_u8(0, 122, 255),
+            palette: LiquidPalette::System { scheme, accent },
             typography: LiquidTypography::default(),
             glass_tint_amount: GlassTintAmount::default(),
         }
@@ -318,10 +324,10 @@ fn theme_local<T: Clone + PartialEq + 'static>(
     })
 }
 
-pub(crate) fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
+fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
     theme_local(
         |locals| &locals.colors,
-        || LiquidColors::light(LiquidThemeSpec::default().accent),
+        || LiquidColors::light(DEFAULT_ACCENT),
     )
 }
 
@@ -377,27 +383,13 @@ pub fn liquid_typography() -> LiquidTypography {
 
 /// Provides the Liquid design system (colors, typography) to `content`.
 ///
-/// `SchemeMode::Auto` follows the OS light/dark appearance live. The scheme
-/// also sets [`cranpose_ui::local_on_light_surface`], so the text selection
-/// menu over a light scheme draws dark labels.
+/// A system palette in `SchemeMode::Auto` follows the OS appearance live.
+/// Both palette sources apply accessibility settings here. The resulting
+/// palette also sets [`cranpose_ui::local_on_light_surface`] for text selection.
 #[composable]
 pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
     let options = cranpose_services::local_accessibility_options().current();
-    let dark = match spec.scheme {
-        SchemeMode::Auto => isSystemInDarkTheme(),
-        SchemeMode::Light => false,
-        SchemeMode::Dark => true,
-    } != options.invert_colors;
-    let colors = if dark {
-        LiquidColors::dark(spec.accent)
-    } else {
-        LiquidColors::light(spec.accent)
-    };
-    let colors = if options.increase_contrast {
-        colors.with_more_contrast()
-    } else {
-        colors
-    };
+    let colors = spec.palette.colors(options);
     let typography = if options.bold_text {
         spec.typography.clone().bolder()
     } else {
@@ -408,7 +400,7 @@ pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
             local_liquid_colors().provides(colors),
             local_liquid_typography().provides(typography),
             local_liquid_glass_tint_amount().provides(spec.glass_tint_amount),
-            cranpose_ui::local_on_light_surface().provides(!dark),
+            cranpose_ui::local_on_light_surface().provides(!colors.is_dark),
         ],
         move || {
             content();

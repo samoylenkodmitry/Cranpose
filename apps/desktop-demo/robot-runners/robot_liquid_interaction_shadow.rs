@@ -59,10 +59,7 @@ pub(crate) fn main() -> ExitCode {
         })
         .try_run(|| {
             LiquidTheme(
-                LiquidThemeSpec {
-                    scheme: SchemeMode::Light,
-                    ..Default::default()
-                },
+                LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 122, 255)),
                 || {
                     let value = rememberMutableStateOf(|| 0.5);
                     Box(
