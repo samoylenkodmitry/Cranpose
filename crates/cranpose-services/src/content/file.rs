@@ -1,3 +1,4 @@
+mod folder_reference;
 mod stream;
 
 use std::{
@@ -5,6 +6,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
     time::UNIX_EPOCH,
 };
 
@@ -72,6 +74,7 @@ impl PathInfo {
 /// A file on the local filesystem.
 pub struct FileContent {
     source: PathInfo,
+    scope: Option<Arc<folder_reference::FolderReference>>,
 }
 
 impl FileContent {
@@ -79,6 +82,7 @@ impl FileContent {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             source: PathInfo::new(path),
+            scope: None,
         }
     }
 
@@ -94,8 +98,22 @@ impl Content for FileContent {
     }
 
     fn media_uri(&self) -> Result<String, ContentError> {
+        if let Some(scope) = &self.scope {
+            return scope.reference(&self.source.path);
+        }
         crate::media_source::media_reference(&self.source.path)
             .map_err(|error| io_error(&self.source.path, error))
+    }
+
+    fn media_uri_async(&self) -> ContentFuture<'_, Result<String, ContentError>> {
+        let path = self.source.path.clone();
+        let scope = self.scope.clone();
+        run_threaded(move || match scope {
+            Some(scope) => scope.reference(&path),
+            None => {
+                crate::media_source::media_reference(&path).map_err(|error| io_error(&path, error))
+            }
+        })
     }
 
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
@@ -173,6 +191,7 @@ impl ContentFolder for FileFolder {
                         }))
                     } else {
                         ContentEntry::File(Rc::new(FileContent {
+                            scope: None,
                             source: PathInfo {
                                 path,
                                 metadata: Some(metadata),

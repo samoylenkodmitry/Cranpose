@@ -14,6 +14,7 @@ use crate::content::{
 
 pub(super) fn open(root: PathBuf) -> ContentStreamRef {
     Rc::new(Stream {
+        scope: Arc::new(super::folder_reference::FolderReference::new(root.clone())),
         walk: Arc::new(Mutex::new(Walk {
             pending: vec![root],
             current: None,
@@ -23,6 +24,7 @@ pub(super) fn open(root: PathBuf) -> ContentStreamRef {
 }
 
 struct Stream {
+    scope: Arc<super::folder_reference::FolderReference>,
     walk: Arc<Mutex<Walk>>,
     produced: Cell<usize>,
 }
@@ -41,6 +43,7 @@ impl ContentStream for Stream {
             Ok(entry.map(|(path, metadata)| {
                 self.produced.set(self.produced.get() + 1);
                 Rc::new(FileContent {
+                    scope: Some(Arc::clone(&self.scope)),
                     source: PathInfo {
                         path,
                         metadata: Some(metadata),
