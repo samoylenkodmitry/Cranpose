@@ -543,7 +543,31 @@ impl RecomposeScope {
 
     pub(crate) fn invalidate_from_state(&self, state_id: StateId) {
         self.record_state_invalidation_source(state_id);
+        if self.inner.read_cursor.get() != NOT_READING {
+            self.note_running_write(state_id);
+        }
         self.enqueue_invalidation();
+    }
+
+    // A write to `state_id` while the scope's body runs. After a read of it
+    // in this run, the body composed from the value the write replaced: it
+    // composes again once it closes, as Compose's does after a backward
+    // write. A write before any read, as a provider's, needs no second run.
+    #[inline(never)]
+    fn note_running_write(&self, state_id: StateId) {
+        let cursor = self.inner.read_cursor.get();
+        let read = if cursor == DIVERGED {
+            read_cell(&self.inner.run_reads, |reads| {
+                reads
+                    .as_ref()
+                    .is_some_and(|reads| reads.contains(&state_id))
+            })
+        } else {
+            self.inner.state_subscriptions.borrow()[..cursor as usize].contains(&state_id)
+        };
+        if read {
+            self.request_pending_recompose();
+        }
     }
 
     pub(crate) fn mark_recomposed(&self) {

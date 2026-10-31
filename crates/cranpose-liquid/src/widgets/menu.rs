@@ -1189,7 +1189,7 @@ pub fn LiquidMenu(
         .current()
         .get();
     let visible = remember(|| mutableStateOf(false)).with(|s| *s);
-    if expanded && !visible.get() {
+    if expanded && !visible.get_non_reactive() {
         visible.set(true);
     }
     if !expanded && !visible.get() {

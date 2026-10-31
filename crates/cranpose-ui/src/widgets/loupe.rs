@@ -286,7 +286,8 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
 
     {
         let mut follow_anim = state.follow_x.borrow_mut();
-        if !follow_anim.state().value().is_finite() {
+        // The read below subscribes: this one only picks the write.
+        if !follow_anim.state().get_non_reactive().is_finite() {
             follow_anim.snapTo(shown.focus_x);
         } else if (follow_anim.target() - shown.focus_x).abs() > f32::EPSILON {
             let velocity = follow_anim.velocity();

@@ -243,3 +243,62 @@ fn a_value_the_record_cleanup_frees_drops_after_the_write_lands() {
         "the freed record's value must drop outside the cleanup, once the write is published"
     );
 }
+
+#[cranpose_macros::composable]
+fn BackwardWriter(state: cranpose_core::MutableState<u32>, seen: Rc<RefCell<Vec<u32>>>) {
+    let value = state.get();
+    seen.borrow_mut().push(value);
+    if value == 1 {
+        state.set(2);
+    }
+}
+
+#[test]
+fn a_body_that_writes_a_state_it_read_composes_again_with_the_new_value() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let state = cranpose_core::MutableState::with_runtime(0u32, composition.runtime_handle());
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, move || BackwardWriter(state, Rc::clone(&sink)))
+        .expect("the composition renders");
+
+    state.set(1);
+    for _ in 0..4 {
+        if !composition.should_recompose() {
+            break;
+        }
+        composition
+            .process_invalid_scopes()
+            .expect("the writer recomposes");
+    }
+
+    assert_eq!(
+        *seen.borrow(),
+        vec![0, 1, 2],
+        "the body composes again after it wrote what it read"
+    );
+}
+
+#[test]
+fn a_first_body_that_writes_a_state_it_read_composes_again_with_the_new_value() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let state = cranpose_core::MutableState::with_runtime(1u32, composition.runtime_handle());
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, move || BackwardWriter(state, Rc::clone(&sink)))
+        .expect("the composition renders");
+    for _ in 0..4 {
+        if !composition.should_recompose() {
+            break;
+        }
+        composition
+            .process_invalid_scopes()
+            .expect("the writer recomposes");
+    }
+
+    assert_eq!(*seen.borrow(), vec![1, 2]);
+}
