@@ -160,9 +160,14 @@ impl ShapeVariant {
     /// The vertex and fragment entry points of this variant, for records
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {
-        let fill = self.kind() == Some(FRAGMENT_KIND_FILL as u8);
-        if self.rounded() && self.solid && fill && flat && !self.dither {
+        let kind = self.kind().map(u32::from);
+        let fill = kind == Some(FRAGMENT_KIND_FILL);
+        let stroke = kind == Some(FRAGMENT_KIND_STROKE);
+        let rounded_solid = self.rounded() && self.solid && flat && !self.dither;
+        if rounded_solid && fill {
             ("vs_record_rounded_fill", "fs_rounded_fill")
+        } else if rounded_solid && stroke {
+            ("vs_record_rounded_stroke", "fs_rounded_stroke")
         } else if self.rounded() {
             ("vs_record", "fs_main")
         } else if self.solid && flat && self.kinds == TRAPEZOID_KIND {
