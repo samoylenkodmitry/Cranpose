@@ -85,11 +85,12 @@ impl TabLensDrawing {
         let frame = self
             .motion
             .frame(self.lens.cells, || self.lens.resting_lens_x());
-        self.layers(frame.activity)(
-            cranpose_ui::current_density(),
-            tab_flight_dynamics(self.lens.geometry(frame), self.lens.node(frame)),
-        )[layer]
-            .clone()
+        std::mem::take(
+            &mut self.layers(frame.activity)(
+                cranpose_ui::current_density(),
+                tab_flight_dynamics(self.lens.geometry(frame), self.lens.node(frame)),
+            )[layer],
+        )
     }
 
     /// The lens node carried across the bar, drawing one of its glass layers.

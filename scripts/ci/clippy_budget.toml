@@ -14,7 +14,7 @@
 "clippy::let_underscore_must_use" = 263
 "clippy::let_underscore_untyped" = 675
 "clippy::missing_assert_message" = 185
-"clippy::needless_pass_by_value" = 170
+"clippy::needless_pass_by_value" = 169
 "clippy::ref_option" = 17
 "clippy::significant_drop_tightening" = 199
 "clippy::string_slice" = 220

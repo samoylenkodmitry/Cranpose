@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
 };
 
-use cranpose_core::{NodeMarks, collections::map::HashMap as NodeMap};
+use cranpose_core::collections::map::HashMap as NodeMap;
 use cranpose_ui_graphics::FxBuildHasher;
 
 use crate::{
@@ -14,7 +14,6 @@ use crate::{
 
 pub(crate) struct RenderThreadState {
     pub(crate) layer_pool: RefCell<Pool>,
-    pub(crate) dirty_ancestry: Cell<NodeMarks>,
     pub(crate) translate_scratch: RefCell<TranslateScratch>,
     /// The hit geometry a subtree had before its rebuild, kept from one
     /// rebuild to the next so no frame allocates it.
@@ -36,7 +35,6 @@ impl RenderThreadState {
     fn new() -> Self {
         Self {
             layer_pool: RefCell::new(Pool::default()),
-            dirty_ancestry: Cell::new(NodeMarks::default()),
             translate_scratch: RefCell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),

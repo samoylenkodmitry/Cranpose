@@ -21,7 +21,7 @@ use crate::{MemoryApplier, NodeId, collections::map::HashMap};
 /// marks.set(&applier, NodeId(7), 2);
 /// assert_eq!(marks.get(&applier, NodeId(7)), 2);
 /// ```
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct NodeMarks {
     dense: Vec<u8>,
     elsewhere: HashMap<NodeId, u8>,
