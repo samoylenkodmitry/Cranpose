@@ -243,14 +243,30 @@ impl Pausing {
     pub(crate) fn end_budget(&self, runtime: &Runtime) {
         self.deadline.set(PassBudget::Closed);
         if self.engaged.get() {
-            self.end_engaged(runtime);
+            self.end_engaged(runtime.handle());
+        }
+    }
+
+    // Opens the budget of the frame's layout pass: a first body that a
+    // measure composes in pausable content waits once it is spent.
+    #[inline]
+    pub(crate) fn open_layout(&self) {
+        self.deadline.set(PassBudget::Open);
+    }
+
+    // Ends the frame's layout pass: content that waited in it asks for the
+    // next frame, as content that waited in the composition does.
+    #[inline]
+    pub(crate) fn close_layout(&self, runtime: &RuntimeHandle) {
+        self.deadline.set(PassBudget::Closed);
+        if self.engaged.get() {
+            self.end_engaged(runtime.clone());
         }
     }
 
     // Ends a pass after which content may wait: asks for the next frame
     // while any does.
-    fn end_engaged(&self, runtime: &Runtime) {
-        let runtime = runtime.handle();
+    fn end_engaged(&self, runtime: RuntimeHandle) {
         let due = self.due.get_or_init(Rc::default);
         if due.replace(false) {
             runtime.scope_runtime().mark_scope_recomposed();
