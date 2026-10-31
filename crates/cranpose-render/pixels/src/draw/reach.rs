@@ -9,6 +9,7 @@ use super::{
 };
 use crate::{
     scene::{RasterScene, TextDraw},
+    scene_item::ItemRef,
     style::point_in_resolved_rounded_rect,
 };
 
@@ -86,24 +87,29 @@ impl RasterScene {
     }
 
     pub(crate) fn item_bounds(&self, item: RenderItem, window: ClipBounds) -> Option<ClipBounds> {
-        match item {
-            RenderItem::Shape(index) => {
-                let draw = &self.shapes[index];
+        self.item(item).bounds(window)
+    }
+}
+
+impl ItemRef<'_> {
+    // The pixels of `window` the item can reach.
+    pub(crate) fn bounds(self, window: ClipBounds) -> Option<ClipBounds> {
+        match self {
+            ItemRef::Shape(draw) => {
                 let placed = place_shape(draw)?;
                 clip_rect_to_window(placed.coverage.reach(placed.rect), draw.clip, window)
             }
-            RenderItem::Image(index) => {
-                let draw = &self.images[index];
+            ItemRef::Image(draw) => {
                 if draw.alpha <= 0.0 {
                     return None;
                 }
                 clip_rect_to_window(image_rect(draw), draw.clip, window)
             }
-            RenderItem::Shadow(index) => {
-                let (shadow, clip) = placed_shadow(&self.shadows[index]);
+            ItemRef::Shadow(draw) => {
+                let (shadow, clip) = placed_shadow(draw);
                 clip_rect_to_window(shadow.bounds, clip, window)
             }
-            RenderItem::Text(index) => text_bounds(&self.texts[index], window),
+            ItemRef::Text(draw) => text_bounds(draw, window),
         }
     }
 }

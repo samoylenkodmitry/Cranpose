@@ -45,29 +45,6 @@ fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<Point>
     Some(Point::new(mapped.x, mapped.y))
 }
 
-fn assign_snap_anchor_since(
-    scene: &mut RasterScene,
-    counts: ItemCounts,
-    snap_anchor: Option<Point>,
-) {
-    let Some(snap_anchor) = snap_anchor else {
-        return;
-    };
-
-    for shape in &mut scene.shapes[counts.shapes..] {
-        shape.snap_anchor = Some(snap_anchor);
-    }
-    for image in &mut scene.images[counts.images..] {
-        image.snap_anchor = Some(snap_anchor);
-    }
-    for text in &mut scene.texts[counts.texts..] {
-        text.snap_anchor = Some(snap_anchor);
-    }
-    for shadow in &mut scene.shadows[counts.shadows..] {
-        shadow.snap_anchor = Some(snap_anchor);
-    }
-}
-
 #[derive(Clone, Copy)]
 struct PrimitiveRenderContext<'a> {
     layer_bounds: RasterLayerBounds,
