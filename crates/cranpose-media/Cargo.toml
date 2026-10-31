@@ -22,7 +22,7 @@ workspace = true
 [features]
 default = ["all-codecs"]
 # Symphonia containers and codecs, plus streaming Opus.
-all-codecs = ["symphonia/all", "dep:opus-pure"]
+all-codecs = ["symphonia/all", "dep:opus-pure", "dep:filmcraft-ac3"]
 # WAV files of PCM samples only.
 wav = ["symphonia/wav", "symphonia/pcm"]
 
@@ -45,6 +45,7 @@ cranpose-audio = { workspace = true, features = ["cpal-backend"] }
 # thread on it. Both are excluded from the targets whose modules compile away.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cranpose-services = { workspace = true, features = ["http-native"] }
+filmcraft-ac3 = { version = "0.9.0", optional = true }
 opus-pure = { version = "0.2.2", optional = true, git = "https://github.com/samoylenkodmitry/opus-pure", rev = "cc886594b6b1a4bd11f66a69e42d9c5ed9a8ecce" }
 pollster = "0.4.0"
 symphonia = { version = "0.6.1", default-features = false, features = ["opt-simd"] }
