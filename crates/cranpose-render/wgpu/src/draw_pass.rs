@@ -1044,8 +1044,8 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     self.text_item(renderer, (text, *geometry), run, scratch)?;
                 }
                 Item::RRectShadow(_) => {
-                    self.flush(renderer, run.binding);
-                    self.shadow_run(renderer, items, run, scratch);
+                    let place = self.draw_held(renderer, run.binding);
+                    self.shadow_run(renderer, (items, place), run, scratch);
                     continue;
                 }
                 Item::Composite(composite) => {
@@ -1131,22 +1131,22 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// chunk open: its shapes so far paint first and the held draws above
     /// them, while its later records, and the opaque interiors of all of
     /// them, stay one chunk. Without an open chunk it draws what is held.
-    fn draw_held(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
+    fn draw_held(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) -> Option<u32> {
         let Some(open) = self.chunk else {
             self.flush(renderer, binding);
-            return;
+            return None;
         };
-        let held = self.held.take();
-        if held.glyphs.is_none() && held.images.is_none() {
-            return;
-        }
         self.cut_paint(renderer, binding, open);
-        // The held draws sit where the chunk's next record will: its later
-        // opaque interiors hide them, its earlier ones do not.
+        // The held draws, and a draw that follows, sit where the chunk's next
+        // record will: its later opaque interiors hide them, its earlier ones
+        // do not. Without an open chunk a draw that follows takes the next
+        // place.
         let base = self
             .chunk_base
             .saturating_add(renderer.open_arena_records());
+        let held = self.held.take();
         self.push_held(renderer, binding, held, Some(base));
+        Some(base)
     }
 
     /// Lays out as fallback triangles the chunk's draws in `range`, just
@@ -1598,12 +1598,12 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         Ok(())
     }
 
-    /// Draws a run of round rect shadows as one instanced batch, placed in
-    /// the pass's order as an image batch is.
+    /// Draws a run of round rect shadows as one instanced batch, at `place`
+    /// in the pass's order, or next in it without one.
     fn shadow_run(
         &mut self,
         renderer: &mut GpuRenderer,
-        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
+        (items, place): (&mut Peekable<impl Iterator<Item = Item<'s>>>, Option<u32>),
         run: &SegmentRun<'s, '_>,
         scratch: &mut PassScratch,
     ) {
@@ -1617,7 +1617,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         if start == end {
             return;
         }
-        let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, None);
+        let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, place);
         let scissor = run.segment.scissor;
         if renderer.pipelines.shadows_stand_in(self.depth) {
             let parts = scratch.shadow_instances[start..end].iter();
