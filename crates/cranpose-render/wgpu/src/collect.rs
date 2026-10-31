@@ -1,99 +1,54 @@
 use std::{borrow::Cow, sync::Arc};
 
-use cranpose_core::{NodeId, collections::map::HashMap};
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
     graph::{
-        CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform,
-        RenderNode, for_each_in_draw_order,
+        CachePolicy, LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode,
+        for_each_in_draw_order,
     },
     layer_composition::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
     },
     layer_shadow::ShadowLight,
-    layer_transform::{apply_layer_affine_to_rect, layer_uniform_scale},
-    primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
-    space::{EyeView, SeenDoor, SpaceTree, node_size},
+    layer_transform::layer_uniform_scale,
+    primitive_emit::resolve_clip,
+    space::SeenDoor,
 };
 use cranpose_ui_graphics::{
-    BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, Point, RecordLane, Rect,
-    RenderEffect,
+    BlendMode, CompositingStrategy, GraphicsLayer, Point, Rect, RenderEffect,
     space::{Camera, Light, MeshSurface},
 };
 
 use crate::{
-    pipeline::{
-        TextPlacement, layer_casts_shadow, push_draw_primitive, push_layer_shadow,
-        push_text_style_draws,
-    },
+    pipeline::{layer_casts_shadow, push_layer_shadow},
     scene::{
-        BackdropLayer, ClipRounding, CompositorScene, ContentContext, LayerRoundedClip,
-        Placement as RunPlacement, RunDraw, SceneCapacityHint, ShadowDraw, SnapAnchor, clip_holds,
+        BackdropLayer, ClipRounding, CompositorScene, ContentContext, LayerRoundedClip, RunDraw,
+        SceneCapacityHint, SnapAnchor, clip_holds,
     },
 };
 
+mod backdrop_space;
+mod layer_motion;
+mod push_content;
+mod rigid_snap;
 mod rounded_clip_corners;
+mod space_children;
+use backdrop_space::{detach_flat_backdrop, with_backdrop_in_own_space};
+pub(crate) use layer_motion::LayerMotion;
+use push_content::{assign_shadow_anchor, push_content};
+pub(crate) use push_content::{assign_snap_anchor_since, scene_counts};
+use rigid_snap::{
+    layer_has_pixel_sensitive_subtree, node_is_pixel_sensitive, primitive_is_drawn,
+    primitive_is_pixel_sensitive, rigid_snap_anchor,
+};
 use rounded_clip_corners::{
     content_admits_rounded_clip, content_takes_rounded_clip, rounded_clip_for_layer,
 };
+use space_children::collect_space_children;
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
 const ROUNDED_CLIP_AA_MARGIN: f32 = 1.0;
-const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
-
-#[derive(Default)]
-pub(crate) struct LayerMotion {
-    previous: HashMap<NodeId, Motion>,
-    current: HashMap<NodeId, Motion>,
-}
-
-#[derive(Clone, Copy)]
-struct Motion {
-    content_hash: u64,
-    raster: f32,
-}
-
-impl LayerMotion {
-    fn retained_scale(&self, node_id: Option<NodeId>, scale: f32, content_hash: u64) -> f32 {
-        node_id
-            .and_then(|id| self.previous.get(&id))
-            .filter(|previous| previous.content_hash == content_hash)
-            .filter(|_| scale.is_finite() && scale > 0.0)
-            .map_or(scale, |previous| held_raster_scale(previous.raster, scale))
-    }
-
-    fn record_scale(&mut self, node_id: Option<NodeId>, raster: f32, content_hash: u64) {
-        let Some(node_id) = node_id else {
-            return;
-        };
-        self.current.insert(
-            node_id,
-            Motion {
-                content_hash,
-                raster,
-            },
-        );
-    }
-
-    pub(crate) fn end_frame(&mut self) {
-        std::mem::swap(&mut self.previous, &mut self.current);
-        self.current.clear();
-    }
-}
-
-fn held_raster_scale(held: f32, scale: f32) -> f32 {
-    if held * (1.0 / ANIMATED_RASTER_STEPS_PER_OCTAVE).exp2() >= scale && held <= scale * 2.0 {
-        held
-    } else {
-        animated_raster_scale(scale)
-    }
-}
-
-pub(crate) fn animated_raster_scale(scale: f32) -> f32 {
-    let step =
-        (scale.log2() * ANIMATED_RASTER_STEPS_PER_OCTAVE).ceil() / ANIMATED_RASTER_STEPS_PER_OCTAVE;
-    step.exp2().max(scale)
-}
 
 /// One isolated layer's content in that layer's own coordinate space: the flat
 /// z-ordered ops, the isolated children composited at their z, and the
@@ -337,71 +292,6 @@ pub(crate) fn uniform_scale_translation(transform: ProjectiveTransform) -> Optio
         return None;
     }
     Some((scale, Point::new(matrix[0][2], matrix[1][2])))
-}
-
-fn graphics_layer_is_rigid(layer: &GraphicsLayer) -> bool {
-    (layer.scale - 1.0).abs() <= AFFINE_TOLERANCE
-        && (layer.scale_x - 1.0).abs() <= AFFINE_TOLERANCE
-        && (layer.scale_y - 1.0).abs() <= AFFINE_TOLERANCE
-        && layer.rotation_x.abs() <= AFFINE_TOLERANCE
-        && layer.rotation_y.abs() <= AFFINE_TOLERANCE
-        && layer.rotation_z.abs() <= AFFINE_TOLERANCE
-}
-
-fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAnchor> {
-    if !graphics_layer_is_rigid(layer) {
-        return None;
-    }
-    let mapped = apply_layer_affine_to_rect(layer_bounds, layer_bounds, layer);
-    Some(SnapAnchor::rigid(Point::new(mapped.x, mapped.y)))
-}
-
-fn primitive_is_pixel_sensitive(primitive: &DrawPrimitive) -> bool {
-    match primitive {
-        DrawPrimitive::Blend { primitive, .. } => primitive_is_pixel_sensitive(primitive),
-        DrawPrimitive::Image { .. } | DrawPrimitive::Text(_) => true,
-        _ => false,
-    }
-}
-
-fn primitive_is_drawn(primitive: &DrawPrimitive) -> bool {
-    !matches!(primitive, DrawPrimitive::Content | DrawPrimitive::Shadow(_))
-}
-
-fn layer_has_pixel_sensitive_subtree(layer: &LayerNode) -> bool {
-    layer.children.iter().any(node_is_pixel_sensitive)
-}
-
-fn node_is_pixel_sensitive(node: &RenderNode) -> bool {
-    match node {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(_) => true,
-            PrimitiveNode::Draw(draw) => primitive_is_pixel_sensitive(&draw.primitive),
-        },
-        RenderNode::DrawRun(run) => run.summary.has_text || run.summary.has_pixel_sensitive,
-        RenderNode::Layer(child) => {
-            direct_translation(child.transform_to_parent).is_some()
-                && layer_has_pixel_sensitive_subtree(child)
-        }
-    }
-}
-
-fn layer_needs_rigid_snap(layer: &LayerNode, translated: bool) -> bool {
-    layer.children.iter().any(|child| match child {
-        RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Text(_) => true,
-            PrimitiveNode::Draw(draw) => {
-                primitive_is_pixel_sensitive(&draw.primitive)
-                    || (translated && primitive_is_drawn(&draw.primitive))
-            }
-        },
-        RenderNode::DrawRun(run) => {
-            run.summary.has_text
-                || run.summary.has_pixel_sensitive
-                || (translated && run.summary.has_non_shadow)
-        }
-        RenderNode::Layer(_) => false,
-    })
 }
 
 /// Whether the layer's own composition needs its content on a separate
@@ -756,114 +646,6 @@ fn isolated_child(
     )
 }
 
-/// The scene `layer` shows to the window, as the eye of the scene sees it,
-/// with `context` the walk of its children; `None` when it shows none.
-fn window_scene<'a>(
-    layer: &'a LayerNode,
-    context: &WalkContext<'_>,
-) -> Option<(Arc<SceneDraw>, EyeView<'a>)> {
-    let tree = SpaceTree::of(layer)?;
-    let view = EyeView::of(&tree, node_size(layer));
-    let scene = SceneDraw {
-        camera: view.camera,
-        light: view.seen[0].light,
-        rect: layer
-            .node_rect()
-            .translate(context.offset.x, context.offset.y),
-        clip: context.visual_clip,
-        seen: view
-            .seen
-            .iter()
-            .map(|seen| SeenDraw {
-                through: seen.through,
-                light: seen.light,
-                door: seen.door,
-            })
-            .collect(),
-    };
-    Some((Arc::new(scene), view))
-}
-
-fn with_backdrop_in_own_space(
-    mut child: ChildLayer,
-    recycler: &mut LayerSceneRecycler,
-) -> ChildLayer {
-    if child.backdrop.is_none()
-        || (uniform_scale_translation(child.transform).is_some()
-            && child.alpha == 1.0
-            && child.blend_mode == BlendMode::SrcOver)
-    {
-        return child;
-    }
-    let content = recycler.take(SceneCapacityHint::default());
-    let mut outer = ChildLayer {
-        z_index: child.z_index,
-        node_id: child.node_id,
-        local_bounds: child.local_bounds,
-        transform: child.transform,
-        clip: child.clip,
-        rounded_clip: None,
-        alpha: child.alpha,
-        blend_mode: child.blend_mode,
-        effect: None,
-        backdrop: None,
-        backdrop_alpha: 1.0,
-        snap_anchor: child.snap_anchor,
-        surface_scale: child.surface_scale,
-        content_hash: child.content_hash,
-        cache_policy: child.cache_policy,
-        in_place: false,
-        content,
-        mesh: child.mesh.take(),
-    };
-    let mut inner = ChildLayer {
-        z_index: outer.content.scene.next_z(),
-        transform: ProjectiveTransform::identity(),
-        clip: None,
-        alpha: 1.0,
-        blend_mode: BlendMode::SrcOver,
-        snap_anchor: None,
-        surface_scale: 1.0,
-        in_place: false,
-        ..child
-    };
-    detach_flat_backdrop(&mut inner, &mut outer.content.scene);
-    outer.content.scene.next_z += 1;
-    outer.content.children.push(inner);
-    outer.content.refresh_backdrop_summary();
-    outer
-}
-
-fn detach_flat_backdrop(child: &mut ChildLayer, scene: &mut CompositorScene) {
-    if child.alpha != 1.0
-        || child.blend_mode != BlendMode::SrcOver
-        || child.content.contains_backdrop()
-    {
-        return;
-    }
-    let Some(offset) = direct_translation(child.transform) else {
-        return;
-    };
-    let Some(effect) = child.backdrop.take() else {
-        return;
-    };
-    scene.push_backdrop_layer(BackdropLayer {
-        node_id: child.node_id,
-        alpha: child.backdrop_alpha,
-        rect: child.local_bounds.translate(offset.x, offset.y),
-        clip: child.clip,
-        reach: None,
-        rounded_clip: child.rounded_clip.map(|clip| LayerRoundedClip {
-            rect: clip.rect.translate(offset.x, offset.y),
-            radii: clip.radii,
-        }),
-        snap_anchor: child.snap_anchor,
-        effect,
-        z_index: 0,
-    });
-    child.z_index = scene.next_z();
-}
-
 fn collect_into(
     layer: &LayerNode,
     motion: &mut LayerMotion,
@@ -931,81 +713,6 @@ fn collect_into(
     has_pixel_sensitive_subtree
 }
 
-/// Collects the children of a layer that shows a scene or lies in a
-/// scene's space, under `context`. The layers in 3D there are the scene's:
-/// its surfaces draw together where its first child in 3D comes, flat
-/// children before it under them and the rest over them. Kept out of line:
-/// a flat layer's walk stops at the check before it.
-#[cold]
-#[inline(never)]
-fn collect_space_children(
-    layer: &LayerNode,
-    motion: &mut LayerMotion,
-    (context, content): (WalkContext<'_>, &ContentContext<'_>),
-    out: &mut LayerScene,
-    recycler: &mut LayerSceneRecycler,
-) -> bool {
-    // Only a scene outside every other scene's space shows to the window;
-    // one inside is a doorway its window scene draws.
-    let mut pending = (!context.settings.in_space)
-        .then(|| window_scene(layer, &context))
-        .flatten();
-    let in_space = context.settings.in_space || pending.is_some();
-    let settings = WalkSettings {
-        in_space,
-        ..*context.settings
-    };
-    let context = WalkContext {
-        settings: &settings,
-        ..context
-    };
-    let mut has_pixel_sensitive_subtree = false;
-    for_each_in_draw_order(&layer.children, |child| {
-        has_pixel_sensitive_subtree |= match child {
-            RenderNode::Layer(child_layer) => {
-                if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
-                    collect_seen_surfaces(&draw, view, motion, context, out, recycler);
-                }
-                !(in_space && child_layer.graphics_layer.space.is_some())
-                    && collect_child(child_layer, motion, context, out, recycler)
-            }
-            _ => {
-                push_content(out, child, content);
-                node_is_pixel_sensitive(child)
-            }
-        };
-    });
-    has_pixel_sensitive_subtree
-}
-
-/// Collects each surface the eye of the scene `draw` sees, for its 3D pass,
-/// placed where the eye sees it.
-fn collect_seen_surfaces(
-    draw: &Arc<SceneDraw>,
-    view: EyeView<'_>,
-    motion: &mut LayerMotion,
-    context: WalkContext<'_>,
-    out: &mut LayerScene,
-    recycler: &mut LayerSceneRecycler,
-) {
-    for seen in view.surfaces {
-        let mesh = MeshChild {
-            scene: Arc::clone(draw),
-            surface: seen.surface,
-            content: seen.layer.node_rect(),
-            seen: seen.seen,
-        };
-        collect_isolated_child(
-            seen.layer,
-            motion,
-            context,
-            Some(Arc::new(mesh)),
-            out,
-            recycler,
-        );
-    }
-}
-
 /// The anchor a layer that starts moving its content as one translated
 /// block, outside any such block, snaps that content to; `None` for any
 /// other layer. The local layer is read only for such a layer.
@@ -1024,14 +731,6 @@ fn boundary_anchor(
         ),
         local_layer,
     )
-}
-
-fn push_content(out: &mut LayerScene, node: &RenderNode, content: &ContentContext<'_>) {
-    match node {
-        RenderNode::Primitive(entry) => push_primitive(out, entry, content),
-        RenderNode::DrawRun(run) => push_draw_run(out, run, content),
-        RenderNode::Layer(_) => {}
-    }
 }
 
 fn collect_child(
@@ -1195,199 +894,22 @@ fn clipped_away(child: &LayerNode, bounds: Rect, clip: Option<Rect>) -> bool {
         .is_none()
 }
 
-/// Anchors the layer shadows pushed since `shadows_before` with
-/// `snap_anchor`.
-fn assign_shadow_anchor(
-    scene: &mut CompositorScene,
-    shadows_before: usize,
-    snap_anchor: Option<SnapAnchor>,
-) {
-    if let Some(anchor) = snap_anchor {
-        for shadow in &mut scene.rrect_shadows[shadows_before..] {
-            shadow.snap_anchor = Some(anchor);
-        }
-    }
-}
-
-fn anchor_shadows(shadows: &mut [ShadowDraw], anchor: SnapAnchor) {
-    for shadow in shadows {
-        for run in shadow
-            .shapes
-            .iter_mut()
-            .chain(&mut shadow.post_blur_cutouts)
-        {
-            run.placement.snap_anchor = Some(anchor);
-        }
-        for text in &mut shadow.texts {
-            text.snap_anchor = Some(anchor);
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct SceneCounts {
-    images: usize,
-    texts: usize,
-    shadow_draws: usize,
-    rrect_shadows: usize,
-    effect_layers: usize,
-}
-
-pub(crate) fn scene_counts(scene: &CompositorScene) -> SceneCounts {
-    SceneCounts {
-        images: scene.images.len(),
-        texts: scene.texts.len(),
-        shadow_draws: scene.shadow_draws.len(),
-        rrect_shadows: scene.rrect_shadows.len(),
-        effect_layers: scene.effect_layers.len(),
-    }
-}
-
-pub(crate) fn assign_snap_anchor_since(
-    scene: &mut CompositorScene,
-    counts: SceneCounts,
-    snap_anchor: Option<SnapAnchor>,
-) {
-    let Some(anchor) = snap_anchor else {
-        return;
-    };
-    for image in &mut scene.images[counts.images..] {
-        image.snap_anchor = Some(anchor);
-    }
-    for text in &mut scene.texts[counts.texts..] {
-        text.snap_anchor = Some(anchor);
-    }
-    anchor_shadows(&mut scene.shadow_draws[counts.shadow_draws..], anchor);
-    assign_shadow_anchor(scene, counts.rrect_shadows, snap_anchor);
-    for layer in &mut scene.effect_layers[counts.effect_layers..] {
-        layer.snap_anchor = Some(anchor);
-    }
-}
-
-fn push_primitive(out: &mut LayerScene, entry: &PrimitiveEntry, content: &ContentContext<'_>) {
-    let ContentContext {
-        layer_bounds,
-        local_layer,
-        visual_clip,
-        rounding,
-        anchor: snap_anchor,
-        ..
-    } = *content;
-    match &entry.node {
-        PrimitiveNode::Draw(draw) => {
-            let counts = scene_counts(&out.scene);
-            let clip = resolve_primitive_clip(
-                draw.clip,
-                layer_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if clip.is_some_and(|clip| clip.is_empty()) {
-                return;
+fn layer_needs_rigid_snap(layer: &LayerNode, translated: bool) -> bool {
+    layer.children.iter().any(|child| match child {
+        RenderNode::Primitive(entry) => match &entry.node {
+            PrimitiveNode::Text(_) => true,
+            PrimitiveNode::Draw(draw) => {
+                primitive_is_pixel_sensitive(&draw.primitive)
+                    || (translated && primitive_is_drawn(&draw.primitive))
             }
-            push_draw_primitive(
-                &draw.primitive,
-                &ContentContext {
-                    visual_clip: clip,
-                    rounding: rounding.filter(|_| clip == visual_clip),
-                    ..*content
-                },
-                &mut out.scene,
-                None,
-            );
-            assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
+        },
+        RenderNode::DrawRun(run) => {
+            run.summary.has_text
+                || run.summary.has_pixel_sensitive
+                || (translated && run.summary.has_non_shadow)
         }
-        PrimitiveNode::Text(text) => {
-            let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
-            let text_clip = resolve_primitive_clip(
-                text.clip,
-                layer_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if text_clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_text_style_draws(
-                &mut out.scene,
-                text,
-                TextPlacement {
-                    bounds: layer_bounds,
-                    text_rect,
-                    layer: local_layer,
-                    clip: text_clip,
-                    snap_anchor,
-                },
-            );
-        }
-    }
-}
-
-/// Places a recorded run: every maximal stretch of shape segments becomes
-/// one run draw under the layer's placement, and the primitives of the
-/// other lane (text, images, shadows) take their own item paths between
-/// them, in the order the command drew.
-fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
-    if !run.summary.has_shapes && !run.summary.has_others {
-        return;
-    }
-    let ContentContext {
-        layer_bounds,
-        local_layer,
-        visual_clip,
-        rounding,
-        anchor: snap_anchor,
-        ..
-    } = *content;
-    let placement = RunPlacement::painted(
-        Point::new(layer_bounds.x, layer_bounds.y),
-        snap_anchor,
-        visual_clip,
-        local_layer,
-    )
-    .with_rounding(rounding);
-    let recording = &*run.recording;
-    // A run of shapes alone draws as one run, read without its segments.
-    if run.summary.shapes_only() {
-        out.scene.push_run(RunDraw::of(
-            recording,
-            run.command,
-            run.segments.clone(),
-            placement,
-        ));
-        return;
-    }
-    let counts = scene_counts(&out.scene);
-    let mut shapes_from: Option<u32> = None;
-    let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
-        if let Some(start) = from.take() {
-            out.scene.push_run(RunDraw::of(
-                recording,
-                run.command,
-                start..end,
-                placement.clone(),
-            ));
-        }
-    };
-    for (index, segment) in recording.segments_in(&run.segments).enumerate() {
-        let position = run.segments.start + index as u32;
-        match segment.lane {
-            RecordLane::Shapes => {
-                shapes_from.get_or_insert(position);
-            }
-            RecordLane::Content | RecordLane::GroupStart | RecordLane::GroupEnd => {}
-            RecordLane::Others => {
-                flush_shapes(out, position, &mut shapes_from);
-                for primitive in &recording.others()[segment.range()] {
-                    push_draw_primitive(primitive, content, &mut out.scene, None);
-                }
-            }
-        }
-    }
-    flush_shapes(out, run.segments.end, &mut shapes_from);
-    assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
+        RenderNode::Layer(_) => false,
+    })
 }
 
 #[cfg(test)]
