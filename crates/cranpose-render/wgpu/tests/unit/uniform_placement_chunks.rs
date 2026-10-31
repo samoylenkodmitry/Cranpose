@@ -11,7 +11,7 @@ fn uniform_chunks_stop_at_the_windows_webgl_placement_budget() {
         storage: true,
         trig_fill: true,
     };
-    for _ in 0..4 {
+    for _ in 0..PLACEMENT_CHUNK {
         assert!(staging.fits(uniform, 1, 0, 0));
         staging.placements.push(PlacementData::zeroed());
     }
@@ -33,6 +33,6 @@ fn uniform_binding_covers_the_entire_placement_chunk() {
     );
     assert_eq!(
         tables.bindings[PLACEMENT_BUFFER],
-        (4 * size_of::<PlacementData>()) as u64,
+        (PLACEMENT_CHUNK * size_of::<PlacementData>()) as u64,
     );
 }

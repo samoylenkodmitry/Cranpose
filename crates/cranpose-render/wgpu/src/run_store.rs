@@ -27,7 +27,7 @@ use crate::{
 pub(crate) const RECORD_CHUNK: usize = 128;
 pub(crate) const BRUSH_CHUNK: usize = 256;
 pub(crate) const STOP_CHUNK: usize = 256;
-pub(crate) const PLACEMENT_CHUNK: usize = 4;
+pub(crate) const PLACEMENT_CHUNK: usize = 64; // 10 KB of a WebGL 2 block's sure 16 KB
 
 /// Runs with at least this many records keep retained GPU buffers keyed by
 /// their command; smaller runs are copied into the frame arena, where

@@ -31,7 +31,7 @@ built_in! {
     MESH_SURFACE = MESH_SURFACE_WGSL;
 }
 
-pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 3] = [
+pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 4] = [
     (
         "var<uniform> brush_words: array<vec4<u32>, 768>;",
         "var<storage, read> brush_words: array<vec4<u32>>;",
@@ -41,13 +41,22 @@ pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 3] = [
         "var<storage, read> gradient_stop_words: array<vec4<f32>>;",
     ),
     (
-        "var<uniform> placements: array<Placement, 4>;",
+        "var<uniform> placement_words: array<vec4<f32>, 640>;",
         "var<storage, read> placements: array<Placement>;",
+    ),
+    (
+        "return placement_at(record.placement);",
+        "return placements[record.placement];",
     ),
 ];
 
+// The function that reads a placement from the uniform table's words. A
+// storage table holds whole placements, which its records index as they did
+// before the uniform table went to words, so native shaders keep their code.
+const UNIFORM_PLACEMENT_READER: &str = "fn placement_at(index: u32) -> Placement {";
+
 pub(crate) fn storage_shape_shader() -> String {
-    let mut source = SHADER.to_string();
+    let mut source = without_function(SHADER, UNIFORM_PLACEMENT_READER);
     for (uniform, storage) in RUN_TABLE_DECLARATIONS {
         assert!(
             source.contains(uniform),
@@ -56,6 +65,18 @@ pub(crate) fn storage_shape_shader() -> String {
         source = source.replace(uniform, storage);
     }
     source
+}
+
+// `source` without the function that starts with `signature`, through the
+// first line after it that closes a function.
+fn without_function(source: &str, signature: &str) -> String {
+    let (before, function) = source
+        .split_once(signature)
+        .unwrap_or_else(|| panic!("shape.wgsl must define `{signature}`"));
+    let (_, after) = function
+        .split_once("\n}\n")
+        .expect("a WGSL function ends in a closing brace on its own line");
+    [before, after].concat()
 }
 
 pub(crate) fn filling_shape_shader() -> String {

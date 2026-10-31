@@ -360,8 +360,37 @@ fn gradient_stop_at(index: u32) -> GradientStop {
     return GradientStop(gradient_stop_words[index * 2u], gradient_stop_words[index * 2u + 1u]);
 }
 
+// The placements as the words of their 160 bytes, ten to a placement, as
+// the brushes are: Firefox on Windows did not link in 30 s a vertex stage
+// that indexed 64 placements declared as structs, each with its matrix.
 @group(1) @binding(3)
-var<uniform> placements: array<Placement, 4>;
+var<uniform> placement_words: array<vec4<f32>, 640>;
+
+fn placement_at(index: u32) -> Placement {
+    let first = index * 10u;
+    let head = placement_words[first];
+    let dither = placement_words[first + 2u];
+    let tail = placement_words[first + 9u];
+    return Placement(
+        head.xy,
+        head.z,
+        bitcast<u32>(head.w),
+        placement_words[first + 1u],
+        dither.xy,
+        dither.z,
+        dither.w,
+        mat4x4<f32>(
+            placement_words[first + 3u],
+            placement_words[first + 4u],
+            placement_words[first + 5u],
+            placement_words[first + 6u],
+        ),
+        placement_words[first + 7u],
+        placement_words[first + 8u],
+        tail.xy,
+        tail.zw,
+    );
+}
 
 const RECORD_KIND_ROUND_RECT: u32 = 1u;
 const RECORD_KIND_ARC: u32 = 2u;
@@ -432,7 +461,7 @@ const BRUSH_TURNED: u32 = 0x80000000u;
 fn record_placement(record: ShapeRecord) -> Placement {
     if ((SHAPE_TIER == TIER_ARENA)
         | ((SHAPE_TIER == TIER_EITHER) & (uniforms.reserved.y == f32(TIER_ARENA)))) {
-        return placements[record.placement];
+        return placement_at(record.placement);
     }
     return uniforms.placement;
 }
