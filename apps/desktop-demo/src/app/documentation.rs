@@ -613,11 +613,7 @@ pub(super) fn GuideTab(header: Option<super::AppHeaderState>) {
     })
     .with(|state| *state);
     LiquidTheme(
-        LiquidThemeSpec {
-            scheme: SchemeMode::Dark,
-            accent: ACCENT,
-            ..Default::default()
-        },
+        LiquidThemeSpec::system_with_accent(SchemeMode::Dark, ACCENT),
         move || {
             Box(
                 Modifier::empty()

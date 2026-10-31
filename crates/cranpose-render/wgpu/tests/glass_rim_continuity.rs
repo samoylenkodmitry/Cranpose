@@ -100,39 +100,33 @@ fn rim_peak_at_angle(frame: &CapturedFrame, cx: f32, cy: f32, radius: f32, theta
 
 #[composable]
 fn TabBarScene() {
-    LiquidTheme(
-        LiquidThemeSpec {
-            scheme: SchemeMode::Light,
-            ..LiquidThemeSpec::default()
-        },
-        move || {
-            Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .background(Color::from_rgb_u8(242, 242, 247)),
-                BoxSpec::default(),
-                move || {
-                    Box(
-                        Modifier::empty().offset(40.0, 80.0).width(320.0),
-                        BoxSpec::default(),
-                        || {
-                            LiquidTabBar(
-                                Modifier::empty(),
-                                LiquidTabBarSpec::default(),
-                                2,
-                                |_| {},
-                                |scope| {
-                                    scope.tab(icons::STAR, "Discover");
-                                    scope.tab(icons::SHOPPING_BAG, "Browse");
-                                    scope.tab(icons::ACCOUNT_CIRCLE, "Account");
-                                },
-                            );
-                        },
-                    );
-                },
-            );
-        },
-    );
+    LiquidTheme(LiquidThemeSpec::system(SchemeMode::Light), move || {
+        Box(
+            Modifier::empty()
+                .fill_max_size()
+                .background(Color::from_rgb_u8(242, 242, 247)),
+            BoxSpec::default(),
+            move || {
+                Box(
+                    Modifier::empty().offset(40.0, 80.0).width(320.0),
+                    BoxSpec::default(),
+                    || {
+                        LiquidTabBar(
+                            Modifier::empty(),
+                            LiquidTabBarSpec::default(),
+                            2,
+                            |_| {},
+                            |scope| {
+                                scope.tab(icons::STAR, "Discover");
+                                scope.tab(icons::SHOPPING_BAG, "Browse");
+                                scope.tab(icons::ACCOUNT_CIRCLE, "Account");
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
 }
 
 fn capture_tab_bar() -> Result<CapturedFrame, String> {

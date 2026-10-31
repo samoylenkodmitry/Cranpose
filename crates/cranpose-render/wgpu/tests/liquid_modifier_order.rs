@@ -25,10 +25,7 @@ fn drawn(widget: impl Fn() + 'static) -> Option<CapturedFrame> {
         move || {
             let widget = std::rc::Rc::clone(&widget);
             // Light, whatever the machine's appearance: the surface is white.
-            let spec = LiquidThemeSpec {
-                scheme: SchemeMode::Light,
-                ..LiquidThemeSpec::default()
-            };
+            let spec = LiquidThemeSpec::system(SchemeMode::Light);
             LiquidTheme(spec, &mut move || {
                 let widget = std::rc::Rc::clone(&widget);
                 Box(

@@ -30,9 +30,32 @@ fn SaveAction(on_save: impl Fn() + 'static) {
 ```
 
 The app host supplies composition, input, draw output, and platform services.
-`SchemeMode::Auto` follows the system appearance; `Light` and `Dark` pin a
-palette. `GlassButtonSpec` selects glass, prominent, plain, or destructive
-styles.
+`LiquidThemeSpec::palette` selects `LiquidPalette::System { scheme, accent }`
+or `LiquidPalette::Custom(colors)`. The system palette defaults to
+`SchemeMode::Auto`; `Light` and `Dark` pin its appearance. Custom palettes carry
+their own `is_dark` value. `LiquidTheme` applies accessibility settings to both
+sources and configures text-selection appearance from the resulting palette.
+
+Use `LiquidThemeSpec::system(SchemeMode::Dark)` for a generated palette with the
+default accent. Use `LiquidThemeSpec::system_with_accent(scheme, accent)` when
+choosing an accent color.
+
+```rust
+use cranpose_liquid::prelude::*;
+use cranpose_ui_graphics::Color;
+
+let mut colors = LiquidColors::dark(Color::from_rgb_u8(176, 230, 210));
+colors.background = Color::from_rgb_u8(10, 40, 30);
+let spec = LiquidThemeSpec {
+    palette: LiquidPalette::Custom(colors),
+    ..Default::default()
+};
+```
+
+Custom palette inversion complements RGB channels and preserves alpha; increased
+contrast follows inversion. Supply the original palette so `LiquidTheme` applies
+these settings once. `GlassButtonSpec` selects glass, prominent, plain, or
+destructive styles.
 
 - [API reference on docs.rs](https://docs.rs/cranpose-liquid/latest/cranpose_liquid/)
 - [Source on GitHub](https://github.com/samoylenkodmitry/cranpose/tree/main/crates/cranpose-liquid)

@@ -53,15 +53,14 @@ pub(crate) fn LiquidControlReference(
 ) {
     let activations = rememberMutableStateOf(|| 0usize);
     LiquidTheme(
-        LiquidThemeSpec {
-            scheme: if dark {
+        LiquidThemeSpec::system_with_accent(
+            if dark {
                 SchemeMode::Dark
             } else {
                 SchemeMode::Light
             },
-            accent: Color::from_rgb_u8(0, if dark { 145 } else { 136 }, 255),
-            ..Default::default()
-        },
+            Color::from_rgb_u8(0, if dark { 145 } else { 136 }, 255),
+        ),
         move || {
             let insets = local_safe_area_insets().current();
             Box(

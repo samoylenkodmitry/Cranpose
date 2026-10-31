@@ -14,14 +14,11 @@ use crate::support;
 #[composable]
 fn NeutralControls(dark: bool, card: bool) {
     LiquidTheme(
-        LiquidThemeSpec {
-            scheme: if dark {
-                SchemeMode::Dark
-            } else {
-                SchemeMode::Light
-            },
-            ..Default::default()
-        },
+        LiquidThemeSpec::system(if dark {
+            SchemeMode::Dark
+        } else {
+            SchemeMode::Light
+        }),
         move || {
             for (index, gray) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().enumerate() {
                 Box(
@@ -102,14 +99,11 @@ fn chip_transition_endpoints_preserve_the_clear_and_prominent_materials() {
             location_key(file!(), line!(), column!()),
             move || {
                 LiquidTheme(
-                    LiquidThemeSpec {
-                        scheme: if dark {
-                            SchemeMode::Dark
-                        } else {
-                            SchemeMode::Light
-                        },
-                        ..Default::default()
-                    },
+                    LiquidThemeSpec::system(if dark {
+                        SchemeMode::Dark
+                    } else {
+                        SchemeMode::Light
+                    }),
                     move || {
                         for (index, color) in [
                             Color::BLACK,

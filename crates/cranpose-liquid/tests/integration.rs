@@ -5,6 +5,7 @@ mod floating_button_interaction;
 mod glass_placeholder;
 #[cfg(feature = "localization")]
 mod localization;
+mod provided_colors;
 mod pull_to_refresh;
 mod segmented_style;
 mod selection_controls;
