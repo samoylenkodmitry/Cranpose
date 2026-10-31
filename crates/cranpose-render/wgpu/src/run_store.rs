@@ -19,7 +19,10 @@ use crate::{
     geometry::{SegmentTransform, snap_delta_for_anchor, snapped_anchor_device_origin},
     idle_pool::IDLE_FRAMES,
     run_geometry::ShapeFill,
-    scene::{Placement, RunDraw},
+    scene::{
+        PLACEMENT_CANONICALIZE, PLACEMENT_CLIPPED, PLACEMENT_FILTERED, PLACEMENT_PAINTED,
+        PLACEMENT_TURNED, Placement, RunDraw,
+    },
 };
 
 pub(crate) const RECORD_CHUNK: usize = 128;
@@ -38,14 +41,9 @@ const INITIAL_BRUSHES: usize = 64;
 const INITIAL_STOPS: usize = 128;
 const INITIAL_PLACEMENTS: usize = 64;
 
-const PLACEMENT_CANONICALIZE: u32 = 1;
 #[cfg(test)]
 #[path = "../tests/unit/uniform_placement_chunks.rs"]
 mod uniform_placement_chunks;
-const PLACEMENT_CLIPPED: u32 = 2;
-const PLACEMENT_FILTERED: u32 = 4;
-const PLACEMENT_PAINTED: u32 = 8;
-const PLACEMENT_TURNED: u32 = 16;
 
 /// The run-table binding mode the device supports: storage buffers hold a
 /// recording whole and draw wide arcs as bands; the uniform fallback (the
@@ -168,14 +166,7 @@ impl PlacementData {
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
             .unwrap_or_default();
-        let canonicalize = placement.snap_anchor.is_some();
-        let mut flags = 0;
-        if canonicalize {
-            flags |= PLACEMENT_CANONICALIZE;
-        }
-        if placement.paints() {
-            flags |= PLACEMENT_PAINTED;
-        }
+        let mut flags = placement.data_flags();
         let clip = match placement.tested_device_clip(root_scale) {
             Some([x, y, width, height]) => {
                 flags |= PLACEMENT_CLIPPED;

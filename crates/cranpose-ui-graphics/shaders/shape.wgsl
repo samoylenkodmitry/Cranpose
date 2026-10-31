@@ -564,6 +564,9 @@ const PLACEMENT_CLIPPED: u32 = 2u;
 const PLACEMENT_FILTERED: u32 = 4u;
 const PLACEMENT_PAINTED: u32 = 8u;
 const PLACEMENT_TURNED: u32 = 16u;
+// A rounded clip that a clip above cuts: the paint's scissor makes the cut,
+// and the interior pre-pass, which draws without it, leaves the record out.
+const PLACEMENT_ROUNDING_CUT: u32 = 32u;
 
 // A band's slack beyond its ring, in device pixels, so every pixel the
 // fragment stage anti-aliases lies inside the strip.
@@ -1224,7 +1227,7 @@ fn vs_record_interior(
     let depth = record_depth(instance);
     placement = record_placement(record);
     let color = paint(record.color);
-    if (color.a < 1.0 || depth <= 0.0) {
+    if (color.a < 1.0 || depth <= 0.0 || (placement.flags & PLACEMENT_ROUNDING_CUT) != 0u) {
         return output;
     }
     let geometry = record_geometry(record);
