@@ -279,6 +279,9 @@ pub struct LayoutNode {
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
     density: crate::density::Density,
+    // A slot host of a subcompose node: it lays out nothing itself, so it
+    // keeps no layout flags, and its subcompose node takes the marks of a
+    // bubble that starts at it.
     is_virtual: bool,
     needs_semantics: Cell<bool>,
     /// The semantics tree has to read this node again, though its own
@@ -385,6 +388,9 @@ impl LayoutNode {
             parts,
         };
         node.sync_modifier_chain(None);
+        if is_virtual {
+            node.parts.cache().set_dirt(LayoutDirt::CLEAN);
+        }
         node
     }
 
@@ -607,12 +613,16 @@ impl LayoutNode {
 
     /// Mark this node as needing measure. Also marks it as needing layout.
     pub fn mark_needs_measure(&self) {
-        self.parts.cache().mark_needs_measure();
+        if !self.is_virtual {
+            self.parts.cache().mark_needs_measure();
+        }
     }
 
     /// Mark this node as needing layout (but not necessarily measure).
     pub fn mark_needs_layout(&self) {
-        self.parts.cache().mark_needs_layout();
+        if !self.is_virtual {
+            self.parts.cache().mark_needs_layout();
+        }
     }
 
     /// Mark this node as needing redraw without forcing measure/layout.
@@ -1139,7 +1149,9 @@ impl Node for LayoutNode {
     }
 
     fn mark_descendant_needs_layout(&self, measure: bool) {
-        self.parts.cache().mark_descendant_needs_layout(measure);
+        if !self.is_virtual {
+            self.parts.cache().mark_descendant_needs_layout(measure);
+        }
     }
 
     fn descendant_needs_layout(&self) -> bool {
