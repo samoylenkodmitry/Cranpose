@@ -165,7 +165,9 @@ pub use composer::{
     ValueSlotHandle,
 };
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
-pub use composition::{Composition, CompositionPassDebugStats, ROOT_RENDER_REPLAY_LIMIT};
+pub use composition::{
+    Composition, CompositionPassDebugStats, LayoutBudget, ROOT_RENDER_REPLAY_LIMIT,
+};
 pub use composition_locals::{
     CompositionLocal, CompositionLocalAccessorScope, CompositionLocalProvider, ProvidedValue,
     ReadableCompositionLocal, StaticCompositionLocal, compositionLocalOf,

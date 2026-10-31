@@ -29,6 +29,20 @@ pub struct Composition<A: Applier + 'static> {
     teardown: Option<runtime::StateTeardownScope>,
 }
 
+/// The budget of a frame's layout pass for pausable content, which closes
+/// when it drops: content that waited asks for the next frame.
+#[doc(hidden)]
+pub struct LayoutBudget {
+    state: Rc<crate::composer::ComposerRuntimeState>,
+    runtime: RuntimeHandle,
+}
+
+impl Drop for LayoutBudget {
+    fn drop(&mut self) {
+        self.state.pausing.close_layout(&self.runtime);
+    }
+}
+
 /// Upper bound on chained root-render replays and scope-recomposition rounds.
 ///
 /// Each root render clears `root_render_requested` but may re-raise it if a
@@ -358,6 +372,19 @@ impl<A: Applier + 'static> Composition<A> {
     /// frame still runs at least one body that waits.
     pub fn set_pausable_budget(&self, budget: Option<std::time::Duration>) {
         self.composer_state.pausing.set_budget(budget);
+    }
+
+    /// Opens the frame's budget for pausable content that a measure composes,
+    /// as `BoxWithConstraints` composes its content, until the returned
+    /// budget drops: that content composes across frames as the
+    /// composition's own does.
+    #[doc(hidden)]
+    pub fn open_layout_budget(&self) -> LayoutBudget {
+        self.composer_state.pausing.open_layout();
+        LayoutBudget {
+            state: Rc::clone(&self.composer_state),
+            runtime: self.runtime.handle(),
+        }
     }
 
     /// Returns a handle to the runtime this composition uses.

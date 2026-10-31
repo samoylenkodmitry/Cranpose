@@ -447,3 +447,72 @@ fn a_screen_composing_across_frames_keeps_the_frame_schedule_asking_until_it_com
 
     assert!(frames > 2, "the screen composed over several frames");
 }
+
+#[cranpose_ui::composable]
+fn Shown(shown: Rc<Cell<bool>>) {
+    cranpose_core::DisposableEffect((), move |_| {
+        shown.set(true);
+        cranpose_core::DisposableEffectResult::new(move || shown.set(false))
+    });
+}
+
+#[test]
+fn a_screen_inside_a_measure_time_subcomposition_composes_across_frames() {
+    let switch = Rc::new(Cell::new(None));
+    let slot = Rc::clone(&switch);
+    let effects = Rc::new(Cell::new(0));
+    let tile_effects = Rc::clone(&effects);
+    let old_shown = Rc::new(Cell::new(false));
+    let old = Rc::clone(&old_shown);
+    let mut rule = create_headless_robot_test(200, 200, move || {
+        let open = rememberMutableStateOf(|| false);
+        slot.set(Some(open));
+        let tile_effects = Rc::clone(&tile_effects);
+        let old = Rc::clone(&old);
+        cranpose_ui::BoxWithConstraints(Modifier::empty().fill_max_size(), move |_| {
+            let tile_effects = Rc::clone(&tile_effects);
+            let old = Rc::clone(&old);
+            cranpose_ui::Crossfade(open.get(), Default::default(), move |open: bool| {
+                if open {
+                    for _ in 0..4 {
+                        Tile(Rc::clone(&tile_effects));
+                    }
+                } else {
+                    Shown(Rc::clone(&old));
+                }
+            });
+        });
+    });
+    rule.wait_for_idle();
+    assert!(old_shown.get(), "the first screen shows");
+    rule.shell_mut()
+        .set_pausable_budget(Some(std::time::Duration::ZERO));
+
+    switch.get().expect("composed").set(true);
+    let mut frames = 0;
+    // The screen composes in the slot's measure, inside the layout pass:
+    // its bodies wait there as they do in the composition's own passes.
+    while effects.get() < 4 {
+        let schedule = rule.shell_mut().frame_schedule();
+        assert!(
+            schedule.needs_update || schedule.needs_frame,
+            "the shell asks for frames while the screen composes"
+        );
+        assert!(
+            old_shown.get(),
+            "the first screen shows until the new one completes"
+        );
+        rule.advance_time(FRAME);
+        frames += 1;
+        assert!(frames < 30, "every frame composes more of the screen");
+    }
+
+    assert!(frames > 2, "the screen composed over several frames");
+    for _ in 0..40 {
+        rule.advance_time(FRAME);
+    }
+    assert!(
+        !old_shown.get(),
+        "the first screen leaves once the change ends"
+    );
+}
