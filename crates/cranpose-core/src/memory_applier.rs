@@ -662,6 +662,12 @@ impl MemoryApplier {
         self.state.layout_dirt_roots.take_into(out)
     }
 
+    /// Whether a layout dirty bubble started since the last
+    /// [`Self::take_layout_dirt_roots`].
+    pub fn has_layout_dirt_roots(&self) -> bool {
+        self.state.layout_dirt_roots.any()
+    }
+
     #[inline]
     pub(crate) fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
         self.state.stable_index.slot(id)

@@ -48,6 +48,12 @@ impl LiveLayoutNode<'_> {
         }
     }
 
+    // A slot host of a subcompose node, which lays out nothing itself: its
+    // subcompose node measures and places the slot's content.
+    pub(super) fn is_virtual(&self) -> bool {
+        matches!(self, Self::Layout(node) if Node::is_virtual(*node))
+    }
+
     fn parts(&self) -> &LayoutParts {
         match self {
             Self::Layout(node) => node.layout_parts(),
