@@ -32,7 +32,7 @@ pub struct TextMetrics {
     pub width: f32,
     /// Height of all lines together.
     pub height: f32,
-    /// Height of the first line.
+    /// The distance from the first line's baseline down to the next line's.
     pub line_height: f32,
     /// Number of lines, at least the minimum the options ask for.
     pub line_count: usize,
@@ -115,7 +115,7 @@ impl PreparedTextLayout {
         TextMetrics {
             width: size.width,
             height: size.height,
-            line_height: layout.line_bottom(0) - layout.line_top(0),
+            line_height: layout.line_advance(),
             line_count: layout
                 .line_count()
                 .max(usize::try_from(self.min_lines).unwrap_or(usize::MAX)),
@@ -923,15 +923,16 @@ pub fn first_baseline(style: &TextStyle) -> Option<f32> {
 }
 
 /// The glyph box `(top_offset, height)` of a `style` line inside a line
-/// `line_height` tall: the font's ascent and descent under the line's
-/// baseline. The whole line with no font.
+/// `line_height` tall, where lines stack from the paragraph's top one advance
+/// apart: the font's ascent and descent under the first line's baseline. The
+/// whole line with no font.
 pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
     let units = host_units();
     crate::render_state::with_text_service(|service| {
         let extent = service.extent(style, units)?;
         let line_box = service.line_box(style, units)?;
         Some((
-            line_box.baseline - extent.ascent,
+            line_box.first_baseline() - extent.ascent,
             extent.ascent + extent.descent,
         ))
     })

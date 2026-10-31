@@ -22,6 +22,9 @@ pub(crate) struct LayoutBody {
     // The widest line with its indent.
     pub(crate) widest: f32,
     pub(crate) height: f32,
+    // The first line's height before the paragraph's edges trim it: the
+    // distance from its baseline down to the next line's.
+    pub(crate) advance: f32,
     pub(crate) did_overflow_height: bool,
     // Whether a line runs right to left.
     pub(crate) rtl: bool,
@@ -101,6 +104,7 @@ impl LayoutBody {
         self.lines.clear();
         self.widest = 0.0;
         self.height = 0.0;
+        self.advance = 0.0;
         self.did_overflow_height = false;
         self.rtl = false;
         self.off_indent = false;

@@ -16,6 +16,25 @@ fn layout(
     width: f32,
     letter_spacing: f32,
 ) -> TextLayout {
+    let options = TextLayoutOptions::default();
+    layout_with(
+        resolver,
+        text,
+        paragraph,
+        lengths,
+        (width, letter_spacing),
+        options,
+    )
+}
+
+fn layout_with(
+    resolver: &FontFamilyResolver,
+    text: &str,
+    paragraph: &ParagraphStyle,
+    lengths: ParagraphLengths,
+    (width, letter_spacing): (f32, f32),
+    options: TextLayoutOptions,
+) -> TextLayout {
     let family = FontFamily::Default;
     let spans = [ShapingSpan {
         letter_spacing: Some(letter_spacing),
@@ -29,7 +48,7 @@ fn layout(
             lengths,
             min_width: 0.0,
             max_width: width,
-            options: TextLayoutOptions::default(),
+            options,
         },
         resolver,
     )
@@ -102,6 +121,25 @@ fn trimming_takes_the_leading_off_the_first_top_and_the_last_bottom() {
     assert!((height(&trimmed, 1) - 40.0).abs() < 0.01);
     assert!(trimmed.height() < full.height());
     assert!(trimmed.line_baseline(0) < full.line_baseline(0));
+}
+
+#[test]
+fn min_lines_of_a_trimmed_text_add_whole_line_advances() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let style = line_height(LineHeightTrim::Both);
+    let three = layout(&resolver, "a\na\na", &style, tall(), 120.0, 0.0);
+
+    let options = TextLayoutOptions {
+        min_lines: 3,
+        ..TextLayoutOptions::default()
+    };
+    let short = layout_with(&resolver, "a", &style, tall(), (120.0, 0.0), options);
+
+    let advance = three.line_baseline(1) - three.line_baseline(0);
+    assert!((advance - 40.0).abs() < 0.01, "advance {advance}");
+    assert!((short.line_advance() - advance).abs() < 0.01);
+    let (short, three) = (short.height(), three.height());
+    assert!((short - three).abs() < 0.01, "{short} against {three}");
 }
 
 fn line_count(laid: &TextLayout) -> f32 {

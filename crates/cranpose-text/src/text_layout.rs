@@ -468,6 +468,12 @@ impl TextLayout {
         self.body.height
     }
 
+    /// The distance from the first line's baseline down to the next line's:
+    /// the first line's height before the paragraph's edges trim it.
+    pub fn line_advance(&self) -> f32 {
+        self.body.advance
+    }
+
     /// The number of lines, at least one.
     pub fn line_count(&self) -> usize {
         self.body.lines.len()

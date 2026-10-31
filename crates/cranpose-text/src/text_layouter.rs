@@ -373,10 +373,11 @@ impl TextLayouter {
             layout.glyphs = LaidGlyphs::new(&self.glyphs);
         }
         self.keep_glyph_room();
+        // Each missing line adds a line's advance, as Compose's
+        // `heightInLines` adds the distance between two lines' baselines.
         if layout.lines.len() < options.min_lines {
-            let first = &layout.lines[0];
             let missing = options.min_lines - layout.lines.len();
-            top += (first.bottom - first.top) * lines_f32(missing);
+            top += layout.advance * lines_f32(missing);
         }
         layout.height = top;
         let grid = input.lengths.grid;
@@ -686,6 +687,9 @@ impl TextLayouter {
         } else {
             0.0
         };
+        if edges.first {
+            layout.advance = line_box.height;
+        }
         let top = edges.top;
         let bottom = top + line_box.height - trim_top - trim_bottom;
         let level = self.paragraph_level(input, line.range.start);

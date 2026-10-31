@@ -155,7 +155,7 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
         }
         let prepared = prepare_draw_text(text, style);
         let layout = &prepared.layout;
-        let line_height = layout.line_bottom(0) - layout.line_top(0);
+        let line_height = layout.line_advance();
         let first_baseline = layout.line_baseline(0);
         let measurement = if text.is_empty() {
             TextMeasurement::empty(line_height, first_baseline)
