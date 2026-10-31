@@ -105,8 +105,13 @@ fn shape_vertices_receive_every_record_field_from_its_column() {
     for entry_name in [
         "vs_record",
         "vs_record_solid",
+        "vs_record_plain_fill",
+        "vs_record_clipped_fill",
         "vs_record_dithered_fill",
+        "vs_record_slice",
+        "vs_record_gradient_slice",
         "vs_record_gradient_fill",
+        "vs_record_interior",
     ] {
         let entry = module
             .entry_points
@@ -117,13 +122,13 @@ fn shape_vertices_receive_every_record_field_from_its_column() {
             .function
             .arguments
             .iter()
-            .find(|argument| argument.name.as_deref() == Some("record"))
+            .find(|argument| argument.name.as_deref() == Some("input"))
             .expect("native vertices must receive the record through instance attributes");
         let naga::TypeInner::Struct { members, span } = &module.types[argument.ty].inner else {
             panic!("the instance input must be a shape record");
         };
         let layouts = crate::record_columns::record_vertex_layouts();
-        assert_eq!(members.len(), 9);
+        assert_eq!(members.len(), 6);
         assert_eq!(
             layouts
                 .iter()
@@ -152,8 +157,7 @@ fn shape_vertices_receive_every_record_field_from_its_column() {
                 .expect("the field must have an instance attribute");
             assert!(attribute.offset + attribute.format.size() <= layout.array_stride);
             let format = match member.name.as_deref().unwrap() {
-                "flags" | "brush" | "placement" => wgpu::VertexFormat::Uint32,
-                "stroke_width" => wgpu::VertexFormat::Float32,
+                "words" => wgpu::VertexFormat::Uint32x4,
                 _ => wgpu::VertexFormat::Float32x4,
             };
             assert_eq!(attribute.format, format);

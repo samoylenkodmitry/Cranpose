@@ -302,15 +302,42 @@ struct Uniforms {
 var<uniform> uniforms: Uniforms;
 
 struct ShapeRecord {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    color: vec4<f32>,
+    stroke_width: f32,
+    flags: u32,
+    brush: u32,
+    placement: u32,
+    arc_geometry: vec4<f32>,
+    arc_normalized: vec4<f32>,
+}
+
+// A record as its vertex stage reads it: the stroke width's bits, the flags,
+// the brush and the placement, the 16 bytes between the colour and the arc,
+// are one attribute, so a draw on WebGL, which points every attribute again,
+// points six.
+struct ShapeRecordInput {
     @location(0) rect: vec4<f32>,
     @location(1) radii: vec4<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) stroke_width: f32,
-    @location(4) flags: u32,
-    @location(5) brush: u32,
-    @location(6) placement: u32,
-    @location(7) arc_geometry: vec4<f32>,
-    @location(8) arc_normalized: vec4<f32>,
+    @location(3) words: vec4<u32>,
+    @location(4) arc_geometry: vec4<f32>,
+    @location(5) arc_normalized: vec4<f32>,
+}
+
+fn shape_record(input: ShapeRecordInput) -> ShapeRecord {
+    return ShapeRecord(
+        input.rect,
+        input.radii,
+        input.color,
+        bitcast<f32>(input.words.x),
+        input.words.y,
+        input.words.z,
+        input.words.w,
+        input.arc_geometry,
+        input.arc_normalized,
+    );
 }
 
 struct BrushRecord {
@@ -917,8 +944,9 @@ fn placed_record_vertex(record: ShapeRecord, local: u32, instance: u32) -> Verte
 fn vs_record(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> VertexOutput {
+    let record = shape_record(input);
     return placed_record_vertex(record, vertex_idx, instance);
 }
 
@@ -926,8 +954,9 @@ fn vs_record(
 fn vs_record_solid(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> SolidOutput {
+    let record = shape_record(input);
     return solid_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
@@ -935,8 +964,9 @@ fn vs_record_solid(
 fn vs_record_plain_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> PlainFillOutput {
+    let record = shape_record(input);
     return plain_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
@@ -944,8 +974,9 @@ fn vs_record_plain_fill(
 fn vs_record_clipped_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> ClippedFillOutput {
+    let record = shape_record(input);
     return clipped_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
@@ -953,8 +984,9 @@ fn vs_record_clipped_fill(
 fn vs_record_dithered_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> DitheredFillOutput {
+    let record = shape_record(input);
     return dithered_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
@@ -962,8 +994,9 @@ fn vs_record_dithered_fill(
 fn vs_record_slice(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> SliceOutput {
+    let record = shape_record(input);
     return slice_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
@@ -971,8 +1004,9 @@ fn vs_record_slice(
 fn vs_record_gradient_slice(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> GradientSliceOutput {
+    let record = shape_record(input);
     let full = placed_record_vertex(record, vertex_idx, instance);
     let slice = slice_output(full);
     let ramp = vertex_gradient_ramp(
@@ -997,8 +1031,9 @@ fn vs_record_gradient_slice(
 fn vs_record_gradient_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> GradientFillOutput {
+    let record = shape_record(input);
     return gradient_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
@@ -1015,8 +1050,9 @@ struct InteriorOutput {
 fn vs_record_interior(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
-    record: ShapeRecord,
+    input: ShapeRecordInput,
 ) -> InteriorOutput {
+    let record = shape_record(input);
     // A record with no opaque interior puts every vertex on one point, and
     // the vertices a banded draw instances past a quad's four sit on its
     // last corner, so neither rasterizes anything.
