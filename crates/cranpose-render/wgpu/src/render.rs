@@ -83,7 +83,7 @@ pub(crate) fn clip_scissor(
     if !viewport.transform.is_identity() {
         return None;
     }
-    let [x, y, width, height] = crate::run_store::device_clip(placement, root_scale)?;
+    let [x, y, width, height] = placement.device_clip(root_scale)?;
     let columns = kept_pixels(x, x + width, viewport.offset[0], viewport.width);
     let rows = kept_pixels(y, y + height, viewport.offset[1], viewport.height);
     Some((
@@ -484,8 +484,7 @@ fn hash_placement_clips<H: Hasher>(
     ] {
         rect.is_some().hash(state);
         if let Some(rect) = rect {
-            let [x, y, width, height] =
-                crate::run_store::placement_device_rect(placement, rect, root_scale);
+            let [x, y, width, height] = placement.device_rect(rect, root_scale);
             for value in [
                 x - origin_x,
                 y - origin_y,

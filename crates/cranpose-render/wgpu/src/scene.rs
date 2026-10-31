@@ -51,6 +51,15 @@ pub(crate) fn clip_holds(outer: Rect, inner: Rect) -> bool {
         && inner.y + inner.height <= outer.y + outer.height + CLIP_HOLD_SLACK
 }
 
+// The bits of a placement's data that the shape shader reads; shape.wgsl
+// declares the same.
+pub(crate) const PLACEMENT_CANONICALIZE: u32 = 1;
+pub(crate) const PLACEMENT_CLIPPED: u32 = 2;
+pub(crate) const PLACEMENT_FILTERED: u32 = 4;
+pub(crate) const PLACEMENT_PAINTED: u32 = 8;
+pub(crate) const PLACEMENT_TURNED: u32 = 16;
+const PLACEMENT_ROUNDING_CUT: u32 = 32;
+
 /// Where a recording's record space lands in the scene: the logical
 /// offset of its origin, the rigid anchor it snaps with, the clip its
 /// records take, and the paint every record takes on the way to the
@@ -104,6 +113,46 @@ impl Placement {
             self.clip
                 .is_none_or(|clip| !clip_holds(clip, rounding.rect))
         })
+    }
+
+    /// The clip in device pixels at `root_scale` as x, y, width and height:
+    /// snapped to the device grid when the placement is.
+    pub(crate) fn device_clip(&self, root_scale: f32) -> Option<[f32; 4]> {
+        self.clip.map(|clip| self.device_rect(clip, root_scale))
+    }
+
+    /// The rect the placement's records test in device pixels: a rounded
+    /// clip's whole rect, from which the draw's scissor cuts what the clips
+    /// above leave, else the clip.
+    pub(crate) fn tested_device_clip(&self, root_scale: f32) -> Option<[f32; 4]> {
+        let rounding = self.rounding.filter(|_| self.clip_rounded());
+        rounding
+            .map(|rounding| rounding.rect)
+            .or(self.clip)
+            .map(|clip| self.device_rect(clip, root_scale))
+    }
+
+    /// `rect` in device pixels at `root_scale` as x, y, width and height:
+    /// snapped to the device grid when the placement is.
+    pub(crate) fn device_rect(&self, rect: Rect, root_scale: f32) -> [f32; 4] {
+        let device = crate::geometry::device_rect(rect, root_scale, self.snap_anchor.is_some());
+        [device.x, device.y, device.width, device.height]
+    }
+
+    pub(crate) fn data_flags(&self) -> u32 {
+        let mut flags = 0;
+        if self.snap_anchor.is_some() {
+            flags |= PLACEMENT_CANONICALIZE;
+        }
+        if self.paints() {
+            flags |= PLACEMENT_PAINTED;
+        }
+        // A rounded clip's records test its whole rect, and the clips above
+        // cut it by the paint's scissor alone, which interiors draw without.
+        if self.clip_rounded() && self.rounding_cut() {
+            flags |= PLACEMENT_ROUNDING_CUT;
+        }
+        flags
     }
 
     /// A placement that paints its records with the layer's alpha and

@@ -5,7 +5,7 @@ use cranpose_core::collections::map::{Entry, HashMap};
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_paint_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, RecordLane,
-    RecordSegment, RecordTables, Rect, ShapeRecordBody, ShapeRecordCurve, band_class_segments,
+    RecordSegment, RecordTables, ShapeRecordBody, ShapeRecordCurve, band_class_segments,
     strip_index_pattern, strip_indices,
 };
 
@@ -16,12 +16,13 @@ use crate::{
         TEST_READBACK, UploadMode, UploadPlacement, align_u64_to, create_filled_buffer,
         place_upload, write_mapped,
     },
-    geometry::{
-        SegmentTransform, device_rect, snap_delta_for_anchor, snapped_anchor_device_origin,
-    },
+    geometry::{SegmentTransform, snap_delta_for_anchor, snapped_anchor_device_origin},
     idle_pool::IDLE_FRAMES,
     run_geometry::ShapeFill,
-    scene::{Placement, RunDraw},
+    scene::{
+        PLACEMENT_CANONICALIZE, PLACEMENT_CLIPPED, PLACEMENT_FILTERED, PLACEMENT_PAINTED,
+        PLACEMENT_TURNED, Placement, RunDraw,
+    },
 };
 
 pub(crate) const RECORD_CHUNK: usize = 128;
@@ -40,14 +41,9 @@ const INITIAL_BRUSHES: usize = 64;
 const INITIAL_STOPS: usize = 128;
 const INITIAL_PLACEMENTS: usize = 64;
 
-const PLACEMENT_CANONICALIZE: u32 = 1;
 #[cfg(test)]
 #[path = "../tests/unit/uniform_placement_chunks.rs"]
 mod uniform_placement_chunks;
-const PLACEMENT_CLIPPED: u32 = 2;
-const PLACEMENT_FILTERED: u32 = 4;
-const PLACEMENT_PAINTED: u32 = 8;
-const PLACEMENT_TURNED: u32 = 16;
 
 /// The run-table binding mode the device supports: storage buffers hold a
 /// recording whole and draw wide arcs as bands; the uniform fallback (the
@@ -136,36 +132,6 @@ pub(crate) struct PlacementData {
     transform_reserved: [f32; 2],
 }
 
-/// `placement`'s clip in device pixels at `root_scale` as x, y, width and
-/// height: snapped to the device grid when the placement is.
-pub(crate) fn device_clip(placement: &Placement, root_scale: f32) -> Option<[f32; 4]> {
-    placement
-        .clip
-        .map(|clip| placement_device_rect(placement, clip, root_scale))
-}
-
-/// The rect a placement's records test in device pixels: a rounded clip's
-/// whole rect, from which the draw's scissor cuts what the clips above
-/// leave, else the clip.
-fn tested_device_clip(placement: &Placement, root_scale: f32) -> Option<[f32; 4]> {
-    let rounding = placement.rounding.filter(|_| placement.clip_rounded());
-    rounding
-        .map(|rounding| rounding.rect)
-        .or(placement.clip)
-        .map(|clip| placement_device_rect(placement, clip, root_scale))
-}
-
-/// `rect` in device pixels at `root_scale` as x, y, width and height:
-/// snapped to the device grid when `placement` is.
-pub(crate) fn placement_device_rect(
-    placement: &Placement,
-    rect: Rect,
-    root_scale: f32,
-) -> [f32; 4] {
-    let device = device_rect(rect, root_scale, placement.snap_anchor.is_some());
-    [device.x, device.y, device.width, device.height]
-}
-
 impl PlacementData {
     /// How the fallback triangles of a record under this placement land
     /// and paint (see [`crate::mesh_fallback`]).
@@ -200,15 +166,8 @@ impl PlacementData {
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
             .unwrap_or_default();
-        let canonicalize = placement.snap_anchor.is_some();
-        let mut flags = 0;
-        if canonicalize {
-            flags |= PLACEMENT_CANONICALIZE;
-        }
-        if placement.paints() {
-            flags |= PLACEMENT_PAINTED;
-        }
-        let clip = match tested_device_clip(placement, root_scale) {
+        let mut flags = placement.data_flags();
+        let clip = match placement.tested_device_clip(root_scale) {
             Some([x, y, width, height]) => {
                 flags |= PLACEMENT_CLIPPED;
                 [x + shift[0], y + shift[1], width, height]

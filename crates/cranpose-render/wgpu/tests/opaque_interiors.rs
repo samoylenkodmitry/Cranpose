@@ -12,7 +12,8 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPlacement, DrawPrimitive, DrawScope, DrawScopeDefault,
-    GraphicsLayer, Point, Rect, Size, Stroke, StrokeCap, StrokeJoin, TileMode,
+    GraphicsLayer, LayerShape, Point, Rect, RoundedCornerShape, Size, Stroke, StrokeCap,
+    StrokeJoin, TileMode,
 };
 
 use crate::{shared_test_support, support};
@@ -261,6 +262,57 @@ fn a_clipped_opaque_fill_hides_only_what_its_clip_shows() {
         vec![220, 40, 40],
         "past the clip the red shows"
     );
+}
+
+// A rounded clip cut by a rect clip above it, as a card a list scrolls
+// part way under a header: its fill's interior stays within the cut.
+#[test]
+fn a_rounded_clip_cut_by_a_clip_above_lays_no_interior_past_the_cut() {
+    let amber = Color::from_rgb_u8(230, 170, 40);
+    let green = Color::from_rgb_u8(40, 200, 90);
+    let clipped = |bounds: Rect, at: Point, shape: LayerShape, children: Vec<RenderNode>| {
+        RenderNode::Layer(Box::new(shared_test_support::layer_node(
+            bounds,
+            ProjectiveTransform::translation(at.x, at.y),
+            GraphicsLayer {
+                clip: true,
+                shape,
+                ..GraphicsLayer::default()
+            },
+            children,
+        )))
+    };
+    let graph = || {
+        let card = clipped(
+            rect(0.0, 0.0, 160.0, 100.0),
+            Point { x: 20.0, y: -40.0 },
+            LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
+            vec![fill(rect(0.0, 0.0, 160.0, 100.0), green, 0.0, None)],
+        );
+        frame_of(vec![
+            fill(rect(0.0, 0.0, 200.0, 60.0), amber, 0.0, None),
+            clipped(
+                rect(0.0, 0.0, 200.0, 140.0),
+                Point { x: 0.0, y: 60.0 },
+                LayerShape::Rectangle,
+                vec![card],
+            ),
+        ])
+    };
+    let Some((with, without)) = capture_both_ways(graph) else {
+        return;
+    };
+    assert_same_pixels(&with.pixels, &without.pixels);
+    let pixel = |x: usize, y: usize| {
+        let at = (y * FRAME as usize + x) * 4;
+        with.pixels[at..at + 3].to_vec()
+    };
+    assert_eq!(
+        pixel(100, 40),
+        vec![230, 170, 40],
+        "above the cut the strip shows"
+    );
+    assert_eq!(pixel(100, 80), vec![40, 200, 90], "below it the card shows");
 }
 
 #[test]
