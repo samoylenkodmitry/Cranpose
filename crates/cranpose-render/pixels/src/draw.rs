@@ -113,7 +113,7 @@ static UNIT: [f32; 256] = {
     table
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ClipBounds {
     pub min_x: i32,
     pub min_y: i32,

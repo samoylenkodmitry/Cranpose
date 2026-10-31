@@ -82,6 +82,15 @@ against 25.61 ms a frame, the demo 0.41 against 0.45, the composed line
 4.04 against 4.11 and the busier screen 7.94 against 8.02, and the drawn
 line 1.65 against 1.58 ms.
 
+Both lists were made again on 2026-10-31 after the pixel scene began to
+write a changed subtree over its old items, whose new functions had run
+from flash. Against main with the lists before, the ES3C35P ran the drawn
+line 1.65 against 1.69 ms a frame, the composed line 4.02 against 4.07, the
+dashboard 25.06 against 25.24 and the busier screen 7.90 against 8.00; the
+E32R35T ran the demo 1.02 against 1.21 ms, the drawn line 3.51 against
+3.83, the composed line 6.15 against 6.40 and the busier screen 9.58
+against 9.62.
+
 A list of 125 KB takes about 2 ms longer to load at reset than one of 89 KB
 (the bootloader copies it from flash), and the screens whose first frame
 waits for the panel show it then. An 89 KB list made from the same
@@ -112,7 +121,7 @@ python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/component
   --profile target/esp32/sim-demo.elf target/esp32/sim-demo.log \
   --profile target/esp32/sim-drawn.elf target/esp32/sim-drawn.log \
   --profile target/esp32/sim-composed.elf target/esp32/sim-composed.log \
-  --profile target/esp32/sim-workload.elf target/esp32/sim-workload.log
+  --profile target/esp32/sim-workload.elf target/esp32/sim-workload.log \
   --profile target/esp32/sim-dashboard.elf target/esp32/sim-dashboard.log
 
 for mode in demo drawn composed; do just esp32-profile e32r35t $mode; done

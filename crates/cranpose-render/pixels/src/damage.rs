@@ -5,6 +5,7 @@ use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
     scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
+    scene_item::ItemRef,
 };
 
 const MAX_AREAS: usize = 8;
@@ -250,20 +251,77 @@ fn same_shadow(old: &ShadowDraw, new: &ShadowDraw) -> bool {
         && *clip == new.clip
 }
 
-fn same_item(
-    old: &RasterScene,
-    old_item: RenderItem,
-    new: &RasterScene,
-    new_item: RenderItem,
+fn same_item(old: ItemRef<'_>, new: ItemRef<'_>) -> bool {
+    match (old, new) {
+        (ItemRef::Shape(old), ItemRef::Shape(new)) => same_shape(old, new),
+        (ItemRef::Text(old), ItemRef::Text(new)) => same_text(old, new),
+        (ItemRef::Image(old), ItemRef::Image(new)) => same_image(old, new),
+        (ItemRef::Shadow(old), ItemRef::Shadow(new)) => same_shadow(old, new),
+        _ => false,
+    }
+}
+
+// Adds the areas a moved fill or a swept arc changes, when `old` and `new`
+// are such a pair.
+fn add_narrowed_areas(
+    old: ItemRef<'_>,
+    new: ItemRef<'_>,
+    window: ClipBounds,
+    areas: &mut Vec<ClipBounds>,
 ) -> bool {
-    match (old_item, new_item) {
-        (RenderItem::Shape(a), RenderItem::Shape(b)) => same_shape(&old.shapes[a], &new.shapes[b]),
-        (RenderItem::Text(a), RenderItem::Text(b)) => same_text(&old.texts[a], &new.texts[b]),
-        (RenderItem::Image(a), RenderItem::Image(b)) => same_image(&old.images[a], &new.images[b]),
-        (RenderItem::Shadow(a), RenderItem::Shadow(b)) => {
-            same_shadow(&old.shadows[a], &new.shadows[b])
+    match (old, new) {
+        (ItemRef::Shape(old), ItemRef::Shape(new)) => {
+            add_moved_fill_areas(old, new, window, areas)
+                || add_swept_arc_areas(old, new, window, areas)
         }
         _ => false,
+    }
+}
+
+// Where the old item of a pair reached in the window.
+pub(crate) enum ItemReach<'a> {
+    // Not held in the scene's reach list: it is worked out.
+    Unknown,
+    // Held, and kept as it is.
+    Kept(Option<ClipBounds>),
+    // Held, and the new item's reach takes its place.
+    Replaced(&'a mut Option<ClipBounds>),
+}
+
+// Adds to `areas` where `new`, which takes the place of `old` in one draw
+// order, draws differently. An item drawn as its pair was reaches where its
+// pair did.
+pub(crate) fn add_changed_pair(
+    old: ItemRef<'_>,
+    new: ItemRef<'_>,
+    reach: ItemReach<'_>,
+    window: ClipBounds,
+    areas: &mut Vec<ClipBounds>,
+) {
+    if same_item(old, new) {
+        return;
+    }
+    // A moved fill and a swept arc add only the areas their change reaches.
+    let narrowed = add_narrowed_areas(old, new, window, areas);
+    if narrowed && !matches!(reach, ItemReach::Replaced(_)) {
+        return;
+    }
+    if !narrowed {
+        let old_bounds = match &reach {
+            ItemReach::Unknown => old.bounds(window),
+            ItemReach::Kept(held) => *held,
+            ItemReach::Replaced(held) => **held,
+        };
+        if let Some(area) = old_bounds {
+            add_area(areas, area);
+        }
+    }
+    let new_bounds = new.bounds(window);
+    if !narrowed && let Some(area) = new_bounds {
+        add_area(areas, area);
+    }
+    if let ItemReach::Replaced(held) = reach {
+        *held = new_bounds;
     }
 }
 
@@ -305,7 +363,7 @@ fn common_ends(old: &RasterScene, new: &RasterScene) -> (usize, usize) {
             start = start.max(run.end.min(shared));
             continue;
         }
-        if !same_item(old, old_items[start], new, new_items[start]) {
+        if !same_item(old.item(old_items[start]), new.item(new_items[start])) {
             break;
         }
         start += 1;
@@ -325,10 +383,8 @@ fn common_ends(old: &RasterScene, new: &RasterScene) -> (usize, usize) {
             continue;
         }
         if !same_item(
-            old,
-            old_items[old_items.len() - 1 - end],
-            new,
-            new_items[index],
+            old.item(old_items[old_items.len() - 1 - end]),
+            new.item(new_items[index]),
         ) {
             break;
         }
@@ -349,10 +405,9 @@ pub(crate) fn changed_areas(
     let new_items = &new.order;
     let (common_start, common_end) = common_ends(old, new);
     let changed = common_start..old_items.len() - common_end;
-    let reach = match old_reach.get(changed.clone()) {
-        Some(reach) if old_reach.len() == old_items.len() => RunReach::Kept(reach),
-        _ => RunReach::Unknown,
-    };
+    let reach = old_reach
+        .get(changed.clone())
+        .filter(|_| old_reach.len() == old_items.len());
     add_changed_runs(
         (old, &old_items[changed]),
         (new, &new_items[common_start..new_items.len() - common_end]),
@@ -363,44 +418,6 @@ pub(crate) fn changed_areas(
     merge_areas(areas);
 }
 
-// Where the items of an old run reach in the window, as the scene's reach
-// list holds them.
-pub(crate) enum RunReach<'a> {
-    // Not held: each old item's reach is worked out.
-    Unknown,
-    // Held, and kept as it is.
-    Kept(&'a [Option<ClipBounds>]),
-    // Held, and each new item's reach takes its old item's place: the new
-    // run takes the old run's place in the order, item for item.
-    Replaced(&'a mut [Option<ClipBounds>]),
-}
-
-impl RunReach<'_> {
-    fn old(
-        &self,
-        scene: &RasterScene,
-        index: usize,
-        item: RenderItem,
-        window: ClipBounds,
-    ) -> Option<ClipBounds> {
-        match self {
-            Self::Unknown => scene.item_bounds(item, window),
-            Self::Kept(reach) => reach[index],
-            Self::Replaced(reach) => reach[index],
-        }
-    }
-
-    fn replaces(&self) -> bool {
-        matches!(self, Self::Replaced(_))
-    }
-
-    fn replace(&mut self, index: usize, reach: Option<ClipBounds>) {
-        if let Self::Replaced(held) = self {
-            held[index] = reach;
-        }
-    }
-}
-
 // Adds to `areas` where the run `old.1` of the scene `old.0` and the run
 // `new.1` of `new.0`, which take each other's place in one draw order, draw
 // differently. Items paired in order draw in the same order in both scenes,
@@ -409,39 +426,18 @@ impl RunReach<'_> {
 pub(crate) fn add_changed_runs(
     (old, old_items): (&RasterScene, &[RenderItem]),
     (new, new_items): (&RasterScene, &[RenderItem]),
-    mut reach: RunReach<'_>,
+    reach: Option<&[Option<ClipBounds>]>,
     window: ClipBounds,
     areas: &mut Vec<ClipBounds>,
 ) {
     let paired = old_items.len().min(new_items.len());
     for (index, (&old_item, &new_item)) in old_items.iter().zip(new_items).enumerate() {
-        if same_item(old, old_item, new, new_item) {
-            continue;
-        }
-        // A moved fill and a swept arc add only the areas their change
-        // reaches.
-        let narrowed = match (old_item, new_item) {
-            (RenderItem::Shape(a), RenderItem::Shape(b)) => {
-                let (old_shape, new_shape) = (&old.shapes[a], &new.shapes[b]);
-                add_moved_fill_areas(old_shape, new_shape, window, areas)
-                    || add_swept_arc_areas(old_shape, new_shape, window, areas)
-            }
-            _ => false,
-        };
-        if narrowed && !reach.replaces() {
-            continue;
-        }
-        if !narrowed && let Some(area) = reach.old(old, index, old_item, window) {
-            add_area(areas, area);
-        }
-        let new_bounds = new.item_bounds(new_item, window);
-        if !narrowed && let Some(area) = new_bounds {
-            add_area(areas, area);
-        }
-        reach.replace(index, new_bounds);
+        let held = reach.map_or(ItemReach::Unknown, |reach| ItemReach::Kept(reach[index]));
+        add_changed_pair(old.item(old_item), new.item(new_item), held, window, areas);
     }
     for (index, &item) in old_items.iter().enumerate().skip(paired) {
-        if let Some(area) = reach.old(old, index, item, window) {
+        let old_bounds = reach.map_or_else(|| old.item_bounds(item, window), |reach| reach[index]);
+        if let Some(area) = old_bounds {
             add_area(areas, area);
         }
     }

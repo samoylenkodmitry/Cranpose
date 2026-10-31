@@ -5,6 +5,9 @@
 use std::{alloc::System, ops::Range};
 
 use cranpose::{SystemTheme, framebuffer::Framebuffer, prelude::*};
+use cranpose_animation::{
+    AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
+};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[path = "../support/reading.rs"]
@@ -29,6 +32,12 @@ const MEASURED: Range<u64> = 300..1200;
 /// that grew once. Frames that kept each text they measured would leave
 /// several times this.
 const LEFT_BEHIND_BOUND: isize = 32 * 1024;
+// The bars a canvas draws, enough that a second copy of what they draw
+// would hold far more than `REDRAW_BOUND`.
+const BARS: usize = 200;
+// What a canvas that draws again every frame may hold more than one that
+// drew once: a few lists that grew once, not a copy of what it draws.
+const REDRAW_BOUND: isize = 4 * 1024;
 
 fn run(framebuffer: &mut Framebuffer, frames: Range<u64>, pixels: &mut [u8]) {
     let mut areas = Vec::new();
@@ -42,6 +51,53 @@ fn run(framebuffer: &mut Framebuffer, frames: Range<u64>, pixels: &mut [u8]) {
         }
         framebuffer.run_pending_tasks();
     }
+}
+
+// The bytes a framebuffer of `content` holds after the `WARM_UP` frames.
+fn held(content: impl Fn() + 'static) -> isize {
+    let mut pixels = vec![0; WIDTH as usize * HEIGHT as usize * 4];
+    let region = Region::new(GLOBAL);
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, 1.0, SystemTheme::Dark, &[], content)
+        .expect("a framebuffer");
+    framebuffer.set_active(true);
+    run(&mut framebuffer, WARM_UP, &mut pixels);
+    let change = region.change();
+    change.bytes_allocated as isize - change.bytes_deallocated as isize
+}
+
+// Rows of bars a canvas draws, shifted along as an animation runs when
+// `moving`: each frame then draws them all again.
+#[composable]
+fn Bars(moving: bool) {
+    let shift = rememberInfiniteTransition("bars").animateFloat(
+        0.0,
+        8.0,
+        infiniteRepeatable(
+            AnimationSpec::linear(1_000),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        "shift",
+    );
+    Box(
+        Modifier::empty()
+            .width(WIDTH as f32)
+            .height(HEIGHT as f32)
+            .draw_behind(move |scope| {
+                let offset = if moving { shift.value() } else { 0.0 };
+                for bar in 0..BARS {
+                    let rect = Rect {
+                        x: offset + (bar % 40) as f32 * 4.0,
+                        y: (bar / 40) as f32 * 12.0,
+                        width: 3.0,
+                        height: 10.0,
+                    };
+                    scope.draw_rect_at(rect, Brush::solid(Color::WHITE));
+                }
+            }),
+        BoxSpec::default(),
+        || {},
+    );
 }
 
 /// The bytes that `MEASURED` frames of `content` leave on the heap.
@@ -61,8 +117,8 @@ fn left_behind(content: impl Fn() + 'static) -> isize {
 /// composed in a `Text` or drawn in a draw scope, leaves no memory behind:
 /// the text pools and caches keep what the screen shows and what recent
 /// frames used. Nor does a busier screen, whose list scrolls and whose
-/// panel comes and goes. One test, as the allocator counts every thread's
-/// memory.
+/// panel comes and goes. A canvas drawn again every frame holds what one
+/// drawn once does. One test: the allocator counts every thread's memory.
 #[test]
 fn screens_that_change_every_frame_leave_no_memory_behind() {
     let composed = left_behind(|| ComposedReading(TextStyle::default()));
@@ -72,4 +128,12 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");
     assert!(busy < LEFT_BEHIND_BOUND, "busy: {busy} bytes");
+    let still = held(|| Bars(false));
+    let moving = held(|| Bars(true));
+    println!("held: still bars {still} bytes, moving bars {moving} bytes");
+    assert!(
+        moving - still < REDRAW_BOUND,
+        "moving bars hold {} bytes more",
+        moving - still
+    );
 }
