@@ -1,5 +1,7 @@
 use bytemuck::{Pod, Zeroable};
-use cranpose_ui_graphics::{BlendMode, ColorFilter, ImageBitmap, ImageSampling, Point, Rect};
+use cranpose_ui_graphics::{
+    BlendMode, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, whole,
+};
 
 use super::{
     DeviceRoundedClip, DrawSpace, FrameCommandRecorder, ImageTextures, PassDepth, TargetRect,
@@ -197,10 +199,10 @@ impl ImageBatch {
 
         let (device_quad, scissor_rect) =
             if sampling == ImageSampling::Nearest && root_scale.is_finite() && root_scale > 0.0 {
-                let left_px = (rect.x * root_scale).round();
-                let top_px = (rect.y * root_scale).round();
-                let width_px = (rect.width * root_scale).round().max(1.0);
-                let height_px = (rect.height * root_scale).round().max(1.0);
+                let left_px = whole::round(rect.x * root_scale);
+                let top_px = whole::round(rect.y * root_scale);
+                let width_px = whole::round(rect.width * root_scale).max(1.0);
+                let height_px = whole::round(rect.height * root_scale).max(1.0);
                 let snapped_rect = Rect {
                     x: left_px / root_scale,
                     y: top_px / root_scale,
@@ -562,10 +564,10 @@ fn snap_nearest_image_to_device_pixels(
         return;
     };
 
-    let left_px = (quad_rect.x * root_scale).round();
-    let top_px = (quad_rect.y * root_scale).round();
-    let width_px = (quad_rect.width * root_scale).round().max(1.0);
-    let height_px = (quad_rect.height * root_scale).round().max(1.0);
+    let left_px = whole::round(quad_rect.x * root_scale);
+    let top_px = whole::round(quad_rect.y * root_scale);
+    let width_px = whole::round(quad_rect.width * root_scale).max(1.0);
+    let height_px = whole::round(quad_rect.height * root_scale).max(1.0);
     let snapped = Rect {
         x: left_px / root_scale,
         y: top_px / root_scale,
@@ -587,10 +589,10 @@ fn nearest_image_device_quad(
     }
 
     let rect = axis_aligned_quad_rect(quad)?;
-    let left_px = (rect.x * root_scale).round();
-    let top_px = (rect.y * root_scale).round();
-    let width_px = (rect.width * root_scale).round().max(1.0);
-    let height_px = (rect.height * root_scale).round().max(1.0);
+    let left_px = whole::round(rect.x * root_scale);
+    let top_px = whole::round(rect.y * root_scale);
+    let width_px = whole::round(rect.width * root_scale).max(1.0);
+    let height_px = whole::round(rect.height * root_scale).max(1.0);
     let right_px = left_px + width_px;
     let bottom_px = top_px + height_px;
     Some([
@@ -650,10 +652,10 @@ pub(super) fn apply_filter_to_bitmap(
             pixel[3] as f32 / 255.0,
         ];
         let out = filter.apply_rgba(rgba);
-        filtered.push((out[0].clamp(0.0, 1.0) * 255.0).round() as u8);
-        filtered.push((out[1].clamp(0.0, 1.0) * 255.0).round() as u8);
-        filtered.push((out[2].clamp(0.0, 1.0) * 255.0).round() as u8);
-        filtered.push((out[3].clamp(0.0, 1.0) * 255.0).round() as u8);
+        filtered.push(whole::round(out[0].clamp(0.0, 1.0) * 255.0) as u8);
+        filtered.push(whole::round(out[1].clamp(0.0, 1.0) * 255.0) as u8);
+        filtered.push(whole::round(out[2].clamp(0.0, 1.0) * 255.0) as u8);
+        filtered.push(whole::round(out[3].clamp(0.0, 1.0) * 255.0) as u8);
     }
     ImageBitmap::from_rgba8(image.width(), image.height(), filtered)
         .map_err(|error| format!("failed to build filtered bitmap: {error}"))

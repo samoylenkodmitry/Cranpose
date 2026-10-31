@@ -2,6 +2,7 @@ use cranpose_foundation::{
     BringIntoViewSpec,
     lazy::{LazyListState, LazySettlePolicy},
 };
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::Axis;
 
 use crate::bring_into_view_spec::current_bring_into_view_spec;
@@ -90,9 +91,9 @@ fn settle_reader_scroll(state: &LazyListState, policy: &LazySettlePolicy, delta:
     let items = reached / size;
     let tolerance = 0.5 / size;
     let index = if delta > 0.0 {
-        (items - tolerance).ceil()
+        whole::ceil(items - tolerance)
     } else {
-        (items + tolerance).floor()
+        whole::floor(items + tolerance)
     };
     let index = index.min(last);
     // The policy takes and gives offsets from the start of the first visible

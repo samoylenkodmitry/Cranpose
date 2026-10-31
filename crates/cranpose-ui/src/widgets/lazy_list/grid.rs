@@ -16,6 +16,7 @@ use cranpose_foundation::lazy::{
     LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallOffsetVec,
     measure_lazy_list_with_beyond_bounds_policy, rememberLazyListStateWithPosition,
 };
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{Axis, LinearArrangement, MeasureScope as _};
 
 use super::{
@@ -46,7 +47,7 @@ impl GridCells {
         match self {
             Self::Fixed(columns) => columns.max(1),
             Self::Adaptive(size) | Self::FixedSize(size) if size + spacing > 0.0 => {
-                (((available + spacing) / (size + spacing)).floor() as usize).max(1)
+                (whole::floor((available + spacing) / (size + spacing)) as usize).max(1)
             }
             Self::Adaptive(_) | Self::FixedSize(_) => 1,
         }
@@ -592,9 +593,9 @@ pub(super) struct CellSizes {
 impl CellSizes {
     pub(super) fn new(available: f32, columns: usize, spacing: f32, density: f32) -> Self {
         let density = density.max(f32::EPSILON);
-        let spacing = (spacing * density).round();
-        let cells = ((available * density).floor() - spacing * (columns - 1) as f32).max(0.0);
-        let base = (cells / columns as f32).floor();
+        let spacing = whole::round(spacing * density);
+        let cells = (whole::floor(available * density) - spacing * (columns - 1) as f32).max(0.0);
+        let base = whole::floor(cells / columns as f32);
         Self {
             base,
             wide: (cells - base * columns as f32) as usize,
@@ -606,7 +607,7 @@ impl CellSizes {
     /// The sizes with every column `size` logical pixels wide, when they
     /// would be wider: the width left over stays empty at the end.
     fn at_most(self, size: f32) -> Self {
-        let size = (size * self.density).round();
+        let size = whole::round(size * self.density);
         if size >= self.base {
             return self;
         }

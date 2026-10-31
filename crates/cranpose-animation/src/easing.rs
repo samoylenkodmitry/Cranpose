@@ -1,3 +1,4 @@
+use cranpose_ui_graphics::whole;
 /// Easing functions for animations matching Jetpack Compose.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Easing {
@@ -46,7 +47,7 @@ impl Easing {
                     fraction
                 } else {
                     let step_count = (*step_count).max(1) as f32;
-                    (fraction * step_count).floor() / step_count
+                    whole::floor(fraction * step_count) / step_count
                 }
             }
         }

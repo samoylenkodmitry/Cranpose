@@ -11,7 +11,7 @@ use cranpose_core::{RuntimeHandle, State, with_current_composer};
 use cranpose_foundation::VelocityTracker1D;
 use cranpose_macros::composable;
 use cranpose_ui::{Modifier, MutableInteractionSource};
-use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_graphics::{GraphicsLayer, whole};
 
 const VISUAL_HANDOFF_TOLERANCE_IN_ITEMS: f32 = 0.12;
 
@@ -29,8 +29,7 @@ pub(crate) fn liquid_visual_index(
     if !lens_owns_selection || !lens_position.is_finite() || item_width <= f32::EPSILON {
         return selected;
     }
-    ((lens_position + item_width * 0.5) / item_width)
-        .floor()
+    whole::floor((lens_position + item_width * 0.5) / item_width)
         .clamp(0.0, count.saturating_sub(1) as f32) as usize
 }
 
@@ -303,7 +302,7 @@ pub(crate) struct LiquidLensGesture {
 
 impl LiquidLensGesture {
     fn commit_index(&self, position: f32) -> usize {
-        (((position - self.cell_offset) / self.cell_width.max(1.0)).floor() as isize)
+        (whole::floor((position - self.cell_offset) / self.cell_width.max(1.0)) as isize)
             .clamp(0, self.count.saturating_sub(1) as isize) as usize
     }
 }

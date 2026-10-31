@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use cranpose_ui_graphics::whole;
 use web_time::{Duration, Instant};
 
 use super::{
@@ -339,8 +340,7 @@ where
             return 0;
         }
 
-        let estimated_visible = (viewport_span / self.estimated_item_extent())
-            .ceil()
+        let estimated_visible = whole::ceil(viewport_span / self.estimated_item_extent())
             .min(MAX_VISIBLE_ITEMS_SAFETY as f32) as usize;
 
         estimated_visible.min(remaining_items)

@@ -1,5 +1,5 @@
 use cranpose_core::NodeId;
-use cranpose_ui_graphics::{Point, Rect};
+use cranpose_ui_graphics::{Point, Rect, whole};
 
 /// The device scale a layer raster is drawn at, compared exactly: a raster
 /// drawn at one scale places its edges and glyphs where no other scale does,
@@ -89,7 +89,8 @@ const DEVICE_PHASE_STEPS: f32 = 16.0;
 
 fn device_phase_steps(phase: Point) -> [u32; 2] {
     let steps = |value: f32| {
-        ((value.rem_euclid(1.0) * DEVICE_PHASE_STEPS).round() as u32) % DEVICE_PHASE_STEPS as u32
+        (whole::round(value.rem_euclid(1.0) * DEVICE_PHASE_STEPS) as u32)
+            % DEVICE_PHASE_STEPS as u32
     };
     [steps(phase.x), steps(phase.y)]
 }

@@ -4,6 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{NodeId, State, rememberMutableStateOf, rememberUpdatedState};
 use cranpose_foundation::{PointerEventKind, PointerId};
+use cranpose_ui_graphics::whole;
 
 use crate::{
     Modifier, MutableInteractionSource, composable,
@@ -332,7 +333,7 @@ fn slider_semantics(
     on_value_change_finished: cranpose_core::MutableState<Rc<dyn Fn()>>,
 ) {
     config.enabled = enabled;
-    config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
+    config.state_description = Some(format!("{}%", whole::round(value * 100.0) as u32));
     config.progress = Some(cranpose_foundation::ProgressBarRangeInfo::new(
         value, 0.0, 1.0, 0,
     ));

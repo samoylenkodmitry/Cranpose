@@ -9,6 +9,7 @@ use cranpose_core::{MutableState, mutableStateOf, remember};
 use cranpose_foundation::lazy::{
     LazyItems, LazyListIntervalContent, LazyListScope, LazyListState, LazySettlePolicy,
 };
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{Axis, LinearArrangement};
 
 use crate::{
@@ -201,7 +202,7 @@ impl PagerState {
             self.list.first_visible_item_index(),
             self.list.first_visible_item_scroll_offset(),
         );
-        pages - pages.round()
+        pages - whole::round(pages)
     }
 
     /// Shows `page` at once.
@@ -251,7 +252,7 @@ impl PagerState {
     /// The page nearest to where it rests when page `first` is the first in
     /// view, scrolled by `offset`.
     fn page_at(&self, first: usize, offset: f32) -> usize {
-        self.pages_at(first, offset).round().max(0.0) as usize
+        whole::round(self.pages_at(first, offset)).max(0.0) as usize
     }
 
     /// Where the pager stands in pages: page `p` rests at `p`, and 2.25 is
@@ -322,12 +323,12 @@ fn page_settle(state: PagerState, fling: PagerFling) -> LazySettlePolicy {
         let target = if velocity.abs() >= PAGE_FLING_VELOCITY {
             let most = fling.max_pages.max(1) as f32;
             if velocity > 0.0 {
-                rest.ceil().clamp(now.floor() + 1.0, now.floor() + most)
+                whole::ceil(rest).clamp(whole::floor(now) + 1.0, whole::floor(now) + most)
             } else {
-                rest.floor().clamp(now.ceil() - most, now.ceil() - 1.0)
+                whole::floor(rest).clamp(whole::ceil(now) - most, whole::ceil(now) - 1.0)
             }
         } else {
-            let whole = rest.floor();
+            let whole = whole::floor(rest);
             if rest - whole > fling.positional_threshold {
                 whole + 1.0
             } else {

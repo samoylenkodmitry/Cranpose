@@ -57,6 +57,7 @@
 //! This is pure geometry: it answers where a row goes and takes no view of how
 //! it is drawn.
 
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::round_to_px;
 
 /// How far a row at the very edge is shrunk and faded.
@@ -260,11 +261,11 @@ pub fn place_row_with(
             alpha: transform.alpha,
         });
     }
-    let viewport_px = (viewport * density).round();
-    let top_px = (top * density).round();
-    let height_px = (height * density).round();
+    let viewport_px = whole::round(viewport * density);
+    let top_px = whole::round(top * density);
+    let height_px = whole::round(height * density);
     let transform = scale_and_alpha_with(params, viewport_px, top_px, top_px + height_px)?;
-    let scaled_px = (height_px * transform.scale).round();
+    let scaled_px = whole::round(height_px * transform.scale);
     let above = top_px + top_px + height_px < viewport_px;
     let pinned = if above {
         top_px + height_px - scaled_px
@@ -456,7 +457,7 @@ pub fn centre_offset_at(slots: &[Slot], viewport: f32, scroll: f32, density: f32
         return 0.0;
     }
     let scroll = if scroll.is_finite() { scroll } else { 0.0 };
-    let whole = (scroll.floor().max(0.0) as usize).min(slots.len() - 1);
+    let whole = (whole::floor(scroll).max(0.0) as usize).min(slots.len() - 1);
     let fraction = (scroll - whole as f32).clamp(0.0, 1.0);
     let mut anchor = slots[whole].centre();
     if let Some(next) = slots.get(whole + 1) {
@@ -512,13 +513,13 @@ pub fn leading_auto_centring_spacer(
     anchor_centre_px: f32,
     anchor_offset: f32,
 ) -> f32 {
-    ((viewport_px * 0.5).floor() - anchor_offset - anchor_centre_px).max(0.0)
+    (whole::floor(viewport_px * 0.5) - anchor_offset - anchor_centre_px).max(0.0)
 }
 
 /// The trailing `autoCentering` spacer, which depends only on the last row's
 /// height: `unadjustedSizeBelowOffsetPoint` under `ItemCenter` is half of it.
 pub fn trailing_auto_centring_spacer(viewport_px: f32, last_height_px: f32) -> f32 {
-    (viewport_px - (viewport_px * 0.5).floor() - last_height_px * 0.5).max(0.0)
+    (viewport_px - whole::floor(viewport_px * 0.5) - last_height_px * 0.5).max(0.0)
 }
 
 /// The stretch of content a scaling list can hold on its centre line.
@@ -558,7 +559,7 @@ pub fn anchor_travel(
 
 fn odd_pixel(pixels: f32) -> f32 {
     let half = pixels * 0.5;
-    half - half.floor()
+    half - whole::floor(half)
 }
 
 fn inverse_lerp(start: f32, stop: f32, value: f32) -> f32 {

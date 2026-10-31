@@ -4,6 +4,7 @@
 use std::fmt;
 
 use cranpose_foundation::SemanticsWidgetRole;
+use cranpose_ui_graphics::whole;
 
 use crate::placed_semantics::PlacedSemanticsNode;
 
@@ -181,8 +182,8 @@ fn check_control(node: &PlacedSemanticsNode, name: &str, issues: &mut Vec<Access
     {
         let detail = format!(
             " is {}x{} points",
-            target.width.round(),
-            target.height.round()
+            whole::round(target.width),
+            whole::round(target.height)
         );
         issues.push(issue(
             AccessibilityIssueKind::SmallTarget,
@@ -261,10 +262,10 @@ fn where_it_is(node: &PlacedSemanticsNode) -> String {
     let bounds = node.layout_bounds;
     format!(
         " is {}x{} points at ({}, {})",
-        bounds.width.round(),
-        bounds.height.round(),
-        bounds.x.round(),
-        bounds.y.round()
+        whole::round(bounds.width),
+        whole::round(bounds.height),
+        whole::round(bounds.x),
+        whole::round(bounds.y)
     )
 }
 

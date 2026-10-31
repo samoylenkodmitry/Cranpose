@@ -4,7 +4,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::layer_shadow::{ShadowHole, ShadowRRect};
-use cranpose_ui_graphics::{BlendMode, Rect};
+use cranpose_ui_graphics::{BlendMode, Rect, whole};
 
 use crate::{
     geometry::{canonicalize_device_coordinate, snap_delta_for_anchor},
@@ -99,10 +99,10 @@ pub(crate) fn device_clip(draw: &RRectShadowDraw, root_scale: f32) -> Option<[f3
         let clip = clip.translate(snap.x, snap.y);
         let edge = |value: f32| canonicalize_device_coordinate(value * root_scale);
         [
-            edge(clip.x).floor(),
-            edge(clip.y).floor(),
-            edge(clip.x + clip.width).ceil(),
-            edge(clip.y + clip.height).ceil(),
+            whole::floor(edge(clip.x)),
+            whole::floor(edge(clip.y)),
+            whole::ceil(edge(clip.x + clip.width)),
+            whole::ceil(edge(clip.y + clip.height)),
         ]
     })
 }

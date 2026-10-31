@@ -17,7 +17,7 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     BRUSH_KIND_LINEAR, BRUSH_KIND_RADIAL, BRUSH_KIND_SWEEP, BrushRecord, FRAGMENT_KIND_ARC,
     FRAGMENT_KIND_FILL, FRAGMENT_KIND_LINE, FRAGMENT_KIND_STROKE, FRAGMENT_KIND_TRAPEZOID,
-    GradientStopRecord, ShapeRecordBody, ShapeRecordCurve,
+    GradientStopRecord, ShapeRecordBody, ShapeRecordCurve, whole,
 };
 
 use crate::frame_graph::BufferUpload;
@@ -574,7 +574,7 @@ fn stop_color(stops: &[GradientStopRecord], t: f32) -> [f32; 4] {
 /// `value` on the 1/16 device pixel grid when the placement snaps.
 fn canonical(value: f32, canonicalize: bool) -> f32 {
     if canonicalize {
-        value.signum() * (value.abs() * 16.0 + 0.5).floor() / 16.0
+        value.signum() * whole::floor(value.abs() * 16.0 + 0.5) / 16.0
     } else {
         value
     }
@@ -809,7 +809,7 @@ impl Record<'_, '_> {
             return;
         }
         let closed = sweep >= std::f32::consts::TAU - 1.0e-4;
-        let steps = ((sweep * outer / 4.0).ceil() as usize).clamp(2, 96);
+        let steps = (whole::ceil(sweep * outer / 4.0) as usize).clamp(2, 96);
         let count = if closed { steps } else { steps + 1 };
         let arc_ring = move |points: &mut Vec<Point>, radius: f32| {
             let radius = radius.max(0.0);
@@ -966,7 +966,7 @@ fn paint(color: [f32; 4], paint: Option<MeshPaint>) -> [f32; 4] {
     let Some(paint) = paint else {
         return color;
     };
-    let mut painted = color.map(|value| (value.clamp(0.0, 1.0) * 255.0 + 0.5).floor() / 255.0);
+    let mut painted = color.map(|value| whole::floor(value.clamp(0.0, 1.0) * 255.0 + 0.5) / 255.0);
     painted[3] = (painted[3] * paint.alpha).clamp(0.0, 1.0);
     if let Some((matrix, offset)) = paint.filter {
         let input = painted;
@@ -997,7 +997,7 @@ fn thin_inset(rect: [f32; 4]) -> (f32, f32) {
 /// keep as many points as each other.
 fn corner_steps(radii: &[f32; 4]) -> [usize; 4] {
     let largest = radii.iter().copied().fold(0.0f32, f32::max);
-    let segments = ((largest.sqrt() * 1.2).ceil() as usize).clamp(1, 12);
+    let segments = (whole::ceil(largest.sqrt() * 1.2) as usize).clamp(1, 12);
     radii.map(|radius| if radius > 0.0 { segments } else { 0 })
 }
 

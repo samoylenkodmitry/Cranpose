@@ -262,6 +262,7 @@ cranpose-core = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-media = { workspace = true, optional = true }
 cranpose-ui = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
 cranpose-text = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 cranpose-platform-desktop-winit = { workspace = true, optional = true }
@@ -363,8 +364,6 @@ sys-locale = { version = "0.3.2", features = ["js"], optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 console_error_panic_hook = "0.1"
-# Turns the liquid glass material folds on in mobile browsers (`web`).
-cranpose-ui-graphics = { workspace = true }
 # Awaits the Async Clipboard API's promises (`web_clipboard`).
 wasm-bindgen-futures = "0.4"
 # The page runs on one thread without wasm atomics, so wgpu's objects may be

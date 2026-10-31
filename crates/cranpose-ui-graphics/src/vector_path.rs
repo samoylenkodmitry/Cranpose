@@ -14,7 +14,10 @@
 
 use thiserror::Error;
 
-use crate::geometry::{Point, Rect};
+use crate::{
+    geometry::{Point, Rect},
+    whole,
+};
 
 /// Maximum recursion depth for adaptive curve flattening.
 const MAX_FLATTEN_DEPTH: u32 = 12;
@@ -371,8 +374,8 @@ fn accumulate_span(
 
     // Pixels the span covers whole take the weight as it is; only the
     // pixels holding its ends take a fraction.
-    let first = x0.floor() as usize;
-    let last = (x1.ceil() as usize).min(width);
+    let first = whole::floor(x0) as usize;
+    let last = (whole::ceil(x1) as usize).min(width);
     let partial = |pixel: usize| {
         let pixel_start = pixel as f32;
         (x1.min(pixel_start + 1.0) - x0.max(pixel_start)).max(0.0) * weight
@@ -844,7 +847,7 @@ fn emit_arc(
         delta -= two_pi;
     }
 
-    let segments = ((delta.abs() / ARC_MAX_ANGLE_STEP).ceil() as usize).max(2);
+    let segments = (whole::ceil(delta.abs() / ARC_MAX_ANGLE_STEP) as usize).max(2);
     for i in 1..=segments {
         let theta = theta1 + delta * (i as f32 / segments as f32);
         let (sin_theta, cos_theta) = theta.sin_cos();

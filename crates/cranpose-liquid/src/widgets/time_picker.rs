@@ -12,7 +12,7 @@ use cranpose_ui::{
     text::TextAlign,
     widgets::{Box, BoxSpec, Row, RowSpec, Text},
 };
-use cranpose_ui_graphics::{Brush, CornerRadii, Point, Rect};
+use cranpose_ui_graphics::{Brush, CornerRadii, Point, Rect, whole};
 
 use crate::theme::{liquid_colors, liquid_typography};
 
@@ -214,7 +214,7 @@ fn Wheel(
             count.saturating_sub(2) as u32,
         ));
         config.set_progress = Some(SemanticsSetProgress::new(move |next: f32| {
-            let row = next.round().clamp(0.0, count.saturating_sub(1) as f32) as usize;
+            let row = whole::round(next).clamp(0.0, count.saturating_sub(1) as f32) as usize;
             list.scroll_to_item(row, 0.0);
             true
         }));

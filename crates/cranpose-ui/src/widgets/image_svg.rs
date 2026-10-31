@@ -1,3 +1,4 @@
+use cranpose_ui_graphics::whole;
 use tiny_skia::{
     FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect as SkiaRect, Stroke,
     Transform,
@@ -218,7 +219,7 @@ impl SvgColor {
     fn with_opacity(self, opacity: f32) -> Self {
         let opacity = opacity.clamp(0.0, 1.0);
         Self {
-            a: ((self.a as f32 * opacity).round()).clamp(0.0, 255.0) as u8,
+            a: (whole::round(self.a as f32 * opacity)).clamp(0.0, 255.0) as u8,
             ..self
         }
     }
@@ -587,12 +588,12 @@ fn parse_color_component(value: &str) -> Result<u8, SvgPainterError> {
         let number: f32 = percent
             .parse()
             .map_err(|_| SvgPainterError::Parse(format!("invalid color component `{value}`")))?;
-        Ok(((number.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8)
+        Ok(whole::round((number.clamp(0.0, 100.0) / 100.0) * 255.0) as u8)
     } else {
         let number: f32 = value
             .parse()
             .map_err(|_| SvgPainterError::Parse(format!("invalid color component `{value}`")))?;
-        Ok(number.round().clamp(0.0, 255.0) as u8)
+        Ok(whole::round(number).clamp(0.0, 255.0) as u8)
     }
 }
 

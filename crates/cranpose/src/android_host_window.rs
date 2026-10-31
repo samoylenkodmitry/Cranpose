@@ -6,6 +6,7 @@ use std::{
 
 use cranpose_core::MutableState;
 use cranpose_ui::{Point, Size, composable};
+use cranpose_ui_graphics::whole;
 use thiserror::Error;
 
 const SIZE_EPSILON: f32 = 0.5;
@@ -445,7 +446,7 @@ fn unregister_android_host_window_state(state: AndroidHostWindowState, owner: Rc
 }
 
 fn logical_dimension_to_physical(logical: f32, density: f32) -> i32 {
-    let physical = (logical * density).round();
+    let physical = whole::round(logical * density);
     physical.clamp(1.0, i32::MAX as f32) as i32
 }
 

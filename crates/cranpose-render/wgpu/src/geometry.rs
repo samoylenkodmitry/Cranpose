@@ -1,5 +1,5 @@
 use cranpose_render_common::graph::quad_bounds;
-use cranpose_ui_graphics::{Point, Rect};
+use cranpose_ui_graphics::{Point, Rect, whole};
 
 use crate::{offscreen::COMPOSITION_BYTES_PER_PIXEL, scene::SnapAnchor};
 
@@ -51,10 +51,10 @@ pub(crate) fn translation_stable_anchored_device_pixel_bounds(
     }
 
     let device_rect = anchored_device_rect(rect, snap_anchor, root_scale);
-    let min_x = device_rect.x.floor();
-    let min_y = device_rect.y.floor();
-    let width = (device_rect.width.ceil() + 1.0).max(0.0) as u32;
-    let height = (device_rect.height.ceil() + 1.0).max(0.0) as u32;
+    let min_x = whole::floor(device_rect.x);
+    let min_y = whole::floor(device_rect.y);
+    let width = (whole::ceil(device_rect.width) + 1.0).max(0.0) as u32;
+    let height = (whole::ceil(device_rect.height) + 1.0).max(0.0) as u32;
     if width == 0 || height == 0 || width > max_texture_dim || height > max_texture_dim {
         return None;
     }
@@ -77,15 +77,15 @@ pub(crate) fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
 
 pub(crate) fn canonicalize_device_coordinate(value: f32) -> f32 {
     // The step is a power of two: scaling by it and back is exact in `f32`,
-    // and the scaled value rounds exactly through `f64`, so this is the
-    // `f64` snap's value, without its multiply and divide, for every value
-    // whose scaled form is finite.
+    // and a whole `f32` is exact in `f64`, so this is the `f64` snap's value,
+    // without its multiply, divide and conversions, for every value whose
+    // scaled form is finite.
     let steps = DEVICE_SNAP_SUBPIXEL_STEPS as f32;
     let scaled = value * steps;
     if !scaled.is_finite() {
         return value;
     }
-    round_half_away(f64::from(scaled)) as f32 / steps
+    whole::round(scaled) / steps
 }
 
 #[cfg(target_arch = "wasm32")]

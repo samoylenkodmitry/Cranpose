@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{
     BAND_MARGIN, BAND_MAX_STEP, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables, ShapeRecord,
-    StrokeCap, arc_trig, band_padded_range, strip_vertices,
+    StrokeCap, arc_trig, band_padded_range, strip_vertices, whole,
 };
 
 pub(crate) fn device_shape_edges(
@@ -13,7 +13,7 @@ pub(crate) fn device_shape_edges(
     let edge = |value: f32| {
         let device = value * scale;
         if canonicalize {
-            device.signum() * (device.abs() * 16.0 + 0.5).floor() / 16.0
+            device.signum() * whole::floor(device.abs() * 16.0 + 0.5) / 16.0
         } else {
             device
         }

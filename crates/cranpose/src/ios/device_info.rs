@@ -4,6 +4,7 @@ use cranpose_services::{
     BatteryStatus, DeviceInfo, PowerCapabilities, PowerMonitor, PowerReading, ThermalState,
     set_platform_device_info, set_platform_power_monitor,
 };
+use cranpose_ui_graphics::whole;
 use objc2_foundation::NSProcessInfo;
 
 pub(crate) fn register() {
@@ -46,7 +47,7 @@ impl PowerMonitor for IosPowerMonitor {
             percent: if level < 0.0 {
                 100
             } else {
-                (level * 100.0).round().clamp(0.0, 100.0) as u8
+                whole::round(level * 100.0).clamp(0.0, 100.0) as u8
             },
             charging: matches!(
                 device.batteryState(),

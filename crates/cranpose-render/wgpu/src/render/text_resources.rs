@@ -14,7 +14,7 @@ use cranpose_render_common::{
     text_canvas::TextPixels,
     text_raster::rasterize_text,
 };
-use cranpose_ui_graphics::{FxHasher, ImageBitmap, ImageSampling, Point, Rect};
+use cranpose_ui_graphics::{FxHasher, ImageBitmap, ImageSampling, Point, Rect, whole};
 
 use super::{
     DrawSpace, FrameUploads, GlyphAtlasSlotKey, GlyphDrawCmd, GlyphExtent, GlyphInstances,
@@ -173,12 +173,12 @@ impl TextResources {
         match clip {
             Some(clip) if text_draw.text.static_motion() => {
                 let device_clip = Rect {
-                    x: (clip.x * root_scale).floor(),
-                    y: (clip.y * root_scale).floor(),
-                    width: ((clip.x + clip.width) * root_scale).ceil()
-                        - (clip.x * root_scale).floor(),
-                    height: ((clip.y + clip.height) * root_scale).ceil()
-                        - (clip.y * root_scale).floor(),
+                    x: whole::floor(clip.x * root_scale),
+                    y: whole::floor(clip.y * root_scale),
+                    width: whole::ceil((clip.x + clip.width) * root_scale)
+                        - whole::floor(clip.x * root_scale),
+                    height: whole::ceil((clip.y + clip.height) * root_scale)
+                        - whole::floor(clip.y * root_scale),
                 };
                 raster_rect.intersect(device_clip).unwrap_or(raster_rect)
             }

@@ -14,7 +14,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
-    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode,
+    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode, whole,
 };
 use smallvec::SmallVec;
 
@@ -65,9 +65,9 @@ pub(crate) struct DeviceRect {
 impl DeviceRect {
     pub(crate) fn from_logical(rect: Rect, scale: f32) -> Self {
         let pixel = |value: f32| {
-            let whole = value.round();
-            if (value - whole).abs() <= value.abs().max(1.0) * f32::EPSILON * 2.0 {
-                whole
+            let rounded = whole::round(value);
+            if (value - rounded).abs() <= value.abs().max(1.0) * f32::EPSILON * 2.0 {
+                rounded
             } else {
                 value
             }
@@ -144,10 +144,10 @@ impl DeviceRect {
 
     /// Snaps to whole pixels, growing outward.
     fn snap_out(self) -> Self {
-        let left = self.x.floor();
-        let top = self.y.floor();
-        let right = (self.x + self.width).ceil();
-        let bottom = (self.y + self.height).ceil();
+        let left = whole::floor(self.x);
+        let top = whole::floor(self.y);
+        let right = whole::ceil(self.x + self.width);
+        let bottom = whole::ceil(self.y + self.height);
         Self {
             x: left,
             y: top,
@@ -157,10 +157,8 @@ impl DeviceRect {
     }
 
     fn pixel_size(self) -> (u32, u32) {
-        (
-            (self.width.ceil().max(1.0)) as u32,
-            (self.height.ceil().max(1.0)) as u32,
-        )
+        let pixels = |length: f32| whole::ceil(length).max(1.0) as u32;
+        (pixels(self.width), pixels(self.height))
     }
 }
 
@@ -1134,7 +1132,7 @@ fn plan_backdrop<'a>(
         None => None,
     };
     let padding = backdrop.effect.input_padding() * scale;
-    let expanded = visible.expand(padding.ceil());
+    let expanded = visible.expand(whole::ceil(padding));
     let capture_bounds = capture_bounds.unwrap_or(expanded);
     let reach = match backdrop.reach {
         Some(reach) => DeviceRect::from_logical(reach.translate(snap.x, snap.y), scale)
@@ -2337,24 +2335,25 @@ impl SurfacePlan {
         let grid_offset = grid.map(|grid| {
             let offset = Point::new(grid.x * scale, grid.y * scale);
             if translated {
-                Point::new(offset.x.round(), offset.y.round())
+                Point::new(whole::round(offset.x), whole::round(offset.y))
             } else {
                 offset
             }
         });
         let (surface_rect, grid_dest, device_phase) = match grid_offset {
             Some(offset) => {
-                let whole = child_rect.translated(offset).snap_out();
+                let snapped = child_rect.translated(offset).snap_out();
                 let dest = if child.content.contains_backdrop() && child.effect.is_none() {
-                    let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
-                    rendered_surface(whole, shown, reach)
+                    let reach = whole::ceil(backdrop_reach(&child.content) * surface_scale) + 1.0;
+                    rendered_surface(snapped, shown, reach)
                 } else {
-                    whole
+                    snapped
                 };
+                let phase = |at: f32| at - whole::floor(at);
                 (
                     dest.translated(Point::new(-offset.x, -offset.y)),
                     Some(dest),
-                    Point::new(offset.x - offset.x.floor(), offset.y - offset.y.floor()),
+                    Point::new(phase(offset.x), phase(offset.y)),
                 )
             }
             None => (child_rect, None, Point::default()),
@@ -3476,7 +3475,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             dest,
             snap,
         } = placement;
-        let padding = (backdrop.input_padding() * scale).ceil();
+        let padding = whole::ceil(backdrop.input_padding() * scale);
         let expanded = visible.expand(padding);
         let capture_rect = expanded
             .intersect(pass.capture_bounds().unwrap_or(expanded))
@@ -4002,8 +4001,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .map_or(0.0, |effect| effect.input_padding() + output_padding)
             * scale;
         let Some(source_rect) = pass.window().cut_near(
-            DeviceRect::from_logical(rect, scale).expand(padding.ceil()),
-            padding.ceil(),
+            DeviceRect::from_logical(rect, scale).expand(whole::ceil(padding)),
+            whole::ceil(padding),
         ) else {
             return Ok(None);
         };
@@ -4448,8 +4447,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return None;
         }
         let dest = DeviceRect {
-            x: (surface_rect.x + translation.x * scale).round(),
-            y: (surface_rect.y + translation.y * scale).round(),
+            x: whole::round(surface_rect.x + translation.x * scale),
+            y: whole::round(surface_rect.y + translation.y * scale),
             width: surface_rect.width,
             height: surface_rect.height,
         };
@@ -5320,8 +5319,8 @@ fn expand_rect(rect: Rect, padding: f32) -> Rect {
 }
 
 fn surface_pixels(rect: Rect, scale: f32) -> u64 {
-    let width = (rect.width * scale).ceil().max(0.0) as u64;
-    let height = (rect.height * scale).ceil().max(0.0) as u64;
+    let width = whole::ceil(rect.width * scale).max(0.0) as u64;
+    let height = whole::ceil(rect.height * scale).max(0.0) as u64;
     width * height
 }
 

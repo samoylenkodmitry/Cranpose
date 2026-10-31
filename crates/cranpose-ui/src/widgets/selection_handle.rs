@@ -15,7 +15,7 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::remember;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
-use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
+use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath, whole};
 
 use crate::{
     PointerInputScope, composable,
@@ -215,8 +215,8 @@ pub fn SelectionHandle(
         }
     }
     let anchor = Rect {
-        x: (tip.x - shape.tip_in_box.x).round(),
-        y: (tip.y - shape.tip_in_box.y).round(),
+        x: whole::round(tip.x - shape.tip_in_box.x),
+        y: whole::round(tip.y - shape.tip_in_box.y),
         width: 0.0,
         height: 0.0,
     };

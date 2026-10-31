@@ -11,6 +11,7 @@ use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
 use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds};
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_ARC, ImageSampling, Point, RecordLane, Rect, RenderHash, TileMode,
+    whole,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -99,7 +100,7 @@ pub(crate) fn clip_scissor(
 /// sums so the edges fall where its comparisons put them.
 fn kept_pixels(low: f32, high: f32, offset: f32, extent: u32) -> std::ops::Range<u32> {
     let centre = |pixel: u32| pixel as f32 + 0.5 + offset;
-    let guess = |edge: f32| (edge - offset - 0.5).ceil().clamp(0.0, extent as f32) as u32;
+    let guess = |edge: f32| whole::ceil(edge - offset - 0.5).clamp(0.0, extent as f32) as u32;
     let mut start = guess(low);
     while start > 0 && centre(start - 1) >= low {
         start -= 1;
@@ -342,11 +343,11 @@ fn text_raster_geometry_at(
         raster_rect.y = canonicalize_device_coordinate(raster_rect.y);
     }
     if static_text_motion {
-        raster_rect.x = raster_rect.x.round();
-        raster_rect.y = raster_rect.y.round();
+        raster_rect.x = whole::round(raster_rect.x);
+        raster_rect.y = whole::round(raster_rect.y);
     }
-    raster_rect.width = raster_rect.width.ceil().max(1.0);
-    raster_rect.height = raster_rect.height.ceil().max(1.0);
+    raster_rect.width = whole::ceil(raster_rect.width).max(1.0);
+    raster_rect.height = whole::ceil(raster_rect.height).max(1.0);
     (
         logical_rect,
         raster_rect,
@@ -3189,12 +3190,11 @@ impl GpuRenderer {
         pass: &mut TrackedPass<'_, '_>,
         tables: ArenaBinding<'_>,
         uniform_slot: usize,
-        scissor: (u32, u32, u32, u32),
+        (x, y, width, height): (u32, u32, u32, u32),
         planned: impl ExactSizeIterator<Item = PlannedRunDraw>,
         meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, PassDepth)>,
     ) -> Result<(), String> {
         self.frame_stats.add_draw_calls(planned.len() as u32);
-        let (x, y, width, height) = scissor;
         pass.set_scissor_rect(x, y, width, height);
         self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_bind_group(1, tables.bind_group, &tables.offsets[2..]);
@@ -3528,10 +3528,10 @@ pub(crate) fn scissor_rect_for_rect(
         (left, top) = (bounds.x, bounds.y);
         (right, bottom) = (bounds.x + bounds.width, bounds.y + bounds.height);
     }
-    let left = (left - viewport.offset[0]).clamp(0.0, width).floor();
-    let top = (top - viewport.offset[1]).clamp(0.0, height).floor();
-    let right = (right - viewport.offset[0]).clamp(0.0, width).ceil();
-    let bottom = (bottom - viewport.offset[1]).clamp(0.0, height).ceil();
+    let left = whole::floor((left - viewport.offset[0]).clamp(0.0, width));
+    let top = whole::floor((top - viewport.offset[1]).clamp(0.0, height));
+    let right = whole::ceil((right - viewport.offset[0]).clamp(0.0, width));
+    let bottom = whole::ceil((bottom - viewport.offset[1]).clamp(0.0, height));
     if right <= left || bottom <= top {
         return None;
     }

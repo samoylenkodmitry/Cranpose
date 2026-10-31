@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Rect, whole};
 
 /// The most taps a blur pass takes on one side of a pixel; a kernel wider
 /// than this in scratch texels truncates there.
@@ -42,7 +42,7 @@ pub fn blur_reach_px(radius_px: f32) -> f32 {
     }
     let block = blur_scratch_block(radius_px) as f32;
     let reach = radius_px.min(BLUR_MAX_TAPS as f32 * block) + 3.0 * block + 1.0;
-    (reach / block).ceil() * block
+    whole::ceil(reach / block) * block
 }
 
 /// [`blur_reach_px`] in logical pixels for a blur of `blur_radius` logical
@@ -141,7 +141,7 @@ impl BlurKernel {
     pub fn of_radius(radius: f32) -> Self {
         let radius = radius.max(0.0);
         let sigma = (radius * 0.5).max(0.001);
-        let tap_count = (radius.ceil() as u32).min(BLUR_MAX_TAPS);
+        let tap_count = (whole::ceil(radius) as u32).min(BLUR_MAX_TAPS);
         let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
         let mut pairs = [BlurTapPair::default(); BLUR_TAP_PAIRS];
         let mut total_weight = 1.0f32;

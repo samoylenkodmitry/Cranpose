@@ -15,7 +15,7 @@ use cranpose_foundation::{
         InputTransformation, OutputTransformation, TextFieldLineLimits, TextFieldState, TextRange,
     },
 };
-use cranpose_ui_graphics::{Color, Point, Rect};
+use cranpose_ui_graphics::{Color, Point, Rect, whole};
 
 use crate::{
     bring_into_view::local_bring_into_view_responder,
@@ -470,7 +470,7 @@ fn BringCaretIntoView(
     let key = (
         selection.start,
         selection.end,
-        (ime_bottom * 4.0).round() as i64,
+        whole::round(ime_bottom * 4.0) as i64,
     );
     SideEffect(move || {
         if previous.get() == Some(key) {

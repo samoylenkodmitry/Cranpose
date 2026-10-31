@@ -4,6 +4,7 @@ use std::{
 };
 
 use cranpose_ui::{Point, Size};
+use cranpose_ui_graphics::whole;
 use jni::{
     Env, jni_sig, jni_str,
     objects::{JClass, JObject, JValue},
@@ -244,7 +245,7 @@ fn logical_to_physical_px(value: f32, density: f32) -> Result<i32, String> {
     if !density.is_finite() || density <= 0.0 {
         return Err("Android display density must be positive and finite".to_string());
     }
-    let rounded = (value * density).round();
+    let rounded = whole::round(value * density);
     if rounded < i32::MIN as f32 || rounded > i32::MAX as f32 {
         return Err("Android overlay physical coordinate is outside i32 range".to_string());
     }

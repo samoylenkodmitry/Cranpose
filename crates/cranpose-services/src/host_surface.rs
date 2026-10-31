@@ -10,6 +10,7 @@
 use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
 use cranpose_core::{State, rememberEventStream};
+use cranpose_ui_graphics::whole;
 use portable_atomic::AtomicU64;
 
 use crate::registry::ServiceRegistry;
@@ -40,8 +41,8 @@ impl HostSurfaceSize {
     /// The size in physical pixels.
     pub fn physical(&self) -> (u32, u32) {
         (
-            (self.width * self.scale).round().max(0.0) as u32,
-            (self.height * self.scale).round().max(0.0) as u32,
+            whole::round(self.width * self.scale).max(0.0) as u32,
+            whole::round(self.height * self.scale).max(0.0) as u32,
         )
     }
 }

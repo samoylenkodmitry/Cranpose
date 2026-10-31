@@ -5,7 +5,7 @@
 //! for edge-to-edge system-bar treatments where content should move smoothly
 //! from sharp to fully frosted without a visible material boundary.
 
-use crate::{RenderEffect, RuntimeShader, SubstrateSpec};
+use crate::{RenderEffect, RuntimeShader, SubstrateSpec, whole};
 
 /// Axis and direction used to interpolate the blur radius.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -65,7 +65,7 @@ pub fn gradient_blur_effect(
     shader.set_float(1, end_radius_px);
     shader.set_float(2, direction.uniform_code());
     let wide_radius_px = start_radius_px.max(end_radius_px);
-    shader.set_input_padding(wide_radius_px.ceil());
+    shader.set_input_padding(whole::ceil(wide_radius_px));
     shader.set_batched_source(true);
     shader.set_substrates(&GRADIENT_BLUR_LEVELS.map(|level| SubstrateSpec::Blur {
         radius_px: wide_radius_px * level,

@@ -6,7 +6,7 @@ use cranpose_ui::{
     Modifier, Size,
     widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope},
 };
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, whole};
 
 use super::slider_motion::{SliderDrag, remember_slider_fling};
 use crate::{
@@ -130,7 +130,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                             let grow = lens_progress.get().clamp(-0.1, 1.2);
                             let projection = thumb_shape.projection(thumb_axis.value());
                             GraphicsLayer {
-                                translation_x: thumb_x.round(),
+                                translation_x: whole::round(thumb_x),
                                 scale_x: (THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow)
                                     / THUMB_WIDTH
                                     * projection.0,
@@ -201,7 +201,7 @@ fn slider_semantics(
     on_change: Rc<dyn Fn(f32)>,
 ) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
     move |config| {
-        config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
+        config.state_description = Some(format!("{}%", whole::round(value * 100.0) as u32));
         config.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(value, 0.0, 1.0, 0));
         let on_change = Rc::clone(&on_change);
         config.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |next: f32| {

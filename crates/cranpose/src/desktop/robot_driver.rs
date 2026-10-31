@@ -7,6 +7,7 @@ use std::{
 use cranpose_app_shell::{AppShell, FrameUpdateResult};
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui_graphics::whole;
 use winit::event_loop::ControlFlow;
 
 use super::{
@@ -455,8 +456,8 @@ fn capture_screenshot_with_scale(
     scale: f32,
 ) -> Result<RobotScreenshot, String> {
     let (logical_width, logical_height) = app.viewport_size();
-    let width = (logical_width * scale).ceil().max(1.0) as u32;
-    let height = (logical_height * scale).ceil().max(1.0) as u32;
+    let width = whole::ceil(logical_width * scale).max(1.0) as u32;
+    let height = whole::ceil(logical_height * scale).max(1.0) as u32;
 
     let captured = capture_final_frame(app, width, height, scale)?;
 
@@ -501,8 +502,8 @@ fn resolve_robot_screenshot_params_with_scale(
     capture_scale: f32,
 ) -> (u32, u32, f32) {
     if let Some((logical_width, logical_height)) = fallback_logical_size {
-        let width = (logical_width * capture_scale).ceil().max(1.0) as u32;
-        let height = (logical_height * capture_scale).ceil().max(1.0) as u32;
+        let width = whole::ceil(logical_width * capture_scale).max(1.0) as u32;
+        let height = whole::ceil(logical_height * capture_scale).max(1.0) as u32;
         return (width, height, capture_scale);
     }
 

@@ -1,5 +1,6 @@
 use cranpose_core::collections::map::HashMap;
 use cranpose_ui::ToggleableState;
+use cranpose_ui_graphics::whole;
 
 use crate::accessibility::{
     AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
@@ -130,10 +131,10 @@ fn same_but_bounds(was: &mut AccessibilityElement, now: &AccessibilityElement) -
 /// A control's bounds in pixels, as the host's `Rect` holds them.
 fn pixel_bounds(bounds: AccessibilityRect, density: f32) -> [i32; 4] {
     [
-        (bounds.x * density).round() as i32,
-        (bounds.y * density).round() as i32,
-        ((bounds.x + bounds.width) * density).round() as i32,
-        ((bounds.y + bounds.height) * density).round() as i32,
+        whole::round(bounds.x * density) as i32,
+        whole::round(bounds.y * density) as i32,
+        whole::round((bounds.x + bounds.width) * density) as i32,
+        whole::round((bounds.y + bounds.height) * density) as i32,
     ]
 }
 

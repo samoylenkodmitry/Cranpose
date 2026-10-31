@@ -5,12 +5,13 @@ use cranpose_ui::{
     Alignment, BitmapPainter, BoxWithConstraints, BoxWithConstraintsScope, ContentScale, Image,
     Modifier, composable, density,
 };
+use cranpose_ui_graphics::whole;
 
 /// Device pixels for `logical` pixels of the layout; no limit for an
 /// unbounded side.
 fn device_pixels(logical: f32, scale: f32) -> u32 {
     if logical.is_finite() {
-        (logical * scale).ceil().clamp(1.0, u32::MAX as f32) as u32
+        whole::ceil(logical * scale).clamp(1.0, u32::MAX as f32) as u32
     } else {
         u32::MAX
     }

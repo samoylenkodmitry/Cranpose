@@ -14,7 +14,7 @@
 //! application tiles is usually a region of an atlas, and a wrapped sampler
 //! reads whatever is next to it.
 
-use cranpose_ui_graphics::{Rect, Size};
+use cranpose_ui_graphics::{Rect, Size, whole};
 
 /// How a region larger than its source is filled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -128,8 +128,8 @@ pub fn tile_count(source: Rect, destination: Rect) -> usize {
     if !usable(source) || !usable(destination) {
         return 0;
     }
-    let columns = (destination.width / source.width).ceil().max(0.0) as usize;
-    let rows = (destination.height / source.height).ceil().max(0.0) as usize;
+    let columns = whole::ceil(destination.width / source.width).max(0.0) as usize;
+    let rows = whole::ceil(destination.height / source.height).max(0.0) as usize;
     columns.saturating_mul(rows)
 }
 

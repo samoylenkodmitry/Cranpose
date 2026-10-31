@@ -3,7 +3,7 @@
 //! and hand the caster to Skia's `SkShadowUtils`, which draws an ambient and a
 //! spot shadow. The constants below are theirs.
 
-use cranpose_ui_graphics::{Color, CornerRadii, GraphicsLayer, Rect, RoundedCornerShape};
+use cranpose_ui_graphics::{Color, CornerRadii, GraphicsLayer, Rect, RoundedCornerShape, whole};
 
 use crate::layer_transform::layer_uniform_scale;
 
@@ -310,9 +310,9 @@ fn corner_radii(radii: CornerRadii) -> [f32; 4] {
 /// byte, truncated to a byte (`multiplyAlpha` in
 /// `ReorderBarrierDrawables.cpp`).
 fn pass_color(color: Color, share: f32, caster_alpha: f32) -> Option<Color> {
-    let share_byte = (share * 255.0).floor();
-    let color_byte = (color.a().clamp(0.0, 1.0) * 255.0).round();
-    let byte = (color_byte * share_byte / 255.0 * caster_alpha).floor();
+    let share_byte = whole::floor(share * 255.0);
+    let color_byte = whole::round(color.a().clamp(0.0, 1.0) * 255.0);
+    let byte = whole::floor(color_byte * share_byte / 255.0 * caster_alpha);
     (byte > 0.0).then(|| Color(color.r(), color.g(), color.b(), byte / 255.0))
 }
 

@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::TileMode;
+use cranpose_ui_graphics::{TileMode, whole};
 
 pub(crate) fn scissor_in_target(
     scissor: (f32, f32, f32, f32),
@@ -6,14 +6,10 @@ pub(crate) fn scissor_in_target(
     segment_offset: [f32; 2],
 ) -> Option<(u32, u32, u32, u32)> {
     let (x, y, width, height) = scissor;
-    let left = (x - segment_offset[0]).floor().max(0.0);
-    let top = (y - segment_offset[1]).floor().max(0.0);
-    let right = (x + width - segment_offset[0])
-        .ceil()
-        .min(target_size.0 as f32);
-    let bottom = (y + height - segment_offset[1])
-        .ceil()
-        .min(target_size.1 as f32);
+    let left = whole::floor(x - segment_offset[0]).max(0.0);
+    let top = whole::floor(y - segment_offset[1]).max(0.0);
+    let right = whole::ceil(x + width - segment_offset[0]).min(target_size.0 as f32);
+    let bottom = whole::ceil(y + height - segment_offset[1]).min(target_size.1 as f32);
     if right <= left || bottom <= top {
         return None;
     }
@@ -53,10 +49,10 @@ pub(crate) fn scaled_scissor(
     if scale_x <= 1.0 && scale_y <= 1.0 {
         return scissor;
     }
-    let left = ((x as f32 / scale_x).floor() as u32).min(width);
-    let top = ((y as f32 / scale_y).floor() as u32).min(height);
-    let right = (((x + w) as f32 / scale_x).ceil() as u32).min(width);
-    let bottom = (((y + h) as f32 / scale_y).ceil() as u32).min(height);
+    let left = (whole::floor(x as f32 / scale_x) as u32).min(width);
+    let top = (whole::floor(y as f32 / scale_y) as u32).min(height);
+    let right = (whole::ceil((x + w) as f32 / scale_x) as u32).min(width);
+    let bottom = (whole::ceil((y + h) as f32 / scale_y) as u32).min(height);
     Some((
         left,
         top,
@@ -89,8 +85,8 @@ pub(crate) fn read_scissor(
     let fy = scratch.3 as f32 / source.3.max(1) as f32;
     let span = |start: u32, end: u32, origin: u32, factor: f32| {
         (
-            ((start as f32 - origin as f32) * factor).floor() as i64,
-            ((end as f32 - origin as f32) * factor).ceil() as i64,
+            whole::floor((start as f32 - origin as f32) * factor) as i64,
+            whole::ceil((end as f32 - origin as f32) * factor) as i64,
         )
     };
     let (x0, x1) = span(ux, ux + uw, source.0, fx);

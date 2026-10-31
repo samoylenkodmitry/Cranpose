@@ -30,40 +30,6 @@ fn scaling_an_arc_moves_its_centre_and_its_radii_and_nothing_else() {
 }
 
 #[test]
-fn exact_floor_is_bit_equal_to_floorf() {
-    let mut probes: Vec<f32> = vec![
-        0.0,
-        -0.0,
-        0.5,
-        -0.5,
-        1.0,
-        -1.0,
-        8_388_607.5,
-        -8_388_607.5,
-        8_388_608.0,
-        -8_388_608.0,
-        1.0e30,
-        -1.0e30,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::MIN_POSITIVE,
-        -f32::MIN_POSITIVE,
-    ];
-    for i in -4000..4000 {
-        probes.push(i as f32 * 0.01737);
-        probes.push(i as f32 * PI);
-    }
-    for x in probes {
-        assert_eq!(
-            exact_floor(x).to_bits(),
-            x.floor().to_bits(),
-            "exact_floor({x}) diverged from floorf"
-        );
-    }
-    assert!(exact_floor(f32::NAN).is_nan());
-}
-
-#[test]
 fn stroke_builders_compose() {
     let stroke = Stroke::new(4.0)
         .with_cap(StrokeCap::Round)

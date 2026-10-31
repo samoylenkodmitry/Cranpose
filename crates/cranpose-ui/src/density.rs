@@ -19,6 +19,7 @@
 //! the pixel side, which is the only side where rounding means anything.
 
 use cranpose_core::{CompositionLocalProvider, StaticCompositionLocal, staticCompositionLocalOf};
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{ceil_to_grid, round_to_grid};
 
 use crate::font_scale::FontScaleCurve;
@@ -114,7 +115,7 @@ impl Density {
     /// A length snapped down to a whole device pixel.
     pub fn floor(self, value: f32) -> f32 {
         if value.is_finite() {
-            (value * self.density).floor() / self.density
+            whole::floor(value * self.density) / self.density
         } else {
             value
         }

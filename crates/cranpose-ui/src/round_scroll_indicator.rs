@@ -18,6 +18,8 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+use cranpose_ui_graphics::whole;
+
 use crate::{
     round_scaling_list::ScalingParams,
     scrollbar::{ThumbBounds, thumb_geometry},
@@ -403,10 +405,10 @@ pub fn scaling_list_items_with<I>(
     }
     let pixels = density > 0.0;
     let to_px = |value: f32| if pixels { value * density } else { value };
-    let round_px = |value: f32| if pixels { value.round() } else { value };
+    let round_px = |value: f32| if pixels { whole::round(value) } else { value };
     let viewport_px = round_px(to_px(viewport));
     let centre_line = if pixels {
-        (viewport_px * 0.5).floor()
+        whole::floor(viewport_px * 0.5)
     } else {
         viewport_px * 0.5
     };
@@ -437,7 +439,7 @@ pub fn scaling_list_items_with<I>(
 
 fn odd_pixel(pixels: f32) -> f32 {
     let half = pixels * 0.5;
-    half - half.floor()
+    half - whole::floor(half)
 }
 
 fn finite(value: f32) -> f32 {

@@ -6,6 +6,7 @@
 
 use std::{collections::VecDeque, convert::Infallible};
 
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::Axis;
 
 use super::{
@@ -752,10 +753,10 @@ fn adaptive_scroll_beyond_bounds_item_count(
         // scroll brings into view per frame, so a frame that finds enough
         // ready leaves the next ones to a pass between frames.
         return base_count.max(MIN_ACTIVE_SCROLL_WHEEL_BEYOND_BOUNDS_ITEMS)
-            + delta_items.ceil() as usize;
+            + whole::ceil(delta_items) as usize;
     }
 
-    let adaptive_count = delta_items.ceil() as usize;
+    let adaptive_count = whole::ceil(delta_items) as usize;
     base_count
         .max(MIN_ACTIVE_SCROLL_FAST_BEYOND_BOUNDS_ITEMS)
         .max(adaptive_count.min(MAX_ADAPTIVE_SCROLL_BEYOND_BOUNDS_ITEMS))

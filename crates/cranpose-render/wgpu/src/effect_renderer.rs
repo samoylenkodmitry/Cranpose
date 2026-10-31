@@ -5,6 +5,7 @@ use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel};
 use cranpose_ui::Axis;
 use cranpose_ui_graphics::{
     BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, ShaderTarget, SubstrateSpec, TileMode,
+    whole,
 };
 
 use crate::{
@@ -449,9 +450,8 @@ impl ReservedShaderUniforms {
 /// The device pixels of the layer an effect draws, however much of it the
 /// target clips: it picks the draw's specialization, which must not flip
 /// while the layer scrolls across the target's edge.
-pub(crate) fn layer_pixels(layer_pixel_rect: [f32; 4]) -> u64 {
-    let [_, _, width, height] = layer_pixel_rect;
-    (width.max(0.0).round() as u64).saturating_mul(height.max(0.0).round() as u64)
+pub(crate) fn layer_pixels([_, _, width, height]: [f32; 4]) -> u64 {
+    (whole::round(width.max(0.0)) as u64).saturating_mul(whole::round(height.max(0.0)) as u64)
 }
 
 /// Pixels a shader draw shades: its viewport clipped by its scissor.
@@ -460,7 +460,7 @@ fn shaded_pixels(viewport: (f32, f32, f32, f32), scissor: (u32, u32, u32, u32)) 
     let top = viewport.1.max(scissor.1 as f32);
     let right = (viewport.0 + viewport.2).min((scissor.0 + scissor.2) as f32);
     let bottom = (viewport.1 + viewport.3).min((scissor.1 + scissor.3) as f32);
-    ((right - left).max(0.0).round() as u64) * ((bottom - top).max(0.0).round() as u64)
+    (whole::round((right - left).max(0.0)) as u64) * (whole::round((bottom - top).max(0.0)) as u64)
 }
 
 fn region_uniform(region: (u32, u32, u32, u32)) -> [f32; 4] {
@@ -584,8 +584,8 @@ pub(crate) struct EffectReads {
     pub(crate) shader_input: Option<(u32, u32, u32, u32)>,
 }
 
-fn kernel_margin((radius_x, radius_y): (f32, f32)) -> (u32, u32) {
-    (radius_x.ceil() as u32 + 1, radius_y.ceil() as u32 + 1)
+fn kernel_margin((x, y): (f32, f32)) -> (u32, u32) {
+    (whole::ceil(x) as u32 + 1, whole::ceil(y) as u32 + 1)
 }
 
 pub(crate) struct AtlasSideWork<'a> {

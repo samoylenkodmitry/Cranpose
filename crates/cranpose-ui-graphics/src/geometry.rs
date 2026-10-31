@@ -14,6 +14,7 @@ use crate::{
         PathSide, VECTOR_PATH_SUPERSAMPLE, rasterize_vector_path, vector_path_mask_cache_get,
         vector_path_mask_cache_put, vector_path_mask_key,
     },
+    whole,
 };
 
 /// A position in two dimensions, in logical pixels. Compose's `Offset`.
@@ -476,7 +477,7 @@ impl GraphicsLayer {
     /// layer without allocating one — a canvas drawing a list row's fade by hand,
     /// say — wants this rule and not the other.
     pub fn composite_alpha_8bit(alpha: f32) -> f32 {
-        (alpha.clamp(0.0, 1.0) * 255.0).floor() / 255.0
+        whole::floor(alpha.clamp(0.0, 1.0) * 255.0) / 255.0
     }
 }
 
@@ -1253,13 +1254,13 @@ pub trait DrawScope {
 /// The rect a path's coverage mask covers: its bounds out to whole pixels and
 /// one pixel more each way, so the anti-aliased edge fits.
 fn vector_mask_rect(bounds: Rect) -> Rect {
-    let x = bounds.x.floor() - 1.0;
-    let y = bounds.y.floor() - 1.0;
+    let x = whole::floor(bounds.x) - 1.0;
+    let y = whole::floor(bounds.y) - 1.0;
     Rect {
         x,
         y,
-        width: (bounds.x + bounds.width).ceil() - x + 1.0,
-        height: (bounds.y + bounds.height).ceil() - y + 1.0,
+        width: whole::ceil(bounds.x + bounds.width) - x + 1.0,
+        height: whole::ceil(bounds.y + bounds.height) - y + 1.0,
     }
 }
 
@@ -1437,12 +1438,10 @@ impl<'a> DrawScopeDefault<'a> {
 
         let rect = vector_mask_rect(bounds);
         let origin = Point::new(rect.x, rect.y);
-        let mask_width = (rect.width * VECTOR_PATH_SUPERSAMPLE)
-            .ceil()
-            .clamp(1.0, MAX_MASK_PIXELS) as usize;
-        let mask_height = (rect.height * VECTOR_PATH_SUPERSAMPLE)
-            .ceil()
-            .clamp(1.0, MAX_MASK_PIXELS) as usize;
+        let mask_width =
+            whole::ceil(rect.width * VECTOR_PATH_SUPERSAMPLE).clamp(1.0, MAX_MASK_PIXELS) as usize;
+        let mask_height =
+            whole::ceil(rect.height * VECTOR_PATH_SUPERSAMPLE).clamp(1.0, MAX_MASK_PIXELS) as usize;
         let mask_size = (mask_width, mask_height);
 
         let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect, side);

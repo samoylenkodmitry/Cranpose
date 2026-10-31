@@ -18,6 +18,7 @@
 use crate::{
     Point, Rect,
     float::{all_finite, at_least, at_most, within},
+    whole,
 };
 
 /// Shape of the two ends of an open stroked path (an arc, today).
@@ -153,24 +154,6 @@ pub struct ArcGeometry {
     pub cap: StrokeCap,
 }
 
-/// Exact `x.floor()` without the libm call `f32::floor` lowers to on armv7
-/// (no `vrintm` there): truncate via int cast, fix up negatives. Bit-equal
-/// to `floorf` for every input — casts only run below 2^23, where i32 cannot
-/// saturate, and at 2^23 and above every finite f32 is already an integer.
-/// NaN fails the range test and passes through unchanged, like `floorf`.
-#[inline]
-fn exact_floor(x: f32) -> f32 {
-    if x == 0.0 {
-        return x;
-    }
-    if x.abs() < 8_388_608.0 {
-        let truncated = x as i32 as f32;
-        truncated - ((x < truncated) as i32 as f32)
-    } else {
-        x
-    }
-}
-
 /// `x mod TAU` into `[0, TAU)` without `rem_euclid`, whose `fmodf` lowers to
 /// the software routine in compiler_builtins on aarch64 Android and shows up
 /// in profiles at two calls per arc per frame. Multiply-floor keeps it to a
@@ -181,7 +164,7 @@ fn wrap_angle_tau(x: f32) -> f32 {
     if (0.0..TAU).contains(&x) {
         return x;
     }
-    let wrapped = x - exact_floor(x * (1.0 / TAU)) * TAU;
+    let wrapped = x - whole::floor(x * (1.0 / TAU)) * TAU;
     if wrapped >= TAU {
         wrapped - TAU
     } else if wrapped < 0.0 {

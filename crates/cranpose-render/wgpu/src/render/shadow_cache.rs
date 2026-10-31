@@ -4,7 +4,7 @@ use std::{
 };
 
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
-use cranpose_ui_graphics::{BlendMode, FxHasher, Rect};
+use cranpose_ui_graphics::{BlendMode, FxHasher, Rect, whole};
 
 use super::{expand_rect, hash_run_item_with_clip, mask_rect};
 use crate::{
@@ -97,8 +97,8 @@ pub(crate) fn shadow_content_hash(shadow: &ShadowDraw, root_scale: f32) -> u64 {
         hash_run_item_with_clip(
             run,
             run.placement.clip,
-            device.x.floor(),
-            device.y.floor(),
+            whole::floor(device.x),
+            whole::floor(device.y),
             root_scale,
             &mut hasher,
         );
@@ -187,10 +187,10 @@ pub(super) fn device_pixel_bounds(
     root_scale: f32,
     max_texture_dim: u32,
 ) -> Option<DevicePixelBounds> {
-    let x = (rect.x * root_scale).floor();
-    let y = (rect.y * root_scale).floor();
-    let right = ((rect.x + rect.width) * root_scale).ceil();
-    let bottom = ((rect.y + rect.height) * root_scale).ceil();
+    let x = whole::floor(rect.x * root_scale);
+    let y = whole::floor(rect.y * root_scale);
+    let right = whole::ceil((rect.x + rect.width) * root_scale);
+    let bottom = whole::ceil((rect.y + rect.height) * root_scale);
     let width = (right - x).max(0.0) as u32;
     let height = (bottom - y).max(0.0) as u32;
     if width == 0 || height == 0 || width > max_texture_dim || height > max_texture_dim {

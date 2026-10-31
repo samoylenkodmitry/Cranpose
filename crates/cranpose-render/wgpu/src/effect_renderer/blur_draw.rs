@@ -1,5 +1,5 @@
 use cranpose_ui::Axis;
-use cranpose_ui_graphics::TileMode;
+use cranpose_ui_graphics::{TileMode, whole};
 
 use super::{BlurUniforms, EffectRenderer, blur_pipelines::BlurPipeline, tile_mode_uniform_value};
 use crate::{frame_graph::UniformUpload, offscreen::OffscreenTarget};
@@ -7,7 +7,7 @@ use crate::{frame_graph::UniformUpload, offscreen::OffscreenTarget};
 /// The block of source texels one pixel of a blur's scratch stands for: one
 /// when `scratch` is `source`'s size.
 pub(super) fn blur_block(source: (u32, u32, u32, u32), scratch: (u32, u32, u32, u32)) -> u32 {
-    (source.2 as f32 / scratch.2.max(1) as f32).round().max(1.0) as u32
+    whole::round(source.2 as f32 / scratch.2.max(1) as f32).max(1.0) as u32
 }
 
 #[derive(Clone, Copy)]

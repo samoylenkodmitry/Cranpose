@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Rect, whole};
 
 use super::{
     CachedGpuTextGlyphRun, GlyphRunQuads, TargetRect, ViewportUniformParams,
@@ -57,10 +57,10 @@ pub(super) fn shared_glyph_clip(
     if left > right {
         return (Some(scissor), scissor);
     }
-    let left = (left - viewport.offset[0]).floor().max(0.0);
-    let top = (top - viewport.offset[1]).floor().max(0.0);
-    let right = (right - viewport.offset[0]).ceil();
-    let bottom = (bottom - viewport.offset[1]).ceil();
+    let left = whole::floor(left - viewport.offset[0]).max(0.0);
+    let top = whole::floor(top - viewport.offset[1]).max(0.0);
+    let right = whole::ceil(right - viewport.offset[0]);
+    let bottom = whole::ceil(bottom - viewport.offset[1]);
     let (x, y, width, height) = scissor;
     let inside = left >= x as f32
         && top >= y as f32

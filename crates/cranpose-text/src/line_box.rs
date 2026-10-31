@@ -26,6 +26,8 @@
 
 use std::cell::Cell;
 
+use cranpose_ui_graphics::whole;
+
 use crate::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle, TextStyle,
 };
@@ -237,9 +239,9 @@ fn aosp_line_box(
     padding: f32,
     grid: f32,
 ) -> LineBox {
-    let up = |value: f32| (value * grid).ceil() / grid;
-    let down = |value: f32| (value * grid).floor() / grid;
-    let round = |value: f32| ((value * grid) + 0.5).floor() / grid;
+    let up = |value: f32| whole::ceil(value * grid) / grid;
+    let down = |value: f32| whole::floor(value * grid) / grid;
+    let round = |value: f32| whole::floor((value * grid) + 0.5) / grid;
     let ascent = -round(-extent.ascent.max(0.0));
     let descent = round(extent.descent.max(0.0));
     let above_padding = down(padding * 0.5);

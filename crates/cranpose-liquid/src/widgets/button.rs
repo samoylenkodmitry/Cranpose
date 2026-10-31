@@ -12,7 +12,7 @@ use cranpose_ui::{
     text::TextStyle,
     widgets::{Box, BoxSpec, Text},
 };
-use cranpose_ui_graphics::{Color, GraphicsLayer};
+use cranpose_ui_graphics::{Color, GraphicsLayer, whole};
 use cranpose_ui_layout::Alignment;
 
 use super::floating_button::{FloatingButtonSurface, floating_button_content};
@@ -360,7 +360,7 @@ fn icon_group_item_at(
         return None;
     }
     let pitch = spec.diameter + spec.spacing;
-    let index = (x / pitch).floor() as isize;
+    let index = whole::floor(x / pitch) as isize;
     if index < 0 || index as usize >= count {
         return None;
     }

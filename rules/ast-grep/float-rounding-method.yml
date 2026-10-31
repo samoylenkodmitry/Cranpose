@@ -1,0 +1,14 @@
+id: float-rounding-method
+language: rust
+severity: warning
+message: An f32 rounds through cranpose_ui_graphics::whole, which 32-bit ARM, wasm and baseline x86 run without a libm call; an f64 keeps the method.
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - crates/**/tests/**
+  - crates/cranpose-ui-graphics/src/whole.rs
+rule:
+  any:
+    - pattern: $VALUE.round()
+    - pattern: $VALUE.floor()
+    - pattern: $VALUE.ceil()

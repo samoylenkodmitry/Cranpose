@@ -1,3 +1,5 @@
+use cranpose_ui_graphics::whole;
+
 use super::{
     lazy_list_measure::LazyListMeasureConfig,
     lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState},
@@ -62,7 +64,7 @@ impl<'a> ScrollPositionResolver<'a> {
         if average_size > 0.0 && offset < -self.effective_viewport_size {
             let pixels_to_jump = (-offset) - self.effective_viewport_size;
             let items_to_jump =
-                (pixels_to_jump / (average_size + self.config.spacing)).floor() as usize;
+                whole::floor(pixels_to_jump / (average_size + self.config.spacing)) as usize;
 
             if items_to_jump > 0 {
                 let actual_jump = items_to_jump.min(index);
@@ -132,7 +134,7 @@ impl<'a> ScrollPositionResolver<'a> {
         if offset > buffer_pixels {
             let pixels_to_skip = offset - buffer_pixels;
             let item_size_with_spacing = average_size + self.config.spacing;
-            let items_to_skip = (pixels_to_skip / item_size_with_spacing).floor() as usize;
+            let items_to_skip = whole::floor(pixels_to_skip / item_size_with_spacing) as usize;
 
             if items_to_skip > 0 {
                 let max_skip = self.items_count.saturating_sub(1).saturating_sub(index);

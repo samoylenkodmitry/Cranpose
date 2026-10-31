@@ -13,6 +13,7 @@ use std::{
 };
 
 use cranpose::SemanticElement;
+use cranpose_ui_graphics::whole;
 
 use crate::robot_assertions::{Bounds, SemanticElementLike};
 
@@ -1015,23 +1016,17 @@ pub fn logical_region_to_pixel_bounds(
         return None;
     }
 
-    let left = logical_to_screenshot_x(screenshot, region.0.max(0.0))
-        .floor()
-        .max(0.0) as u32;
-    let top = logical_to_screenshot_y(screenshot, region.1.max(0.0))
-        .floor()
-        .max(0.0) as u32;
-    let right = logical_to_screenshot_x(
+    let left = whole::floor(logical_to_screenshot_x(screenshot, region.0.max(0.0))).max(0.0) as u32;
+    let top = whole::floor(logical_to_screenshot_y(screenshot, region.1.max(0.0))).max(0.0) as u32;
+    let right = whole::ceil(logical_to_screenshot_x(
         screenshot,
         (region.0 + region.2).min(screenshot_logical_width(screenshot)),
-    )
-    .ceil()
+    ))
     .min(screenshot.width as f32) as u32;
-    let bottom = logical_to_screenshot_y(
+    let bottom = whole::ceil(logical_to_screenshot_y(
         screenshot,
         (region.1 + region.3).min(screenshot_logical_height(screenshot)),
-    )
-    .ceil()
+    ))
     .min(screenshot.height as f32) as u32;
 
     if right <= left || bottom <= top {
@@ -1278,8 +1273,8 @@ fn sample_screenshot_pixel_bilinear(
     let max_y = screenshot.height.saturating_sub(1) as f32;
     let source_x = (x - 0.5).clamp(0.0, max_x);
     let source_y = (y - 0.5).clamp(0.0, max_y);
-    let x0 = source_x.floor() as u32;
-    let y0 = source_y.floor() as u32;
+    let x0 = whole::floor(source_x) as u32;
+    let y0 = whole::floor(source_y) as u32;
     let x1 = (x0 + 1).min(screenshot.width.saturating_sub(1));
     let y1 = (y0 + 1).min(screenshot.height.saturating_sub(1));
     let tx = source_x - x0 as f32;
@@ -1292,7 +1287,7 @@ fn sample_screenshot_pixel_bilinear(
     let lerp_channel = |index: usize| {
         let top = top_left[index] as f32 * (1.0 - tx) + top_right[index] as f32 * tx;
         let bottom = bottom_left[index] as f32 * (1.0 - tx) + bottom_right[index] as f32 * tx;
-        (top * (1.0 - ty) + bottom * ty).round() as u8
+        whole::round(top * (1.0 - ty) + bottom * ty) as u8
     };
 
     Some([

@@ -105,7 +105,7 @@ use cranpose_foundation::{
     DRAG_THRESHOLD, MAX_FLING_VELOCITY, VelocityTracker1D,
     lazy::{LazyItems, LazyLayoutKey},
 };
-use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
+use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size, whole};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
@@ -325,7 +325,7 @@ impl IndicatorState {
             self.clear();
             return;
         }
-        let viewport_px = density.to_px(viewport).round();
+        let viewport_px = whole::round(density.to_px(viewport));
         self.total = count;
         self.viewport = viewport_px;
         scaling_list_items_with(
@@ -351,12 +351,12 @@ impl IndicatorState {
                 + known.height_of(index) * 0.5;
             before += leading_auto_centring_spacer(
                 viewport_px,
-                density.to_px(centre).round(),
+                whole::round(density.to_px(centre)),
                 density.to_px(anchor.offset),
             );
             after += trailing_auto_centring_spacer(
                 viewport_px,
-                density.to_px(known.height_of(count - 1)).round(),
+                whole::round(density.to_px(known.height_of(count - 1))),
             );
         }
         self.before_padding = before;

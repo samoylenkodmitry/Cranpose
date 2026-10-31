@@ -1,10 +1,11 @@
 //! `f32::floor`, `f32::ceil` and `f32::round` without a library call.
 //!
-//! A target with no instruction that rounds a float, as the ESP32-S3 and
-//! baseline x86 are, calls `floorf`, `ceilf` and `roundf` for them, and
-//! layout snapping and the software renderer place pixels with dozens of
+//! A target with no instruction that rounds a float, as the ESP32-S3,
+//! 32-bit ARM and baseline x86 are, calls `floorf`, `ceilf` and `roundf` for
+//! them, and layout snapping and the renderers place pixels with dozens of
 //! them a frame. There these functions truncate through the integer
-//! conversion such targets do have and step by the exact remainder. Every
+//! conversion such targets do have and step by the exact remainder. Wasm
+//! rounds halves only to even, so its `round` truncates instead. Every
 //! result is the one the `f32` method gives, bit for bit, signed zeros,
 //! infinities and NaN included. Targets that round in one instruction use
 //! the method.
@@ -12,6 +13,7 @@
 /// Whether the target rounds a float in one instruction.
 const ROUNDS_IN_HARDWARE: bool = !cfg!(any(
     target_arch = "xtensa",
+    target_arch = "arm",
     all(
         any(target_arch = "x86", target_arch = "x86_64"),
         not(target_feature = "sse4.1")
@@ -62,6 +64,11 @@ pub fn ceil(value: f32) -> f32 {
 /// `value.round()`: halves away from zero.
 #[inline(always)]
 pub fn round(value: f32) -> f32 {
+    if cfg!(target_arch = "wasm32") {
+        // The float just below one half carries a fraction of a half or
+        // more over the next whole number and no smaller one.
+        return (value + 0.499_999_97_f32.copysign(value)).trunc();
+    }
     if ROUNDS_IN_HARDWARE {
         return value.round();
     }

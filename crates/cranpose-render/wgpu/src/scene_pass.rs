@@ -14,6 +14,7 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
     space::{Light, Mat4, Material, Mesh, Shaded, Vec3, Volume},
+    whole,
 };
 
 use crate::{
@@ -1144,14 +1145,12 @@ pub(crate) fn scene_scissor(
     for cut in [scene.clip, clip].into_iter().flatten() {
         rect = rect.intersect(cut)?;
     }
-    let left = (rect.x * page.scale - page.offset[0]).floor().max(0.0);
-    let top = (rect.y * page.scale - page.offset[1]).floor().max(0.0);
-    let right = ((rect.x + rect.width) * page.scale - page.offset[0])
-        .ceil()
-        .min(page.size.0 as f32);
-    let bottom = ((rect.y + rect.height) * page.scale - page.offset[1])
-        .ceil()
-        .min(page.size.1 as f32);
+    let left = whole::floor(rect.x * page.scale - page.offset[0]).max(0.0);
+    let top = whole::floor(rect.y * page.scale - page.offset[1]).max(0.0);
+    let right =
+        whole::ceil((rect.x + rect.width) * page.scale - page.offset[0]).min(page.size.0 as f32);
+    let bottom =
+        whole::ceil((rect.y + rect.height) * page.scale - page.offset[1]).min(page.size.1 as f32);
     (right > left && bottom > top).then_some((
         left as u32,
         top as u32,

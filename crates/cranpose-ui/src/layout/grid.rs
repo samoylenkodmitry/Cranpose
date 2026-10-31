@@ -2,6 +2,7 @@
 //! children get their cells, the tracks get their sizes, and children
 //! measure in their cells and align there.
 
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{
     Constraints, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
@@ -336,11 +337,11 @@ impl GridMeasurePolicy {
             }
             // Whole device pixels, rounded up so the child is not narrower
             // than it asked, split as evenly as they go.
-            let deficit = ((required - current) * density - 1e-3).ceil();
+            let deficit = whole::ceil((required - current) * density - 1e-3);
             if deficit <= 0.0 {
                 continue;
             }
-            let share = (deficit / growable as f32).floor();
+            let share = whole::floor(deficit / growable as f32);
             let mut remainder = deficit - share * growable as f32;
             for index in (start..end).filter(|&index| grows_for_spans(self.spec(axis, index))) {
                 let extra = if remainder > 0.0 { 1.0 } else { 0.0 };
