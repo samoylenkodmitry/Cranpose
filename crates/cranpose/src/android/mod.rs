@@ -9,6 +9,8 @@ pub(crate) mod accessibility;
 pub(crate) mod accessibility_wire;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod activity_window_layout;
+#[cfg(all(target_os = "android", target_arch = "arm"))]
+mod aeabi_memory;
 #[cfg(target_os = "android")]
 pub(crate) mod app_info;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]

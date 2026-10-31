@@ -34,6 +34,7 @@ ignores:
   - crates/cranpose-storekit/src/apple.rs
   - crates/cranpose-storekit/src/tests/apple_tests.rs
   - crates/cranpose/src/android/accessibility.rs
+  - crates/cranpose/src/android/aeabi_memory.rs
   - crates/cranpose/src/android/app_update.rs
   - crates/cranpose/src/android/camera.rs
   - crates/cranpose/src/android/display_timing.rs
