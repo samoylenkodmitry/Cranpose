@@ -442,7 +442,7 @@ fn TorusGrid(switch: TorusSwitch) {
         on
     });
     LiquidTheme(
-        LiquidThemeSpec::system(SchemeMode::Dark, Color(1.0, 0.45, 0.85, 1.0)),
+        LiquidThemeSpec::system_with_accent(SchemeMode::Dark, Color(1.0, 0.45, 0.85, 1.0)),
         move || {
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 for row in 0..rows {

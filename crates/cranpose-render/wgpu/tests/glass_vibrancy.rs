@@ -490,7 +490,7 @@ fn VibrantTabScene(backdrop: TabBackdrop) {
         widgets::{Box, BoxSpec},
     };
     LiquidTheme(
-        LiquidThemeSpec::system(
+        LiquidThemeSpec::system_with_accent(
             if matches!(backdrop, TabBackdrop::DarkFlat(_)) {
                 SchemeMode::Dark
             } else {

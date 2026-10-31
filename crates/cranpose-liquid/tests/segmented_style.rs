@@ -38,22 +38,19 @@ fn robot(
     let style = Rc::new(style);
     create_headless_robot_test_with_fonts(320, 80, fonts, move || {
         let style = Rc::clone(&style);
-        LiquidTheme(
-            LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 122, 255)),
-            move || {
-                ProvideLiquidSegmentedStyle(style(liquid_colors(), liquid_typography()), || {
-                    LiquidSegmentedControl(
-                        Modifier::empty().width(WIDTH),
-                        0,
-                        |_| {},
-                        |scope| {
-                            scope.segment("One");
-                            scope.segment("Two");
-                        },
-                    );
-                });
-            },
-        );
+        LiquidTheme(LiquidThemeSpec::system(SchemeMode::Light), move || {
+            ProvideLiquidSegmentedStyle(style(liquid_colors(), liquid_typography()), || {
+                LiquidSegmentedControl(
+                    Modifier::empty().width(WIDTH),
+                    0,
+                    |_| {},
+                    |scope| {
+                        scope.segment("One");
+                        scope.segment("Two");
+                    },
+                );
+            });
+        });
     })
 }
 

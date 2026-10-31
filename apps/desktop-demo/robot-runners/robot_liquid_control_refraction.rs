@@ -113,7 +113,7 @@ pub(crate) fn main() -> anyhow::Result<()> {
             robot.exit().expect("exit");
         })
         .try_run(|| {
-            LiquidTheme(LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 122, 255)), || {
+            LiquidTheme(LiquidThemeSpec::system(SchemeMode::Light), || {
                 Box(Modifier::empty().fill_max_size().background(Color::WHITE), BoxSpec::default(), || {
                     LiquidToggle(Modifier::empty().absolute_offset(0.0, 136.0).graphics_layer(|| cranpose::GraphicsLayer {
                         translation_x: 170.66667,

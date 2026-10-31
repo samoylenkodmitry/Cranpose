@@ -32,13 +32,7 @@ fn with_palette(palette: LiquidPalette, content: impl FnOnce()) {
 fn custom_colors_reach_controls_and_restore_the_parent_theme() {
     for scheme in [SchemeMode::Light, SchemeMode::Dark] {
         run_test_composition(move || {
-            let spec = LiquidThemeSpec {
-                palette: LiquidPalette::System {
-                    scheme,
-                    accent: Color::BLUE,
-                },
-                ..Default::default()
-            };
+            let spec = LiquidThemeSpec::system_with_accent(scheme, Color::BLUE);
             LiquidTheme(spec, || {
                 let original = liquid_colors();
                 let colors = custom();
@@ -168,23 +162,14 @@ fn system_auto_uses_system_appearance_and_inverts_once() {
                         ..Default::default()
                     },
                     || {
-                        LiquidTheme(
-                            LiquidThemeSpec {
-                                palette: LiquidPalette::System {
-                                    scheme: SchemeMode::Auto,
-                                    accent: Color::BLUE,
-                                },
-                                ..Default::default()
-                            },
-                            || {
-                                assert_eq!(liquid_colors().is_dark, system == SystemTheme::Light);
-                                assert_eq!(liquid_colors().accent, Color::BLUE);
-                                assert_eq!(
-                                    local_on_light_surface().current(),
-                                    system == SystemTheme::Dark
-                                );
-                            },
-                        );
+                        LiquidTheme(LiquidThemeSpec::system(SchemeMode::Auto), || {
+                            assert_eq!(liquid_colors().is_dark, system == SystemTheme::Light);
+                            assert_eq!(liquid_colors().accent, Color::from_rgb_u8(0, 122, 255));
+                            assert_eq!(
+                                local_on_light_surface().current(),
+                                system == SystemTheme::Dark
+                            );
+                        });
                     },
                 );
             });

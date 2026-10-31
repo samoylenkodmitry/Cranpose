@@ -189,7 +189,7 @@ pub(crate) fn LiquidTabReference(backdrop: ReferenceBackdrop, dark: bool) {
         LiquidThemeSpec {
             typography,
             glass_tint_amount: tint_amount.get(),
-            ..LiquidThemeSpec::system(scheme, accent)
+            ..LiquidThemeSpec::system_with_accent(scheme, accent)
         },
         move || {
             let selected = rememberMutableStateOf(initial_destination);

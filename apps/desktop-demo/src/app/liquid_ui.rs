@@ -940,7 +940,7 @@ fn SortFilterStage(suggestion_offset: f32) {
     let menu_gesture = rememberLiquidMenuGesture();
 
     LiquidTheme(
-        LiquidThemeSpec::system(SchemeMode::Dark, Color::from_rgb_u8(233, 30, 196)),
+        LiquidThemeSpec::system_with_accent(SchemeMode::Dark, Color::from_rgb_u8(233, 30, 196)),
         move || {
             let anchor_rect = std::rc::Rc::clone(&anchor_rect);
             let menu_gesture = menu_gesture.clone();
@@ -1406,7 +1406,10 @@ fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static)
         move || {
             let on_select = std::rc::Rc::clone(&on_select);
             LiquidTheme(
-                LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 190, 200)),
+                LiquidThemeSpec::system_with_accent(
+                    SchemeMode::Light,
+                    Color::from_rgb_u8(0, 190, 200),
+                ),
                 move || {
                     let on_select = std::rc::Rc::clone(&on_select);
                     LiquidTabBar(
@@ -1804,7 +1807,10 @@ pub fn LiquidReferenceFixture(case: LiquidReferenceFixtureCase) {
             LiquidReferenceFixtureCase::TogglePress => {
                 let checked = remember(|| mutableStateOf(true)).with(|state| *state);
                 LiquidTheme(
-                    LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(52, 199, 89)),
+                    LiquidThemeSpec::system_with_accent(
+                        SchemeMode::Light,
+                        Color::from_rgb_u8(52, 199, 89),
+                    ),
                     move || {
                         let state = checked;
                         TogglePressReferenceStage(state.get(), move |value| state.set(value));
@@ -1885,435 +1891,409 @@ pub fn LiquidUiTab() {
         SchemeMode::Light
     };
 
-    LiquidTheme(
-        LiquidThemeSpec::system(scheme, Color::from_rgb_u8(0, 122, 255)),
-        move || {
-            let menu_gesture = menu_gesture.clone();
-            let colors = liquid_colors();
-            let scroll = remember(|| ScrollState::new(0.0)).with(|s| *s);
-            super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
-                *cell.borrow_mut() = Some(scroll);
-            });
-            let menu_anchor_rect = remember(|| {
-                std::rc::Rc::new(std::cell::Cell::new(Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                }))
-            })
-            .with(std::rc::Rc::clone);
-            let menu_absorbed_rect = remember(|| {
-                std::rc::Rc::new(std::cell::Cell::new(Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                }))
-            })
-            .with(std::rc::Rc::clone);
-            let absorbed_button_spec = GlassButtonSpec::glass()
-                .with_glass(
-                    Glass::regular()
-                        .lift(0.05)
-                        .highlight(0.30)
-                        .adaptive_frost(colors.label, 0.35),
-                )
-                .with_icon_backplate(colors.accent)
-                .with_content_color(Color::WHITE);
-            let stage_menu_gesture = menu_gesture.clone();
-            let stage_anchor = std::rc::Rc::clone(&menu_anchor_rect);
-            let stage_absorbed = std::rc::Rc::clone(&menu_absorbed_rect);
-            let stage_button_spec = absorbed_button_spec.clone();
+    LiquidTheme(LiquidThemeSpec::system(scheme), move || {
+        let menu_gesture = menu_gesture.clone();
+        let colors = liquid_colors();
+        let scroll = remember(|| ScrollState::new(0.0)).with(|s| *s);
+        super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
+            *cell.borrow_mut() = Some(scroll);
+        });
+        let menu_anchor_rect = remember(|| {
+            std::rc::Rc::new(std::cell::Cell::new(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            }))
+        })
+        .with(std::rc::Rc::clone);
+        let menu_absorbed_rect = remember(|| {
+            std::rc::Rc::new(std::cell::Cell::new(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            }))
+        })
+        .with(std::rc::Rc::clone);
+        let absorbed_button_spec = GlassButtonSpec::glass()
+            .with_glass(
+                Glass::regular()
+                    .lift(0.05)
+                    .highlight(0.30)
+                    .adaptive_frost(colors.label, 0.35),
+            )
+            .with_icon_backplate(colors.accent)
+            .with_content_color(Color::WHITE);
+        let stage_menu_gesture = menu_gesture.clone();
+        let stage_anchor = std::rc::Rc::clone(&menu_anchor_rect);
+        let stage_absorbed = std::rc::Rc::clone(&menu_absorbed_rect);
+        let stage_button_spec = absorbed_button_spec.clone();
 
-            Box(
-                Modifier::empty()
-                    .semantics(|config: &mut SemanticsConfiguration| {
-                        config.content_description = Some(LIQUID_SCROLL_VIEWPORT_TAG.to_string());
-                    })
-                    .fill_max_size()
-                    .clip_to_bounds()
-                    .draw_behind(move |scope| {
-                        scope.draw_rect(Brush::solid(colors.background));
-                    }),
-                BoxSpec::default(),
-                move || {
-                    let dark_for_chip = dark;
-                    let slider_state = slider;
-                    let segment_state = segment;
-                    let chip_state = chip;
-                    let store_tab_state = store_tab;
-                    let on_white_tab_state = on_white_tab;
-                    let clicks_state = clicks;
-                    let stage_menu_gesture = stage_menu_gesture.clone();
-                    let stage_anchor = std::rc::Rc::clone(&stage_anchor);
-                    let stage_absorbed = std::rc::Rc::clone(&stage_absorbed);
-                    let stage_button_spec = stage_button_spec.clone();
-                    Column(
-                        Modifier::empty()
-                            .fill_max_size()
-                            .vertical_scroll(scroll, false)
-                            .padding_each(
-                                PAGE_PADDING,
-                                liquid_nav_bar_expanded_height() + 8.0,
-                                PAGE_PADDING,
-                                120.0,
+        Box(
+            Modifier::empty()
+                .semantics(|config: &mut SemanticsConfiguration| {
+                    config.content_description = Some(LIQUID_SCROLL_VIEWPORT_TAG.to_string());
+                })
+                .fill_max_size()
+                .clip_to_bounds()
+                .draw_behind(move |scope| {
+                    scope.draw_rect(Brush::solid(colors.background));
+                }),
+            BoxSpec::default(),
+            move || {
+                let dark_for_chip = dark;
+                let slider_state = slider;
+                let segment_state = segment;
+                let chip_state = chip;
+                let store_tab_state = store_tab;
+                let on_white_tab_state = on_white_tab;
+                let clicks_state = clicks;
+                let stage_menu_gesture = stage_menu_gesture.clone();
+                let stage_anchor = std::rc::Rc::clone(&stage_anchor);
+                let stage_absorbed = std::rc::Rc::clone(&stage_absorbed);
+                let stage_button_spec = stage_button_spec.clone();
+                Column(
+                    Modifier::empty()
+                        .fill_max_size()
+                        .vertical_scroll(scroll, false)
+                        .padding_each(
+                            PAGE_PADDING,
+                            liquid_nav_bar_expanded_height() + 8.0,
+                            PAGE_PADDING,
+                            120.0,
+                        ),
+                    ColumnSpec::default(),
+                    move || {
+                        FeaturedVideosReferenceStage(
+                            menu_open,
+                            stage_menu_gesture.clone(),
+                            std::rc::Rc::clone(&stage_anchor),
+                            std::rc::Rc::clone(&stage_absorbed),
+                            stage_button_spec.clone(),
+                        );
+
+                        SectionTitle("wcKSRD OPTICS");
+                        OpticalShaderPreview();
+
+                        SectionTitle("TOGGLE PRESS");
+                        let reference_toggle = toggle_a;
+                        TogglePressReferenceStage(reference_toggle.get(), move |value| {
+                            reference_toggle.set(value);
+                        });
+                        Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+
+                        SectionTitle("TAB SWIPE");
+                        TabSwipeReferenceBackdrop();
+                        Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+
+                        for (icon, title, subtitle) in [
+                            (
+                                icons::GRID,
+                                "iPadOS",
+                                "Unlock the full potential of iPadOS.",
                             ),
-                        ColumnSpec::default(),
-                        move || {
-                            FeaturedVideosReferenceStage(
-                                menu_open,
-                                stage_menu_gesture.clone(),
-                                std::rc::Rc::clone(&stage_anchor),
-                                std::rc::Rc::clone(&stage_absorbed),
-                                stage_button_spec.clone(),
-                            );
+                            (
+                                icons::FOLDER,
+                                "macOS",
+                                "Take full advantage of the powerful capabilities of Mac.",
+                            ),
+                            (
+                                icons::STAR,
+                                "Metal",
+                                "Explore the latest in Metal tools, technologies, and resources.",
+                            ),
+                            (
+                                icons::EDIT,
+                                "Swift",
+                                "Discover updates to Swift and related tools and frameworks.",
+                            ),
+                            (
+                                icons::HOME,
+                                "SwiftUI",
+                                "Design and build your apps like never before.",
+                            ),
+                        ] {
+                            SessionCard(icon, title, subtitle);
+                        }
 
-                            SectionTitle("wcKSRD OPTICS");
-                            OpticalShaderPreview();
+                        SectionTitle("BOTTOM BAR");
+                        let store_state = store_tab_state;
+                        StoreBottomBarExample(store_state.get(), move |index| {
+                            store_state.set(index);
+                        });
+                        let headers_state = store_tab_state;
+                        StoreHeadersBarExample(headers_state.get(), move |index| {
+                            headers_state.set(index);
+                        });
 
-                            SectionTitle("TOGGLE PRESS");
-                            let reference_toggle = toggle_a;
-                            TogglePressReferenceStage(reference_toggle.get(), move |value| {
-                                reference_toggle.set(value);
-                            });
-                            Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+                        SectionTitle("SORT FILTER MENU");
+                        SortFilterReferenceStage();
+                        let on_white_state = on_white_tab_state;
+                        OnWhiteBottomBarExample(on_white_state.get(), move |index| {
+                            on_white_state.set(index);
+                        });
+                        Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 
-                            SectionTitle("TAB SWIPE");
-                            TabSwipeReferenceBackdrop();
-                            Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+                        GradientStripe(
+                            [
+                                Color::from_rgb_u8(255, 94, 58),
+                                Color::from_rgb_u8(255, 149, 0),
+                            ],
+                            120.0,
+                        );
 
-                            for (icon, title, subtitle) in [
-                                (
-                                    icons::GRID,
-                                    "iPadOS",
-                                    "Unlock the full potential of iPadOS.",
-                                ),
-                                (
-                                    icons::FOLDER,
-                                    "macOS",
-                                    "Take full advantage of the powerful capabilities of Mac.",
-                                ),
-                                (
-                                    icons::STAR,
-                                    "Metal",
-                                    "Explore the latest in Metal tools, technologies, and resources.",
-                                ),
-                                (
-                                    icons::EDIT,
-                                    "Swift",
-                                    "Discover updates to Swift and related tools and frameworks.",
-                                ),
-                                (
-                                    icons::HOME,
-                                    "SwiftUI",
-                                    "Design and build your apps like never before.",
-                                ),
-                            ] {
-                                SessionCard(icon, title, subtitle);
-                            }
-
-                            SectionTitle("BOTTOM BAR");
-                            let store_state = store_tab_state;
-                            StoreBottomBarExample(store_state.get(), move |index| {
-                                store_state.set(index);
-                            });
-                            let headers_state = store_tab_state;
-                            StoreHeadersBarExample(headers_state.get(), move |index| {
-                                headers_state.set(index);
-                            });
-
-                            SectionTitle("SORT FILTER MENU");
-                            SortFilterReferenceStage();
-                            let on_white_state = on_white_tab_state;
-                            OnWhiteBottomBarExample(on_white_state.get(), move |index| {
-                                on_white_state.set(index);
-                            });
-                            Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
-
-                            GradientStripe(
-                                [
-                                    Color::from_rgb_u8(255, 94, 58),
-                                    Color::from_rgb_u8(255, 149, 0),
-                                ],
-                                120.0,
-                            );
-
-                            SectionTitle("BUTTONS");
-                            TouchedUpReferenceStage();
-                            Box(Modifier::empty().height(8.0), BoxSpec::default(), || {});
-                            Row(
-                                Modifier::empty(),
-                                RowSpec::default()
-                                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                                {
-                                    let clicks = clicks_state;
-                                    move || {
-                                        let clicks_a = clicks;
-                                        GlassButton(
-                                            Modifier::empty(),
-                                            GlassButtonSpec::glass(),
-                                            move || clicks_a.set(clicks_a.get() + 1),
-                                            || {
-                                                GlassButtonLabel(
-                                                    "Glass".into(),
-                                                    GlassButtonSpec::glass(),
-                                                );
-                                            },
-                                        );
-                                        Box(
-                                            Modifier::empty().width(12.0),
-                                            BoxSpec::default(),
-                                            || {},
-                                        );
-                                        let clicks_b = clicks;
-                                        GlassButton(
-                                            Modifier::empty(),
-                                            GlassButtonSpec::prominent(),
-                                            move || clicks_b.set(clicks_b.get() + 1),
-                                            || {
-                                                GlassButtonLabel(
-                                                    "Prominent".into(),
-                                                    GlassButtonSpec::prominent(),
-                                                );
-                                            },
-                                        );
-                                        Box(
-                                            Modifier::empty().width(12.0),
-                                            BoxSpec::default(),
-                                            || {},
-                                        );
-                                        let clicks_c = clicks;
-                                        GlassIconButton(
-                                            Modifier::empty().content_description("Add one"),
-                                            GlassButtonSpec::glass(),
-                                            44.0,
-                                            move || clicks_c.set(clicks_c.get() + 1),
-                                            icons::PLUS,
-                                        );
-                                    }
-                                },
-                            );
-
-                            SectionTitle("CONTROLS");
-                            LiquidCard(Modifier::empty().fill_max_width(), move || {
-                                Column(
-                                    Modifier::empty().padding(16.0),
-                                    ColumnSpec::default(),
-                                    move || {
-                                        let colors = liquid_colors();
-                                        let toggle_a2 = toggle_a;
-                                        Row(
-                                            Modifier::empty().fill_max_width(),
-                                            RowSpec::default().vertical_alignment(
-                                                VerticalAlignment::CenterVertically,
-                                            ),
-                                            move || {
-                                                Text(
-                                                    "Wi-Fi",
-                                                    Modifier::empty().weight(1.0),
-                                                    body_style(colors.label),
-                                                );
-                                                let t = toggle_a2;
-                                                LiquidToggle(
-                                                    Modifier::empty().semantics(|config| {
-                                                        config.is_clickable = true;
-                                                        config.content_description = Some(
-                                                            "Wi-Fi settings switch".to_string(),
-                                                        );
-                                                    }),
-                                                    t.get(),
-                                                    move |value| t.set(value),
-                                                );
-                                            },
-                                        );
-                                        Box(
-                                            Modifier::empty().height(12.0),
-                                            BoxSpec::default(),
-                                            || {},
-                                        );
-                                        let toggle_b2 = toggle_b;
-                                        Row(
-                                            Modifier::empty().fill_max_width(),
-                                            RowSpec::default().vertical_alignment(
-                                                VerticalAlignment::CenterVertically,
-                                            ),
-                                            move || {
-                                                Text(
-                                                    "Airplane Mode",
-                                                    Modifier::empty().weight(1.0),
-                                                    body_style(colors.label),
-                                                );
-                                                let t = toggle_b2;
-                                                LiquidToggle(
-                                                    Modifier::empty()
-                                                        .content_description("Airplane Mode"),
-                                                    t.get(),
-                                                    move |value| t.set(value),
-                                                );
-                                            },
-                                        );
-                                        Box(
-                                            Modifier::empty().height(16.0),
-                                            BoxSpec::default(),
-                                            || {},
-                                        );
-                                        let s = slider_state;
-                                        LiquidSlider(
-                                            Modifier::empty().fill_max_width(),
-                                            s.get(),
-                                            move |value| s.set(value),
-                                        );
-                                    },
-                                );
-                            });
-
-                            SectionTitle("SEGMENTED");
-                            let seg = segment_state;
-                            LiquidSegmentedControl(
-                                Modifier::empty().width(310.0),
-                                seg.get(),
-                                move |index| seg.set(index),
-                                |scope| {
-                                    scope.segment("Receiving");
-                                    scope.segment("Sending");
-                                    scope.segment("Errored");
-                                },
-                            );
-
-                            SectionTitle("CHIPS");
-                            Row(Modifier::empty(), RowSpec::default(), move || {
-                                for (index, label) in
-                                    ["All", "Recent", "Favorites"].iter().enumerate()
-                                {
-                                    let chip_state2 = chip_state;
-                                    LiquidChip(
-                                        Modifier::empty().padding_each(0.0, 0.0, 8.0, 0.0),
-                                        chip_state.get() == index,
-                                        move || chip_state2.set(index),
-                                        (*label).into(),
+                        SectionTitle("BUTTONS");
+                        TouchedUpReferenceStage();
+                        Box(Modifier::empty().height(8.0), BoxSpec::default(), || {});
+                        Row(
+                            Modifier::empty(),
+                            RowSpec::default()
+                                .vertical_alignment(VerticalAlignment::CenterVertically),
+                            {
+                                let clicks = clicks_state;
+                                move || {
+                                    let clicks_a = clicks;
+                                    GlassButton(
+                                        Modifier::empty(),
+                                        GlassButtonSpec::glass(),
+                                        move || clicks_a.set(clicks_a.get() + 1),
+                                        || {
+                                            GlassButtonLabel(
+                                                "Glass".into(),
+                                                GlassButtonSpec::glass(),
+                                            );
+                                        },
+                                    );
+                                    Box(Modifier::empty().width(12.0), BoxSpec::default(), || {});
+                                    let clicks_b = clicks;
+                                    GlassButton(
+                                        Modifier::empty(),
+                                        GlassButtonSpec::prominent(),
+                                        move || clicks_b.set(clicks_b.get() + 1),
+                                        || {
+                                            GlassButtonLabel(
+                                                "Prominent".into(),
+                                                GlassButtonSpec::prominent(),
+                                            );
+                                        },
+                                    );
+                                    Box(Modifier::empty().width(12.0), BoxSpec::default(), || {});
+                                    let clicks_c = clicks;
+                                    GlassIconButton(
+                                        Modifier::empty().content_description("Add one"),
+                                        GlassButtonSpec::glass(),
+                                        44.0,
+                                        move || clicks_c.set(clicks_c.get() + 1),
+                                        icons::PLUS,
                                     );
                                 }
-                                let dark2 = dark_for_chip;
-                                LiquidChip(
-                                    Modifier::empty(),
-                                    dark_for_chip.get(),
-                                    move || dark2.set(!dark2.get()),
-                                    "Dark mode".into(),
-                                );
-                            });
+                            },
+                        );
 
-                            GradientStripe(
-                                [
-                                    Color::from_rgb_u8(0, 122, 255),
-                                    Color::from_rgb_u8(88, 86, 214),
-                                ],
-                                120.0,
-                            );
-
-                            SectionTitle("LIST");
-                            LiquidListSection(Modifier::empty().fill_max_width(), "Library", {
+                        SectionTitle("CONTROLS");
+                        LiquidCard(Modifier::empty().fill_max_width(), move || {
+                            Column(
+                                Modifier::empty().padding(16.0),
+                                ColumnSpec::default(),
                                 move || {
-                                    for (index, (icon, title)) in [
-                                        (icons::DOCUMENT, "Receipt 2026-06-30"),
-                                        (icons::CAMERA, "Idea Marketi doo"),
-                                        (icons::FOLDER, "Groceries"),
-                                    ]
-                                    .into_iter()
-                                    .enumerate()
-                                    {
-                                        LiquidListRow(
-                                            Modifier::empty(),
-                                            LiquidListRowSpec::default().with_separator(index < 2),
-                                            || {},
-                                            move || {
-                                                let colors = liquid_colors();
-                                                Row(
-                                                    Modifier::empty().fill_max_width(),
-                                                    RowSpec::default().vertical_alignment(
-                                                        VerticalAlignment::CenterVertically,
-                                                    ),
-                                                    move || {
-                                                        icons::Icon(
-                                                            icon,
-                                                            None,
-                                                            20.0,
-                                                            colors.accent,
-                                                        );
-                                                        Box(
-                                                            Modifier::empty().width(12.0),
-                                                            BoxSpec::default(),
-                                                            || {},
-                                                        );
-                                                        Text(
-                                                            title,
-                                                            Modifier::empty().weight(1.0),
-                                                            body_style(colors.label),
-                                                        );
-                                                        icons::Icon(
-                                                            icons::CHEVRON_RIGHT,
-                                                            None,
-                                                            16.0,
-                                                            colors.tertiary_label,
-                                                        );
-                                                    },
-                                                );
-                                            },
-                                        );
-                                    }
-                                }
-                            });
-                            GradientStripe(
-                                [
-                                    Color::from_rgb_u8(175, 82, 222),
-                                    Color::from_rgb_u8(255, 204, 0),
-                                ],
-                                160.0,
+                                    let colors = liquid_colors();
+                                    let toggle_a2 = toggle_a;
+                                    Row(
+                                        Modifier::empty().fill_max_width(),
+                                        RowSpec::default().vertical_alignment(
+                                            VerticalAlignment::CenterVertically,
+                                        ),
+                                        move || {
+                                            Text(
+                                                "Wi-Fi",
+                                                Modifier::empty().weight(1.0),
+                                                body_style(colors.label),
+                                            );
+                                            let t = toggle_a2;
+                                            LiquidToggle(
+                                                Modifier::empty().semantics(|config| {
+                                                    config.is_clickable = true;
+                                                    config.content_description =
+                                                        Some("Wi-Fi settings switch".to_string());
+                                                }),
+                                                t.get(),
+                                                move |value| t.set(value),
+                                            );
+                                        },
+                                    );
+                                    Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+                                    let toggle_b2 = toggle_b;
+                                    Row(
+                                        Modifier::empty().fill_max_width(),
+                                        RowSpec::default().vertical_alignment(
+                                            VerticalAlignment::CenterVertically,
+                                        ),
+                                        move || {
+                                            Text(
+                                                "Airplane Mode",
+                                                Modifier::empty().weight(1.0),
+                                                body_style(colors.label),
+                                            );
+                                            let t = toggle_b2;
+                                            LiquidToggle(
+                                                Modifier::empty()
+                                                    .content_description("Airplane Mode"),
+                                                t.get(),
+                                                move |value| t.set(value),
+                                            );
+                                        },
+                                    );
+                                    Box(Modifier::empty().height(16.0), BoxSpec::default(), || {});
+                                    let s = slider_state;
+                                    LiquidSlider(
+                                        Modifier::empty().fill_max_width(),
+                                        s.get(),
+                                        move |value| s.set(value),
+                                    );
+                                },
                             );
-                        },
-                    );
+                        });
 
-                    LiquidNavBar(
-                        Modifier::empty().fill_max_width(),
-                        LiquidNavBarSpec::new("WWDC"),
-                        scroll,
-                        || {},
-                        || {},
-                    );
+                        SectionTitle("SEGMENTED");
+                        let seg = segment_state;
+                        LiquidSegmentedControl(
+                            Modifier::empty().width(310.0),
+                            seg.get(),
+                            move |index| seg.set(index),
+                            |scope| {
+                                scope.segment("Receiving");
+                                scope.segment("Sending");
+                                scope.segment("Errored");
+                            },
+                        );
 
-                    let menu_state = menu_open;
-                    let menu_dismiss = menu_open;
-                    let menu_selection = menu_mode;
-                    let menu_anchor = menu_anchor_rect.get();
-                    let menu_absorbed = menu_absorbed_rect.get();
-                    LiquidMenu(
-                        menu_state.get(),
-                        menu_anchor,
-                        LiquidMenuSpec::default(),
-                        vec![
-                            LiquidMenuAbsorbedSource::new(
-                                menu_absorbed,
-                                absorbed_button_spec.clone(),
-                                36.0,
-                                icons::FILTER,
-                            ),
-                            LiquidMenuAbsorbedSource::new(
-                                menu_anchor,
-                                GlassButtonSpec::glass(),
-                                40.0,
-                                icons::MORE_HORIZ,
-                            ),
-                        ],
-                        menu_gesture.clone(),
-                        move || menu_dismiss.set(false),
-                        move |scope| view_mode_menu_content(scope, menu_selection),
-                    );
+                        SectionTitle("CHIPS");
+                        Row(Modifier::empty(), RowSpec::default(), move || {
+                            for (index, label) in ["All", "Recent", "Favorites"].iter().enumerate()
+                            {
+                                let chip_state2 = chip_state;
+                                LiquidChip(
+                                    Modifier::empty().padding_each(0.0, 0.0, 8.0, 0.0),
+                                    chip_state.get() == index,
+                                    move || chip_state2.set(index),
+                                    (*label).into(),
+                                );
+                            }
+                            let dark2 = dark_for_chip;
+                            LiquidChip(
+                                Modifier::empty(),
+                                dark_for_chip.get(),
+                                move || dark2.set(!dark2.get()),
+                                "Dark mode".into(),
+                            );
+                        });
 
-                    LiquidUiTabBar(selected_tab);
-                },
-            );
-        },
-    );
+                        GradientStripe(
+                            [
+                                Color::from_rgb_u8(0, 122, 255),
+                                Color::from_rgb_u8(88, 86, 214),
+                            ],
+                            120.0,
+                        );
+
+                        SectionTitle("LIST");
+                        LiquidListSection(Modifier::empty().fill_max_width(), "Library", {
+                            move || {
+                                for (index, (icon, title)) in [
+                                    (icons::DOCUMENT, "Receipt 2026-06-30"),
+                                    (icons::CAMERA, "Idea Marketi doo"),
+                                    (icons::FOLDER, "Groceries"),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                {
+                                    LiquidListRow(
+                                        Modifier::empty(),
+                                        LiquidListRowSpec::default().with_separator(index < 2),
+                                        || {},
+                                        move || {
+                                            let colors = liquid_colors();
+                                            Row(
+                                                Modifier::empty().fill_max_width(),
+                                                RowSpec::default().vertical_alignment(
+                                                    VerticalAlignment::CenterVertically,
+                                                ),
+                                                move || {
+                                                    icons::Icon(icon, None, 20.0, colors.accent);
+                                                    Box(
+                                                        Modifier::empty().width(12.0),
+                                                        BoxSpec::default(),
+                                                        || {},
+                                                    );
+                                                    Text(
+                                                        title,
+                                                        Modifier::empty().weight(1.0),
+                                                        body_style(colors.label),
+                                                    );
+                                                    icons::Icon(
+                                                        icons::CHEVRON_RIGHT,
+                                                        None,
+                                                        16.0,
+                                                        colors.tertiary_label,
+                                                    );
+                                                },
+                                            );
+                                        },
+                                    );
+                                }
+                            }
+                        });
+                        GradientStripe(
+                            [
+                                Color::from_rgb_u8(175, 82, 222),
+                                Color::from_rgb_u8(255, 204, 0),
+                            ],
+                            160.0,
+                        );
+                    },
+                );
+
+                LiquidNavBar(
+                    Modifier::empty().fill_max_width(),
+                    LiquidNavBarSpec::new("WWDC"),
+                    scroll,
+                    || {},
+                    || {},
+                );
+
+                let menu_state = menu_open;
+                let menu_dismiss = menu_open;
+                let menu_selection = menu_mode;
+                let menu_anchor = menu_anchor_rect.get();
+                let menu_absorbed = menu_absorbed_rect.get();
+                LiquidMenu(
+                    menu_state.get(),
+                    menu_anchor,
+                    LiquidMenuSpec::default(),
+                    vec![
+                        LiquidMenuAbsorbedSource::new(
+                            menu_absorbed,
+                            absorbed_button_spec.clone(),
+                            36.0,
+                            icons::FILTER,
+                        ),
+                        LiquidMenuAbsorbedSource::new(
+                            menu_anchor,
+                            GlassButtonSpec::glass(),
+                            40.0,
+                            icons::MORE_HORIZ,
+                        ),
+                    ],
+                    menu_gesture.clone(),
+                    move || menu_dismiss.set(false),
+                    move |scope| view_mode_menu_content(scope, menu_selection),
+                );
+
+                LiquidUiTabBar(selected_tab);
+            },
+        );
+    });
 }
 
 // The bar reads the selection itself, so a tab change composes it again and

@@ -53,7 +53,7 @@ pub(crate) fn LiquidControlReference(
 ) {
     let activations = rememberMutableStateOf(|| 0usize);
     LiquidTheme(
-        LiquidThemeSpec::system(
+        LiquidThemeSpec::system_with_accent(
             if dark {
                 SchemeMode::Dark
             } else {

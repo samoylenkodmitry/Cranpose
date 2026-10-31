@@ -13,6 +13,8 @@ For system palettes, `SchemeMode::Auto` follows the system appearance; `Light`
 and `Dark` select a fixed appearance. A custom palette supplies its own
 `is_dark`. `LiquidTheme` applies inversion, increased contrast and bold text,
 then configures text-selection appearance from the resulting colors.
+`LiquidThemeSpec::system(scheme)` uses the default accent;
+`LiquidThemeSpec::system_with_accent(scheme, accent)` selects an explicit color.
 See [theme.rs](../crates/cranpose-liquid/src/theme.rs) and
 [palette.rs](../crates/cranpose-liquid/src/palette.rs).
 
