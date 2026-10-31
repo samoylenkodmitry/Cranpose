@@ -42,6 +42,21 @@ pub(super) fn draw_text<P: Pixel>(
     } else {
         reach
     };
+    draw_text_image(target, draw, (raster_rect, part), diagnostics, text);
+}
+
+// Draws `part` of `draw`, a text that covers `raster_rect`, through an image
+// of its own, as a text between pixels or one with a gradient or a shadow
+// takes. Out of line: the text most frames draw paints straight over the
+// target, and the item loop keeps only the call.
+#[inline(never)]
+fn draw_text_image<P: Pixel>(
+    target: &mut Target<'_, P>,
+    draw: &TextDraw,
+    (raster_rect, part): (Rect, Rect),
+    diagnostics: &RenderDiagnostics,
+    text: &TextRaster,
+) {
     if let Some((pixels, rect)) = rasterize_text_part(draw, raster_rect, part, text) {
         blit_rasterized_text(target, rect, draw.clip, pixels, diagnostics);
     }
