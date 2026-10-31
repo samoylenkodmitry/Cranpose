@@ -99,7 +99,10 @@ fn assert_one_interior_draw(page: fn()) {
         with_stats.shape_interior_draws, 1,
         "the page and every card lay their interiors down in one draw"
     );
-    assert_eq!(without_stats.shape_interior_draws, 0);
+    assert_eq!(
+        without_stats.shape_interior_draws, 0,
+        "turned off, no pass lays interiors down"
+    );
     let differing = support::differing_pixels(FRAME, &with.pixels, &without.pixels);
     assert!(
         differing.is_empty(),
