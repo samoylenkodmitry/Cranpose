@@ -270,8 +270,10 @@ Chrome 154 (6 legs each) the renderer's main thread went from 16.6 to
 16.1 ms a frame and the GPU process's from 7.6 to 7.0 ms. With the
 attribute disables deferred to the end of the command buffer and the
 index buffer, texture levels, color targets and first instances tracked,
-it makes 4,740 calls a frame where it made 6,475 (headless Chrome at the
-Mate's viewport), with byte-identical pictures.
+and the attributes of the last pointed buffer pointed first, it makes 4,600
+calls a frame where it made 6,475 (headless Chrome at the Mate's viewport),
+with byte-identical pictures. On the Mate in Chrome (8 visits each, one
+session) the median rAF callback went from 13.78 to 13.68 ms.
 
 ### Web surfaces can be copied and sampled; the WebGL canvas has no depth
 
