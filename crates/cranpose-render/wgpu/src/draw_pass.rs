@@ -10,13 +10,13 @@ use crate::{
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
-    instant_triangles::{InstantDraw, InstantStandIn, LayerTexels},
+    instant_triangles::{InstantDraw, LayerTexels},
     lazy_resource::Pending,
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
         ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
-        StoreRunBatch, TargetRect, TurnedGlyphs, ViewportUniformParams, scissor_rect_for_rect,
+        StoreRunBatch, TargetRect, ViewportUniformParams, scissor_rect_for_rect,
         supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
@@ -36,10 +36,12 @@ use op_items::{OpItems, Texts, merge_items, segment_viewport_rect};
 mod op_bounds;
 pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
+mod pass_buffers;
 mod pass_scratch;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
+use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
@@ -741,49 +743,6 @@ fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
         >= MIXED_TURN_CHANGES
 }
 
-/// The per-frame vectors a pass fills: image and glyph geometry and draw
-/// commands, kept on the renderer between frames so they never reallocate.
-/// The quads a pass drew from its scratch, uploaded for its draws: fallback
-/// triangles, image vertices and indices, and glyph instances.
-#[derive(Default)]
-struct PassBuffers {
-    meshes: Option<crate::mesh_fallback::MeshBuffers>,
-    images: Option<ImageSlot>,
-    shadows: Option<crate::frame_graph::BufferUpload>,
-    glyphs: Option<crate::frame_graph::BufferUpload>,
-    turned_glyphs: Option<crate::frame_graph::BufferUpload>,
-    instant: Option<crate::instant_triangles::InstantBuffers>,
-}
-
-impl PassBuffers {
-    // Where the pass draws its turned glyphs from: see `TurnedGlyphs`.
-    fn turned_glyphs<'a>(&'a self, stand_in: Option<InstantStandIn<'a>>) -> TurnedGlyphs<'a> {
-        let laid = self
-            .instant
-            .as_ref()
-            .and_then(|laid| laid.glyphs(stand_in?));
-        laid.map_or(
-            TurnedGlyphs::Own(self.turned_glyphs.as_ref()),
-            TurnedGlyphs::Instant,
-        )
-    }
-
-    /// The pass's fallback triangles, with the index range of each run draw
-    /// of `meshes` that takes some.
-    fn run_meshes<'a>(
-        &'a self,
-        meshes: &'a crate::mesh_fallback::PassMeshes,
-    ) -> Option<crate::mesh_fallback::RunMeshes<'a>> {
-        self.meshes
-            .as_ref()
-            .map(|buffers| crate::mesh_fallback::RunMeshes {
-                ranges: &meshes.ranges,
-                chunks: meshes.builder.chunks(),
-                buffers,
-            })
-    }
-}
-
 /// The commands a pass's batches draw ranges of.
 #[derive(Clone, Copy)]
 struct PassCmds<'a> {
@@ -1085,8 +1044,8 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                     self.text_item(renderer, (text, *geometry), run, scratch)?;
                 }
                 Item::RRectShadow(_) => {
-                    self.flush(renderer, run.binding);
-                    self.shadow_run(renderer, items, run, scratch);
+                    let place = self.draw_held(renderer, run.binding);
+                    self.shadow_run(renderer, (items, place), run, scratch);
                     continue;
                 }
                 Item::Composite(composite) => {
@@ -1172,22 +1131,22 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
     /// chunk open: its shapes so far paint first and the held draws above
     /// them, while its later records, and the opaque interiors of all of
     /// them, stay one chunk. Without an open chunk it draws what is held.
-    fn draw_held(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
+    fn draw_held(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) -> Option<u32> {
         let Some(open) = self.chunk else {
             self.flush(renderer, binding);
-            return;
+            return None;
         };
-        let held = self.held.take();
-        if held.glyphs.is_none() && held.images.is_none() {
-            return;
-        }
         self.cut_paint(renderer, binding, open);
-        // The held draws sit where the chunk's next record will: its later
-        // opaque interiors hide them, its earlier ones do not.
+        // The held draws, and a draw that follows, sit where the chunk's next
+        // record will: its later opaque interiors hide them, its earlier ones
+        // do not. Without an open chunk a draw that follows takes the next
+        // place.
         let base = self
             .chunk_base
             .saturating_add(renderer.open_arena_records());
+        let held = self.held.take();
         self.push_held(renderer, binding, held, Some(base));
+        Some(base)
     }
 
     /// Lays out as fallback triangles the chunk's draws in `range`, just
@@ -1639,12 +1598,12 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         Ok(())
     }
 
-    /// Draws a run of round rect shadows as one instanced batch, placed in
-    /// the pass's order as an image batch is.
+    /// Draws a run of round rect shadows as one instanced batch, at `place`
+    /// in the pass's order, or next in it without one.
     fn shadow_run(
         &mut self,
         renderer: &mut GpuRenderer,
-        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
+        (items, place): (&mut Peekable<impl Iterator<Item = Item<'s>>>, Option<u32>),
         run: &SegmentRun<'s, '_>,
         scratch: &mut PassScratch,
     ) {
@@ -1658,7 +1617,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         if start == end {
             return;
         }
-        let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, None);
+        let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, place);
         let scissor = run.segment.scissor;
         if renderer.pipelines.shadows_stand_in(self.depth) {
             let parts = scratch.shadow_instances[start..end].iter();

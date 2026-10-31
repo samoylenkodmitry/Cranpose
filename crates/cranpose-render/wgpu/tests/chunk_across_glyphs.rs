@@ -50,9 +50,12 @@ fn text_between_stacked_cards_keeps_their_interiors_in_one_draw() {
     else {
         return;
     };
-    cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, Some("1"));
-    let without = support::warm_app_frame(StackedLabelledCards, FRAME, FRAME);
-    cranpose_core::debug_toggles::set_debug_toggle(NO_INTERIORS_FIRST, None);
+    let without = support::warm_app_frame_toggled(
+        StackedLabelledCards,
+        FRAME,
+        FRAME,
+        Some(NO_INTERIORS_FIRST),
+    );
     let Some((without, without_stats)) = without else {
         return;
     };

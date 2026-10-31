@@ -23,6 +23,7 @@ mod blur_reference;
 mod cancellation_contract;
 mod capture_culling;
 mod chunk_across_glyphs;
+mod chunk_across_shadows;
 mod clipped_out_layer;
 mod clipped_text_batching;
 mod compile_rules;

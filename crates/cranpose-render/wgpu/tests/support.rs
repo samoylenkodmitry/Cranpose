@@ -618,14 +618,33 @@ pub(crate) fn warm_app_frame(
     width: u32,
     height: u32,
 ) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
+    warm_app_frame_toggled(page, width, height, None)
+}
+
+// The debug toggle `toggle` names is on only while the GPU lock is held:
+// toggles are process-wide, and another test drawing meanwhile would read it.
+pub(crate) fn warm_app_frame_toggled(
+    page: fn(),
+    width: u32,
+    height: u32,
+    toggle: Option<&'static str>,
+) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
     let (_lock, mut shell) = app_shell_for(
         page,
         width,
         height,
         wgpu::TextureFormat::Bgra8UnormSrgb,
-        |_| {},
+        |_| {
+            if let Some(toggle) = toggle {
+                cranpose_core::debug_toggles::set_debug_toggle(toggle, Some("1"));
+            }
+        },
     )?;
-    Some(warm_shell_frame(&mut shell, width, height))
+    let frame = warm_shell_frame(&mut shell, width, height);
+    if let Some(toggle) = toggle {
+        cranpose_core::debug_toggles::set_debug_toggle(toggle, None);
+    }
+    Some(frame)
 }
 
 pub(crate) fn warm_shell_frame(

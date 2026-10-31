@@ -78,10 +78,14 @@ fn folded_stages_draw_what_stages_the_device_specializes_draw() {
         cranpose_render_wgpu::shader_stages_flattened() > flattened_before,
         "the frame's pipelines took flattened stages"
     );
-    cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, Some("1"));
-    let shared = support::headless_renderer()
-        .map(|mut renderer| support::capture_graph(&mut renderer, scene(), SIZE, SIZE).pixels);
-    cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, None);
+    // Toggles are process-wide: the renderer's lock keeps other tests from
+    // drawing while this one is on.
+    let shared = support::headless_renderer().map(|mut renderer| {
+        cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, Some("1"));
+        let pixels = support::capture_graph(&mut renderer, scene(), SIZE, SIZE).pixels;
+        cranpose_core::debug_toggles::set_debug_toggle(NO_SHADER_FOLD, None);
+        pixels
+    });
     let Ok(shared) = shared else {
         return;
     };
