@@ -660,25 +660,12 @@ impl LayoutNode {
 
     /// Mark this node as needing measure. Also marks it as needing layout.
     pub fn mark_needs_measure(&self) {
-        self.update_dirt(|dirt| LayoutDirt {
-            measure: true,
-            layout: true,
-            ..dirt
-        });
+        self.parts.cache().mark_needs_measure();
     }
 
     /// Mark this node as needing layout (but not necessarily measure).
     pub fn mark_needs_layout(&self) {
-        self.update_dirt(|dirt| LayoutDirt {
-            layout: true,
-            ..dirt
-        });
-    }
-
-    fn update_dirt(&self, update: impl FnOnce(LayoutDirt) -> LayoutDirt) {
-        self.parts
-            .cache()
-            .set_dirt(update(self.parts.cache().dirt()));
+        self.parts.cache().mark_needs_layout();
     }
 
     /// Mark this node as needing redraw without forcing measure/layout.
@@ -745,10 +732,7 @@ impl LayoutNode {
     }
 
     pub(crate) fn clear_needs_measure(&self) {
-        self.update_dirt(|dirt| LayoutDirt {
-            measure: false,
-            ..dirt
-        });
+        self.parts.cache().clear_needs_measure();
     }
 
     /// Clears the node's layout flag and its descendants': a layout pass
@@ -1208,13 +1192,7 @@ impl Node for LayoutNode {
     }
 
     fn mark_descendant_needs_layout(&self, measure: bool) {
-        self.update_dirt(|dirt| LayoutDirt {
-            descendant: dirt.descendant.marked(measure),
-            ..dirt
-        });
-        if measure {
-            self.parts.cache().forget_intrinsics();
-        }
+        self.parts.cache().mark_descendant_needs_layout(measure);
     }
 
     fn descendant_needs_layout(&self) -> bool {

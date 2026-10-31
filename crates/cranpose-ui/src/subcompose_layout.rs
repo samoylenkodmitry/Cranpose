@@ -19,7 +19,7 @@ use crate::{
     layout::MeasuredNode,
     modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
     render_state::AppContext,
-    widgets::nodes::{DescendantDirt, LayoutNode, LayoutParts, LayoutState, NodeCache},
+    widgets::nodes::{LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
 mod retained_measure_scope;
@@ -708,10 +708,6 @@ pub struct SubcomposeLayoutNode {
     inner: Rc<RefCell<SubcomposeLayoutNodeInner>>,
     parent: Cell<Option<NodeId>>,
     id: Cell<Option<NodeId>>,
-    needs_measure: Cell<bool>,
-    needs_layout: Cell<bool>,
-    /// A node below this one needs layout or measure.
-    descendant_dirt: Cell<DescendantDirt>,
     needs_semantics: Cell<bool>,
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
@@ -729,9 +725,6 @@ impl SubcomposeLayoutNode {
             inner,
             parent: Cell::new(None),
             id: Cell::new(None),
-            needs_measure: Cell::new(true),
-            needs_layout: Cell::new(true),
-            descendant_dirt: Cell::default(),
             needs_semantics: Cell::new(true),
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
@@ -766,9 +759,6 @@ impl SubcomposeLayoutNode {
             inner,
             parent: Cell::new(None),
             id: Cell::new(None),
-            needs_measure: Cell::new(true),
-            needs_layout: Cell::new(true),
-            descendant_dirt: Cell::default(),
             needs_semantics: Cell::new(true),
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
@@ -1028,13 +1018,12 @@ impl SubcomposeLayoutNode {
 
     /// Mark this node as needing measure. Also marks it as needing layout.
     pub fn mark_needs_measure(&self) {
-        self.needs_measure.set(true);
-        self.needs_layout.set(true);
+        self.parts.cache().mark_needs_measure();
     }
 
     /// Mark this node as needing layout (but not necessarily measure).
     pub fn mark_needs_layout_flag(&self) {
-        self.needs_layout.set(true);
+        self.parts.cache().mark_needs_layout();
     }
 
     /// Mark this node as needing redraw without forcing measure/layout.
@@ -1048,18 +1037,17 @@ impl SubcomposeLayoutNode {
 
     /// Check if this node needs measure.
     pub fn needs_measure(&self) -> bool {
-        self.needs_measure.get()
+        self.parts.cache().dirt().measure
     }
 
     pub(crate) fn clear_needs_measure(&self) {
-        self.needs_measure.set(false);
+        self.parts.cache().clear_needs_measure();
     }
 
     /// Clears the node's layout flag and its descendants': a layout pass
     /// visited them.
     pub(crate) fn clear_needs_layout(&self) {
-        self.needs_layout.set(false);
-        self.descendant_dirt.set(DescendantDirt::default());
+        self.parts.cache().clear_layout_dirt();
     }
 
     /// Mark this node as needing semantics recomputation.
@@ -1323,36 +1311,31 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn mark_needs_layout(&self) {
-        self.needs_layout.set(true);
+        self.parts.cache().mark_needs_layout();
     }
 
     fn needs_layout(&self) -> bool {
-        self.needs_layout.get()
+        self.parts.cache().dirt().layout
     }
 
     fn mark_needs_measure(&self) {
-        self.needs_measure.set(true);
-        self.needs_layout.set(true);
+        Self::mark_needs_measure(self);
     }
 
     fn needs_measure(&self) -> bool {
-        self.needs_measure.get()
+        Self::needs_measure(self)
     }
 
     fn mark_descendant_needs_layout(&self, measure: bool) {
-        self.descendant_dirt
-            .set(self.descendant_dirt.get().marked(measure));
-        if measure {
-            self.parts.cache().forget_intrinsics();
-        }
+        self.parts.cache().mark_descendant_needs_layout(measure);
     }
 
     fn descendant_needs_layout(&self) -> bool {
-        self.descendant_dirt.get().layout
+        self.parts.cache().dirt().descendant.layout
     }
 
     fn descendant_needs_measure(&self) -> bool {
-        self.descendant_dirt.get().measure
+        self.parts.cache().dirt().descendant.measure
     }
 
     fn mark_needs_semantics(&self) {

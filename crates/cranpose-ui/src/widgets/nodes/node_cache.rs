@@ -111,6 +111,46 @@ impl NodeCache {
         self.dirt.set(dirt);
     }
 
+    fn update_dirt(&self, update: impl FnOnce(LayoutDirt) -> LayoutDirt) {
+        self.set_dirt(update(self.dirt()));
+    }
+
+    // Marks the node as needing measure, and so layout.
+    pub(crate) fn mark_needs_measure(&self) {
+        self.update_dirt(|dirt| LayoutDirt {
+            measure: true,
+            layout: true,
+            ..dirt
+        });
+    }
+
+    // Marks the node as needing layout, not necessarily measure.
+    pub(crate) fn mark_needs_layout(&self) {
+        self.update_dirt(|dirt| LayoutDirt {
+            layout: true,
+            ..dirt
+        });
+    }
+
+    pub(crate) fn clear_needs_measure(&self) {
+        self.update_dirt(|dirt| LayoutDirt {
+            measure: false,
+            ..dirt
+        });
+    }
+
+    // Marks a node below this one as needing layout, and measure when
+    // `measure`, which also drops the intrinsic sizes.
+    pub(crate) fn mark_descendant_needs_layout(&self, measure: bool) {
+        self.update_dirt(|dirt| LayoutDirt {
+            descendant: dirt.descendant.marked(measure),
+            ..dirt
+        });
+        if measure {
+            self.forget_intrinsics();
+        }
+    }
+
     /// Clears the node's layout flag and its descendants' flags, and returns
     /// the flags as they were, which [`Self::restore_dirt`] puts back.
     pub(crate) fn take_layout_dirt(&self) -> LayoutDirt {
