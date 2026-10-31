@@ -5,6 +5,7 @@ pub mod core;
 pub(crate) mod flex_box;
 mod frame_layout_arena;
 pub(crate) mod grid;
+mod live_layout_node;
 mod measure_telemetry;
 mod measured_spare;
 mod placed_root_measurements;
@@ -34,6 +35,7 @@ use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
+use live_layout_node::read_live_layout_node;
 use measured_spare::MeasuredSpare;
 use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
@@ -668,64 +670,6 @@ fn read_layout_node<R>(
     read_live_layout_node(applier, node_id, |node| {
         node.with_children(|children| read(node.state(), children))
     })
-}
-
-enum LiveLayoutNode<'a> {
-    Layout(&'a LayoutNode),
-    Subcompose(&'a SubcomposeLayoutNode),
-}
-
-impl LiveLayoutNode<'_> {
-    fn state(&self) -> LayoutState {
-        match self {
-            Self::Layout(node) => node.layout_state(),
-            Self::Subcompose(node) => node.layout_state(),
-        }
-    }
-
-    fn parent(&self) -> Option<NodeId> {
-        match self {
-            Self::Layout(node) => node.parent(),
-            Self::Subcompose(node) => node.parent(),
-        }
-    }
-
-    fn is_window_root(&self) -> bool {
-        matches!(self, Self::Layout(node) if node.is_window_root())
-    }
-
-    fn with_children<R>(&self, read: impl FnOnce(&[NodeId]) -> R) -> R {
-        match self {
-            Self::Layout(node) => read(&node.children),
-            Self::Subcompose(node) => node.with_active_children(read),
-        }
-    }
-
-    fn semantics(&self) -> Option<SemanticsConfiguration> {
-        match self {
-            Self::Layout(node) => node.semantics_configuration(),
-            Self::Subcompose(node) => node.semantics_configuration(),
-        }
-    }
-}
-
-fn read_live_layout_node<R>(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    mut read: impl FnMut(LiveLayoutNode<'_>) -> R,
-) -> Result<Option<R>, NodeError> {
-    match applier.with_node::<LayoutNode, _>(node_id, |node| read(LiveLayoutNode::Layout(node))) {
-        Ok(value) => return Ok(Some(value)),
-        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
-        Err(err) => return Err(err),
-    }
-    match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        read(LiveLayoutNode::Subcompose(node))
-    }) {
-        Ok(value) => Ok(Some(value)),
-        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
 }
 
 fn snapshot_node_data(
