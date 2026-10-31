@@ -117,8 +117,8 @@ fn full_from_clipped_fill(fill: ClippedFillOutput) -> VertexOutput {
 }
 
 // `ClippedFillOutput` under a rounded clip: the clip's radius, and `interior`,
-// the rect inside both the fill's corners and the clip's, whose pixels the
-// fill covers whole.
+// a rect inside both the fill's corners and the clip's (see
+// `rounded_fill_interior`), whose pixels the fill covers whole.
 struct RoundedFillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
@@ -131,27 +131,46 @@ struct RoundedFillOutput {
 
 fn rounded_fill_output(full: VertexOutput) -> RoundedFillOutput {
     let clip_radius = bitcast<f32>(full.brush.z);
-    // Inside the clip inset by its radius, and by at least half a pixel, the
-    // clip's distance field is half a pixel or more inside: its coverage is
-    // whole. A record with no clip has no clip edge to keep off.
-    let inset = max(clip_radius, 0.5);
-    let clipped = (full.clip_rect.z > 0.0) & (full.clip_rect.w > 0.0);
-    let clip_inner = select(
-        vec4<f32>(-3.0e38, -3.0e38, 3.0e38, 3.0e38),
-        vec4<f32>(full.clip_rect.xy + inset, full.clip_rect.xy + full.clip_rect.zw - inset),
-        clipped,
-    );
-    let bands = fill_bands(full.rect, full.radii);
-    let interior = vec4<f32>(max(bands.xy, clip_inner.xy), min(bands.zw, clip_inner.zw));
     return RoundedFillOutput(
         full.clip_position,
         full.color,
         full.rect,
         full.radii,
         full.clip_rect,
-        interior,
+        rounded_fill_interior(full.rect, full.radii, full.clip_rect, clip_radius),
         clip_radius,
     );
+}
+
+// A rect where both the fill's coverage and its rounded clip's are whole:
+// the fill's interior (see `fill_interior`) cut to the clip's band that
+// keeps more of it. Inside the clip's rect inset by half a pixel, and across
+// or down also by its radius, the clip's distance field is half a pixel or
+// more inside. A record with no clip has no clip edge to keep off.
+fn rounded_fill_interior(
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    clip_rect: vec4<f32>,
+    clip_radius: f32,
+) -> vec4<f32> {
+    let fill = fill_interior(rect, radii);
+    if ((clip_rect.z <= 0.0) | (clip_rect.w <= 0.0)) {
+        return fill;
+    }
+    let edges = vec4<f32>(clip_rect.xy, clip_rect.xy + clip_rect.zw);
+    let side = max(clip_radius, 0.5);
+    let across = rect_overlap(fill, edges + vec4<f32>(side, 0.5, -side, -0.5));
+    let down = rect_overlap(fill, edges + vec4<f32>(0.5, side, -0.5, -side));
+    return larger_rect(across, down);
+}
+
+fn rect_overlap(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(max(a.xy, b.xy), min(a.zw, b.zw));
+}
+
+// `b` where it covers more than `a`, else `a`.
+fn larger_rect(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return select(a, b, rect_area(b) > rect_area(a));
 }
 
 fn full_from_rounded_fill(fill: RoundedFillOutput) -> VertexOutput {
@@ -683,6 +702,17 @@ fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
 // interior per fragment from these alone: the inset rect `fill_interior`
 // weighs too would cost every fragment more arithmetic than its pixels save.
 fn fill_bands(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
+    let bands = fill_band_pair(rect, radii);
+    return select(bands.down, bands.across, rect_area(bands.across) >= rect_area(bands.down));
+}
+
+struct BandPair {
+    across: vec4<f32>,
+    down: vec4<f32>,
+}
+
+// Both of the bands `fill_bands` chooses between.
+fn fill_band_pair(rect: vec4<f32>, radii: vec4<f32>) -> BandPair {
     let right = rect.x + rect.z;
     let bottom = rect.y + rect.w;
     let across = vec4<f32>(
@@ -697,7 +727,7 @@ fn fill_bands(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
         right - 0.5,
         bottom - max(radii.z, radii.w) - 0.5,
     );
-    return select(down, across, rect_area(across) >= rect_area(down));
+    return BandPair(across, down);
 }
 
 fn rect_area(edges: vec4<f32>) -> f32 {
@@ -714,15 +744,18 @@ fn rect_area(edges: vec4<f32>) -> f32 {
 // and a scene of many small shapes pays for it whether or not any pixel lies
 // inside.
 fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
-    let band = fill_bands(rect, radii);
+    return larger_rect(fill_bands(rect, radii), fill_arc_inset(rect, radii));
+}
+
+// The rect `fill_interior` insets past every corner's arc.
+fn fill_arc_inset(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
     let arc = max(radii - (radii - 0.5) * INV_SQRT2, vec4<f32>(0.5)) + ARC_INSET_SLACK;
-    let inset = vec4<f32>(
+    return vec4<f32>(
         rect.x + max(arc.x, arc.z),
         rect.y + max(arc.x, arc.y),
         rect.x + rect.z - max(arc.y, arc.w),
         rect.y + rect.w - max(arc.z, arc.w),
     );
-    return select(band, inset, rect_area(inset) > rect_area(band));
 }
 
 // How far past the exact inset the inset rect stays, so rounding at its
