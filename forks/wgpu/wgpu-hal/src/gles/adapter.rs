@@ -1135,6 +1135,7 @@ impl crate::Adapter for super::Adapter {
                 temp_query_results: Mutex::new(Vec::new()),
                 draw_buffer_count: AtomicU8::new(1),
                 current_index_buffer: Mutex::new(None),
+                gl_state: Mutex::new(Default::default()),
             },
         })
     }

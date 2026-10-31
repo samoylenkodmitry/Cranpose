@@ -380,6 +380,9 @@ pub struct Queue {
     temp_query_results: Mutex<Vec<u64>>,
     draw_buffer_count: AtomicU8,
     current_index_buffer: Mutex<Option<glow::Buffer>>,
+    /// The state each submitted command buffer's commands set, kept here so
+    /// its lists keep their storage from one command buffer to the next.
+    gl_state: Mutex<gl_state::GlState>,
 }
 
 impl Drop for Queue {
