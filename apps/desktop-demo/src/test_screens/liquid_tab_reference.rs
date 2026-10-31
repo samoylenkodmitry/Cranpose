@@ -181,15 +181,15 @@ pub(crate) fn LiquidTabReference(backdrop: ReferenceBackdrop, dark: bool) {
     let tint_amount = rememberMutableStateOf(initial_tint_amount);
     let mut typography = LiquidTypography::default();
     typography.caption1.span_style.font_family = Some(FontFamily::SansSerif);
+    let accent = content.accent.map_or_else(
+        || Color::from_rgb_u8(0, if dark { 145 } else { 136 }, 255),
+        ReferenceContent::color,
+    );
     LiquidTheme(
         LiquidThemeSpec {
-            scheme,
-            accent: content
-                .accent
-                .map(ReferenceContent::color)
-                .unwrap_or_else(|| Color::from_rgb_u8(0, if dark { 145 } else { 136 }, 255)),
             typography,
             glass_tint_amount: tint_amount.get(),
+            ..LiquidThemeSpec::system(scheme, accent)
         },
         move || {
             let selected = rememberMutableStateOf(initial_destination);

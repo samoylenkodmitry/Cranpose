@@ -40,10 +40,7 @@ fn robot(
     create_headless_robot_test_with_text_measurer(320, 80, measurer, move || {
         let style = Rc::clone(&style);
         LiquidTheme(
-            LiquidThemeSpec {
-                scheme: SchemeMode::Light,
-                ..Default::default()
-            },
+            LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 122, 255)),
             move || {
                 ProvideLiquidSegmentedStyle(style(liquid_colors(), liquid_typography()), || {
                     LiquidSegmentedControl(
@@ -112,7 +109,7 @@ fn a_provided_style_sets_the_height_and_the_label_colors() {
         "the label sits at {} in a 44 high control",
         center.y
     );
-    let colors = LiquidColors::light(LiquidThemeSpec::default().accent);
+    let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
     let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
     let (chosen, filter) = find_label(&graph.root, "One", None).expect("the chosen label");
     assert_eq!(label_color(chosen), Some(colors.on_accent));
@@ -125,7 +122,7 @@ fn a_provided_style_sets_the_height_and_the_label_colors() {
 fn a_held_lens_gives_the_chosen_label_the_color_of_the_others() {
     let mut robot = robot(accent);
     hold_the_first_segment(&mut robot);
-    let colors = LiquidColors::light(LiquidThemeSpec::default().accent);
+    let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
     let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
     let (_, filter) = find_label(&graph.root, "One", None).expect("the chosen label");
     let Some(ColorFilter::Tint(held)) = filter else {
@@ -152,7 +149,7 @@ fn a_held_lens_gives_the_chosen_label_the_color_of_the_others() {
 fn the_system_style_draws_every_label_alike_without_a_filter() {
     let mut robot = robot(|colors, typography| LiquidSegmentedStyle::system(&colors, &typography));
     hold_the_first_segment(&mut robot);
-    let colors = LiquidColors::light(LiquidThemeSpec::default().accent);
+    let colors = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
     let graph = robot.shell_mut().scene().graph.as_ref().expect("a scene");
     for label in ["One", "Two"] {
         let (text, filter) = find_label(&graph.root, label, None).expect("a label");

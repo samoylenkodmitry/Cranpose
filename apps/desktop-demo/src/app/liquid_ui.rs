@@ -940,11 +940,7 @@ fn SortFilterStage(suggestion_offset: f32) {
     let menu_gesture = rememberLiquidMenuGesture();
 
     LiquidTheme(
-        LiquidThemeSpec {
-            scheme: SchemeMode::Dark,
-            accent: Color::from_rgb_u8(233, 30, 196),
-            ..LiquidThemeSpec::default()
-        },
+        LiquidThemeSpec::system(SchemeMode::Dark, Color::from_rgb_u8(233, 30, 196)),
         move || {
             let anchor_rect = std::rc::Rc::clone(&anchor_rect);
             let menu_gesture = menu_gesture.clone();
@@ -1411,11 +1407,7 @@ fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static)
         move || {
             let on_select = std::rc::Rc::clone(&on_select);
             LiquidTheme(
-                LiquidThemeSpec {
-                    scheme: SchemeMode::Light,
-                    accent: Color::from_rgb_u8(0, 190, 200),
-                    ..LiquidThemeSpec::default()
-                },
+                LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(0, 190, 200)),
                 move || {
                     let on_select = std::rc::Rc::clone(&on_select);
                     LiquidTabBar(
@@ -1813,11 +1805,7 @@ pub fn LiquidReferenceFixture(case: LiquidReferenceFixtureCase) {
             LiquidReferenceFixtureCase::TogglePress => {
                 let checked = remember(|| mutableStateOf(true)).with(|state| *state);
                 LiquidTheme(
-                    LiquidThemeSpec {
-                        scheme: SchemeMode::Light,
-                        accent: Color::from_rgb_u8(52, 199, 89),
-                        ..LiquidThemeSpec::default()
-                    },
+                    LiquidThemeSpec::system(SchemeMode::Light, Color::from_rgb_u8(52, 199, 89)),
                     move || {
                         let state = checked;
                         TogglePressReferenceStage(state.get(), move |value| state.set(value));
@@ -1899,10 +1887,7 @@ pub fn LiquidUiTab() {
     };
 
     LiquidTheme(
-        LiquidThemeSpec {
-            scheme,
-            ..LiquidThemeSpec::default()
-        },
+        LiquidThemeSpec::system(scheme, Color::from_rgb_u8(0, 122, 255)),
         move || {
             let menu_gesture = menu_gesture.clone();
             let colors = liquid_colors();

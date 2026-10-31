@@ -112,10 +112,7 @@ pub(crate) fn main() -> ExitCode {
             robot.exit().expect("exit");
         })
         .try_run(move || {
-            LiquidTheme(LiquidThemeSpec {
-                scheme: SchemeMode::Dark,
-                ..Default::default()
-            }, || {
+            LiquidTheme(LiquidThemeSpec::system(SchemeMode::Dark, Color::from_rgb_u8(0, 122, 255)), || {
                 CBox(
                     Modifier::empty()
                         .size(Size {
