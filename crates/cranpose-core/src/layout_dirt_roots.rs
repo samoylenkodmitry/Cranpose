@@ -32,6 +32,11 @@ impl LayoutDirtRoots {
         self.ids.push(id);
     }
 
+    // Whether a bubble started since the last take.
+    pub(crate) fn any(&self) -> bool {
+        self.overflowed || !self.ids.is_empty()
+    }
+
     /// Moves the noted nodes into `out` and forgets them. `false` when more
     /// were noted than the list keeps; `out` is then empty.
     pub(crate) fn take_into(&mut self, out: &mut Vec<NodeId>) -> bool {
