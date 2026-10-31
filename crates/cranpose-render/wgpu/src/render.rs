@@ -3071,7 +3071,7 @@ impl GpuRenderer {
     }
 
     /// Appends `window` of `run`'s records to the open arena chunk, their
-    /// placement under `turn` and moved by `shift` (see
+    /// placement under `turn`, moved by `shift` and `depth_skip` places on (see
     /// [`PlacementData::of`]), keyed for a pass whose flat and turned
     /// records alternate often when `mixed_turns`, and the pipelines they
     /// draw with to `pipelines`. `clip` says how its variant tests its clip:
@@ -3082,7 +3082,7 @@ impl GpuRenderer {
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
-        at: ArenaPlacement,
+        (at, depth_skip): (ArenaPlacement, u32),
         clip: SegmentClip,
         (pipelines, mut depth_keys): (&mut PipelineDemand, Option<&mut PipelineDemand>),
     ) -> u32 {
@@ -3095,7 +3095,7 @@ impl GpuRenderer {
             chunk,
             run,
             window,
-            (at.space.scale, turn, at.shift),
+            (at.space.scale, turn, at.shift, depth_skip),
             &mut |segment| {
                 let key = |depth| {
                     ShapePipelineKey::of_run(

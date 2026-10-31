@@ -25,7 +25,8 @@ pub(crate) struct PlacementData {
     pub(super) color_offset: [f32; 4],
     pub(super) transform: [f32; 4],
     pub(super) translation: [f32; 2],
-    pub(super) transform_reserved: [f32; 2],
+    pub(super) depth_skip: f32,
+    pub(super) depth_reserved: f32,
 }
 
 impl PlacementData {
@@ -52,6 +53,15 @@ impl PlacementData {
     /// moves its device space by whole pixels into the space of a binding
     /// the segment shares with others beside it: zero for every other
     /// segment.
+    // `self` with its records placed `skip` further in the pass's order:
+    // past the records of the stored runs drawn among their arena chunk's.
+    pub(crate) fn with_depth_skip(self, skip: u32) -> Self {
+        Self {
+            depth_skip: skip as f32,
+            ..self
+        }
+    }
+
     pub(crate) fn of(
         placement: &Placement,
         root_scale: f32,
@@ -116,7 +126,8 @@ impl PlacementData {
             color_offset,
             transform,
             translation,
-            transform_reserved: [0.0; 2],
+            depth_skip: 0.0,
+            depth_reserved: 0.0,
         }
     }
 }

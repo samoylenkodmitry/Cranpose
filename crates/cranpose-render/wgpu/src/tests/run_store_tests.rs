@@ -76,7 +76,7 @@ fn arena_draws(runs: &[(RunDraw, crate::render::ShapePipelineKey)]) -> Vec<RunDr
             chunk,
             run,
             0..records,
-            (1.0, SegmentTransform::IDENTITY, [0.0; 2]),
+            (1.0, SegmentTransform::IDENTITY, [0.0; 2], 0),
             &mut |_| *key,
             &mut wanted,
         );
@@ -463,7 +463,7 @@ fn arena_wants(
         chunk,
         run,
         window,
-        (1.0, SegmentTransform::IDENTITY, [0.0; 2]),
+        (1.0, SegmentTransform::IDENTITY, [0.0; 2], 0),
         &mut |segment| arena_key(segment),
         &mut wanted,
     );

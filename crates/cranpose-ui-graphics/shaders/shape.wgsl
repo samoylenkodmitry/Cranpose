@@ -398,7 +398,10 @@ struct Placement {
     // so records of layers turned differently share a draw.
     transform: vec4<f32>,
     translation: vec2<f32>,
-    transform_reserved: vec2<f32>,
+    // The places in the pass's order the records skip: those of the stored
+    // runs drawn among the records of their arena chunk.
+    depth_skip: f32,
+    depth_reserved: f32,
 }
 
 // The placement of the record the vertex stage draws, which
@@ -538,7 +541,8 @@ fn placement_at(index: u32) -> Placement {
         placement_words[first + 7u],
         placement_words[first + 8u],
         tail.xy,
-        tail.zw,
+        tail.z,
+        tail.w,
     );
 }
 
@@ -1063,12 +1067,13 @@ var<private> frag: VertexOutput;
 const DEPTH_STEP: f32 = 1.0 / 1048576.0;
 
 // The depth of the record at `instance`: its place in the pass's draw
-// order, counted from the batch's first record in `uniforms.reserved.x`,
-// nearer for later records and a step nearer than the cleared far plane.
+// order, counted from the batch's first record in `uniforms.reserved.x` and
+// past the places its placement skips, nearer for later records and a step
+// nearer than the cleared far plane. `placement` is the record's.
 // Records past the 2^20 the range holds sit on the near plane: they pass
 // every test, so they paint in order, and never occlude.
 fn record_depth(instance: u32) -> f32 {
-    return max(1.0 - (uniforms.reserved.x + f32(instance) + 1.0) * DEPTH_STEP, 0.0);
+    return max(1.0 - (uniforms.reserved.x + placement.depth_skip + f32(instance) + 1.0) * DEPTH_STEP, 0.0);
 }
 
 // Every record writes its depth, in a pass with a depth buffer or without
@@ -1224,8 +1229,8 @@ fn vs_record_interior(
     if (kind >= RECORD_KIND_ARC || (record.flags & RECORD_STROKED) != 0u || record.brush != 0u) {
         return output;
     }
-    let depth = record_depth(instance);
     placement = record_placement(record);
+    let depth = record_depth(instance);
     let color = paint(record.color);
     if (color.a < 1.0 || depth <= 0.0 || (placement.flags & PLACEMENT_ROUNDING_CUT) != 0u) {
         return output;

@@ -15,9 +15,8 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        ArenaPlacement, DrawSpace, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage,
-        StoreRunBatch, TargetRect, ViewportUniformParams, scissor_rect_for_rect,
-        supported_blend_mode,
+        ArenaPlacement, GpuRenderer, ImageSlot, PassDepth, PassFrame, RunStage, StoreRunBatch,
+        TargetRect, ViewportUniformParams, scissor_rect_for_rect, supported_blend_mode,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances},
     run_store::RunDrawCall,
@@ -1117,7 +1116,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         }
         let uniform_slot = self.chunk_uniform_slot(renderer, binding);
         if self.depth.is_on() {
-            self.depth_seq = self.chunk_base.saturating_add(records);
+            self.depth_seq = self.depth_seq.saturating_add(records);
         }
         self.batches.push(Batch::Arena {
             chunk: open,
@@ -1138,14 +1137,9 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             self.flush(renderer, binding);
             return None;
         };
+        // The held draws, and a draw that follows, take the next record's place.
         self.cut_paint(renderer, binding, open);
-        // The held draws, and a draw that follows, sit where the chunk's next
-        // record will: its later opaque interiors hide them, its earlier ones
-        // do not. Without an open chunk a draw that follows takes the next
-        // place.
-        let base = self
-            .chunk_base
-            .saturating_add(renderer.open_arena_records());
+        let base = self.depth_seq.saturating_add(renderer.open_arena_records());
         let held = self.held.take();
         self.push_held(renderer, binding, held, Some(base));
         self.depth.is_on().then_some(base)
@@ -1161,7 +1155,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         range: std::ops::Range<usize>,
     ) {
         let viewport = ViewportUniformParams {
-            depth_base: self.chunk_base as f32,
+            depth_base: self.depth_seq as f32,
             ..binding.bound
         };
         renderer.mesh_arena_draws(
@@ -1443,14 +1437,13 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
             }
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
-                self.close_chunk(renderer, run.binding);
-                let space = DrawSpace {
-                    viewport: ViewportUniformParams {
-                        depth_base: self.depth_seq as f32,
-                        ..run.viewport
-                    },
-                    scale: run.segment.scale,
-                };
+                // The chunk stays open, its paint so far drawn first; `depth_seq`
+                // moves past the stored run's places, which its later records skip.
+                if let Some(open) = self.chunk {
+                    self.cut_paint(renderer, run.binding, open);
+                }
+                let open = self.chunk.map_or(0, |_| renderer.open_arena_records());
+                let space = run.space().at_place(self.depth_seq.saturating_add(open));
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
@@ -1510,7 +1503,7 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
                         open,
                         draw,
                         from..total,
-                        at,
+                        (at, self.depth_seq - self.chunk_base),
                         segment_clip,
                         (&mut self.pipelines, self.depth_keys.as_mut()),
                     );

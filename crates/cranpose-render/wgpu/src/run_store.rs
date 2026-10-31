@@ -1654,7 +1654,7 @@ impl RunStore {
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
-        (root_scale, turn, shift): (f32, SegmentTransform, [f32; 2]),
+        (root_scale, turn, shift, skip): (f32, SegmentTransform, [f32; 2], u32),
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
         pipelines: &mut crate::shape_pipelines::PipelineDemand,
     ) -> u32 {
@@ -1669,9 +1669,8 @@ impl RunStore {
         let staging = &mut self.arena.staging;
         let tables = run.tables();
         let placement_index = staging.placements.len() as u32;
-        staging
-            .placements
-            .push(PlacementData::of(&run.placement, root_scale, turn, shift));
+        let placement = PlacementData::of(&run.placement, root_scale, turn, shift);
+        staging.placements.push(placement.with_depth_skip(skip));
         if !tables.brushes.is_empty() {
             staging.brush_map.clear();
             staging.brush_map.resize(tables.brushes.len(), u32::MAX);

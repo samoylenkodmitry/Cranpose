@@ -18,7 +18,15 @@ pub(crate) fn interior_run_draws(draws: &[RunDrawCall]) -> SmallVec<[PlannedRunD
     }
     let mut planned: SmallVec<[PlannedRunDraw; 4]> = SmallVec::new();
     let mut stretch: Option<Stretch> = None;
-    for draw in draws.iter().rev() {
+    // A stored run drawn while an arena chunk stays open sits among the
+    // chunk's draws, its records in tables of its own: its draws lay their
+    // interiors with its batch and leave the chunk's stretches whole.
+    let tier = draws.first().map(|draw| draw.key.tier);
+    for draw in draws
+        .iter()
+        .rev()
+        .filter(|draw| Some(draw.key.tier) == tier)
+    {
         let Some(key) = draw.key.interior() else {
             planned.extend(stretch.take().and_then(|open| open.span));
             continue;

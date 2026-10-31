@@ -1,9 +1,9 @@
-// Elevation shadows and composited layers between stacked opaque cards draw
-// where they fall without closing the arena chunk the cards fill, so the
-// cards' opaque interiors still go down in one draw ahead of the paint, and
-// the frame draws the same pixels as without the pre-pass.
+// Elevation shadows, composited layers and stored runs between stacked
+// opaque cards draw where they fall without closing the arena chunk the
+// cards fill, so the cards' opaque interiors still go down in one draw ahead
+// of the paint, and the frame draws the same pixels as without the pre-pass.
 
-use cranpose_ui_graphics::{CompositingStrategy, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, CompositingStrategy, GraphicsLayer, Rect};
 use support::page::*;
 
 use crate::support;
@@ -22,12 +22,17 @@ const PALETTE: [Color; 3] = [
 enum Overlay {
     Shadow,
     Composite,
+    // A drawing of more records than a run joins the arena with: a stored
+    // run, drawn from buffers it keeps between frames.
+    Dots,
+    // A stored run of opaque tiles, which lays interiors of its own.
+    Tiles,
     Nothing,
 }
 
 // Cards stacked like replies in a thread, each inset from the last and
 // raised over it by a shadow, or carrying a badge drawn through a surface
-// of its own and composited, or plain.
+// of its own and composited, or a field of dots or of tiles, or plain.
 #[composable]
 fn StackedCards(overlay: Overlay) {
     FramePage(FRAME, FRAME, Color(0.08, 0.09, 0.15, 1.0), move || {
@@ -37,12 +42,32 @@ fn StackedCards(overlay: Overlay) {
             let card = rect_modifier([inset, inset, side, side]);
             let card = match overlay {
                 Overlay::Shadow => card.shadow(4.0),
-                Overlay::Composite | Overlay::Nothing => card,
+                Overlay::Composite | Overlay::Dots | Overlay::Tiles | Overlay::Nothing => card,
             };
             Box(
                 card.background(PALETTE[level % 3]),
                 BoxSpec::default(),
                 move || {
+                    if matches!(overlay, Overlay::Dots | Overlay::Tiles) {
+                        let side = if overlay == Overlay::Tiles { 33.0 } else { 1.0 };
+                        Box(
+                            Modifier::empty()
+                                .size_points(30.0, 6.0)
+                                .draw_behind(move |scope| {
+                                    for dot in 0..80 {
+                                        let rect = Rect {
+                                            x: (dot % 20) as f32 * 1.5,
+                                            y: (dot / 20) as f32 * 1.5,
+                                            width: side,
+                                            height: side,
+                                        };
+                                        scope.draw_rect_at(rect, Brush::solid(Color::WHITE));
+                                    }
+                                }),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
                     if overlay == Overlay::Composite {
                         Box(
                             Modifier::empty()
@@ -74,13 +99,23 @@ fn BadgedCards() {
 }
 
 #[composable]
+fn DottedCards() {
+    StackedCards(Overlay::Dots);
+}
+
+#[composable]
+fn TiledCards() {
+    StackedCards(Overlay::Tiles);
+}
+
+#[composable]
 fn PlainCards() {
     StackedCards(Overlay::Nothing);
 }
 
-// `page` keeps its cards' interiors in one draw, draws the same pixels
-// without the pre-pass, and draws its overlays.
-fn assert_one_interior_draw(page: fn()) {
+// `page` lays its interiors in `draws` draws, the cards' in one, draws the
+// same pixels without the pre-pass, and draws its overlays.
+fn assert_interior_draws(page: fn(), draws: u32) {
     let Some((with, with_stats)) = support::warm_app_frame(page, FRAME, FRAME) else {
         return;
     };
@@ -96,7 +131,7 @@ fn assert_one_interior_draw(page: fn()) {
         "the cards draw their overlays"
     );
     assert_eq!(
-        with_stats.shape_interior_draws, 1,
+        with_stats.shape_interior_draws, draws,
         "the page and every card lay their interiors down in one draw"
     );
     assert_eq!(
@@ -113,10 +148,25 @@ fn assert_one_interior_draw(page: fn()) {
 
 #[test]
 fn shadows_between_stacked_cards_keep_their_interiors_in_one_draw() {
-    assert_one_interior_draw(ShadowedCards);
+    assert_interior_draws(ShadowedCards, 1);
 }
 
 #[test]
 fn composites_between_stacked_cards_keep_their_interiors_in_one_draw() {
-    assert_one_interior_draw(BadgedCards);
+    assert_interior_draws(BadgedCards, 1);
+}
+
+#[test]
+fn stored_runs_between_stacked_cards_keep_their_interiors_in_one_draw() {
+    assert_interior_draws(DottedCards, 1);
+}
+
+// Each stored run lays its tiles' interiors from its own tables, and the
+// cards' interiors around them stay one draw.
+#[test]
+fn stored_runs_with_interiors_of_their_own_draw_the_same_pixels() {
+    assert_interior_draws(
+        TiledCards,
+        1 + u32::try_from(LEVELS).expect("a dozen levels"),
+    );
 }
