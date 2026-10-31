@@ -1,7 +1,23 @@
+#![allow(
+    clippy::print_stderr,
+    reason = "the test support prints what a test measured"
+)]
+
+#[path = "../src/record_columns.rs"]
+#[allow(dead_code, reason = "this binary reads a part of the module")]
+mod record_columns;
+#[path = "../src/test_support.rs"]
+#[allow(dead_code, reason = "this binary reads a part of the module")]
+mod shared_test_support;
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "this binary reads a part of the module"
+)]
+mod support;
+
 use cranpose_render_wgpu::{pipelines_created, pipelines_created_off_frame};
 use cranpose_ui_graphics::shader_warm_ups_after;
-
-use crate::support;
 
 /// A renderer builds no pipeline on the creating thread, and its compiler
 /// builds exactly the warm-ups requested so far, each once, the instant

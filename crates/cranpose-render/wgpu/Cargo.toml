@@ -165,6 +165,12 @@ cranpose-foundation = { workspace = true }
 name = "integration"
 path = "tests/integration.rs"
 
+# Its own process: a renderer builds the warm-ups every earlier test of its
+# process requested, so the pipeline count it checks would vary.
+[[test]]
+name = "renderer_startup"
+path = "tests/renderer_startup.rs"
+
 # Its own process: an installed font joins every renderer in the process.
 [[test]]
 name = "installed_fonts"
