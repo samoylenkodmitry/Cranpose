@@ -183,8 +183,10 @@ fn node_admits_corners(
             let Some(translation) = direct_translation(child.transform_to_parent) else {
                 return child_stays_clear(child, offset, corners);
             };
-            if child_needs_surface(child) {
-                return child_stays_clear(child, offset, corners);
+            // A child whose bounds stay clear holds content that stays clear.
+            let clear = child_stays_clear(child, offset, corners);
+            if clear || child_needs_surface(child) {
+                return clear;
             }
             let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
             layer_admits_corners(child, child_offset, inherited_clip, corners)
@@ -241,6 +243,10 @@ fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCo
 }
 
 fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    // A child whose bounds stay clear holds content that stays clear.
+    if child_stays_clear(child, offset, corners) {
+        return true;
+    }
     let plain = child.visual_clip_rect().is_none()
         && rounded_clip_for_layer(child).is_none()
         && child.graphics_layer.shadow_elevation <= 0.0
@@ -251,7 +257,7 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
             Point::new(offset.x + translation.x, offset.y + translation.y),
             corners,
         ),
-        _ => child_stays_clear(child, offset, corners),
+        _ => false,
     }
 }
 
