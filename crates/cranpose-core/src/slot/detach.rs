@@ -299,8 +299,9 @@ pub(crate) fn dispose_detached_node_now(
     if let Some(parent_id) = parent_id {
         return remove_child_and_cleanup_now(applier, parent_id, node_id);
     }
+    // A node without a parent left it in the child sync that removed it,
+    // which told it so.
     if let Ok(node) = applier.get_mut(node_id) {
-        node.on_removed_from_parent();
         node.unmount();
     }
     match applier.remove(node_id) {

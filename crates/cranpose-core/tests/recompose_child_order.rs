@@ -189,3 +189,35 @@ fn content_that_appears_in_an_empty_scope_takes_its_place() {
         .expect("the content leaves");
     assert_eq!(child_labels(&mut composition, parent), ["before", "after"]);
 }
+
+#[cranpose_macros::composable]
+fn Holder(show: MutableState<bool>, parent_id: Rc<Cell<Option<NodeId>>>) {
+    let parent = with_current_composer(|composer| composer.emit_node(OrderedParent::default));
+    parent_id.set(Some(parent));
+    push_parent(parent);
+    Child("kept");
+    if show.get() {
+        Child("removed");
+    }
+    pop_parent();
+}
+
+#[test]
+fn a_child_that_its_parent_removes_leaves_the_parent_once() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let show = MutableState::with_runtime(true, composition.runtime_handle());
+    let parent_id = Rc::new(Cell::new(None));
+    let root_key = cranpose_core::location_key(file!(), line!(), column!());
+    composition
+        .render(root_key, || Holder(show, Rc::clone(&parent_id)))
+        .expect("initial composition succeeds");
+    let parent = parent_id.get().expect("composition emitted its parent");
+    assert_eq!(child_labels(&mut composition, parent), ["kept", "removed"]);
+
+    // `ParentTracked` asserts that a node it detaches was attached.
+    show.set(false);
+    composition
+        .process_invalid_scopes()
+        .expect("the parent recomposes without its second child");
+    assert_eq!(child_labels(&mut composition, parent), ["kept"]);
+}

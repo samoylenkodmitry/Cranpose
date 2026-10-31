@@ -8,15 +8,14 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 use crate::{
     RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId, StateId,
-    collections::map::{HashMap, HashSet},
+    collections::map::HashMap,
     debug_trace::debug_record_scope_invalidation,
     runtime,
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
-    snapshot_pinning::lowest_pinned_snapshot,
     snapshot_v2::{
         AnySnapshot, GlobalSnapshot, advance_global_snapshot, allocate_record_id, current_snapshot,
     },
@@ -24,9 +23,11 @@ use crate::{
 };
 
 mod derived_state;
+mod record_chain;
 mod snapshot_state_list;
 
 pub(crate) use derived_state::DerivedState;
+pub(crate) use record_chain::RecordChain;
 pub use snapshot_state_list::SnapshotStateList;
 
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = SnapshotId(1);
@@ -48,7 +49,6 @@ impl ObjectId {
 pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
-    next: Cell<Option<Rc<Self>>>,
     value: RefCell<Option<Box<dyn RecordValue>>>,
 }
 
@@ -110,23 +110,14 @@ pub(crate) enum StateRecordValueError {
 }
 
 impl StateRecord {
-    pub(crate) fn new<T: Any + Clone>(
-        snapshot_id: SnapshotId,
-        value: T,
-        next: Option<Rc<Self>>,
-    ) -> Rc<Self> {
-        Self::with_boxed(snapshot_id, Box::new(value), next)
+    pub(crate) fn new<T: Any + Clone>(snapshot_id: SnapshotId, value: T) -> Rc<Self> {
+        Self::with_boxed(snapshot_id, Box::new(value))
     }
 
-    fn with_boxed(
-        snapshot_id: SnapshotId,
-        value: Box<dyn RecordValue>,
-        next: Option<Rc<Self>>,
-    ) -> Rc<Self> {
+    fn with_boxed(snapshot_id: SnapshotId, value: Box<dyn RecordValue>) -> Rc<Self> {
         Rc::new(Self {
             snapshot_id: Cell::new(snapshot_id),
             tombstone: Cell::new(false),
-            next: Cell::new(next),
             value: RefCell::new(Some(value)),
         })
     }
@@ -139,18 +130,6 @@ impl StateRecord {
     #[inline]
     pub(crate) fn set_snapshot_id(&self, id: SnapshotId) {
         self.snapshot_id.set(id);
-    }
-
-    #[inline]
-    pub(crate) fn next(&self) -> Option<Rc<Self>> {
-        self.next.take().inspect(|record| {
-            self.next.set(Some(Rc::clone(record)));
-        })
-    }
-
-    #[inline]
-    pub(crate) fn set_next(&self, next: Option<Rc<Self>>) {
-        self.next.set(next);
     }
 
     #[inline]
@@ -264,193 +243,6 @@ impl StateRecord {
     }
 }
 
-impl Drop for StateRecord {
-    fn drop(&mut self) {
-        let mut next = self.next.take();
-        while let Some(node) = next {
-            match Rc::try_unwrap(node) {
-                Ok(record) => {
-                    next = record.next.take();
-                }
-                Err(_) => {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-struct CurrentRecord {
-    head: RefCell<Rc<StateRecord>>,
-}
-
-impl CurrentRecord {
-    fn new(head: Rc<StateRecord>) -> Self {
-        Self {
-            head: RefCell::new(head),
-        }
-    }
-
-    fn clone_head(&self) -> Rc<StateRecord> {
-        self.head.borrow().clone()
-    }
-
-    fn replace(&self, new_head: Rc<StateRecord>) {
-        *self.head.borrow_mut() = new_head;
-    }
-
-    fn prepend(&self, record: Rc<StateRecord>) {
-        let current_head = self.clone_head();
-        record.set_next(Some(current_head));
-        self.replace(record);
-    }
-}
-
-#[inline]
-fn record_is_valid_for(
-    record: &Rc<StateRecord>,
-    snapshot_id: SnapshotId,
-    invalid: &SnapshotIdSet,
-) -> bool {
-    if record.is_tombstone() {
-        return false;
-    }
-
-    let candidate = record.snapshot_id();
-    if candidate == INVALID_SNAPSHOT_ID || candidate > snapshot_id {
-        return false;
-    }
-
-    candidate == snapshot_id || !invalid.get(candidate)
-}
-
-pub(crate) fn readable_record_for(
-    head: &Rc<StateRecord>,
-    snapshot_id: SnapshotId,
-    invalid: &SnapshotIdSet,
-) -> Option<Rc<StateRecord>> {
-    let mut best: Option<Rc<StateRecord>> = None;
-    let mut cursor = Some(Rc::clone(head));
-
-    while let Some(record) = cursor {
-        cursor = record.next();
-        if record_is_valid_for(&record, snapshot_id, invalid)
-            && best
-                .as_ref()
-                .is_none_or(|current| current.snapshot_id() < record.snapshot_id())
-        {
-            best = Some(record);
-        }
-    }
-
-    best
-}
-
-pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
-    let mut current = Some(Rc::clone(head));
-    let mut valid_record: Option<Rc<StateRecord>> = None;
-
-    let reuse_limit = lowest_pinned_snapshot().map_or_else(
-        || crate::snapshot_v2::peek_next_snapshot_id().previous(),
-        SnapshotId::previous,
-    );
-
-    let invalid = SnapshotIdSet::EMPTY;
-
-    while let Some(record) = current {
-        let current_id = record.snapshot_id();
-
-        if current_id == PREEXISTING_SNAPSHOT_ID {
-            current = record.next();
-            continue;
-        }
-
-        if current_id == INVALID_SNAPSHOT_ID {
-            return Some(record);
-        }
-
-        if record.is_tombstone() && current_id < reuse_limit {
-            return Some(record);
-        }
-
-        if record_is_valid_for(&record, reuse_limit, &invalid) {
-            if let Some(ref existing) = valid_record {
-                return Some(if current_id < existing.snapshot_id() {
-                    record
-                } else {
-                    Rc::clone(existing)
-                });
-            } else {
-                valid_record = Some(Rc::clone(&record));
-            }
-        }
-
-        current = record.next();
-    }
-
-    None
-}
-
-pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Rc<StateRecord> {
-    let state_head = state.first_record();
-
-    if let Some(reusable) = used_locked(&state_head) {
-        reusable.set_snapshot_id(SNAPSHOT_ID_MAX);
-        return reusable;
-    }
-
-    let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
-
-    state.prepend_state_record(Rc::clone(&new_record));
-
-    new_record
-}
-
-pub(crate) fn new_overwritable_record_as_head_locked(state: &dyn StateObject) -> Rc<StateRecord> {
-    let head = state.first_record();
-
-    if let Some(reusable) = used_locked(&head) {
-        reusable.set_snapshot_id(SNAPSHOT_ID_MAX);
-
-        if !Rc::ptr_eq(&head, &reusable) {
-            let mut cursor = Some(Rc::clone(&head));
-            let mut unlinked = false;
-
-            while let Some(node) = cursor {
-                let next = node.next();
-                if let Some(next_record) = next {
-                    if Rc::ptr_eq(&next_record, &reusable) {
-                        node.set_next(reusable.next());
-                        unlinked = true;
-                        break;
-                    }
-                    cursor = Some(next_record);
-                } else {
-                    break;
-                }
-            }
-
-            if !unlinked {
-                debug_assert!(
-                    false,
-                    "new_overwritable_record_as_head_locked: reusable record not found in chain"
-                );
-                let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
-                state.prepend_state_record(Rc::clone(&new_record));
-                return new_record;
-            }
-
-            state.prepend_state_record(Rc::clone(&reusable));
-        }
-
-        return reusable;
-    }
-
-    let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
-    state.prepend_state_record(Rc::clone(&new_record));
-    new_record
-}
-
 #[cold]
 fn log_merge_value_missing(which: &str, state: ObjectId, record: &StateRecord) {
     log::error!(
@@ -466,7 +258,7 @@ fn install_copy_as_head(
 ) -> Option<SnapshotId> {
     let value = source.cloned_value_of(expected)?;
     let new_id = allocate_record_id();
-    let record = new_overwritable_record_as_head_locked(state);
+    let record = state.records().overwritable_head();
     record.set_boxed_value(value);
     record.set_tombstone(false);
     record.set_snapshot_id(new_id);
@@ -479,27 +271,23 @@ fn promote_record_locked(
     child_id: SnapshotId,
     expected: TypeId,
 ) -> Result<(), &'static str> {
-    let mut cursor = Some(state.first_record());
-    while let Some(record) = cursor {
-        if record.snapshot_id() == child_id {
-            if install_copy_as_head(state, &record, expected).is_none() {
-                log::error!(
-                    "SnapshotMutableState::promote_record child record value missing or wrong type (state {:?}, child_id={})",
-                    state.object_id(),
-                    child_id
-                );
-                return Err("child record value missing or wrong type");
-            }
-            return Ok(());
-        }
-        cursor = record.next();
+    let Some(record) = state.records().at(child_id) else {
+        log::error!(
+            "SnapshotMutableState::promote_record missing child record (state {:?}, child_id={})",
+            state.object_id(),
+            child_id
+        );
+        return Err("missing child record");
+    };
+    if install_copy_as_head(state, &record, expected).is_none() {
+        log::error!(
+            "SnapshotMutableState::promote_record child record value missing or wrong type (state {:?}, child_id={})",
+            state.object_id(),
+            child_id
+        );
+        return Err("child record value missing or wrong type");
     }
-    log::error!(
-        "SnapshotMutableState::promote_record missing child record (state {:?}, child_id={})",
-        state.object_id(),
-        child_id
-    );
-    Err("missing child record")
+    Ok(())
 }
 
 fn commit_merged_record_locked(
@@ -555,52 +343,6 @@ impl Drop for RetiredValuesScope {
     }
 }
 
-/// Marks the records of `state` that no open snapshot can read as free for
-/// reuse, retiring their values, and reports whether the state still keeps
-/// more than one record.
-pub(crate) fn overwrite_unused_records_locked(state: &dyn StateObject) -> bool {
-    let mut current = Some(state.first_record());
-    let mut valid_record: Option<Rc<StateRecord>> = None;
-
-    let reuse_limit =
-        lowest_pinned_snapshot().unwrap_or_else(crate::snapshot_v2::peek_next_snapshot_id);
-
-    let mut retained_records = 0;
-
-    while let Some(record) = current {
-        let current_id = record.snapshot_id();
-
-        if current_id == INVALID_SNAPSHOT_ID {
-        } else if current_id < reuse_limit {
-            match valid_record.as_ref() {
-                None => {
-                    valid_record = Some(Rc::clone(&record));
-                    retained_records += 1;
-                }
-                Some(valid) => {
-                    let record_to_overwrite = if current_id < valid.snapshot_id() {
-                        Rc::clone(&record)
-                    } else {
-                        let to_overwrite = Rc::clone(valid);
-                        valid_record = Some(Rc::clone(&record));
-                        to_overwrite
-                    };
-                    record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
-                    if let Some(value) = record_to_overwrite.clear_value() {
-                        retire_record_value(value);
-                    }
-                }
-            }
-        } else {
-            retained_records += 1;
-        }
-
-        current = record.next();
-    }
-
-    retained_records > 1
-}
-
 fn active_snapshot() -> AnySnapshot {
     current_snapshot().unwrap_or_else(|| AnySnapshot::Global(GlobalSnapshot::get_or_create()))
 }
@@ -630,15 +372,13 @@ impl<T: PartialEq> MutationPolicy<T> for StructuralEqual {
 
 pub trait StateObject: Any {
     fn object_id(&self) -> ObjectId;
-    fn first_record(&self) -> Rc<StateRecord>;
+    fn records(&self) -> &RecordChain;
     fn try_readable_record(
         &self,
         snapshot_id: SnapshotId,
         invalid: &SnapshotIdSet,
     ) -> Option<Rc<StateRecord>>;
     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord>;
-
-    fn prepend_state_record(&self, record: Rc<StateRecord>);
 
     fn merge_records(
         &self,
@@ -666,7 +406,7 @@ pub trait StateObject: Any {
 }
 
 pub(crate) struct SnapshotMutableState<T> {
-    head: CurrentRecord,
+    records: RecordChain,
     policy: Rc<dyn MutationPolicy<T>>,
     id: ObjectId,
     weak_self: Weak<Self>,
@@ -736,13 +476,13 @@ impl Subscribers {
 
 #[inline(always)]
 fn assert_record_chain(
-    head: &CurrentRecord,
+    records: &RecordChain,
     id: ObjectId,
     caller: &str,
     snapshot_context: Option<SnapshotId>,
 ) {
     if should_check_chain_integrity() {
-        check_chain_integrity(&head.clone_head(), id, caller, snapshot_context);
+        records.check_integrity(id, caller, snapshot_context);
     }
 }
 
@@ -762,68 +502,25 @@ fn notify_applied(observer: &ApplyObserver) {
 
 fn finish_apply(
     observer: &ApplyObserver,
-    head: &CurrentRecord,
+    records: &RecordChain,
     id: ObjectId,
     caller: &str,
     snapshot_id: SnapshotId,
 ) {
     notify_applied(observer);
-    assert_record_chain(head, id, caller, Some(snapshot_id));
+    assert_record_chain(records, id, caller, Some(snapshot_id));
 }
 
 // What a write does that does not depend on the state's value type, so it
 // is compiled once instead of once per state type.
 struct WriteTarget<'a> {
-    head: &'a CurrentRecord,
+    records: &'a RecordChain,
     id: ObjectId,
-    state: &'a dyn StateObject,
-}
-
-/// Clears the values of the records that `record`, the global snapshot's
-/// record at its current id, hides from every open snapshot, and marks them
-/// unused; their values go to `cleared`, for the caller to drop once the
-/// write is published. A snapshot pinned at an id reads the newest record
-/// below that id, so the newest record below the lowest pin stays.
-fn clear_hidden_records(record: &StateRecord, cleared: &mut SmallVec<[Box<dyn RecordValue>; 2]>) {
-    let reuse_limit = lowest_pinned_snapshot();
-    let record_hides_all = reuse_limit.is_none_or(|limit| record.snapshot_id() < limit);
-    let mut kept: Option<Rc<StateRecord>> = None;
-    let mut cursor = record.next();
-    while let Some(node) = cursor {
-        cursor = node.next();
-        let id = node.snapshot_id();
-        if node.is_tombstone()
-            || id == PREEXISTING_SNAPSHOT_ID
-            || reuse_limit.is_some_and(|limit| id >= limit)
-        {
-            continue;
-        }
-        let hidden = if record_hides_all {
-            node
-        } else {
-            match kept.take() {
-                None => {
-                    kept = Some(node);
-                    continue;
-                }
-                Some(newest) if newest.snapshot_id() < id => {
-                    kept = Some(node);
-                    newest
-                }
-                newest => {
-                    kept = newest;
-                    node
-                }
-            }
-        };
-        cleared.extend(hidden.clear_value());
-        hidden.set_tombstone(true);
-    }
 }
 
 impl WriteTarget<'_> {
     fn assert_chain_integrity(&self, caller: &str, snapshot_context: Option<SnapshotId>) {
-        assert_record_chain(self.head, self.id, caller, snapshot_context);
+        assert_record_chain(self.records, self.id, caller, snapshot_context);
     }
 
     fn begin_global_write(&self, global: &GlobalSnapshot, snapshot_id: SnapshotId) {
@@ -841,7 +538,7 @@ impl WriteTarget<'_> {
     /// [`Self::publish_global_record`] publishes it.
     fn push_global_record(&self) -> (Rc<StateRecord>, SnapshotId) {
         let new_id = allocate_record_id();
-        (new_overwritable_record_as_head_locked(self.state), new_id)
+        (self.records.overwritable_head(), new_id)
     }
 
     /// Publishes a pushed record once its value is stored: nothing may read
@@ -867,7 +564,7 @@ impl WriteTarget<'_> {
         snapshot_id: SnapshotId,
     ) {
         let mut cleared: SmallVec<[Box<dyn RecordValue>; 2]> = SmallVec::new();
-        clear_hidden_records(record, &mut cleared);
+        self.records.clear_hidden_after(record, &mut cleared);
         self.assert_chain_integrity("set(global-tombstone)", Some(snapshot_id));
         if let Some(modified) = written.as_ref() {
             crate::snapshot_v2::notify_apply_observers(
@@ -893,17 +590,14 @@ impl WriteTarget<'_> {
     }
 
     fn writable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
-        let Some(readable) = readable_record_for(&self.head.clone_head(), snapshot_id, invalid)
-        else {
-            let current_head = self.head.clone_head();
-            let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
-            let source = refreshed.unwrap_or_else(|| Rc::clone(&current_head));
-
-            let cloned_value = source
+        let Some(readable) = self.records.readable(snapshot_id, invalid) else {
+            let cloned_value = self
+                .records
+                .head()
                 .cloned_value()
                 .unwrap_or_else(|| panic!("StateRecord value missing or wrong type"));
-            let new_head = StateRecord::with_boxed(snapshot_id, cloned_value, Some(current_head));
-            self.head.replace(Rc::clone(&new_head));
+            let new_head = StateRecord::with_boxed(snapshot_id, cloned_value);
+            self.records.prepend(Rc::clone(&new_head));
             self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
             return new_head;
         };
@@ -912,28 +606,10 @@ impl WriteTarget<'_> {
             return readable;
         }
 
-        let refreshed = {
-            let current_head = self.head.clone_head();
-            let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
-                || {
-                    panic!(
-                        "SnapshotMutableState::writable_record failed to locate refreshed readable record (state {:?}, snapshot_id={}, invalid={:?})",
-                        self.id, snapshot_id, invalid
-                    )
-                },
-            );
-
-            if refreshed.snapshot_id() == snapshot_id {
-                return refreshed;
-            }
-
-            Rc::clone(&refreshed)
-        };
-
-        let overwritable = new_overwritable_record_locked(self.state);
-        if let Err(error) = overwritable.assign_value(&refreshed) {
+        let overwritable = self.records.overwritable();
+        if let Err(error) = overwritable.assign_value(&readable) {
             log::error!(
-                "snapshot writable record could not copy refreshed value for state {:?}: {:?}",
+                "snapshot writable record could not copy the readable value for state {:?}: {:?}",
                 self.id,
                 error
             );
@@ -1005,9 +681,8 @@ fn write_value(target: &WriteTarget<'_>, write: &mut dyn PendingWrite) -> bool {
 
     let snapshot = active_snapshot();
     let snapshot_id = snapshot.snapshot_id();
-    let readable_for = |snapshot_id, invalid: &SnapshotIdSet| {
-        readable_record_for(&target.head.clone_head(), snapshot_id, invalid)
-    };
+    let readable_for =
+        |snapshot_id, invalid: &SnapshotIdSet| target.records.readable(snapshot_id, invalid);
 
     match &snapshot {
         AnySnapshot::Global(global) => {
@@ -1058,35 +733,6 @@ fn write_value(target: &WriteTarget<'_>, write: &mut dyn PendingWrite) -> bool {
     true
 }
 
-#[cold]
-#[inline(never)]
-fn check_chain_integrity(
-    head: &Rc<StateRecord>,
-    id: ObjectId,
-    caller: &str,
-    snapshot_context: Option<SnapshotId>,
-) {
-    let mut cursor = Some(Rc::clone(head));
-    let mut seen: HashSet<usize> = HashSet::default();
-    let mut ids = Vec::new();
-
-    while let Some(record) = cursor {
-        let addr = Rc::as_ptr(&record) as usize;
-        assert!(
-            seen.insert(addr),
-            "SnapshotMutableState::{caller} detected duplicate/cycle at record {:p} for state {id:?} (snapshot_context={snapshot_context:?}, chain_ids={ids:?})",
-            Rc::as_ptr(&record),
-        );
-        ids.push(record.snapshot_id());
-        cursor = record.next();
-    }
-
-    assert!(
-        !ids.is_empty(),
-        "SnapshotMutableState::{caller} finished integrity scan with empty id list for state {id:?} (snapshot_context={snapshot_context:?})"
-    );
-}
-
 fn should_check_chain_integrity() -> bool {
     #[cfg(debug_assertions)]
     {
@@ -1099,19 +745,17 @@ fn should_check_chain_integrity() -> bool {
     }
 }
 
-// The record of the state `state`, whose records start at `head`, that the
+// The record of the state `state`, whose records are `records`, that the
 // active snapshot reads, after a fresh snapshot's and the global one's when
 // that snapshot's own misses. Out of line, one function for every state
 // type.
 #[inline(never)]
 fn readable_record_for_active_snapshot(
     state: &dyn StateObject,
-    head: &CurrentRecord,
+    records: &RecordChain,
     id: ObjectId,
 ) -> Result<Rc<StateRecord>, StateReadFailure> {
-    let readable = |snapshot_id, invalid: &SnapshotIdSet| {
-        readable_record_for(&head.clone_head(), snapshot_id, invalid)
-    };
+    let readable = |snapshot_id, invalid: &SnapshotIdSet| records.readable(snapshot_id, invalid);
     let snapshot = active_snapshot();
     snapshot.record_read(state);
 
@@ -1141,25 +785,13 @@ fn readable_record_for_active_snapshot(
         snapshot_id,
         fresh_snapshot_id: fresh_id,
         fresh_invalid,
-        record_chain: record_chain(head),
+        record_chain: records.ids(),
     })
-}
-
-// The snapshot id of each record from `head` on, and whether it is a
-// tombstone.
-fn record_chain(head: &CurrentRecord) -> Vec<(SnapshotId, bool)> {
-    let mut chain = Vec::new();
-    let mut cursor = Some(head.clone_head());
-    while let Some(record) = cursor {
-        chain.push((record.snapshot_id(), record.is_tombstone()));
-        cursor = record.next();
-    }
-    chain
 }
 
 impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn readable_record_for_active_snapshot(&self) -> Result<Rc<StateRecord>, StateReadFailure> {
-        readable_record_for_active_snapshot(self, &self.head, self.id)
+        readable_record_for_active_snapshot(self, &self.records, self.id)
     }
 
     fn readable_for(
@@ -1167,19 +799,18 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         snapshot_id: SnapshotId,
         invalid: &SnapshotIdSet,
     ) -> Option<Rc<StateRecord>> {
-        let head = self.first_record();
-        readable_record_for(&head, snapshot_id, invalid)
+        self.records.readable(snapshot_id, invalid)
     }
 
     pub(crate) fn new_in_rc(initial: T, policy: Rc<dyn MutationPolicy<T>>) -> Rc<Self> {
         let snapshot = active_snapshot();
         let snapshot_id = snapshot.snapshot_id();
 
-        let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, initial.clone(), None);
-        let head = StateRecord::new(snapshot_id, initial, Some(tail));
+        let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, initial.clone());
+        let head = StateRecord::new(snapshot_id, initial);
 
         Rc::new_cyclic(|weak_self| Self {
-            head: CurrentRecord::new(head),
+            records: RecordChain::new(smallvec![head, tail]),
             policy,
             id: ObjectId(weak_self.as_ptr() as usize),
             weak_self: Weak::clone(weak_self),
@@ -1198,7 +829,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn finish_apply(&self, caller: &str, snapshot_id: SnapshotId) {
         finish_apply(
             &self.apply_observer,
-            &self.head,
+            &self.records,
             self.id,
             caller,
             snapshot_id,
@@ -1241,9 +872,8 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
     pub(crate) fn set(&self, new_value: T) -> bool {
         let target = WriteTarget {
-            head: &self.head,
+            records: &self.records,
             id: self.id,
-            state: self,
         };
         let mut write = TypedWrite {
             state: self,
@@ -1315,8 +945,8 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         self.id
     }
 
-    fn first_record(&self) -> Rc<StateRecord> {
-        self.head.clone_head()
+    fn records(&self) -> &RecordChain {
+        &self.records
     }
 
     fn try_readable_record(
@@ -1335,10 +965,6 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
                     self.id, snapshot_id
                 )
             })
-    }
-
-    fn prepend_state_record(&self, record: Rc<StateRecord>) {
-        self.head.prepend(record);
     }
 
     fn observation_lease(&self) -> Option<Rc<dyn Any>> {
@@ -1374,7 +1000,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         match outcome {
             Merge::KeepCurrent => Some(current),
             Merge::Value(merged) => {
-                merged.map(|value| StateRecord::new(applied.snapshot_id(), value, None))
+                merged.map(|value| StateRecord::new(applied.snapshot_id(), value))
             }
             Merge::Missing(which, record) => {
                 log_merge_value_missing(which, self.id, record);
@@ -1396,7 +1022,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn overwrite_unused_records(&self) -> bool {
-        overwrite_unused_records_locked(self)
+        self.records.overwrite_unused()
     }
 
     fn as_any(&self) -> &dyn Any {

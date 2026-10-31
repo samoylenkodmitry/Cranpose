@@ -1499,7 +1499,7 @@ pub(crate) fn AsyncRuntimeEngine(
     });
 
     if running {
-        let previous = last_progress.get();
+        let previous = last_progress.get_non_reactive();
         let delta = progress_value - previous;
         let direction = if delta >= 0.0 { 1.0 } else { -1.0 };
         let dt_ms = (delta.abs() * duration_ms).max(0.0);

@@ -5,7 +5,7 @@ use cranpose_ui::*;
 
 #[composable]
 fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
-    render_count.set(render_count.get() + 1);
+    render_count.set(render_count.get_non_reactive() + 1);
 
     Column(
         Modifier::empty().padding(20.0),
@@ -39,7 +39,7 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
 
 #[composable]
 fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
-    render_count.set(render_count.get() + 1);
+    render_count.set(render_count.get_non_reactive() + 1);
 
     Column(
         Modifier::empty().padding(20.0),

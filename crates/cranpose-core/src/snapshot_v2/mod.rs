@@ -754,16 +754,13 @@ pub(crate) fn optimistic_merges(
     let mut result: Option<HashMap<usize, Rc<StateRecord>>> = None;
 
     for (_, state, writer_id) in modified_objects {
-        let head = state.first_record();
+        let records = state.records();
 
-        let Some(current) =
-            crate::state::readable_record_for(&head, current_snapshot_id, invalid_snapshots)
-        else {
+        let Some(current) = records.readable(current_snapshot_id, invalid_snapshots) else {
             continue;
         };
 
-        let (previous_opt, found_base) =
-            mutable::find_previous_record(&head, base_parent_id, applying_invalid);
+        let (previous_opt, found_base) = records.previous(base_parent_id, applying_invalid);
         let previous = previous_opt?;
 
         if !found_base || previous.snapshot_id() == crate::state::PREEXISTING_SNAPSHOT_ID {
@@ -774,7 +771,7 @@ pub(crate) fn optimistic_merges(
             continue;
         }
 
-        let applied = mutable::find_record_by_id(&head, *writer_id)?;
+        let applied = records.live_at(*writer_id)?;
 
         let merged = state.merge_records(
             Rc::clone(&previous),
