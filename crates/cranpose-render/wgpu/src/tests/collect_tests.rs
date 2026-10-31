@@ -436,7 +436,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         settings: &walk_settings(),
     };
     assert!(matches!(
-        placement_in(&bar, &panel),
+        child_placement(&bar, panel.settings.raster_scale),
         Placement::DirectRounded(..)
     ));
     let rounding = Some(ClipRounding {

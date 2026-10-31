@@ -201,6 +201,11 @@ fn a_bar_over_a_rounded_track_differs_from_its_surface_only_where_their_edges_me
 /// rounded frame. Its texels differ on every row and column, so a shifted
 /// or resampled edge shows.
 fn photo(sampling: ImageSampling) -> RenderNode {
+    photo_over(CLIP, sampling)
+}
+
+// The photo of `photo` drawn over `rect`.
+fn photo_over(rect: Rect, sampling: ImageSampling) -> RenderNode {
     let (width, height) = (24u32, 8u32);
     let pixels = (0..width * height)
         .flat_map(|index| {
@@ -216,7 +221,7 @@ fn photo(sampling: ImageSampling) -> RenderNode {
     let image = ImageBitmap::from_rgba8(width, height, pixels).expect("a photo");
     draw_node(
         DrawPrimitive::Image {
-            rect: CLIP,
+            rect,
             image,
             alpha: 1.0,
             color_filter: None,
@@ -225,6 +230,74 @@ fn photo(sampling: ImageSampling) -> RenderNode {
         },
         None,
     )
+}
+
+// A card: the rounded clip over a fill that reaches its corners, holding an
+// avatar at `at` under a rounded clip of its own, drawn in place or
+// through a surface when `offscreen`.
+fn card_with_avatar(at: Point, offscreen: bool) -> RenderGraph {
+    let avatar = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 24.0,
+        height: 24.0,
+    };
+    on_page(
+        CLIP,
+        AT,
+        rounded(RADIUS, false),
+        vec![
+            solid_rect(CLIP, Color::WHITE),
+            RenderNode::Layer(Box::new(shared_test_support::layer_node(
+                avatar,
+                ProjectiveTransform::translation(at.x, at.y),
+                rounded(12.0, offscreen),
+                vec![photo_over(avatar, ImageSampling::Linear)],
+            ))),
+        ],
+    )
+}
+
+#[test]
+fn a_rounded_avatar_clear_of_its_cards_corners_draws_in_place_as_its_surface_would() {
+    let Some((frames, isolated)) =
+        both_graphs(|offscreen| card_with_avatar(Point::new(8.0, 8.0), offscreen))
+    else {
+        return;
+    };
+    assert_eq!(
+        isolated,
+        [0, 1],
+        "the card and its avatar in place, then the avatar through a surface"
+    );
+    let differing =
+        support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
+    assert!(
+        differing.is_empty(),
+        "the avatar takes its own clip's coverage as its surface's mask does: {}",
+        support::describe_differing(&differing)
+    );
+}
+
+#[test]
+fn a_rounded_avatar_in_its_cards_corner_keeps_the_card_on_a_surface() {
+    let Some((frames, isolated)) =
+        both_graphs(|offscreen| card_with_avatar(Point::default(), offscreen))
+    else {
+        return;
+    };
+    assert_eq!(
+        isolated,
+        [1, 2],
+        "the card, whose corner the avatar reaches, then the avatar too"
+    );
+    let differing =
+        support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
+    assert!(
+        differing.is_empty(),
+        "the card's corner cuts the avatar either way: {}",
+        support::describe_differing(&differing)
+    );
 }
 
 /// A coverage mask covering the clip whole, its alpha ramping across it: a

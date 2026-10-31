@@ -542,16 +542,6 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
     context.rounding.filter(|_| keeps)
 }
 
-/// How `child` places under `context`: a rounded clip draws in place,
-/// whatever rect clips above cut from it, but never inside another rounded
-/// clip, whose radius a placement could not carry beside its own.
-fn placement_in(child: &LayerNode, context: &WalkContext<'_>) -> Placement {
-    match child_placement(child, context.settings.raster_scale) {
-        Placement::DirectRounded(..) if context.rounding.is_some() => Placement::Isolated,
-        placement => placement,
-    }
-}
-
 pub(crate) fn collect_root(
     root: &LayerNode,
     update: u64,
@@ -1055,7 +1045,10 @@ fn collect_child(
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         return context.settings.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
-    let (translation, radius) = match placement_in(child, &context) {
+    // A rounded clip draws in place inside another one too: the outer one
+    // drew in place only with every rounded layer under it clear of its
+    // corners, where it cuts as its rect does, so the inner radius replaces it.
+    let (translation, radius) = match child_placement(child, context.settings.raster_scale) {
         Placement::Direct(translation) => (translation, None),
         Placement::DirectRounded(translation, radius) => (translation, Some(radius)),
         Placement::Isolated => {
