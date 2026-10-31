@@ -75,10 +75,18 @@ demo frame 0.07 ms and its drawn line 0.19 ms slower, and its composed line
 the busier screen ran no faster there (12.31 ms a frame against 12.23) and
 the demo frame 0.23 ms slower.
 
-The dashboard of the benchmarks (`--features dashboard`) stays out of the
-lists. Its frame runs far more code than 125 KB holds: with its profile as
-a fifth, the ES3C35P ran it 0.5 ms faster (46.8 against 47.3 ms) and the
-drawn line 0.27 ms slower (2.58 against 2.31 ms).
+The ES3C35P's list also takes the dashboard of the benchmarks
+(`--features dashboard`) as a fifth profile. Against the list of the other
+four, made from the same builds on 2026-10-31, it ran the dashboard 25.39
+against 25.61 ms a frame, the demo 0.41 against 0.45, the composed line
+4.04 against 4.11 and the busier screen 7.94 against 8.02, and the drawn
+line 1.65 against 1.58 ms.
+
+A list of 125 KB takes about 2 ms longer to load at reset than one of 89 KB
+(the bootloader copies it from flash), and the screens whose first frame
+waits for the panel show it then. An 89 KB list made from the same
+profiles ran the dashboard slower than a list that had kept 89 KB of an
+older build's functions (26.97 against 26.75 ms).
 
 - `esp32s3.ld` comes from QEMU: `just esp32-sim-profile MODE` builds the
   demo for QEMU's ESP32-S3 without this component and counts the misses of
@@ -98,13 +106,14 @@ per-frame work:
 
 ```sh
 scripts/esp32/cache/setup.sh    # once: QEMU with plugins, and the cache plugin
-for mode in demo drawn composed workload; do just esp32-sim-profile $mode; done
+for mode in demo drawn composed workload dashboard; do just esp32-sim-profile $mode; done
 python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
   --board "apps/esp32-demo in QEMU's ESP32-S3, by cache misses" \
   --profile target/esp32/sim-demo.elf target/esp32/sim-demo.log \
   --profile target/esp32/sim-drawn.elf target/esp32/sim-drawn.log \
   --profile target/esp32/sim-composed.elf target/esp32/sim-composed.log \
   --profile target/esp32/sim-workload.elf target/esp32/sim-workload.log
+  --profile target/esp32/sim-dashboard.elf target/esp32/sim-dashboard.log
 
 for mode in demo drawn composed; do just esp32-profile e32r35t $mode; done
 python3 scripts/esp32/hot_code.py 64 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.ld \
