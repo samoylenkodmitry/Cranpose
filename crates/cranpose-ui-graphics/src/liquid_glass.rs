@@ -529,11 +529,11 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
         let identity_outer = slot(uniforms, GLASS_ACTIVITY_UNIFORM) > 0.0
             && slot(uniforms, GLASS_EDGE_REFRACTION_REACH_UNIFORM) <= 0.0
             && projection == [1.0, 1.0];
-        let stage = |index: u8| {
-            let mut pass = shader.clone();
+        let input_padding = shader.input_padding();
+        let stage = |mut pass: RuntimeShader, index: u8| {
             pass.set_float(GLASS_OPTICAL_STAGE_UNIFORM, f32::from(index));
             if identity_outer && index == 2 {
-                pass.set_input_padding(shader.input_padding() * 2.0);
+                pass.set_input_padding(input_padding * 2.0);
             }
             if index < 3 {
                 pass.set_output_support(None);
@@ -542,11 +542,11 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
             glass_shader_effect(pass)
         };
         let warp = if identity_outer {
-            stage(2)
+            stage(shader.clone(), 2)
         } else {
-            stage(1).then(stage(2))
+            stage(shader.clone(), 1).then(stage(shader.clone(), 2))
         };
-        warp.then(stage(3))
+        warp.then(stage(shader, 3))
     } else {
         glass_shader_effect(shader)
     }
