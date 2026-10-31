@@ -38,11 +38,13 @@ pub(crate) use op_bounds::{op_draw_bounds, op_is_visible_in_rect};
 mod interiors_first;
 mod pass_buffers;
 mod pass_scratch;
+mod segment_run;
 mod target_space;
 pub(crate) use interiors_first::lays_interiors_first;
 use interiors_first::takes_depth;
 use pass_buffers::PassBuffers;
 pub(crate) use pass_scratch::PassScratch;
+use segment_run::{ArenaClip, SegmentBinding, SegmentRun};
 use target_space::{dest_in_target, mask_in_target, translate_inverse};
 
 /// A render target and its size in pixels.
@@ -1833,57 +1835,6 @@ impl<'a, 's, C: FrameCommandRecorder> PassPrep<'a, 's, C> {
         self.batches.push(Batch::Shader(prepared));
         Ok(())
     }
-}
-
-/// One segment's viewport, turn included, and what its shapes and glyphs
-/// bind while its items are batched.
-struct SegmentRun<'s, 'a> {
-    segment: &'a PassSegment<'s>,
-    viewport: ViewportUniformParams,
-    binding: SegmentBinding,
-    /// What moves the segment's device space into the binding's: whole
-    /// pixels for a member of side-by-side segments, else zero.
-    shift: [f32; 2],
-    /// A member's scissor, which its binding leaves to each draw that may
-    /// reach past it.
-    slot: Option<TargetRect>,
-}
-
-/// How an arena run's clip applies: see [`PassPrep::arena_clip`].
-struct ArenaClip {
-    paint: Option<TargetRect>,
-    tested: crate::render::SegmentClip,
-    chunk: Option<TargetRect>,
-}
-
-impl SegmentRun<'_, '_> {
-    fn space(&self) -> DrawSpace {
-        DrawSpace {
-            viewport: self.viewport,
-            scale: self.segment.scale,
-        }
-    }
-
-    /// The viewport the segment's images draw under: a member's are moved
-    /// into its binding's space.
-    fn image_viewport(&self) -> ViewportUniformParams {
-        if self.slot.is_some() {
-            self.binding.bound
-        } else {
-            self.viewport
-        }
-    }
-}
-
-/// What a segment's shape and glyph batches bind: its viewport without its
-/// turn, which its records and glyphs carry, the slot claimed for that and
-/// its scissor. Members side by side bind the target's own space without a
-/// scissor: their records and glyphs carry their offsets.
-#[derive(Clone, Copy)]
-struct SegmentBinding {
-    uniform_slot: usize,
-    bound: ViewportUniformParams,
-    scissor: Option<(u32, u32, u32, u32)>,
 }
 
 #[cfg(test)]
