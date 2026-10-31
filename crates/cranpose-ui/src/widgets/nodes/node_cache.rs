@@ -8,7 +8,7 @@ use std::{
 
 use cranpose_ui_layout::Constraints;
 
-use super::layout_node::{DescendantDirt, LayoutDirt};
+use super::layout_dirt::{DescendantDirt, LayoutDirt};
 use crate::layout::MeasuredNode;
 
 #[derive(Clone)]
