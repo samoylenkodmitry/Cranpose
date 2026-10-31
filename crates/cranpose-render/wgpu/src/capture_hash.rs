@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use cranpose_render_common::geometry::blur_reach;
-use cranpose_ui_graphics::{FxHasher, Point, Rect, RenderHash};
+use cranpose_ui_graphics::{FxHasher, Point, Rect, RenderHash, whole};
 
 use crate::{
     draw_pass::{ResolvedComposite, ResolvedCompositeKind, SourceContent},
@@ -232,8 +232,8 @@ fn hash_text<H: Hasher>(text: &TextDraw, window: CaptureWindow, scale: f32, stat
     } else {
         hash_device_offset(logical_rect.x, origin.x, scale, state);
         hash_device_offset(logical_rect.y, origin.y, scale, state);
-        hash_f32_for_cache(raster_rect.x.fract(), state);
-        hash_f32_for_cache(raster_rect.y.fract(), state);
+        hash_f32_for_cache(whole::fract(raster_rect.x), state);
+        hash_f32_for_cache(whole::fract(raster_rect.y), state);
     }
     hash_f32_for_cache(text_scale, state);
     let visible = match clip {

@@ -65,3 +65,54 @@ fn ceil_matches_f32_ceil() {
 fn round_matches_f32_round() {
     assert_same("round", whole::round, f32::round);
 }
+
+#[test]
+fn trunc_matches_f32_trunc() {
+    assert_same("trunc", whole::trunc, f32::trunc);
+}
+
+#[test]
+fn fract_matches_f32_fract() {
+    assert_same("fract", whole::fract, f32::fract);
+}
+
+// Halves either side of zero, the double just below a half, the ends of
+// `i32` and of exact whole doubles, the extremes, infinities, and the
+// sixteenths the device snap rounds, each with its neighbours.
+#[test]
+fn round_f64_matches_f64_round() {
+    let mut values = vec![
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1.5,
+        -1.5,
+        2.5,
+        -2.5,
+        0.499_999_999_999_999_94,
+        -0.499_999_999_999_999_94,
+        2_147_483_647.5,
+        -2_147_483_648.5,
+        2_147_483_648.0,
+        4_503_599_627_370_495.5,
+        -4_503_599_627_370_495.5,
+        9_007_199_254_740_993.0,
+        f64::MAX,
+        f64::MIN,
+        f64::MIN_POSITIVE,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    values.extend((-64_000..=64_000).map(|step| f64::from(step) / 16.0));
+    values.extend(values.clone().into_iter().map(f64::next_up));
+    values.extend(values.clone().into_iter().map(f64::next_down));
+    for value in values {
+        let (ours, theirs) = (whole::round_f64(value), value.round());
+        assert!(
+            ours.to_bits() == theirs.to_bits() || (ours.is_nan() && theirs.is_nan()),
+            "round_f64({value:e}) gave {ours:e}, f64::round gives {theirs:e}",
+        );
+    }
+}

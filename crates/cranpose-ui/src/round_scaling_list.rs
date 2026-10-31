@@ -457,10 +457,10 @@ pub fn centre_offset_at(slots: &[Slot], viewport: f32, scroll: f32, density: f32
         return 0.0;
     }
     let scroll = if scroll.is_finite() { scroll } else { 0.0 };
-    let whole = (whole::floor(scroll).max(0.0) as usize).min(slots.len() - 1);
-    let fraction = (scroll - whole as f32).clamp(0.0, 1.0);
-    let mut anchor = slots[whole].centre();
-    if let Some(next) = slots.get(whole + 1) {
+    let index = (whole::floor(scroll).max(0.0) as usize).min(slots.len() - 1);
+    let fraction = (scroll - index as f32).clamp(0.0, 1.0);
+    let mut anchor = slots[index].centre();
+    if let Some(next) = slots.get(index + 1) {
         anchor += (next.centre() - anchor) * fraction;
     }
     round_to_px(viewport * 0.5 - anchor, density)

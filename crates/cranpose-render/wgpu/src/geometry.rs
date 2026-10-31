@@ -88,32 +88,6 @@ pub(crate) fn canonicalize_device_coordinate(value: f32) -> f32 {
     whole::round(scaled) / steps
 }
 
-#[cfg(target_arch = "wasm32")]
-#[inline(always)]
-fn round_half_away(value: f64) -> f64 {
-    truncated_round(value)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[inline(always)]
-fn round_half_away(value: f64) -> f64 {
-    value.round()
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-#[inline(always)]
-fn truncated_round(value: f64) -> f64 {
-    let whole = value.trunc();
-    let rest = value - whole;
-    if rest >= 0.5 {
-        whole + 1.0
-    } else if rest <= -0.5 {
-        whole - 1.0
-    } else {
-        whole
-    }
-}
-
 pub(crate) fn canonicalized_scaled_rect(rect: Rect, scale: f32) -> Rect {
     let left = canonicalize_device_coordinate(rect.x * scale);
     let top = canonicalize_device_coordinate(rect.y * scale);
@@ -176,8 +150,8 @@ pub(crate) fn snapped_anchor_device_origin(anchor: SnapAnchor, root_scale: f32) 
     let snapped = |origin: f32| {
         let snap_units = f64::from(origin) * f64::from(root_scale) / f64::from(device_pixel_step);
         let canonical_snap_units =
-            round_half_away(snap_units * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS;
-        (round_half_away(canonical_snap_units) * f64::from(device_pixel_step)) as f32
+            whole::round_f64(snap_units * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS;
+        (whole::round_f64(canonical_snap_units) * f64::from(device_pixel_step)) as f32
     };
     Point::new(snapped(anchor.origin.x), snapped(anchor.origin.y))
 }
@@ -200,9 +174,9 @@ pub(crate) fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Poin
         let device_pixel_step = f64::from(device_pixel_step);
         let snap_units = f64::from(origin) * root_scale / device_pixel_step;
         let canonical_snap_units =
-            round_half_away(snap_units * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS;
+            whole::round_f64(snap_units * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS;
         let snapped_logical =
-            round_half_away(canonical_snap_units) * device_pixel_step / root_scale;
+            whole::round_f64(canonical_snap_units) * device_pixel_step / root_scale;
         (snapped_logical - f64::from(origin)) as f32
     };
     Point::new(

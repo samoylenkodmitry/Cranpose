@@ -487,7 +487,7 @@ fn grid_copy<'a>(
     ];
     if coords
         .iter()
-        .any(|value| value.fract() != 0.0 || *value < 0.0)
+        .any(|&value| whole::fract(value) != 0.0 || value < 0.0)
     {
         return None;
     }

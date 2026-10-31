@@ -43,6 +43,7 @@
 //! handed straight to a scroll container's "scroll by N pixels" API with the
 //! same meaning a wheel/touch scroll delta would have.
 
+use cranpose_ui_graphics::whole;
 /// Android's default vertical scroll factor expressed in density-independent
 /// pixels.
 ///
@@ -182,7 +183,7 @@ impl RotaryStepAccumulator {
             return 0;
         }
         self.pending_pixels += pixels;
-        let steps = (self.pending_pixels / self.pixels_per_step).trunc() as i32;
+        let steps = whole::trunc(self.pending_pixels / self.pixels_per_step) as i32;
         self.pending_pixels -= steps as f32 * self.pixels_per_step;
         steps
     }

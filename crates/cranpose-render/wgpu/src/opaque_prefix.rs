@@ -7,7 +7,7 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{
     BRUSH_KIND_LINEAR, BRUSH_KIND_RADIAL, BRUSH_KIND_SWEEP, BlendMode, BrushRecord,
     GradientStopRecord, Point, RECORD_KIND_RECT, RecordLane, RecordTables, Rect, ShapeRecord,
-    TileMode,
+    TileMode, whole,
 };
 
 use crate::{
@@ -73,7 +73,7 @@ impl Edges {
 }
 
 fn whole(value: f32) -> Option<f32> {
-    (value.is_finite() && value.fract() == 0.0).then_some(value)
+    (value.is_finite() && whole::fract(value) == 0.0).then_some(value)
 }
 
 fn hash_rect<H: Hasher>(rect: Rect, state: &mut H) {

@@ -1,6 +1,6 @@
 use std::{iter::Peekable, rc::Rc, sync::Arc};
 
-use cranpose_ui_graphics::{BlendMode, FrontPolygon, Rect, RuntimeShader};
+use cranpose_ui_graphics::{BlendMode, FrontPolygon, Rect, RuntimeShader, whole};
 
 use crate::{
     effect_renderer::{
@@ -184,8 +184,8 @@ fn is_member(segment: &PassSegment<'_>) -> bool {
     segment.transform.is_identity()
         && segment.composites.is_empty()
         && segment.scissor.is_some()
-        && segment.offset[0].fract() == 0.0
-        && segment.offset[1].fract() == 0.0
+        && whole::fract(segment.offset[0]) == 0.0
+        && whole::fract(segment.offset[1]) == 0.0
 }
 
 enum Item<'a> {

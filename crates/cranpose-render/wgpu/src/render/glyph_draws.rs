@@ -412,7 +412,7 @@ impl GlyphKind {
 /// Whether a plain glyph quad at `rect` lands on whole pixels of a target
 /// whose origin sits at `offset`: its quads hold one texel a pixel.
 pub(super) fn glyph_rect_aligned(rect: [f32; 4], offset: [f32; 2]) -> bool {
-    let whole = |value: f32| value.fract() == 0.0;
+    let whole = |value: f32| whole::fract(value) == 0.0;
     whole(rect[0] - offset[0])
         && whole(rect[1] - offset[1])
         && whole(rect[2] - offset[0])

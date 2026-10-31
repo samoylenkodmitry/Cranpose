@@ -219,7 +219,7 @@ impl SvgColor {
     fn with_opacity(self, opacity: f32) -> Self {
         let opacity = opacity.clamp(0.0, 1.0);
         Self {
-            a: (whole::round(self.a as f32 * opacity)).clamp(0.0, 255.0) as u8,
+            a: whole::round(self.a as f32 * opacity).clamp(0.0, 255.0) as u8,
             ..self
         }
     }

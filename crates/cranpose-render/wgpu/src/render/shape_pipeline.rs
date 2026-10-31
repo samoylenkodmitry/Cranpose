@@ -2,7 +2,7 @@ use std::{borrow::Cow, hash::Hash};
 
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_ARC, FRAGMENT_KIND_FILL, FRAGMENT_KIND_LINE, FRAGMENT_KIND_STROKE,
-    FRAGMENT_KIND_TRAPEZOID, RecordSegment,
+    FRAGMENT_KIND_TRAPEZOID, RecordSegment, whole,
 };
 
 use super::{
@@ -627,7 +627,10 @@ impl ShapePipelineKey {
                     turns == ShapeTurns::None,
                     turns == ShapeTurns::None
                         && placement.snap_anchor.is_some()
-                        && viewport.offset.iter().all(|value| value.fract() == 0.0),
+                        && viewport
+                            .offset
+                            .iter()
+                            .all(|&value| whole::fract(value) == 0.0),
                 ),
             ),
             turns,

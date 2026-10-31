@@ -249,8 +249,8 @@ fn hash_text_raster_geometry_for_cache<H: Hasher>(
     hash_f32_for_cache(rect.height, state);
     static_text_motion.hash(state);
     if !static_text_motion {
-        hash_f32_for_cache(rect.x.fract(), state);
-        hash_f32_for_cache(rect.y.fract(), state);
+        hash_f32_for_cache(whole::fract(rect.x), state);
+        hash_f32_for_cache(whole::fract(rect.y), state);
     }
 }
 

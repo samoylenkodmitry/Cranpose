@@ -2,6 +2,7 @@
 //! children take their base sizes, break into lines, grow or shrink on
 //! each line, and align along and across it.
 
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{
     Axis, Constraints, IntrinsicSize, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
     Placement, round_to_px,
@@ -119,7 +120,7 @@ impl FlexBoxMeasurePolicy {
     /// `value` cut to whole device pixels toward zero, as Compose's integer
     /// division cuts it.
     fn truncate_px(&self, value: f32) -> f32 {
-        (value * self.density).trunc() / self.density
+        whole::trunc(value * self.density) / self.density
     }
 
     /// The gaps along the main axis and across it.

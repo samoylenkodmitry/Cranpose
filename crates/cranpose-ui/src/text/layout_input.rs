@@ -4,6 +4,7 @@ use cranpose_text::{
     FontFamily, FontFamilyResolver, FontFeature, FontRequest, FontStyle, FontWeight,
     ParagraphLengths, ShapingSpan, font_feature_settings,
 };
+use cranpose_ui_graphics::whole;
 use smallvec::SmallVec;
 
 use super::{AnnotatedString, SpanStyle, TextStyle, TextUnit};
@@ -192,7 +193,7 @@ impl<'a> ParagraphSpans<'a> {
         let grid = self.lengths.grid;
         let ascent =
             typeface.line_metrics().ascent * stretch.size / f32::from(typeface.units_per_em());
-        (ascent * stretch.baseline_shift * grid).trunc() / grid
+        whole::trunc(ascent * stretch.baseline_shift * grid) / grid
     }
 }
 

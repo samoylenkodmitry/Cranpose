@@ -165,7 +165,7 @@ impl DitherAxis {
     pub fn new(origin: f32) -> Self {
         Self {
             origin,
-            whole_origin: (origin.fract() == 0.0 && origin.abs() < WHOLE_COORDINATES)
+            whole_origin: (whole::fract(origin) == 0.0 && origin.abs() < WHOLE_COORDINATES)
                 .then_some(origin as i32),
         }
     }
