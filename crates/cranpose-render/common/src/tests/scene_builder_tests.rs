@@ -1,18 +1,18 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui::{
-    Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
+    Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LayoutNode, LazyColumn, LazyColumnSpec,
     LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer, Text,
     TextLayoutOptions, TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
 use cranpose_ui_graphics::{
-    Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect,
+    Brush, DrawPlacement, DrawPrimitive, DrawScopeDefault, GraphicsLayer, LayerShape, RenderEffect,
 };
 
-use super::{text_node::TEXT_CLIP_PAD, *};
-use crate::graph::{DrawRunNode, TextPrimitiveNode};
+use super::{layer_shape::shape_clip, node_layer::isolation_reasons, text_node::TEXT_CLIP_PAD, *};
+use crate::graph::{DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, TextPrimitiveNode};
 
 // Each of `ids` with the update that records it again.
 fn content(ids: &[NodeId]) -> Vec<(NodeId, NodeUpdate)> {

@@ -3,8 +3,8 @@ use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, PlacedChild, TranslateAncestorContext, placed_transform,
-    publish_retained_window_geometry, text_node,
+    AbsOrigin, TranslateAncestorContext, placed_transform, publish_retained_window_geometry,
+    text_node, translate_layer::PlacedChild,
 };
 use crate::{
     NodeUpdate,

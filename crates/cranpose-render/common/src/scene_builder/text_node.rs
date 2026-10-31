@@ -7,9 +7,10 @@ use cranpose_ui::{
 };
 
 use super::{
-    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer,
-    apply_translated_container_state, hit_test_from_slices, modifier_slices_have_origin_sinks,
-    read_node_data, translate_bail, translate_layer_from_data, translated_container,
+    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
+    hit_test_from_slices, modifier_slices_have_origin_sinks, read_node_data, translate_bail,
+    translate_layer::{apply_translated_container_state, translate_layer_from_data},
+    translated_container,
 };
 use crate::{
     NodeUpdate,
@@ -58,7 +59,14 @@ pub(super) fn translate_unwrapped(
     {
         return done;
     }
-    translate_layer_from_data(applier, container, dirty_nodes, ancestors, data, false)
+    translate_layer_from_data(
+        applier,
+        container,
+        dirty_nodes,
+        ancestors,
+        data,
+        Wrapping::Bare,
+    )
 }
 
 // Brings `container`, the layer of a leaf that drew its node's text and
@@ -80,13 +88,7 @@ pub(super) fn translate_leaf_text(
     let TranslatedContainer {
         node_id,
         node_bounds,
-    } = match translated_container(
-        container,
-        layout_state,
-        slices,
-        ancestors.inherited_motion_context_animated,
-        false,
-    ) {
+    } = match translated_container(container, layout_state, slices, ancestors, Wrapping::Bare) {
         Ok(plan) => plan,
         Err(reason) => return Some(translate_bail(reason)),
     };
