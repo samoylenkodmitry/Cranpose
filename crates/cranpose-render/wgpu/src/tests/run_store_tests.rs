@@ -1,6 +1,6 @@
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, ColorFilter, DrawScope, DrawScopeDefault, Point, Size, Stroke,
+    BlendMode, Brush, ColorFilter, DrawScope, DrawScopeDefault, Point, Rect, Size, Stroke,
 };
 
 use super::*;

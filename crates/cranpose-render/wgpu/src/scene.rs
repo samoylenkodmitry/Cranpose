@@ -106,6 +106,30 @@ impl Placement {
         })
     }
 
+    /// The clip in device pixels at `root_scale` as x, y, width and height:
+    /// snapped to the device grid when the placement is.
+    pub(crate) fn device_clip(&self, root_scale: f32) -> Option<[f32; 4]> {
+        self.clip.map(|clip| self.device_rect(clip, root_scale))
+    }
+
+    /// The rect the placement's records test in device pixels: a rounded
+    /// clip's whole rect, from which the draw's scissor cuts what the clips
+    /// above leave, else the clip.
+    pub(crate) fn tested_device_clip(&self, root_scale: f32) -> Option<[f32; 4]> {
+        let rounding = self.rounding.filter(|_| self.clip_rounded());
+        rounding
+            .map(|rounding| rounding.rect)
+            .or(self.clip)
+            .map(|clip| self.device_rect(clip, root_scale))
+    }
+
+    /// `rect` in device pixels at `root_scale` as x, y, width and height:
+    /// snapped to the device grid when the placement is.
+    pub(crate) fn device_rect(&self, rect: Rect, root_scale: f32) -> [f32; 4] {
+        let device = crate::geometry::device_rect(rect, root_scale, self.snap_anchor.is_some());
+        [device.x, device.y, device.width, device.height]
+    }
+
     /// A placement that paints its records with the layer's alpha and
     /// colour filter; the layer's affine part is identity for anything
     /// drawn direct.

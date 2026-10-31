@@ -14,7 +14,6 @@ use crate::{
     capture_hash::capture_hasher,
     geometry::{device_rect, snap_delta_for_anchor},
     render::hash_f32_for_cache,
-    run_store::device_clip,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw},
 };
 
@@ -322,7 +321,7 @@ pub(crate) fn capture_solid_rect(
     )
     .rect()
     .intersect(capture)?;
-    let clip = device_clip(placement, scale).map(|[x, y, width, height]| {
+    let clip = placement.device_clip(scale).map(|[x, y, width, height]| {
         let device = Rect {
             x,
             y,
