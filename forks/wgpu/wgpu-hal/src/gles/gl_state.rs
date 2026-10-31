@@ -72,8 +72,9 @@ pub(super) struct GlState {
     array_buffer: Option<glow::Buffer>,
     attributes: [Attribute; MAX_VERTEX_ATTRIBUTES],
     /// Attributes an `UnsetVertexAttribute` turned off, which stay enabled
-    /// until a draw or an untracked command needs the context to agree:
-    /// the next pipeline usually enables most of them again.
+    /// until an untracked command or the end of the command buffer needs the
+    /// context to agree: the next pipeline usually enables most of them
+    /// again, and a draw reads none of them (see `apply`).
     pending_disables: u32,
     program: Option<glow::Program>,
     scissor: Option<(i32, i32, i32, i32)>,
@@ -212,14 +213,14 @@ impl GlState {
             },
             // Bindings of other targets and slots, and image units.
             C::BindBuffer { .. } | C::BindImage { .. } => return false,
-            // Draws read the attributes: the deferred disables land first.
+            // A draw's program reads only the attributes its pipeline pointed,
+            // so the deferred disables wait: GL and WebGL fetch and range-check
+            // only the attributes a program reads, and an attribute left
+            // enabled keeps the live buffer it was pointed at.
             C::Draw { .. }
             | C::DrawIndexed { .. }
             | C::DrawIndirect { .. }
-            | C::DrawIndexedIndirect { .. } => {
-                unsafe { self.disable_pending(gl) };
-                return false;
-            }
+            | C::DrawIndexedIndirect { .. } => return false,
             // State the tracker holds none of.
             C::SetIndexBuffer(_)
             | C::SetViewport { .. }

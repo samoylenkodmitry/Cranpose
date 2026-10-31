@@ -252,11 +252,14 @@ The fork's queue keeps the state a command buffer's commands have set
 (`gles/gl_state.rs`): attribute enables, pointers and divisors, the
 `ARRAY_BUFFER` binding, the program, scissor, depth and stencil state,
 uniform buffer ranges, textures, samplers and the active unit. A command
-that sets a value the context holds makes no call; disables wait for the
-next draw, since the next pipeline usually enables the same attributes.
-Any command the tracker does not know forgets it all, and the state starts
-unknown in each command buffer, as the device's own calls run between
-them. A draw with no first-instance uniform makes no `uniform1ui(null)`.
+that sets a value the context holds makes no call. Disables wait for an
+untracked command or the end of the command buffer: a draw's program reads
+only the attributes its pipeline pointed, GL and WebGL fetch and
+range-check only those, and the next pipeline usually enables the others
+again. Any command the tracker does not know forgets it all, and the state
+starts unknown in each command buffer, as the device's own calls run
+between them. A draw with no first-instance uniform makes no
+`uniform1ui(null)`.
 
 Cranpose's gauntlet at tier 8 made 24,200 WebGL calls a frame, 74% of them
 attribute calls, and makes 9,800 with the same pictures. On a Mate 20 X in
