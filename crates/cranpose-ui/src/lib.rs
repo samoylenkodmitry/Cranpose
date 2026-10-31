@@ -161,9 +161,9 @@ pub use draw::{
 };
 pub use eye::{Eye, local_eye, rememberEye};
 pub use focus_dispatch::{
-    active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
-    keyboard_focus_visible, process_focus_invalidations, schedule_focus_invalidation,
-    set_active_focus_target, set_keyboard_focus_visible,
+    active_focus_target, clear_focus_invalidations, has_focus_targets,
+    has_pending_focus_invalidations, keyboard_focus_visible, process_focus_invalidations,
+    schedule_focus_invalidation, set_active_focus_target, set_keyboard_focus_visible,
 };
 pub use focus_manager::{
     FocusManager, local_focus_manager, request_focus_from_platform, request_focus_without_keyboard,
