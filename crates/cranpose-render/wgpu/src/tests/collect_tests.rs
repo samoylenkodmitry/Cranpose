@@ -1,7 +1,7 @@
 use cranpose_render_common::graph::PrimitivePhase;
-use cranpose_ui_graphics::RoundedCornerShape;
+use cranpose_ui_graphics::{LayerShape, RoundedCornerShape};
 
-use super::*;
+use super::{rounded_clip_corners::RoundedClipCorners, *};
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {
@@ -363,6 +363,37 @@ fn a_rounded_layer_whose_text_enters_a_corner_isolates() {
     assert!(matches!(
         child_placement(&mixed, RasterScale::Exact(1.0)),
         Placement::Isolated
+    ));
+}
+
+fn child_at(x: f32, y: f32, width: f32, height: f32, content: RenderNode) -> RenderNode {
+    RenderNode::Layer(Box::new(LayerNode {
+        local_bounds: rect(0.0, 0.0, width, height),
+        transform_to_parent: ProjectiveTransform::translation(x, y),
+        children: vec![content],
+        ..Default::default()
+    }))
+}
+
+fn text_in_a_child_at(x: f32, y: f32) -> LayerNode {
+    let text = child_at(x, y, 60.0, 20.0, shapes_run(vec![snap_test_text()]));
+    let mut layer = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    layer.children.push(child_at(0.0, 0.0, 200.0, 100.0, text));
+    layer
+}
+
+#[test]
+fn a_rounded_layer_finds_text_its_child_layers_put_in_a_corner() {
+    assert!(matches!(
+        child_placement(&text_in_a_child_at(0.0, 0.0), RasterScale::Exact(1.0)),
+        Placement::Isolated
+    ));
+    assert!(matches!(
+        child_placement(&text_in_a_child_at(60.0, 40.0), RasterScale::Exact(1.0)),
+        Placement::DirectRounded(..)
     ));
 }
 
