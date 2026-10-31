@@ -3,22 +3,36 @@
 //! A target with no instruction that rounds a float, as the ESP32-S3,
 //! 32-bit ARM and baseline x86 are, calls `floorf`, `ceilf`, `roundf` and
 //! `truncf` for the `f32` methods, and layout snapping and the renderers
-//! place pixels with dozens of them a frame. There these functions truncate
-//! through the integer conversion such targets do have and step by the
-//! exact remainder. Wasm rounds halves only to even, so its `round`
+//! place pixels with dozens of them a frame. There these functions round
+//! inline: through the integer conversion and the exact remainder, or, on
+//! 32-bit ARM, on the bits. Wasm rounds halves only to even, so its `round`
 //! truncates instead. Every result is the one the method gives, bit for
-//! bit, signed zeros, infinities and NaN included. Targets that round in
-//! one instruction use the method.
+//! bit, signed zeros, infinities and NaN included.
 
-/// Whether the target rounds a float in one instruction.
-const ROUNDS_IN_HARDWARE: bool = !cfg!(any(
+// How the target rounds a float.
+enum Rounding {
+    // In one instruction, which the method compiles to.
+    Hardware,
+    // Through the integer conversion and the exact remainder.
+    Conversion,
+    // On the bits in core registers. On 32-bit ARM each float compare
+    // moves its flags out of the FPU, and the in-order cores wait for it.
+    Bits,
+}
+
+const ROUNDING: Rounding = if cfg!(target_arch = "arm") {
+    Rounding::Bits
+} else if cfg!(any(
     target_arch = "xtensa",
-    target_arch = "arm",
     all(
         any(target_arch = "x86", target_arch = "x86_64"),
         not(target_feature = "sse4.1")
     )
-));
+)) {
+    Rounding::Conversion
+} else {
+    Rounding::Hardware
+};
 
 /// From this magnitude up every `f32` is whole.
 const WHOLE_FROM: f32 = 8_388_608.0;
@@ -35,29 +49,135 @@ fn split(value: f32) -> Option<(f32, f32)> {
     })
 }
 
+// The bits of a float, by the exponent of its units bit. The exponent is
+// biased: `ONE` is the exponent of 1, and from `WHOLE` up the lowest
+// mantissa bit counts units, so the float is whole, infinite or NaN.
+macro_rules! float_bits {
+    ($module:ident: $float:ty, $bits:ty, $exponent_bits:literal, $mantissa_bits:literal, { $($more:item)* }) => {
+        mod $module {
+            const MANTISSA_BITS: u32 = $mantissa_bits;
+            const ONE: $bits = (1 << ($exponent_bits - 1)) - 1;
+            const WHOLE: $bits = ONE + $mantissa_bits;
+            const SIGN: $bits = 1 << (<$bits>::BITS - 1);
+            const MANTISSA: $bits = (1 << MANTISSA_BITS) - 1;
+
+            // The bits of `value`, whether it is negative, and its exponent.
+            #[inline]
+            fn parts(value: $float) -> ($bits, bool, $bits) {
+                let bits = value.to_bits();
+                let exponent = (bits >> MANTISSA_BITS) & ((1 << $exponent_bits) - 1);
+                (bits, (bits & SIGN) != 0, exponent)
+            }
+
+            // The mantissa bits below the units bit of a magnitude from 1
+            // below `WHOLE`.
+            #[inline]
+            fn fraction(exponent: $bits) -> $bits {
+                MANTISSA >> (exponent - ONE)
+            }
+
+            #[inline]
+            pub(super) fn round(value: $float) -> $float {
+                let (bits, _, exponent) = parts(value);
+                if exponent >= WHOLE {
+                    return value;
+                }
+                if exponent < ONE - 1 {
+                    // Below one half.
+                    return <$float>::from_bits(bits & SIGN);
+                }
+                if exponent < ONE {
+                    // From one half below 1.
+                    return <$float>::from_bits((bits & SIGN) | <$float>::to_bits(1.0));
+                }
+                // Adding the half bit carries a half or more into the units.
+                let fraction = fraction(exponent);
+                <$float>::from_bits((bits + (fraction >> 1) + 1) & !fraction)
+            }
+
+            $($more)*
+        }
+    };
+}
+
+float_bits!(f64_bits: f64, u64, 11, 52, {});
+float_bits!(f32_bits: f32, u32, 8, 23, {
+    #[inline]
+    pub(super) fn floor(value: f32) -> f32 {
+        let (bits, negative, exponent) = parts(value);
+        if exponent >= WHOLE {
+            return value;
+        }
+        if exponent < ONE {
+            // Zeros stay; others go to 0 or -1.
+            return match (negative, (bits & !SIGN) == 0) {
+                (_, true) => value,
+                (false, false) => 0.0,
+                (true, false) => -1.0,
+            };
+        }
+        let fraction = fraction(exponent);
+        let up = if negative && (bits & fraction) != 0 { fraction } else { 0 };
+        f32::from_bits((bits + up) & !fraction)
+    }
+
+    #[inline]
+    pub(super) fn ceil(value: f32) -> f32 {
+        let (bits, negative, exponent) = parts(value);
+        if exponent >= WHOLE {
+            return value;
+        }
+        if exponent < ONE {
+            // Zeros stay; others go to -0 or 1.
+            return match (negative, (bits & !SIGN) == 0) {
+                (_, true) => value,
+                (true, false) => -0.0,
+                (false, false) => 1.0,
+            };
+        }
+        let fraction = fraction(exponent);
+        let up = if !negative && (bits & fraction) != 0 { fraction } else { 0 };
+        f32::from_bits((bits + up) & !fraction)
+    }
+
+    #[inline]
+    pub(super) fn trunc(value: f32) -> f32 {
+        let (bits, _, exponent) = parts(value);
+        if exponent >= WHOLE {
+            return value;
+        }
+        if exponent < ONE {
+            return f32::from_bits(bits & SIGN);
+        }
+        f32::from_bits(bits & !fraction(exponent))
+    }
+});
+
 /// `value.floor()`.
 #[inline(always)]
 pub fn floor(value: f32) -> f32 {
-    if ROUNDS_IN_HARDWARE {
-        return value.floor();
-    }
-    match split(value) {
-        Some((whole, fraction)) if fraction < 0.0 => whole - 1.0,
-        Some((whole, _)) => whole.copysign(value),
-        None => value,
+    match ROUNDING {
+        Rounding::Hardware => value.floor(),
+        Rounding::Bits => f32_bits::floor(value),
+        Rounding::Conversion => match split(value) {
+            Some((whole, fraction)) if fraction < 0.0 => whole - 1.0,
+            Some((whole, _)) => whole.copysign(value),
+            None => value,
+        },
     }
 }
 
 /// `value.ceil()`.
 #[inline(always)]
 pub fn ceil(value: f32) -> f32 {
-    if ROUNDS_IN_HARDWARE {
-        return value.ceil();
-    }
-    match split(value) {
-        Some((whole, fraction)) if fraction > 0.0 => whole + 1.0,
-        Some((whole, _)) => whole.copysign(value),
-        None => value,
+    match ROUNDING {
+        Rounding::Hardware => value.ceil(),
+        Rounding::Bits => f32_bits::ceil(value),
+        Rounding::Conversion => match split(value) {
+            Some((whole, fraction)) if fraction > 0.0 => whole + 1.0,
+            Some((whole, _)) => whole.copysign(value),
+            None => value,
+        },
     }
 }
 
@@ -69,26 +189,28 @@ pub fn round(value: f32) -> f32 {
         // more over the next whole number and no smaller one.
         return (value + 0.499_999_97_f32.copysign(value)).trunc();
     }
-    if ROUNDS_IN_HARDWARE {
-        return value.round();
-    }
-    match split(value) {
-        Some((whole, fraction)) if fraction >= 0.5 => whole + 1.0,
-        Some((whole, fraction)) if fraction <= -0.5 => whole - 1.0,
-        Some((whole, _)) => whole.copysign(value),
-        None => value,
+    match ROUNDING {
+        Rounding::Hardware => value.round(),
+        Rounding::Bits => f32_bits::round(value),
+        Rounding::Conversion => match split(value) {
+            Some((whole, fraction)) if fraction >= 0.5 => whole + 1.0,
+            Some((whole, fraction)) if fraction <= -0.5 => whole - 1.0,
+            Some((whole, _)) => whole.copysign(value),
+            None => value,
+        },
     }
 }
 
 /// `value.trunc()`.
 #[inline(always)]
 pub fn trunc(value: f32) -> f32 {
-    if ROUNDS_IN_HARDWARE {
-        return value.trunc();
-    }
-    match split(value) {
-        Some((whole, _)) => whole.copysign(value),
-        None => value,
+    match ROUNDING {
+        Rounding::Hardware => value.trunc(),
+        Rounding::Bits => f32_bits::trunc(value),
+        Rounding::Conversion => match split(value) {
+            Some((whole, _)) => whole.copysign(value),
+            None => value,
+        },
     }
 }
 
@@ -108,18 +230,22 @@ pub fn round_f64(value: f64) -> f64 {
         // As in `round`, with the `f64` just below one half.
         return (value + 0.499_999_999_999_999_94_f64.copysign(value)).trunc();
     }
-    if ROUNDS_IN_HARDWARE || value.abs() >= I32_FROM || value.is_nan() {
-        return value.round();
-    }
-    // Below 2^31 the whole part and the remainder are exact.
-    let whole = f64::from(value as i32);
-    let fraction = value - whole;
-    if fraction >= 0.5 {
-        whole + 1.0
-    } else if fraction <= -0.5 {
-        whole - 1.0
-    } else {
-        whole.copysign(value)
+    match ROUNDING {
+        Rounding::Hardware => value.round(),
+        Rounding::Bits => f64_bits::round(value),
+        Rounding::Conversion if value.abs() >= I32_FROM || value.is_nan() => value.round(),
+        Rounding::Conversion => {
+            // Below 2^31 the whole part and the remainder are exact.
+            let whole = f64::from(value as i32);
+            let fraction = value - whole;
+            if fraction >= 0.5 {
+                whole + 1.0
+            } else if fraction <= -0.5 {
+                whole - 1.0
+            } else {
+                whole.copysign(value)
+            }
+        }
     }
 }
 
