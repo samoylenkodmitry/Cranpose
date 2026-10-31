@@ -1,12 +1,17 @@
 use cranpose_core::NodeId;
-use cranpose_render_common::graph::{
-    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderGraph, RenderNode,
+use cranpose_render_common::{
+    graph::{
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderGraph, RenderNode,
+    },
+    layer_shadow::layer_shadow_geometry,
 };
 use cranpose_ui::TextLayoutOptions;
-use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
+use cranpose_ui_graphics::{
+    CornerRadii, DrawPrimitive, ImageBitmap, ImageSampling, LayerShape, RoundedCornerShape,
+};
 
-use super::*;
+use super::{draw_child::push_shadow_primitive, *};
 use crate::{draw::RenderItem, scene::RasterScene, text_draws::laid_out};
 
 fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {

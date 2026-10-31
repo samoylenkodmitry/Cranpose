@@ -9,27 +9,21 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     hit_graph::collect_hits_from_graph,
     layer_composition::folded_layer_alpha,
-    layer_shadow::{ShadowLight, layer_shadow_geometry},
+    layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
-    primitive_emit::{
-        DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
-        draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
-    },
+    primitive_emit::resolve_clip,
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
 use cranpose_ui::{LayoutBox, text::TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, TransformOrigin, whole,
+    BlendMode, Color, ColorFilter, GraphicsLayer, Point, Rect, RenderEffect, TransformOrigin,
 };
 
 use crate::{
     draw::TextRaster,
-    scene::{ImageDraw, ItemCounts, PassedDown, RasterScene, Scene, TextDraw},
-    style::{
-        apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
-    },
+    scene::{ItemCounts, PassedDown, RasterScene, Scene, TextDraw},
+    style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
 
@@ -249,128 +243,6 @@ fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnos
     }
 }
 
-#[derive(Clone, Copy)]
-struct ShadowSample {
-    expansion: f32,
-    weight: f32,
-}
-
-fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
-    if blur_radius <= f32::EPSILON {
-        return Vec::new();
-    }
-
-    let sample_count = (whole::ceil(blur_radius * 2.4) as usize).clamp(8, 36);
-    let sigma = (blur_radius * 0.5).max(1.0);
-    let mut samples = Vec::with_capacity(sample_count);
-    let mut weight_sum = 0.0f32;
-
-    for index in 0..sample_count {
-        let t0 = index as f32 / sample_count as f32;
-        let t1 = (index + 1) as f32 / sample_count as f32;
-        let center = blur_radius * (t0 + t1) * 0.5;
-        let expansion = blur_radius * t1;
-        let weight = (-0.5 * (center / sigma).powi(2)).exp().max(0.0001);
-        samples.push(ShadowSample { expansion, weight });
-        weight_sum += weight;
-    }
-
-    if weight_sum <= f32::EPSILON {
-        return vec![ShadowSample {
-            expansion: blur_radius,
-            weight: 1.0,
-        }];
-    }
-
-    for sample in &mut samples {
-        sample.weight /= weight_sum;
-    }
-
-    samples
-}
-
-fn expanded_shape_rect(shape: &crate::scene::DrawShape, expansion: f32) -> Rect {
-    Rect {
-        x: shape.rect.x - expansion,
-        y: shape.rect.y - expansion,
-        width: (shape.rect.width + expansion * 2.0).max(0.0),
-        height: (shape.rect.height + expansion * 2.0).max(0.0),
-    }
-}
-
-fn push_blurred_shape_samples(
-    scene: &mut RasterScene,
-    shape: &crate::scene::DrawShape,
-    blend_mode: BlendMode,
-    clip: Option<Rect>,
-    blur_radius: f32,
-) {
-    let samples = blur_samples(blur_radius.max(1.0));
-    if samples.is_empty() {
-        scene.push_shape(
-            shape.rect,
-            shape.brush.clone(),
-            shape.outline.rounded(),
-            clip,
-            blend_mode,
-        );
-        return;
-    }
-
-    for sample in samples.iter().rev() {
-        scene.push_shape(
-            expanded_shape_rect(shape, sample.expansion),
-            scale_brush_alpha(shape.brush.clone(), sample.weight),
-            shape.outline.rounded(),
-            clip,
-            blend_mode,
-        );
-    }
-}
-
-fn scale_color_alpha(color: Color, alpha: f32) -> Color {
-    Color(
-        color.r(),
-        color.g(),
-        color.b(),
-        (color.a() * alpha).clamp(0.0, 1.0),
-    )
-}
-
-fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
-    brush.map_colors(|color| scale_color_alpha(color, alpha))
-}
-
-fn push_layer_shadow(
-    scene: &mut RasterScene,
-    layer: &GraphicsLayer,
-    layer_bounds: RasterLayerBounds,
-    transformed_bounds: Rect,
-    clip: Option<Rect>,
-    light: ShadowLight,
-) {
-    if layer.shadow_elevation <= 0.0 {
-        return;
-    }
-    let caster = match layer.shape {
-        LayerShape::Rectangle => None,
-        LayerShape::Rounded(shape) => {
-            let scale = layer_uniform_scale(layer).max(0.1);
-            let resolved = shape.resolve(
-                layer_bounds.local_bounds.width,
-                layer_bounds.local_bounds.height,
-            );
-            Some(RoundedCornerShape::with_radii(scale_corner_radii(
-                resolved, scale,
-            )))
-        }
-    };
-    for (shadow, color) in layer_shadow_geometry(layer, transformed_bounds, caster, light).passes()
-    {
-        scene.push_shadow(shadow, color, clip);
-    }
-}
-
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
     collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
@@ -512,10 +384,16 @@ pub(crate) fn build_raster_scene(
 /// scene's storage. The items of each subtree that `previous`, the scene of
 /// the frame before, holds for the same content in the same place are
 /// copied from it.
+mod draw_child;
 mod in_place;
+mod layer_shadow;
 mod space;
 
+#[cfg(test)]
+pub(crate) use draw_child::push_draw_primitive;
+use draw_child::render_draw_child;
 pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
+use layer_shadow::push_layer_shadow;
 use space::{push_seen_surfaces, seen_surfaces};
 
 /// The shadow light of a scene `graph` gives at `scale`.
@@ -1054,334 +932,6 @@ fn note_passed_down(
         && before.and_then(|at| reuse.as_ref()?.old.passed_down.get(at)) == Some(&passed_down);
     scene.note_passed_down(record, passed_down);
     same
-}
-
-/// Pushes the items of `child`, a primitive or draw run of a layer.
-fn render_draw_child(
-    scene: &mut RasterScene,
-    child: &RenderNode,
-    context: PrimitiveRenderContext<'_>,
-) {
-    match child {
-        RenderNode::Primitive(primitive) => render_graph_primitive(scene, primitive, context),
-        RenderNode::DrawRun(run) => render_graph_draw_run(scene, run, context),
-        RenderNode::Layer(_) => {}
-    }
-}
-
-fn render_graph_draw_run(
-    scene: &mut RasterScene,
-    run: &cranpose_render_common::graph::DrawRunNode,
-    context: PrimitiveRenderContext<'_>,
-) {
-    let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene.counts();
-    run.for_each_primitive(|primitive| {
-        push_draw_primitive(
-            &primitive,
-            rect,
-            context.node_layer,
-            context.visual_clip,
-            scene,
-            None,
-            context.motion_context_animated || context.content_offset_translation,
-        );
-    });
-    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
-}
-
-fn render_graph_primitive(
-    scene: &mut RasterScene,
-    primitive: &PrimitiveEntry,
-    context: PrimitiveRenderContext<'_>,
-) {
-    let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene.counts();
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            let effective_clip = resolve_primitive_clip(
-                draw.clip,
-                rect,
-                context.node_layer,
-                context.visual_clip,
-                PrimitiveClipSpace::LayerTransformed,
-            );
-            if effective_clip.is_some_and(|clip| clip.is_empty()) {
-                return;
-            }
-            push_draw_primitive(
-                &draw.primitive,
-                rect,
-                context.node_layer,
-                effective_clip,
-                scene,
-                None,
-                context.motion_context_animated || context.content_offset_translation,
-            );
-        }
-        PrimitiveNode::Text(text) => {
-            render_graph_text(
-                scene,
-                text,
-                context.layer_bounds,
-                context.node_layer,
-                context.visual_clip,
-            );
-        }
-    }
-    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
-}
-
-// Out of line for the walk's stack, as `push_layer_shadow_of` tells.
-#[inline(never)]
-fn render_graph_text(
-    scene: &mut RasterScene,
-    text: &TextPrimitiveNode,
-    layer_bounds: RasterLayerBounds,
-    node_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-) {
-    let rect = layer_bounds.raster_rect();
-    let text_rect = Rect {
-        x: rect.x + text.rect.x,
-        y: rect.y + text.rect.y,
-        width: text.rect.width,
-        height: text.rect.height,
-    };
-    let text_clip = resolve_primitive_clip(
-        text.clip,
-        rect,
-        node_layer,
-        visual_clip,
-        PrimitiveClipSpace::LayerTransformed,
-    );
-    if text_clip.is_some_and(|clip| clip.is_empty()) {
-        return;
-    }
-
-    let placement = TextPlacement {
-        bounds: rect,
-        text_rect,
-        layer: node_layer,
-        clip: text_clip,
-    };
-    push_text_style_draws(scene, text, placement);
-}
-
-pub(crate) fn push_draw_primitive(
-    primitive: &DrawPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    scene: &mut RasterScene,
-    blend_mode: Option<BlendMode>,
-    motion_context_animated: bool,
-) {
-    struct SceneEmitter<'a> {
-        scene: &'a mut RasterScene,
-    }
-
-    impl DrawPrimitiveSink for SceneEmitter<'_> {
-        fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_params(params);
-        }
-
-        fn push_image(&mut self, params: ImageDrawParams) {
-            self.scene.push_image(ImageDraw {
-                rect: params.rect,
-                snap_anchor: None,
-                image: params.image,
-                alpha: params.alpha,
-                color_filter: params.color_filter,
-                sampling: params.sampling,
-                clip: params.clip,
-                blend_mode: params.blend_mode,
-                src_rect: params.src_rect,
-                transform: None,
-            });
-        }
-
-        fn push_shadow(
-            &mut self,
-            shadow_primitive: &cranpose_ui_graphics::ShadowPrimitive,
-            layer_bounds: Rect,
-            layer: &GraphicsLayer,
-            clip: Option<Rect>,
-        ) {
-            push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
-        }
-
-        fn push_text(&mut self, params: TextDrawParams) {
-            self.scene.push_text(TextDraw {
-                rect: params.rect,
-                snap_anchor: None,
-                text: params.text,
-                layout: params.layout,
-                ink: GlyphInk::Painted,
-                color: params.color,
-                text_style: params.text_style,
-                font_size: params.font_size,
-                scale: params.scale,
-                clip: params.clip,
-            });
-        }
-    }
-
-    let mut emitter = SceneEmitter { scene };
-    emit_draw_primitive(
-        primitive,
-        layer_bounds,
-        layer,
-        clip,
-        &mut emitter,
-        blend_mode,
-        motion_context_animated,
-    );
-}
-
-fn push_shadow_primitive(
-    shadow_prim: &cranpose_ui_graphics::ShadowPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    scene: &mut RasterScene,
-) {
-    fn shape_pair_for_primitive(
-        prim: &DrawPrimitive,
-        layer_bounds: Rect,
-        layer: &GraphicsLayer,
-        blend_mode: BlendMode,
-    ) -> Option<(crate::scene::DrawShape, BlendMode)> {
-        let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
-        let blend_mode = params.blend_mode;
-        Some((crate::scene::DrawShape::of_params(params), blend_mode))
-    }
-
-    match shadow_prim {
-        cranpose_ui_graphics::ShadowPrimitive::Drop {
-            shape,
-            cutout,
-            blur_radius,
-            blend_mode,
-        } => {
-            let Some(shape_pair) =
-                shape_pair_for_primitive(shape, layer_bounds, layer, *blend_mode)
-            else {
-                return;
-            };
-            let cutout_pair = match cutout {
-                Some(cutout) => {
-                    let Some(pair) =
-                        shape_pair_for_primitive(cutout, layer_bounds, layer, BlendMode::DstOut)
-                    else {
-                        return;
-                    };
-                    Some(pair)
-                }
-                None => None,
-            };
-            let Some(cutout_pair) = cutout_pair else {
-                push_blurred_shape_samples(scene, &shape_pair.0, shape_pair.1, clip, *blur_radius);
-                return;
-            };
-            let samples = blur_samples(blur_radius.max(1.0));
-            if samples.is_empty() {
-                scene.push_shape(
-                    shape_pair.0.rect,
-                    shape_pair.0.brush,
-                    shape_pair.0.outline.rounded(),
-                    clip,
-                    shape_pair.1,
-                );
-                scene.push_shape(
-                    cutout_pair.0.rect,
-                    cutout_pair.0.brush,
-                    cutout_pair.0.outline.rounded(),
-                    clip,
-                    cutout_pair.1,
-                );
-                return;
-            }
-            for sample in samples.iter().rev() {
-                scene.push_shape(
-                    expanded_shape_rect(&shape_pair.0, sample.expansion),
-                    scale_brush_alpha(shape_pair.0.brush.clone(), sample.weight),
-                    shape_pair.0.outline.rounded(),
-                    clip,
-                    shape_pair.1,
-                );
-                scene.push_shape(
-                    expanded_shape_rect(&cutout_pair.0, sample.expansion),
-                    scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
-                    cutout_pair.0.outline.rounded(),
-                    clip,
-                    cutout_pair.1,
-                );
-            }
-        }
-        cranpose_ui_graphics::ShadowPrimitive::Inner {
-            fill,
-            cutout,
-            blur_radius,
-            blend_mode,
-            clip_rect,
-        } => {
-            let Some(fill_pair) = shape_pair_for_primitive(fill, layer_bounds, layer, *blend_mode)
-            else {
-                return;
-            };
-            let Some(cutout_pair) =
-                shape_pair_for_primitive(cutout, layer_bounds, layer, BlendMode::DstOut)
-            else {
-                return;
-            };
-            let abs_clip = Rect {
-                x: clip_rect.x + layer_bounds.x,
-                y: clip_rect.y + layer_bounds.y,
-                width: clip_rect.width,
-                height: clip_rect.height,
-            };
-            let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
-            let effective_clip = clip.map_or(Some(transformed_clip), |parent_clip| {
-                parent_clip.intersect(transformed_clip)
-            });
-            let samples = blur_samples(blur_radius.max(1.0));
-            if samples.is_empty() {
-                scene.push_shape(
-                    fill_pair.0.rect,
-                    fill_pair.0.brush,
-                    fill_pair.0.outline.rounded(),
-                    effective_clip,
-                    fill_pair.1,
-                );
-                scene.push_shape(
-                    cutout_pair.0.rect,
-                    cutout_pair.0.brush,
-                    cutout_pair.0.outline.rounded(),
-                    effective_clip,
-                    cutout_pair.1,
-                );
-                return;
-            }
-
-            for sample in samples.iter().rev() {
-                scene.push_shape(
-                    expanded_shape_rect(&fill_pair.0, sample.expansion),
-                    scale_brush_alpha(fill_pair.0.brush.clone(), sample.weight),
-                    fill_pair.0.outline.rounded(),
-                    effective_clip,
-                    fill_pair.1,
-                );
-                scene.push_shape(
-                    expanded_shape_rect(&cutout_pair.0, sample.expansion),
-                    scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
-                    cutout_pair.0.outline.rounded(),
-                    effective_clip,
-                    cutout_pair.1,
-                );
-            }
-        }
-    }
 }
 
 #[cfg(test)]
