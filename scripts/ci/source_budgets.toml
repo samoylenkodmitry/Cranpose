@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 13689
+private_docs = 13681
 for_test_fns = 40
 cranpose_env_names = 77
 source_text_checks = 341
@@ -48,7 +48,7 @@ limit = 1000
 "crates/cranpose-capabilities/src/lib.rs" = 1069
 "crates/cranpose-core/src/composer.rs" = 2078
 "crates/cranpose-core/src/runtime.rs" = 1719
-"crates/cranpose-core/src/state.rs" = 2294
+"crates/cranpose-core/src/state.rs" = 1920
 "crates/cranpose-foundation/src/lazy/lazy_list_state.rs" = 1139
 "crates/cranpose-foundation/src/modifier.rs" = 2262
 "crates/cranpose-liquid/src/material.rs" = 2198

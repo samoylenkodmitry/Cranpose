@@ -95,11 +95,10 @@ fn test_conflict_detection_after_record_reuse() {
 
     const INVALID_SNAPSHOT_ID: SnapshotId = SnapshotId(0);
 
-    let head = state.first_record();
-    let original_head_id = head.snapshot_id();
+    let original_head_id = state.records().head().snapshot_id();
 
-    let invalid_record = StateRecord::new(INVALID_SNAPSHOT_ID, -1i32, head.next());
-    head.set_next(Some(Rc::clone(&invalid_record)));
+    let invalid_record = StateRecord::new(INVALID_SNAPSHOT_ID, -1i32);
+    state.records().prepend(Rc::clone(&invalid_record));
 
     let snap1 = global.take_nested_mutable_snapshot(None, None);
     let snap2 = global.take_nested_mutable_snapshot(None, None);
@@ -179,8 +178,10 @@ fn test_optimistic_merges_success() {
     let (global, invalid, optimistic) = conflicting_apply_then_optimistic_merge(&state);
     let optimistic = optimistic.expect("expected optimistic merges");
 
-    let head = state.first_record();
-    let current = crate::state::readable_record_for(&head, global.snapshot_id(), &invalid).unwrap();
+    let current = state
+        .records()
+        .readable(global.snapshot_id(), &invalid)
+        .unwrap();
     let key = Rc::as_ptr(&current) as usize;
 
     let merged = optimistic.get(&key).expect("merged value present");

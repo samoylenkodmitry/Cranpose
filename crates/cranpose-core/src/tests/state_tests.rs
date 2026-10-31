@@ -6,30 +6,25 @@ fn writable_record(
     invalid: &SnapshotIdSet,
 ) -> Rc<StateRecord> {
     WriteTarget {
-        head: &state.head,
+        records: &state.records,
         id: state.id,
-        state,
     }
     .writable_record(snapshot_id, invalid)
 }
 
-fn create_record_chain(ids: &[SnapshotId]) -> Rc<StateRecord> {
-    let mut head: Option<Rc<StateRecord>> = None;
-
-    for &id in ids.iter().rev() {
-        head = Some(StateRecord::new(id, 0i32, head));
-    }
-
-    head.expect("create_record_chain called with empty ids")
+fn create_record_chain(ids: &[SnapshotId]) -> RecordChain {
+    RecordChain::new(ids.iter().map(|&id| StateRecord::new(id, 0i32)).collect())
 }
 
 struct ManualState {
-    head: Rc<StateRecord>,
+    records: RecordChain,
 }
 
 impl ManualState {
-    fn new(head: Rc<StateRecord>) -> Self {
-        Self { head }
+    fn new(records: SmallVec<[Rc<StateRecord>; 2]>) -> Self {
+        Self {
+            records: RecordChain::new(records),
+        }
     }
 }
 
@@ -38,19 +33,17 @@ impl StateObject for ManualState {
         ObjectId(999)
     }
 
-    fn first_record(&self) -> Rc<StateRecord> {
-        Rc::clone(&self.head)
+    fn records(&self) -> &RecordChain {
+        &self.records
     }
 
     fn try_readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Option<Rc<StateRecord>> {
-        Some(Rc::clone(&self.head))
+        Some(self.records.head())
     }
 
     fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
-        Rc::clone(&self.head)
+        self.records.head()
     }
-
-    fn prepend_state_record(&self, _: Rc<StateRecord>) {}
 
     fn promote_record(&self, _: SnapshotId) -> Result<(), &'static str> {
         Ok(())
@@ -132,8 +125,8 @@ fn snapshot_mutable_state_promote_missing_record_returns_error() {
 fn snapshot_mutable_state_promote_wrong_record_type_returns_error() {
     let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let child_snapshot = SnapshotId(usize::MAX - 31);
-    let wrong_record = StateRecord::new(child_snapshot, "wrong type", None);
-    StateObject::prepend_state_record(&*state, wrong_record);
+    let wrong_record = StateRecord::new(child_snapshot, "wrong type");
+    state.records().prepend(wrong_record);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         StateObject::promote_record(&*state, child_snapshot)
@@ -148,7 +141,7 @@ fn snapshot_mutable_state_promote_wrong_record_type_returns_error() {
 #[test]
 fn snapshot_mutable_state_commit_wrong_record_type_returns_error() {
     let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
-    let merged = StateRecord::new(SnapshotId(usize::MAX - 43), "wrong type", None);
+    let merged = StateRecord::new(SnapshotId(usize::MAX - 43), "wrong type");
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         StateObject::commit_merged_record(&*state, merged)
@@ -163,9 +156,9 @@ fn snapshot_mutable_state_commit_wrong_record_type_returns_error() {
 #[test]
 fn snapshot_mutable_state_merge_wrong_record_type_returns_none() {
     let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
-    let previous = StateRecord::new(SnapshotId(usize::MAX - 51), 1i32, None);
-    let current = StateRecord::new(SnapshotId(usize::MAX - 52), "wrong type", None);
-    let applied = StateRecord::new(SnapshotId(usize::MAX - 53), 2i32, None);
+    let previous = StateRecord::new(SnapshotId(usize::MAX - 51), 1i32);
+    let current = StateRecord::new(SnapshotId(usize::MAX - 52), "wrong type");
+    let applied = StateRecord::new(SnapshotId(usize::MAX - 53), 2i32);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         StateObject::merge_records(&*state, previous, current, applied)
@@ -180,11 +173,13 @@ fn snapshot_mutable_state_merge_wrong_record_type_returns_none() {
 
 #[test]
 fn test_used_locked_finds_invalid_snapshot() {
-    let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
-    let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, Some(tail));
-    let head = StateRecord::new(SnapshotId(10), 0i32, Some(invalid_rec));
+    let records = RecordChain::new(smallvec![
+        StateRecord::new(SnapshotId(10), 0i32),
+        StateRecord::new(INVALID_SNAPSHOT_ID, 0i32),
+        StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32),
+    ]);
 
-    let result = used_locked(&head);
+    let result = records.used();
     assert!(result.is_some());
     assert_eq!(result.unwrap().snapshot_id(), INVALID_SNAPSHOT_ID);
 }
@@ -195,11 +190,13 @@ fn test_used_locked_finds_obscured_record() {
 
     let pin_handle = crate::snapshot_pinning::track_pinning(SnapshotId(10), &SnapshotIdSet::EMPTY);
 
-    let oldest = StateRecord::new(SnapshotId(2), 0i32, None);
-    let newer = StateRecord::new(SnapshotId(5), 0i32, Some(oldest));
-    let head = StateRecord::new(SnapshotId(100), 0i32, Some(newer));
+    let records = RecordChain::new(smallvec![
+        StateRecord::new(SnapshotId(100), 0i32),
+        StateRecord::new(SnapshotId(5), 0i32),
+        StateRecord::new(SnapshotId(2), 0i32),
+    ]);
 
-    let result = used_locked(&head);
+    let result = records.used();
 
     assert!(result.is_some());
     let reused = result.unwrap();
@@ -217,9 +214,9 @@ fn test_used_locked_no_reusable_record() {
     crate::snapshot_pinning::reset_pinning_table();
 
     let high_id = SnapshotId::new(allocate_record_id().index() + 1000);
-    let head = create_record_chain(&[high_id, high_id.next(), high_id.next().next()]);
+    let records = create_record_chain(&[high_id, high_id.next(), high_id.next().next()]);
 
-    let result = used_locked(&head);
+    let result = records.used();
     assert!(
         result.is_none(),
         "Should find no reusable records when all are recent"
@@ -230,10 +227,12 @@ fn test_used_locked_no_reusable_record() {
 fn test_used_locked_single_old_record() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let old = StateRecord::new(SnapshotId(2), 0i32, None);
-    let head = StateRecord::new(SnapshotId(100), 0i32, Some(old));
+    let records = RecordChain::new(smallvec![
+        StateRecord::new(SnapshotId(100), 0i32),
+        StateRecord::new(SnapshotId(2), 0i32),
+    ]);
 
-    let result = used_locked(&head);
+    let result = records.used();
     assert!(result.is_none(), "Single old record should not be reused");
 }
 
@@ -242,7 +241,7 @@ fn test_readable_record_for_preexisting() {
     let head = create_record_chain(&[PREEXISTING_SNAPSHOT_ID]);
     let invalid = SnapshotIdSet::EMPTY;
 
-    let result = readable_record_for(&head, SnapshotId(10), &invalid);
+    let result = head.readable(SnapshotId(10), &invalid);
     assert!(result.is_some());
     assert_eq!(result.unwrap().snapshot_id(), PREEXISTING_SNAPSHOT_ID);
 }
@@ -252,11 +251,11 @@ fn test_readable_record_for_picks_highest_valid() {
     let head = create_record_chain(&[SnapshotId(10), SnapshotId(5), PREEXISTING_SNAPSHOT_ID]);
     let invalid = SnapshotIdSet::EMPTY;
 
-    let result = readable_record_for(&head, SnapshotId(10), &invalid);
+    let result = head.readable(SnapshotId(10), &invalid);
     assert!(result.is_some());
     assert_eq!(result.unwrap().snapshot_id(), SnapshotId(10));
 
-    let result = readable_record_for(&head, SnapshotId(7), &invalid);
+    let result = head.readable(SnapshotId(7), &invalid);
     assert!(result.is_some());
     assert_eq!(result.unwrap().snapshot_id(), SnapshotId(5));
 }
@@ -265,11 +264,10 @@ fn test_readable_record_for_picks_highest_valid() {
 fn test_new_overwritable_record_locked_reuses_invalid() {
     let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
 
-    let current_head = state.first_record();
-    let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, current_head.next());
-    current_head.set_next(Some(Rc::clone(&invalid_rec)));
+    let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32);
+    state.records().prepend(Rc::clone(&invalid_rec));
 
-    let result = new_overwritable_record_locked(&*state);
+    let result = state.records().overwritable();
 
     assert!(Rc::ptr_eq(&result, &invalid_rec));
     assert_eq!(result.snapshot_id(), SNAPSHOT_ID_MAX);
@@ -282,13 +280,13 @@ fn test_new_overwritable_record_locked_creates_new() {
     let _pin_handle = crate::snapshot_pinning::track_pinning(SnapshotId(1), &SnapshotIdSet::EMPTY);
 
     let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
-    let old_head = state.first_record();
+    let old_head = state.records().head();
 
-    let result = new_overwritable_record_locked(&*state);
+    let result = state.records().overwritable();
 
     assert_eq!(result.snapshot_id(), SNAPSHOT_ID_MAX);
 
-    let new_head = state.first_record();
+    let new_head = state.records().head();
     assert!(
         Rc::ptr_eq(&new_head, &result),
         "new_head ({:p}) should equal result ({:p})",
@@ -296,8 +294,11 @@ fn test_new_overwritable_record_locked_creates_new() {
         Rc::as_ptr(&result)
     );
 
-    assert!(result.next().is_some());
-    assert!(Rc::ptr_eq(&result.next().unwrap(), &old_head));
+    assert_eq!(
+        state.records().ids()[1],
+        (old_head.snapshot_id(), false),
+        "the old head follows the new one"
+    );
 }
 
 #[test]
@@ -306,9 +307,8 @@ fn test_writable_record_reuses_invalid_record() {
 
     let state = SnapshotMutableState::new_in_rc(7i32, Rc::new(NeverEqual));
 
-    let head = state.first_record();
-    let invalid = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, head.next());
-    head.set_next(Some(Rc::clone(&invalid)));
+    let invalid = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32);
+    state.records().prepend(Rc::clone(&invalid));
 
     let snapshot_id = allocate_record_id();
     let result = writable_record(&state, snapshot_id, &SnapshotIdSet::EMPTY);
@@ -330,9 +330,10 @@ fn test_writable_record_creates_new_when_reuse_disallowed() {
     let pin = crate::snapshot_pinning::track_pinning(SnapshotId(1), &SnapshotIdSet::EMPTY);
 
     let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
-    let original_head = state.first_record();
-    let preexisting = original_head
-        .next()
+    let original_head = state.records().head();
+    let preexisting = state
+        .records()
+        .at(PREEXISTING_SNAPSHOT_ID)
         .expect("preexisting record should exist for newly created state");
 
     let snapshot_id = allocate_record_id();
@@ -349,7 +350,7 @@ fn test_writable_record_creates_new_when_reuse_disallowed() {
     assert_eq!(result.snapshot_id(), snapshot_id);
     result.with_value(|value: &i32| assert_eq!(*value, 42));
 
-    let new_head = state.first_record();
+    let new_head = state.records().head();
     assert!(
         Rc::ptr_eq(&new_head, &result),
         "Newly created record should become the head of the chain"
@@ -360,7 +361,7 @@ fn test_writable_record_creates_new_when_reuse_disallowed() {
 
 #[test]
 fn test_state_record_clear_for_reuse() {
-    let record = StateRecord::new(SnapshotId(10), 42i32, None);
+    let record = StateRecord::new(SnapshotId(10), 42i32);
 
     record.with_value(|val: &i32| {
         assert_eq!(*val, 42);
@@ -386,10 +387,8 @@ fn test_overwrite_unused_records_no_old_records() {
         "Should retain multiple records when none are old enough"
     );
 
-    let mut cursor = Some(state.first_record());
-    while let Some(record) = cursor {
-        assert_ne!(record.snapshot_id(), INVALID_SNAPSHOT_ID);
-        cursor = record.next();
+    for (id, _) in state.records().ids() {
+        assert_ne!(id, INVALID_SNAPSHOT_ID);
     }
 }
 
@@ -397,15 +396,19 @@ fn test_overwrite_unused_records_no_old_records() {
 fn test_overwrite_unused_records_basic_cleanup() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let rec1 = StateRecord::new(SnapshotId(100), 1i32, None);
-    let rec2 = StateRecord::new(SnapshotId(200), 2i32, Some(Rc::clone(&rec1)));
-    let rec3 = StateRecord::new(SnapshotId(300), 3i32, Some(Rc::clone(&rec2)));
+    let rec1 = StateRecord::new(SnapshotId(100), 1i32);
+    let rec2 = StateRecord::new(SnapshotId(200), 2i32);
+    let rec3 = StateRecord::new(SnapshotId(300), 3i32);
 
-    let test_state = ManualState::new(Rc::clone(&rec3));
+    let test_state = ManualState::new(smallvec![
+        Rc::clone(&rec3),
+        Rc::clone(&rec2),
+        Rc::clone(&rec1),
+    ]);
 
     let _pin = crate::snapshot_pinning::track_pinning(SnapshotId(1000), &SnapshotIdSet::EMPTY);
 
-    let result = overwrite_unused_records_locked(&test_state);
+    let result = test_state.records().overwrite_unused();
 
     assert_eq!(rec3.snapshot_id(), SnapshotId(300));
     assert_eq!(rec2.snapshot_id(), INVALID_SNAPSHOT_ID);
@@ -418,12 +421,9 @@ fn test_overwrite_unused_records_basic_cleanup() {
 fn test_overwrite_unused_records_single_record_only() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
+    let state = ManualState::new(smallvec![StateRecord::new(SnapshotId(2), 42i32)]);
 
-    let head = state.first_record();
-    head.set_next(None);
-
-    let should_retain = state.overwrite_unused_records();
+    let should_retain = state.records().overwrite_unused();
 
     assert!(!should_retain, "Single record should return false");
 }
@@ -433,9 +433,12 @@ fn snapshot_state_try_get_reports_missing_visible_record_without_panicking() {
     crate::snapshot_pinning::reset_pinning_table();
 
     let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
-    let head = state.first_record();
-    head.set_snapshot_id(SNAPSHOT_ID_MAX);
-    head.set_next(None);
+    state.records().head().set_snapshot_id(SNAPSHOT_ID_MAX);
+    state
+        .records()
+        .at(PREEXISTING_SNAPSHOT_ID)
+        .expect("a new state keeps its preexisting record")
+        .set_tombstone(true);
 
     assert_eq!(state.try_get(), None);
 }
@@ -444,18 +447,20 @@ fn snapshot_state_try_get_reports_missing_visible_record_without_panicking() {
 fn test_overwrite_unused_records_clears_values() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
-    let old_rec1 = StateRecord::new(SnapshotId(2), 999i32, Some(tail));
-    let old_rec2 = StateRecord::new(SnapshotId(3), 888i32, Some(Rc::clone(&old_rec1)));
-    let head = StateRecord::new(SnapshotId(150), 42i32, Some(old_rec2));
-    let state = ManualState::new(head);
+    let old_rec1 = StateRecord::new(SnapshotId(2), 999i32);
+    let state = ManualState::new(smallvec![
+        StateRecord::new(SnapshotId(150), 42i32),
+        StateRecord::new(SnapshotId(3), 888i32),
+        Rc::clone(&old_rec1),
+        StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32),
+    ]);
 
     old_rec1.with_value(|val: &i32| {
         assert_eq!(*val, 999);
     });
 
     let _pin = crate::snapshot_pinning::track_pinning(SnapshotId(100), &SnapshotIdSet::EMPTY);
-    overwrite_unused_records_locked(&state);
+    state.records().overwrite_unused();
 
     assert_eq!(old_rec1.snapshot_id(), INVALID_SNAPSHOT_ID);
 }
@@ -464,16 +469,20 @@ fn test_overwrite_unused_records_clears_values() {
 fn test_overwrite_unused_records_mixed_old_and_new() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let preexisting = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
-    let rec2 = StateRecord::new(SnapshotId(2), 100i32, Some(preexisting));
-    let rec5 = StateRecord::new(SnapshotId(5), 100i32, Some(Rc::clone(&rec2)));
-    let rec50 = StateRecord::new(SnapshotId(50), 100i32, Some(Rc::clone(&rec5)));
-    let head = StateRecord::new(SnapshotId(120), 100i32, Some(Rc::clone(&rec50)));
-    let state = ManualState::new(head);
+    let rec2 = StateRecord::new(SnapshotId(2), 100i32);
+    let rec5 = StateRecord::new(SnapshotId(5), 100i32);
+    let rec50 = StateRecord::new(SnapshotId(50), 100i32);
+    let state = ManualState::new(smallvec![
+        StateRecord::new(SnapshotId(120), 100i32),
+        Rc::clone(&rec50),
+        Rc::clone(&rec5),
+        Rc::clone(&rec2),
+        StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32),
+    ]);
 
     let _pin = crate::snapshot_pinning::track_pinning(SnapshotId(40), &SnapshotIdSet::EMPTY);
 
-    let should_retain = overwrite_unused_records_locked(&state);
+    let should_retain = state.records().overwrite_unused();
     assert!(should_retain);
 
     assert_eq!(rec50.snapshot_id(), SnapshotId(50));
@@ -486,19 +495,19 @@ fn test_readable_record_for_skips_invalid_set() {
     let head = create_record_chain(&[SnapshotId(10), SnapshotId(5), PREEXISTING_SNAPSHOT_ID]);
     let invalid = SnapshotIdSet::new().set(SnapshotId(5));
 
-    let result = readable_record_for(&head, SnapshotId(10), &invalid);
+    let result = head.readable(SnapshotId(10), &invalid);
     assert!(result.is_some());
     assert_eq!(result.unwrap().snapshot_id(), SnapshotId(10));
 
-    let result = readable_record_for(&head, SnapshotId(7), &invalid);
+    let result = head.readable(SnapshotId(7), &invalid);
     assert!(result.is_some());
     assert_eq!(result.unwrap().snapshot_id(), PREEXISTING_SNAPSHOT_ID);
 }
 
 #[test]
 fn test_assign_value_copies_int() {
-    let source = StateRecord::new(SnapshotId(10), 42i32, None);
-    let target = StateRecord::new(SnapshotId(20), 0i32, None);
+    let source = StateRecord::new(SnapshotId(10), 42i32);
+    let target = StateRecord::new(SnapshotId(20), 0i32);
 
     target.assign_value(&source).expect("copy int value");
 
@@ -516,8 +525,8 @@ fn test_assign_value_copies_int() {
 
 #[test]
 fn test_assign_value_copies_string() {
-    let source = StateRecord::new(SnapshotId(10), "hello".to_string(), None);
-    let target = StateRecord::new(SnapshotId(20), "world".to_string(), None);
+    let source = StateRecord::new(SnapshotId(10), "hello".to_string());
+    let target = StateRecord::new(SnapshotId(20), "world".to_string());
 
     target.assign_value(&source).expect("copy string value");
 
@@ -532,8 +541,8 @@ fn test_assign_value_copies_string() {
 
 #[test]
 fn test_assign_value_reports_cleared_source() {
-    let source = StateRecord::new(SnapshotId(10), 42i32, None);
-    let target = StateRecord::new(SnapshotId(20), 0i32, None);
+    let source = StateRecord::new(SnapshotId(10), 42i32);
+    let target = StateRecord::new(SnapshotId(20), 0i32);
 
     source.clear_for_reuse();
 
@@ -546,8 +555,8 @@ fn test_assign_value_reports_cleared_source() {
 
 #[test]
 fn test_assign_value_overwrites_existing_value() {
-    let source = StateRecord::new(SnapshotId(10), 100i32, None);
-    let target = StateRecord::new(SnapshotId(20), 999i32, None);
+    let source = StateRecord::new(SnapshotId(10), 100i32);
+    let target = StateRecord::new(SnapshotId(20), 999i32);
 
     target.with_value(|val: &i32| {
         assert_eq!(*val, 999);
@@ -568,8 +577,8 @@ fn test_assign_value_with_custom_type() {
         y: f64,
     }
 
-    let source = StateRecord::new(SnapshotId(10), Point { x: 1.5, y: 2.5 }, None);
-    let target = StateRecord::new(SnapshotId(20), Point { x: 0.0, y: 0.0 }, None);
+    let source = StateRecord::new(SnapshotId(10), Point { x: 1.5, y: 2.5 });
+    let target = StateRecord::new(SnapshotId(20), Point { x: 0.0, y: 0.0 });
 
     target.assign_value(&source).expect("copy point value");
 
@@ -580,7 +589,7 @@ fn test_assign_value_with_custom_type() {
 
 #[test]
 fn test_assign_value_self_assignment() {
-    let record = StateRecord::new(SnapshotId(10), 42i32, None);
+    let record = StateRecord::new(SnapshotId(10), 42i32);
 
     record.assign_value(&record).expect("self-assign int value");
 
@@ -602,7 +611,7 @@ fn event_loop_writes_keep_the_record_chain_bounded() {
         .expect("event snapshot applies");
         let _ = state.get();
         if event % 500 == 499 {
-            lens.push(record_chain(&state.head).len());
+            lens.push(state.records.ids().len());
         }
     }
 
@@ -635,8 +644,8 @@ fn global_writes_keep_the_state_arena_flat() {
 
 #[test]
 fn test_assign_value_with_vec() {
-    let source = StateRecord::new(SnapshotId(10), vec![1, 2, 3, 4, 5], None);
-    let target = StateRecord::new(SnapshotId(20), Vec::<i32>::new(), None);
+    let source = StateRecord::new(SnapshotId(10), vec![1, 2, 3, 4, 5]);
+    let target = StateRecord::new(SnapshotId(20), Vec::<i32>::new());
 
     target.assign_value(&source).expect("copy vec value");
 
