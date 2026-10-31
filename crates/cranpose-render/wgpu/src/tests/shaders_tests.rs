@@ -326,7 +326,17 @@ fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
     let stop_words = STOP_CHUNK * words(size_of::<cranpose_ui_graphics::GradientStopRecord>());
     assert!(SHADER.contains(&format!("array<vec4<u32>, {brush_words}>")));
     assert!(SHADER.contains(&format!("array<vec4<f32>, {stop_words}>")));
-    assert!(SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
+    let placement_words = PLACEMENT_CHUNK * words(size_of::<crate::run_store::PlacementData>());
+    assert!(SHADER.contains(&format!("array<vec4<f32>, {placement_words}>")));
+}
+
+#[test]
+fn storage_shaders_index_whole_placements() {
+    let source = storage_shape_shader();
+    assert!(source.contains("var<storage, read> placements: array<Placement>;"));
+    assert!(source.contains("return placements[record.placement];"));
+    assert!(!source.contains("placement_words"));
+    assert!(!source.contains("fn placement_at("));
 }
 
 #[test]
