@@ -363,8 +363,6 @@ pub struct LayoutNode {
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
 }
 
-pub(crate) const RECYCLED_LAYOUT_NODE_POOL_LIMIT: usize = 128;
-
 pub(crate) fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
     crate::thread_state::with(|state| {
         Rc::clone(
@@ -1231,7 +1229,7 @@ impl Node for LayoutNode {
     }
 
     fn recycle_pool_limit(&self) -> Option<usize> {
-        Some(RECYCLED_LAYOUT_NODE_POOL_LIMIT)
+        Some(super::node_pool_limit::node_pool_limit())
     }
 
     fn prepare_for_recycle(&mut self) {

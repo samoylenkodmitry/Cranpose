@@ -44,3 +44,25 @@ fn memory_turns_tight_below_a_quarter_free_and_ample_again_above_three_eighths()
     assert_eq!(tight.of_heap(375, total), MemoryHeadroom::Tight);
     assert_eq!(tight.of_heap(376, total), MemoryHeadroom::Ample);
 }
+
+#[test]
+fn a_list_with_little_memory_left_keeps_no_layout_nodes_for_later_rows() {
+    let mut ample = LazyScreen::new(VIEWPORT, TitledRows);
+    let mut tight = LazyScreen::new(VIEWPORT, TitledRows);
+    tight.set_headroom(MemoryHeadroom::Tight);
+    // Jumps that bring rows no pass composed before.
+    for row in [35, 0, 35] {
+        ample.scroll_to(row, 0.0);
+        tight.scroll_to(row, 0.0);
+        assert_eq!(
+            tight.texts(),
+            ample.texts(),
+            "the frame at row {row} draws the same rows"
+        );
+    }
+    assert_eq!(
+        tight.recycled_layout_nodes(),
+        0,
+        "tight memory frees the layout nodes the rows leave"
+    );
+}
