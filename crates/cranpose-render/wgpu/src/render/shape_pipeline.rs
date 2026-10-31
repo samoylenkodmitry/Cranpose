@@ -42,8 +42,8 @@ pub(crate) struct ShapeVariant {
     kinds: u8,
     brush: Option<u8>,
     solid: bool,
-    /// How its records meet their placements' clips. A rounded clip gives
-    /// every fragment its coverage, on the general entry points.
+    /// How its records meet their placements' clips. Under a rounded clip, a
+    /// solid fill drawn flat has entry points of its own, the rest the general.
     clip: SegmentClip,
     interior: bool,
     dither: bool,
@@ -161,7 +161,9 @@ impl ShapeVariant {
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {
         let fill = self.kind() == Some(FRAGMENT_KIND_FILL as u8);
-        if self.rounded() {
+        if self.rounded() && self.solid && fill && flat && !self.dither {
+            ("vs_record_rounded_fill", "fs_rounded_fill")
+        } else if self.rounded() {
             ("vs_record", "fs_main")
         } else if self.solid && flat && self.kinds == TRAPEZOID_KIND {
             SLICE_ENTRIES[usize::from(self.dither)]
