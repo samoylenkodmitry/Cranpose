@@ -134,6 +134,55 @@ fn a_delay_wakes_a_sleeping_host_and_its_change_presents() {
     }
 }
 
+// A benchmark's hover driver moves the mouse from a frame callback, and only
+// a draw reads the hover, so nothing recomposes in that frame.
+#[test]
+fn a_mouse_move_from_a_frame_draws_its_hover_in_that_frame() {
+    let moves = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&moves);
+    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], move || {
+        let mouse = mouse_input::local_mouse_input();
+        let counted = Rc::clone(&counted);
+        LaunchedEffectAsync((), move |scope| {
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                while scope.is_active() {
+                    clock.next_frame().await;
+                    counted.set(counted.get() + 1);
+                    // Right of the box at first, then onto it.
+                    let x = if counted.get() < 3 { 39.0 } else { 20.0 };
+                    let point = Point { x, y: 15.0 };
+                    mouse.move_to(mouse_input::MouseInputTarget::Primary, point);
+                }
+            })
+        });
+        let interaction = rememberMutableInteractionSource();
+        let hovered = collect_is_hovered_as_state(&interaction);
+        Spacer(
+            Modifier::empty()
+                .size_points(30.0, 30.0)
+                .hoverable(interaction, true)
+                .draw_behind(move |scope| {
+                    scope.draw_rect(Brush::solid(if hovered.get() { GREEN } else { RED }));
+                }),
+        );
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    let mut frame_time = 1;
+    while moves.get() < 3 {
+        assert!(frame_time < 100_000_000, "every frame moves the mouse");
+        assert_eq!(center(&mut framebuffer), [255, 0, 0, 255]);
+        framebuffer.tick(frame_time);
+        frame_time += 16_000_000;
+    }
+    assert_eq!(
+        center(&mut framebuffer),
+        [0, 255, 0, 255],
+        "the frame that moves the mouse onto the box draws it hovered"
+    );
+}
+
 /// Draws the whole picture of `framebuffer` in strips of `rows` rows, as a
 /// host with a small buffer does.
 fn picture_in_strips(framebuffer: &mut Framebuffer, rows: u32) -> Vec<u8> {
