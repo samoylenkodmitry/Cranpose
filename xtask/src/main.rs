@@ -16,8 +16,9 @@ use std::{
 
 use regex::{Captures, Regex};
 
-use crate::duplicate_debt::{
-    DuplicateDebt, ALL_FEATURES_EXTRA_DUPLICATE_DEBT, WORKSPACE_DUPLICATE_DEBT,
+use crate::{
+    duplicate_debt::{DuplicateDebt, ALL_FEATURES_EXTRA_DUPLICATE_DEBT, WORKSPACE_DUPLICATE_DEBT},
+    forked_crates::FORKED_CRATES,
 };
 
 fn main() -> ExitCode {
@@ -2021,19 +2022,6 @@ fn is_release_crate(name: &str) -> bool {
     (name.starts_with("cranpose") && !FORKED_CRATES.contains(&name)) || name == "coroflow"
 }
 
-/// Upstream crates Cranpose ships patched under its own names
-/// (forks/README.md). They keep the upstream version and publish ahead of
-/// the release crates instead of in lockstep with them.
-const FORKED_CRATES: &[&str] = &[
-    "cranpose-wgpu",
-    "cranpose-wgpu-core",
-    "cranpose-wgpu-core-deps-apple",
-    "cranpose-wgpu-core-deps-emscripten",
-    "cranpose-wgpu-core-deps-wasm",
-    "cranpose-wgpu-core-deps-windows-linux-android",
-    "cranpose-wgpu-hal",
-];
-
 /// The names [`is_release_crate`] accepts, as a regex fragment.
 const RELEASE_CRATE_PATTERN: &str = r"(?:cranpose[\w-]*|coroflow)";
 
@@ -3045,6 +3033,7 @@ mod android_contracts;
 mod complexity_gate;
 mod duplicate_debt;
 mod duplication_gate;
+mod forked_crates;
 mod test_layout;
 mod thread_local_budget;
 mod workflow_contracts;
