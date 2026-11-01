@@ -316,6 +316,14 @@ where
             None => {
                 let slot =
                     u32::try_from(self.slots.len()).expect("a cache holds fewer than 2^32 entries");
+                // A full cache keeps its slots, so growth adds a quarter of
+                // them, where doubling would leave room the bound may never
+                // let entries take.
+                let len = self.slots.len();
+                if len == self.slots.capacity() {
+                    let room = self.cap.get().saturating_sub(len);
+                    self.slots.reserve_exact((len / 4).max(8).min(room).max(1));
+                }
                 self.slots.push(Some(entry));
                 slot
             }
