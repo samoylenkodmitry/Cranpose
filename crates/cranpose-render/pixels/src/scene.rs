@@ -3,10 +3,11 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
+    glyph_reach::{InkSpread, glyph_part},
     graph::{InlineNode, LayerChange, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    text_glyphs::{casts_shadow, lines_part},
+    text_glyphs::casts_shadow,
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -155,13 +156,14 @@ pub(crate) struct ShadowDraw {
 
 impl TextDraw {
     // The part of `rect`, where the text draws from its top left corner,
-    // in which its glyphs draw: its lines, or all of it for a text that
-    // casts a shadow.
+    // in which its glyphs draw: its lines and their ink, or all of it for a
+    // text that casts a shadow.
     pub(crate) fn glyph_reach(&self, rect: Rect) -> Rect {
         if casts_shadow(self.text.as_ref().into(), &self.text_style) {
             rect
         } else {
-            lines_part(rect, &self.layout, self.scale)
+            let spread = InkSpread::of_text(&self.text_style, &self.text.span_styles, &self.layout);
+            glyph_part(rect, &self.layout, self.scale, spread)
         }
     }
 

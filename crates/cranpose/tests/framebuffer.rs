@@ -454,16 +454,16 @@ fn layers_that_draw_more_or_less_show_as_a_new_screen_shows_them() {
 
 // A frame a host keeps: the areas a framebuffer changes are drawn into it,
 // in strips of eight rows as a board with a small buffer draws them.
-struct KeptFrame {
+pub(crate) struct KeptFrame {
     width: u32,
     kept: Vec<u8>,
     redrawn: Vec<u8>,
     strip: Vec<u8>,
-    areas: Vec<PixelRect>,
+    pub(crate) areas: Vec<PixelRect>,
 }
 
 impl KeptFrame {
-    fn new(width: u32, height: u32) -> Self {
+    pub(crate) fn new(width: u32, height: u32) -> Self {
         let bytes = (width * height * 4) as usize;
         Self {
             width,
@@ -476,7 +476,7 @@ impl KeptFrame {
 
     // Draws the areas `framebuffer` changed into the kept frame, and checks
     // that it shows what a whole redraw shows.
-    fn draw_changed_areas(&mut self, framebuffer: &mut Framebuffer, frame: u64) {
+    pub(crate) fn draw_changed_areas(&mut self, framebuffer: &mut Framebuffer, frame: u64) {
         let width = self.width;
         framebuffer.changed_areas(&mut self.areas);
         for area in &self.areas {

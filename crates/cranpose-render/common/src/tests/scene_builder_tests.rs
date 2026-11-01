@@ -2679,7 +2679,7 @@ fn stored_effect_hash_tracks_local_effect_only() {
 }
 
 #[test]
-fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
+fn text_node_preserves_rtl_alignment_and_baseline_shift() {
     let mut text_style = TextStyle::default();
     text_style.paragraph_style.text_align = TextAlign::Start;
     text_style.paragraph_style.text_direction = TextDirection::Rtl;
@@ -2702,21 +2702,14 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
 
     let graph = build_layer_node_for_test(snapshot, false);
     let text = first_text_primitive(&graph);
-    let clip = text
-        .clip
-        .expect("clipped overflow should produce a clip rect");
 
     assert!(
         text.rect.x + text.layout.line_left(0) > 0.0,
         "RTL start alignment should shift the line within the available width"
     );
-    assert!(
-        clip.y < text.rect.y,
-        "baseline shift must expand the clip upward so superscript glyphs are preserved"
-    );
-    assert!(
-        clip.intersect(text.rect).is_some(),
-        "the clip rect must intersect the shifted text draw rect"
+    assert_eq!(
+        text.clip, None,
+        "a text that fits its box draws uncut, its superscript glyphs above the box too"
     );
 }
 
@@ -2776,8 +2769,11 @@ fn first_text_primitive(layer: &LayerNode) -> &TextPrimitiveNode {
     text
 }
 
+// A text in a node of a fixed width lays out as wide as the node, and one
+// that fits it draws uncut, as Compose cuts a text only when its layout
+// overflows the box: a slant or a stroke past its glyphs' advances shows.
 #[test]
-fn a_clipped_text_draws_in_its_layout_box_and_keeps_the_clip_padding() {
+fn a_text_that_fits_its_box_lays_out_as_wide_and_draws_uncut() {
     let options = TextLayoutOptions {
         overflow: TextOverflow::Clip,
         ..Default::default()
@@ -2795,16 +2791,48 @@ fn a_clipped_text_draws_in_its_layout_box_and_keeps_the_clip_padding() {
 
     let graph = build_layer_node_for_test(snapshot, false);
     let text = first_text_primitive(&graph);
-    let clip = text.clip.expect("clipped text should keep a clip rect");
 
     assert_eq!(
         text.rect.width,
         text.layout.width(),
         "a text in a node of a fixed width lays out as wide as the node"
     );
+    assert_eq!(text.clip, None, "a text that fits its box draws uncut");
+}
+
+// A text whose line overflows its box is cut at the box, with the clip
+// padding around it.
+#[test]
+fn an_overflowing_text_is_cut_at_its_box_with_the_clip_padding() {
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        soft_wrap: false,
+        max_lines: 1,
+        ..Default::default()
+    };
+    let (_composition, text) = text_slices(
+        "a line far too long for its box",
+        TextStyle::default(),
+        options,
+        60.0,
+    );
+    let snapshot = BuildNodeSnapshot {
+        node_id: NodeId(1),
+        size: Size {
+            width: 60.0,
+            height: 48.0,
+        },
+        slices: text,
+        ..Default::default()
+    };
+
+    let graph = build_layer_node_for_test(snapshot, false);
+    let text = first_text_primitive(&graph);
+    let clip = text.clip.expect("an overflowing text is cut");
+
     assert_eq!(
-        clip.width, 322.0,
-        "text clip should still preserve the full content box plus clip padding"
+        clip.width, 62.0,
+        "the clip holds the box and the clip padding"
     );
 }
 

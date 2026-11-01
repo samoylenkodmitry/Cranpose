@@ -9,6 +9,8 @@ use cranpose_ui::{
     text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextMotion},
 };
 
+use crate::glyph_reach::InkSpread;
+
 /// The paint of a text node's glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextPaint {
@@ -36,21 +38,24 @@ pub struct TextPaint {
     /// Whether the style or a span casts a shadow, which spreads past the
     /// glyphs.
     pub casts_shadow: bool,
+    /// How far past their outlines the glyphs put ink: a stroke's outer
+    /// half, and the bold or italic a face of the layout synthesizes.
+    pub spread: InkSpread,
 }
 
 impl TextPaint {
     /// The paint of a text in `style`, whose [`TextStyle::render_hash`] is
-    /// `style_hash`, with `spans`, at `font_size`, whose string's
-    /// `RenderString::render_hash` and emptiness are `text`.
+    /// `style_hash`, with `spans`, at `font_size`, laid out as `layout`, whose
+    /// string's `RenderString::render_hash` and emptiness are `text`.
     pub fn of(
         style: &TextStyle,
         style_hash: u64,
         spans: &[RangeStyle<SpanStyle>],
-        font_size: f32,
+        (font_size, layout): (f32, &cranpose_text::TextLayout),
         (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
-        let spans = SpanPaint::of(spans);
+        let span_paint = SpanPaint::of(spans);
         let plain = span_style.background.is_none()
             && span_style.shadow.is_none()
             && span_style.brush.is_none()
@@ -58,9 +63,9 @@ impl TextPaint {
                 span_style.draw_style,
                 Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0
             )
-            && !spans.foreground
+            && !span_paint.foreground
             && !decorates(span_style.text_decoration)
-            && !spans.decoration;
+            && !span_paint.decoration;
         Self {
             plain,
             color: resolve_text_color_without_gradient_fallback(style, Color::WHITE),
@@ -76,7 +81,13 @@ impl TextPaint {
                 .text_motion
                 .unwrap_or(TextMotion::Static)
                 == TextMotion::Static,
-            casts_shadow: span_style.shadow.is_some() || spans.shadow,
+            casts_shadow: span_style.shadow.is_some() || span_paint.shadow,
+            // A plain text and its spans draw no stroke.
+            spread: if plain {
+                InkSpread::of(0.0, layout.synthesized_style())
+            } else {
+                InkSpread::of_text(style, spans, layout)
+            },
         }
     }
 }
