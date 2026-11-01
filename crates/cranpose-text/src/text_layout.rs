@@ -93,7 +93,7 @@ fn glyph_reach(body: &LayoutBody, reach: InkReach) -> Rect {
     if !may_ink_past_lines(body, reach) {
         return lines;
     }
-    find_ink_past_lines(body, (left, right)).map_or(lines, |past| lines.union(past))
+    find_ink_past_lines(body, (left, right), reach).map_or(lines, |past| lines.union(past))
 }
 
 // Widths from `min` up to but not including `max`.

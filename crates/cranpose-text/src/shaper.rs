@@ -39,10 +39,10 @@ pub struct Shaper {
     // and their glyphs, reused from item to item.
     word_ends: Vec<usize>,
     pieces: Vec<(Range<usize>, Range<usize>)>,
-    // Whether a glyph shaped since the layouter last took it puts ink past
-    // its advance or its typeface's lines, and the bold and the italic the
-    // glyphs ask of faces that lack them.
-    inks_out: bool,
+    // How the ink of the glyphs shaped or noted since the layouter last took
+    // it reaches, and the bold and the italic the glyphs ask of faces that
+    // lack them.
+    ink_reach: InkReach,
     synthesized: SynthesizedStyle,
 }
 
@@ -119,7 +119,7 @@ impl Default for Shaper {
             words: WordCache::default(),
             word_ends: Vec::new(),
             pieces: Vec::new(),
-            inks_out: false,
+            ink_reach: InkReach::Within,
             synthesized: SynthesizedStyle::default(),
         }
     }
@@ -161,7 +161,9 @@ impl Shaper {
             && let Some(inks_out) =
                 plain[index].append((font, item.typeface), text, item.range.clone(), glyphs)
         {
-            self.inks_out |= inks_out;
+            if inks_out {
+                self.ink_reach = InkReach::Glyphs;
+            }
             return;
         }
         // Made here, the HarfRust plan does not take its stack under the
@@ -170,26 +172,27 @@ impl Shaper {
         let start = glyphs.len();
         self.shape_with_plan((face, plan), text, (item, span, settings), context, glyphs);
         let inks = item.typeface.glyph_inks();
-        self.inks_out |= glyphs[start..]
+        if glyphs[start..]
             .iter()
-            .any(|glyph| inks.leaves_band(item.typeface, glyph.id()));
+            .any(|glyph| inks.leaves_band(item.typeface, glyph.id()))
+        {
+            self.ink_reach = InkReach::Glyphs;
+        }
     }
 
-    // Whether a glyph shaped since the last call puts ink past its advance
-    // or the band of its typeface's ASCII ink, and the bold and the italic
-    // the glyphs ask of faces that lack them.
+    // How the ink of the glyphs shaped or noted since the last call
+    // reaches, and the bold and the italic the glyphs ask of faces that
+    // lack them.
     pub(crate) fn take_ink_reach(&mut self) -> (InkReach, SynthesizedStyle) {
-        let reach = if std::mem::take(&mut self.inks_out) {
-            InkReach::Past
-        } else {
-            InkReach::Within
-        };
-        (reach, std::mem::take(&mut self.synthesized))
+        (
+            std::mem::take(&mut self.ink_reach),
+            std::mem::take(&mut self.synthesized),
+        )
     }
 
     // Notes glyphs taken from a layout, whose ink reaches as `reach` says.
     pub(crate) fn note_ink_reach(&mut self, reach: InkReach) {
-        self.inks_out |= reach == InkReach::Past;
+        self.ink_reach = self.ink_reach.max(reach);
     }
 
     // Notes the glyphs of `item` in `span`, shaped or taken from a layout,
@@ -239,7 +242,7 @@ impl Shaper {
             word_ends,
             pieces,
             // `shape` reads the item's glyphs once they are all placed.
-            inks_out: _,
+            ink_reach: _,
             synthesized: _,
         } = self;
         let (direction, script, language) =
