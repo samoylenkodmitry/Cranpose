@@ -6,6 +6,7 @@ use cranpose_ui_graphics::Point;
 use crate::{
     draw::RenderItem,
     scene::{DrawShape, ImageDraw, ItemCounts, RasterScene, ShadowDraw, TextDraw},
+    scene_list::SceneList,
 };
 
 // An item of a scene, borrowed from its list.
@@ -26,7 +27,7 @@ pub(crate) trait SceneItem: Sized {
     // How many items of this kind `counts` holds.
     fn count(counts: &mut ItemCounts) -> &mut usize;
     // This kind's list in `scene`, and the scene's draw order.
-    fn lists(scene: &mut RasterScene) -> (&mut Vec<Self>, &mut Vec<RenderItem>);
+    fn lists(scene: &mut RasterScene) -> (&mut SceneList<Self>, &mut SceneList<RenderItem>);
     // Snaps the item to the pixel grid as its layer, whose snap anchor is
     // `anchor`, lands on it.
     fn snap_to(&mut self, anchor: Point);
@@ -51,7 +52,9 @@ macro_rules! scene_item {
                 &mut counts.$list
             }
 
-            fn lists(scene: &mut RasterScene) -> (&mut Vec<Self>, &mut Vec<RenderItem>) {
+            fn lists(
+                scene: &mut RasterScene,
+            ) -> (&mut SceneList<Self>, &mut SceneList<RenderItem>) {
                 (&mut scene.$list, &mut scene.order)
             }
 

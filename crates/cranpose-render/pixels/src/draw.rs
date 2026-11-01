@@ -262,7 +262,7 @@ fn draw_raster_scene(
         width,
         height,
     };
-    let mut reach = Vec::new();
+    let mut reach = crate::scene_list::SceneList::new();
     scene.reach_into(target.window(), &mut reach);
     draw_raster_window(&mut target, scene, &reach, diagnostics, text);
 }

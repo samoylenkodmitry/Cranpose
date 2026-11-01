@@ -10,6 +10,7 @@ use super::{
 use crate::{
     scene::{RasterScene, TextDraw},
     scene_item::ItemRef,
+    scene_list::SceneList,
     style::point_in_resolved_rounded_rect,
 };
 
@@ -77,7 +78,7 @@ impl RasterScene {
     /// Puts into `reach` where each item of the order can draw in `window`,
     /// in order: what a host that draws a picture in strips would otherwise
     /// work out again for every strip.
-    pub(crate) fn reach_into(&self, window: ClipBounds, reach: &mut Vec<Option<ClipBounds>>) {
+    pub(crate) fn reach_into(&self, window: ClipBounds, reach: &mut SceneList<Option<ClipBounds>>) {
         reach.clear();
         reach.extend(
             self.order

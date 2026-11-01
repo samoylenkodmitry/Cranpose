@@ -257,7 +257,7 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
     });
 
     let scene = build_raster_scene_for_test(&graph);
-    let [shape] = scene.shapes.as_slice() else {
+    let [shape] = &scene.shapes[..] else {
         panic!("expected exactly one translated child shape");
     };
     assert_eq!(
@@ -521,7 +521,7 @@ fn push_text_style_draws_emits_decoration_shapes() {
         "text decoration shapes should snap after inherited translated-content anchors"
     );
     assert_eq!(
-        scene.order,
+        scene.order[..],
         [
             RenderItem::Text(0),
             RenderItem::Shape(0),

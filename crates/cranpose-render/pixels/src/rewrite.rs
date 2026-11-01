@@ -13,6 +13,7 @@ use crate::{
     pipeline::UpdatedReach,
     scene::{ItemCounts, PassedDown, RasterScene, SubtreeItems},
     scene_item::SceneItem,
+    scene_list::SceneList,
 };
 
 // Where in a scene's lists a subtree's next item, record and passed-down
@@ -37,7 +38,7 @@ pub(crate) struct Rewrite {
     window: ClipBounds,
     // Whether `reach` holds where each item of the scene reaches.
     held: UpdatedReach,
-    reach: Vec<Option<ClipBounds>>,
+    reach: SceneList<Option<ClipBounds>>,
     areas: Vec<ClipBounds>,
 }
 
@@ -53,7 +54,7 @@ impl Rewrite {
         scene: &RasterScene,
         record: usize,
         window: ClipBounds,
-        reach: &mut Vec<Option<ClipBounds>>,
+        reach: &mut SceneList<Option<ClipBounds>>,
         held: UpdatedReach,
     ) -> bool {
         let Some((extent, first)) = scene.subtree_span(record) else {
@@ -238,10 +239,10 @@ impl Rewrite {
         splice_items(scene, (from.items, stop.items), &mut self.spill);
         scene
             .subtrees
-            .splice(from.records..stop.records, self.spill.subtrees.drain(..));
+            .splice(from.records..stop.records, self.spill.subtrees.drain());
         scene.passed_down.splice(
             from.passed_down..stop.passed_down,
-            self.spill.passed_down.drain(..),
+            self.spill.passed_down.drain(),
         );
         let shift = |index: usize, (removed, added): (usize, usize)| index - removed + added;
         for holder in &mut scene.subtrees[..record] {
@@ -267,7 +268,11 @@ impl Rewrite {
     // where each item of the scene reaches, and the areas it changed.
     pub(crate) fn results(
         &mut self,
-    ) -> (Vec<Option<ClipBounds>>, UpdatedReach, &mut Vec<ClipBounds>) {
+    ) -> (
+        SceneList<Option<ClipBounds>>,
+        UpdatedReach,
+        &mut Vec<ClipBounds>,
+    ) {
         (std::mem::take(&mut self.reach), self.held, &mut self.areas)
     }
 
@@ -293,16 +298,16 @@ fn splice_items(
     let (removed, added) = (old_stop.since(to), from.counts());
     scene
         .shapes
-        .splice(to.shapes..old_stop.shapes, from.shapes.drain(..));
+        .splice(to.shapes..old_stop.shapes, from.shapes.drain());
     scene
         .images
-        .splice(to.images..old_stop.images, from.images.drain(..));
+        .splice(to.images..old_stop.images, from.images.drain());
     scene
         .texts
-        .splice(to.texts..old_stop.texts, from.texts.drain(..));
+        .splice(to.texts..old_stop.texts, from.texts.drain());
     scene
         .shadows
-        .splice(to.shadows..old_stop.shadows, from.shadows.drain(..));
+        .splice(to.shadows..old_stop.shadows, from.shadows.drain());
     let placed = |item: RenderItem, base: ItemCounts| match item {
         RenderItem::Shape(index) => RenderItem::Shape(base.shapes + index),
         RenderItem::Image(index) => RenderItem::Image(base.images + index),
@@ -311,7 +316,7 @@ fn splice_items(
     };
     scene.order.splice(
         to.order..old_stop.order,
-        from.order.drain(..).map(|item| placed(item, to)),
+        from.order.drain().map(|item| placed(item, to)),
     );
     // The items after the run lie after its items in each list.
     let shift = |index: usize, removed: usize, added: usize| index - removed + added;

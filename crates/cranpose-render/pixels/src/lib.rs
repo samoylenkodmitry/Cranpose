@@ -9,6 +9,7 @@ mod rewrite;
 /// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
 mod scene_item;
+mod scene_list;
 pub mod sprites;
 mod style;
 mod surface;
@@ -65,7 +66,7 @@ pub struct Picture {
     changed: Vec<draw::ClipBounds>,
     // Where each item of `raster` can draw in the frame, in its order: each
     // strip a host draws passes over the items that miss it.
-    reach: Vec<Option<draw::ClipBounds>>,
+    reach: scene_list::SceneList<Option<draw::ClipBounds>>,
 }
 
 fn valid_scale(scale: f32) -> f32 {

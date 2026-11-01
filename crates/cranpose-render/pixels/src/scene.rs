@@ -18,6 +18,7 @@ use crate::{
     draw::RenderItem,
     rewrite::Rewrite,
     scene_item::{ItemRef, SceneItem},
+    scene_list::SceneList,
 };
 
 #[derive(Clone, Debug)]
@@ -352,17 +353,17 @@ pub(crate) struct SubtreeItems {
 }
 
 pub(crate) struct RasterScene {
-    pub shapes: Vec<DrawShape>,
-    pub images: Vec<ImageDraw>,
-    pub texts: Vec<TextDraw>,
-    pub shadows: Vec<ShadowDraw>,
+    pub shapes: SceneList<DrawShape>,
+    pub images: SceneList<ImageDraw>,
+    pub texts: SceneList<TextDraw>,
+    pub shadows: SceneList<ShadowDraw>,
     /// Every item in the order it was pushed, which is the order it draws in.
-    pub order: Vec<RenderItem>,
+    pub order: SceneList<RenderItem>,
     /// A record for each layer the scene was built from, in the order the
     /// layers were visited: a layer's descendants follow it.
-    pub subtrees: Vec<SubtreeItems>,
+    pub subtrees: SceneList<SubtreeItems>,
     /// What the layers with child layers passed down to them.
-    pub passed_down: Vec<PassedDown>,
+    pub passed_down: SceneList<PassedDown>,
     /// The scale and the shadow light the walk started from.
     pub start: Option<(f32, ShadowLight)>,
     /// The runs of `order` copied in place from the scene the walk started
@@ -379,13 +380,13 @@ pub(crate) struct RasterScene {
 impl RasterScene {
     pub(crate) fn new() -> Self {
         Self {
-            shapes: Vec::new(),
-            images: Vec::new(),
-            texts: Vec::new(),
-            shadows: Vec::new(),
-            order: Vec::new(),
-            subtrees: Vec::new(),
-            passed_down: Vec::new(),
+            shapes: SceneList::new(),
+            images: SceneList::new(),
+            texts: SceneList::new(),
+            shadows: SceneList::new(),
+            order: SceneList::new(),
+            subtrees: SceneList::new(),
+            passed_down: SceneList::new(),
             start: None,
             kept: Vec::new(),
             snap_anchor: None,

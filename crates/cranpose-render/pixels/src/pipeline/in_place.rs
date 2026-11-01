@@ -21,12 +21,13 @@ use crate::{
     draw::{ClipBounds, TextRaster},
     rewrite::Rewrite,
     scene::{RasterScene, Subtree},
+    scene_list::SceneList,
 };
 
 // What a walk that pushes changed layers again shares.
 struct Repush<'a> {
     scene: &'a mut RasterScene,
-    reach: &'a mut Vec<Option<ClipBounds>>,
+    reach: &'a mut SceneList<Option<ClipBounds>>,
     // Whether `reach` still holds where each item of `scene` reaches: a
     // splice moves the items after it.
     held: UpdatedReach,
@@ -64,7 +65,7 @@ pub(crate) enum UpdatedReach {
 // changed subtree again.
 pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
-    pub reach: &'a mut Vec<Option<ClipBounds>>,
+    pub reach: &'a mut SceneList<Option<ClipBounds>>,
     pub rewrite: &'a mut Option<Box<Rewrite>>,
 }
 

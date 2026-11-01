@@ -35,6 +35,10 @@ const LEFT_BEHIND_BOUND: isize = 32 * 1024;
 // The bars a canvas draws, enough that a second copy of what they draw
 // would hold far more than `REDRAW_BOUND`.
 const BARS: usize = 200;
+// A count of bars where lists that double fill their storage, and what one
+// bar more may hold: the bar, not room for as many more.
+const FULL_BARS: usize = 64;
+const BAR_BOUND: isize = 2 * 1024;
 // What a canvas that draws again every frame may hold more than one that
 // drew once: a few lists that grew once, not a copy of what it draws.
 const REDRAW_BOUND: isize = 4 * 1024;
@@ -65,10 +69,10 @@ fn held(content: impl Fn() + 'static) -> isize {
     change.bytes_allocated as isize - change.bytes_deallocated as isize
 }
 
-// Rows of bars a canvas draws, shifted along as an animation runs when
-// `moving`: each frame then draws them all again.
+// `count` bars in rows that a canvas draws, shifted along as an animation
+// runs when `moving`: each frame then draws them all again.
 #[composable]
-fn Bars(moving: bool) {
+fn Bars(moving: bool, count: usize) {
     let shift = rememberInfiniteTransition("bars").animateFloat(
         0.0,
         8.0,
@@ -85,7 +89,7 @@ fn Bars(moving: bool) {
             .height(HEIGHT as f32)
             .draw_behind(move |scope| {
                 let offset = if moving { shift.value() } else { 0.0 };
-                for bar in 0..BARS {
+                for bar in 0..count {
                     let rect = Rect {
                         x: offset + (bar % 40) as f32 * 4.0,
                         y: (bar / 40) as f32 * 12.0,
@@ -113,12 +117,12 @@ fn left_behind(content: impl Fn() + 'static) -> isize {
     change.bytes_allocated as isize - change.bytes_deallocated as isize
 }
 
-/// A number that changes every frame, as a clock or a sensor reading does,
-/// composed in a `Text` or drawn in a draw scope, leaves no memory behind:
-/// the text pools and caches keep what the screen shows and what recent
-/// frames used. Nor does a busier screen, whose list scrolls and whose
-/// panel comes and goes. A canvas drawn again every frame holds what one
-/// drawn once does. One test: the allocator counts every thread's memory.
+/// A number that changes every frame, as a clock or a sensor reading does, composed in a
+/// `Text` or drawn in a draw scope, leaves no memory behind: the text pools and caches keep
+/// what the screen shows and what recent frames used. Nor does a busier screen, whose list
+/// scrolls and whose panel comes and goes. A canvas drawn again every frame holds what one
+/// drawn once does, and one bar more holds about that bar. One test: the allocator counts
+/// every thread's memory.
 #[test]
 fn screens_that_change_every_frame_leave_no_memory_behind() {
     let composed = left_behind(|| ComposedReading(TextStyle::default()));
@@ -128,12 +132,20 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");
     assert!(busy < LEFT_BEHIND_BOUND, "busy: {busy} bytes");
-    let still = held(|| Bars(false));
-    let moving = held(|| Bars(true));
+    let still = held(|| Bars(false, BARS));
+    let moving = held(|| Bars(true, BARS));
     println!("held: still bars {still} bytes, moving bars {moving} bytes");
     assert!(
         moving - still < REDRAW_BOUND,
         "moving bars hold {} bytes more",
         moving - still
+    );
+    let full = held(|| Bars(false, FULL_BARS));
+    let past_full = held(|| Bars(false, FULL_BARS + 1));
+    println!("held: {FULL_BARS} bars {full} bytes, one more {past_full} bytes");
+    assert!(
+        past_full - full < BAR_BOUND,
+        "one bar more holds {} bytes more",
+        past_full - full
     );
 }
