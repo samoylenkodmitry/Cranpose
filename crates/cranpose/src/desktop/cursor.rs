@@ -47,6 +47,36 @@ fn cursor_key(custom: &CustomPointerIcon, factor: f64) -> CursorKey {
     (custom.id(), factor.to_bits())
 }
 
+// Whether an uploaded custom cursor may be handed to a window again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reuse {
+    Cached,
+    // Uploaded for each change and dropped once the window shows another.
+    Never,
+}
+
+// winit's X11 backend frees a cursor's server image when the window drops its
+// own copy at the next change, so a cached copy handed over again names a freed
+// cursor and the window keeps the one it had. The X server keeps a cursor a
+// window shows until the window stops showing it.
+#[cfg(all(target_os = "linux", feature = "desktop-x11"))]
+fn reuse_under(window: &dyn Window) -> Reuse {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let x11 = window.window_handle().is_ok_and(|handle| {
+        matches!(
+            handle.as_raw(),
+            RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)
+        )
+    });
+    if x11 { Reuse::Never } else { Reuse::Cached }
+}
+
+#[cfg(not(all(target_os = "linux", feature = "desktop-x11")))]
+fn reuse_under(_window: &dyn Window) -> Reuse {
+    Reuse::Cached
+}
+
 /// What the platform under `window` does to a custom cursor image by itself.
 fn cursor_surface(window: &dyn Window) -> crate::cursor_scale::CursorSurface {
     #[cfg(target_os = "macos")]
@@ -76,6 +106,7 @@ pub(crate) struct DesktopCursors {
     uploaded: HashMap<CursorKey, CustomCursor>,
     rejected: HashSet<CursorKey>,
     applied: HashMap<WindowId, PointerIcon>,
+    shown_once: HashMap<WindowId, CustomCursor>,
     /// Cursors winit cannot build, sized in points rather than one point to a
     /// pixel.
     #[cfg(target_os = "macos")]
@@ -129,13 +160,22 @@ impl DesktopCursors {
         if offering_the_same_icon_needs_a_nudge(self.applied.get(&id), icon) {
             window.set_cursor(Cursor::Icon(a_cursor_that_is_not(icon)));
         }
-        match icon {
-            PointerIcon::System(system) => window.set_cursor(Cursor::Icon(*system)),
-            PointerIcon::Custom(custom) => {
-                if let Some(cursor) = self.custom_cursor(event_loop, custom, factor) {
-                    window.set_cursor(Cursor::Custom(cursor));
-                }
+        let reuse = reuse_under(window.as_ref());
+        let shown = match icon {
+            PointerIcon::System(system) => {
+                window.set_cursor(Cursor::Icon(*system));
+                None
             }
+            PointerIcon::Custom(custom) => self
+                .custom_cursor(event_loop, custom, factor, reuse)
+                .inspect(|cursor| window.set_cursor(Cursor::Custom(cursor.clone()))),
+        };
+        if reuse == Reuse::Never {
+            // Dropped only now: the window has let go of the one it replaces.
+            match shown {
+                Some(cursor) => self.shown_once.insert(id, cursor),
+                None => self.shown_once.remove(&id),
+            };
         }
         self.applied.insert(id, icon.clone());
     }
@@ -208,7 +248,7 @@ impl DesktopCursors {
     }
 
     /// The uploaded cursor for `custom`, uploading it if this is the first time
-    /// it is asked for.
+    /// it is asked for, or every time under [`Reuse::Never`].
     ///
     /// A cursor the windowing system refuses is reported once and remembered as
     /// rejected, so the window keeps the cursor it already has instead of
@@ -218,9 +258,12 @@ impl DesktopCursors {
         event_loop: &dyn ActiveEventLoop,
         custom: &CustomPointerIcon,
         factor: f64,
+        reuse: Reuse,
     ) -> Option<CustomCursor> {
         let id = cursor_key(custom, factor);
-        if let Some(cursor) = self.uploaded.get(&id) {
+        if reuse == Reuse::Cached
+            && let Some(cursor) = self.uploaded.get(&id)
+        {
             return Some(cursor.clone());
         }
         if self.rejected.contains(&id) {
@@ -263,7 +306,9 @@ impl DesktopCursors {
         };
         match cursor {
             Ok(cursor) => {
-                self.uploaded.insert(id, cursor.clone());
+                if reuse == Reuse::Cached {
+                    self.uploaded.insert(id, cursor.clone());
+                }
                 Some(cursor)
             }
             Err(()) => {
@@ -277,3 +322,7 @@ impl DesktopCursors {
 #[cfg(test)]
 #[path = "tests/cursor_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux", feature = "desktop-x11"))]
+#[path = "tests/x11_cursor_tests.rs"]
+mod x11_tests;

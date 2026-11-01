@@ -1144,6 +1144,11 @@ robot-linux-fast: robot-gpu-fast
 vulkan-sync:
     scripts/ci/vulkan_sync.sh
 
+# A custom cursor shown again on X11, where winit frees a cursor's server
+# image when a window drops its copy, against a disposable X server.
+x11-cursor:
+    xvfb-run -a cargo test --profile ci -p cranpose --no-default-features --features desktop-x11,renderer-wgpu,embedded-default-font --lib x11_tests -- --include-ignored
+
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
     ./liquid_cheatsheets.sh
