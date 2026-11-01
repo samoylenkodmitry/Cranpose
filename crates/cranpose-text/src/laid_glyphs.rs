@@ -43,6 +43,10 @@ impl PackedGlyph {
         GlyphId(u32::from(self.id))
     }
 
+    fn text_offset(self) -> usize {
+        usize::try_from(self.cluster).unwrap_or(usize::MAX)
+    }
+
     // `glyph` in eight bytes, its id and advance cut to their low bits, and
     // whether they fit them. No branch, so a layout's glyphs pack in one
     // pass.
@@ -175,12 +179,18 @@ impl LaidGlyphs {
         out: &mut ShapedGlyphs,
     ) -> usize {
         let start = range.start;
-        let end = start
-            + self
-                .run(range)
+        // Read in place, so each glyph is unpacked only to be appended.
+        let taken = match self.run(range) {
+            RunGlyphs::Packed(glyphs) => glyphs
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.text_offset()))
-                .count();
+                .count(),
+            RunGlyphs::Full(glyphs) => glyphs
+                .iter()
+                .take_while(|glyph| text.contains(&glyph.text_offset()))
+                .count(),
+        };
+        let end = start + taken;
         let offsets = self.offsets(start..end).unwrap_or_default();
         match self.run(start..end) {
             RunGlyphs::Packed(glyphs) => {
