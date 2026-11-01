@@ -1,3 +1,9 @@
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 /// One OpenType feature setting: its tag and its value, 0 for off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FontFeature {
@@ -6,6 +12,78 @@ pub struct FontFeature {
     /// The value: 0 turns the feature off, 1 on, and larger values pick an
     /// alternate.
     pub value: u32,
+}
+
+/// Compose's `fontFeatureSettings`: a CSS `font-feature-settings` string,
+/// such as `smcp, liga 0`, kept with the settings it parses to, so that a
+/// layout reads them without parsing the string again. Two settings are
+/// equal when their strings are.
+#[derive(Clone)]
+pub struct FontFeatureSettings(Arc<ParsedSettings>);
+
+struct ParsedSettings {
+    text: Box<str>,
+    features: Box<[FontFeature]>,
+}
+
+impl FontFeatureSettings {
+    /// The settings `text` writes, parsed as [`font_feature_settings`] does.
+    pub fn new(text: &str) -> Self {
+        Self(Arc::new(ParsedSettings {
+            text: text.into(),
+            features: font_feature_settings(text).collect(),
+        }))
+    }
+
+    /// The string the settings are written as.
+    pub fn as_str(&self) -> &str {
+        &self.0.text
+    }
+
+    /// The settings, in order, invalid entries skipped.
+    pub fn features(&self) -> &[FontFeature] {
+        &self.0.features
+    }
+}
+
+impl From<&str> for FontFeatureSettings {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<String> for FontFeatureSettings {
+    fn from(text: String) -> Self {
+        Self::new(&text)
+    }
+}
+
+impl From<Arc<str>> for FontFeatureSettings {
+    fn from(text: Arc<str>) -> Self {
+        Self::new(&text)
+    }
+}
+
+impl PartialEq for FontFeatureSettings {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0.text == other.0.text
+    }
+}
+
+impl Eq for FontFeatureSettings {}
+
+impl Hash for FontFeatureSettings {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl fmt::Debug for FontFeatureSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("FontFeatureSettings")
+            .field(&self.as_str())
+            .finish()
+    }
 }
 
 /// The settings of a CSS `font-feature-settings` string, Compose's

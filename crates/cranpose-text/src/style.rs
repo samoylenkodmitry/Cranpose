@@ -173,7 +173,7 @@ pub struct SpanStyle {
     /// Font family.
     pub font_family: Option<FontFamily>,
     /// OpenType feature settings in CSS `font-feature-settings` syntax, such as `smcp, liga 0`.
-    pub font_feature_settings: Option<std::sync::Arc<str>>,
+    pub font_feature_settings: Option<crate::font_feature::FontFeatureSettings>,
     /// Extra space added after each character, in `Sp` or as a multiple of the font size.
     pub letter_spacing: TextUnit,
     /// Vertical shift of the glyphs from the baseline.
