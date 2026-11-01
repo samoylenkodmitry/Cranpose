@@ -5,9 +5,11 @@ pub mod core;
 pub(crate) mod flex_box;
 mod frame_layout_arena;
 pub(crate) mod grid;
+mod layout_child_measurable;
 mod live_layout_node;
 mod measure_telemetry;
 mod measured_spare;
+mod modifier_chain_measure;
 mod placed_root_measurements;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
@@ -16,6 +18,7 @@ mod semantics_details;
 mod semantics_labels;
 mod semantics_tree;
 mod semantics_update;
+mod subcompose_measure;
 
 use std::{
     cell::{Cell, RefCell},
@@ -25,8 +28,7 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId, PackedU64,
-    RuntimeHandle,
+    Applier, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId, PackedU64, RuntimeHandle,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, SemanticsConfiguration, SemanticsWidgetRole,
@@ -35,6 +37,7 @@ use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
+use layout_child_measurable::LayoutChildMeasurable;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
 use measured_spare::MeasuredSpare;
 use placed_root_measurements::PlacedRootMeasurements;
@@ -49,7 +52,7 @@ use web_time::Instant;
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::{
     coordinator_chain::{CoordinatorChain, CoordinatorFrame},
-    core::{Measurable, Placeable},
+    core::Measurable,
     measure_telemetry::{
         LayoutStages, layout_measure_telemetry_threshold_ms, log_layout_measure_telemetry,
         log_node_measure_telemetry,
@@ -67,9 +70,7 @@ use crate::{
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
     render_state::AppContext,
-    subcompose_layout::{
-        MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNode, SubcomposeLayoutNodeHandle,
-    },
+    subcompose_layout::SubcomposeLayoutNode,
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
 };
 
@@ -1183,7 +1184,10 @@ struct LayoutNodeMeasure<'a> {
     spare: MeasuredSpare,
 }
 
-#[expect(clippy::multiple_inherent_impl, reason = "bottom-up pass in its file")]
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the bottom-up pass, the chain measure and the subcompose measure in their files"
+)]
 impl LayoutBuilderState {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
@@ -1564,67 +1568,6 @@ impl LayoutBuilderState {
             )
             .into_rc(spare),
         ))
-    }
-
-    // The result of `node_handle`'s policy at `constraints`: from the slots
-    // of its last pass where its retained measure policy keeps them, else
-    // from a pass that composes, which puts the children it measures in
-    // `measured_children` and its first failure in `measure_error`.
-    fn subcompose_policy_result(
-        self: &Rc<Self>,
-        node_handle: &SubcomposeLayoutNodeHandle,
-        node_id: NodeId,
-        constraints: Constraints,
-        measured_children: &MeasuredChildren,
-        measure_error: &RefCell<Option<NodeError>>,
-    ) -> Result<cranpose_ui_layout::MeasureResult, NodeError> {
-        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
-        if let Some(result) = node_handle.measure_retained(&*applier_host, node_id, constraints) {
-            return Ok(result);
-        }
-        let runtime_handle = {
-            let mut runtime_handle = self.runtime_handle.borrow_mut();
-            if runtime_handle.is_none()
-                && let Ok(applier) = self.applier.try_borrow_typed()
-            {
-                *runtime_handle = applier.runtime_handle();
-            }
-            runtime_handle.clone().ok_or(NodeError::MissingContext {
-                id: node_id,
-                reason: "runtime handle required for subcomposition",
-            })?
-        };
-        node_handle.measure_with_callbacks(
-            &applier_host,
-            &runtime_handle,
-            node_id,
-            constraints,
-            MeasureCallbacks {
-                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
-                    match self.measure_node(child_id, child_constraints) {
-                        Ok(measured) => {
-                            measured_children
-                                .borrow_mut()
-                                .insert(child_id, Rc::clone(&measured));
-                            let size = measured.size_for_parent();
-                            Placeable::value(size.width, size.height, child_id)
-                                .with_alignment_lines(measured.alignment_lines_for_parent())
-                        }
-                        Err(err) => {
-                            let mut slot = measure_error.borrow_mut();
-                            if slot.is_none() {
-                                *slot = Some(err);
-                            }
-                            Placeable::value(0.0, 0.0, child_id)
-                        }
-                    }
-                }),
-                retained_measure_lookup: Box::new(|child_id| {
-                    measured_children.borrow().get(&child_id).cloned()
-                }),
-                error: measure_error,
-            },
-        )
     }
 
     fn measure_layout_node(
@@ -2073,111 +2016,6 @@ impl LayoutBuilderState {
             }
             Err(NodeError::Missing { .. }) => Ok(false),
             Err(err) => Err(err),
-        }
-    }
-
-    fn measure_through_modifier_chain(
-        &self,
-        node_id: NodeId,
-        runtime_state: &LayoutRuntimeState,
-        chain: ModifierChainInputs,
-        constraints: Constraints,
-        placements: &mut Vec<Placement>,
-        placement_indices: &mut Vec<usize>,
-    ) -> ModifierChainMeasurement {
-        let scope = crate::density::DensityMeasureScope::new(chain.density);
-
-        if !chain.uses_chain {
-            let measurement = runtime_state.measure_policy.measure_into(
-                &scope,
-                runtime_state.child_measurables(),
-                constraints,
-                placements,
-            );
-            return ModifierChainMeasurement {
-                size: measurement.size,
-                alignment_lines: inherited_alignment_lines(
-                    runtime_state.child_states(),
-                    placements,
-                    placement_indices,
-                )
-                .with_overrides(measurement.alignment_lines),
-                content_offset: Point::default(),
-                offset: chain.offset,
-                window_root: chain.window_root,
-                hold: if chain.window_root {
-                    None
-                } else {
-                    runtime_state.measure_policy.measure_hold(
-                        runtime_state.child_measurables(),
-                        constraints,
-                        measurement.size,
-                    )
-                },
-                ignores_child_sizes: !chain.window_root
-                    && runtime_state
-                        .measure_policy
-                        .ignores_child_sizes(runtime_state.child_measurables(), constraints),
-            };
-        }
-
-        let frame = CoordinatorFrame::new(
-            &runtime_state.measure_policy,
-            &scope,
-            runtime_state.child_measurables(),
-            runtime_state.child_states(),
-            placements,
-            placement_indices,
-        );
-        let placeable = runtime_state
-            .coordinator_chain
-            .measure_from(0, &frame, constraints);
-        let (content_x, content_y) = placeable.content_offset();
-
-        let invalidations = frame.take_invalidations();
-        if !invalidations.is_empty() {
-            self.with_applier_result(|applier| {
-                applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    for kind in invalidations {
-                        match kind {
-                            InvalidationKind::Layout => layout_node.mark_needs_measure(),
-                            InvalidationKind::Draw => layout_node.mark_needs_redraw(),
-                            InvalidationKind::Semantics => layout_node.mark_needs_semantics(),
-                            InvalidationKind::PointerInput => layout_node.mark_needs_pointer_pass(),
-                            InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
-                        }
-                    }
-                })
-            })
-            .ok();
-        }
-
-        ModifierChainMeasurement {
-            alignment_lines: placeable.alignment_lines(),
-            size: Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            },
-            content_offset: Point {
-                x: content_x - chain.offset.x,
-                y: content_y - chain.offset.y,
-            },
-            offset: chain.offset,
-            window_root: chain.window_root,
-            hold: if chain.window_root {
-                None
-            } else {
-                runtime_state.coordinator_chain.measured_hold(
-                    cranpose_ui_layout::MeasureScope::density(&scope),
-                    runtime_state.measure_policy.as_ref(),
-                    runtime_state.child_measurables(),
-                )
-            },
-            ignores_child_sizes: !chain.window_root
-                && runtime_state.coordinator_chain.ignores_child_sizes(
-                    runtime_state.measure_policy.as_ref(),
-                    runtime_state.child_measurables(),
-                ),
         }
     }
 }
@@ -2832,55 +2670,6 @@ impl LayoutChildMeasureState {
     }
 }
 
-struct LayoutChildMeasurable {
-    state: Rc<LayoutChildMeasureState>,
-}
-
-impl LayoutChildMeasurable {
-    fn new(state: Rc<LayoutChildMeasureState>) -> Self {
-        Self { state }
-    }
-
-    fn resolved_parent_data(&self) -> Option<cranpose_ui_layout::ParentData> {
-        if self.state.frame.builder.borrow().is_none() {
-            return None;
-        }
-        read_cell(&self.state.parent_data, Clone::clone)
-    }
-
-    fn intrinsic(
-        &self,
-        kind: IntrinsicKind,
-        constraints: Constraints,
-        extent: fn(Size) -> f32,
-    ) -> f32 {
-        let state = &self.state;
-        if state.frame.measures() {
-            state.read_intrinsics.set(true);
-        }
-        let parts = read_cell(&state.parts, Clone::clone);
-        let cache = parts.as_deref().map(LayoutParts::cache);
-        if let Some(cache) = cache {
-            cache.activate(state.cache_epoch.get().get());
-        }
-        if !state.force_remeasure.get()
-            && let Some(value) = cache.and_then(|cache| cache.get_intrinsic(&kind))
-        {
-            return value;
-        }
-        let value = match state.layout_intrinsic(kind) {
-            Some(value) => value,
-            None => state
-                .measure_cached(constraints)
-                .map_or(0.0, |node| extent(node.size_for_parent())),
-        };
-        if let Some(cache) = cache {
-            cache.store_intrinsic(kind, value);
-        }
-        value
-    }
-}
-
 impl PlaceTarget for LayoutChildMeasureState {
     fn place(&self, x: f32, y: f32) {
         let internal_offset = read_cell(&self.measured, |measured| {
@@ -2893,120 +2682,6 @@ impl PlaceTarget for LayoutChildMeasureState {
             x: x + internal_offset.x,
             y: y + internal_offset.y,
         });
-    }
-}
-
-impl Measurable for LayoutChildMeasurable {
-    fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
-        read_cell(&self.state.measured, |measured| {
-            let measured = measured.as_ref()?;
-            let hold = read_cell(&self.state.parts, |parts| {
-                parts.as_ref()?.cache().hold_of(measured)
-            })?;
-            Some((measured.size_for_parent(), hold))
-        })
-    }
-
-    fn measure(&self, constraints: Constraints) -> Placeable {
-        let state = &self.state;
-        let measured = state.measure_cached(constraints);
-        let (measured_size, size_for_parent) = measured.as_ref().map_or(
-            (
-                Size {
-                    width: 0.0,
-                    height: 0.0,
-                },
-                Size {
-                    width: 0.0,
-                    height: 0.0,
-                },
-            ),
-            |measured| (measured.size, measured.size_for_parent()),
-        );
-        state.with_pass_layout_state(|layout_state, context| {
-            layout_state.set_size(measured_size, context);
-        });
-        let alignment_lines = measured
-            .as_ref()
-            .map_or_else(AlignmentLines::default, |node| {
-                node.alignment_lines_for_parent()
-            });
-        state.measured.set(measured);
-
-        Placeable::with_place_target(
-            size_for_parent.width,
-            size_for_parent.height,
-            state.node_id,
-            Rc::clone(&self.state) as Rc<dyn PlaceTarget>,
-        )
-        .with_alignment_lines(alignment_lines)
-    }
-
-    fn min_intrinsic_width(&self, height: f32) -> f32 {
-        self.intrinsic(
-            IntrinsicKind::MinWidth(height),
-            Constraints {
-                min_width: 0.0,
-                max_width: f32::INFINITY,
-                min_height: height,
-                max_height: height,
-            },
-            |size| size.width,
-        )
-    }
-
-    fn max_intrinsic_width(&self, height: f32) -> f32 {
-        self.intrinsic(
-            IntrinsicKind::MaxWidth(height),
-            Constraints {
-                min_width: 0.0,
-                max_width: f32::INFINITY,
-                min_height: 0.0,
-                max_height: height,
-            },
-            |size| size.width,
-        )
-    }
-
-    fn min_intrinsic_height(&self, width: f32) -> f32 {
-        self.intrinsic(
-            IntrinsicKind::MinHeight(width),
-            Constraints {
-                min_width: width,
-                max_width: width,
-                min_height: 0.0,
-                max_height: f32::INFINITY,
-            },
-            |size| size.height,
-        )
-    }
-
-    fn max_intrinsic_height(&self, width: f32) -> f32 {
-        self.intrinsic(
-            IntrinsicKind::MaxHeight(width),
-            Constraints {
-                min_width: 0.0,
-                max_width: width,
-                min_height: 0.0,
-                max_height: f32::INFINITY,
-            },
-            |size| size.height,
-        )
-    }
-
-    fn flex_parent_data(&self) -> Option<cranpose_ui_layout::FlexParentData> {
-        let parent_data = self.resolved_parent_data()?;
-        if !parent_data.has_weight() {
-            return None;
-        }
-        Some(cranpose_ui_layout::FlexParentData::new(
-            parent_data.weight,
-            parent_data.fill,
-        ))
-    }
-
-    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        self.resolved_parent_data().unwrap_or_default()
     }
 }
 
