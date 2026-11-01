@@ -320,7 +320,7 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
         Box::new(MockMeasurable::new(60.0, 30.0, 2)),
     ];
     let mut placements = Vec::with_capacity(8);
-    placements.push(Placement::new(NodeId(999), 1.0, 1.0, 0));
+    placements.push(Placement::new(NodeId(999), 1.0, 1.0, 0.0));
     let original_capacity = placements.capacity();
 
     let policy =

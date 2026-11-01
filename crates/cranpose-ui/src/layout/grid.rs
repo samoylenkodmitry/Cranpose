@@ -601,7 +601,7 @@ impl MeasurePolicy for GridMeasurePolicy {
             let x = cell_x + inside_x;
             let y = rows.offset(cell.row) + inside_y;
             placeable.place(x, y);
-            placements.push(Placement::new(placeable.node_id(), x, y, 0));
+            placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
         }
         crate::modifier::Size { width, height }.into()
     }

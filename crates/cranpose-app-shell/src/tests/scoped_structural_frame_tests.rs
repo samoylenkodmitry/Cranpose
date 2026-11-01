@@ -112,7 +112,7 @@ impl MeasurePolicy for PeekPolicy {
                     placeable.node_id(),
                     0.0,
                     index as f32 * 20.0,
-                    0,
+                    0.0,
                 ));
             }
         }

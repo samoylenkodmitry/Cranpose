@@ -327,7 +327,7 @@ impl cranpose_ui_layout::MeasurePolicy for ColumnsPolicy {
                     .map_or(0.0, |column| column.0);
                 let placeable = measurable.measure(constraints.loosen());
                 placeable.place(x, 0.0);
-                cranpose_ui_layout::Placement::new(placeable.node_id(), x, 0.0, 0)
+                cranpose_ui_layout::Placement::new(placeable.node_id(), x, 0.0, 0.0)
             })
             .collect();
         cranpose_ui::MeasureResult::new(

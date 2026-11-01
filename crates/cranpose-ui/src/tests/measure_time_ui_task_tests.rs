@@ -125,7 +125,7 @@ fn invalidation_after_probe_write(site: ProbeSite, reader: ProbeReader) -> Probe
                 for child in children {
                     let placeable = scope.measure(child, constraints);
                     placeable.place(0.0, 0.0);
-                    placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+                    placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
                 }
                 scope.layout(constraints.max_width, constraints.max_height, placements)
             });

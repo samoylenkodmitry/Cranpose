@@ -430,13 +430,15 @@ pub struct Placement {
     pub x: f32,
     /// Its top edge in the parent, in logical pixels.
     pub y: f32,
-    /// Its draw order among its siblings: higher draws on top.
-    pub z_index: i32,
+    /// Its draw order among its siblings: higher draws on top and takes a
+    /// tap first. It adds to the child's `Modifier::z_index`, as the
+    /// `zIndex` of Compose's `Placeable.place` does.
+    pub z_index: f32,
 }
 
 impl Placement {
     /// `node_id` at `(x, y)` in the parent, drawn in `z_index` order.
-    pub fn new(node_id: NodeId, x: f32, y: f32, z_index: i32) -> Self {
+    pub fn new(node_id: NodeId, x: f32, y: f32, z_index: f32) -> Self {
         Self {
             node_id,
             x,

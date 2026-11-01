@@ -512,8 +512,8 @@ fn subcompose_scope_layout_uses_retained_placement_scratch() {
             10.0,
             20.0,
             [
-                Placement::new(NodeId(101), 1.0, 2.0, 0),
-                Placement::new(NodeId(102), 3.0, 4.0, 0),
+                Placement::new(NodeId(101), 1.0, 2.0, 0.0),
+                Placement::new(NodeId(102), 3.0, 4.0, 0.0),
             ],
         )
     });

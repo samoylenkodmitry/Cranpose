@@ -38,9 +38,9 @@ impl cranpose_ui_layout::MeasurePolicy for CustomBaselinePolicy {
                 if matches!(self, Self::DirectPlacement) {
                     placeable.place(0.0, y);
                 } else {
-                    placements.push(Placement::new(placeable.node_id(), 0.0, y, 0));
+                    placements.push(Placement::new(placeable.node_id(), 0.0, y, 0.0));
                     if index == 0 {
-                        placements.push(Placement::new(placeable.node_id(), 0.0, -20.0, 0));
+                        placements.push(Placement::new(placeable.node_id(), 0.0, -20.0, 0.0));
                     }
                 }
             }
@@ -262,8 +262,8 @@ fn subcomposed_layout_can_align_to_the_last_drawn_line_inside_padding_and_offset
                             source.width() + marker.width(),
                             source.height().max(marker_y + marker.height()),
                             [
-                                Placement::new(source.node_id(), 0.0, 0.0, 0),
-                                Placement::new(marker.node_id(), source.width(), marker_y, 0),
+                                Placement::new(source.node_id(), 0.0, 0.0, 0.0),
+                                Placement::new(marker.node_id(), source.width(), marker_y, 0.0),
                             ],
                         )
                     },

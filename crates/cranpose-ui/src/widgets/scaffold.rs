@@ -221,7 +221,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
         for node in top_nodes {
             let placeable = scope.measure(node, loose);
             top_height = top_height.max(placeable.height());
-            top_placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 1));
+            top_placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 1.0));
         }
 
         let bottom_content = Rc::clone(&bottom_bar);
@@ -244,7 +244,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
         );
         for node in content_nodes {
             let placeable = scope.measure(node, Constraints::tight(width, height));
-            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
         placements.extend(top_placements);
         for placeable in bottom_placeables {
@@ -252,7 +252,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
                 placeable.node_id(),
                 0.0,
                 (height - placeable.height()).max(0.0),
-                1,
+                1.0,
             ));
         }
 
@@ -267,7 +267,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
                 LayoutDirection::Rtl => end_gap.min((width - placeable.width()).max(0.0)),
             };
             let y = (height - placeable.height() - bottom_gap).max(0.0);
-            placements.push(Placement::new(placeable.node_id(), x, y, 2));
+            placements.push(Placement::new(placeable.node_id(), x, y, 2.0));
         }
 
         scope.layout(width, height, placements)

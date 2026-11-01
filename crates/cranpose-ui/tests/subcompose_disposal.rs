@@ -247,7 +247,7 @@ fn compose_nested_movable_layout(
                         });
                         for child in children {
                             let placeable = scope.measure(child, constraints);
-                            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+                            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
                         }
                     }
                     let (width, height) = constraints.constrain(320.0, 480.0);
