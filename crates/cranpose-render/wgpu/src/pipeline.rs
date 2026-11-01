@@ -859,7 +859,7 @@ pub(crate) fn push_text_style_draws(
             rect: apply_layer_to_rect(placement.text_rect, placement.bounds, placement.layer),
             // A plain text pushes its glyphs and nothing else.
             snap_anchor: placement.snap_anchor,
-            text: DrawnText::plain(Arc::clone(&node.render_text), &paint),
+            text: DrawnText::plain(Arc::clone(&node.render_text), paint),
             layout: node.layout.clone(),
             color: apply_layer_to_color(paint.color, placement.layer),
             text_style: Arc::clone(&node.text_style),

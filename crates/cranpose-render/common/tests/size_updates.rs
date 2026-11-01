@@ -157,7 +157,7 @@ fn nodes_texts(nodes: &[RenderNode], transform: ProjectiveTransform, out: &mut V
                         transform.bounds_for_rect(text.rect),
                         text.clip.map(|clip| transform.bounds_for_rect(clip)),
                         text.layout.width(),
-                        text.paint(),
+                        *text.paint(),
                     ));
                 }
             }

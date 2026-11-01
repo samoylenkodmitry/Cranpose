@@ -93,12 +93,12 @@ impl Default for PlainChars {
 
 impl PlainChars {
     // The glyph of `ch` and its advance when `ch` is plain, from its slot,
-    // or from `read` the first time. A glyph or an advance a slot cannot
-    // hold is not plain.
+    // or from `read` of `ch` the first time. A glyph or an advance a slot
+    // cannot hold is not plain.
     pub(crate) fn char(
         &mut self,
         ch: char,
-        read: impl FnOnce() -> Option<CharGlyph>,
+        read: &impl Fn(char) -> Option<CharGlyph>,
     ) -> Option<PlainChar> {
         let code = u32::from(ch);
         let slot = (code & (SLOTS as u32 - 1)) as u8;
@@ -107,7 +107,7 @@ impl PlainChars {
         if (packed >> 32) & !(PAIRS >> 32) == known | (PLAIN >> 32) {
             return Some(PlainChar::of(packed, slot));
         }
-        self.uncommon_char(slot, (packed, known), read)
+        self.uncommon_char(slot, (packed, known), ch, read)
     }
 
     // Whether a character given since the last call has a glyph whose ink
@@ -125,7 +125,8 @@ impl PlainChars {
         &mut self,
         slot: u8,
         (packed, known): (u64, u64),
-        read: impl FnOnce() -> Option<CharGlyph>,
+        ch: char,
+        read: &impl Fn(char) -> Option<CharGlyph>,
     ) -> Option<PlainChar> {
         if (packed >> 32) & !((PAIRS | INKS_OUT) >> 32) == known | (PLAIN >> 32) {
             self.inked = true;
@@ -134,7 +135,7 @@ impl PlainChars {
         if packed >> 32 == known {
             return None;
         }
-        let read = read();
+        let read = read(ch);
         let inks_out = read.as_ref().is_some_and(|read| read.inks_out);
         let plain = read.and_then(|read| {
             Some(PlainChar {

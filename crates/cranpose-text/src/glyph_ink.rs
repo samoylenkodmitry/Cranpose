@@ -14,15 +14,17 @@ use crate::{
     typeface::Typeface,
 };
 
-// Whether some glyph of a layout may put ink past the visible text of its
-// line or past the layout's box: a glyph whose ink leaves its advance or the
-// band its typeface's ASCII glyphs ink, as the shaper finds it, or a line
-// too short for that band.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+// How some glyph of a layout may put ink past the visible text of its line
+// or past the layout's box, the farther reach last: not at all; as its line
+// places it, on a line too short for the band its typeface's ASCII glyphs
+// ink or spaced closer than its advance; or as its own ink leaves its
+// advance or that band, as the shaper finds it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum InkReach {
     #[default]
     Within,
-    Past,
+    Lines,
+    Glyphs,
 }
 
 impl InkReach {
@@ -39,7 +41,7 @@ impl InkReach {
         let cuts =
             |extent: FontExtent| baseline < extent.ascent || height - baseline < extent.descent;
         if cuts(fonts) && cuts(band()) {
-            Self::Past
+            Self::Lines
         } else {
             Self::Within
         }
@@ -179,10 +181,15 @@ pub(crate) fn line_band(pieces: &[Piece], faces: &[Typeface]) -> FontExtent {
 // pen, take their outlines. Out of line: few layouts hold a glyph that may
 // ink past their lines.
 #[inline(never)]
-pub(crate) fn find_ink_past_lines(body: &LayoutBody, lines: (f32, f32)) -> Option<Rect> {
+pub(crate) fn find_ink_past_lines(
+    body: &LayoutBody,
+    lines: (f32, f32),
+    reach: InkReach,
+) -> Option<Rect> {
     let mut past = PastInk {
         lines,
         height: body.height,
+        glyphs_leave: reach == InkReach::Glyphs,
         ink: None,
     };
     for (index, line) in body.lines.iter().enumerate() {
@@ -195,10 +202,13 @@ pub(crate) fn find_ink_past_lines(body: &LayoutBody, lines: (f32, f32)) -> Optio
 }
 
 // The ink the glyphs of a layout put past the visible text of its lines,
-// which reaches across `lines`, or past its box, `height` tall.
+// which reaches across `lines`, or past its box, `height` tall. Only when
+// `glyphs_leave` does a glyph inked within its advance and the band need its
+// state read.
 struct PastInk {
     lines: (f32, f32),
     height: f32,
+    glyphs_leave: bool,
     ink: Option<Rect>,
 }
 
@@ -245,7 +255,10 @@ impl PastInk {
             });
         }
         let traced = |state: u8| moved || state == OUT || (short && state == LOOSE);
-        if moved || any_traced(body.glyphs.run(run.glyphs.range()), (face, inks), traced) {
+        if moved
+            || (self.glyphs_leave
+                && any_traced(body.glyphs.run(run.glyphs.range()), (face, inks), traced))
+        {
             self.add_outlines(glyph_run, (inks, scale), traced);
         }
     }
@@ -313,5 +326,5 @@ fn any_traced(
 // the test `find_ink_past_lines` makes before it places any glyph, which
 // most layouts pass.
 pub(crate) fn may_ink_past_lines(body: &LayoutBody, reach: InkReach) -> bool {
-    reach == InkReach::Past || body.glyphs.has_offsets()
+    reach != InkReach::Within || body.glyphs.has_offsets()
 }

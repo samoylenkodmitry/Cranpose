@@ -117,7 +117,7 @@ pub struct TextPrimitiveNode {
 
 impl TextPrimitiveNode {
     /// The paint of the node's glyphs.
-    pub fn paint(&self) -> TextPaint {
+    pub fn paint(&self) -> &TextPaint {
         self.paint.get_or(|| {
             TextPaint::of(
                 &self.text_style,

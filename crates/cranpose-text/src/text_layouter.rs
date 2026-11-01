@@ -578,7 +578,7 @@ impl TextLayouter {
             });
         // Glyphs spaced closer than their advances overlap past a line's ends.
         if self.items.iter().any(|item| item.spacing < 0.0) {
-            self.shaper.note_ink_reach(InkReach::Past);
+            self.shaper.note_ink_reach(InkReach::Lines);
         }
     }
 
