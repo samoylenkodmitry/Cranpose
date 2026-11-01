@@ -655,44 +655,67 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
         batch_effects.push((batch.visible_ranges, effect, effect_rect));
     }
 
-    let mut mask_text_style = transformed_text_style.clone();
-    mask_text_style.span_style.brush = None;
-    mask_text_style.span_style.alpha = None;
-    mask_text_style.span_style.color = Some(Color(1.0, 1.0, 1.0, 0.0));
-    mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
-
+    let mask = mask_style(transformed_text_style, Color(1.0, 1.0, 1.0, 0.0));
     for (visible_ranges, effect, effect_rect) in batch_effects {
-        let z_start = sink.current_z();
         let mask_text = text_for_gpu_mask_batch(text, &visible_ranges);
-        sink.push_text(TextDraw {
-            node_id: node.node_id,
-            rect: text_rect,
-            snap_anchor: None,
-            text: DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
-            layout: node.layout.clone(),
-            color: Color(1.0, 1.0, 1.0, 0.0),
-            text_style: Arc::new(mask_text_style.clone()),
-            style_hash: mask_text_style.render_hash(),
-            font_size: node.font_size,
-            scale: text_scale,
-            clip: placement
-                .clip
-                .map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
-        });
-        let z_end = sink.current_z();
-        sink.push_effect_layer(EffectLayer {
-            rect: effect_rect,
-            clip: placement.clip,
-            snap_anchor: None,
-            effect: Some(effect),
-            blend_mode: BlendMode::SrcOver,
-            composite_alpha: 1.0,
-            z_start,
-            z_end,
-        });
+        push_text_effect(
+            sink,
+            node,
+            (text_rect, text_scale, placement.clip),
+            (&mask_text, Arc::clone(&mask.0), mask.1),
+            (effect, effect_rect),
+        );
     }
 
     true
+}
+
+// `style` with its glyphs filled in `color` and unpainted otherwise: the mask
+// a text's effect paints through.
+fn mask_style(style: &TextStyle, color: Color) -> (Arc<TextStyle>, Color) {
+    let mut mask = style.clone();
+    mask.span_style.brush = None;
+    mask.span_style.alpha = None;
+    mask.span_style.color = Some(color);
+    mask.span_style.draw_style = Some(TextDrawStyle::Fill);
+    (Arc::new(mask), color)
+}
+
+// Pushes `mask_text`, the glyphs of `node` over `text_rect` in the mask
+// style and its color, cut to `clip` grown by the effect's padding, then the
+// layer of `effect` over `effect_rect`, which paints through them.
+fn push_text_effect<S: TextStyleDrawSink>(
+    sink: &mut S,
+    node: &TextPrimitiveNode,
+    (text_rect, text_scale, clip): (Rect, f32, Option<Rect>),
+    (mask_text, style, color): (&cranpose_ui::text::AnnotatedString, Arc<TextStyle>, Color),
+    (effect, effect_rect): (RenderEffect, Rect),
+) {
+    let z_start = sink.current_z();
+    sink.push_text(TextDraw {
+        node_id: node.node_id,
+        rect: text_rect,
+        snap_anchor: None,
+        text: DrawnText::of(Arc::new(mask_text.render_string()), &style, &node.layout),
+        layout: node.layout.clone(),
+        color,
+        style_hash: style.render_hash(),
+        text_style: style,
+        font_size: node.font_size,
+        scale: text_scale,
+        clip: clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
+    });
+    let z_end = sink.current_z();
+    sink.push_effect_layer(EffectLayer {
+        rect: effect_rect,
+        clip,
+        snap_anchor: None,
+        effect: Some(effect),
+        blend_mode: BlendMode::SrcOver,
+        composite_alpha: 1.0,
+        z_start,
+        z_end,
+    });
 }
 
 fn emit_text_style_draws<S: TextStyleDrawSink>(
@@ -770,7 +793,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 node_id,
                 rect: apply_layer_to_rect(shadow_rect, rect, content_layer),
                 snap_anchor: None,
-                text: DrawnText::of(shadow_text, &shadow_text_style),
+                text: DrawnText::of(shadow_text, &shadow_text_style, layout),
                 layout: layout.clone(),
                 color: shadow_color,
                 text_style: Arc::new(shadow_text_style),
@@ -830,40 +853,14 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
             return;
         }
 
-        let z_start = sink.current_z();
-        let mut mask_text_style = TextStyle::clone(style);
-        mask_text_style.span_style.brush = None;
-        mask_text_style.span_style.alpha = None;
-        mask_text_style.span_style.color = Some(Color::WHITE);
-        mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
-        let mask_text = text_for_gpu_mask(&node.text);
-        let mask_style_hash = mask_text_style.render_hash();
-
-        sink.push_text(TextDraw {
-            node_id: node.node_id,
-            rect: text_rect,
-            snap_anchor: None,
-            text: DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
-            layout: node.layout.clone(),
-            color: Color::WHITE,
-            text_style: Arc::new(mask_text_style),
-            style_hash: mask_style_hash,
-            font_size: node.font_size,
-            scale: text_scale,
-            clip: text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
-        });
-
-        let z_end = sink.current_z();
-        sink.push_effect_layer(EffectLayer {
-            rect: effect_rect,
-            clip: text_clip,
-            snap_anchor: None,
-            effect: Some(effect),
-            blend_mode: BlendMode::SrcOver,
-            composite_alpha: 1.0,
-            z_start,
-            z_end,
-        });
+        let (mask, color) = mask_style(style, Color::WHITE);
+        push_text_effect(
+            sink,
+            node,
+            (text_rect, text_scale, text_clip),
+            (&text_for_gpu_mask(&node.text), mask, color),
+            (effect, effect_rect),
+        );
         return;
     }
 
@@ -871,7 +868,7 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
         node_id: node.node_id,
         rect: text_rect,
         snap_anchor: None,
-        text: DrawnText::of(Arc::clone(&node.render_text), style),
+        text: DrawnText::of(Arc::clone(&node.render_text), style, &node.layout),
         layout: node.layout.clone(),
         color,
         text_style: Arc::clone(style),
@@ -908,7 +905,7 @@ pub(crate) fn push_text_style_draws(
             rect: apply_layer_to_rect(placement.text_rect, placement.bounds, placement.layer),
             // A plain text pushes its glyphs and nothing else.
             snap_anchor: placement.snap_anchor,
-            text: DrawnText::plain(Arc::clone(&node.render_text), &paint),
+            text: DrawnText::plain(Arc::clone(&node.render_text), &paint, &node.layout),
             layout: node.layout.clone(),
             color: apply_layer_to_color(paint.color, placement.layer),
             text_style: Arc::clone(&node.text_style),
@@ -1100,7 +1097,7 @@ pub(crate) fn push_draw_primitive(
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
                 snap_anchor: None,
-                text: DrawnText::of(render_text, &params.text_style),
+                text: DrawnText::of(render_text, &params.text_style, &params.layout),
                 layout: params.layout,
                 color: params.color,
                 text_style: params.text_style,

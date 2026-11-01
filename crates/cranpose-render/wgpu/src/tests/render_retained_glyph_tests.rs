@@ -633,7 +633,11 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
             height: 24.0,
         },
         snap_anchor: None,
-        text: DrawnText::of(cranpose_ui::text::shared_plain_render_string("MM"), &style),
+        text: DrawnText::of(
+            cranpose_ui::text::shared_plain_render_string("MM"),
+            &style,
+            &layout,
+        ),
         layout,
         color,
         style_hash: style.render_hash(),

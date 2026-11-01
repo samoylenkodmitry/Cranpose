@@ -9,6 +9,8 @@ use cranpose_ui::{
     text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextMotion},
 };
 
+use crate::glyph_reach::InkStyle;
+
 /// The paint of a text node's glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextPaint {
@@ -36,6 +38,9 @@ pub struct TextPaint {
     /// Whether the style or a span casts a shadow, which spreads past the
     /// glyphs.
     pub casts_shadow: bool,
+    /// What the style and the spans set that puts ink past the glyphs'
+    /// outlines.
+    pub ink_style: InkStyle,
 }
 
 impl TextPaint {
@@ -50,6 +55,7 @@ impl TextPaint {
         (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
+        let ink_style = InkStyle::of(style, spans);
         let spans = SpanPaint::of(spans);
         let plain = span_style.background.is_none()
             && span_style.shadow.is_none()
@@ -77,6 +83,7 @@ impl TextPaint {
                 .unwrap_or(TextMotion::Static)
                 == TextMotion::Static,
             casts_shadow: span_style.shadow.is_some() || spans.shadow,
+            ink_style,
         }
     }
 }

@@ -242,7 +242,13 @@ impl TextPlacement {
             height: text_rect.height.max(0.0),
             ..text_rect
         };
-        let clip = (options.overflow != TextOverflow::Visible || text_pan.is_some())
+        // As Compose cuts a text at its box only when the layout overflows
+        // it, glyph ink past a fitting layout draws; a text that pans cuts.
+        let overflows = prepared.layout.did_overflow_width()
+            || prepared.layout.did_overflow_height()
+            || rect.width > text_bounds.width
+            || rect.height > text_bounds.height;
+        let clip = (text_pan.is_some() || (options.overflow != TextOverflow::Visible && overflows))
             .then(|| pad_clip_rect(text_bounds));
         Some(Self {
             rect,

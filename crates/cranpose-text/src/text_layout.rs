@@ -12,6 +12,7 @@ use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
     index_range::{IndexRange, widen},
+    ink_bounds::{InkBounds, InkCache},
     laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
     paragraph::TextAlign,
@@ -346,6 +347,11 @@ impl TextLayout {
     // how far their visible text reaches.
     fn take_lines(&mut self) {
         self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1);
+        // Every caller holds the body alone, as it has just filled or moved
+        // its lines, whose ink found before lies where they were.
+        if let Some(body) = Arc::get_mut(&mut self.body) {
+            body.ink = InkCache::default();
+        }
         self.reach = self
             .body
             .lines
@@ -484,6 +490,13 @@ impl TextLayout {
     /// both zero for the empty default.
     pub fn lines_reach(&self) -> (f32, f32) {
         self.reach
+    }
+
+    /// Where the glyphs put ink, as their outlines give it: `None` when no
+    /// glyph has any. Found on the first call, and kept for the copies that
+    /// share the layout's lines.
+    pub fn ink_bounds(&self) -> Option<InkBounds> {
+        self.body.ink.of(self)
     }
 
     /// Whether the text had more lines than the line limit: Compose's

@@ -16,6 +16,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
+    glyph_reach::glyph_part,
     raster_cache::LayerRasterCacheHashes,
     text_paint::{TextPaint, TextPaintCache},
 };
@@ -128,8 +129,10 @@ impl TextPrimitiveNode {
         })
     }
 
-    /// Conservative bounds for the emitted glyphs and paint. Returns `None`
-    /// when an unclipped layout or style can draw beyond its layout rectangle.
+    /// Conservative bounds for the emitted glyphs and paint: the clip, or
+    /// the layout rectangle and wherever the ink of a glyph reaches past it.
+    /// Returns `None` when an unclipped layout or style can draw beyond
+    /// both: a visible overflow, a shadow, a baseline shift or a stroke.
     pub fn draw_bounds(&self) -> Option<Rect> {
         if let Some(clip) = self.clip {
             return Some(clip);
@@ -148,7 +151,11 @@ impl TextPrimitiveNode {
                 .span_styles
                 .iter()
                 .all(|span| !stroked(&span.item)))
-        .then_some(self.rect)
+        .then(|| {
+            let spread = self.paint().ink_style.spread(&self.layout);
+            self.rect
+                .union(glyph_part(self.rect, &self.layout, 1.0, spread))
+        })
     }
 
     fn draws_within(&self, bounds: Rect) -> bool {

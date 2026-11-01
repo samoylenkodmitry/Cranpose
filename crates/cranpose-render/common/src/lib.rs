@@ -17,6 +17,7 @@ pub mod font_source;
 pub mod geometry;
 /// Glyph masks and the cache renderers keep them in.
 pub mod glyph_mask;
+pub mod glyph_reach;
 /// The render graph: the layers and primitives that a scene builds for a renderer to draw.
 pub mod graph;
 mod graph_hash;

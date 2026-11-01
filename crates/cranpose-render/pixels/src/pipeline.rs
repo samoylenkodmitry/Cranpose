@@ -258,6 +258,7 @@ fn push_text_style_draws(
 ) {
     let (rect, node_layer, text_clip) = (placement.bounds, placement.layer, placement.clip);
     let (text, text_style, layout) = (&node.text, &node.text_style, &node.layout);
+    let spread = node.paint().ink_style.spread(layout);
     let text_rect = placement.text_rect;
     let transformed_text_rect = apply_layer_to_rect(text_rect, rect, node_layer);
     // A line or a box of the text, in layout pixels, where the node draws it.
@@ -312,6 +313,7 @@ fn push_text_style_draws(
             font_size: node.font_size,
             scale: layer_uniform_scale(node_layer),
             ink: GlyphInk::Hidden,
+            spread,
             clip: text_clip,
         });
     }
@@ -326,6 +328,7 @@ fn push_text_style_draws(
         font_size: node.font_size,
         scale: layer_uniform_scale(node_layer),
         ink: GlyphInk::Painted,
+        spread,
         clip: text_clip,
     });
 

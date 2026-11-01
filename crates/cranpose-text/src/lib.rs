@@ -26,6 +26,7 @@ pub mod glyph_outline;
 #[cfg(feature = "hyphenation")]
 pub mod hyphenator;
 mod index_range;
+mod ink_bounds;
 /// Splitting text into the items a shaper takes.
 pub mod itemizer;
 mod laid_glyphs;
@@ -87,6 +88,7 @@ pub use glyph_id::GlyphId;
 pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
 #[cfg(feature = "hyphenation")]
 pub use hyphenator::{HyphenationError, Hyphenator};
+pub use ink_bounds::InkBounds;
 pub use itemizer::{Itemizer, TextItem};
 pub use layout_input::{LayoutInput, ParagraphLengths};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
