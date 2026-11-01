@@ -8,11 +8,10 @@ use std::{
     time::Duration,
 };
 
-use block2::RcBlock;
 use cranpose_services::{
-    AudioFocus, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand, MediaError,
-    MediaItem, MediaMetadata, MediaObserver, MediaPlayer, PlaybackProgress, PlaybackState,
-    publish_audio_focus, publish_media_command, publish_playback_progress, publish_playback_state,
+    AudioFocus, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaError, MediaItem,
+    MediaMetadata, MediaObserver, MediaPlayer, PlaybackProgress, PlaybackState,
+    publish_audio_focus, publish_playback_progress, publish_playback_state,
     set_platform_media_player,
 };
 use dispatch2::DispatchQueue;
@@ -35,12 +34,7 @@ use objc2_core_media::CMTime;
 use objc2_foundation::{
     NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol, NSString, NSURL,
 };
-use objc2_media_player::{
-    MPChangePlaybackPositionCommandEvent, MPMediaItemPropertyAlbumTitle, MPMediaItemPropertyArtist,
-    MPMediaItemPropertyPlaybackDuration, MPMediaItemPropertyTitle, MPNowPlayingInfoCenter,
-    MPNowPlayingInfoPropertyElapsedPlaybackTime, MPNowPlayingInfoPropertyPlaybackRate,
-    MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
-};
+use objc2_media_player::MPNowPlayingInfoCenter;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -69,7 +63,7 @@ pub(crate) fn register() {
     crate::apple::media_source::register();
     configure_audio_session();
     install_interruption_observer();
-    install_remote_commands();
+    crate::apple::now_playing::install_remote_commands();
     let player = Arc::new(IosMediaPlayer {
         software: cranpose_media::SoftwareMediaPlayer::new(),
         native_stream: AtomicBool::new(false),
@@ -242,87 +236,10 @@ struct SendRetained<T: ?Sized>(Retained<T>);
 unsafe impl<T: ?Sized> Send for SendRetained<T> {}
 unsafe impl<T: ?Sized> Sync for SendRetained<T> {}
 
-fn install_remote_commands() {
-    unsafe {
-        let center = MPRemoteCommandCenter::sharedCommandCenter();
-        for (command, action) in [
-            (center.playCommand(), MediaCommand::Play),
-            (center.pauseCommand(), MediaCommand::Pause),
-            (
-                center.togglePlayPauseCommand(),
-                MediaCommand::TogglePlayPause,
-            ),
-            (center.stopCommand(), MediaCommand::Stop),
-            (center.nextTrackCommand(), MediaCommand::Next),
-            (center.previousTrackCommand(), MediaCommand::Previous),
-        ] {
-            let handler = RcBlock::new(
-                move |_event: std::ptr::NonNull<MPRemoteCommandEvent>| -> MPRemoteCommandHandlerStatus {
-                    publish_media_command(action);
-                    MPRemoteCommandHandlerStatus::Success
-                },
-            );
-            command.setEnabled(true);
-            let _ = command.addTargetWithHandler(&handler);
-        }
-
-        let seek = center.changePlaybackPositionCommand();
-        let handler = RcBlock::new(
-            move |event: std::ptr::NonNull<MPRemoteCommandEvent>| -> MPRemoteCommandHandlerStatus {
-                let event = event.as_ref();
-                let Some(event) = event.downcast_ref::<MPChangePlaybackPositionCommandEvent>()
-                else {
-                    return MPRemoteCommandHandlerStatus::CommandFailed;
-                };
-                let seconds = event.positionTime();
-                if !seconds.is_finite() || seconds < 0.0 {
-                    return MPRemoteCommandHandlerStatus::CommandFailed;
-                }
-                publish_media_command(MediaCommand::SeekTo(Duration::from_secs_f64(seconds)));
-                MPRemoteCommandHandlerStatus::Success
-            },
-        );
-        seek.setEnabled(true);
-        let _ = seek.addTargetWithHandler(&handler);
-    }
-}
-
 fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) {
-    on_main(|_| unsafe {
-        let title = NSString::from_str(&metadata.title);
-        let artist = NSString::from_str(&metadata.artist);
-        let album = NSString::from_str(&metadata.album);
-        let duration = NSNumber::new_f64(
-            metadata
-                .duration
-                .map_or(0.0, |duration| duration.as_secs_f64()),
-        );
-        let elapsed = NSNumber::new_f64(position.as_secs_f64());
-        let rate = NSNumber::new_f32(rate);
-
-        let mut keys: Vec<&NSString> = vec![
-            MPMediaItemPropertyTitle,
-            MPMediaItemPropertyArtist,
-            MPMediaItemPropertyAlbumTitle,
-            MPMediaItemPropertyPlaybackDuration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime,
-            MPNowPlayingInfoPropertyPlaybackRate,
-        ];
-        let mut values: Vec<&AnyObject> = vec![
-            title.as_ref(),
-            artist.as_ref(),
-            album.as_ref(),
-            duration.as_ref(),
-            elapsed.as_ref(),
-            rate.as_ref(),
-        ];
+    on_main(|_| {
         let artwork = super::media_artwork::image(metadata.artwork.as_ref());
-        if let Some(artwork) = &artwork {
-            keys.push(objc2_media_player::MPMediaItemPropertyArtwork);
-            values.push(artwork.as_ref());
-        }
-        let info = NSDictionary::from_slices(&keys, &values);
-        MPNowPlayingInfoCenter::defaultCenter().setNowPlayingInfo(Some(&info));
+        crate::apple::now_playing::publish(metadata, position, rate, artwork.as_deref());
     });
 }
 

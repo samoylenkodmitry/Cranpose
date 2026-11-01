@@ -194,7 +194,7 @@ media = ["media-backend", "cranpose-media/all-codecs"]
 # recordings, without the code of the other containers and codecs.
 media-wav = ["media-backend", "cranpose-media/wav"]
 # Internal: the backend itself, with no codec. Enable `media` or `media-wav`.
-media-backend = ["dep:cranpose-media"]
+media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 renderer-pixels = ["cranpose-render-pixels"]
 # A composition the CPU draws into an RGBA framebuffer that the host
 # presents (`cranpose::framebuffer`), for hosts without a GPU: watchOS and
@@ -445,7 +445,16 @@ windows-sys = { version = "0.61", optional = true, features = [
 ] }
 # The internet connection profile and its changes (`windows_network`). The
 # version AccessKit and wgpu already resolve.
-windows = { version = "0.62", optional = true, features = ["Networking_Connectivity", "Foundation", "System_Power"] }
+windows = { version = "0.62", optional = true, features = [
+    "Networking_Connectivity",
+    "Foundation",
+    "System_Power",
+    # The playing item in the system media controls (`media_controls`).
+    "Media",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+] }
 wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
@@ -480,6 +489,19 @@ objc2-core-foundation = { version = "0.3", default-features = false, optional = 
     "CFDictionary",
     "CFNumber",
     "CFString",
+] }
+# Now Playing and the media keys for the playing item (`media_controls`),
+# shared with iOS (`apple::now_playing`).
+objc2-media-player = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "objc2-app-kit",
+    "objc2-core-foundation",
+    "MPMediaItem",
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommandEvent",
 ] }
 # Custom cursors that keep the size they were drawn at (`macos_cursor`), which
 # winit cannot build. The version winit already resolves.
