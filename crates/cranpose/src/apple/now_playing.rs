@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use block2::RcBlock;
 use cranpose_services::{MediaCommand, MediaMetadata, publish_media_command};
-use objc2::runtime::AnyObject;
+use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 use objc2_media_player::{
     MPChangePlaybackPositionCommandEvent, MPMediaItemArtwork, MPMediaItemPropertyAlbumTitle,
@@ -37,7 +37,7 @@ pub(crate) fn install_remote_commands() {
                 },
             );
             command.setEnabled(true);
-            let _ = command.addTargetWithHandler(&handler);
+            let _: Retained<AnyObject> = command.addTargetWithHandler(&handler);
         }
 
         let seek = center.changePlaybackPositionCommand();
@@ -57,7 +57,7 @@ pub(crate) fn install_remote_commands() {
             },
         );
         seek.setEnabled(true);
-        let _ = seek.addTargetWithHandler(&handler);
+        let _: Retained<AnyObject> = seek.addTargetWithHandler(&handler);
     }
 }
 

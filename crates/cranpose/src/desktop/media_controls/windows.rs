@@ -143,15 +143,18 @@ impl Controls {
 
 impl Drop for Controls {
     fn drop(&mut self) {
-        let _ = self.controls.RemoveButtonPressed(self.buttons);
-        let _ = self
-            .controls
-            .RemovePlaybackPositionChangeRequested(self.seeks);
-        let _ = self
-            .controls
-            .DisplayUpdater()
-            .and_then(|updater| updater.ClearAll());
-        let _ = self.controls.SetIsEnabled(false);
+        let cleared: [windows::core::Result<()>; 4] = [
+            self.controls.RemoveButtonPressed(self.buttons),
+            self.controls
+                .RemovePlaybackPositionChangeRequested(self.seeks),
+            self.controls
+                .DisplayUpdater()
+                .and_then(|updater| updater.ClearAll()),
+            self.controls.SetIsEnabled(false),
+        ];
+        if let Some(Err(error)) = cleared.into_iter().find(Result::is_err) {
+            log::warn!("the system media controls kept part of the closed item: {error}");
+        }
     }
 }
 

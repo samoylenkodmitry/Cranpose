@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
@@ -141,7 +141,7 @@ impl Controls {
     // MPRIS takes the cover as a URL, so it is written to a file of its own.
     fn show_cover(&mut self, artwork: Option<&MediaArtwork>) {
         if let Some(old) = self.cover.take() {
-            let _ = std::fs::remove_file(old);
+            remove_cover(&old);
         }
         self.cover = artwork.and_then(|artwork| {
             write_cover(artwork)
@@ -154,7 +154,7 @@ impl Controls {
 impl Drop for Controls {
     fn drop(&mut self) {
         if let Some(cover) = self.cover.take() {
-            let _ = std::fs::remove_file(cover);
+            remove_cover(&cover);
         }
     }
 }
@@ -191,6 +191,15 @@ pub(super) fn bus_name(app: &str) -> String {
         element.insert(0, '_');
     }
     format!("org.mpris.MediaPlayer2.{element}")
+}
+
+// A cover that the cache lost already needs no removal.
+fn remove_cover(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("the old media cover stays at {}: {error}", path.display());
+    }
 }
 
 fn write_cover(artwork: &MediaArtwork) -> std::io::Result<PathBuf> {

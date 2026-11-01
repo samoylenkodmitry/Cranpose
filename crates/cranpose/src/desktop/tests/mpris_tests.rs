@@ -86,12 +86,12 @@ fn a_client_reads_the_playing_item_and_its_commands_reach_the_app() {
     assert_eq!(String::try_from(read("PlaybackStatus")).unwrap(), "Stopped");
     let path = cover.trim_start_matches("file://");
     assert!(
-        !std::path::Path::new(path).exists(),
+        !Path::new(path).exists(),
         "the cover file outlived the item"
     );
     clear_application_id();
     clear_host_controller();
-    let _ = std::fs::remove_dir_all(scratch);
+    std::fs::remove_dir_all(scratch).expect("remove the scratch folder");
 }
 
 // The app's folders, all in the test's scratch folder.

@@ -140,7 +140,11 @@ impl Integration {
     pub(crate) fn new(integration: Option<Box<dyn DesktopIntegration>>) -> Self {
         Self {
             app: integration,
-            ..Self::default()
+            #[cfg(all(
+                feature = "media-backend",
+                any(target_os = "linux", target_os = "macos", target_os = "windows")
+            ))]
+            media: super::media_controls::MediaControls::default(),
         }
     }
 
