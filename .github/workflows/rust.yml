@@ -69,7 +69,9 @@ jobs:
   lint:
     name: lint + gates
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    # Needs no GPU and no Emscripten, so it also takes samarch's overflow
+    # runner beside samarch-1's two.
+    runs-on: [self-hosted, Linux, cranpose-linux]
     timeout-minutes: 20
     defaults:
       run:
