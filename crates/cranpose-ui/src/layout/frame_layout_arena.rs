@@ -3,39 +3,21 @@ use std::cell::RefCell;
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Placement;
 
-pub(super) struct ScratchVecPool<T> {
-    available: Vec<Vec<T>>,
-}
-
-impl<T> ScratchVecPool<T> {
-    pub(super) fn acquire(&mut self) -> Vec<T> {
-        self.available.pop().unwrap_or_default()
-    }
-
-    pub(super) fn release(&mut self, mut values: Vec<T>) {
-        values.clear();
-        self.available.push(values);
-    }
-
-    #[cfg(test)]
-    pub(super) fn available_count(&self) -> usize {
-        self.available.len()
-    }
-}
-
-impl<T> Default for ScratchVecPool<T> {
-    fn default() -> Self {
-        Self {
-            available: Vec::new(),
-        }
-    }
+// The scratch lists of one measure, taken from the arena and given back
+// together: one pop and one push a measure instead of one for each list.
+#[derive(Default)]
+struct MeasureLists {
+    child_ids: Vec<NodeId>,
+    placements: Vec<Placement>,
+    placement_indices: Vec<usize>,
 }
 
 #[derive(Default)]
 pub(crate) struct FrameLayoutArena {
-    pub(super) tmp_child_ids: ScratchVecPool<NodeId>,
-    pub(super) tmp_placements: ScratchVecPool<Placement>,
-    pub(super) tmp_placement_indices: ScratchVecPool<usize>,
+    // The lists of the measures that ran, for the next ones to take.
+    lists: Vec<MeasureLists>,
+    // The nodes the dirty bubbles started from, which a pass takes.
+    pub(super) dirty_roots: Vec<NodeId>,
     /// The marks a pass that starts from the dirty nodes cleared.
     pub(super) cleared_marks: Vec<(NodeId, crate::widgets::nodes::LayoutDirt)>,
 }
@@ -43,11 +25,14 @@ pub(crate) struct FrameLayoutArena {
 #[cfg(test)]
 impl FrameLayoutArena {
     pub(crate) fn available_placement_scratch_count(&self) -> usize {
-        self.tmp_placements.available_count()
+        self.lists.len()
     }
 
     pub(crate) fn seed_placement_scratch_for_test(&mut self) {
-        self.tmp_placements.release(Vec::with_capacity(1));
+        self.lists.push(MeasureLists {
+            placements: Vec::with_capacity(1),
+            ..MeasureLists::default()
+        });
     }
 }
 
@@ -60,10 +45,11 @@ pub(super) struct VecPools<'a> {
 
 impl<'a> VecPools<'a> {
     pub(super) fn acquire(arena: &'a RefCell<FrameLayoutArena>) -> Self {
-        let mut pools = arena.borrow_mut();
-        let child_ids = pools.tmp_child_ids.acquire();
-        let placements = pools.tmp_placements.acquire();
-        let placement_indices = pools.tmp_placement_indices.acquire();
+        let MeasureLists {
+            child_ids,
+            placements,
+            placement_indices,
+        } = arena.borrow_mut().lists.pop().unwrap_or_default();
         Self {
             arena,
             child_ids,
@@ -75,15 +61,14 @@ impl<'a> VecPools<'a> {
 
 impl Drop for VecPools<'_> {
     fn drop(&mut self) {
-        let mut pools = self.arena.borrow_mut();
-        pools
-            .tmp_child_ids
-            .release(std::mem::take(&mut self.child_ids));
-        pools
-            .tmp_placements
-            .release(std::mem::take(&mut self.placements));
-        pools
-            .tmp_placement_indices
-            .release(std::mem::take(&mut self.placement_indices));
+        let mut lists = MeasureLists {
+            child_ids: std::mem::take(&mut self.child_ids),
+            placements: std::mem::take(&mut self.placements),
+            placement_indices: std::mem::take(&mut self.placement_indices),
+        };
+        lists.child_ids.clear();
+        lists.placements.clear();
+        lists.placement_indices.clear();
+        self.arena.borrow_mut().lists.push(lists);
     }
 }

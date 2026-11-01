@@ -1457,11 +1457,11 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
 
     let frame_arena = builder.state.frame_arena.borrow();
     assert!(
-        frame_arena.tmp_child_ids.available_count() >= 2,
+        frame_arena.available_placement_scratch_count() >= 2,
         "nested measurement should retain multiple child-id scratch vecs"
     );
     assert!(
-        frame_arena.tmp_placements.available_count() >= 2,
+        frame_arena.available_placement_scratch_count() >= 2,
         "nested measurement should retain multiple placement scratch vecs"
     );
 
