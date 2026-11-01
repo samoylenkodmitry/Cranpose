@@ -175,7 +175,7 @@ jobs:
   android-apks:
     name: Android robot APKs for the emulator (self-hosted)
     if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'android' }}
-    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
     timeout-minutes: 60
     defaults:
       run:
@@ -268,7 +268,7 @@ jobs:
   apple-apps:
     name: iOS simulator and macOS apps (self-hosted)
     if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'apple' }}
-    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
     timeout-minutes: 30
     defaults:
       run:
