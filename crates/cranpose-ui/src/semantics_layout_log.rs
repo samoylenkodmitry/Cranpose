@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, PackedU64};
 
 const MAX_PENDING: usize = 4096;
 
@@ -48,12 +48,12 @@ impl SemanticsLayoutLog {
         }
     }
 
-    fn record(&self, node: NodeId, stamp: &mut u64) {
+    fn record(&self, node: NodeId, stamp: &mut PackedU64) {
         let sync = self.sync.get();
-        if !self.armed.get() || *stamp == sync {
+        if !self.armed.get() || stamp.get() == sync {
             return;
         }
-        *stamp = sync;
+        *stamp = PackedU64::new(sync);
         let mut pending = self.pending.borrow_mut();
         if pending.len() < MAX_PENDING {
             pending.push(node);
@@ -87,14 +87,14 @@ impl Drop for SemanticsLayoutLog {
 /// Notes that layout changed `node`, for the semantics logs that are armed.
 /// The check that none is armed is inlined where a layout state changes.
 #[inline]
-pub(crate) fn record_layout_change(node: NodeId, stamp: &mut u64) {
+pub(crate) fn record_layout_change(node: NodeId, stamp: &mut PackedU64) {
     if ARMED_LOGS.load(Ordering::Relaxed) != 0 {
         record_armed_layout_change(node, stamp);
     }
 }
 
 #[inline(never)]
-fn record_armed_layout_change(node: NodeId, stamp: &mut u64) {
+fn record_armed_layout_change(node: NodeId, stamp: &mut PackedU64) {
     crate::render_state::with_current_semantics_layout_log(|log| log.record(node, stamp));
 }
 

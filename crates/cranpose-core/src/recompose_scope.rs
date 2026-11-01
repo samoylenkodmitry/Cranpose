@@ -9,8 +9,8 @@ use smallvec::SmallVec;
 #[cfg(feature = "inspection")]
 use crate::source_trace;
 use crate::{
-    AnchorId, Composer, LocalStackSnapshot, NodeId, RetentionMode, RuntimeHandle, ScopeId,
-    SlotsHost, StateId, collections::map::HashSet, composer, runtime, thread_state,
+    AnchorId, Composer, LocalStackSnapshot, NodeId, PackedU64, RetentionMode, RuntimeHandle,
+    ScopeId, SlotsHost, StateId, collections::map::HashSet, composer, runtime, thread_state,
 };
 
 // Whether a scope's body ran to its end or was skipped.
@@ -153,8 +153,8 @@ impl ScopeFlags {
 pub(crate) struct RecomposeScopeInner {
     runtime: runtime::ScopeRuntime,
     flags: ScopeFlags,
-    active_epoch: Cell<u64>,
-    deactivations: Cell<u64>,
+    active_epoch: Cell<PackedU64>,
+    deactivations: Cell<PackedU64>,
     retention_mode: Cell<RetentionMode>,
     /// [`NO_PARENT_HINT`] for none.
     parent_hint: Cell<NodeId>,
@@ -221,7 +221,7 @@ impl RecomposeScopeInner {
     }
 
     fn is_effectively_active(&self, epoch: u64) -> bool {
-        if self.active_epoch.get() == epoch {
+        if self.active_epoch.get().get() == epoch {
             return true;
         }
         if !self.flags.get(ScopeFlag::Active) {
@@ -233,7 +233,7 @@ impl RecomposeScopeInner {
             ScopeOwner::Live(owner) => owner.is_effectively_active(epoch),
         };
         if active {
-            self.active_epoch.set(epoch);
+            self.active_epoch.set(PackedU64::new(epoch));
         }
         active
     }
@@ -243,8 +243,8 @@ impl RecomposeScopeInner {
         Self {
             runtime,
             flags: ScopeFlags(Cell::new(ScopeFlag::Active.bit())),
-            active_epoch: Cell::new(0),
-            deactivations: Cell::new(0),
+            active_epoch: Cell::default(),
+            deactivations: Cell::default(),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(NO_PARENT_HINT),
             group_anchor: Cell::new(AnchorId::INVALID),
@@ -384,10 +384,10 @@ impl RecomposeScope {
     /// once to restart them — no flag on the slot's own scopes carries that
     /// trace, because deactivation walks stop at slot-host boundaries.
     pub fn owner_chain_deactivation_epoch(&self) -> u64 {
-        let mut total = self.inner.deactivations.get();
+        let mut total = self.inner.deactivations.get().get();
         let mut owner = self.inner.owner();
         while let ScopeOwner::Live(scope) = owner {
-            total = total.wrapping_add(scope.deactivations.get());
+            total = total.wrapping_add(scope.deactivations.get().get());
             owner = scope.owner();
         }
         total
@@ -810,7 +810,7 @@ impl RecomposeScope {
         note_scope_activity_change();
         self.inner
             .deactivations
-            .set(self.inner.deactivations.get() + 1);
+            .set(PackedU64::new(self.inner.deactivations.get().get() + 1));
         if self.inner.flags.replace(ScopeFlag::Enqueued, false) {
             self.inner.runtime.mark_scope_recomposed();
         }

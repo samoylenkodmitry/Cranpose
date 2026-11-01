@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{Node, NodeId, collections::map::HashMap};
+use cranpose_core::{Node, NodeId, PackedU64, collections::map::HashMap};
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
@@ -168,13 +168,13 @@ pub struct LayoutState {
     is_placed: bool,
     node_id: Option<NodeId>,
     /// The layout pass that cleared the placed flag while the node was placed.
-    cleared_in_pass: u64,
+    cleared_in_pass: PackedU64,
     content_offset: Point,
-    semantics_stamp: u64,
+    semantics_stamp: PackedU64,
     /// The take of the moved-node list this node was last noted in.
-    moved_noted_in: u64,
+    moved_noted_in: PackedU64,
     /// The take of the reshaped-node list this node was last noted in.
-    reshaped_noted_in: u64,
+    reshaped_noted_in: PackedU64,
 }
 
 impl LayoutState {
@@ -242,7 +242,7 @@ impl LayoutState {
         // A node the running pass cleared while it was placed changes
         // nothing the scene draws by being placed again.
         let newly_placed =
-            !self.is_placed && !context.placement_pass().restore(self.cleared_in_pass);
+            !self.is_placed && !context.placement_pass().restore(self.cleared_in_pass.get());
         let moved = self.position != position;
         if let Some(id) = self.node_id {
             if newly_placed {
@@ -266,13 +266,13 @@ impl LayoutState {
             return;
         }
         self.is_placed = false;
-        self.cleared_in_pass = context.placement_pass().clear();
+        self.cleared_in_pass = PackedU64::new(context.placement_pass().clear());
         self.note_semantics_change();
     }
 
     /// Whether `pass` found this node placed and left it unplaced.
     pub(crate) fn unplaced_in(&self, pass: u64) -> bool {
-        !self.is_placed && self.cleared_in_pass == pass
+        !self.is_placed && self.cleared_in_pass.get() == pass
     }
 
     #[inline]
