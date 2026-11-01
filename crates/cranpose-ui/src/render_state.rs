@@ -6,13 +6,16 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, SnapshotStateObserver, collections::map::HashSet};
+use cranpose_core::{MemoryApplier, NodeId, SnapshotStateObserver};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
+mod dirty_node_set;
 mod display_scale;
 mod draw_observation;
+mod noted_scene_nodes;
 
+use dirty_node_set::DirtyNodeSet;
 use display_scale::normalize_density;
 pub use display_scale::{
     MAX_FONT_SCALE, MIN_FONT_SCALE, current_density, current_font_scale, current_font_scale_curve,
@@ -24,6 +27,7 @@ pub(crate) use draw_observation::{
     DrawObservationScope, clear_draw_observations_for_node, observe_draw_reads,
 };
 pub use draw_observation::{prune_draw_observations_to_nodes, request_current_draw_redraw};
+use noted_scene_nodes::NotedSceneNodes;
 
 struct RenderState {
     layout_repasses: RefCell<DirtyNodeSet>,
@@ -905,97 +909,6 @@ pub(crate) fn request_pointer_input_task_poll(
 fn with_draw_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
     let context = require_current_app_context("draw observer access");
     f(&context.draw_observer)
-}
-
-struct DirtyNodeSet {
-    dirty_nodes: HashSet<NodeId>,
-}
-
-/// The nodes a layout pass names to the scene, each once a take: a node
-/// keeps the take it was last noted in, so a second note in the same take
-/// is dropped with one comparison instead of a hash. A node pushed without
-/// that record may come twice, which the scene's routing marks absorb.
-struct NotedSceneNodes<T> {
-    nodes: Vec<T>,
-    /// The take the list fills: a number no other list on the thread uses.
-    take: u64,
-}
-
-impl<T> NotedSceneNodes<T> {
-    fn new() -> Self {
-        Self {
-            nodes: Vec::new(),
-            take: next_moved_scene_node_take(),
-        }
-    }
-
-    fn note(&mut self, node: T, noted_in: &mut u64) {
-        if *noted_in != self.take {
-            *noted_in = self.take;
-            self.nodes.push(node);
-        }
-    }
-
-    fn push(&mut self, node: T) {
-        self.nodes.push(node);
-    }
-
-    /// Moves the nodes into `output` and keeps the storage `output` held
-    /// for the next take.
-    fn take_into(&mut self, output: &mut Vec<T>) {
-        output.clear();
-        if !self.nodes.is_empty() {
-            std::mem::swap(&mut self.nodes, output);
-            self.take = next_moved_scene_node_take();
-        }
-    }
-}
-
-fn next_moved_scene_node_take() -> u64 {
-    crate::thread_state::cells(|cells| {
-        let take = cells.moved_scene_node_takes.get() + 1;
-        cells.moved_scene_node_takes.set(take);
-        take
-    })
-}
-
-impl DirtyNodeSet {
-    fn new() -> Self {
-        Self {
-            dirty_nodes: HashSet::default(),
-        }
-    }
-
-    fn schedule_repass(&mut self, node_id: NodeId) {
-        self.dirty_nodes.insert(node_id);
-    }
-
-    fn has_pending_repass(&self) -> bool {
-        !self.dirty_nodes.is_empty()
-    }
-
-    // A drain clears every control byte of the table when it ends, even of
-    // an empty one: most frames take sets that are empty.
-    fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
-        if self.dirty_nodes.is_empty() {
-            return Vec::new();
-        }
-        self.dirty_nodes.drain().collect()
-    }
-
-    fn take_dirty_nodes_into(&mut self, output: &mut Vec<NodeId>) {
-        output.clear();
-        if self.dirty_nodes.is_empty() {
-            return;
-        }
-        output.extend(self.dirty_nodes.drain());
-    }
-
-    fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {
-        let mut nodes = self.dirty_nodes.iter().copied().collect::<Vec<_>>();
-        nodes.sort_unstable();
-        nodes
-    }
 }
 
 /// Schedules a layout repass for a specific node.
