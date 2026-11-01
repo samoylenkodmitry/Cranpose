@@ -3,7 +3,7 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    glyph_reach::{InkStyle, glyph_part},
+    glyph_reach::{InkSpread, glyph_part},
     graph::{InlineNode, LayerChange, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
@@ -162,8 +162,7 @@ impl TextDraw {
         if casts_shadow(self.text.as_ref().into(), &self.text_style) {
             rect
         } else {
-            let spread =
-                InkStyle::of(&self.text_style, &self.text.span_styles).spread(&self.layout);
+            let spread = InkSpread::of_text(&self.text_style, &self.text.span_styles, &self.layout);
             glyph_part(rect, &self.layout, self.scale, spread)
         }
     }

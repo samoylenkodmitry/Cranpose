@@ -7,7 +7,7 @@ use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
-    glyph_ink::InkReach,
+    glyph_ink::{InkReach, line_band},
     index_range::narrow,
     itemizer::{Itemizer, TextItem},
     laid_glyphs::LaidGlyphs,
@@ -552,7 +552,8 @@ impl TextLayouter {
                 match &mut taken {
                     Some((body, from)) => {
                         *from = body.glyphs.take(*from..body.shaped, &item.range, glyphs);
-                        shaper.note_ink_reach(body.ink_reach());
+                        shaper.note_ink_reach(body.ink_reach);
+                        shaper.note_synthesis(&item, &input.spans[item.span]);
                     }
                     None => {
                         shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs);
@@ -722,7 +723,8 @@ impl TextLayouter {
             ends_paragraph: true,
         });
         layout.widest = layout.widest.max(width + line.indent);
-        let reach = InkReach::of_line(line_box.baseline - trim_top, bottom - top, extent);
+        let band = || line_band(&self.pieces, &layout.faces);
+        let reach = InkReach::of_line(line_box.baseline - trim_top, bottom - top, (extent, band));
         (bottom, reach)
     }
 

@@ -8,7 +8,7 @@ use std::{
 use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
     GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, TextOverflow, TextStyle,
-    text::{AnnotatedString, RenderString, SpanStyle, TextDrawStyle},
+    text::{AnnotatedString, RenderString},
 };
 pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
 use cranpose_ui_graphics::{
@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    glyph_reach::glyph_part,
+    glyph_reach::glyph_bounds,
     raster_cache::LayerRasterCacheHashes,
     text_paint::{TextPaint, TextPaintCache},
 };
@@ -130,35 +130,21 @@ impl TextPrimitiveNode {
     }
 
     /// Conservative bounds for the emitted glyphs and paint: the clip, or
-    /// the layout rectangle and wherever the ink of a glyph reaches past it.
-    /// Returns `None` when an unclipped layout or style can draw beyond
-    /// both: a visible overflow, a shadow, a baseline shift or a stroke.
+    /// the layout rectangle and wherever the ink of a glyph, a stroke's
+    /// included, reaches past it. Returns `None` when an unclipped layout or
+    /// style can draw beyond both: a visible overflow, a shadow of the style
+    /// or a span, or a baseline shift.
     pub fn draw_bounds(&self) -> Option<Rect> {
         if let Some(clip) = self.clip {
             return Some(clip);
         }
-        let style = &self.text_style.span_style;
-        let stroked =
-            |style: &SpanStyle| matches!(style.draw_style, Some(TextDrawStyle::Stroke { .. }));
-        (!matches!(self.overflow, TextOverflow::Visible)
-            && style.shadow.is_none()
-            && style
-                .baseline_shift
-                .is_none_or(|shift| !shift.is_specified() || shift.0 == 0.0)
-            && !stroked(style)
-            && self
-                .text
-                .span_styles
-                .iter()
-                .all(|span| !stroked(&span.item)))
-        .then(|| {
-            self.rect.union(glyph_part(
-                self.rect,
-                &self.layout,
-                1.0,
-                self.paint().spread,
-            ))
-        })
+        if matches!(self.overflow, TextOverflow::Visible) {
+            return None;
+        }
+        // The paint, kept in the node, tells this without loading the style.
+        let paint = self.paint();
+        (!paint.casts_shadow && paint.baseline_shift == 0.0)
+            .then(|| glyph_bounds(self.rect, &self.layout, paint.spread))
     }
 
     fn draws_within(&self, bounds: Rect) -> bool {

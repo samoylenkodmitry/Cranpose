@@ -17,6 +17,7 @@ use crate::{
     layout_body::LayoutBody,
     paragraph::TextAlign,
     shaped_glyphs::GlyphOffset,
+    synthesized_style::SynthesizedStyle,
     typeface::Typeface,
 };
 
@@ -36,12 +37,9 @@ pub struct TextLayout {
     wrap: f32,
     did_overflow_width: bool,
     id: u32,
-    // How far the visible text of the lines reaches across, from the left
-    // edge of the leftmost to the right edge of the rightmost. Kept beside
-    // the body, so a renderer reads it in the layout it holds.
-    reach: (f32, f32),
-    // Whether the body holds ink past the lines, kept beside it as `reach`.
-    inks_past_lines: bool,
+    // How far the glyphs reach, as `glyph_reach` gives it. Kept beside the
+    // body, so a renderer reads it in the layout it holds.
+    glyph_reach: Rect,
 }
 
 impl PartialEq for TextLayout {
@@ -63,25 +61,35 @@ fn next_id() -> u32 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1)
 }
 
-// Takes the lines `body` now holds in their places: how far their visible
-// text reaches, and whether glyphs put ink past it, whose box the body keeps;
-// `glyphs` tells whether a glyph puts ink past its advance or its typeface's
-// lines.
-fn take_lines(body: &mut LayoutBody, glyphs: InkReach) -> ((f32, f32), bool) {
-    let reach = body
-        .lines
+// How far the visible text of the lines of `body` reaches across, from the
+// left edge of the leftmost to the right edge of the rightmost.
+fn lines_reach(body: &LayoutBody) -> (f32, f32) {
+    body.lines
         .iter()
         .map(|line| (line.left, line.right()))
         .reduce(|(left, right), (line_left, line_right)| {
             (left.min(line_left), right.max(line_right))
         })
-        .unwrap_or_default();
-    let ink = may_ink_past_lines(body, glyphs)
-        .then(|| find_ink_past_lines(body))
-        .flatten();
-    let inks_past_lines = ink.is_some();
-    body.ink = ink.map(Box::new);
-    (reach, inks_past_lines)
+        .unwrap_or_default()
+}
+
+// How far the glyphs of `body`, in the places its lines now take, reach, as
+// `TextLayout::glyph_reach` gives it; `reach` tells whether a glyph may put
+// ink past its advance or its typeface's lines. Inline: each layout takes
+// its lines.
+#[inline]
+fn glyph_reach(body: &LayoutBody, reach: InkReach) -> Rect {
+    let (left, right) = lines_reach(body);
+    let lines = Rect {
+        x: left,
+        y: 0.0,
+        width: right - left,
+        height: 0.0,
+    };
+    if !may_ink_past_lines(body, reach) {
+        return lines;
+    }
+    find_ink_past_lines(body, (left, right)).map_or(lines, |past| lines.union(past))
 }
 
 // Widths from `min` up to but not including `max`.
@@ -237,7 +245,7 @@ pub(crate) struct LayoutLine {
 
 impl LayoutLine {
     // The right edge of the visible text.
-    fn right(&self) -> f32 {
+    pub(crate) fn right(&self) -> f32 {
         self.left + self.width + self.stretch
     }
 }
@@ -329,43 +337,44 @@ impl GlyphRun<'_> {
 
 impl TextLayout {
     // The layout of `body`, whose lines wrap at `wrap`, laid out between
-    // `widths`, the narrowest and the widest it may be.
+    // `widths`, the narrowest and the widest it may be, of glyphs whose ink
+    // reaches as `reach` says that ask `synthesized` of their faces.
     pub(crate) fn new(
         mut body: LayoutBody,
         wrap: f32,
         widths: (f32, f32),
-        glyphs: InkReach,
+        (reach, synthesized): (InkReach, SynthesizedStyle),
     ) -> Self {
         let width = body.width_between(widths.0, widths.1);
-        let (reach, inks_past_lines) = take_lines(&mut body, glyphs);
+        (body.ink_reach, body.synthesized) = (reach, synthesized);
+        let glyph_reach = glyph_reach(&body, reach);
         Self {
             did_overflow_width: body.widest > width || width > widths.1,
             body: Arc::new(body),
             width,
             wrap,
             id: next_id(),
-            reach,
-            inks_past_lines,
+            glyph_reach,
         }
     }
 
     // Lays the layout out again between `widths`: `fill` fills its body, in
     // the body's own storage when no copy shares it, and gives the width its
-    // lines wrap at.
+    // lines wrap at, how the ink of its glyphs reaches and what they ask of
+    // their faces.
     pub(crate) fn refill(
         &mut self,
         widths: (f32, f32),
-        fill: impl FnOnce(&mut LayoutBody) -> (f32, InkReach),
+        fill: impl FnOnce(&mut LayoutBody) -> (f32, (InkReach, SynthesizedStyle)),
     ) {
         if Arc::get_mut(&mut self.body).is_none() {
             self.body = Arc::default();
         }
         let body = Arc::make_mut(&mut self.body);
-        let glyphs;
-        (self.wrap, glyphs) = fill(body);
+        (self.wrap, (body.ink_reach, body.synthesized)) = fill(body);
         self.width = body.width_between(widths.0, widths.1);
         self.did_overflow_width = body.widest > self.width || self.width > widths.1;
-        (self.reach, self.inks_past_lines) = take_lines(body, glyphs);
+        self.glyph_reach = glyph_reach(body, body.ink_reach);
         self.id = next_id();
     }
 
@@ -478,10 +487,8 @@ impl TextLayout {
     fn move_lines(&mut self, align: TextAlign) {
         let body = Arc::make_mut(&mut self.body);
         if body.align_lines(self.width, align) {
-            // Moved across, the glyphs and the lines' heights stay: ink
-            // past the lines before may lie past them still.
-            let glyphs = body.ink_reach();
-            (self.reach, self.inks_past_lines) = take_lines(body, glyphs);
+            // Moved across, the glyphs and the lines' heights stay.
+            self.glyph_reach = glyph_reach(body, body.ink_reach);
             self.id = next_id();
         }
     }
@@ -512,7 +519,7 @@ impl TextLayout {
     /// of the leftmost line's and the right edge of the rightmost line's,
     /// both zero for the empty default.
     pub fn lines_reach(&self) -> (f32, f32) {
-        self.reach
+        lines_reach(&self.body)
     }
 
     /// The typefaces the glyphs come from.
@@ -520,19 +527,20 @@ impl TextLayout {
         &self.body.faces
     }
 
-    /// Whether a glyph puts ink past the visible text of its line or past the
-    /// layout's box, as the overhang of an `f` that ends a line does: then
-    /// [`TextLayout::ink_past_lines`] says where.
-    pub fn inks_past_lines(&self) -> bool {
-        self.inks_past_lines
+    /// The bold and the italic the glyphs ask of faces that lack them, which
+    /// a renderer synthesizes and which spread their ink.
+    pub fn synthesized_style(&self) -> SynthesizedStyle {
+        self.body.synthesized
     }
 
-    /// The box around the ink that glyphs put past the visible text of their
-    /// lines or past the layout's box, as their outlines give it, in pixels
-    /// from the layout's top left corner; `None` when every glyph's ink lies
-    /// within them.
-    pub fn ink_past_lines(&self) -> Option<Rect> {
-        self.body.ink.as_deref().copied()
+    /// How far the glyphs reach, in pixels from the layout's top left
+    /// corner: across, the visible text of the lines and the ink a glyph puts
+    /// past it, as the overhang of an `f` that ends a line does; down, from
+    /// the top, or the ink above it, to the lowest ink, at the top when the
+    /// glyphs ink no lower than the box. A renderer joins it with the box it
+    /// draws the text in.
+    pub fn glyph_reach(&self) -> Rect {
+        self.glyph_reach
     }
 
     /// Whether the text had more lines than the line limit: Compose's

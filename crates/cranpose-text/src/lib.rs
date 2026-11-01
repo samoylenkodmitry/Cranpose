@@ -59,6 +59,8 @@ pub mod shaping_span;
 mod simple_glyf;
 /// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
+/// The bold and the italic a layout's glyphs ask of faces that lack them.
+pub mod synthesized_style;
 /// A paragraph laid out in lines, and Compose's `TextLayoutResult` queries.
 pub mod text_layout;
 /// Laying paragraphs out in lines.
@@ -106,6 +108,7 @@ pub use style::{
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
 };
+pub use synthesized_style::SynthesizedStyle;
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
 pub use text_layouter::TextLayouter;
 pub use typeface::{

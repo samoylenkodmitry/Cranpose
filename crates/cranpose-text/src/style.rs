@@ -372,23 +372,12 @@ impl ParagraphStyle {
 }
 
 /// Complete style of a text: a [`SpanStyle`] and a [`ParagraphStyle`]. Compose's `TextStyle`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct TextStyle {
     /// Settings that apply to characters.
     pub span_style: SpanStyle,
     /// Settings that apply to the whole paragraph.
     pub paragraph_style: ParagraphStyle,
-}
-
-impl PartialEq for TextStyle {
-    fn eq(&self, other: &Self) -> bool {
-        // Texts share one style in an `Arc`, whose comparison reads the
-        // fields of both sides unless the style is `Eq`, which floats rule
-        // out.
-        std::ptr::eq(self, other)
-            || (self.span_style == other.span_style
-                && self.paragraph_style == other.paragraph_style)
-    }
 }
 
 impl TextStyle {

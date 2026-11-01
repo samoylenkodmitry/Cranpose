@@ -295,6 +295,16 @@ pub(crate) struct DrawnText {
 }
 
 impl DrawnText {
+    // `string` drawn in `style`, laid out as `layout`.
+    pub(crate) fn of_laid_out(
+        string: Arc<RenderString>,
+        style: &TextStyle,
+        layout: &cranpose_text::TextLayout,
+    ) -> Self {
+        let spread = InkSpread::of_text(style, string.span_styles(), layout);
+        Self::of(string, style, spread)
+    }
+
     /// `string` drawn in `style`, its glyphs' ink spread by `spread`.
     pub(crate) fn of(string: Arc<RenderString>, style: &TextStyle, spread: InkSpread) -> Self {
         let paints_gradient = |span: &cranpose_ui::text::SpanStyle| {

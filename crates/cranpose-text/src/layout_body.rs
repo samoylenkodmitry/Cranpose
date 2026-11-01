@@ -1,4 +1,3 @@
-use cranpose_ui_graphics::Rect;
 use smallvec::SmallVec;
 
 use crate::{
@@ -7,6 +6,7 @@ use crate::{
     index_range::widen,
     laid_glyphs::{LaidGlyphs, RunGlyphs},
     paragraph::TextAlign,
+    synthesized_style::SynthesizedStyle,
     text_layout::{GlyphRun, LayoutLine, LineRun, WidthRange},
     typeface::Typeface,
 };
@@ -48,23 +48,14 @@ pub(crate) struct LayoutBody {
     // How many glyphs, from the first, shaping placed: an ellipsis's and a
     // hyphen's follow them.
     pub(crate) shaped: usize,
-    // The box around the ink the glyphs put past the visible text of their
-    // lines or past the layout's box, in the places the lines now take; most
-    // layouts have none, and keep no box.
-    pub(crate) ink: Option<Box<Rect>>,
+    // Whether a glyph may put ink past its advance or its typeface's lines,
+    // as the layouter found it.
+    pub(crate) ink_reach: InkReach,
+    // The bold and the italic the glyphs ask of faces that lack them.
+    pub(crate) synthesized: SynthesizedStyle,
 }
 
 impl LayoutBody {
-    // Whether the glyphs put ink past the lines in their places now, and so
-    // may past their own advances or their typefaces' lines.
-    pub(crate) fn ink_reach(&self) -> InkReach {
-        if self.ink.is_some() {
-            InkReach::Past
-        } else {
-            InkReach::Within
-        }
-    }
-
     // The glyph runs of `line`, left to right.
     pub(crate) fn glyph_runs(&self, line: usize) -> impl Iterator<Item = GlyphRun<'_>> + '_ {
         let line = &self.lines[line];

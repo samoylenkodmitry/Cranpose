@@ -9,7 +9,7 @@ use cranpose_ui::{
     text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextMotion},
 };
 
-use crate::glyph_reach::{InkSpread, InkStyle};
+use crate::glyph_reach::InkSpread;
 
 /// The paint of a text node's glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,8 +55,7 @@ impl TextPaint {
         (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
-        let spread = InkStyle::of(style, spans).spread(layout);
-        let spans = SpanPaint::of(spans);
+        let span_paint = SpanPaint::of(spans);
         let plain = span_style.background.is_none()
             && span_style.shadow.is_none()
             && span_style.brush.is_none()
@@ -64,9 +63,9 @@ impl TextPaint {
                 span_style.draw_style,
                 Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0
             )
-            && !spans.foreground
+            && !span_paint.foreground
             && !decorates(span_style.text_decoration)
-            && !spans.decoration;
+            && !span_paint.decoration;
         Self {
             plain,
             color: resolve_text_color_without_gradient_fallback(style, Color::WHITE),
@@ -82,8 +81,13 @@ impl TextPaint {
                 .text_motion
                 .unwrap_or(TextMotion::Static)
                 == TextMotion::Static,
-            casts_shadow: span_style.shadow.is_some() || spans.shadow,
-            spread,
+            casts_shadow: span_style.shadow.is_some() || span_paint.shadow,
+            // A plain text and its spans draw no stroke.
+            spread: if plain {
+                InkSpread::of(0.0, layout.synthesized_style())
+            } else {
+                InkSpread::of_text(style, spans, layout)
+            },
         }
     }
 }

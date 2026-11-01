@@ -13,6 +13,9 @@ pub(crate) struct PlainChars {
     row_of: Box<[u8; SLOTS]>,
     rows: Vec<[u8; SLOTS]>,
     kerns: Vec<i16>,
+    // Whether a character given since `take_inked` has a glyph whose ink
+    // leaves its advance or the band of its typeface's ASCII ink.
+    inked: bool,
 }
 
 // A plain character's glyph, its advance, whether its glyph may kern with
@@ -22,13 +25,24 @@ pub(crate) struct PlainChar {
     pub(crate) glyph: u16,
     pub(crate) advance: i16,
     pub(crate) pairs: bool,
-    // Whether the glyph's ink reaches past its advance or the font's lines.
-    pub(crate) inks_out: bool,
     slot: u8,
 }
 
-// What a font reads for a plain character: its glyph, its advance and
-// whether its glyph may kern with or join the glyph after it.
+impl PlainChar {
+    // The character slot `slot` holds as `packed`.
+    fn of(packed: u64, slot: u8) -> Self {
+        Self {
+            glyph: (packed >> 16) as u16,
+            advance: packed as u16 as i16,
+            pairs: packed & PAIRS != 0,
+            slot,
+        }
+    }
+}
+
+// What a font reads for a plain character: its glyph, its advance,
+// whether its glyph may kern with or join the glyph after it, and whether
+// its ink leaves its advance or the band of its typeface's ASCII ink.
 pub(crate) struct CharGlyph {
     pub(crate) glyph: u32,
     pub(crate) advance: i32,
@@ -51,7 +65,7 @@ const SLOTS: usize = 1 << SLOT_BITS;
 // bits 16 to 31 and its advance in the low 16. `FILLED` marks a slot that
 // holds a character, `PLAIN` one whose character is plain, `PAIRS` one
 // whose glyph may kern with or join the next and `INKS_OUT` one whose
-// glyph's ink reaches past its advance or the font's lines.
+// glyph's ink leaves its advance or the band of its typeface's ASCII ink.
 const FILLED: u64 = 1 << 63;
 const PLAIN: u64 = 1 << 62;
 const PAIRS: u64 = 1 << 61;
@@ -72,6 +86,7 @@ impl Default for PlainChars {
             row_of: Box::new([0; SLOTS]),
             rows: Vec::new(),
             kerns: Vec::new(),
+            inked: false,
         }
     }
 }
@@ -89,47 +104,55 @@ impl PlainChars {
         let slot = (code & (SLOTS as u32 - 1)) as u8;
         let packed = self.slots[usize::from(slot)];
         let known = (FILLED >> 32) | u64::from(code);
-        if (packed >> 32) & !((PAIRS | INKS_OUT) >> 32) == known | (PLAIN >> 32) {
-            return Some(PlainChar {
-                glyph: (packed >> 16) as u16,
-                advance: packed as u16 as i16,
-                pairs: packed & PAIRS != 0,
-                inks_out: packed & INKS_OUT != 0,
-                slot,
-            });
+        if (packed >> 32) & !(PAIRS >> 32) == known | (PLAIN >> 32) {
+            return Some(PlainChar::of(packed, slot));
         }
-        if packed >> 32 == known {
-            return None;
-        }
-        self.read_char(slot, (packed, known), read)
+        self.uncommon_char(slot, (packed, known), read)
     }
 
-    // `char` of a character its slot does not hold, `packed` holding
+    // Whether a character given since the last call has a glyph whose ink
+    // leaves its advance or the band of its typeface's ASCII ink.
+    pub(crate) fn take_inked(&mut self) -> bool {
+        std::mem::take(&mut self.inked)
+    }
+
+    // `char` of a character its slot holds as plain with a glyph whose ink
+    // reaches out, holds as not plain, or does not hold, `packed` holding
     // another or none: `read` reads it. Out of line, as text meets each
-    // character once.
+    // character once and few glyphs ink out.
     #[inline(never)]
-    fn read_char(
+    fn uncommon_char(
         &mut self,
         slot: u8,
         (packed, known): (u64, u64),
         read: impl FnOnce() -> Option<CharGlyph>,
     ) -> Option<PlainChar> {
-        let plain = read().and_then(|read| {
+        if (packed >> 32) & !((PAIRS | INKS_OUT) >> 32) == known | (PLAIN >> 32) {
+            self.inked = true;
+            return Some(PlainChar::of(packed, slot));
+        }
+        if packed >> 32 == known {
+            return None;
+        }
+        let read = read();
+        let inks_out = read.as_ref().is_some_and(|read| read.inks_out);
+        let plain = read.and_then(|read| {
             Some(PlainChar {
                 glyph: u16::try_from(read.glyph).ok()?,
                 advance: i16::try_from(read.advance).ok()?,
                 pairs: read.pairs,
-                inks_out: read.inks_out,
                 slot,
             })
         });
+        let inks_out = plain.is_some() && inks_out;
+        self.inked |= inks_out;
         if packed & FILLED != 0 {
             self.forget(slot);
         }
         self.slots[usize::from(slot)] = known << 32
             | plain.map_or(0, |plain| {
                 let pairs = if plain.pairs { PAIRS } else { 0 };
-                let inks_out = if plain.inks_out { INKS_OUT } else { 0 };
+                let inks_out = if inks_out { INKS_OUT } else { 0 };
                 PLAIN
                     | pairs
                     | inks_out

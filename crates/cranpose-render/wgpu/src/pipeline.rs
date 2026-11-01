@@ -7,7 +7,6 @@ use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
-    glyph_reach::InkStyle,
     graph::TextPrimitiveNode,
     hit_graph::collect_hits_from_graph,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
@@ -1048,12 +1047,11 @@ pub(crate) fn push_draw_primitive(
 
         fn push_text(&mut self, params: TextDrawParams) {
             let render_text = shared_plain_render_string(&params.text.text);
-            let spread = InkStyle::of(&params.text_style, &[]).spread(&params.layout);
             self.scene.push_text(TextDraw {
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
                 snap_anchor: None,
-                text: DrawnText::of(render_text, &params.text_style, spread),
+                text: DrawnText::of_laid_out(render_text, &params.text_style, &params.layout),
                 layout: params.layout,
                 color: params.color,
                 text_style: params.text_style,

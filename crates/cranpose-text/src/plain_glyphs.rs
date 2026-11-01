@@ -20,7 +20,6 @@ use read_fonts::{
 use crate::{
     font_fallback::needs_no_glyph,
     glyph_id,
-    glyph_ink::font_glyph_inks_out,
     plain_chars::{CharGlyph, PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
     script_lookups::{
@@ -29,6 +28,7 @@ use crate::{
     },
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
     shaper::font_bytes,
+    typeface::Typeface,
     word_split::{class_index, moves},
 };
 
@@ -210,11 +210,12 @@ impl PlainGlyphs {
 
     // Appends the plain glyphs of `range` of `text` at `font`'s advances,
     // kerned as the plan kerns them, when every one is plain, and returns
-    // whether the ink of one reaches past its advance or the font's lines;
-    // `None`, appending none, when one is not plain.
+    // whether the ink of one leaves its advance or the band of the ASCII ink
+    // of `typeface`, whose font `font` is; `None`, appending none, when one
+    // is not plain.
     pub(crate) fn append(
         &mut self,
-        font: &Font,
+        (font, typeface): (&Font, &Typeface),
         text: &str,
         range: Range<usize>,
         glyphs: &mut ShapedGlyphs,
@@ -229,8 +230,9 @@ impl PlainGlyphs {
             chars,
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
+        // What a run given up on before left.
+        chars.take_inked();
         let mut previous: Option<PlainChar> = None;
-        let mut inks_out = false;
         for (at, ch) in run.char_indices() {
             let read = || {
                 let (glyph, advance) = plain_glyph(font, (busy, substitutes), ch)?;
@@ -238,7 +240,9 @@ impl PlainGlyphs {
                 Some(CharGlyph {
                     glyph,
                     advance,
-                    inks_out: font_glyph_inks_out(font, glyph, advance),
+                    inks_out: typeface
+                        .glyph_inks()
+                        .leaves_band(typeface, glyph_id::GlyphId(glyph)),
                     pairs: pairs.get(starts).is_some_and(|&(first, _)| first == glyph)
                         || kerning.starts(font_bytes(font), glyph.into()),
                 })
@@ -247,7 +251,6 @@ impl PlainGlyphs {
                 glyphs.truncate(first);
                 return None;
             };
-            inks_out |= plain.inks_out;
             // A glyph that starts no pair kerns with nothing after it.
             let fit = previous
                 .filter(|before| before.pairs)
@@ -294,7 +297,7 @@ impl PlainGlyphs {
                 GlyphOffset::default(),
             );
         }
-        Some(inks_out)
+        Some(chars.take_inked())
     }
 }
 
