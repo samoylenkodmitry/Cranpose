@@ -189,6 +189,7 @@ mod frame;
 mod grid;
 mod item_cache;
 mod retained;
+mod skipped_slots;
 mod staggered;
 
 use focused_item::{focused_lazy_item, measure_focused_lazy_item, place_focused_lazy_item};
@@ -198,6 +199,7 @@ pub use grid::{
     LazyVerticalGridSpec, rememberLazyGridState,
 };
 use item_cache::{LazyMeasuredItemCache, log_lazy_cache_telemetry};
+use skipped_slots::recycle_forward_skipped_active_slots;
 pub use staggered::{
     LazyHorizontalStaggeredGrid, LazyHorizontalStaggeredGridSpec, LazyStaggeredGridState,
     LazyVerticalStaggeredGrid, LazyVerticalStaggeredGridSpec, rememberLazyStaggeredGridState,
@@ -535,32 +537,6 @@ fn measure_lazy_list_children(
     }
     measured_item_cache.borrow_mut().record_uncached_measure();
     item
-}
-
-/// Recycles the active slots of items before `first_measured_index`, found
-/// among the items `near` the viewport, where every slot a forward scroll
-/// skips was active.
-fn recycle_forward_skipped_active_slots(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    content: &LazyListIntervalContent,
-    near: &std::ops::Range<usize>,
-    first_measured_index: usize,
-    scroll_delta: f32,
-) -> bool {
-    if scroll_delta >= -0.001 || first_measured_index == 0 {
-        return false;
-    }
-
-    // The focused item's slot stays: the pass places it after the viewport,
-    // and an item that took its node would take the focus.
-    let focused = scope.focused_slot();
-    scope.recycle_active_slots_where(|slot_id| {
-        Some(slot_id) != focused
-            && content
-                .get_index_by_slot_id_in_range(slot_id.raw(), near.clone())
-                .is_some_and(|index| index < first_measured_index)
-    });
-    true
 }
 
 /// Internal helper to create a lazy list measure policy.
