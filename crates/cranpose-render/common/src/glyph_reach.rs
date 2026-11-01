@@ -2,19 +2,22 @@
 //! lines, and wherever the ink of a glyph reaches past them.
 
 use cranpose_text::{SynthesizedStyle, TextLayout};
-use cranpose_ui::text::{RangeStyle, SpanStyle, TextDrawStyle, TextStyle};
+use cranpose_ui::text::{RangeStyle, Shadow, SpanStyle, TextDrawStyle, TextStyle};
 use cranpose_ui_graphics::{Rect, whole};
 
 use crate::{
+    geometry::blur_reach_for_minimum_scale,
     glyph_mask::STROKE_MITER_LIMIT,
     text_glyphs::{FAKE_BOLD_MAX_RATIO, FAKE_ITALIC_SKEW},
 };
 
-/// How far past their outlines a text's glyphs put ink, in layout pixels.
+/// How far past their outlines a text's glyphs put ink, and its shadows
+/// past that, in layout pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InkSpread {
     // Around every outline: a stroke's outer half or a synthesized bold's,
-    // as far as a miter at the limit reaches.
+    // as far as a miter at the limit reaches, and past that the farthest
+    // shadow's offset and blur.
     around: f32,
     // How far right a pixel of height above the baseline moves the ink.
     skew: f32,
@@ -41,19 +44,37 @@ impl InkSpread {
     }
 
     /// How far past their outlines the glyphs of a text in `style` with
-    /// `spans`, laid out as `layout`, put ink.
+    /// `spans`, laid out as `layout`, put ink, and its shadows past that.
     pub fn of_text(
         style: &TextStyle,
         spans: &[RangeStyle<SpanStyle>],
         layout: &TextLayout,
     ) -> Self {
-        let stroke = spans
-            .iter()
-            .fold(stroke_width(&style.span_style), |stroke, span| {
-                stroke.max(stroke_width(&span.item))
-            });
-        Self::of(stroke, layout.synthesized_style())
+        let styles =
+            || std::iter::once(&style.span_style).chain(spans.iter().map(|span| &span.item));
+        let stroke = styles().map(stroke_width).fold(0.0, f32::max);
+        let shadow = styles()
+            .filter_map(|span| span.shadow)
+            .map(shadow_reach)
+            .fold(0.0, f32::max);
+        let glyphs = Self::of(stroke, layout.synthesized_style());
+        Self {
+            around: glyphs.around + shadow,
+            ..glyphs
+        }
     }
+}
+
+// How far `shadow` reaches past the ink it copies, on every side: its
+// offset and its blur, at any scale of one device pixel a layout pixel or
+// more.
+fn shadow_reach(shadow: Shadow) -> f32 {
+    let blur = if shadow.blur_radius > 0.0 {
+        blur_reach_for_minimum_scale(shadow.blur_radius, 1.0)
+    } else {
+        0.0
+    };
+    shadow.offset.x.abs().max(shadow.offset.y.abs()) + blur
 }
 
 // How wide a stroke `style` draws its glyphs with, in layout pixels; zero
@@ -68,11 +89,10 @@ fn stroke_width(style: &SpanStyle) -> f32 {
 /// The part of `rect` in which the glyphs of `layout` draw, `layout` drawn
 /// from `rect`'s top left corner at `scale` units of `rect` a layout pixel:
 /// across the visible text of its lines, and past them or past `rect`
-/// wherever the ink of a glyph, spread by `spread`, reaches. Its left and
-/// right edges lie on whole units from that corner, so that the part
-/// rasterizes on the grid the whole text does. A renderer draws a text's
-/// glyphs in this part, unless
-/// the text [casts a shadow](crate::text_glyphs::casts_shadow).
+/// wherever the ink of a glyph, spread by `spread`, or its shadows reach.
+/// Its left and right edges lie on whole units from that corner, so that
+/// the part rasterizes on the grid the whole text does. A renderer draws a
+/// text's glyphs and their shadows in this part.
 #[inline]
 pub fn glyph_part(rect: Rect, layout: &TextLayout, scale: f32, spread: InkSpread) -> Rect {
     let reach = reach_from_corner((rect, layout, scale), spread);

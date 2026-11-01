@@ -289,7 +289,6 @@ pub(crate) struct DrawnText {
     hash: u64,
     empty: bool,
     gradient: bool,
-    shadow: bool,
     static_motion: bool,
     spread: InkSpread,
 }
@@ -312,23 +311,15 @@ impl DrawnText {
                 .as_ref()
                 .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
         };
-        let (gradient, shadow) = string.span_styles().iter().fold(
-            (
-                paints_gradient(&style.span_style),
-                style.span_style.shadow.is_some(),
-            ),
-            |(gradient, shadow), span| {
-                (
-                    gradient || paints_gradient(&span.item),
-                    shadow || span.item.shadow.is_some(),
-                )
-            },
-        );
+        let gradient = paints_gradient(&style.span_style)
+            || string
+                .span_styles()
+                .iter()
+                .any(|span| paints_gradient(&span.item));
         Self {
             hash: string.render_hash(),
             empty: string.is_empty(),
             gradient,
-            shadow,
             static_motion: style
                 .paragraph_style
                 .text_motion
@@ -348,7 +339,6 @@ impl DrawnText {
             hash: paint.text_hash,
             empty: paint.text_empty,
             gradient: false,
-            shadow: paint.casts_shadow,
             static_motion: paint.static_motion,
             spread: paint.spread,
         }
@@ -371,11 +361,6 @@ impl DrawnText {
     /// brush.
     pub(crate) fn gradient(&self) -> bool {
         self.gradient
-    }
-
-    // Whether the style or a span of the string casts a shadow.
-    pub(crate) fn shadow(&self) -> bool {
-        self.shadow
     }
 
     /// Whether the style's motion is static, so its glyphs stay on whole
@@ -416,14 +401,10 @@ impl TextDraw {
     }
 
     // The part of `rect`, where the text draws from its top left corner at
-    // `scale` units of `rect` a layout pixel, in which its glyphs draw: its
-    // lines and their ink, or all of it for a text that casts a shadow.
+    // `scale` units of `rect` a layout pixel, in which its glyphs and their
+    // shadows draw.
     pub(crate) fn glyph_reach(&self, rect: Rect, scale: f32) -> Rect {
-        if self.text.shadow() {
-            rect
-        } else {
-            glyph_part(rect, &self.layout, scale, self.text.spread)
-        }
+        glyph_part(rect, &self.layout, scale, self.text.spread)
     }
 }
 

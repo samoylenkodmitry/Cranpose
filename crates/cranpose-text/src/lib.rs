@@ -85,7 +85,7 @@ pub use font::{
     LoadedTypefacePath,
 };
 pub use font_family_resolver::{FontFamilyResolver, FontRequest};
-pub use font_feature::{FontFeature, font_feature_settings};
+pub use font_feature::{FontFeature, FontFeatureSettings, font_feature_settings};
 pub use glyph_id::GlyphId;
 pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
 #[cfg(feature = "hyphenation")]

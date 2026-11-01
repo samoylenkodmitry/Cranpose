@@ -1,7 +1,10 @@
 // A label's glyphs draw their whole ink, as Compose draws it: a slant or a
 // stroke past the advances of its line and past its box.
 
-use cranpose_ui::text::{FontStyle, SpanStyle, TextDrawStyle, TextUnit};
+use cranpose_ui::{
+    Point,
+    text::{FontStyle, Shadow, SpanStyle, TextDrawStyle, TextUnit},
+};
 use support::page::*;
 
 use crate::support;
@@ -63,8 +66,28 @@ fn Stroked() {
     );
 }
 
+#[composable]
+fn Shadowed() {
+    label(
+        "H",
+        SpanStyle {
+            shadow: Some(Shadow {
+                color: Color::BLACK,
+                offset: Point::new(0.0, 0.0),
+                blur_radius: 12.0,
+            }),
+            ..SpanStyle::default()
+        },
+    );
+}
+
 // The columns and rows of the dark pixels of `page`.
 fn dark_pixels(page: fn()) -> Option<Vec<(usize, usize)>> {
+    pixels_darker_than(128, page)
+}
+
+// The columns and rows of the pixels of `page` darker than `level`.
+fn pixels_darker_than(level: u8, page: fn()) -> Option<Vec<(usize, usize)>> {
     let (frame, _) = support::warm_app_frame(page, FRAME, FRAME)?;
     Some(
         frame
@@ -73,7 +96,7 @@ fn dark_pixels(page: fn()) -> Option<Vec<(usize, usize)>> {
             .0
             .iter()
             .enumerate()
-            .filter(|(_, pixel)| pixel[0] < 128)
+            .filter(|(_, pixel)| pixel[0] < level)
             .map(|(index, _)| (index % ROW, index / ROW))
             .collect(),
     )
@@ -138,6 +161,27 @@ fn a_stroke_draws_its_outer_half_past_the_line_ends() {
         stroked[2],
         filled[0],
         filled[2]
+    );
+}
+
+// A shadow blurred 12 pixels shades about as far past the glyph it copies,
+// past the label's box on both sides.
+#[test]
+fn a_blurred_shadow_draws_past_the_label_box() {
+    let Some([left, _, right, _]) = ink(Upright) else {
+        return;
+    };
+    let Some(shaded) = pixels_darker_than(250, Shadowed) else {
+        return;
+    };
+    let (from, to) = shaded
+        .into_iter()
+        .fold((usize::MAX, 0), |(from, to), (x, _)| {
+            (from.min(x), to.max(x))
+        });
+    assert!(
+        from + 6 <= left && to >= right + 6,
+        "the shadow shades columns {from}..={to}, the glyph's ink {left}..={right}"
     );
 }
 

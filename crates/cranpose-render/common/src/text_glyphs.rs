@@ -14,13 +14,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Point, whole};
 use smallvec::SmallVec;
 
-use crate::{glyph_mask::GlyphRaster, text_paint::spans_cast_shadow};
-
-/// Whether `style` or a span of `text` casts a shadow, which spreads past
-/// the glyphs: a renderer draws such a text in its whole box.
-pub fn casts_shadow(text: StyledTextRef<'_>, style: &TextStyle) -> bool {
-    style.span_style.shadow.is_some() || spans_cast_shadow(text.span_styles)
-}
+use crate::glyph_mask::GlyphRaster;
 
 /// A text and the styles of its ranges.
 #[derive(Clone, Copy, Debug)]
