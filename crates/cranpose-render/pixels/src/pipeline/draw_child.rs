@@ -12,7 +12,7 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, Rect};
 
 use super::{
-    PrimitiveRenderContext, RasterLayerBounds, TextPlacement, assign_snap_anchor_since,
+    PrimitiveRenderContext, RasterLayerBounds, TextPlacement,
     layer_shadow::{
         blur_samples, expanded_shape_rect, push_blurred_shape_samples, scale_brush_alpha,
     },
@@ -26,11 +26,14 @@ pub(super) fn render_draw_child(
     child: &RenderNode,
     context: PrimitiveRenderContext<'_>,
 ) {
+    // The items the child pushes snap as its layer does.
+    scene.snap_anchor = context.layer_snap_anchor;
     match child {
         RenderNode::Primitive(primitive) => render_graph_primitive(scene, primitive, context),
         RenderNode::DrawRun(run) => render_graph_draw_run(scene, run, context),
         RenderNode::Layer(_) | RenderNode::Inline(_) => {}
     }
+    scene.snap_anchor = None;
 }
 
 fn render_graph_draw_run(
@@ -39,7 +42,6 @@ fn render_graph_draw_run(
     context: PrimitiveRenderContext<'_>,
 ) {
     let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene.counts();
     run.for_each_primitive(|primitive| {
         push_draw_primitive(
             &primitive,
@@ -51,7 +53,6 @@ fn render_graph_draw_run(
             context.motion_context_animated || context.content_offset_translation,
         );
     });
-    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
 fn render_graph_primitive(
@@ -60,7 +61,6 @@ fn render_graph_primitive(
     context: PrimitiveRenderContext<'_>,
 ) {
     let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene.counts();
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
             let effective_clip = resolve_primitive_clip(
@@ -93,7 +93,6 @@ fn render_graph_primitive(
             );
         }
     }
-    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
 // Out of line for the walk's stack, as `push_layer_shadow_of` tells.

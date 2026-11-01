@@ -5,8 +5,10 @@ mod damage;
 mod draw;
 mod pipeline;
 mod pixel;
+mod rewrite;
 /// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
+mod scene_item;
 pub mod sprites;
 mod style;
 mod surface;
@@ -21,7 +23,7 @@ use cranpose_render_common::{
     text_fonts::TextFonts,
 };
 use cranpose_ui::LayoutTree;
-use cranpose_ui_graphics::Size;
+use cranpose_ui_graphics::{MemoryHeadroom, Size};
 pub use draw::draw_scene;
 use pixel::Pixel;
 pub use scene::{HitRegion, Scene};
@@ -55,8 +57,8 @@ fn pixel_rect(bounds: draw::ClipBounds) -> PixelRect {
 #[derive(Default)]
 pub struct Picture {
     raster: Option<scene::RasterScene>,
-    /// The scene an update in place pushes each changed layer into.
-    spare: scene::RasterScene,
+    /// What an update in place pushes each changed layer again with.
+    rewrite: Option<Box<rewrite::Rewrite>>,
     width: u32,
     height: u32,
     scale: f32,
@@ -166,12 +168,23 @@ impl PixelsRenderer {
                 pipeline::UpdatedReach::Held => {}
                 pipeline::UpdatedReach::Lost => picture.measure_reach(),
             }
+            // With little memory left, the spill an update took for a
+            // subtree that pushed other items than before goes.
+            if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight
+                && let Some(rewrite) = picture.rewrite.as_mut()
+            {
+                rewrite.release_spill();
+            }
             return;
         }
         // An update in place that gave up after it changed part of the scene
         // left the areas it changed: the scene holds those changes already.
         let updated = (!picture.changed.is_empty()).then(|| std::mem::take(&mut picture.changed));
-        let mut raster = std::mem::take(&mut picture.spare);
+        let mut raster = picture
+            .rewrite
+            .as_mut()
+            .map(|rewrite| rewrite.take_storage())
+            .unwrap_or_default();
         self.fill_raster_scene(&mut raster, scale, picture.raster.as_ref());
         changed.clear();
         match picture.raster.as_ref() {
@@ -199,10 +212,7 @@ impl PixelsRenderer {
             }),
             _ => {}
         }
-        // An update in place pushes into the spare scene only the layers it
-        // pushes again: it keeps no storage the size of a whole scene.
         picture.raster = Some(raster);
-        picture.spare = scene::RasterScene::new();
         picture.width = width;
         picture.height = height;
         picture.scale = scale;
@@ -239,7 +249,7 @@ impl PixelsRenderer {
         pipeline::InPlaceUpdate {
             scene: raster,
             reach: &mut picture.reach,
-            scratch: &mut picture.spare,
+            rewrite: &mut picture.rewrite,
         }
         .run(
             graph,
