@@ -36,6 +36,10 @@ pub struct TextLayout {
     // The width the lines wrap at.
     wrap: f32,
     did_overflow_width: bool,
+    // Whether a glyph asks a bold or an italic of a face that lacks it.
+    // Kept beside the body, so the paint of a text that asks none does not
+    // load the body.
+    synthesizes: bool,
     id: u32,
     // How far the glyphs reach, as `glyph_reach` gives it. Kept beside the
     // body, so a renderer reads it in the layout it holds.
@@ -350,6 +354,7 @@ impl TextLayout {
         let glyph_reach = glyph_reach(&body, reach);
         Self {
             did_overflow_width: body.widest > width || width > widths.1,
+            synthesizes: synthesized != SynthesizedStyle::default(),
             body: Arc::new(body),
             width,
             wrap,
@@ -372,6 +377,7 @@ impl TextLayout {
         }
         let body = Arc::make_mut(&mut self.body);
         (self.wrap, (body.ink_reach, body.synthesized)) = fill(body);
+        self.synthesizes = body.synthesized != SynthesizedStyle::default();
         self.width = body.width_between(widths.0, widths.1);
         self.did_overflow_width = body.widest > self.width || self.width > widths.1;
         self.glyph_reach = glyph_reach(body, body.ink_reach);
@@ -530,7 +536,11 @@ impl TextLayout {
     /// The bold and the italic the glyphs ask of faces that lack them, which
     /// a renderer synthesizes and which spread their ink.
     pub fn synthesized_style(&self) -> SynthesizedStyle {
-        self.body.synthesized
+        if self.synthesizes {
+            self.body.synthesized
+        } else {
+            SynthesizedStyle::default()
+        }
     }
 
     /// How far the glyphs reach, in pixels from the layout's top left
