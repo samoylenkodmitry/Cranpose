@@ -89,12 +89,7 @@ impl<'a> ScrollPositionResolver<'a> {
             let Some(item_size) = self.state.get_cached_size(index) else {
                 break;
             };
-            let leading_padding = if index == 0 {
-                self.config.before_content_padding
-            } else {
-                0.0
-            };
-            let item_extent = leading_padding + item_size + self.config.spacing;
+            let item_extent = item_size + self.config.spacing;
             if offset + 0.001 < item_extent {
                 break;
             }
@@ -108,19 +103,6 @@ impl<'a> ScrollPositionResolver<'a> {
     pub(crate) fn normalize_forward(&self, mut index: usize, mut offset: f32) -> (usize, f32) {
         if offset <= 0.0 {
             return (index, offset);
-        }
-
-        let original_offset = offset;
-        let leading_padding = if index == 0 {
-            self.config.before_content_padding
-        } else {
-            0.0
-        };
-        if leading_padding > 0.0 {
-            if offset <= leading_padding {
-                return (index, offset);
-            }
-            offset -= leading_padding;
         }
 
         let average_size = self.measure_state.average_item_size;
@@ -143,10 +125,6 @@ impl<'a> ScrollPositionResolver<'a> {
                     offset -= actual_skip as f32 * item_size_with_spacing;
                 }
             }
-        }
-
-        if index == 0 {
-            offset = original_offset;
         }
 
         (index, offset)

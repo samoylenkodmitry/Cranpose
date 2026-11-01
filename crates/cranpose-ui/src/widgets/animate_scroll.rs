@@ -41,12 +41,7 @@ fn distance_to_item(state: &LazyListState, index: usize) -> f32 {
             .visible_items_info
             .iter()
             .find(|item| item.index == index)?;
-        let leading = if index == 0 {
-            info.before_content_padding
-        } else {
-            0.0
-        };
-        Some(item.offset - leading)
+        Some(item.offset - info.before_content_padding)
     });
     if let Some(distance) = shown.flatten() {
         return distance;
