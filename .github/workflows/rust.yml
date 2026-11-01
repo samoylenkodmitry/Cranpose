@@ -5,14 +5,17 @@ name: Rust
 # heads before allocating a runner; same-repository pull requests remain safe.
 # The robot suite lives in heavy-selfhosted.yml where it runs on the real GPU.
 #
-# Four jobs, cheapest first. `lint` answers in about a minute and is what a
-# typo, a stale version or an unformatted file comes back as; `tests` and
-# `clippy` are the long ones. Splitting them is what makes a single failure
+# Five jobs, cheapest first. `lint` answers in about a minute and is what a
+# typo, a stale version or an unformatted file comes back as; `tests`,
+# `feature-tests` and `clippy` are the long ones. `tests` runs the default
+# build's tests and `feature-tests` the feature permutations: in one job they
+# took 14 to 21 minutes and hit the 20-minute timeout on three of four main
+# runs on 2026-11-01. Splitting the gates into jobs makes a single failure
 # re-runnable on its own -- GitHub re-runs jobs, not steps, so one job
 # carrying every gate meant a one-line fix at the end re-ran everything
 # before it.
 #
-# Only `tests` and `clippy` need macOS: they are what compiles the macOS
+# Only the test jobs and `clippy` need macOS: they are what compiles the macOS
 # code paths. `lint` and `wasm build` answer the same question on any host,
 # so they run on the Linux pool. Both macOS runners are one M3, and every
 # pull request asked it for six jobs against Linux's one; on 2026-09-24 a
@@ -204,6 +207,33 @@ jobs:
       - name: Run workspace tests
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test
+
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
+
+  feature-tests:
+    name: feature tests (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
+      - name: Provision toolchain
+        id: provision
+        if: steps.memo.outputs.passed != 'true'
+        run: scripts/ci/provision_toolchain.sh
 
       - name: Run feature permutations the default build skips
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
