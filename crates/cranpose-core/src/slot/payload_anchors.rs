@@ -5,9 +5,11 @@ use super::SlotInvariantError;
 use super::{
     DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable, checked_usize_to_u32,
     generational_registry::{GenerationalRegistryStorage, RegistryState},
-    growth::GrowthSlack,
 };
-use crate::{AnchorId, collections::map::HashMap};
+use crate::{
+    AnchorId,
+    collections::{growth_slack::GrowthSlack, map::HashMap},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PayloadAnchorState {

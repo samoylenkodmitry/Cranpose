@@ -1,5 +1,5 @@
-use super::{dense_id_map::DenseIdMap, growth::GrowthSlack};
-use crate::collections::map::HashMap;
+use super::dense_id_map::DenseIdMap;
+use crate::collections::{growth_slack::GrowthSlack, map::HashMap};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GenerationalSlot<S> {

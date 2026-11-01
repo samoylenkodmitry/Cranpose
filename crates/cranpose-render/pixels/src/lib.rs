@@ -3,6 +3,7 @@
 
 mod damage;
 mod draw;
+mod growth_trim;
 mod pipeline;
 mod pixel;
 mod rewrite;
@@ -169,11 +170,13 @@ impl PixelsRenderer {
                 pipeline::UpdatedReach::Lost => picture.measure_reach(),
             }
             // With little memory left, the spill an update took for a
-            // subtree that pushed other items than before goes.
-            if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight
-                && let Some(rewrite) = picture.rewrite.as_mut()
-            {
-                rewrite.release_spill();
+            // subtree that pushed other items than before goes, and so does
+            // the room the scene's lists grew past their items.
+            if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight {
+                if let Some(rewrite) = picture.rewrite.as_mut() {
+                    rewrite.release_spill();
+                }
+                growth_trim::trim(picture);
             }
             return;
         }
@@ -217,6 +220,9 @@ impl PixelsRenderer {
         picture.height = height;
         picture.scale = scale;
         picture.measure_reach();
+        if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight {
+            growth_trim::trim(picture);
+        }
     }
 
     // Brings `picture`'s scene up to the current scene in place, and puts

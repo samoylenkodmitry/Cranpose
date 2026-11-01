@@ -6,7 +6,6 @@ mod dense_id_map;
 mod detach;
 mod generational_registry;
 mod groups;
-mod growth;
 mod introspection;
 mod lifecycle;
 mod movable;
