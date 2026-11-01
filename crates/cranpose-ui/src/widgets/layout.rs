@@ -116,15 +116,26 @@ trait PolicyUpdate {
 
 impl<P: MeasurePolicy + Clone + PartialEq> PolicyUpdate for P {
     fn new_node(&self, modifier: Modifier) -> LayoutNode {
-        LayoutNode::new(modifier, Rc::new(self.clone()))
+        LayoutNode::new(modifier, held_policy(self))
     }
 
     fn update(&self, node: &mut LayoutNode) {
         let current: &dyn std::any::Any = &*node.measure_policy;
         if current.downcast_ref::<P>() != Some(self) {
-            node.set_measure_policy(Rc::new(self.clone()));
+            node.set_measure_policy(held_policy(self));
         }
     }
+}
+
+// `policy` in an allocation of its own, or the thread's one empty policy,
+// which every leaf shares.
+fn held_policy<P: MeasurePolicy + Clone>(policy: &P) -> Rc<dyn MeasurePolicy> {
+    if std::any::TypeId::of::<P>()
+        == std::any::TypeId::of::<crate::layout::policies::EmptyMeasurePolicy>()
+    {
+        return crate::widgets::nodes::layout_node::empty_measure_policy();
+    }
+    Rc::new(policy.clone())
 }
 
 // Emits and updates a layout node; returns it, the composition locals its

@@ -24,7 +24,7 @@ pub(crate) struct SlotWriteSessionState {
 }
 
 // The frames of a host whose state goes back to the spare states: a frame
-// takes about 100 bytes on 32-bit targets.
+// takes about 410 bytes on 32-bit targets.
 const SHARED_STATE_FRAMES: usize = 64;
 
 #[cfg(test)]

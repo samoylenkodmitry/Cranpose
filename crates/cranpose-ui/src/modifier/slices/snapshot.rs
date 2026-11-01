@@ -212,6 +212,10 @@ fn collect_modifier_slices_into(
     }
 
     backgrounds.insert_into(slices);
+    // The slices stay for as long as the chain does, and so would the room
+    // growth left past the commands. A collect into these again pushes as
+    // many commands, mostly, which then fit without growing.
+    slices.draw_commands.shrink_to_fit();
 }
 
 /// The chain's backgrounds as the walk finds them. Each draws at its place in
