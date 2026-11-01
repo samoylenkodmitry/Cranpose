@@ -17,6 +17,7 @@ pub use annotated_string::{
     AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,
     StringAnnotation,
 };
+pub use cranpose_text::FontFeatureSettings;
 pub use decoration::{Shadow, TextDecoration};
 pub use draw_scope_text::{
     AppContextTextMeasurer, draw_style_line_box, drawn_text_style, text_style_for_draw_style,

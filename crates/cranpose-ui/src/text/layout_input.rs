@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, FontFeature, FontRequest, FontStyle, FontWeight,
-    ParagraphLengths, ShapingSpan, font_feature_settings,
+    FontFamily, FontFamilyResolver, FontFeatureSettings, FontRequest, FontStyle, FontWeight,
+    ParagraphLengths, ShapingSpan,
 };
 use smallvec::SmallVec;
 
@@ -32,21 +32,18 @@ impl TextUnits {
 // paragraph's lengths. Stretches that differ only in what does not change
 // shaping, such as color, are one span.
 pub(crate) struct ParagraphSpans<'a> {
-    // Most text is one stretch with no features, which these hold without
-    // allocating or moving room for more.
+    // Most text is one stretch, which this holds without allocating or
+    // moving room for more.
     stretches: SmallVec<[Stretch<'a>; 1]>,
-    features: SmallVec<[FontFeature; 1]>,
     units: TextUnits,
     // The paragraph's line height, indents and device pixel grid.
     pub(crate) lengths: ParagraphLengths,
 }
 
-// A stretch of text with the settings it shapes with and the range of its
-// features among the paragraph's.
+// A stretch of text with the settings it shapes with.
 struct Stretch<'a> {
     text: Range<usize>,
     style: ShapingStyle<'a>,
-    features: Range<usize>,
 }
 
 // The settings a stretch of text shapes with: its span styles over the text
@@ -58,7 +55,7 @@ struct ShapingStyle<'a> {
     style: FontStyle,
     size: f32,
     letter_spacing: TextUnit,
-    features: Option<&'a str>,
+    features: Option<&'a FontFeatureSettings>,
     language: Option<&'a str>,
     baseline_shift: f32,
 }
@@ -113,16 +110,7 @@ impl<'a> ParagraphSpans<'a> {
         .over(&style.span_style, units);
         // The style's own size is its resolved size, `Em` against 14 sp.
         let base = ShapingStyle { size, ..base };
-        let mut stretches = stretches(text, base, units);
-        // Most text asks for no features.
-        let features = if stretches
-            .iter()
-            .any(|stretch| stretch.style.features.is_some())
-        {
-            stretch_features(&mut stretches)
-        } else {
-            SmallVec::new()
-        };
+        let stretches = stretches(text, base, units);
         let paragraph = &style.paragraph_style;
         let indent = paragraph.text_indent.unwrap_or_default();
         let length = |unit: TextUnit| match unit {
@@ -138,7 +126,6 @@ impl<'a> ParagraphSpans<'a> {
         };
         Self {
             stretches,
-            features,
             units,
             lengths,
         }
@@ -160,7 +147,7 @@ impl<'a> ParagraphSpans<'a> {
                     range: stretch.text.clone(),
                     font,
                     size: style.size,
-                    features: &self.features[stretch.features.clone()],
+                    features: style.features.map_or(&[], FontFeatureSettings::features),
                     language: style.language,
                     letter_spacing: match style.letter_spacing {
                         TextUnit::Sp(sp) if sp.is_finite() => Some(self.units.sp(sp)),
@@ -196,21 +183,6 @@ impl<'a> ParagraphSpans<'a> {
     }
 }
 
-// The features of `stretches` in one list, each stretch given the range of
-// its own. Out of line, as most text asks for none.
-#[inline(never)]
-fn stretch_features(stretches: &mut [Stretch<'_>]) -> SmallVec<[FontFeature; 1]> {
-    let mut features = SmallVec::new();
-    for stretch in stretches {
-        if let Some(settings) = stretch.style.features {
-            let start = features.len();
-            features.extend(font_feature_settings(settings));
-            stretch.features = start..features.len();
-        }
-    }
-    features
-}
-
 // The stretches of `text` between its span boundaries with the settings
 // each shapes with, adjacent stretches with the same settings joined.
 fn stretches<'a>(
@@ -222,7 +194,6 @@ fn stretches<'a>(
         return SmallVec::from_buf([Stretch {
             text: 0..text.text.len(),
             style: base,
-            features: 0..0,
         }]);
     }
     spanned_stretches(text, base, units)
@@ -236,11 +207,7 @@ fn spanned_stretches<'a>(
     base: ShapingStyle<'a>,
     units: TextUnits,
 ) -> SmallVec<[Stretch<'a>; 1]> {
-    let stretch = |text: Range<usize>, style: ShapingStyle<'a>| Stretch {
-        text,
-        style,
-        features: 0..0,
-    };
+    let stretch = |text: Range<usize>, style: ShapingStyle<'a>| Stretch { text, style };
     let mut stretches: SmallVec<[Stretch<'a>; 1]> = SmallVec::new();
     for edges in text.span_boundaries().windows(2) {
         let range = edges[0]..edges[1];
