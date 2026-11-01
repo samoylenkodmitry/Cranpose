@@ -218,10 +218,18 @@ esp32-profile board mode="demo" seconds="40" port="": _disk-guard
 # Profiles the demo in QEMU by its instruction cache misses, without a board;
 # with cache="data", by the data cache's misses at the code that made them,
 # into target/esp32/sim-<mode>-data.log.
-esp32-sim-profile mode="demo" cache="instructions": _disk-guard
+esp32-sim-profile mode="demo" cache="instructions": (_esp32-sim-build mode)
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
+
+# Profiles the five screens of the ES3C35P's lists as esp32-sim-profile does:
+# builds them one after another, then runs their QEMUs at once, a core each,
+# so the set takes about as long as its slowest screen.
+esp32-sim-profiles cache="instructions": (_esp32-sim-build "demo") (_esp32-sim-build "drawn") (_esp32-sim-build "composed") (_esp32-sim-build "workload") (_esp32-sim-build "dashboard")
+    . "$HOME/export-{{esp32_toolchain}}.sh" && pids="" && for mode in demo drawn composed workload dashboard; do python3 scripts/esp32/sim_profile.py target/esp32/sim-$mode.elf target/esp32/sim-$mode{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin > target/esp32/sim-$mode.out 2>&1 & pids="$pids $!"; done; status=0; for pid in $pids; do wait $pid || status=1; done; exit $status
+
+_esp32-sim-build mode: _disk-guard
     . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;{{justfile_directory()}}/scripts/esp32/sdkconfig.no_hot_code" CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-sim cargo build --release {{ if mode == "demo" { "" } else if mode == "workload" { "--features workload" } else if mode == "dashboard" { "--features dashboard" } else { "--features text-" + mode } }}
     mkdir -p target/esp32 && cp target/esp32-sim/xtensa-esp32s3-espidf/release/esp32-demo target/esp32/sim-{{mode}}.elf
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}{{ if cache == "data" { "-data" } else { "" } }}.log --cache {{cache}} --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
 
 # Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
 esp32-clippy: _disk-guard

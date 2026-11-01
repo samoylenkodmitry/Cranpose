@@ -110,12 +110,37 @@ older build's functions (26.97 against 26.75 ms).
   5000 times a second. The simulator does not know the classic ESP32's
   cache yet, and its list ran the E32R35T's drawn line 0.24 ms slower.
 
+## The rest of the sampled code in flash
+
+A function that the profiles sampled but the budget left out runs from
+flash. The linker would place it where its crate's code falls, among code a
+frame never runs, and a change anywhere before it would move it and the
+functions it shares the cache with: a 228-byte shift of the flash code moved
+every E32R35T screen by 0.02 to 0.05 ms. A file for each chip,
+`esp32s3.order` and `esp32.order`, lists the sampled functions hottest per
+byte first, and the linker puts them at the start of the flash code
+(`--section-ordering-file`), one after another, where they evict each other
+less and code outside the list does not move them. A function of the IRAM
+list matches the IRAM section first and stays in IRAM.
+
+Both files come from the boards' sampled profiles, as `esp32.ld` does: an
+order by QEMU's cache misses read the ES3C35P's dashboard 24.97 -> 25.01 ms
+in a first trial, between two worktrees. Each build below comes from one
+worktree with the order file removed or put back, as two worktrees' paths
+give their crates other hashes and rustc other code (2026-11-01, main
+ff6f10cf0):
+
+| ms a frame | demo | drawn line | composed line | busier screen | dashboard |
+| --- | --- | --- | --- | --- | --- |
+| ES3C35P | 0.46 -> 0.42 | 1.68 -> 1.64 | 4.07 -> 4.03 | 7.84 -> 7.76 | 24.66 -> 24.58 |
+| E32R35T | 0.99 -> 0.92 | 3.51 -> 3.46 | 6.21 -> 6.03 | 9.61 -> 9.54 | |
+
 To write the scripts again, after changes that move the framework's
 per-frame work:
 
 ```sh
 scripts/esp32/cache/setup.sh    # once: QEMU with plugins, and the cache plugin
-for mode in demo drawn composed workload dashboard; do just esp32-sim-profile $mode; done
+just esp32-sim-profiles   # the five screens, their QEMUs at once
 python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.ld \
   --board "apps/esp32-demo in QEMU's ESP32-S3, by cache misses" \
   --profile target/esp32/sim-demo.elf target/esp32/sim-demo.log \
@@ -123,14 +148,34 @@ python3 scripts/esp32/hot_code.py 125 crates/cranpose-platform/esp-idf/component
   --profile target/esp32/sim-composed.elf target/esp32/sim-composed.log \
   --profile target/esp32/sim-workload.elf target/esp32/sim-workload.log \
   --profile target/esp32/sim-dashboard.elf target/esp32/sim-dashboard.log
+for mode in demo drawn composed workload dashboard; do just esp32-profile es3c35p $mode 30; done
+python3 scripts/esp32/hot_code.py 0 /dev/null \
+  --flash-order crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32s3.order \
+  --board "apps/esp32-demo on the ES3C35P" \
+  --profile target/esp32/profile-es3c35p-demo.elf target/esp32/profile-es3c35p-demo.log \
+  --profile target/esp32/profile-es3c35p-drawn.elf target/esp32/profile-es3c35p-drawn.log \
+  --profile target/esp32/profile-es3c35p-composed.elf target/esp32/profile-es3c35p-composed.log \
+  --profile target/esp32/profile-es3c35p-workload.elf target/esp32/profile-es3c35p-workload.log \
+  --profile target/esp32/profile-es3c35p-dashboard.elf target/esp32/profile-es3c35p-dashboard.log
 
-for mode in demo drawn composed; do just esp32-profile e32r35t $mode; done
+for mode in demo drawn composed workload; do just esp32-profile e32r35t $mode; done
 python3 scripts/esp32/hot_code.py 64 crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.ld \
   --board "apps/esp32-demo on the E32R35T" \
   --profile target/esp32/profile-e32r35t-demo.elf target/esp32/profile-e32r35t-demo.log \
   --profile target/esp32/profile-e32r35t-drawn.elf target/esp32/profile-e32r35t-drawn.log \
   --profile target/esp32/profile-e32r35t-composed.elf target/esp32/profile-e32r35t-composed.log
+python3 scripts/esp32/hot_code.py 0 /dev/null \
+  --flash-order crates/cranpose-platform/esp-idf/components/cranpose_hot_code/esp32.order \
+  --board "apps/esp32-demo on the E32R35T" \
+  --profile target/esp32/profile-e32r35t-demo.elf target/esp32/profile-e32r35t-demo.log \
+  --profile target/esp32/profile-e32r35t-drawn.elf target/esp32/profile-e32r35t-drawn.log \
+  --profile target/esp32/profile-e32r35t-composed.elf target/esp32/profile-e32r35t-composed.log \
+  --profile target/esp32/profile-e32r35t-workload.elf target/esp32/profile-e32r35t-workload.log
 ```
+
+A budget of 0 leaves every sampled function to the order file, the ones of
+the IRAM list too, which stay in IRAM. The E32R35T's busier screen joins the
+order's profiles, which its IRAM list has no room for.
 
 The budget counts the functions' code; their literals take a few KB more in
 the section, 7 KB on the ES3C35P. The board profiles run without this
