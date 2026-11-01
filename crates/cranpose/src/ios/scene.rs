@@ -1,5 +1,7 @@
 #![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
+use std::sync::Arc;
+
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
     runtime::AnyClass,
@@ -107,7 +109,8 @@ pub(crate) fn register_class() {
     }
 }
 
-pub(crate) fn hold_window(window: &dyn Window) {
+pub(crate) fn hold_window(window: Arc<dyn Window>) {
+    super::host::hold_window(Arc::clone(&window));
     let Ok(handle) = window.window_handle() else {
         return;
     };

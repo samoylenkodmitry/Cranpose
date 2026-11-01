@@ -2669,6 +2669,7 @@ This pattern plays two pulses with a 40-millisecond pause.
 - **Haptics:** `default_haptics`, `HapticPattern`.
 - **Lifecycle:** `rememberLifecycleState`, `cranpose::LifecycleEffect`.
 - **Display power:** `cranpose::KeepScreenOn`.
+- **System bar icons over the app:** `SystemBarAppearance`, `SystemBarIcons`.
 - **Purchases:** `purchases`, `rememberStoreState`, `rememberPurchaseEvents`.
 
 Check [target support](capability_parity.md). Handle support results and operation errors.

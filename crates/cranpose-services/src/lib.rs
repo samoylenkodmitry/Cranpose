@@ -59,6 +59,7 @@ mod retain;
 pub mod share_sheet;
 #[cfg(feature = "storage-space")]
 pub mod storage;
+pub mod system_bars;
 /// The light or dark appearance of the operating system.
 pub mod theme;
 mod thread_state;
@@ -297,6 +298,7 @@ pub use share_sheet::{
 };
 #[cfg(feature = "storage-space")]
 pub use storage::{StorageSpace, StorageSpaceRef, available_storage, set_platform_storage_space};
+pub use system_bars::{SystemBarAppearance, SystemBarIcons, system_bar_icons};
 pub use theme::{
     ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
     isSystemInDarkTheme, known_system_theme, local_system_theme, set_platform_system_theme,
