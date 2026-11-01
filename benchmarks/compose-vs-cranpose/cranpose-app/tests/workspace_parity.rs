@@ -224,6 +224,10 @@ fn workspace_hover_moves_between_visible_rows() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the quote stream's delay runs on the timer thread's wall clock, which frames do not advance"
+)]
 fn workspace_stream_control_freezes_and_restarts_quotes() {
     let mut app = WorkspaceHarness::new();
     let initial = app.quote_price();

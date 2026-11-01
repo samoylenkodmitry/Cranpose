@@ -135,7 +135,7 @@ fn style(size: f32, color: Color, weight: Option<FontWeight>) -> TextStyle {
             ..Default::default()
         },
         paragraph_style: ParagraphStyle {
-            line_height: TextUnit::Em(1.618_034),
+            line_height: TextUnit::Em(core::f32::consts::GOLDEN_RATIO),
             line_height_style: Some(LineHeightStyle {
                 alignment: LineHeightAlignment::Center,
                 trim: LineHeightTrim::None,
