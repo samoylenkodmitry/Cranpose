@@ -195,6 +195,13 @@ esp32-flash-es3c35p port: esp32-build-es3c35p
 esp32-flash-e32r35t port: esp32-build-e32r35t
     . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --baud 460800 --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32-espidf/release/bootloader.bin --partition-table partitions_4mb.csv target/xtensa-esp32-espidf/release/esp32-demo
 
+# Compares revisions of the demo on a board, every screen over 4 placements
+# of the code, the base first: `just esp32-ab e32r35t origin/main HEAD`.
+# `--port <port>` among the revisions names the board's serial port when
+# another device's name matches it. See benchmarks/esp32/README.md.
+esp32-ab board +args: _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_ab.py --board {{board}} {{args}}
+
 # `app` is demo or lvgl, `board` es3c35p or e32r35t. See benchmarks/esp32/README.md.
 # Runs an app on a board and prints its frame time, instructions and stall cycles.
 # `port` names the board's serial port when another device's name matches it.

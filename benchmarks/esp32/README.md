@@ -46,7 +46,7 @@ platform has its own.
 
 `perfstats` is an ESP-IDF component that counts cycles, instructions and
 stall cycles of core 0, where every UI runs, with the Xtensa performance
-counters over 5 s windows, the time core 0 spent idle (FreeRTOS's run time
+counters over 5 s windows (`CONFIG_PERFSTATS_WINDOW_MS`), the time core 0 spent idle (FreeRTOS's run time
 counter, which its `sdkconfig.defaults` turns on), and the internal RAM
 left. Every app logs its frame time and the kilobytes a frame sends to the
 panel. `scripts/esp32/board_run.py` builds an app with the component,
@@ -71,6 +71,21 @@ python3 benchmarks/esp32/summary.py target/esp32/bench-*.log
 
 The LVGL build takes ESP-IDF from `~/.espressif`, where the demo's first
 build installed it.
+
+### Compare revisions
+
+A screen's frame time moves by up to 0.1 ms with where the linker puts the
+code the order file leaves out, which any change shifts, so one build per
+side measures luck. `just esp32-ab <board> <base> <revision>...` builds
+each revision once with the demo's `screens-in-turn` feature (every screen
+in turn, 6 s each, with 1 s windows), links it again for each of 4
+placements (the order file, and with empty gaps a seed picks between its
+patterns, the same for every revision), runs placement by placement and
+prints each screen's mean frame time and instructions a frame, and each
+revision's mean, smallest and largest difference from the base. A
+revision run takes about a minute; a base and one revision take about 10.
+Builds go in a worktree for each board beside the checkout, as two
+worktrees of one commit build different code, and stay there by commit.
 
 ## Results
 

@@ -1,11 +1,6 @@
 // The demo's own screen: a title, a line of text, a bar that sweeps its
 // width, a line that changes and a box that counts taps.
 
-#[cfg(not(any(
-    feature = "text-drawn",
-    feature = "text-composed",
-    feature = "workload"
-)))]
 use std::time::Duration;
 
 use cranpose::{prelude::*, text::TextUnit};
@@ -59,17 +54,57 @@ fn Pulse() {
     );
 }
 
-// The line under the bar: the seconds since the start. The benchmarks'
-// `text-drawn` and `text-composed` features show a number that counts up
-// every frame there instead, as a clock or a sensor reading does, and the
-// `workload` feature the work of a busier screen.
-#[cfg(not(any(
-    feature = "text-drawn",
-    feature = "text-composed",
-    feature = "workload"
-)))]
+// What the line under the bar shows: the seconds since the start, or for
+// the benchmarks a number that counts up every frame there instead, as a
+// clock or a sensor reading does, drawn by a draw scope that reads it
+// (`text-drawn`: frames draw it again without composing or laying out) or
+// composed in a `Text` (`text-composed`), or the work of a busier screen
+// (`workload`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Line {
+    Seconds,
+    Drawn,
+    Composed,
+    Workload,
+}
+
+#[cfg(any(
+    all(feature = "text-drawn", feature = "text-composed"),
+    all(feature = "text-drawn", feature = "workload"),
+    all(feature = "text-composed", feature = "workload"),
+))]
+compile_error!("text-drawn, text-composed and workload each replace the seconds line: pick one");
+
+// The line the build's features choose.
+#[cfg(not(feature = "screens-in-turn"))]
+pub const LINE: Line = if cfg!(feature = "text-drawn") {
+    Line::Drawn
+} else if cfg!(feature = "text-composed") {
+    Line::Composed
+} else if cfg!(feature = "workload") {
+    Line::Workload
+} else {
+    Line::Seconds
+};
+
+#[path = "../../../crates/cranpose/tests/support/reading.rs"]
+mod reading;
+#[path = "../../../crates/cranpose/tests/support/workload.rs"]
+mod workload;
+
 #[composable]
-fn StatusLine() {
+fn StatusLine(line: Line) {
+    let style = text_style(Color::from_rgb_u8(200, 204, 220), 14.0);
+    match line {
+        Line::Seconds => Seconds(style),
+        Line::Drawn => reading::DrawnReading(Color::from_rgb_u8(200, 204, 220), 14.0),
+        Line::Composed => reading::ComposedReading(style),
+        Line::Workload => workload::Workload(style),
+    }
+}
+
+#[composable]
+fn Seconds(style: TextStyle) {
     let seconds = cranpose_core::rememberMutableStateOf(|| 0u32);
     cranpose_core::LaunchedEffectAsync((), move |_| {
         std::boxed::Box::pin(async move {
@@ -82,45 +117,8 @@ fn StatusLine() {
     Text(
         format!("Running for {} s", seconds.get()),
         Modifier::empty(),
-        text_style(Color::from_rgb_u8(200, 204, 220), 14.0),
+        style,
     );
-}
-
-#[cfg(any(
-    all(feature = "text-drawn", feature = "text-composed"),
-    all(feature = "text-drawn", feature = "workload"),
-    all(feature = "text-composed", feature = "workload"),
-))]
-compile_error!("text-drawn, text-composed and workload each replace the seconds line: pick one");
-
-#[cfg(any(feature = "text-drawn", feature = "text-composed"))]
-#[path = "../../../crates/cranpose/tests/support/reading.rs"]
-mod reading;
-
-// The number in a `Text`, composed again each frame.
-#[cfg(feature = "text-composed")]
-#[composable]
-fn StatusLine() {
-    reading::ComposedReading(text_style(Color::from_rgb_u8(200, 204, 220), 14.0));
-}
-
-// The number drawn by a draw scope that reads it: frames draw it again
-// without composing or laying out.
-#[cfg(feature = "text-drawn")]
-#[composable]
-fn StatusLine() {
-    reading::DrawnReading(Color::from_rgb_u8(200, 204, 220), 14.0);
-}
-
-#[cfg(feature = "workload")]
-#[path = "../../../crates/cranpose/tests/support/workload.rs"]
-mod workload;
-
-// The work of a busier screen, for the profiles of the IRAM lists.
-#[cfg(feature = "workload")]
-#[composable]
-fn StatusLine() {
-    workload::Workload(text_style(Color::from_rgb_u8(200, 204, 220), 14.0));
 }
 
 #[composable]
@@ -145,14 +143,14 @@ fn Taps() {
 }
 
 #[composable]
-pub fn Screen() {
+pub fn Screen(line: Line) {
     Column(
         Modifier::empty()
             .fill_max_size()
             .background(Color::from_rgb_u8(18, 20, 30))
             .padding(20.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
-        || {
+        move || {
             Text(
                 crate::board::TITLE,
                 Modifier::empty(),
@@ -164,7 +162,7 @@ pub fn Screen() {
                 text_style(Color::from_rgb_u8(160, 166, 190), 14.0),
             );
             Pulse();
-            StatusLine();
+            StatusLine(line);
             Taps();
         },
     );

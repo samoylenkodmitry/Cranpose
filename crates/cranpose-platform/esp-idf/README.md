@@ -138,7 +138,7 @@ RGB565 buffers the panel reads by DMA. The default, 8 rows, takes 25 KB on a
 
 The calling task becomes the UI thread. Composition and layout run on its
 stack, so give it at least 28 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for the
-main task). The stats line the loop logs every 5 s tells the bytes of it that
+main task). The stats line the loop logs every `stats_window` (5 s by default) tells the bytes of it that
 the run never used. An `esp_timer` wakes the task at each frame or timed
 event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 

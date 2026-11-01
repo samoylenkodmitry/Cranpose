@@ -4,8 +4,10 @@ mod board;
 #[cfg(feature = "dashboard")]
 #[path = "../../../crates/cranpose/tests/support/dashboard.rs"]
 mod dashboard;
-#[cfg(not(feature = "dashboard"))]
+#[cfg(any(not(feature = "dashboard"), feature = "screens-in-turn"))]
 mod demo;
+#[cfg(feature = "screens-in-turn")]
+mod in_turn;
 
 use cranpose::prelude::*;
 use cranpose_platform_esp_idf::{DisplayConfig, RunError, run};
@@ -22,14 +24,28 @@ static FONTS: &[&[u8]] = &[include_bytes!("../assets/NotoSans-Latin.ttf")];
 ))]
 compile_error!("dashboard replaces the demo's screen, which the other benchmark features change");
 
-// The screen: the demo's own, or with the `dashboard` feature the
-// dashboard of the benchmarks.
+#[cfg(all(
+    feature = "screens-in-turn",
+    any(
+        feature = "text-drawn",
+        feature = "text-composed",
+        feature = "workload"
+    )
+))]
+compile_error!(
+    "screens-in-turn shows every line in turn: drop text-drawn, text-composed and workload"
+);
+
+// The screen: the demo's own, with the `dashboard` feature the dashboard of
+// the benchmarks, or with `screens-in-turn` each of them in turn.
 #[composable]
 fn Screen() {
-    #[cfg(feature = "dashboard")]
+    #[cfg(feature = "screens-in-turn")]
+    in_turn::Screens();
+    #[cfg(all(feature = "dashboard", not(feature = "screens-in-turn")))]
     dashboard::Dashboard(board::TITLE);
-    #[cfg(not(feature = "dashboard"))]
-    demo::Screen();
+    #[cfg(not(any(feature = "dashboard", feature = "screens-in-turn")))]
+    demo::Screen(demo::LINE);
 }
 
 fn main() {
@@ -37,6 +53,8 @@ fn main() {
     esp_idf_svc::log::EspLogger::initialize_default();
     let config = DisplayConfig {
         fonts: FONTS,
+        #[cfg(feature = "screens-in-turn")]
+        stats_window: in_turn::STATS_WINDOW,
         ..board::config()
     };
     let Err(error) = board::open()

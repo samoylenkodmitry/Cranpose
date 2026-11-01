@@ -1,0 +1,11 @@
+menu "perfstats"
+
+config PERFSTATS_WINDOW_MS
+    int "Window length in milliseconds"
+    default 5000
+    help
+        How long each window counts one pair of events. Board A/Bs that show
+        the demo's screens in turn use 1000, so each screen's time holds
+        several windows.
+
+endmenu
