@@ -39,6 +39,10 @@ installed-fonts = [
     "cranpose-render-wgpu?/installed-fonts",
     "cranpose-render-pixels?/installed-fonts",
 ]
+# `available_storage` and the platform measures of free space behind it (see
+# cranpose-services' `storage-space`). An iOS app that turns it on declares
+# the disk space reason in its privacy manifest.
+storage-space = ["cranpose-services/storage-space"]
 localization = ["cranpose-ui/localization", "cranpose-liquid/localization", "cranpose-services/localization", "dep:sys-locale"]
 localization-formatting = ["localization", "cranpose-ui/localization-formatting"]
 default = ["embedded-default-font"]

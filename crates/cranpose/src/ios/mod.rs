@@ -50,6 +50,7 @@ pub(crate) mod scene;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod share_sheet;
 #[cfg(feature = "renderer-wgpu")]
+#[cfg(feature = "storage-space")]
 pub(crate) mod storage;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod uri_handler;

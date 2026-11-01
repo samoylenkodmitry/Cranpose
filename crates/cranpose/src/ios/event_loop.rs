@@ -700,6 +700,7 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::process_info::install();
     super::background::register();
     super::downloads::register();
+    #[cfg(feature = "storage-space")]
     super::storage::register();
     super::writable_folder::register();
     crate::apple::camera::register();

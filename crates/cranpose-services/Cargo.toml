@@ -58,6 +58,10 @@ uri-android = ["dep:webbrowser"]
 uri-web = ["dep:web-sys"]
 # Zero-dependency desktop notifications (notify-send / osascript / PowerShell).
 notifier-native = []
+# `available_storage`: free space on the device. Its platform measures are
+# required-reason APIs on Apple platforms, so an app that does not ask links
+# none of them.
+storage-space = []
 system-theme = []
 system-theme-web = ["dep:web-sys"]
 # Native desktop file/folder picker (rfd; xdg-portal surfaces GVFS/WebDAV mounts).

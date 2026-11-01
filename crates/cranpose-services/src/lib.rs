@@ -57,6 +57,7 @@ pub mod purchases;
 mod registry;
 mod retain;
 pub mod share_sheet;
+#[cfg(feature = "storage-space")]
 pub mod storage;
 /// The light or dark appearance of the operating system.
 pub mod theme;
@@ -294,6 +295,7 @@ pub use share_sheet::{
     ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
     clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
 };
+#[cfg(feature = "storage-space")]
 pub use storage::{StorageSpace, StorageSpaceRef, available_storage, set_platform_storage_space};
 pub use theme::{
     ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
