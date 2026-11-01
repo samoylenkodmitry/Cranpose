@@ -1267,7 +1267,7 @@ fn push_lazy_item_placements(
                 viewport_size - x - extent
             };
         }
-        placements.push(Placement::new(node_id, x, y, 0));
+        placements.push(Placement::new(node_id, x, y, 0.0));
     }
 }
 

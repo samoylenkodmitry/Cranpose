@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 
 use cranpose_ui_graphics::{Rect, Size};
+use cranpose_ui_layout::Placement;
 
 use super::{LayoutState, NodeCache};
 use crate::layout::LayoutRuntimeState;
@@ -42,6 +43,15 @@ impl LayoutParts {
         &self.layout_state
     }
 
+    // Notes whether `placements`, the node's latest, give a child a z index
+    // other than 0.
+    pub(crate) fn note_child_placements(&self, placements: &[Placement]) {
+        let with_z = placements.iter().any(|placement| placement.z_index != 0.0);
+        self.layout_state
+            .borrow_mut()
+            .set_places_children_with_z_index(with_z);
+    }
+
     pub(crate) fn runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
         &self.runtime_state
     }
@@ -53,5 +63,15 @@ impl LayoutParts {
         self.runtime_state
             .borrow()
             .placed_coordinator_rect(ordinal, node_size)
+    }
+}
+
+// A node whose last placement gave a child a z index counts among the
+// scene's reasons to order siblings until its parts end.
+impl Drop for LayoutParts {
+    fn drop(&mut self) {
+        if self.layout_state.get_mut().places_children_with_z_index() {
+            super::layout_state::count_z_index_placer(false);
+        }
     }
 }

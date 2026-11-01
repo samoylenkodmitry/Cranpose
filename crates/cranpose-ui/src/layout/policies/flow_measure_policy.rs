@@ -186,7 +186,7 @@ impl MeasurePolicy for FlowMeasurePolicy {
             if !self.layout_direction.is_rtl() {
                 placeable.place(x, y);
             }
-            placements.push(Placement::new(placeable.node_id(), x, y, 0));
+            placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
 
             cursor = main + child_main;
             line_cross = line_cross.max(child_cross);

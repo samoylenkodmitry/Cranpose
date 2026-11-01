@@ -275,7 +275,7 @@ where
             width = width.max(placeable.width());
             height = height.max(placeable.height());
             placeable.place(0.0, 0.0);
-            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
 
         width = width.clamp(constraints.min_width, constraints.max_width);

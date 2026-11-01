@@ -5297,7 +5297,7 @@ fn app_shell_clean_slot_scroll_probe() {
                     placeable.node_id(),
                     0.0,
                     0.0,
-                    0,
+                    0.0,
                 ));
             }
             scope.layout(width, height, placements)
@@ -5419,7 +5419,7 @@ fn app_shell_slot_reads_state_probe() {
                     placeable.node_id(),
                     0.0,
                     0.0,
-                    0,
+                    0.0,
                 ));
             }
             scope.layout(width, height, placements)
@@ -5511,7 +5511,7 @@ fn app_shell_unkeyed_cell_slot_probe() {
                     placeable.node_id(),
                     0.0,
                     0.0,
-                    1,
+                    1.0,
                 ));
             }
             let list_nodes = scope.subcompose(SlotId::new(1), (), move || {
@@ -5540,7 +5540,7 @@ fn app_shell_unkeyed_cell_slot_probe() {
                     placeable.node_id(),
                     0.0,
                     0.0,
-                    0,
+                    0.0,
                 ));
             }
             scope.layout(width, height, placements)
@@ -5610,7 +5610,7 @@ fn app_shell_keyed_measure_input_probe() {
                     placeable.node_id(),
                     0.0,
                     0.0,
-                    1,
+                    1.0,
                 ));
             }
             let padding = bar_height;
@@ -5630,7 +5630,7 @@ fn app_shell_keyed_measure_input_probe() {
                     placeable.node_id(),
                     0.0,
                     padding,
-                    0,
+                    0.0,
                 ));
             }
             scope.layout(width, total_height, placements)

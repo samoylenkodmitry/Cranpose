@@ -27,21 +27,33 @@ impl Modifier {
     }
 }
 
-/// Whether a `z_index` modifier is attached anywhere on this thread. While
-/// none is, the scene keeps every node's children in composition order
-/// without reading their z indices.
+/// Whether a `z_index` modifier is attached anywhere on this thread, or a
+/// node's last placement gave a child a z index. While neither is so, the
+/// scene keeps every node's children in composition order without reading
+/// their z indices.
 pub fn z_index_in_use() -> bool {
+    crate::thread_state::cells(|cells| cells.z_order_reasons.get()) > 0
+}
+
+/// Whether a `z_index` modifier is attached anywhere on this thread. While
+/// none is, only a node whose last placement gave a child a z index orders
+/// its children by z index.
+pub fn z_index_modifier_in_use() -> bool {
     crate::thread_state::cells(|cells| cells.z_index_nodes.get()) > 0
+}
+
+fn count(counter: &std::cell::Cell<usize>, added: bool) {
+    counter.set(if added {
+        counter.get() + 1
+    } else {
+        counter.get().saturating_sub(1)
+    });
 }
 
 fn count_z_index_node(attached: bool) {
     crate::thread_state::cells(|cells| {
-        let nodes = &cells.z_index_nodes;
-        nodes.set(if attached {
-            nodes.get() + 1
-        } else {
-            nodes.get().saturating_sub(1)
-        });
+        count(&cells.z_index_nodes, attached);
+        count(&cells.z_order_reasons, attached);
     });
 }
 

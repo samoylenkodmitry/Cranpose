@@ -130,7 +130,7 @@ impl MeasurePolicy for AsWideAsChild {
                 width,
                 height: 10.0,
             },
-            vec![Placement::new(child.node_id(), 0.0, 0.0, 0)],
+            vec![Placement::new(child.node_id(), 0.0, 0.0, 0.0)],
         )
     }
 

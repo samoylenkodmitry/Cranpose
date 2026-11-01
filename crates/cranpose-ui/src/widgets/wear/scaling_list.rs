@@ -1127,7 +1127,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
             let placeable = measurable.measure(constraints);
             width = width.max(placeable.width());
             height = height.max(placeable.height());
-            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
         Size::new(
             width.clamp(constraints.min_width, constraints.max_width),
@@ -1559,7 +1559,7 @@ fn measure_wear_scaling_list(
                 });
                 for &(node_id, offset, root_width) in &item.roots {
                     let x = left + density.centre(item_width, root_width);
-                    placements.push(Placement::new(node_id, x, row.top + offset, 0));
+                    placements.push(Placement::new(node_id, x, row.top + offset, 0.0));
                 }
             }
         })

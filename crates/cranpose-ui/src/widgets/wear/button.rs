@@ -197,7 +197,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
         let mut y = density.dp(self.spec.padding_vertical) + density.centre(content, column);
         let x = density.dp(self.spec.padding_horizontal);
         for placeable in &placeables {
-            placements.push(Placement::new(placeable.node_id(), x, y, 0));
+            placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
             y += density.ceil(placeable.height()) + spacing;
         }
         Size::new(width, height).into()

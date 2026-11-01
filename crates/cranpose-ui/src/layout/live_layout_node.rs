@@ -7,7 +7,7 @@ use cranpose_foundation::SemanticsConfiguration;
 use crate::{
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::{LayoutNode, LayoutParts, LayoutState, NodeCache},
+    widgets::nodes::{ChildPlacement, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
 pub(super) enum LiveLayoutNode<'a> {
@@ -75,6 +75,14 @@ impl LiveLayoutNode<'_> {
             Self::Layout(node) => node.parent_data(),
             Self::Subcompose(node) => node.parent_data(),
         }
+    }
+
+    // Places the node where `placer` placed it with `at`.
+    pub(super) fn place(&self, at: ChildPlacement, placer: NodeId, context: &AppContext) {
+        self.parts()
+            .layout_state()
+            .borrow_mut()
+            .place_child(at, Some(placer), context);
     }
 
     // Places the node again where `placer` last placed it.

@@ -969,7 +969,7 @@ fn reader_reveal_rejects_a_subcomposed_target_until_it_is_placed_again() {
                             child.node_id(),
                             0.0,
                             240.0,
-                            0,
+                            0.0,
                         ));
                     }
                 }

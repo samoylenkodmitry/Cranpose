@@ -173,7 +173,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
 
         for placeable in placeables {
             let x = density.centre(width, placeable.width());
-            placements.push(Placement::new(placeable.node_id(), x, top, 0));
+            placements.push(Placement::new(placeable.node_id(), x, top, 0.0));
         }
         Size::new(width, height).into()
     }

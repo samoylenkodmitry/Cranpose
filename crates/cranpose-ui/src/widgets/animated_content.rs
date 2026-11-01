@@ -763,7 +763,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             // The current content is the last.
             current = size;
             placeable.place(0.0, 0.0);
-            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0.0));
         }
         let size = match state.size_transform.get() {
             Some(transform) => {

@@ -479,14 +479,14 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
         let mut y = padding_top + density.centre(content, column);
         let x = density.dp(self.spec.padding_horizontal);
         for placeable in &labels {
-            placements.push(Placement::new(placeable.node_id(), x, y, 0));
+            placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
             y += density.ceil(placeable.height()) + label_spacing;
         }
 
         if let Some(switch) = switch {
             let slot_top = padding_top + density.centre(content, slot);
             let switch_x = width - density.dp(self.spec.padding_horizontal) - switch.width();
-            placements.push(Placement::new(switch.node_id(), switch_x, slot_top, 0));
+            placements.push(Placement::new(switch.node_id(), switch_x, slot_top, 0.0));
         }
 
         Size::new(width, height).into()

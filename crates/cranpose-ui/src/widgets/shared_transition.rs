@@ -320,11 +320,11 @@ impl MeasurePolicy for FlightPolicy {
                     // Not laid out yet: nowhere to draw it.
                     let placeable = measurable.measure(Constraints::tight(0.0, 0.0));
                     placeable.place(0.0, 0.0);
-                    return Placement::new(placeable.node_id(), 0.0, 0.0, 0);
+                    return Placement::new(placeable.node_id(), 0.0, 0.0, 0.0);
                 };
                 let placeable = measurable.measure(Constraints::tight(flying.width, flying.height));
                 placeable.place(flying.x, flying.y);
-                Placement::new(placeable.node_id(), flying.x, flying.y, 0)
+                Placement::new(placeable.node_id(), flying.x, flying.y, 0.0)
             })
             .collect();
         // Takes no room: the copy is placed in the layout's pixels, outside

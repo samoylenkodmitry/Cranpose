@@ -39,7 +39,7 @@ impl MeasurePolicy for ScrolledStackPolicy {
         for (index, measurable) in measurables.iter().enumerate() {
             let placeable = measurable.measure(constraints);
             let y = index as f32 * ROW_HEIGHT - self.offset.get();
-            placements.push(Placement::new(placeable.node_id(), 0.0, y, 0));
+            placements.push(Placement::new(placeable.node_id(), 0.0, y, 0.0));
         }
         MeasureResult::new(
             Size {

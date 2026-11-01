@@ -39,6 +39,9 @@ pub(crate) struct ThreadCells {
     pub(crate) modal_counting_contexts: Cell<usize>,
     /// How many `z_index` modifier nodes are attached on this thread.
     pub(crate) z_index_nodes: Cell<usize>,
+    // The `z_index` modifier nodes, plus the layout nodes whose last
+    // placement gave a child a z index: while 0, nothing reorders siblings.
+    pub(crate) z_order_reasons: Cell<usize>,
     pub(crate) last_unhandled_key_handler_id: Cell<u64>,
     /// Whether the shell on this thread runs idle prefetch passes
     /// ([`crate::set_idle_prefetch_passes`]).
@@ -59,6 +62,7 @@ impl ThreadCells {
             last_modifier_revision: Cell::new(0),
             modal_counting_contexts: Cell::new(0),
             z_index_nodes: Cell::new(0),
+            z_order_reasons: Cell::new(0),
             last_unhandled_key_handler_id: Cell::new(0),
             idle_prefetch_passes: Cell::new(false),
         }

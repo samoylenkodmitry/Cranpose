@@ -352,7 +352,7 @@ fn renderer_renders_subcompose_background() {
                     });
                     let placements: Vec<_> = children
                         .into_iter()
-                        .map(|child| Placement::new(child.node_id(), 0.0, 0.0, 0))
+                        .map(|child| Placement::new(child.node_id(), 0.0, 0.0, 0.0))
                         .collect();
                     let (width, height) = constraints.constrain(40.0, 20.0);
                     scope.layout(width, height, placements)

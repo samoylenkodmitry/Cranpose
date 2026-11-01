@@ -213,7 +213,7 @@ impl MeasurePolicy for IntrinsicReader {
         });
         MeasureResult::new(
             Size::new(width, placeable.height()),
-            vec![Placement::new(placeable.node_id(), 0.0, 0.0, 0)],
+            vec![Placement::new(placeable.node_id(), 0.0, 0.0, 0.0)],
         )
     }
 

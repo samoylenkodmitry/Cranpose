@@ -95,7 +95,7 @@ pub struct AppContext {
     modifier_chain_trace: RefCell<Option<Arc<ModifierChainTraceCallback>>>,
     window_roots: crate::modifier::WindowRootRegistry,
     drag_and_drop: crate::modifier::DragAndDropState,
-    placement_pass: crate::widgets::nodes::layout_node::PlacementPass,
+    placement_pass: crate::widgets::nodes::PlacementPass,
     memory_headroom: Cell<crate::MemoryHeadroom>,
 }
 
@@ -190,7 +190,7 @@ impl AppContext {
             modifier_chain_trace: RefCell::new(None),
             window_roots: crate::modifier::WindowRootRegistry::default(),
             drag_and_drop: crate::modifier::DragAndDropState::default(),
-            placement_pass: crate::widgets::nodes::layout_node::PlacementPass::new(),
+            placement_pass: crate::widgets::nodes::PlacementPass::new(),
             memory_headroom: Cell::new(crate::MemoryHeadroom::Ample),
         });
         *context.self_weak.borrow_mut() = Rc::downgrade(&context);
@@ -514,7 +514,7 @@ impl AppContext {
     }
 
     /// The placement bookkeeping of this context's running layout pass.
-    pub(crate) fn placement_pass(&self) -> &crate::widgets::nodes::layout_node::PlacementPass {
+    pub(crate) fn placement_pass(&self) -> &crate::widgets::nodes::PlacementPass {
         &self.placement_pass
     }
 

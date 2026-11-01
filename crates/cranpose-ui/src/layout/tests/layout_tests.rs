@@ -8,7 +8,8 @@ use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
 
 use super::{
     core::{Alignment, Measurable},
-    layout_child_measure_state::LayoutChildBinding,
+    layout_child_measurable::LayoutChildMeasurable,
+    layout_child_measure_state::{LayoutChildBinding, LayoutChildFrame},
     *,
 };
 use crate::{
@@ -79,7 +80,7 @@ impl MeasurePolicy for VerticalStackPolicy {
             let placeable = measurable.measure(constraints);
             width = width.max(placeable.width());
             let height = placeable.height();
-            placements.push(Placement::new(placeable.node_id(), 0.0, y, 0));
+            placements.push(Placement::new(placeable.node_id(), 0.0, y, 0.0));
             y += height;
         }
         let width = width.clamp(constraints.min_width, constraints.max_width);

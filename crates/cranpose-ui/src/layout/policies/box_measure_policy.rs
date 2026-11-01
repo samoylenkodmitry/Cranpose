@@ -155,7 +155,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
                 .align(height, child_height, scope.density());
 
             placeable.place(x, y);
-            placements.push(Placement::new(placeable.node_id(), x, y, 0));
+            placements.push(Placement::new(placeable.node_id(), x, y, 0.0));
         }
 
         crate::modifier::Size { width, height }.into()
