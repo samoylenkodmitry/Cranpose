@@ -95,9 +95,7 @@ pub trait HostController: Send + Sync {
     fn set_keep_screen_on(&self, enabled: bool);
     /// Shows `icons` in the system bars drawn over the app. A host without
     /// system bars over the app keeps this default, which does nothing.
-    fn set_system_bar_icons(&self, icons: crate::SystemBarIcons) {
-        let _ = icons;
-    }
+    fn set_system_bar_icons(&self, _icons: crate::SystemBarIcons) {}
     /// Returns platform directory roots inside the application's host sandbox.
     fn platform_directories(&self) -> Option<PlatformDirectories>;
     /// Finishes/backgrounds the host.
