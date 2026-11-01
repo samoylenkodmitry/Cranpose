@@ -176,50 +176,56 @@ impl TextPreparedLayoutOwner {
         self.source.borrow().options
     }
 
-    fn with_prepared<R>(
-        &self,
-        widths: (f32, f32),
-        read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
-    ) -> R {
+    // The layout at `widths`, which the cache holds first: the latest one
+    // when it keeps the widths, else a cached one that takes them, else a
+    // new one. The reader holds the cache borrowed, and no callback runs
+    // while it is.
+    fn prepared(&self, widths: (f32, f32)) -> Ref<'_, Rc<crate::text::PreparedTextLayout>> {
         let stamp = crate::render_state::text_layout_stamp();
         {
-            let mut cache = self.cache.borrow_mut();
-            let Some(latest) = cache.first_mut() else {
-                drop(cache);
-                return self.prepare(widths, stamp, read);
-            };
-            if latest.keeps(widths, stamp) {
-                return read(&latest.layout);
-            }
-            // The latest layout, which nothing else holds, takes widths at
-            // which it breaks into the same lines in place, as a width that
-            // animates asks for each frame, before the others are searched.
-            // Its style, equal to the source's, gives the alignment.
-            if (latest.text_generation, latest.font_scale_fingerprint) == stamp
-                && let Some(prepared) = Rc::get_mut(&mut latest.layout)
-                && prepared.try_realign(widths, prepared.visual_style.paragraph_style.text_align)
+            let cache = self.cache.borrow();
+            if cache
+                .first()
+                .is_some_and(|latest| latest.keeps(widths, stamp))
             {
-                latest.min_width = widths.0;
-                latest.max_widths = prepared.max_widths_kept(widths.0);
-                return read(&latest.layout);
-            }
-            if let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) {
-                cache[..=index].rotate_right(1);
-                return read(&cache[0].layout);
+                return Ref::map(cache, |cache| &cache[0].layout);
             }
         }
-        self.prepare(widths, stamp, read)
+        if !self.bring_kept(widths, stamp) {
+            self.prepare(widths, stamp);
+        }
+        Ref::map(self.cache.borrow(), |cache| &cache[0].layout)
     }
 
-    // Prepares a layout at `widths` that no cached one keeps. Out of line:
-    // most reads take a cached layout, and each reader has its own copy.
+    // Puts first a cached layout that takes `widths`: the latest one, which
+    // nothing else holds, realigned in place where it breaks into the same
+    // lines there, as a width that animates asks for each frame, or one the
+    // cache keeps. False when none does.
+    fn bring_kept(&self, widths: (f32, f32), stamp: (u64, u32)) -> bool {
+        let mut cache = self.cache.borrow_mut();
+        let Some(latest) = cache.first_mut() else {
+            return false;
+        };
+        // Its style, equal to the source's, gives the alignment.
+        if (latest.text_generation, latest.font_scale_fingerprint) == stamp
+            && let Some(prepared) = Rc::get_mut(&mut latest.layout)
+            && prepared.try_realign(widths, prepared.visual_style.paragraph_style.text_align)
+        {
+            latest.min_width = widths.0;
+            latest.max_widths = prepared.max_widths_kept(widths.0);
+            return true;
+        }
+        let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) else {
+            return false;
+        };
+        cache[..=index].rotate_right(1);
+        true
+    }
+
+    // Prepares a layout at `widths` that no cached one keeps, which the
+    // cache then holds first. Out of line: most reads take a cached layout.
     #[inline(never)]
-    fn prepare<R>(
-        &self,
-        widths: (f32, f32),
-        stamp: (u64, u32),
-        read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
-    ) -> R {
+    fn prepare(&self, widths: (f32, f32), stamp: (u64, u32)) {
         let source = self.source.borrow();
         let frame = source.frame(widths);
         let align = source.style.paragraph_style.text_align;
@@ -266,7 +272,6 @@ impl TextPreparedLayoutOwner {
             TextPreparedLayoutCacheEntry::new(widths.0, stamp, prepared),
         );
         cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
-        read(&cache[0].layout)
     }
 
     /// The size of the layout the cache holds for `widths` and the max widths
@@ -285,20 +290,19 @@ impl TextPreparedLayoutOwner {
     }
 
     fn measure_text_content(&self, widths: (f32, f32)) -> Size {
-        self.with_prepared(widths, |prepared| prepared.size())
+        self.prepared(widths).size()
     }
 
     fn measure_layout(&self, widths: (f32, f32)) -> (Size, cranpose_ui_layout::AlignmentLines) {
         self.measured_widths.set(Some(widths));
-        self.with_prepared(widths, |prepared| {
-            (prepared.size(), prepared.alignment_lines())
-        })
+        let prepared = self.prepared(widths);
+        (prepared.size(), prepared.alignment_lines())
     }
 
     fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
         self.measured_widths
             .get()
-            .map(|widths| self.with_prepared(widths, Rc::clone))
+            .map(|widths| Rc::clone(&self.prepared(widths)))
     }
 }
 
