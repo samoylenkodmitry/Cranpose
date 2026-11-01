@@ -14,7 +14,7 @@ use crate::{
     modifier::Point,
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
 #[expect(
@@ -48,6 +48,13 @@ impl LayoutBuilderState {
         position: usize,
         child_id: NodeId,
     ) -> Result<bool, NodeError> {
+        let unchanged = runtime_state.children.as_deref().is_some_and(|children| {
+            children.ids.get(position) == Some(&child_id)
+                && children.states[position].rebind_unchanged(self)
+        });
+        if unchanged {
+            return Ok(true);
+        }
         let bound = applier.with_node::<LayoutNode, _>(child_id, |child| {
             runtime_state.child_state_at(position, child_id).bind(
                 LayoutChildBinding {
@@ -157,6 +164,8 @@ pub(super) struct LayoutChildMeasureState {
     // Whether the record writes the child's size and placed flag: see
     // `LayoutChildBinding::layout_node`.
     pub(super) layout_node: Cell<bool>,
+    // The revision of the child's cache when the record last read the child.
+    revision: Cell<u32>,
     pub(super) cache_epoch: Cell<PackedU64>,
     pub(super) force_remeasure: Cell<bool>,
     pub(super) parent_data: Cell<Option<cranpose_ui_layout::ParentData>>,
@@ -194,6 +203,7 @@ impl LayoutChildMeasureState {
             frame,
             parts: Cell::new(None),
             layout_node: Cell::new(false),
+            revision: Cell::new(0),
             cache_epoch: Cell::default(),
             force_remeasure: Cell::new(true),
             parent_data: Cell::new(None),
@@ -209,10 +219,8 @@ impl LayoutChildMeasureState {
     /// measurement.
     pub(super) fn bind(&self, binding: LayoutChildBinding<'_>, pass: &LayoutBuilderState) {
         let cache = binding.parts.cache();
-        let child_epoch = cache.epoch();
-        let stale = binding.dirty || child_epoch < pass.cache_floor;
-        let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
-        cache.activate(cache_epoch);
+        self.bind_cache(cache, binding.dirty, binding.descendant_dirty, pass);
+        self.revision.set(cache.revision());
         let parts = self.parts.take();
         let shared = parts
             .as_ref()
@@ -223,9 +231,42 @@ impl LayoutChildMeasureState {
             Some(Rc::clone(binding.parts))
         });
         self.layout_node.set(binding.layout_node);
-        self.cache_epoch.set(PackedU64::new(cache_epoch));
-        self.force_remeasure.set(stale || binding.descendant_dirty);
         self.parent_data.set(binding.parent_data);
+    }
+
+    // Binds the record again to the layout node it holds, without a look at
+    // the node, while the node's cache has the revision of the record's last
+    // read: the node's parts and parent data are then as the record holds
+    // them, and the node's flags sit in its cache. `false` otherwise.
+    fn rebind_unchanged(&self, pass: &LayoutBuilderState) -> bool {
+        self.layout_node.get()
+            && read_cell(&self.parts, |parts| {
+                parts.as_deref().is_some_and(|parts| {
+                    let cache = parts.cache();
+                    let unchanged = cache.revision() == self.revision.get();
+                    if unchanged {
+                        let dirt = cache.dirt();
+                        let dirty = dirt.measure || dirt.layout;
+                        self.bind_cache(cache, dirty, dirt.descendant.layout, pass);
+                    }
+                    unchanged
+                })
+            })
+    }
+
+    fn bind_cache(
+        &self,
+        cache: &NodeCache,
+        dirty: bool,
+        descendant_dirty: bool,
+        pass: &LayoutBuilderState,
+    ) {
+        let child_epoch = cache.epoch();
+        let stale = dirty || child_epoch < pass.cache_floor;
+        let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
+        cache.activate(cache_epoch);
+        self.cache_epoch.set(PackedU64::new(cache_epoch));
+        self.force_remeasure.set(stale || descendant_dirty);
         if self.frame.measures() {
             self.measured.take();
             self.last_position.set(None);
