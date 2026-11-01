@@ -7,6 +7,8 @@ use support::page::*;
 use crate::support;
 
 const FRAME: u32 = 120;
+// The frame's width, the pixels in a row.
+const ROW: usize = FRAME as usize;
 
 // `text` drawn black over white at 40 sp in `span`, its box 30 pixels in
 // from the frame's corner.
@@ -62,7 +64,7 @@ fn Stroked() {
 }
 
 // The columns and rows of the dark pixels of `page`.
-fn dark_pixels(page: fn()) -> Option<Vec<(u32, u32)>> {
+fn dark_pixels(page: fn()) -> Option<Vec<(usize, usize)>> {
     let (frame, _) = support::warm_app_frame(page, FRAME, FRAME)?;
     Some(
         frame
@@ -72,16 +74,16 @@ fn dark_pixels(page: fn()) -> Option<Vec<(u32, u32)>> {
             .iter()
             .enumerate()
             .filter(|(_, pixel)| pixel[0] < 128)
-            .map(|(index, _)| (index as u32 % FRAME, index as u32 / FRAME))
+            .map(|(index, _)| (index % ROW, index / ROW))
             .collect(),
     )
 }
 
 // The leftmost, topmost, rightmost and bottommost dark pixels of `page`.
-fn ink(page: fn()) -> Option<[u32; 4]> {
+fn ink(page: fn()) -> Option<[usize; 4]> {
     let box_of = dark_pixels(page)?
         .into_iter()
-        .fold(None, |ink: Option<[u32; 4]>, (x, y)| {
+        .fold(None, |ink: Option<[usize; 4]>, (x, y)| {
             Some(ink.map_or([x, y, x, y], |[left, top, right, bottom]| {
                 [left.min(x), top.min(y), right.max(x), bottom.max(y)]
             }))
@@ -113,7 +115,7 @@ fn an_f_that_ends_a_line_draws_its_overhang() {
     let (Some(alone), Some(followed)) = (ink(LoneF), dark_pixels(FBeforePeriod)) else {
         return;
     };
-    let columns: Vec<u32> = followed.into_iter().map(|(x, _)| x).collect();
+    let columns: Vec<usize> = followed.into_iter().map(|(x, _)| x).collect();
     let followed = last_before_last_gap(columns);
     assert_eq!(
         alone[2], followed,
@@ -141,7 +143,7 @@ fn a_stroke_draws_its_outer_half_past_the_line_ends() {
 
 // The last of `columns` before the last gap between them: where the glyph
 // before a period ends.
-fn last_before_last_gap(mut columns: Vec<u32>) -> u32 {
+fn last_before_last_gap(mut columns: Vec<usize>) -> usize {
     columns.sort_unstable();
     columns.dedup();
     let gap = columns.windows(2).rposition(|pair| pair[1] > pair[0] + 1);

@@ -220,9 +220,7 @@ impl PlainGlyphs {
         glyphs: &mut ShapedGlyphs,
     ) -> Option<bool> {
         let first = glyphs.len();
-        let Some(run) = text.get(range.clone()) else {
-            return None;
-        };
+        let run = text.get(range.clone())?;
         let Self {
             busy,
             substitutes,

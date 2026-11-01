@@ -7,6 +7,7 @@ use crate::{
     bidi_level::{BidiLevel, reorder_visually},
     ellipsis_at::{ELLIPSIS, EllipsisAt, ellipsis_at, take_rest_of_paragraph},
     font_family_resolver::FontFamilyResolver,
+    glyph_ink::InkReach,
     index_range::narrow,
     itemizer::{Itemizer, TextItem},
     laid_glyphs::LaidGlyphs,
@@ -574,6 +575,10 @@ impl TextLayouter {
                     },
                 });
             });
+        // Glyphs spaced closer than their advances overlap past a line's ends.
+        if self.items.iter().any(|item| item.spacing < 0.0) {
+            self.shaper.note_ink_reach(InkReach::Past);
+        }
     }
 
     fn build_lines(
@@ -607,7 +612,9 @@ impl TextLayouter {
                 last: index == last,
                 ellipsized,
             };
-            top = self.push_line(input, resolver, line, edges, layout);
+            let reach;
+            (top, reach) = self.push_line(input, resolver, line, edges, layout);
+            self.shaper.note_ink_reach(reach);
         }
         for index in 1..layout.lines.len() {
             let starts = starts_paragraph(input.text, layout.lines[index].text.start());
@@ -662,12 +669,13 @@ impl TextLayouter {
             last: true,
             ellipsized: false,
         };
-        let top = self.push_line(input, resolver, line, edges, layout);
+        let (top, reach) = self.push_line(input, resolver, line, edges, layout);
+        self.shaper.note_ink_reach(reach);
         self.finish_lines(input, options, top, layout);
     }
 
     // Places the pieces just collected for `line` as its runs, adds the
-    // line below `edges.top` and returns its bottom.
+    // line below `edges.top` and returns its bottom and how its ink reaches.
     fn push_line(
         &self,
         input: &LayoutInput<'_>,
@@ -675,7 +683,7 @@ impl TextLayouter {
         line: LineText,
         edges: LineEdges,
         layout: &mut LayoutBody,
-    ) -> f32 {
+    ) -> (f32, InkReach) {
         let (runs, width) = place_runs(&self.pieces, line.visible, layout);
         let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
         let asked = input.lengths.line_height.unwrap_or(f32::NAN);
@@ -714,7 +722,8 @@ impl TextLayouter {
             ends_paragraph: true,
         });
         layout.widest = layout.widest.max(width + line.indent);
-        bottom
+        let reach = InkReach::of_line(line_box.baseline - trim_top, bottom - top, extent);
+        (bottom, reach)
     }
 
     // Collects the pieces of line `index`, with an ellipsis where it does

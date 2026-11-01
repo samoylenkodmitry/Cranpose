@@ -154,6 +154,11 @@ impl LaidGlyphs {
 
     // Where the first glyphs of `range` draw from the pen, when any glyph
     // draws off it; the glyphs past them draw at the pen.
+    // Whether a glyph draws off its pen.
+    pub(crate) fn has_offsets(&self) -> bool {
+        self.offsets.is_some()
+    }
+
     pub(crate) fn offsets(&self, range: Range<usize>) -> Option<&[GlyphOffset]> {
         self.offsets.as_deref().map(|offsets| {
             let len = offsets.len();

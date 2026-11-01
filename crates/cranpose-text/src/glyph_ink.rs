@@ -11,7 +11,8 @@ use crate::{
     index_range::widen,
     laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
-    text_layout::{LayoutLine, LineRun},
+    line_box::FontExtent,
+    text_layout::{LayoutLine, LineRun, font_units},
     typeface::Typeface,
 };
 
@@ -21,6 +22,20 @@ use crate::{
 pub(crate) enum InkReach {
     Within,
     Past,
+}
+
+impl InkReach {
+    // How the ink of a line whose baseline lies `baseline` below its top
+    // and whose box is `height` tall reaches, for typefaces reaching
+    // `extent` above and below the baseline: past the box when it is too
+    // short for them.
+    pub(crate) fn of_line(baseline: f32, height: f32, extent: FontExtent) -> Self {
+        if baseline < extent.ascent || height - baseline < extent.descent {
+            Self::Past
+        } else {
+            Self::Within
+        }
+    }
 }
 
 // What a glyph's two bits say: not read yet, its ink inside its advance and
@@ -100,7 +115,7 @@ pub(crate) fn font_glyph_inks_out(font: &Font, glyph: u32, advance: i32) -> bool
     });
     font.glyph_metrics()
         .extents(FontGlyphId::new(glyph))
-        .is_some_and(|ink| reaches_out(&ink, advance as f32, (ascent, descent)))
+        .is_some_and(|ink| reaches_out(&ink, font_units(advance), (ascent, descent)))
 }
 
 // The box around the ink that the glyphs of `layout` put past the visible
@@ -171,15 +186,11 @@ fn any_out(glyphs: RunGlyphs<'_>, face: &Typeface, inks: &GlyphInks) -> bool {
 }
 
 // Whether a glyph of `body` may put ink past the visible text of its line or
-// past the layout's box, `glyphs` telling whether one puts ink past its own
-// advance or its typeface's lines: the test `find_ink_past_lines` makes
-// before it places any glyph, which most layouts pass.
-pub(crate) fn may_ink_past_lines(body: &LayoutBody, glyphs: InkReach) -> bool {
-    glyphs == InkReach::Past
-        || body.lines.iter().any(|line| {
-            body.runs[line.runs.range()].iter().any(|run| {
-                let face = &body.faces[widen(run.face)];
-                run_leaves_lines(body, line, run, face.glyph_inks())
-            })
-        })
+// past the layout's box, `reach` telling whether the layouter found a glyph
+// whose ink reaches past its own advance or its typeface's lines, glyphs
+// spaced closer than their advances or a line too short for its typefaces:
+// the test `find_ink_past_lines` makes before it places any glyph, which
+// most layouts pass.
+pub(crate) fn may_ink_past_lines(body: &LayoutBody, reach: InkReach) -> bool {
+    reach == InkReach::Past || body.glyphs.has_offsets()
 }
