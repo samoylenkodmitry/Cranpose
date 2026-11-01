@@ -15,6 +15,7 @@ use crate::{
     draw::DrawCommand,
     modifier::{
         Modifier,
+        offset::OffsetPxNode,
         scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
     },
     modifier_nodes::{
@@ -349,7 +350,10 @@ fn collect_draw_node(
         collect_draw_closures(draw_node, site, slices);
     }
 
-    if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
+    let layer_node = any
+        .downcast_ref::<GraphicsLayerNode>()
+        .or_else(|| any.downcast_ref::<OffsetPxNode>().map(OffsetPxNode::layer));
+    if let Some(layer_node) = layer_node {
         slices.mark_layer_draw_boundary();
         slices.push_graphics_layer(
             layer_node.layer_snapshot(),

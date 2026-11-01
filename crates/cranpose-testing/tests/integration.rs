@@ -29,6 +29,7 @@ mod modifier_reuse_test;
 mod modifier_size_position_test;
 mod nested_scroll_test;
 mod offset_updates_test;
+mod offset_with_test;
 mod pager_test;
 mod placed_semantics_test;
 mod pointer_hover_gradient_test;

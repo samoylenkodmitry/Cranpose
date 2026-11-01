@@ -16,6 +16,7 @@ use super::{
     DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
     ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
     layout_data::LayoutDataNode, local::ModifierLocalManager, modifier_debug_enabled,
+    offset::OffsetPxNode,
 };
 use crate::{
     modifier_nodes::{
@@ -172,6 +173,10 @@ impl ModifierChainHandle {
         self.chain.visit_nodes_mut(|node, capabilities| {
             if capabilities.contains(NodeCapabilities::LAYOUT)
                 && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetNode>()
+            {
+                offset.set_layout_direction(direction);
+            } else if capabilities.contains(NodeCapabilities::DRAW)
+                && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetPxNode>()
             {
                 offset.set_layout_direction(direction);
             }
