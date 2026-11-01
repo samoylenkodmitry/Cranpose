@@ -11,7 +11,7 @@ use super::{SemanticsRole, SemanticsText};
 use crate::{
     modifier::{Modifier, ModifierNodeSlices, Point, ResolvedModifiers, Size},
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::LayoutNode,
+    widgets::nodes::{LayoutNode, LayoutState},
 };
 
 /// Snapshot of the data required to render a layout node.
@@ -31,6 +31,9 @@ pub struct LayoutNodeData {
     pub semantics: Option<Rc<SemanticsConfiguration>>,
     /// What kind of node this is.
     pub kind: LayoutNodeKind,
+    /// Where the node draws among its siblings: its `Modifier::z_index`
+    /// plus the z index its parent placed it with.
+    pub z_index: f32,
 }
 
 impl LayoutNodeData {
@@ -50,6 +53,7 @@ impl LayoutNodeData {
             modifier_slices,
             semantics,
             kind,
+            z_index: 0.0,
         }
     }
 
@@ -120,6 +124,7 @@ pub(super) fn snapshot_node_data(
         resolved_modifiers,
         modifier_slices,
         semantics,
+        z_index,
         ..
     } = info;
 
@@ -145,6 +150,7 @@ pub(super) fn snapshot_node_data(
         modifier_slices,
         semantics,
         kind,
+        z_index,
     };
     Ok((data, window_transform))
 }
@@ -156,6 +162,8 @@ struct RuntimeNodeMetadata {
     modifier_slices: Rc<ModifierNodeSlices>,
     semantics: Option<Rc<SemanticsConfiguration>>,
     role: SemanticsRole,
+    // The node's `Modifier::z_index` plus its placement's.
+    z_index: f32,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
 }
 
@@ -168,6 +176,7 @@ impl Default for RuntimeNodeMetadata {
             semantics: None,
             role: SemanticsRole::Unknown,
             button_handler: None,
+            z_index: 0.0,
         }
     }
 }
@@ -189,6 +198,7 @@ fn runtime_metadata_for(
         let resolved_modifiers = layout.resolved_modifiers();
         let modifier_slices = layout.modifier_slices_snapshot();
         let role = role_from_modifier_slices(&modifier_slices);
+        let z_index = modifier_slices.z_index() + layout.with_layout_state(LayoutState::z_index);
 
         RuntimeNodeMetadata {
             modifier,
@@ -197,18 +207,23 @@ fn runtime_metadata_for(
             semantics: layout.semantics_configuration().map(Rc::new),
             role,
             button_handler: None,
+            z_index,
         }
     }) {
         return Ok(meta);
     }
 
-    if let Ok((modifier, resolved_modifiers, modifier_slices, semantics)) =
+    if let Ok((modifier, resolved_modifiers, modifier_slices, semantics, z_index)) =
         applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+            let modifier_slices = node.modifier_slices_snapshot();
+            let placed = node.layout_parts().layout_state().borrow().z_index();
+            let z_index = modifier_slices.z_index() + placed;
             (
                 node.modifier(),
                 node.resolved_modifiers(),
-                node.modifier_slices_snapshot(),
+                modifier_slices,
                 node.semantics_configuration().map(Rc::new),
+                z_index,
             )
         })
     {
@@ -219,6 +234,7 @@ fn runtime_metadata_for(
             semantics,
             role: SemanticsRole::Subcompose,
             button_handler: None,
+            z_index,
         });
     }
     Ok(RuntimeNodeMetadata::default())

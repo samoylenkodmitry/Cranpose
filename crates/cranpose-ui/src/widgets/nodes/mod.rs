@@ -11,6 +11,6 @@ pub use layout_node::LayoutNode;
 pub(crate) use layout_node_registry::LayoutNodeRegistryState;
 pub(crate) use layout_parts::LayoutParts;
 pub use layout_state::LayoutState;
-pub(crate) use layout_state::PlacementPass;
+pub(crate) use layout_state::{ChildPlacement, PlacementPass};
 pub use node_cache::IntrinsicKind;
 pub(crate) use node_cache::NodeCache;

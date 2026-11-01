@@ -7,7 +7,7 @@ use std::{
 };
 
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, PackedU64};
-use cranpose_ui_layout::{Constraints, MeasurePolicy, ParentData, Placement};
+use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, ParentData, Placement};
 
 use super::{LayoutBuilderState, LayoutRuntimeState, MeasuredNode};
 use crate::{
@@ -100,6 +100,9 @@ pub(super) struct LayoutChildFrame {
     pass: Cell<ChildPass>,
     /// The node whose children the frame binds, which places them.
     parent: Cell<Option<NodeId>>,
+    // How many of the children the parent placed with a z index other
+    // than 0, as their records last placed them.
+    placed_with_z_index: Cell<u32>,
 }
 
 /// What a node binds its children for.
@@ -120,6 +123,20 @@ impl LayoutChildFrame {
         *self.builder.borrow_mut() = Some(Rc::clone(builder));
         self.pass.set(pass);
         self.parent.set(Some(parent));
+    }
+
+    // Counts a child whose placed z index went from `before` to `after`.
+    fn count_placed_z_index(&self, before: Option<f32>, after: Option<f32>) {
+        let with_z = |z_index: Option<f32>| z_index.is_some_and(|z_index| z_index != 0.0);
+        match (with_z(before), with_z(after)) {
+            (false, true) => self
+                .placed_with_z_index
+                .set(self.placed_with_z_index.get() + 1),
+            (true, false) => self
+                .placed_with_z_index
+                .set(self.placed_with_z_index.get() - 1),
+            _ => {}
+        }
     }
 
     pub(super) fn measures(&self) -> bool {
@@ -175,6 +192,9 @@ pub(super) struct LayoutChildMeasureState {
     pub(super) read_intrinsics: Cell<bool>,
     pub(super) measured: Cell<Option<Rc<MeasuredNode>>>,
     pub(super) last_position: Cell<Option<Point>>,
+    // The z index the record last placed the child with, `None` before it
+    // placed the child.
+    placed_z_index: Cell<Option<f32>>,
 }
 
 /// Runs `read` on what `cell` holds and puts it back. `read` must not reach
@@ -211,6 +231,7 @@ impl LayoutChildMeasureState {
             read_intrinsics: Cell::new(false),
             measured: Cell::new(None),
             last_position: Cell::new(None),
+            placed_z_index: Cell::new(None),
         })
     }
 
@@ -305,6 +326,24 @@ impl LayoutChildMeasureState {
         });
     }
 
+    // Places the child where its parent's placement says. A policy that
+    // placed its placeable there in this pass, as one that places its
+    // placeables does, left only the z index to set.
+    pub(super) fn place_at(&self, position: Point, z_index: f32) {
+        if self.last_position.get() != Some(position) {
+            self.place_retained(position);
+        }
+        let placed = self.placed_z_index.replace(Some(z_index));
+        if placed != Some(z_index) {
+            self.frame.count_placed_z_index(placed, Some(z_index));
+            read_cell(&self.parts, |parts| {
+                if let Some(parts) = parts {
+                    parts.layout_state().borrow_mut().set_z_index(z_index);
+                }
+            });
+        }
+    }
+
     pub(super) fn place_retained(&self, position: Point) {
         self.last_position.set(Some(position));
         let builder = self.frame.builder.borrow();
@@ -380,4 +419,74 @@ impl LayoutChildMeasureState {
             }
         }
     }
+}
+
+// A record that leaves its parent takes its child out of the parent's count
+// of children placed with a z index.
+impl Drop for LayoutChildMeasureState {
+    fn drop(&mut self) {
+        self.frame
+            .count_placed_z_index(self.placed_z_index.get(), None);
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "a node's children records in their file"
+)]
+impl LayoutRuntimeState {
+    // Whether the node's last placement gave a child a z index other than 0.
+    pub(super) fn places_children_with_z_index(&self) -> bool {
+        self.children
+            .as_deref()
+            .is_some_and(|children| children.frame.placed_with_z_index.get() > 0)
+    }
+}
+
+pub(super) fn inherited_alignment_lines(
+    child_states: &[Rc<LayoutChildMeasureState>],
+    placements: &[Placement],
+    placement_indices: &mut Vec<usize>,
+) -> AlignmentLines {
+    placement_indices.clear();
+    let in_child_order = placements.len() == child_states.len()
+        && placements
+            .iter()
+            .zip(child_states)
+            .all(|(placement, child)| placement.node_id == child.node_id);
+    if !in_child_order {
+        placement_indices.extend(0..placements.len());
+        placement_indices.sort_unstable_by_key(|&index| (placements[index].node_id, index));
+    }
+    let mut lines = AlignmentLines::default();
+    for (index, child) in child_states.iter().enumerate() {
+        let placement = placement_for_child(placements, placement_indices, index, child.node_id);
+        read_cell(&child.measured, |measured| {
+            if let Some(measured) = measured {
+                lines.merge(
+                    measured
+                        .alignment_lines_for_parent()
+                        .translated(child.placement_position(placement).y),
+                );
+            }
+        });
+    }
+    lines
+}
+
+pub(super) fn placement_for_child<'a>(
+    placements: &'a [Placement],
+    indices: &[usize],
+    child_index: usize,
+    node_id: NodeId,
+) -> Option<&'a Placement> {
+    let index = if indices.is_empty() {
+        child_index
+    } else {
+        let first = indices.partition_point(|&index| placements[index].node_id < node_id);
+        *indices.get(first)?
+    };
+    placements
+        .get(index)
+        .filter(|placement| placement.node_id == node_id)
 }

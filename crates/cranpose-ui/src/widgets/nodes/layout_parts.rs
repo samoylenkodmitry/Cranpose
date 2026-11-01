@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 
 use cranpose_ui_graphics::{Rect, Size};
+use cranpose_ui_layout::Placement;
 
 use super::{LayoutState, NodeCache};
 use crate::layout::LayoutRuntimeState;
@@ -40,6 +41,15 @@ impl LayoutParts {
 
     pub(crate) fn layout_state(&self) -> &RefCell<LayoutState> {
         &self.layout_state
+    }
+
+    // Notes whether `placements`, the node's latest, give a child a z index
+    // other than 0.
+    pub(crate) fn note_child_placements(&self, placements: &[Placement]) {
+        let with_z = placements.iter().any(|placement| placement.z_index != 0.0);
+        self.layout_state
+            .borrow_mut()
+            .set_places_children_with_z_index(with_z);
     }
 
     pub(crate) fn runtime_state(&self) -> &RefCell<LayoutRuntimeState> {

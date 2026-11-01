@@ -21,7 +21,7 @@ use crate::{
     },
     render_state::AppContext,
     widgets::nodes::{
-        LayoutDirt, LayoutParts, LayoutState, NodeCache,
+        ChildPlacement, LayoutDirt, LayoutParts, LayoutState, NodeCache,
         layout_node_registry::{
             register_layout_node, resolve_modifier_local_from_parent_chain, unregister_layout_node,
         },
@@ -752,14 +752,14 @@ impl LayoutNode {
             .set_size(size, context);
     }
 
-    /// Updates the position of this node, which `placer` placed. Called
-    /// during placement. [`LayoutState::place`] self-reports actual moves to
-    /// the scene phase.
-    pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
+    // Updates the position of this node, which `placer` placed. Called
+    // during placement. `LayoutState::place` self-reports actual moves to
+    // the scene phase.
+    pub(crate) fn place(&self, at: ChildPlacement, placer: Option<NodeId>, context: &AppContext) {
         self.parts
             .layout_state()
             .borrow_mut()
-            .place(position, placer, context);
+            .place_child(at, placer, context);
     }
 
     /// Records the content offset (e.g. from padding).

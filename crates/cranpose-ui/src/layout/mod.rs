@@ -35,7 +35,10 @@ use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
 use layout_child_measurable::LayoutChildMeasurable;
-use layout_child_measure_state::{ChildPass, LayoutChildFrame, LayoutChildMeasureState, read_cell};
+use layout_child_measure_state::{
+    ChildPass, LayoutChildFrame, LayoutChildMeasureState, inherited_alignment_lines,
+    placement_for_child, read_cell,
+};
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
 use measured_spare::MeasuredSpare;
@@ -71,7 +74,7 @@ use crate::{
     },
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
+    widgets::nodes::{ChildPlacement, IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
 };
 
 #[derive(Default)]
@@ -528,12 +531,12 @@ fn layout_tree_origin(root: Option<LayoutState>) -> Point {
 fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppContext) {
     if applier
         .with_node::<LayoutNode, _>(root, |node| {
-            node.set_position(Point::default(), None, context);
+            node.place(ChildPlacement::default(), None, context);
         })
         .is_err()
     {
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
-            node.set_position(Point::default(), None, context);
+            node.place(ChildPlacement::default(), None, context);
         });
     }
     if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
@@ -1360,6 +1363,9 @@ impl LayoutBuilderState {
         if let Some(applier) = applier.as_mut() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height }, &self.context);
+                parent_node
+                    .layout_parts()
+                    .note_child_placements(&placements);
                 parent_node.clear_needs_measure();
                 parent_node.clear_needs_layout();
             });
@@ -1393,21 +1399,16 @@ impl LayoutBuilderState {
                 x: policy_position.x + child.offset.x,
                 y: policy_position.y + child.offset.y,
             };
+            let retained = ChildPlacement::new(retained_position, placement.z_index);
             alignment_lines.merge(
                 child
                     .alignment_lines_for_parent()
                     .translated(policy_position.y),
             );
 
-            if let Some(applier) = applier.as_mut()
-                && applier
-                    .with_node::<LayoutNode, _>(placement.node_id, |node| {
-                        node.set_position(retained_position, Some(node_id), &self.context);
-                    })
-                    .is_err()
-            {
-                let _ = applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
-                    node.set_position(retained_position, Some(node_id), &self.context);
+            if let Some(applier) = applier.as_mut() {
+                let _ = read_live_layout_node(applier, placement.node_id, |node| {
+                    node.place(retained, node_id, &self.context);
                 });
             }
 
@@ -1537,6 +1538,7 @@ impl LayoutBuilderState {
         cache.clear_layout_dirt();
         layout_state.set_size(measurement.size, &self.context);
         layout_state.set_content_offset(measurement.content_offset);
+        layout_state.set_places_children_with_z_index(runtime_state.places_children_with_z_index());
 
         Ok(Some(measured))
     }
@@ -1951,54 +1953,6 @@ fn policy_intrinsic(
     }
 }
 
-fn inherited_alignment_lines(
-    child_states: &[Rc<LayoutChildMeasureState>],
-    placements: &[Placement],
-    placement_indices: &mut Vec<usize>,
-) -> AlignmentLines {
-    placement_indices.clear();
-    let in_child_order = placements.len() == child_states.len()
-        && placements
-            .iter()
-            .zip(child_states)
-            .all(|(placement, child)| placement.node_id == child.node_id);
-    if !in_child_order {
-        placement_indices.extend(0..placements.len());
-        placement_indices.sort_unstable_by_key(|&index| (placements[index].node_id, index));
-    }
-    let mut lines = AlignmentLines::default();
-    for (index, child) in child_states.iter().enumerate() {
-        let placement = placement_for_child(placements, placement_indices, index, child.node_id);
-        read_cell(&child.measured, |measured| {
-            if let Some(measured) = measured {
-                lines.merge(
-                    measured
-                        .alignment_lines_for_parent()
-                        .translated(child.placement_position(placement).y),
-                );
-            }
-        });
-    }
-    lines
-}
-
-fn placement_for_child<'a>(
-    placements: &'a [Placement],
-    indices: &[usize],
-    child_index: usize,
-    node_id: NodeId,
-) -> Option<&'a Placement> {
-    let index = if indices.is_empty() {
-        child_index
-    } else {
-        let first = indices.partition_point(|&index| placements[index].node_id < node_id);
-        *indices.get(first)?
-    };
-    placements
-        .get(index)
-        .filter(|placement| placement.node_id == node_id)
-}
-
 pub(crate) struct LayoutRuntimeState {
     /// `None` until the node first binds a child: most nodes are leaves.
     children: Option<Box<LayoutChildren>>,
@@ -2149,10 +2103,8 @@ impl LayoutRuntimeState {
                 x: base_position.x + measured.offset.x,
                 y: base_position.y + measured.offset.y,
             };
-            // A policy that placed the child there in this pass, as one
-            // that places its placeables does, left nothing to place.
-            if placement.is_some() && child_state.last_position.get() != Some(position) {
-                child_state.place_retained(position);
+            if let Some(placement) = placement {
+                child_state.place_at(position, placement.z_index);
             }
             measured_children.push(MeasuredChild::new(
                 &measured,

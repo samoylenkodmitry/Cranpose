@@ -69,6 +69,23 @@ pub struct LayoutState {
     moved_noted_in: PackedU64,
     /// The take of the reshaped-node list this node was last noted in.
     reshaped_noted_in: PackedU64,
+    z_index: f32,
+    // Whether the node's last placement gave a child a z index other than 0.
+    places_children_with_z_index: bool,
+}
+
+// Where a parent placed a child: its position in the parent, and the z
+// index the placement gave it among its siblings.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ChildPlacement {
+    position: Point,
+    z_index: f32,
+}
+
+impl ChildPlacement {
+    pub(crate) fn new(position: Point, z_index: f32) -> Self {
+        Self { position, z_index }
+    }
 }
 
 impl LayoutState {
@@ -129,6 +146,45 @@ impl LayoutState {
             }
             self.size = size;
             self.note_semantics_change();
+        }
+    }
+
+    /// The z index the node's parent last placed it with. It adds to the
+    /// node's `Modifier::z_index` to order the node among its siblings.
+    pub fn z_index(&self) -> f32 {
+        self.z_index
+    }
+
+    /// Whether the node's last placement gave one of its children a z index
+    /// other than 0: the scene then orders the children by z index.
+    pub fn places_children_with_z_index(&self) -> bool {
+        self.places_children_with_z_index
+    }
+
+    pub(crate) fn set_places_children_with_z_index(&mut self, places: bool) {
+        self.places_children_with_z_index = places;
+    }
+
+    // Places the node where `at` says, with its z index.
+    pub(crate) fn place_child(
+        &mut self,
+        at: ChildPlacement,
+        placer: Option<NodeId>,
+        context: &AppContext,
+    ) {
+        self.place(at.position, placer, context);
+        self.set_z_index(at.z_index);
+    }
+
+    // Sets the z index the parent placed the node with. A change reorders
+    // the node among its siblings, which its parent's layer holds.
+    pub(crate) fn set_z_index(&mut self, z_index: f32) {
+        if self.z_index.to_bits() == z_index.to_bits() {
+            return;
+        }
+        self.z_index = z_index;
+        if let Some(id) = self.node_id {
+            crate::schedule_z_order_change(id);
         }
     }
 
