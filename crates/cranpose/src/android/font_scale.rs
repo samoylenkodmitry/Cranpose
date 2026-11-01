@@ -1,6 +1,8 @@
 use cranpose_ui::FontScaleCurve;
 use jni::{jni_sig, jni_str, objects::JObject};
 
+use super::jni::{activity_configuration, jni_failure};
+
 const COMPLEX_UNIT_SP: i32 = 2;
 
 const SAMPLE_SP: [f32; 36] = [
@@ -29,32 +31,11 @@ pub(crate) fn refresh_font_scale(app: &android_activity::AndroidApp) -> bool {
 
 fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve, String> {
     super::jni::with_android_activity_env(app, |env, activity| {
-        let describe = |env: &mut jni::Env<'_>, what: &str, error: jni::errors::Error| {
-            super::jni::clear_pending_android_jni_exception(env);
-            format!("{what} failed: {error}")
-        };
-        let resources = env
-            .call_method(
-                &activity,
-                jni_str!("getResources"),
-                jni_sig!("()Landroid/content/res/Resources;"),
-                &[],
-            )
-            .and_then(jni::JValueOwned::l)
-            .map_err(|error| describe(env, "Activity.getResources", error))?;
-        let configuration = env
-            .call_method(
-                &resources,
-                jni_str!("getConfiguration"),
-                jni_sig!("()Landroid/content/res/Configuration;"),
-                &[],
-            )
-            .and_then(jni::JValueOwned::l)
-            .map_err(|error| describe(env, "Resources.getConfiguration", error))?;
+        let (resources, configuration) = activity_configuration(env, &activity)?;
         let scale = env
             .get_field(&configuration, jni_str!("fontScale"), jni_sig!("F"))
             .and_then(jni::JValueOwned::f)
-            .map_err(|error| describe(env, "Configuration.fontScale", error))?;
+            .map_err(|error| jni_failure(env, "Configuration.fontScale", error))?;
 
         let metrics = env
             .call_method(
@@ -64,11 +45,11 @@ fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve
                 &[],
             )
             .and_then(jni::JValueOwned::l)
-            .map_err(|error| describe(env, "Resources.getDisplayMetrics", error))?;
+            .map_err(|error| jni_failure(env, "Resources.getDisplayMetrics", error))?;
         let density = env
             .get_field(&metrics, jni_str!("density"), jni_sig!("F"))
             .and_then(jni::JValueOwned::f)
-            .map_err(|error| describe(env, "DisplayMetrics.density", error))?;
+            .map_err(|error| jni_failure(env, "DisplayMetrics.density", error))?;
         if !density.is_finite() || density <= 0.0 {
             return Err(format!("DisplayMetrics.density was {density}"));
         }

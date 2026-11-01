@@ -5039,7 +5039,6 @@ fn dispatch_ime_event(surface: &mut SurfaceMut<'_, WgpuRenderer>, ime_event: win
         } => {
             let _ = surface.on_ime_delete_surrounding(before_bytes, after_bytes);
         }
-        _ => {}
     }
 }
 

@@ -370,7 +370,7 @@ pub enum LaunchError {
     EventLoopCreate(#[source] winit::error::EventLoopError),
     /// Creating the desktop window failed.
     #[error("failed to create desktop window: {0}")]
-    WindowCreate(#[source] winit::error::RequestError),
+    WindowCreate(#[source] winit::error::CreateWindowError),
     /// Creating the rendering surface failed.
     #[cfg(feature = "renderer-wgpu")]
     #[error("failed to create desktop rendering surface: {0}")]

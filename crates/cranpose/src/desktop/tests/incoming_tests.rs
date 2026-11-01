@@ -6,23 +6,23 @@ use std::{
     },
 };
 
-use cranpose_services::{InboxObserver, observe_incoming_content};
+use cranpose_services::{InboxObserver, observe_incoming_content, uri_for_path};
 use winit::data_transfer::TransferType;
 
 use super::*;
 
 #[derive(Debug)]
 struct StagedFileList {
-    paths: Vec<PathBuf>,
+    uris: Vec<String>,
     reads_before_ready: AtomicUsize,
 }
 
 impl StagedFileList {
     fn ready_after(reads_before_ready: usize, names: &[&str]) -> Arc<dyn TypedData> {
         Arc::new(Self {
-            paths: names
+            uris: names
                 .iter()
-                .map(|name| PathBuf::from("/drops").join(name))
+                .map(|name| uri_for_path(&PathBuf::from("/drops").join(name)))
                 .collect(),
             reads_before_ready: AtomicUsize::new(reads_before_ready),
         })
@@ -39,10 +39,6 @@ impl TypedData for StagedFileList {
     }
 
     fn try_as_uris(&self) -> io::Result<Vec<String>> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
-
-    fn try_as_file_paths(&self) -> io::Result<Vec<PathBuf>> {
         let still_blocked = self
             .reads_before_ready
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
@@ -52,7 +48,7 @@ impl TypedData for StagedFileList {
         if still_blocked {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        Ok(self.paths.clone())
+        Ok(self.uris.clone())
     }
 
     fn try_as_string(&self) -> io::Result<String> {
@@ -73,10 +69,6 @@ impl TypedData for PlainText {
     }
 
     fn try_as_uris(&self) -> io::Result<Vec<String>> {
-        Err(io::ErrorKind::InvalidData.into())
-    }
-
-    fn try_as_file_paths(&self) -> io::Result<Vec<PathBuf>> {
         Err(io::ErrorKind::InvalidData.into())
     }
 
@@ -114,6 +106,23 @@ fn a_dropped_file_list_publishes_every_file() {
     ));
 
     assert_eq!(snapshot(&names), ["drop-every-a.txt", "drop-every-b.png"]);
+    assert!(drops.waiting.is_empty());
+}
+
+#[test]
+fn a_dropped_uri_list_publishes_its_local_files_by_their_decoded_names() {
+    let (names, _observer) = published_names_matching("drop-decoded-");
+    let mut drops = FileDrops::default();
+
+    drops.receive(Arc::new(StagedFileList {
+        uris: vec![
+            "file:///drops/drop-decoded-a%20b%231.txt".to_owned(),
+            "https://example.com/drop-decoded-link.txt".to_owned(),
+        ],
+        reads_before_ready: AtomicUsize::new(0),
+    }));
+
+    assert_eq!(snapshot(&names), ["drop-decoded-a b#1.txt"]);
     assert!(drops.waiting.is_empty());
 }
 

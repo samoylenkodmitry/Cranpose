@@ -78,7 +78,7 @@ portable-atomic = { version = "1.15", features = ["fallback"] }
 cranpose-localization = { path = "crates/cranpose-localization", version = "0.17.2" }
 # Cranpose's patched wgpu (forks/README.md), which every target takes. Its
 # library is still `wgpu`.
-wgpu = { package = "cranpose-wgpu", version = "30.0.24", default-features = false }
+wgpu = { package = "cranpose-wgpu", version = "30.0.25", default-features = false }
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
 bytemuck = { version = "1.25", features = ["derive"] }
@@ -207,10 +207,11 @@ manual_assert = "warn"
 # the extra block expects this lint with the reason.
 multiple_inherent_impl = "deny"
 
-# The workspace builds the fork from forks/. Crates name it by version, so a
-# published crate takes the same fork from crates.io.
+# The workspace builds the forks from forks/. Crates name them by version, so
+# a published crate takes the same forks from crates.io.
 [patch.crates-io]
 cranpose-wgpu = { path = "forks/wgpu/wgpu" }
+cranpose-opus-pure = { path = "forks/opus-pure/opus-pure" }
 
 # Faster local debug builds while preserving useful panic locations.
 [profile.dev]

@@ -44,6 +44,16 @@ use cranpose_core::{EventStream, State, rememberEventStream};
 use parking_lot::Mutex;
 use portable_atomic::AtomicU64;
 
+mod observers;
+
+use observers::{
+    COMMAND_OBSERVERS, FOCUS_OBSERVERS, PROGRESS_OBSERVERS, SAMPLE_OBSERVERS, STATE_OBSERVERS,
+};
+pub use observers::{
+    MediaObserver, observe_audio_focus, observe_media_commands, observe_media_metadata,
+    observe_media_samples, observe_playback_progress, observe_playback_state,
+};
+
 use crate::{
     background::{BackgroundWorkLease, acquire_background_work},
     host::{LifecycleEvent, LifecycleState},
@@ -639,11 +649,7 @@ pub fn clear_platform_media_player() {
         player.stop();
     }
     PLATFORM_MEDIA.clear();
-    STATE_OBSERVERS.clear();
-    PROGRESS_OBSERVERS.clear();
-    COMMAND_OBSERVERS.clear();
-    FOCUS_OBSERVERS.clear();
-    SAMPLE_OBSERVERS.clear();
+    observers::clear();
     *STATE.lock() = PlaybackState::Idle;
     *PROGRESS.lock() = PlaybackProgress::default();
     *CURRENT_ITEM.lock() = None;
@@ -729,129 +735,6 @@ pub fn audio_focus() -> AudioFocus {
 /// The volume the application asked for, before the audio-focus gain.
 pub fn media_volume() -> f32 {
     *VOLUME.lock()
-}
-
-struct ObserverList<T: ?Sized> {
-    entries: Mutex<Vec<(u64, Arc<T>)>>,
-}
-
-impl<T: ?Sized> ObserverList<T> {
-    const fn new() -> Self {
-        Self {
-            entries: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn add(&self, observer: Arc<T>) -> u64 {
-        let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
-        self.entries.lock().push((id, observer));
-        id
-    }
-
-    fn remove(&self, id: u64) {
-        self.entries.lock().retain(|(entry, _)| *entry != id);
-    }
-
-    fn snapshot(&self) -> Vec<Arc<T>> {
-        self.entries
-            .lock()
-            .iter()
-            .map(|(_, observer)| Arc::clone(observer))
-            .collect()
-    }
-
-    fn clear(&self) {
-        self.entries.lock().clear();
-    }
-}
-
-static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
-
-type StateObserverFn = dyn Fn(PlaybackState) + Send + Sync;
-type ProgressObserverFn = dyn Fn(PlaybackProgress) + Send + Sync;
-type CommandObserverFn = dyn Fn(MediaCommand) + Send + Sync;
-type FocusObserverFn = dyn Fn(AudioFocus) + Send + Sync;
-type SampleObserverFn = dyn Fn(MediaSamples) + Send + Sync;
-
-static STATE_OBSERVERS: ObserverList<StateObserverFn> = ObserverList::new();
-static PROGRESS_OBSERVERS: ObserverList<ProgressObserverFn> = ObserverList::new();
-static COMMAND_OBSERVERS: ObserverList<CommandObserverFn> = ObserverList::new();
-static FOCUS_OBSERVERS: ObserverList<FocusObserverFn> = ObserverList::new();
-static SAMPLE_OBSERVERS: ObserverList<SampleObserverFn> = ObserverList::new();
-
-/// Keeps a media observer registered until it is dropped.
-pub struct MediaObserver {
-    id: u64,
-    remove: fn(u64),
-}
-
-impl Drop for MediaObserver {
-    fn drop(&mut self) {
-        (self.remove)(self.id);
-    }
-}
-
-/// Registers `observer` for playback state. The current state is delivered at
-/// once, so a screen composed mid-item shows what is happening rather than
-/// waiting for the next change.
-pub fn observe_playback_state(
-    observer: impl Fn(PlaybackState) + Send + Sync + 'static,
-) -> MediaObserver {
-    let observer: Arc<StateObserverFn> = Arc::new(observer);
-    let id = STATE_OBSERVERS.add(Arc::clone(&observer));
-    observer(playback_state());
-    MediaObserver {
-        id,
-        remove: |id| STATE_OBSERVERS.remove(id),
-    }
-}
-
-/// Registers `observer` for position updates. The current position is
-/// delivered at once.
-pub fn observe_playback_progress(
-    observer: impl Fn(PlaybackProgress) + Send + Sync + 'static,
-) -> MediaObserver {
-    let observer: Arc<ProgressObserverFn> = Arc::new(observer);
-    let id = PROGRESS_OBSERVERS.add(Arc::clone(&observer));
-    observer(playback_progress());
-    MediaObserver {
-        id,
-        remove: |id| PROGRESS_OBSERVERS.remove(id),
-    }
-}
-
-/// Registers `observer` for media-session commands.
-pub fn observe_media_commands(
-    observer: impl Fn(MediaCommand) + Send + Sync + 'static,
-) -> MediaObserver {
-    let id = COMMAND_OBSERVERS.add(Arc::new(observer));
-    MediaObserver {
-        id,
-        remove: |id| COMMAND_OBSERVERS.remove(id),
-    }
-}
-
-/// Registers `observer` for audio-focus changes. The current focus is
-/// delivered at once.
-pub fn observe_audio_focus(observer: impl Fn(AudioFocus) + Send + Sync + 'static) -> MediaObserver {
-    let observer: Arc<FocusObserverFn> = Arc::new(observer);
-    let id = FOCUS_OBSERVERS.add(Arc::clone(&observer));
-    observer(audio_focus());
-    MediaObserver {
-        id,
-        remove: |id| FOCUS_OBSERVERS.remove(id),
-    }
-}
-
-/// Registers `observer` for analysis samples.
-pub fn observe_media_samples(
-    observer: impl Fn(MediaSamples) + Send + Sync + 'static,
-) -> MediaObserver {
-    let id = SAMPLE_OBSERVERS.add(Arc::new(observer));
-    MediaObserver {
-        id,
-        remove: |id| SAMPLE_OBSERVERS.remove(id),
-    }
 }
 
 /// Publishes what the player is doing.
@@ -1225,18 +1108,16 @@ pub fn set_media_equalizer(settings: EqualizerSettings) -> bool {
 ///
 /// Called when tags finish parsing, which is usually after playback started.
 pub fn set_media_metadata(metadata: MediaMetadata) {
-    {
-        let mut item = CURRENT_ITEM.lock();
-        let Some(item) = item.as_mut() else {
-            return;
-        };
-        item.metadata = metadata.clone();
+    match CURRENT_ITEM.lock().as_mut() {
+        Some(item) => item.metadata = metadata.clone(),
+        None => return,
     }
     if let Some(player) = media_player()
         && player.capabilities().session
     {
         player.set_session_metadata(&metadata);
     }
+    observers::metadata_changed(&metadata);
 }
 
 static BACKGROUND_LEASE: Mutex<Option<BackgroundWorkLease>> = Mutex::new(None);

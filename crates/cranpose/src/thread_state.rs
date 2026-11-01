@@ -150,6 +150,8 @@ pub(crate) struct IosThreadState {
         RefCell<Option<objc2::rc::Retained<crate::ios::notifier::NotificationDelegate>>>,
     pub(crate) window_scene: RefCell<Option<objc2::rc::Retained<objc2_ui_kit::UIWindowScene>>>,
     pub(crate) window: RefCell<Option<objc2::rc::Retained<objc2_ui_kit::UIWindow>>>,
+    // The app's winit window, which sets the status bar style.
+    pub(crate) winit_window: RefCell<Option<std::sync::Arc<dyn winit::window::Window>>>,
     pub(crate) key_input_view:
         RefCell<Option<objc2::rc::Retained<crate::ios::keyboard::KeyInputView>>>,
 }
@@ -164,6 +166,7 @@ impl IosThreadState {
             notification_delegate: RefCell::new(None),
             window_scene: RefCell::new(None),
             window: RefCell::new(None),
+            winit_window: RefCell::new(None),
             key_input_view: RefCell::new(None),
         }
     }

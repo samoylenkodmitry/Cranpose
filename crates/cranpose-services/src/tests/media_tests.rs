@@ -726,6 +726,23 @@ fn metadata_learned_after_playback_started_reaches_the_session() {
 }
 
 #[test]
+fn an_observer_hears_metadata_learned_after_playback_started() {
+    let (_guard, _player) = install();
+    open_media(MediaItem::new("file:///music/untagged.mp3")).expect("opens");
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&heard);
+    let observer = observe_media_metadata(move |metadata| {
+        sink.lock().push(metadata.title.clone());
+    });
+
+    set_media_metadata(MediaMetadata::titled("Late Tag"));
+    drop(observer);
+    set_media_metadata(MediaMetadata::titled("Unheard"));
+
+    assert_eq!(*heard.lock(), ["Late Tag"]);
+}
+
+#[test]
 fn metadata_with_nothing_in_it_is_metadata_a_lock_screen_can_skip() {
     assert!(MediaMetadata::default().is_empty());
     assert!(!MediaMetadata::titled("Track").is_empty());

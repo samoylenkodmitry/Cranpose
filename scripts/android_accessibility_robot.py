@@ -45,14 +45,15 @@ def main():
             tests = ','.join([navigation,
                               'com.compose_rs.demo.CranposeAccessibilityAuditTest',
                               'com.compose_rs.demo.CranposeAccessibilityParserTest',
-                              'com.compose_rs.demo.CranposeAccessibilityInteractionTest'])
+                              'com.compose_rs.demo.CranposeAccessibilityInteractionTest',
+                              'com.compose_rs.demo.CranposeNightModeTest'])
             output = device.command(
                 'shell', 'am', 'instrument', '-w', '-r', '-e', 'class',
                 tests,
                 'com.compose_rs.demo.robot.test/androidx.test.runner.AndroidJUnitRunner', timeout=120)
             (args.output / 'instrumentation.log').write_text(output)
             report['tests_passed'] = completed_tests(output)
-            expected = 15 if args.connected_only else 16
+            expected = 16 if args.connected_only else 17
             if report['tests_passed'] != expected:
                 raise RuntimeError(f"Expected {expected} Android tests, got {report['tests_passed']}")
             report['reconnect'] = 'not_requested' if args.connected_only else 'included'

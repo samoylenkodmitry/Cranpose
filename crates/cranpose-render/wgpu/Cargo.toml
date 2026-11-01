@@ -45,7 +45,7 @@ bytemuck = { workspace = true }
 log = "0.4"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 web-time = { workspace = true }
-smallvec = "1.16.3"
+smallvec = "1.16.4"
 
 # Every target takes Cranpose's fork of wgpu (`wgpu` in the workspace,
 # forks/README.md), whose library is also `wgpu`, with its backends.

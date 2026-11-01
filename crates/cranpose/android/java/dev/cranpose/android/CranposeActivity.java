@@ -34,6 +34,7 @@ import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.content.UriPermission;
 import android.database.Cursor;
 import android.net.Uri;
@@ -171,6 +172,35 @@ public class CranposeActivity extends NativeActivity {
         });
     }
     public void cranposeMoveToBackground() { moveTaskToBack(true); }
+
+    // The bar appearance flags the theme gave this window, restored for
+    // SystemBarIcons::FollowSystem; read before the first change.
+    private int themeBarAppearance = -1;
+
+    /** 0 follows the system theme, 1 shows dark icons and 2 light icons. */
+    public void cranposeSetSystemBarIcons(int icons) {
+        runOnUiThread(() -> applySystemBarIcons(icons));
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applySystemBarIcons(int icons) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller == null) return;
+            int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            if (themeBarAppearance < 0) themeBarAppearance = controller.getSystemBarsAppearance() & mask;
+            controller.setSystemBarsAppearance(icons == 1 ? mask : icons == 2 ? 0 : themeBarAppearance, mask);
+        } else {
+            View decor = getWindow().getDecorView();
+            int mask = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    | (Build.VERSION.SDK_INT >= 26 ? View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+            int flags = decor.getSystemUiVisibility();
+            if (themeBarAppearance < 0) themeBarAppearance = flags & mask;
+            int light = icons == 1 ? mask : icons == 2 ? 0 : themeBarAppearance;
+            decor.setSystemUiVisibility((flags & ~mask) | light);
+        }
+    }
 
     public int cranposeThermalStatus() {
         if (Build.VERSION.SDK_INT < 29) {

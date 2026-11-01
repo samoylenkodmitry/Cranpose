@@ -94,7 +94,7 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just typos
 
-      - name: Check the wgpu forks build as publishing verifies them
+      - name: Check the forks build as publishing verifies them
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just check-forks
 

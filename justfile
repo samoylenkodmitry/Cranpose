@@ -137,6 +137,7 @@ test-emscripten: check-emscripten
 # Lint the iOS simulator binary.
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
+    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space -- -D warnings
 
 # The feature set `clippy-optional-backends` and `clippy-release` both lint.
 optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"
@@ -368,8 +369,8 @@ check-forks base="origin/main":
         echo "check-forks: forks/ unchanged against {{base}}"
         exit 0
     fi
-    for crate in wgpu-hal wgpu-core wgpu; do
-        cargo check --manifest-path "forks/wgpu/$crate/Cargo.toml" --target-dir target/forks
+    for crate in wgpu/wgpu-hal wgpu/wgpu-core wgpu/wgpu opus-pure/opus-pure; do
+        cargo check --manifest-path "forks/$crate/Cargo.toml" --target-dir target/forks
     done
 
 # Copy-paste budget for a block the diff adds, at either end of the copy.
@@ -589,6 +590,7 @@ test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
     cargo test --profile ci -p cranpose-services --features image-loading,http-native --test integration image_loading
+    cargo test --profile ci -p cranpose-services --features storage-space --lib storage
     cargo test --profile ci -p cranpose-testing --features image-loading --test integration async_image
     cargo clippy -p cranpose-services --all-targets --features image-loading,http-native -- -D warnings
     cargo clippy -p cranpose-services --target wasm32-unknown-unknown --features image-loading,web-http -- -D warnings
@@ -1144,10 +1146,20 @@ robot-linux classes="all": (robot-gpu classes) (robot-captures classes)
 # The half of the Linux suite a pull request waits for.
 robot-linux-fast: robot-gpu-fast
 
+# The MPRIS player a desktop app publishes, read and driven over a disposable
+# session bus.
+mpris:
+    dbus-run-session -- cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,media,embedded-default-font --lib media_controls -- --include-ignored
+
 # The forked wgpu's Vulkan barriers under the Khronos layer's synchronization
 # validation (Linux x86_64; fetches the pinned layer once).
 vulkan-sync:
     scripts/ci/vulkan_sync.sh
+
+# A custom cursor shown again on X11, where winit frees a cursor's server
+# image when a window drops its copy, against a disposable X server.
+x11-cursor:
+    xvfb-run -a cargo test --profile ci -p cranpose --no-default-features --features desktop-x11,renderer-wgpu,embedded-default-font --lib x11_tests -- --include-ignored
 
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:

@@ -159,6 +159,42 @@ pub(crate) fn clear_pending_android_jni_exception(env: &mut Env<'_>) {
     }
 }
 
+// The activity's resources and the configuration they currently follow.
+// The configuration that android-activity reports comes from the
+// AssetManager NativeActivity took at creation, and that one keeps the
+// values of that moment: a night mode switch while the app runs, for one,
+// shows only here.
+pub(crate) fn activity_configuration<'local>(
+    env: &mut Env<'local>,
+    activity: &JObject<'local>,
+) -> Result<(JObject<'local>, JObject<'local>), String> {
+    let resources = env
+        .call_method(
+            activity,
+            jni_str!("getResources"),
+            jni_sig!("()Landroid/content/res/Resources;"),
+            &[],
+        )
+        .and_then(jni::JValueOwned::l)
+        .map_err(|error| jni_failure(env, "Activity.getResources", error))?;
+    let configuration = env
+        .call_method(
+            &resources,
+            jni_str!("getConfiguration"),
+            jni_sig!("()Landroid/content/res/Configuration;"),
+            &[],
+        )
+        .and_then(jni::JValueOwned::l)
+        .map_err(|error| jni_failure(env, "Resources.getConfiguration", error))?;
+    Ok((resources, configuration))
+}
+
+// Clears the Java exception that `what` left and names the failure.
+pub(crate) fn jni_failure(env: &mut Env<'_>, what: &str, error: jni::errors::Error) -> String {
+    clear_pending_android_jni_exception(env);
+    format!("{what} failed: {error}")
+}
+
 pub(crate) fn load_cranpose_java_class<'local>(
     env: &mut Env<'local>,
     activity: &JObject<'local>,

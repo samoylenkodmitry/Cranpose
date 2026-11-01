@@ -21,7 +21,7 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("com.android.application") version "9.4.1"
+        id("com.android.application") version "9.5.0"
     }
 }
 

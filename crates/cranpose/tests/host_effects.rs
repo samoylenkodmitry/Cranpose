@@ -11,6 +11,16 @@ fn keeping_the_screen_on_composes_enabled_and_disabled() {
 }
 
 #[test]
+fn system_bar_icons_return_to_the_system_when_the_composition_goes() {
+    run_test_composition(|| cranpose::SystemBarAppearance(cranpose::SystemBarIcons::Light));
+    assert_eq!(
+        cranpose_services::system_bar_icons(),
+        cranpose_services::SystemBarIcons::FollowSystem,
+        "system bar icons outlived the composition that asked for them"
+    );
+}
+
+#[test]
 fn a_back_handler_composes_and_releases_its_interception() {
     let pressed = Rc::new(Cell::new(0usize));
     let counter = Rc::clone(&pressed);

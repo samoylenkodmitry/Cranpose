@@ -57,7 +57,9 @@ pub mod purchases;
 mod registry;
 mod retain;
 pub mod share_sheet;
+#[cfg(feature = "storage-space")]
 pub mod storage;
+pub mod system_bars;
 /// The light or dark appearance of the operating system.
 pub mod theme;
 mod thread_state;
@@ -221,16 +223,16 @@ pub use media::{
     clear_platform_media_player, clear_platform_media_source_opener, current_media_item,
     dropped_media_samples, latest_media_samples, media_capabilities, media_equalizer,
     media_equalizer_bands, media_playback_supported, media_player, media_volume,
-    observe_audio_focus, observe_media_commands, observe_media_samples, observe_playback_progress,
-    observe_playback_state, octave_equalizer_bands, open_media, open_media_source, path_from_uri,
-    pause_media, play_media, playback_progress, playback_state, probe_media_duration,
-    publish_audio_focus, publish_media_command, publish_media_samples, publish_playback_progress,
-    publish_playback_state, record_dropped_media_samples, rememberAudioFocus,
-    rememberMediaCommands, rememberMediaSamples, rememberPlaybackProgress, rememberPlaybackState,
-    seek_media, seek_media_fraction, set_media_analysis_enabled, set_media_balance,
-    set_media_equalizer, set_media_looping, set_media_metadata, set_media_speed, set_media_volume,
-    set_platform_media_player, set_platform_media_source_opener, stop_media, toggle_media,
-    uri_for_path,
+    observe_audio_focus, observe_media_commands, observe_media_metadata, observe_media_samples,
+    observe_playback_progress, observe_playback_state, octave_equalizer_bands, open_media,
+    open_media_source, path_from_uri, pause_media, play_media, playback_progress, playback_state,
+    probe_media_duration, publish_audio_focus, publish_media_command, publish_media_samples,
+    publish_playback_progress, publish_playback_state, record_dropped_media_samples,
+    rememberAudioFocus, rememberMediaCommands, rememberMediaSamples, rememberPlaybackProgress,
+    rememberPlaybackState, seek_media, seek_media_fraction, set_media_analysis_enabled,
+    set_media_balance, set_media_equalizer, set_media_looping, set_media_metadata, set_media_speed,
+    set_media_volume, set_platform_media_player, set_platform_media_source_opener, stop_media,
+    toggle_media, uri_for_path,
 };
 pub use memory_pressure::{
     MemoryPressure, MemoryPressureObserver, observe_memory_pressure, publish_memory_pressure,
@@ -294,7 +296,9 @@ pub use share_sheet::{
     ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
     clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
 };
+#[cfg(feature = "storage-space")]
 pub use storage::{StorageSpace, StorageSpaceRef, available_storage, set_platform_storage_space};
+pub use system_bars::{SystemBarAppearance, SystemBarIcons, system_bar_icons};
 pub use theme::{
     ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
     isSystemInDarkTheme, known_system_theme, local_system_theme, set_platform_system_theme,

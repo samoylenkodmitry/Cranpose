@@ -43,3 +43,8 @@ pub use event_loop::*;
 
 #[cfg(feature = "media-backend")]
 mod media;
+#[cfg(all(
+    feature = "media-backend",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub(crate) mod media_controls;

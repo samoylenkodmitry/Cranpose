@@ -29,7 +29,7 @@ cranpose-core = { workspace = true }
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
 ab_glyph_rasterizer = "0.1.10"
 thiserror = "2.0.21"
-smallvec = "1.16.3"
+smallvec = "1.16.4"
 bytemuck = { workspace = true }
 
 [dev-dependencies]

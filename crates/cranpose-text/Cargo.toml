@@ -25,8 +25,8 @@ cranpose-ui-graphics = { workspace = true }
 foldhash = "0.2.0"
 harfrust = "0.15"
 hyphenation = { version = "0.8.4", default-features = false, optional = true }
-icu_properties = { version = "2.3", default-features = false, features = ["compiled_data", "unicode_bidi"] }
-icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "2.4", default-features = false, features = ["compiled_data", "unicode_bidi"] }
+icu_segmenter = { version = "2.4", default-features = false, features = ["compiled_data"] }
 read-fonts = "0.46"
 smallvec = "1.16"
 thiserror = "2.0.21"

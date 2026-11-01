@@ -2,7 +2,8 @@ use std::sync::PoisonError;
 
 use super::*;
 
-fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+// Held by every test that installs a host controller.
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }

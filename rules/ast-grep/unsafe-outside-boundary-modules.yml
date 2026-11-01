@@ -64,8 +64,12 @@ ignores:
   - crates/cranpose/src/apple/media_source.rs
   - crates/cranpose/src/apple/microphone.rs
   - crates/cranpose/src/apple/network.rs
+  - crates/cranpose/src/apple/now_playing.rs
   - crates/cranpose/src/apple/wearable.rs
   - crates/cranpose/src/desktop/accessibility.rs
+  - crates/cranpose/src/desktop/media_controls/macos.rs
+  - crates/cranpose/src/desktop/media_controls/windows.rs
+  - crates/cranpose/src/desktop/tests/now_playing_tests.rs
   - crates/cranpose/src/ios/accessibility.rs
   - crates/cranpose/src/ios/back_gesture.rs
   - crates/cranpose/src/ios/background.rs

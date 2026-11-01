@@ -548,7 +548,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         self.shell = Some(shell);
         self.accessibility = accessibility;
         self.window = Some(Arc::clone(&window));
-        super::scene::hold_window(window.as_ref());
+        super::scene::hold_window(Arc::clone(&window));
         window.request_redraw();
     }
 
@@ -700,6 +700,7 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::process_info::install();
     super::background::register();
     super::downloads::register();
+    #[cfg(feature = "storage-space")]
     super::storage::register();
     super::writable_folder::register();
     crate::apple::camera::register();

@@ -125,13 +125,27 @@ pub trait DesktopIntegration: 'static {
     }
 }
 
-/// The integration of a running desktop app, if it has one.
+/// The app's own integration, if it has one, and its system media controls.
 #[derive(Default)]
-pub(crate) struct Integration(Option<Box<dyn DesktopIntegration>>);
+pub(crate) struct Integration {
+    app: Option<Box<dyn DesktopIntegration>>,
+    #[cfg(all(
+        feature = "media-backend",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    media: super::media_controls::MediaControls,
+}
 
 impl Integration {
     pub(crate) fn new(integration: Option<Box<dyn DesktopIntegration>>) -> Self {
-        Self(integration)
+        Self {
+            app: integration,
+            #[cfg(all(
+                feature = "media-backend",
+                any(target_os = "linux", target_os = "macos", target_os = "windows")
+            ))]
+            media: super::media_controls::MediaControls::default(),
+        }
     }
 
     pub(crate) fn window_opened(
@@ -141,7 +155,18 @@ impl Integration {
         app: &mut AppShell<WgpuRenderer>,
         proxy: &EventLoopProxy,
     ) {
-        if let Some(integration) = &mut self.0 {
+        #[cfg(all(
+            feature = "media-backend",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
+        self.media.window_opened(
+            id,
+            window,
+            DesktopWaker {
+                proxy: proxy.clone(),
+            },
+        );
+        if let Some(integration) = &mut self.app {
             let window = DesktopWindow { id, window };
             integration.window_opened(&window, &mut DesktopIntegrationContext { app, proxy });
         }
@@ -153,7 +178,12 @@ impl Integration {
         app: &mut AppShell<WgpuRenderer>,
         proxy: &EventLoopProxy,
     ) {
-        if let Some(integration) = &mut self.0 {
+        #[cfg(all(
+            feature = "media-backend",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
+        self.media.window_closed(id);
+        if let Some(integration) = &mut self.app {
             integration.window_closed(id, &mut DesktopIntegrationContext { app, proxy });
         }
     }
@@ -163,7 +193,12 @@ impl Integration {
         app: &mut AppShell<WgpuRenderer>,
         proxy: &EventLoopProxy,
     ) {
-        if let Some(integration) = &mut self.0 {
+        #[cfg(all(
+            feature = "media-backend",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
+        self.media.about_to_wait();
+        if let Some(integration) = &mut self.app {
             integration.about_to_wait(&mut DesktopIntegrationContext { app, proxy });
         }
     }

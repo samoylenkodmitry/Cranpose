@@ -2665,10 +2665,11 @@ This pattern plays two pulses with a 40-millisecond pause.
 - **Preferences and directories:** `preferences`, `application_directories`.
 - **Notifications:** `local_notifier`.
 - **Camera:** `rememberCameraState`, `rememberCameraFrames`, `capture_camera_still`.
-- **Media and audio:** `open_media`, `play_media`, `audio`.
+- **Media and audio:** `open_media`, `play_media`, `audio`. `set_media_metadata` sets the title, artist, album and cover the system media controls show; `observe_media_metadata` follows them.
 - **Haptics:** `default_haptics`, `HapticPattern`.
 - **Lifecycle:** `rememberLifecycleState`, `cranpose::LifecycleEffect`.
 - **Display power:** `cranpose::KeepScreenOn`.
+- **System bar icons over the app:** `SystemBarAppearance`, `SystemBarIcons`.
 - **Purchases:** `purchases`, `rememberStoreState`, `rememberPurchaseEvents`.
 
 Check [target support](capability_parity.md). Handle support results and operation errors.
