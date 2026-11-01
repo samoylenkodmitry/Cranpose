@@ -780,8 +780,8 @@ fn leading_content_padding_scrolls_away_without_recycling_visible_item() {
         // to end past its edge, 20 above it.
         assert_eq!(partial.first_visible_item_index, 2);
         assert!((partial.first_visible_item_scroll_offset - 20.0).abs() < 0.01);
-        assert_eq!(state.layout_info().viewport_start_offset, 0.0);
-        assert_eq!(state.layout_info().viewport_end_offset, 200.0);
+        assert_eq!(state.layout_info().viewport_start_offset, -100.0);
+        assert_eq!(state.layout_info().viewport_end_offset, 100.0);
 
         state.dispatch_scroll_delta(-31.0);
         let gone = measure_lazy_list(10, &state, 200.0, 300.0, &config, measure);

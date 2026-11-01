@@ -577,15 +577,15 @@ fn publish<S: LazyStaggeredItemSource>(
         pass.viewport
     };
     let mut visible_items_info = state.spare_items_info();
-    visible_items_info.extend(visible.iter().map(LazyListMeasuredItem::to_item_info));
+    visible_items_info.extend(visible.iter().map(|item| item.to_item_info(pass.before)));
     state.update_layout_info(LazyListLayoutInfo {
         visible_items_info,
         total_items_count: pass.items_count,
         raw_viewport_size: pass.viewport,
         is_infinite_viewport: pass.unbounded,
         viewport_size: viewport,
-        viewport_start_offset: 0.0,
-        viewport_end_offset: viewport,
+        viewport_start_offset: -pass.before,
+        viewport_end_offset: viewport - pass.before,
         before_content_padding: pass.before,
         after_content_padding: pass.after,
         main_axis_item_spacing: config.spacing,
