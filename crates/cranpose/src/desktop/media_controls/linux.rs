@@ -263,13 +263,13 @@ impl Root {
     }
 
     #[zbus(property)]
-    fn supported_uri_schemes(&self) -> Vec<String> {
-        Vec::new()
+    fn supported_uri_schemes(&self) -> &'static [&'static str] {
+        &[]
     }
 
     #[zbus(property)]
-    fn supported_mime_types(&self) -> Vec<String> {
-        Vec::new()
+    fn supported_mime_types(&self) -> &'static [&'static str] {
+        &[]
     }
 }
 

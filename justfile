@@ -1144,15 +1144,15 @@ robot-linux classes="all": (robot-gpu classes) (robot-captures classes)
 # The half of the Linux suite a pull request waits for.
 robot-linux-fast: robot-gpu-fast
 
-# The forked wgpu's Vulkan barriers under the Khronos layer's synchronization
-# validation (Linux x86_64; fetches the pinned layer once).
-vulkan-sync:
-    scripts/ci/vulkan_sync.sh
-
 # The MPRIS player a desktop app publishes, read and driven over a disposable
 # session bus.
 mpris:
     dbus-run-session -- cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,media,embedded-default-font --lib media_controls -- --include-ignored
+
+# The forked wgpu's Vulkan barriers under the Khronos layer's synchronization
+# validation (Linux x86_64; fetches the pinned layer once).
+vulkan-sync:
+    scripts/ci/vulkan_sync.sh
 
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
