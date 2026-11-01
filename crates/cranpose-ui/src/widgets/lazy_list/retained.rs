@@ -62,6 +62,7 @@ pub(super) fn measure_lazy_list_retained(
             content,
             state,
             measured_item_cache: context.measured_item_cache,
+            first_item: &std::cell::Cell::new(None),
         },
         near,
         scroll_delta,

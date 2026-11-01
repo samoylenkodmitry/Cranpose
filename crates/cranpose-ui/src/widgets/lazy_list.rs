@@ -199,7 +199,7 @@ pub use grid::{
     LazyVerticalGridSpec, rememberLazyGridState,
 };
 use item_cache::{LazyMeasuredItemCache, log_lazy_cache_telemetry};
-use skipped_slots::recycle_forward_skipped_active_slots;
+use skipped_slots::{recycle_out_of_reach, recycle_skipped_active_slots};
 pub use staggered::{
     LazyHorizontalStaggeredGrid, LazyHorizontalStaggeredGridSpec, LazyStaggeredGridState,
     LazyVerticalStaggeredGrid, LazyVerticalStaggeredGridSpec, rememberLazyStaggeredGridState,
@@ -270,6 +270,29 @@ struct LazyListItemMeasureInputs<'a> {
     content: &'a LazyListIntervalContent,
     state: &'a LazyListState,
     measured_item_cache: &'a Rc<RefCell<LazyMeasuredItemCache>>,
+    // The item the pass started at, until it composes one: see
+    // `skipped_slots::recycle_out_of_reach`.
+    first_item: &'a Cell<Option<usize>>,
+}
+
+impl<'a> LazyListItemMeasureInputs<'a> {
+    // What a pass of `context` along `axis` reads of `content`'s items, laid
+    // `cross_axis_size` across, noting its first one in `first_item`.
+    fn new(
+        context: &LazyListMeasureContext<'a>,
+        (axis, cross_axis_size): (Axis, f32),
+        content: &'a LazyListIntervalContent,
+        first_item: &'a Cell<Option<usize>>,
+    ) -> Self {
+        Self {
+            axis,
+            cross_axis_size,
+            content,
+            state: context.state,
+            measured_item_cache: context.measured_item_cache,
+            first_item,
+        }
+    }
 }
 
 /// The measurements of all an item's roots, in the order of its roots: what
@@ -354,11 +377,8 @@ fn measure_lazy_list_item(
         }
     } else {
         drop(candidate_cache);
-        let mut cache = inputs.measured_item_cache.borrow_mut();
-        cache.record_candidate_miss();
-        if stale_candidate {
-            cache.remove(index);
-        }
+        note_candidate_miss(inputs.measured_item_cache, index, stale_candidate);
+        recycle_out_of_reach(scope, inputs, index, slot_id);
     }
 
     // An item the cache keeps reads no clock: only composing and measuring
@@ -410,6 +430,16 @@ fn measure_lazy_list_item(
     );
     crate::lazy_prefetch::record_lazy_item_cost(measure_start.elapsed());
     item
+}
+
+// Notes that the cache held no measurement of the item at `index` to keep,
+// and lets go of a `stale` one it held there.
+fn note_candidate_miss(cache: &RefCell<LazyMeasuredItemCache>, index: usize, stale: bool) {
+    let mut cache = cache.borrow_mut();
+    cache.record_candidate_miss();
+    if stale {
+        cache.remove(index);
+    }
 }
 
 fn subcompose_lazy_list_item(
@@ -657,13 +687,13 @@ fn measure_list_viewport(
     }
 
     let scroll_delta_for_direction = state.peek_scroll_delta();
-    let item_measure_inputs = LazyListItemMeasureInputs {
-        axis: frame.axis,
-        cross_axis_size: frame.item_cross_axis_size,
+    let first_item = Cell::new(None);
+    let item_measure_inputs = LazyListItemMeasureInputs::new(
+        context,
+        (frame.axis, frame.item_cross_axis_size),
         content,
-        state,
-        measured_item_cache,
-    };
+        &first_item,
+    );
 
     let focused_item = measure_focused_lazy_item(scope, &item_measure_inputs);
     let node_id = scope.root_id();
@@ -821,17 +851,7 @@ impl LazyListItems<'_, '_, '_> {
 
     // Composes and measures the item at `index`.
     fn item(&mut self, index: usize) -> LazyListMeasuredItem {
-        if !self.skipped_slots_recycled
-            && recycle_forward_skipped_active_slots(
-                self.scope,
-                self.inputs.content,
-                &self.near,
-                index,
-                self.scroll_delta,
-            )
-        {
-            self.skipped_slots_recycled = true;
-        }
+        recycle_skipped_active_slots(self, index);
         // An item an idle pass composes afresh has its modifier slices built
         // before the frame it enters the screen in.
         let fresh =
