@@ -6,13 +6,15 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, PackedU64, SnapshotStateObserver};
+use cranpose_core::{MemoryApplier, NodeId, PackedU64, SnapshotStateObserver, internal::NodeReads};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
 mod dirty_node_set;
 mod display_scale;
 mod draw_observation;
+mod geometry_scene_nodes;
+pub(crate) mod measure_reads;
 mod noted_scene_nodes;
 
 use dirty_node_set::DirtyNodeSet;
@@ -27,6 +29,7 @@ pub(crate) use draw_observation::{
     DrawObservationScope, clear_draw_observations_for_node, observe_draw_reads,
 };
 pub use draw_observation::{prune_draw_observations_to_nodes, request_current_draw_redraw};
+pub use geometry_scene_nodes::{GeometrySceneNodes, MovedSceneNode};
 use noted_scene_nodes::NotedSceneNodes;
 
 struct RenderState {
@@ -61,6 +64,8 @@ pub struct AppContext {
     self_weak: RefCell<Weak<Self>>,
     state: RenderState,
     draw_observer: SnapshotStateObserver,
+    // What each node's last measure read: a change measures the node again.
+    pub(crate) measure_reads: Rc<NodeReads>,
     text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
     /// The host the next layout pass lends its applier to; `None` while a
@@ -151,11 +156,13 @@ impl AppContext {
     }
 
     pub fn new_with_density(density: f32) -> Rc<Self> {
+        let id = next_app_context_id();
         let context = Rc::new(Self {
-            id: next_app_context_id(),
+            id,
             self_weak: RefCell::new(Weak::new()),
             state: RenderState::new_with_density(density),
             draw_observer: new_draw_observer(),
+            measure_reads: measure_reads::new(id),
             text: crate::text::measure::TextService::new(),
             layout_frame_arena: RefCell::new(crate::layout::FrameLayoutArena::default()),
             layout_host: RefCell::new(None),
@@ -1146,35 +1153,6 @@ pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
 
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
     require_current_app_context("render state access").record_geometry_scene_node(node_id);
-}
-
-/// The nodes whose geometry a layout pass changed, by what the scene redoes
-/// for them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GeometrySceneNodes {
-    /// Nodes that changed size or were placed anew: the scene draws them
-    /// again.
-    pub reshaped: Vec<NodeId>,
-    /// Nodes that moved in their parent: the scene moves what it drew for
-    /// them, unless they are also reshaped or drawn again.
-    pub moved: Vec<MovedSceneNode>,
-}
-
-/// A node a layout pass moved, with the node whose placement put it there:
-/// its nearest ancestor that is not virtual, the parent of its layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MovedSceneNode {
-    /// The node that moved.
-    pub node: NodeId,
-    /// The node that placed it; `None` for a root.
-    pub placer: Option<NodeId>,
-}
-
-impl GeometrySceneNodes {
-    /// Whether the pass changed no node's geometry.
-    pub fn is_empty(&self) -> bool {
-        self.reshaped.is_empty() && self.moved.is_empty()
-    }
 }
 
 /// Takes the nodes whose geometry the last layout pass actually changed.

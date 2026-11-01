@@ -1385,10 +1385,9 @@ pub(crate) fn unregister_layout_node(
 ) {
     let _ = crate::render_state::with_layout_node_registry_by_app_context(
         owner_context_id,
-        |registry| {
-            registry.unregister(id);
-        },
+        |registry| registry.unregister(id),
     );
+    crate::render_state::measure_reads::forget(owner_context_id, id);
 }
 
 #[cfg(test)]

@@ -198,10 +198,13 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        match self.measure_dirty_nodes_first(root, constraints)? {
-            Some(measured) => Ok(measured),
-            None => self.measure_node(root, constraints),
-        }
+        // Each measure's state reads are kept for its node.
+        self.context.measure_reads.observe(|| {
+            match self.measure_dirty_nodes_first(root, constraints)? {
+                Some(measured) => Ok(measured),
+                None => self.measure_node(root, constraints),
+            }
+        })
     }
 
     // Takes the nodes the dirty bubbles started from and measures from
@@ -212,7 +215,7 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let mut dirty = self.frame_arena.borrow_mut().tmp_child_ids.acquire();
+        let mut dirty = std::mem::take(&mut self.frame_arena.borrow_mut().dirty_roots);
         let complete = match self.applier.try_borrow_typed() {
             Ok(mut applier) => applier.take_layout_dirt_roots(&mut dirty),
             Err(_) => false,
@@ -222,7 +225,8 @@ impl LayoutBuilderState {
         } else {
             Ok(None)
         };
-        self.frame_arena.borrow_mut().tmp_child_ids.release(dirty);
+        dirty.clear();
+        self.frame_arena.borrow_mut().dirty_roots = dirty;
         measured
     }
 

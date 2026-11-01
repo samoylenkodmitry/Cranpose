@@ -22,9 +22,11 @@ use crate::{
     widgets::nodes::{LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
+mod measure_scratch;
 mod retained_measure_scope;
 mod subcompose_child;
 
+pub(crate) use measure_scratch::MeasureScratch;
 pub(crate) use retained_measure_scope::RetainedMeasureScope;
 pub(crate) use subcompose_child::SubcomposeChild;
 
@@ -46,30 +48,6 @@ type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode
 
 // The children a pass that composes measured, by node.
 pub(crate) type MeasuredChildren = RefCell<HashMap<NodeId, Rc<MeasuredNode>>>;
-
-/// The buffers a measure pass of a subcompose node fills, kept on the node
-/// between passes.
-#[derive(Default)]
-pub(crate) struct MeasureScratch {
-    placements: Vec<Placement>,
-    /// The roots the policy placed, each with its measurement, in the order
-    /// of the placements, where it placed lazy items: empty otherwise.
-    placed_roots: Vec<Rc<LazyItemRoots>>,
-}
-
-impl MeasureScratch {
-    fn layout_with_placed_roots(
-        &mut self,
-        width: f32,
-        height: f32,
-        build: impl FnOnce(&mut Vec<Placement>, &mut Vec<Rc<LazyItemRoots>>),
-    ) -> MeasureResult {
-        self.placements.clear();
-        self.placed_roots.clear();
-        build(&mut self.placements, &mut self.placed_roots);
-        MeasureResult::new(Size { width, height }, std::mem::take(&mut self.placements))
-    }
-}
 
 // A measure scope that lays out lazy items' roots with their measurements:
 // the scope of a pass that composes, and of one that keeps the slots of the
@@ -307,6 +285,12 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         Content: FnMut() + 'static,
     {
         let telemetry_start = subcompose_telemetry_enabled().then(Instant::now);
+        // A slot's composition reads for itself, not for the measure that
+        // asked for it, as Compose subcomposes without read observation.
+        let context = crate::render_state::current_app_context();
+        let _paused = context
+            .as_ref()
+            .map(|context| context.measure_reads.paused());
         let mut inner = self.parent_handle.inner.borrow_mut();
 
         let (virtual_node_id, is_rebound) =
@@ -1216,11 +1200,13 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn unmount(&mut self) {
-        self.inner
-            .borrow_mut()
-            .modifier_chain
-            .chain_mut()
-            .detach_nodes();
+        let mut inner = self.inner.borrow_mut();
+        inner.modifier_chain.chain_mut().detach_nodes();
+        if let Some(node_id) = inner.node_id
+            && let Some(context) = crate::render_state::current_app_context()
+        {
+            context.measure_reads.forget(node_id);
+        }
     }
 
     fn insert_child(&mut self, child: NodeId) -> bool {

@@ -23,10 +23,12 @@ use crate::{
 };
 
 mod derived_state;
+mod readable_record;
 mod record_chain;
 mod snapshot_state_list;
 
 pub(crate) use derived_state::DerivedState;
+use readable_record::{ReadNotice, StateReadFailure, readable_record_for_active_snapshot};
 pub(crate) use record_chain::RecordChain;
 pub use snapshot_state_list::SnapshotStateList;
 
@@ -76,31 +78,6 @@ impl<T: Any + Clone> RecordValue for T {
             Some(slot) => slot.clone_from(self),
             None => *target = Some(Box::new(self.clone())),
         }
-    }
-}
-
-#[derive(Debug)]
-struct StateReadFailure {
-    state_id: ObjectId,
-    snapshot_id: SnapshotId,
-    fresh_snapshot_id: SnapshotId,
-    fresh_invalid: SnapshotIdSet,
-    record_chain: Vec<(SnapshotId, bool)>,
-}
-
-impl fmt::Display for StateReadFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Reading a state that was created after the snapshot was taken or in a snapshot that has not yet been applied\n\
-             state={:?}, snapshot_id={}, fresh_snapshot_id={}, fresh_invalid={:?}\n\
-             record_chain={:?}",
-            self.state_id,
-            self.snapshot_id,
-            self.fresh_snapshot_id,
-            self.fresh_invalid,
-            self.record_chain
-        )
     }
 }
 
@@ -745,53 +722,9 @@ fn should_check_chain_integrity() -> bool {
     }
 }
 
-// The record of the state `state`, whose records are `records`, that the
-// active snapshot reads, after a fresh snapshot's and the global one's when
-// that snapshot's own misses. Out of line, one function for every state
-// type.
-#[inline(never)]
-fn readable_record_for_active_snapshot(
-    state: &dyn StateObject,
-    records: &RecordChain,
-    id: ObjectId,
-) -> Result<Rc<StateRecord>, StateReadFailure> {
-    let readable = |snapshot_id, invalid: &SnapshotIdSet| records.readable(snapshot_id, invalid);
-    let snapshot = active_snapshot();
-    snapshot.record_read(state);
-
-    let snapshot_id = snapshot.snapshot_id();
-    if let Some(record) = snapshot.with_invalid(|invalid| readable(snapshot_id, invalid)) {
-        return Ok(record);
-    }
-
-    let fresh_snapshot = active_snapshot();
-    let fresh_id = fresh_snapshot.snapshot_id();
-    let fresh_invalid = fresh_snapshot.invalid();
-
-    if let Some(record) = readable(fresh_id, &fresh_invalid) {
-        return Ok(record);
-    }
-
-    let global = GlobalSnapshot::get_or_create();
-    let global_id = global.snapshot_id();
-    let global_invalid = global.invalid();
-
-    if let Some(record) = readable(global_id, &global_invalid) {
-        return Ok(record);
-    }
-
-    Err(StateReadFailure {
-        state_id: id,
-        snapshot_id,
-        fresh_snapshot_id: fresh_id,
-        fresh_invalid,
-        record_chain: records.ids(),
-    })
-}
-
 impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn readable_record_for_active_snapshot(&self) -> Result<Rc<StateRecord>, StateReadFailure> {
-        readable_record_for_active_snapshot(self, &self.records, self.id)
+        readable_record_for_active_snapshot(ReadNotice::Observers(self), &self.records, self.id)
     }
 
     fn readable_for(
@@ -1411,11 +1344,11 @@ impl<T: Clone + 'static> State<T> {
         self.value()
     }
 
-    /// Reads the value without subscribing the current scope, for a
-    /// composition that changes what it shows by the value only through a
-    /// layer or a draw that reads it again.
+    /// Reads the value without subscribing the current scope or telling a
+    /// read observer, for a composition that shows it only through a layer
+    /// or a draw that reads it again.
     pub fn get_non_reactive(&self) -> T {
-        self.with_fresh_inner(|inner| inner.state.get())
+        self.with_fresh_inner(|inner| inner.state.value_unobserved())
     }
 
     /// The view a derived state hands out of its cell.
@@ -1673,9 +1606,9 @@ impl<T: Clone + 'static> MutableState<T> {
         self.value()
     }
 
-    /// Returns a copy of the value without subscribing the current scope.
+    /// Returns a copy of the value without subscribing a scope or observer.
     pub fn get_non_reactive(&self) -> T {
-        self.with_inner(|inner| inner.state.get())
+        self.with_inner(|inner| inner.state.value_unobserved())
     }
 
     #[doc(hidden)]
