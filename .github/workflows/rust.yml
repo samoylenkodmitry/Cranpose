@@ -20,6 +20,13 @@ name: Rust
 # idle. Shell steps on both platforms hold the host lock's shared side, so
 # they never run beside a measurement that has emptied that machine.
 #
+# macOS build and test jobs take `cranpose-mac`, which the M3's two runners
+# and the Mac the Mate 20 X hangs off carry; that Mac's runner listens only
+# while it sits idle on power. On 2026-11-01 the M3 alone, shared with other
+# repositories' runners at a load of 48 to 69, kept macOS jobs waiting up to
+# 98 minutes. Publishing and the nightly's M3 desktop comparison keep
+# `recent-repo`, which only the M3 carries.
+#
 # Every job starts by asking tree_memo.sh whether this exact source tree
 # already passed it on this host -- most often the pull request's own run,
 # when the merge that lands it changes nothing -- and skips its work if so.
@@ -172,7 +179,7 @@ jobs:
   tests:
     name: tests (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
     timeout-minutes: 20
     defaults:
       run:
@@ -215,7 +222,7 @@ jobs:
   clippy:
     name: clippy + docs (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
     timeout-minutes: 20
     defaults:
       run:
