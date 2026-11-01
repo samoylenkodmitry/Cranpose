@@ -914,9 +914,7 @@ impl WgpuRenderer {
             PresentBackend::Threaded(handle) => {
                 let status = handle.status();
                 Some((
-                    status
-                        .needs_frame_warmup
-                        .load(std::sync::atomic::Ordering::Relaxed),
+                    status.warmup_due(),
                     status
                         .presented_frames
                         .load(std::sync::atomic::Ordering::Relaxed),
