@@ -1628,14 +1628,10 @@ impl LayoutBuilderState {
             for child_state in runtime_state.child_states() {
                 child_state.measured.take();
             }
-            self.with_applier_result(|applier| {
-                applier.with_node::<LayoutNode, _>(node_id, |node| {
-                    if runtime_state.take_moved_coordinators() {
-                        node.note_geometry_change(node_id, &self.context);
-                    }
-                })
-            })
-            .ok();
+            if runtime_state.take_moved_coordinators() {
+                let mut layout_state = parts.layout_state().borrow_mut();
+                layout_state.note_geometry_change(node_id, &self.context);
+            }
             return Err(err);
         }
 
@@ -1660,24 +1656,22 @@ impl LayoutBuilderState {
         .with_window_root(measurement.window_root)
         .into_rc(spare);
 
-        self.with_applier_result(|applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |node| {
-                node.cache().store_held_measurement(
-                    constraints,
-                    Rc::clone(&measured),
-                    measurement.hold,
-                    measurement.ignores_child_sizes,
-                );
-                if runtime_state.take_moved_coordinators() {
-                    node.note_geometry_change(node_id, &self.context);
-                }
-                node.clear_needs_measure();
-                node.clear_needs_layout();
-                node.set_measured_size(measurement.size, &self.context);
-                node.set_content_offset(measurement.content_offset);
-            })
-        })
-        .ok();
+        // The node's parts hold all its measure writes: no lookup of it.
+        let cache = parts.cache();
+        cache.store_held_measurement(
+            constraints,
+            Rc::clone(&measured),
+            measurement.hold,
+            measurement.ignores_child_sizes,
+        );
+        let mut layout_state = parts.layout_state().borrow_mut();
+        if runtime_state.take_moved_coordinators() {
+            layout_state.note_geometry_change(node_id, &self.context);
+        }
+        cache.clear_needs_measure();
+        cache.clear_layout_dirt();
+        layout_state.set_size(measurement.size, &self.context);
+        layout_state.set_content_offset(measurement.content_offset);
 
         Ok(Some(measured))
     }

@@ -203,6 +203,12 @@ impl LayoutState {
         }
     }
 
+    /// Notes to the scene phase of `context` that the layout pass changed
+    /// the geometry of this node, `node_id`.
+    pub(crate) fn note_geometry_change(&mut self, node_id: NodeId, context: &AppContext) {
+        context.note_geometry_scene_node(node_id, &mut self.reshaped_noted_in);
+    }
+
     /// The same state placed at the origin: what a window root's own scene
     /// starts from, since the position its parent gave it belongs to the
     /// parent's window.
@@ -966,15 +972,6 @@ impl LayoutNode {
             .layout_state()
             .borrow_mut()
             .set_size(size, context);
-    }
-
-    /// Notes to the scene phase of `context` that the layout pass changed
-    /// the geometry of this node, `node_id`.
-    pub(crate) fn note_geometry_change(&self, node_id: NodeId, context: &AppContext) {
-        context.note_geometry_scene_node(
-            node_id,
-            &mut self.parts.layout_state().borrow_mut().reshaped_noted_in,
-        );
     }
 
     /// Updates the position of this node, which `placer` placed. Called
