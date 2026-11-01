@@ -2,7 +2,7 @@
 //! worked out once per text node so that drawing a plain text never loads
 //! its style, and drawing a cached run never loads its string.
 
-use std::cell::Cell;
+use std::cell::OnceCell;
 
 use cranpose_ui::{
     Brush, Color, TextStyle,
@@ -128,23 +128,18 @@ fn decorates(decoration: Option<TextDecoration>) -> bool {
 /// renderer first asks for it. It is derived data, so two caches always
 /// compare equal.
 #[derive(Clone, Debug, Default)]
-pub struct TextPaintCache(Cell<Option<TextPaint>>);
+pub struct TextPaintCache(OnceCell<TextPaint>);
 
 impl TextPaintCache {
     /// A cache holding `paint`.
     pub fn holding(paint: TextPaint) -> Self {
-        Self(Cell::new(Some(paint)))
+        Self(OnceCell::from(paint))
     }
 
     /// The cached paint, or the one `compute` returns, which the cache then
     /// keeps.
-    pub fn get_or(&self, compute: impl FnOnce() -> TextPaint) -> TextPaint {
-        if let Some(paint) = self.0.get() {
-            return paint;
-        }
-        let paint = compute();
-        self.0.set(Some(paint));
-        paint
+    pub fn get_or(&self, compute: impl FnOnce() -> TextPaint) -> &TextPaint {
+        self.0.get_or_init(compute)
     }
 }
 
