@@ -62,6 +62,7 @@ mod keyboard_options;
 /// Layout tree, measurement and placement of nodes.
 pub mod layout;
 pub mod layout_direction;
+mod layout_modifier;
 pub mod lazy_item;
 mod lazy_prefetch;
 #[cfg(feature = "localization")]
@@ -141,7 +142,9 @@ pub use cranpose_ui_graphics::{
     Stroke, StrokeCap, StrokeJoin, SubstrateSpec, TextMeasurement, TextVerticalAlign, TileMode,
     WindowCoordinates, glass_material_folds_enabled, set_glass_material_folds,
 };
-pub use cranpose_ui_layout::{AlignmentLines, Axis, IntrinsicSize, Measurement};
+pub use cranpose_ui_layout::{
+    AlignmentLines, Axis, IntrinsicSize, LayoutModifierMeasureResult, Measurement,
+};
 pub use cursor_animation::{
     is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
     stop_cursor_blink, tick_cursor_blink,
