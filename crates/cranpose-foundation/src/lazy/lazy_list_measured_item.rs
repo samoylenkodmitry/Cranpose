@@ -133,12 +133,12 @@ impl LazyListMeasuredItem {
         }
     }
 
-    /// Converts to layout info for external consumption.
-    pub fn to_item_info(&self) -> LazyListItemInfo {
+    /// This item's layout info, its offset counted from the edge of the `before` padding.
+    pub fn to_item_info(&self, before: f32) -> LazyListItemInfo {
         LazyListItemInfo {
             index: self.index,
             key: self.key,
-            offset: self.offset,
+            offset: self.offset - before,
             size: self.main_axis_size,
         }
     }

@@ -296,7 +296,7 @@ impl MeasuredLazyList {
                     let item_end = item_end_with_spacing(item, self.items_count, self.spacing);
                     item_end > 0.0 && item.offset < viewport_end
                 })
-                .map(LazyListMeasuredItem::to_item_info),
+                .map(|item| item.to_item_info(self.padding.0)),
         );
         state.update_layout_info(LazyListLayoutInfo {
             visible_items_info,
@@ -304,8 +304,8 @@ impl MeasuredLazyList {
             raw_viewport_size: self.raw_viewport_size,
             is_infinite_viewport: false,
             viewport_size: result.viewport_size,
-            viewport_start_offset: 0.0,
-            viewport_end_offset: viewport_end,
+            viewport_start_offset: -self.padding.0,
+            viewport_end_offset: viewport_end - self.padding.0,
             before_content_padding: self.padding.0,
             after_content_padding: self.padding.1,
             main_axis_item_spacing: self.spacing,
@@ -609,8 +609,8 @@ pub(super) fn publish_without_items(
         raw_viewport_size: viewport_size,
         is_infinite_viewport: viewport_size.is_infinite(),
         viewport_size,
-        viewport_start_offset: 0.0,
-        viewport_end_offset: viewport_size.max(0.0),
+        viewport_start_offset: -config.before_content_padding,
+        viewport_end_offset: viewport_size.max(0.0) - config.before_content_padding,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
         main_axis_item_spacing: config.spacing,
@@ -667,15 +667,19 @@ where
 
     state.update_scroll_position(0, 0.0);
     let mut visible_items_info = state.spare_items_info();
-    visible_items_info.extend(visible_items.iter().map(LazyListMeasuredItem::to_item_info));
+    visible_items_info.extend(
+        visible_items
+            .iter()
+            .map(|item| item.to_item_info(config.before_content_padding)),
+    );
     state.update_layout_info(LazyListLayoutInfo {
         visible_items_info,
         total_items_count: items_count,
         raw_viewport_size,
         is_infinite_viewport: true,
         viewport_size: content_extent,
-        viewport_start_offset: 0.0,
-        viewport_end_offset: content_extent,
+        viewport_start_offset: -config.before_content_padding,
+        viewport_end_offset: content_extent - config.before_content_padding,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
         main_axis_item_spacing: config.spacing,

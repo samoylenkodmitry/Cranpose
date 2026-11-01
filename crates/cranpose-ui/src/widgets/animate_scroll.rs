@@ -37,11 +37,10 @@ impl AnimateScroll for LazyListState {
 /// when not. The animation lands on the item exactly either way.
 fn distance_to_item(state: &LazyListState, index: usize) -> f32 {
     let shown = state.with_layout_info(|info| {
-        let item = info
-            .visible_items_info
+        info.visible_items_info
             .iter()
-            .find(|item| item.index == index)?;
-        Some(item.offset - info.before_content_padding)
+            .find(|item| item.index == index)
+            .map(|item| item.offset)
     });
     if let Some(distance) = shown.flatten() {
         return distance;

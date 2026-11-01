@@ -1,7 +1,7 @@
-//! A lazy column's scroll position counts from the edge of its start
-//! padding, as Compose's does: `scroll_to_item(k, 0)` puts item `k` there,
-//! the items before it show in the padding, and an item that lies wholly in
-//! the padding is not the first visible one.
+//! A lazy column's scroll position and layout info count from the edge of
+//! its start padding, as Compose's do: `scroll_to_item(k, 0)` puts item `k`
+//! there, the items before it show in the padding, and an item that lies
+//! wholly in the padding is not the first visible one.
 
 use std::{cell::Cell, rc::Rc};
 
@@ -145,4 +145,27 @@ fn the_end_of_the_list_rests_above_the_end_padding() {
         "the last row ends at the end padding"
     );
     assert_eq!(list.first_visible(), (17, 0.0));
+}
+
+#[test]
+fn the_layout_info_counts_offsets_from_the_edge_of_the_start_padding() {
+    let mut list = List::new();
+    list.scroll_to(3, 0.0);
+    let info = list.state().layout_info();
+    assert_eq!(
+        (info.viewport_start_offset, info.viewport_end_offset),
+        (-TOP_PADDING, 100.0 - TOP_PADDING),
+        "the viewport starts in the start padding and ends where the list ends"
+    );
+    let offsets: Vec<_> = info
+        .visible_items_info
+        .iter()
+        .take(3)
+        .map(|item| (item.index, item.offset))
+        .collect();
+    assert_eq!(
+        offsets,
+        [(1, -40.0), (2, -20.0), (3, 0.0)],
+        "row 3 starts at the edge, and the rows in the padding before it"
+    );
 }

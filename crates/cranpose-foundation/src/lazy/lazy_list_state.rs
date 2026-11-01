@@ -933,7 +933,7 @@ impl LazyListState {
         let can_forward = {
             let inner = cell.borrow();
             let info = &inner.layout_info;
-            let viewport_end = info.viewport_size - info.after_content_padding;
+            let viewport_end = info.viewport_end_offset - info.after_content_padding;
             // A staggered grid's last item by index need not be the one
             // that reaches furthest.
             if let Some(last_visible) = info.visible_items_info.last() {
@@ -1061,10 +1061,10 @@ pub struct LazyListLayoutInfo {
     /// Size of the viewport in the main axis.
     pub viewport_size: f32,
 
-    /// Start offset of the viewport in layout coordinates.
+    /// Where the viewport starts from the start padding's edge: Compose's `viewportStartOffset`.
     pub viewport_start_offset: f32,
 
-    /// End offset of the viewport in layout coordinates.
+    /// Where the viewport ends from the start padding's edge: Compose's `viewportEndOffset`.
     pub viewport_end_offset: f32,
 
     /// Content padding before the first item.
@@ -1092,7 +1092,7 @@ pub struct LazyListItemInfo {
     /// Key of the item.
     pub key: u64,
 
-    /// Offset of the item from the start of the list content.
+    /// Offset of the item from the start padding's edge, negative in it.
     pub offset: f32,
 
     /// Size of the item in the main axis.
@@ -1124,9 +1124,9 @@ fn continuous_snap_anchor_offset(
 
 fn snap_anchor_item_offset(info: &LazyListLayoutInfo, item: &LazyListItemInfo) -> f32 {
     if info.reverse_layout {
-        info.viewport_size - item.offset - item.size
+        info.viewport_size + info.viewport_start_offset - item.offset - item.size
     } else {
-        item.offset
+        item.offset - info.viewport_start_offset
     }
 }
 
