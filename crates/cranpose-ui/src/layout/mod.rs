@@ -31,13 +31,11 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, SemanticsConfiguration, SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::ProjectiveTransform;
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
+use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
-use layout_child_measurable::LayoutChildMeasurable;
 use layout_child_measure_state::{
-    ChildPass, LayoutChildFrame, LayoutChildMeasureState, inherited_alignment_lines,
-    placement_for_child, read_cell,
+    ChildPass, LayoutChildMeasureState, LayoutChildren, inherited_alignment_lines, read_cell,
 };
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
@@ -1960,48 +1958,6 @@ pub(crate) struct LayoutRuntimeState {
     measure_policy: Rc<dyn MeasurePolicy>,
 }
 
-/// What a node keeps for measuring its children, in their order.
-struct LayoutChildren {
-    ids: Vec<NodeId>,
-    states: Vec<Rc<LayoutChildMeasureState>>,
-    measurables: Vec<Box<dyn Measurable>>,
-    frame: Rc<LayoutChildFrame>,
-}
-
-impl LayoutChildren {
-    /// Room for exactly `count` children, where growth would make room for
-    /// four in each of the three lists. Children added later grow the lists
-    /// as usual.
-    fn with_capacity(count: usize) -> Self {
-        Self {
-            ids: Vec::with_capacity(count),
-            states: Vec::with_capacity(count),
-            measurables: Vec::with_capacity(count),
-            frame: Rc::default(),
-        }
-    }
-
-    /// Puts the state of `child_id` at `position`: the one it had further
-    /// on, or a new one.
-    #[inline(never)]
-    fn bind_at(&mut self, position: usize, child_id: NodeId) {
-        let from = match self.ids[position..].iter().position(|&id| id == child_id) {
-            Some(offset) => position + offset,
-            None => {
-                let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
-                self.ids.push(child_id);
-                self.states.push(Rc::clone(&state));
-                self.measurables
-                    .push(Box::new(LayoutChildMeasurable::new(state)));
-                self.ids.len() - 1
-            }
-        };
-        self.ids.swap(position, from);
-        self.states.swap(position, from);
-        self.measurables.swap(position, from);
-    }
-}
-
 impl LayoutRuntimeState {
     pub(crate) fn new(measure_policy: Rc<dyn MeasurePolicy>) -> Self {
         Self {
@@ -2016,104 +1972,6 @@ impl LayoutRuntimeState {
             self.measure_policy = Rc::clone(&node.measure_policy);
         }
         self.coordinator_chain.sync(node)
-    }
-
-    fn child_states(&self) -> &[Rc<LayoutChildMeasureState>] {
-        self.children
-            .as_deref()
-            .map_or(&[], |children| children.states.as_slice())
-    }
-
-    fn child_measurables(&self) -> &[Box<dyn Measurable>] {
-        self.children
-            .as_deref()
-            .map_or(&[], |children| children.measurables.as_slice())
-    }
-
-    /// Binds the children's frame of the node `parent` to `builder` for a
-    /// pass over `count` children. A node that never had one binds nothing.
-    fn bind_children(
-        &mut self,
-        builder: &Rc<LayoutBuilderState>,
-        parent: NodeId,
-        pass: ChildPass,
-        count: usize,
-    ) {
-        if count == 0 && self.children.is_none() {
-            return;
-        }
-        self.children
-            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(count)))
-            .frame
-            .bind(builder, parent, pass);
-    }
-
-    fn unbind_children(&self) {
-        if let Some(children) = &self.children {
-            children.frame.unbind();
-        }
-    }
-
-    /// The first error a child recorded in the pass, taken.
-    fn take_child_error(&self) -> Option<NodeError> {
-        self.children
-            .as_ref()
-            .and_then(|children| children.frame.error.borrow_mut().take())
-    }
-
-    /// The state of the child at `position`, for a pass `bind_children`
-    /// bound. Inlined: the child is nearly always where it was.
-    #[inline]
-    fn child_state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
-        let children = self
-            .children
-            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(position + 1)));
-        if children.ids.get(position) != Some(&child_id) {
-            children.bind_at(position, child_id);
-        }
-        &children.states[position]
-    }
-
-    fn truncate_children(&mut self, len: usize) {
-        if let Some(children) = &mut self.children {
-            children.ids.truncate(len);
-            children.states.truncate(len);
-            children.measurables.truncate(len);
-        }
-    }
-
-    /// Puts the children the last measure measured into `measured_children`.
-    fn measured_children(
-        &self,
-        placements: &[Placement],
-        placement_indices: &[usize],
-        content_offset: Point,
-        measured_children: &mut Vec<MeasuredChild>,
-    ) {
-        let child_states = self.child_states();
-        measured_children.reserve_exact(child_states.len());
-        for (index, child_state) in child_states.iter().enumerate() {
-            let Some(measured) = child_state.measured.take() else {
-                continue;
-            };
-            let placement =
-                placement_for_child(placements, placement_indices, index, child_state.node_id);
-            let base_position = child_state.placement_position(placement);
-            let position = Point {
-                x: base_position.x + measured.offset.x,
-                y: base_position.y + measured.offset.y,
-            };
-            if let Some(placement) = placement {
-                child_state.place_at(position, placement.z_index);
-            }
-            measured_children.push(MeasuredChild::new(
-                &measured,
-                Point {
-                    x: content_offset.x + base_position.x,
-                    y: content_offset.y + base_position.y,
-                },
-            ));
-        }
     }
 
     // Notes that a measure placed the node's coordinators, and says whether

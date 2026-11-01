@@ -9,7 +9,10 @@ use std::{
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, PackedU64};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, ParentData, Placement};
 
-use super::{LayoutBuilderState, LayoutRuntimeState, MeasuredNode};
+use super::{
+    LayoutBuilderState, LayoutRuntimeState, MeasuredChild, MeasuredNode, core::Measurable,
+    layout_child_measurable::LayoutChildMeasurable,
+};
 use crate::{
     modifier::Point,
     render_state::AppContext,
@@ -435,6 +438,108 @@ impl Drop for LayoutChildMeasureState {
     reason = "a node's children records in their file"
 )]
 impl LayoutRuntimeState {
+    pub(super) fn child_states(&self) -> &[Rc<LayoutChildMeasureState>] {
+        self.children
+            .as_deref()
+            .map_or(&[], |children| children.states.as_slice())
+    }
+
+    pub(super) fn child_measurables(&self) -> &[Box<dyn Measurable>] {
+        self.children
+            .as_deref()
+            .map_or(&[], |children| children.measurables.as_slice())
+    }
+
+    /// Binds the children's frame of the node `parent` to `builder` for a
+    /// pass over `count` children. A node that never had one binds nothing.
+    pub(super) fn bind_children(
+        &mut self,
+        builder: &Rc<LayoutBuilderState>,
+        parent: NodeId,
+        pass: ChildPass,
+        count: usize,
+    ) {
+        if count == 0 && self.children.is_none() {
+            return;
+        }
+        self.children
+            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(count)))
+            .frame
+            .bind(builder, parent, pass);
+    }
+
+    pub(super) fn unbind_children(&self) {
+        if let Some(children) = &self.children {
+            children.frame.unbind();
+        }
+    }
+
+    /// The first error a child recorded in the pass, taken.
+    pub(super) fn take_child_error(&self) -> Option<NodeError> {
+        self.children
+            .as_ref()
+            .and_then(|children| children.frame.error.borrow_mut().take())
+    }
+
+    /// The state of the child at `position`, for a pass `bind_children`
+    /// bound. Inlined: the child is nearly always where it was.
+    #[inline]
+    pub(super) fn child_state_at(
+        &mut self,
+        position: usize,
+        child_id: NodeId,
+    ) -> &LayoutChildMeasureState {
+        let children = self
+            .children
+            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(position + 1)));
+        if children.ids.get(position) != Some(&child_id) {
+            children.bind_at(position, child_id);
+        }
+        &children.states[position]
+    }
+
+    pub(super) fn truncate_children(&mut self, len: usize) {
+        if let Some(children) = &mut self.children {
+            children.ids.truncate(len);
+            children.states.truncate(len);
+            children.measurables.truncate(len);
+        }
+    }
+
+    /// Puts the children the last measure measured into `measured_children`.
+    pub(super) fn measured_children(
+        &self,
+        placements: &[Placement],
+        placement_indices: &[usize],
+        content_offset: Point,
+        measured_children: &mut Vec<MeasuredChild>,
+    ) {
+        let child_states = self.child_states();
+        measured_children.reserve_exact(child_states.len());
+        for (index, child_state) in child_states.iter().enumerate() {
+            let Some(measured) = child_state.measured.take() else {
+                continue;
+            };
+            let placement =
+                placement_for_child(placements, placement_indices, index, child_state.node_id);
+            let base_position = child_state.placement_position(placement);
+            let position = Point {
+                x: base_position.x + measured.offset.x,
+                y: base_position.y + measured.offset.y,
+            };
+            if let Some(placement) = placement {
+                child_state.place_at(position, placement.z_index);
+            }
+            measured_children.push(MeasuredChild::new(
+                &measured,
+                Point {
+                    x: content_offset.x + base_position.x,
+                    y: content_offset.y + base_position.y,
+                },
+            ));
+        }
+    }
+
     // Whether the node's last placement gave a child a z index other than 0.
     pub(super) fn places_children_with_z_index(&self) -> bool {
         self.children
@@ -489,4 +594,46 @@ pub(super) fn placement_for_child<'a>(
     placements
         .get(index)
         .filter(|placement| placement.node_id == node_id)
+}
+
+/// What a node keeps for measuring its children, in their order.
+pub(super) struct LayoutChildren {
+    pub(super) ids: Vec<NodeId>,
+    states: Vec<Rc<LayoutChildMeasureState>>,
+    measurables: Vec<Box<dyn Measurable>>,
+    frame: Rc<LayoutChildFrame>,
+}
+
+impl LayoutChildren {
+    /// Room for exactly `count` children, where growth would make room for
+    /// four in each of the three lists. Children added later grow the lists
+    /// as usual.
+    fn with_capacity(count: usize) -> Self {
+        Self {
+            ids: Vec::with_capacity(count),
+            states: Vec::with_capacity(count),
+            measurables: Vec::with_capacity(count),
+            frame: Rc::default(),
+        }
+    }
+
+    /// Puts the state of `child_id` at `position`: the one it had further
+    /// on, or a new one.
+    #[inline(never)]
+    fn bind_at(&mut self, position: usize, child_id: NodeId) {
+        let from = match self.ids[position..].iter().position(|&id| id == child_id) {
+            Some(offset) => position + offset,
+            None => {
+                let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
+                self.ids.push(child_id);
+                self.states.push(Rc::clone(&state));
+                self.measurables
+                    .push(Box::new(LayoutChildMeasurable::new(state)));
+                self.ids.len() - 1
+            }
+        };
+        self.ids.swap(position, from);
+        self.states.swap(position, from);
+        self.measurables.swap(position, from);
+    }
 }
