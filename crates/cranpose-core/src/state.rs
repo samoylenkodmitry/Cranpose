@@ -28,7 +28,7 @@ mod record_chain;
 mod snapshot_state_list;
 
 pub(crate) use derived_state::DerivedState;
-use readable_record::{StateReadFailure, readable_record_for_active_snapshot};
+use readable_record::{ReadNotice, StateReadFailure, readable_record_for_active_snapshot};
 pub(crate) use record_chain::RecordChain;
 pub use snapshot_state_list::SnapshotStateList;
 
@@ -724,7 +724,7 @@ fn should_check_chain_integrity() -> bool {
 
 impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn readable_record_for_active_snapshot(&self) -> Result<Rc<StateRecord>, StateReadFailure> {
-        readable_record_for_active_snapshot(self, &self.records, self.id)
+        readable_record_for_active_snapshot(ReadNotice::Observers(self), &self.records, self.id)
     }
 
     fn readable_for(
@@ -1344,11 +1344,11 @@ impl<T: Clone + 'static> State<T> {
         self.value()
     }
 
-    /// Reads the value without subscribing the current scope, for a
-    /// composition that changes what it shows by the value only through a
-    /// layer or a draw that reads it again.
+    /// Reads the value without subscribing the current scope or telling a
+    /// read observer, for a composition that shows it only through a layer
+    /// or a draw that reads it again.
     pub fn get_non_reactive(&self) -> T {
-        self.with_fresh_inner(|inner| inner.state.get())
+        self.with_fresh_inner(|inner| inner.state.value_unobserved())
     }
 
     /// The view a derived state hands out of its cell.
@@ -1606,9 +1606,9 @@ impl<T: Clone + 'static> MutableState<T> {
         self.value()
     }
 
-    /// Returns a copy of the value without subscribing the current scope.
+    /// Returns a copy of the value without subscribing a scope or observer.
     pub fn get_non_reactive(&self) -> T {
-        self.with_inner(|inner| inner.state.get())
+        self.with_inner(|inner| inner.state.value_unobserved())
     }
 
     #[doc(hidden)]

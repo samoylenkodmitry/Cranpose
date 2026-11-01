@@ -32,6 +32,16 @@ impl LayoutChildMeasurable {
         read_cell(&self.state.parent_data, Clone::clone)
     }
 
+    // How many state reads the pass that binds the child has kept.
+    fn reads_seen(&self) -> usize {
+        self.state
+            .frame
+            .builder
+            .borrow()
+            .as_ref()
+            .map_or(0, |builder| builder.context.measure_reads.seen())
+    }
+
     fn intrinsic(
         &self,
         kind: IntrinsicKind,
@@ -52,13 +62,19 @@ impl LayoutChildMeasurable {
         {
             return value;
         }
+        let seen = self.reads_seen();
         let value = match state.layout_intrinsic(kind) {
             Some(value) => value,
             None => state
                 .measure_cached(constraints)
                 .map_or(0.0, |node| extent(node.size_for_parent())),
         };
-        if let Some(cache) = cache {
+        // A value that read a state holds only while the state does: the
+        // measure that asked for it keeps the read and asks again, as
+        // Compose, which keeps no intrinsic sizes, does.
+        if let Some(cache) = cache
+            && self.reads_seen() == seen
+        {
             cache.store_intrinsic(kind, value);
         }
         value

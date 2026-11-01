@@ -198,10 +198,13 @@ impl LayoutBuilderState {
         root: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        match self.measure_dirty_nodes_first(root, constraints)? {
-            Some(measured) => Ok(measured),
-            None => self.measure_node(root, constraints),
-        }
+        // Each measure's state reads are kept for its node.
+        self.context.measure_reads.observe(|| {
+            match self.measure_dirty_nodes_first(root, constraints)? {
+                Some(measured) => Ok(measured),
+                None => self.measure_node(root, constraints),
+            }
+        })
     }
 
     // Takes the nodes the dirty bubbles started from and measures from

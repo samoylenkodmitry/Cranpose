@@ -28,6 +28,7 @@ impl LayoutBuilderState {
         placements: &mut Vec<Placement>,
         placement_indices: &mut Vec<usize>,
     ) -> ModifierChainMeasurement {
+        let _reading = self.context.measure_reads.reading(node_id);
         let scope = crate::density::DensityMeasureScope::new(chain.density);
 
         if !chain.uses_chain {
@@ -77,23 +78,7 @@ impl LayoutBuilderState {
             .measure_from(0, &frame, constraints);
         let (content_x, content_y) = placeable.content_offset();
 
-        let invalidations = frame.take_invalidations();
-        if !invalidations.is_empty() {
-            self.with_applier_result(|applier| {
-                applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    for kind in invalidations {
-                        match kind {
-                            InvalidationKind::Layout => layout_node.mark_needs_measure(),
-                            InvalidationKind::Draw => layout_node.mark_needs_redraw(),
-                            InvalidationKind::Semantics => layout_node.mark_needs_semantics(),
-                            InvalidationKind::PointerInput => layout_node.mark_needs_pointer_pass(),
-                            InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
-                        }
-                    }
-                })
-            })
-            .ok();
-        }
+        self.mark_invalidations(node_id, frame.take_invalidations());
 
         ModifierChainMeasurement {
             alignment_lines: placeable.alignment_lines(),
@@ -122,5 +107,26 @@ impl LayoutBuilderState {
                     runtime_state.child_measurables(),
                 ),
         }
+    }
+    // Marks the node `node_id` with what its modifier chain invalidated while
+    // it measured.
+    fn mark_invalidations(&self, node_id: NodeId, invalidations: Vec<InvalidationKind>) {
+        if invalidations.is_empty() {
+            return;
+        }
+        self.with_applier_result(|applier| {
+            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                for kind in invalidations {
+                    match kind {
+                        InvalidationKind::Layout => layout_node.mark_needs_measure(),
+                        InvalidationKind::Draw => layout_node.mark_needs_redraw(),
+                        InvalidationKind::Semantics => layout_node.mark_needs_semantics(),
+                        InvalidationKind::PointerInput => layout_node.mark_needs_pointer_pass(),
+                        InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
+                    }
+                }
+            })
+        })
+        .ok();
     }
 }

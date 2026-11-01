@@ -63,6 +63,8 @@ pub mod diagnostics;
 #[cfg(any(feature = "internal", test))]
 mod frame_clock;
 mod hooks;
+#[cfg(feature = "internal")]
+mod node_reads;
 pub(crate) use key_group::{explicit_group_key_seed, hash_key};
 mod key_group;
 pub use key_group::{key, with_key};
@@ -150,7 +152,10 @@ pub use stage_times::{StageTimes, stage_ms};
 #[cfg(feature = "internal")]
 #[doc(hidden)]
 pub mod internal {
-    pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
+    pub use crate::{
+        frame_clock::{FrameCallbackRegistration, FrameClock},
+        node_reads::{NodeReads, ReaderGuard},
+    };
 }
 pub use applier_host::{ApplierGuard, ApplierHost, ConcreteApplierHost, NodeDisposal};
 pub use blocking::{

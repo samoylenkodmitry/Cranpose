@@ -26,6 +26,7 @@ impl LayoutBuilderState {
         measured_children: &MeasuredChildren,
         measure_error: &RefCell<Option<NodeError>>,
     ) -> Result<cranpose_ui_layout::MeasureResult, NodeError> {
+        let _reading = self.context.measure_reads.reading(node_id);
         let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
         if let Some(result) = node_handle.measure_retained(&*applier_host, node_id, constraints) {
             return Ok(result);
