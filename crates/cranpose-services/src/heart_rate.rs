@@ -25,8 +25,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use cranpose_core::{State, rememberEventStream};
-use portable_atomic::AtomicU64;
+use cranpose_core::{ProcessIds, State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 
@@ -173,7 +172,7 @@ fn resting_reading() -> HeartRate {
 
 type Observer = Arc<dyn Fn(HeartRate) + Send + Sync>;
 
-static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVER: ProcessIds = ProcessIds::starting_at(1);
 /// How many active readers want the sensor running.
 static READERS: AtomicUsize = AtomicUsize::new(0);
 
@@ -272,7 +271,7 @@ pub fn observe_heart_rate(
     read: bool,
     observer: impl Fn(HeartRate) + Send + Sync + 'static,
 ) -> HeartRateReader {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     let observer: Observer = Arc::new(observer);
     if let Ok(mut observers) = observers().lock() {
         observers.push((id, Arc::clone(&observer)));

@@ -12,11 +12,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, atomic::Ordering},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
 };
 
-use cranpose_core::{EventStream, rememberEventStream};
-use portable_atomic::AtomicU64;
+use cranpose_core::{EventStream, ProcessIds, rememberEventStream};
 
 /// One message on the line between the application and its host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,7 +92,7 @@ fn outbox() -> MutexGuard<'static, Option<Outbox>> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_ID: ProcessIds = ProcessIds::starting_at(1);
 
 /// Keeps a host message observer registered until it is dropped.
 pub struct HostMessageObserver {
@@ -114,7 +113,7 @@ pub fn observe_host_messages(
     channel: &str,
     observer: impl Fn(String) + Send + Sync + 'static,
 ) -> HostMessageObserver {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_ID.next();
     let observer: Observer = Arc::new(observer);
     let replay = mailbox().observe(id, channel, Arc::clone(&observer));
     if let Some(payload) = replay {

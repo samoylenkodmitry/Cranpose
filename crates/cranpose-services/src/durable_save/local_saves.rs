@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
-use super::{NEXT_SAVE, Ordering, SaveBatch};
+use super::{NEXT_SAVE, SaveBatch};
 use crate::preferences::PreferencesRef;
 
 struct LocalSave {
@@ -100,7 +100,7 @@ pub(crate) fn register(
     key: String,
     read: impl Fn() -> Option<String> + 'static,
 ) -> SaveableRegistration {
-    let id = NEXT_SAVE.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_SAVE.next();
     crate::thread_state::with(|state| {
         let mut saves = state.local_saves.borrow_mut();
         saves.retired.remove(&key);

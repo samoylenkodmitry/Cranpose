@@ -7,10 +7,9 @@
 //! different size — reads observable state here instead of reaching for a
 //! platform API and a resize callback of its own.
 
-use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use cranpose_core::{State, rememberEventStream};
-use portable_atomic::AtomicU64;
+use cranpose_core::{ProcessIds, State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 
@@ -150,7 +149,7 @@ fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVER: ProcessIds = ProcessIds::starting_at(1);
 
 /// Keeps a host-surface observer registered until it is dropped.
 pub struct HostSurfaceObserver {
@@ -170,7 +169,7 @@ impl Drop for HostSurfaceObserver {
 pub fn observe_host_surface_size(
     observer: impl Fn(HostSurfaceSize) + Send + Sync + 'static,
 ) -> HostSurfaceObserver {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     if let Ok(mut observers) = observers().lock() {
         observers.push((id, Arc::new(observer)));
     }

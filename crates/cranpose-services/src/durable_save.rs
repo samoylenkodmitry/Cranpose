@@ -1,11 +1,11 @@
 use std::{
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex, OnceLock, PoisonError, atomic::Ordering},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::Duration,
 };
 
-use portable_atomic::AtomicU64;
+use cranpose_core::ProcessIds;
 
 use crate::preferences::{PreferencesError, PreferencesRef};
 
@@ -45,7 +45,7 @@ enum SaveWork {
     },
 }
 
-static NEXT_SAVE: AtomicU64 = AtomicU64::new(1);
+static NEXT_SAVE: ProcessIds = ProcessIds::starting_at(1);
 type Saves = BTreeMap<u64, Arc<SaveWork>>;
 
 fn saves() -> &'static Mutex<Saves> {
@@ -69,7 +69,7 @@ impl Drop for DurableSaveRegistration {
 }
 
 fn register(work: SaveWork) -> DurableSaveRegistration {
-    let id = NEXT_SAVE.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_SAVE.next();
     saves()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

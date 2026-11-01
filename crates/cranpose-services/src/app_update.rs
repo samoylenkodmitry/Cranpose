@@ -6,9 +6,9 @@
 //! platform's installer: a digest computed four different ways is four chances
 //! to compute it wrongly, and one of them will be the one nobody tested.
 
-use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use portable_atomic::AtomicU64;
+use cranpose_core::ProcessIds;
 use sha2::{Digest, Sha256};
 
 use crate::registry::ServiceRegistry;
@@ -472,7 +472,7 @@ fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
     OBSERVERS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-static NEXT_OBSERVER_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVER_ID: ProcessIds = ProcessIds::starting_at(1);
 
 /// Registration returned by [`observe_app_update_status`].
 pub struct AppUpdateObserver {
@@ -495,7 +495,7 @@ impl Drop for AppUpdateObserver {
 pub fn observe_app_update_status(
     observer: impl Fn(AppUpdateStatus) + Send + Sync + 'static,
 ) -> AppUpdateObserver {
-    let id = NEXT_OBSERVER_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER_ID.next();
     let observer: Observer = Arc::new(observer);
     if let Ok(mut observers) = observers().lock() {
         observers.push((id, Arc::clone(&observer)));
@@ -509,7 +509,7 @@ pub fn observe_app_update_status(
 pub fn observe_app_update_status(
     observer: impl Fn(AppUpdateStatus) + 'static,
 ) -> AppUpdateObserver {
-    let id = NEXT_OBSERVER_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER_ID.next();
     let observer: std::rc::Rc<dyn Fn(AppUpdateStatus)> = std::rc::Rc::new(observer);
     crate::thread_state::with(|state| {
         state
