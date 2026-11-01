@@ -12,6 +12,7 @@ mod node_marks;
 #[path = "support/ordered_parent.rs"]
 mod ordered_parent;
 mod pausable_content;
+mod process_ids;
 mod recompose_ancestors_first;
 mod recompose_child_order;
 #[cfg(feature = "inspection")]

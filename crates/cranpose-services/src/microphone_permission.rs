@@ -17,10 +17,9 @@
 //! the first time an application records), the permission reads
 //! [`MicrophonePermission::Granted`].
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, atomic::Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use cranpose_core::{State, rememberEventStream};
-use portable_atomic::AtomicU64;
+use cranpose_core::{ProcessIds, State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 
@@ -136,7 +135,7 @@ impl Drop for PreparedMicrophone {
 
 type Observer = Arc<dyn Fn(MicrophonePermission) + Send + Sync>;
 
-static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVER: ProcessIds = ProcessIds::starting_at(1);
 
 fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
     static OBSERVERS: OnceLock<Mutex<Vec<(u64, Observer)>>> = OnceLock::new();
@@ -174,7 +173,7 @@ impl Drop for MicrophonePermissionObserver {
 pub fn observe_microphone_permission(
     observer: impl Fn(MicrophonePermission) + Send + Sync + 'static,
 ) -> MicrophonePermissionObserver {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     let observer: Observer = Arc::new(observer);
     if let Ok(mut observers) = observers().lock() {
         observers.push((id, Arc::clone(&observer)));

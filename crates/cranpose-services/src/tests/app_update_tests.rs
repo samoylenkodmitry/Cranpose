@@ -1,4 +1,7 @@
-use std::sync::{PoisonError, atomic::AtomicUsize};
+use std::sync::{
+    PoisonError,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use super::*;
 

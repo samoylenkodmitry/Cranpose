@@ -100,6 +100,8 @@ pub use anchor_id::AnchorId;
 mod packed_u64;
 pub use node_error::NodeError;
 pub use packed_u64::PackedU64;
+mod process_ids;
+pub use process_ids::ProcessIds;
 /// `Owned`, the handle to a value that a composition remembers.
 pub mod owned;
 mod pausable;

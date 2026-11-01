@@ -651,7 +651,7 @@ fn bridge_channel(bridge: u64) -> Option<Rc<dyn Any>> {
     crate::thread_state::runtimes(|state| state.bridges.borrow().get(&bridge).cloned())
 }
 
-static NEXT_BRIDGE: portable_atomic::AtomicU64 = portable_atomic::AtomicU64::new(1);
+static NEXT_BRIDGE: crate::ProcessIds = crate::ProcessIds::starting_at(1);
 
 fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
     let Some(channel) = bridge_channel(bridge) else {
@@ -670,7 +670,7 @@ struct Bridge<T: Send + 'static> {
 
 impl<T: Send + 'static> Bridge<T> {
     fn new() -> Self {
-        let id = NEXT_BRIDGE.fetch_add(1, Ordering::Relaxed);
+        let id = NEXT_BRIDGE.next();
         let channel = Rc::new(EventChannel::<T>::new());
         crate::thread_state::runtimes(|state| {
             state

@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use portable_atomic::AtomicU64;
+use cranpose_core::ProcessIds;
 
 pub use crate::durable_save::{
     DurableSaveEffect, DurableSaveError, DurableSaveOutcome, DurableSaveRegistration,
@@ -253,7 +253,7 @@ fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
     static SLOT: OnceLock<Mutex<Vec<(u64, Observer)>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_ID: ProcessIds = ProcessIds::starting_at(1);
 static LIFECYCLE_STATE: AtomicU8 = AtomicU8::new(LifecycleState::Created as u8);
 static KEEP_SCREEN_ON: AtomicU8 = AtomicU8::new(0);
 
@@ -276,7 +276,7 @@ impl Drop for LifecycleObserver {
 pub fn observe_lifecycle(
     observer: impl Fn(LifecycleEvent) + Send + Sync + 'static,
 ) -> LifecycleObserver {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_ID.next();
     if let Ok(mut list) = observers().lock() {
         list.push((id, Arc::new(observer)));
     }
@@ -285,7 +285,7 @@ pub fn observe_lifecycle(
 /// Observes host lifecycle transitions until the returned handle is dropped.
 #[cfg(target_arch = "wasm32")]
 pub fn observe_lifecycle(observer: impl Fn(LifecycleEvent) + 'static) -> LifecycleObserver {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_ID.next();
     crate::thread_state::with(|state| {
         state
             .lifecycle_observers

@@ -38,10 +38,10 @@
 use std::sync::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, OnceLock, atomic::Ordering},
+    sync::{Arc, OnceLock},
 };
 
-use portable_atomic::AtomicU64;
+use cranpose_core::ProcessIds;
 
 use crate::registry::{RecoveryGate, ServiceRegistry};
 
@@ -308,7 +308,7 @@ fn store_listeners() -> &'static Mutex<Vec<(u64, StoreListener)>> {
     LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-static NEXT_STORE_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_STORE_LISTENER_ID: ProcessIds = ProcessIds::starting_at(1);
 
 /// A store observer installed by [`observe_store_news`].
 pub struct StoreObserver {
@@ -339,7 +339,7 @@ impl Drop for StoreObserver {
 /// `Send + Sync`. Browser callbacks remain on their browser thread.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn observe_store_news(listener: impl Fn() + Send + Sync + 'static) -> StoreObserver {
-    let id = NEXT_STORE_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_STORE_LISTENER_ID.next();
     if let Ok(mut listeners) = store_listeners().lock() {
         listeners.push((id, Arc::new(listener)));
     }
@@ -349,7 +349,7 @@ pub fn observe_store_news(listener: impl Fn() + Send + Sync + 'static) -> StoreO
 /// Registers a browser-thread callback run whenever the store has news.
 #[cfg(target_arch = "wasm32")]
 pub fn observe_store_news(listener: impl Fn() + 'static) -> StoreObserver {
-    let id = NEXT_STORE_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_STORE_LISTENER_ID.next();
     crate::thread_state::with(|state| state.store_listeners.add(id, std::rc::Rc::new(listener)));
     StoreObserver { id }
 }

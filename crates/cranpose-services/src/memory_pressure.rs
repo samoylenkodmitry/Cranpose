@@ -6,10 +6,9 @@
 //! stream and give back what they can rebuild — caches, warm model sessions,
 //! pools.
 
-use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use cranpose_core::{EventStream, rememberEventStream};
-use portable_atomic::AtomicU64;
+use cranpose_core::{EventStream, ProcessIds, rememberEventStream};
 
 /// How hard the platform asks for memory back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +67,7 @@ fn registry() -> &'static Mutex<Registry> {
     REGISTRY.get_or_init(|| Mutex::new(Registry::new()))
 }
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_ID: ProcessIds = ProcessIds::starting_at(1);
 
 /// Keeps an observer registered until it is dropped.
 pub struct MemoryPressureObserver {
@@ -90,7 +89,7 @@ impl Drop for MemoryPressureObserver {
 pub fn observe_memory_pressure(
     observer: impl Fn(MemoryPressure) + Send + Sync + 'static,
 ) -> MemoryPressureObserver {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_ID.next();
     if let Ok(mut registry) = registry().lock() {
         registry.observe(id, Arc::new(observer));
     }

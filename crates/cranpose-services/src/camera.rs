@@ -23,7 +23,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
-use cranpose_core::{EventStream, State, rememberEventStream};
+use cranpose_core::{EventStream, ProcessIds, State, rememberEventStream};
 use portable_atomic::AtomicU64;
 
 use crate::registry::ServiceRegistry;
@@ -561,7 +561,7 @@ fn lens_observers() -> &'static Mutex<Vec<(u64, LensObserver)>> {
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVER: ProcessIds = ProcessIds::starting_at(1);
 
 /// Keeps a camera observer registered until it is dropped.
 pub struct CameraObserver {
@@ -715,7 +715,7 @@ pub fn camera_lenses() -> CameraLenses {
 pub fn observe_camera_frames(
     observer: impl Fn(CameraFrame) + Send + Sync + 'static,
 ) -> CameraObserver {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     if let Ok(mut observers) = frame_observers().lock() {
         observers.push((id, Arc::new(observer)));
     }
@@ -731,7 +731,7 @@ pub fn observe_camera_frames(
 pub fn observe_camera_state(
     observer: impl Fn(CameraState) + Send + Sync + 'static,
 ) -> CameraObserver {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     let observer: StateObserver = Arc::new(observer);
     if let Ok(mut observers) = state_observers().lock() {
         observers.push((id, Arc::clone(&observer)));
@@ -747,7 +747,7 @@ pub fn observe_camera_state(
 pub fn observe_camera_stills(
     observer: impl Fn(Result<CameraStill, CameraError>) + Send + Sync + 'static,
 ) -> CameraObserver {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     if let Ok(mut observers) = still_observers().lock() {
         observers.push((id, Arc::new(observer)));
     }
@@ -763,7 +763,7 @@ pub fn observe_camera_stills(
 pub fn observe_camera_lenses(
     observer: impl Fn(CameraLenses) + Send + Sync + 'static,
 ) -> CameraObserver {
-    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_OBSERVER.next();
     let observer: LensObserver = Arc::new(observer);
     if let Ok(mut observers) = lens_observers().lock() {
         observers.push((id, Arc::clone(&observer)));

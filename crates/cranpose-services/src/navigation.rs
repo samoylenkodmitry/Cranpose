@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, OnceLock};
 
-use portable_atomic::AtomicU64;
+use cranpose_core::ProcessIds;
 
 #[cfg(not(target_arch = "wasm32"))]
 type BackListener = Arc<dyn Fn(BackSignal) + Send + Sync + 'static>;
@@ -76,7 +76,7 @@ pub(crate) enum BackSignal {
 
 static BACK_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static BACK_INTERCEPTION: AtomicBool = AtomicBool::new(false);
-static NEXT_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_LISTENER_ID: ProcessIds = ProcessIds::starting_at(1);
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Record a system back request (called by the platform backend's gesture /
@@ -139,7 +139,7 @@ pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserv
 fn observe_back_signals(
     listener: impl Fn(BackSignal) + Send + Sync + 'static,
 ) -> BackRequestObserver {
-    let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_LISTENER_ID.next();
     if let Ok(mut listeners) = back_listeners().lock() {
         listeners.push((id, Arc::new(listener)));
     }
@@ -148,7 +148,7 @@ fn observe_back_signals(
 
 #[cfg(target_arch = "wasm32")]
 fn observe_back_signals(listener: impl Fn(BackSignal) + 'static) -> BackRequestObserver {
-    let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    let id = NEXT_LISTENER_ID.next();
     crate::thread_state::with(|state| state.back_listeners.add(id, std::rc::Rc::new(listener)));
     BackRequestObserver { id }
 }

@@ -1,10 +1,10 @@
 //! Who hears the media service: the observers of its playback state, position,
 //! commands, audio focus and analysis samples.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
+use cranpose_core::ProcessIds;
 use parking_lot::Mutex;
-use portable_atomic::AtomicU64;
 
 use super::{
     AudioFocus, MediaCommand, MediaMetadata, MediaSamples, PlaybackProgress, PlaybackState,
@@ -23,7 +23,7 @@ impl<T: ?Sized> ObserverList<T> {
     }
 
     pub(super) fn add(&self, observer: Arc<T>) -> u64 {
-        let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+        let id = NEXT_OBSERVER.next();
         self.entries.lock().push((id, observer));
         id
     }
@@ -45,7 +45,7 @@ impl<T: ?Sized> ObserverList<T> {
     }
 }
 
-static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVER: ProcessIds = ProcessIds::starting_at(1);
 
 type StateObserverFn = dyn Fn(PlaybackState) + Send + Sync;
 type ProgressObserverFn = dyn Fn(PlaybackProgress) + Send + Sync;
