@@ -8,6 +8,7 @@ mod frame_scheduler;
 mod hit_path_tracker;
 pub mod inspector;
 mod modal_focus;
+mod requested_mouse_moves;
 #[cfg(debug_assertions)]
 mod semantics_check;
 mod shell_debug;
@@ -1412,36 +1413,6 @@ where
     fn give_press_to(&mut self, node: NodeId) {
         for index in 0..self.surfaces.len() {
             SurfaceMut::new(self, index).give_press_to(node);
-        }
-    }
-
-    fn dispatch_requested_mouse_moves(&mut self, frame_time: u64) {
-        let pending = self.app.app_context.pending_mouse_moves();
-        if pending > 0 {
-            self.dispatch_mouse_moves(pending, frame_time);
-        }
-    }
-
-    /// Moves the cursor of each surface that `pending` requested mouse moves
-    /// name. Out of line, as most frames have none.
-    #[inline(never)]
-    fn dispatch_mouse_moves(&mut self, pending: usize, frame_time: u64) {
-        use cranpose_ui::mouse_input::MouseInputTarget;
-        for _ in 0..pending {
-            let Some(request) = self.app.app_context.take_mouse_move() else {
-                break;
-            };
-            let root = match request.target {
-                MouseInputTarget::Primary => RootId::Primary,
-                MouseInputTarget::Window(id) => RootId::Window(id),
-            };
-            if let Some(mut surface) = self.surface(root) {
-                surface.set_pointer_source(PointerSource::Mouse);
-                surface.set_cursor_at_event_time(request.position.x, request.position.y, PointerEventTime {
-                    platform_time_ms: Some((frame_time / 1_000_000).min(i64::MAX as u64) as i64),
-                    animation_time_nanos: frame_time,
-                });
-            }
         }
     }
 
