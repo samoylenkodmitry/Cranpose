@@ -51,12 +51,20 @@ impl<T> SceneList<T> {
         self.0.clear();
     }
 
-    // Makes room for `additional` more items.
+    // Makes room for `additional` more items. Only the test is inlined: a
+    // push runs on every frame that draws, and growth seldom.
+    #[inline]
     fn reserve(&mut self, additional: usize) {
         if self.0.capacity() - self.0.len() < additional {
-            self.0
-                .reserve_exact(additional.max(self.0.len() / 4).max(MIN_GROWTH));
+            self.grow(additional);
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, additional: usize) {
+        self.0
+            .reserve_exact(additional.max(self.0.len() / 4).max(MIN_GROWTH));
     }
 }
 
