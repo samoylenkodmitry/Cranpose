@@ -258,8 +258,8 @@ impl LazyListState {
             .unwrap_or(std::ptr::null())
     }
 
-    /// Returns the index of the first visible item.
-    ///
+    /// The index of the first visible item: the first to end past the edge
+    /// of the start content padding, as in Compose.
     /// When called during composition, this creates a reactive subscription
     /// so that changes to the index will trigger recomposition.
     pub fn first_visible_item_index(&self) -> usize {
@@ -282,7 +282,7 @@ impl LazyListState {
 
     /// Returns the scroll offset of the first visible item.
     ///
-    /// This is the amount the first item is scrolled off-screen (positive = scrolled up/left).
+    /// This is how far the first item is scrolled past the start padding's edge (positive = up/left).
     /// When called during composition, this creates a reactive subscription
     /// so that changes to the offset will trigger recomposition.
     pub fn first_visible_item_scroll_offset(&self) -> f32 {
@@ -515,11 +515,11 @@ impl LazyListState {
         self.scroll_in_progress_state.set(moving);
     }
 
-    /// Scrolls to the specified item index.
+    /// Puts the item at `index` at the edge of the start content padding.
     ///
     /// # Arguments
     /// * `index` - The index of the item to scroll to
-    /// * `scroll_offset` - Additional offset within the item (default 0)
+    /// * `scroll_offset` - How far past that edge the item is scrolled (default 0)
     pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
         if !self.inner.is_alive() {
             return;

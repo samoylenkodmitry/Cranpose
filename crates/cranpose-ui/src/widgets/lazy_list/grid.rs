@@ -190,19 +190,22 @@ impl Default for LazyGridState {
 }
 
 impl LazyGridState {
-    /// The first item of the first line the grid shows. A composable that
-    /// reads it recomposes when it changes.
+    /// The first item of the first line that ends past the edge of the start
+    /// content padding. A composable that reads it recomposes when it
+    /// changes.
     pub fn first_visible_item_index(&self) -> usize {
         let line = self.list.first_visible_item_index();
         self.lines.borrow().line(line).first
     }
 
-    /// How far the first visible line is scrolled past the top.
+    /// How far the first visible line is scrolled past the start padding's
+    /// edge.
     pub fn first_visible_item_scroll_offset(&self) -> f32 {
         self.list.first_visible_item_scroll_offset()
     }
 
-    /// Scrolls the line of `index` to the top, moved `offset` further.
+    /// Scrolls the line of `index` to the edge of the start content padding,
+    /// moved `offset` further.
     /// Before the grid's first layout it goes there on that layout.
     pub fn scroll_to_item(&self, index: usize, offset: f32) {
         let lines = self.lines.borrow();
