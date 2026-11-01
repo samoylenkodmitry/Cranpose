@@ -297,13 +297,9 @@ pub(super) fn measure_staggered_viewport(
             content.get_index_by_slot_id_in_range(slot_id, near.clone())
         });
     }
-    let inputs = LazyListItemMeasureInputs {
-        axis: frame.axis,
-        cross_axis_size: available,
-        content,
-        state,
-        measured_item_cache: context.measured_item_cache,
-    };
+    let first_item = std::cell::Cell::new(None);
+    let inputs =
+        LazyListItemMeasureInputs::new(context, (frame.axis, available), content, &first_item);
     // While the grid holds the focus, the focused item stays placed and so
     // do the items beyond the viewport, where a focus search can move into
     // them.

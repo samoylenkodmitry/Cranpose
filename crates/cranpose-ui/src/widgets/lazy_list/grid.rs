@@ -788,13 +788,9 @@ pub(super) fn measure_grid_viewport(
                 .map(|item| lines.line_of(item))
         });
     }
-    let inputs = LazyListItemMeasureInputs {
-        axis: frame.axis,
-        cross_axis_size: available,
-        content,
-        state,
-        measured_item_cache: context.measured_item_cache,
-    };
+    let first_item = std::cell::Cell::new(None);
+    let inputs =
+        LazyListItemMeasureInputs::new(context, (frame.axis, available), content, &first_item);
     // While the grid holds the focus, the focused cell's line stays placed
     // and so do the lines beyond the viewport, where a focus search can move
     // into them.
