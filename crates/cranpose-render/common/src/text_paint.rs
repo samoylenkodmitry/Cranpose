@@ -82,8 +82,9 @@ impl TextPaint {
                 .unwrap_or(TextMotion::Static)
                 == TextMotion::Static,
             casts_shadow: span_style.shadow.is_some() || span_paint.shadow,
-            // A plain text and its spans draw no stroke.
-            spread: if plain {
+            // A plain text and its spans draw no stroke, and most cast no
+            // shadow.
+            spread: if plain && !span_paint.shadow {
                 InkSpread::of(0.0, layout.synthesized_style())
             } else {
                 InkSpread::of_text(style, spans, layout)

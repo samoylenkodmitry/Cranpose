@@ -49,9 +49,25 @@ fn dark_pixels(label: &'static str, span: SpanStyle, paragraph: ParagraphStyle) 
     dark_pixels_after(&[], label, (span, paragraph))
 }
 
+// `dark_pixels_after` of `label` alone, every pixel darker than `level`.
+fn pixels_darker_than(level: u8, label: &'static str, span: SpanStyle) -> Vec<(u32, u32)> {
+    pixels_after(level, &[], label, (span, ParagraphStyle::default()))
+}
+
 // `dark_pixels` of `label`, which the screen shows after each of `before`
 // in a frame of its own.
 fn dark_pixels_after(
+    before: &[&'static str],
+    label: &'static str,
+    styles: (SpanStyle, ParagraphStyle),
+) -> Vec<(u32, u32)> {
+    pixels_after(128, before, label, styles)
+}
+
+// The pixels darker than `level` of `label`, which the screen shows after
+// each of `before` in a frame of its own.
+fn pixels_after(
+    level: u8,
     before: &[&'static str],
     label: &'static str,
     (span, paragraph): (SpanStyle, ParagraphStyle),
@@ -87,7 +103,7 @@ fn dark_pixels_after(
         .0
         .iter()
         .enumerate()
-        .filter(|(_, pixel)| pixel[0] < 128)
+        .filter(|(_, pixel)| pixel[0] < level)
         .map(|(index, _)| (index as u32 % WIDTH, index as u32 / WIDTH))
         .collect()
 }
@@ -187,6 +203,33 @@ fn a_stroke_draws_its_outer_half_past_the_line_ends() {
         stroked.right,
         filled.left,
         filled.right
+    );
+}
+
+// A shadow blurred 12 pixels shades about as far past the glyph it copies,
+// past the label's box on both sides, as Compose draws it.
+#[test]
+fn a_blurred_shadow_draws_past_the_label_box() {
+    let glyph = ink("H", SpanStyle::default(), ParagraphStyle::default());
+    let shadow = SpanStyle {
+        shadow: Some(text::Shadow {
+            color: Color::BLACK,
+            offset: Point::new(0.0, 0.0),
+            blur_radius: 12.0,
+        }),
+        ..SpanStyle::default()
+    };
+    let columns = pixels_darker_than(250, "H", shadow)
+        .into_iter()
+        .map(|(x, _)| x);
+    let (left, right) = columns.fold((u32::MAX, 0), |(left, right), x| {
+        (left.min(x), right.max(x))
+    });
+    assert!(
+        left + 6 <= glyph.left && right >= glyph.right + 6,
+        "the shadow shades columns {left}..={right}, the glyph's ink {}..={}",
+        glyph.left,
+        glyph.right
     );
 }
 
