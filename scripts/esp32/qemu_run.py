@@ -196,8 +196,9 @@ def main():
     parser.add_argument("--log", type=pathlib.Path)
     parser.add_argument("--window", action="store_true")
     parser.add_argument("--icount", type=int, metavar="SHIFT",
-                        help="run the guest clock on instructions, 2^SHIFT ns each, so the "
-                             "firmware's timings count instructions and ignore host load")
+                        help="run the guest clock on instructions, 2^SHIFT ns each, and skip "
+                             "its idle time, so the firmware's timings count instructions, "
+                             "ignore host load and repeat from run to run")
     parser.add_argument("--plugin", help="a QEMU TCG plugin with its options, such as "
                                          "libhotblocks.so for guest instruction counts")
     parser.add_argument("--plugin-log", type=pathlib.Path, help="where the plugin writes")
@@ -235,7 +236,7 @@ def main():
     if not args.window:
         command += ["-monitor", f"unix:{pump_path},server,nowait"]
     if args.icount is not None:
-        command += ["-icount", f"shift={args.icount},align=off,sleep=on"]
+        command += ["-icount", f"shift={args.icount},align=off,sleep=off"]
     if args.plugin:
         command += ["-plugin", args.plugin]
         if args.plugin_log:

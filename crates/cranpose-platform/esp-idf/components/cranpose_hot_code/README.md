@@ -105,7 +105,12 @@ older build's functions (26.97 against 26.75 ms).
   the most; a list by sampled time also holds loops that the cache serves.
   On the same three screens the list by misses ran the ES3C35P's drawn line
   0.17 ms and its composed line 0.12 ms faster. The simulator's misses match
-  the board's waits: 305 to 320 cycles each.
+  the board's waits: 305 to 320 cycles each. With `--cache count` the plugin
+  counts the instructions each function runs instead, and `--icount 2` runs
+  the chip's clock on them: two runs of the dashboard's build then differ by
+  141 of 1.92 million instructions a frame, where without it they differ by
+  80 thousand. Two builds still draw other frames once their instruction
+  counts differ, as the dashboard's animations follow that clock.
 - `esp32.ld` comes from the board: `scripts/esp32/sampler` samples the PC
   5000 times a second. The simulator does not know the classic ESP32's
   cache yet, and its list ran the E32R35T's drawn line 0.24 ms slower.
