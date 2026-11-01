@@ -54,11 +54,18 @@ impl InkStyle {
         } else {
             FontStyle::Normal
         };
+        let synthesis =
+            |face: &cranpose_text::Typeface| face.synthesis(self.weight, style, FontSynthesis::All);
+        // Bold and italic text mostly has faces of its own.
+        if !layout.typefaces().iter().any(|face| {
+            let synthesis = synthesis(face);
+            synthesis.bold || synthesis.italic
+        }) {
+            return spread;
+        }
         for line in 0..layout.line_count() {
             for run in layout.glyph_runs(line) {
-                let synthesis = run
-                    .typeface
-                    .synthesis(self.weight, style, FontSynthesis::All);
+                let synthesis = synthesis(run.typeface);
                 if synthesis.bold {
                     let embolden = run.size * FAKE_BOLD_MAX_RATIO;
                     spread.around = spread.around.max(embolden * 0.5 * STROKE_MITER_LIMIT);
@@ -97,20 +104,50 @@ pub fn glyph_part(rect: Rect, layout: &TextLayout, scale: f32, spread: InkSpread
         width: whole::ceil(right * scale) - left,
         ..rect
     };
-    let Some(ink) = layout.ink_bounds() else {
+    if !layout.inks_past_lines() && spread == InkSpread::default() {
         return lines;
+    }
+    with_ink(lines, (rect, layout, scale), spread)
+}
+
+// `lines`, the part of `rect` across the visible text of `layout`'s lines,
+// grown by the ink its glyphs put past it, spread by `spread`. Out of line:
+// most text keeps its ink within its lines and spreads none.
+#[inline(never)]
+fn with_ink(
+    lines: Rect,
+    (rect, layout, scale): (Rect, &TextLayout, f32),
+    spread: InkSpread,
+) -> Rect {
+    let past = layout.ink_past_lines();
+    let ink = if spread == InkSpread::default() {
+        let Some(past) = past else {
+            return lines;
+        };
+        past
+    } else {
+        let (left, right) = layout.lines_reach();
+        let within = Rect {
+            x: left,
+            y: 0.0,
+            width: right - left,
+            height: layout.height(),
+        };
+        past.map_or(within, |past| within.union(past))
     };
-    // Half a unit more on each side holds a glyph whose origin a renderer
-    // rounds to a whole pixel.
+    // A slant moves each point of a glyph by its height from the glyph's
+    // baseline, which lies within the ink's height. Half a unit more on each
+    // side holds a glyph whose origin a renderer rounds to a whole pixel.
     let InkSpread { around, skew } = spread;
-    let left = whole::floor((ink.rect.x - around - skew * ink.drop) * scale - 0.5);
-    let top = whole::floor((ink.rect.y - around) * scale - 0.5);
-    let right = (ink.rect.x + ink.rect.width + around + skew * ink.rise) * scale + 0.5;
-    let bottom = (ink.rect.y + ink.rect.height + around) * scale + 0.5;
+    let slant = skew * ink.height;
+    let left = whole::floor((ink.x - around - slant) * scale - 0.5);
+    let top = whole::floor((ink.y - around) * scale - 0.5);
+    let right = whole::ceil((ink.x + ink.width + around + slant) * scale + 0.5);
+    let bottom = whole::ceil((ink.y + ink.height + around) * scale + 0.5);
     lines.union(Rect {
         x: rect.x + left,
         y: rect.y + top,
-        width: whole::ceil(right) - left,
-        height: whole::ceil(bottom) - top,
+        width: right - left,
+        height: bottom - top,
     })
 }

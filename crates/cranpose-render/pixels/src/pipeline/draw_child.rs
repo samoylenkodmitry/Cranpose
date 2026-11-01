@@ -1,7 +1,6 @@
 // How a layer's own primitives, draw runs and text become raster items.
 
 use cranpose_render_common::{
-    glyph_reach::InkStyle,
     graph::{PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode},
     layer_transform::apply_layer_to_rect,
     primitive_emit::{
@@ -176,15 +175,12 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            let spread =
-                InkStyle::of(&params.text_style, &params.text.span_styles).spread(&params.layout);
             self.scene.push_text(TextDraw {
                 rect: params.rect,
                 snap_anchor: None,
                 text: params.text,
                 layout: params.layout,
                 ink: GlyphInk::Painted,
-                spread,
                 color: params.color,
                 text_style: params.text_style,
                 font_size: params.font_size,

@@ -1,9 +1,9 @@
+use cranpose_ui_graphics::Rect;
 use smallvec::SmallVec;
 
 use crate::{
     bidi_level::BidiLevel,
     index_range::widen,
-    ink_bounds::InkCache,
     laid_glyphs::{LaidGlyphs, RunGlyphs},
     paragraph::TextAlign,
     text_layout::{LayoutLine, LineRun, WidthRange},
@@ -47,8 +47,10 @@ pub(crate) struct LayoutBody {
     // How many glyphs, from the first, shaping placed: an ellipsis's and a
     // hyphen's follow them.
     pub(crate) shaped: usize,
-    // Where the glyphs put ink, in the places the lines now take.
-    pub(crate) ink: InkCache,
+    // The box around the ink the glyphs put past the visible text of their
+    // lines or past the layout's box, in the places the lines now take; most
+    // layouts have none, and keep no box.
+    pub(crate) ink: Option<Box<Rect>>,
 }
 
 impl LayoutBody {

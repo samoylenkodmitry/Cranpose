@@ -195,8 +195,6 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
         text,
         layout,
         ink,
-        // Follows from the text, the style and the layout.
-        spread: _,
         color,
         text_style,
         font_size,

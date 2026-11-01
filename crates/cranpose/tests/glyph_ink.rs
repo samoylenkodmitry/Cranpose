@@ -23,6 +23,29 @@ struct Ink {
 // The ink of `label` drawn black over white at 40 sp in `span` and
 // `paragraph`, its box 30 pixels in from the screen's corner.
 fn ink(label: &'static str, span: SpanStyle, paragraph: ParagraphStyle) -> Ink {
+    let dark = dark_pixels(label, span, paragraph);
+    dark.into_iter()
+        .fold(None, |ink: Option<Ink>, (x, y)| {
+            Some(match ink {
+                None => Ink {
+                    left: x,
+                    top: y,
+                    right: x,
+                    bottom: y,
+                },
+                Some(ink) => Ink {
+                    left: ink.left.min(x),
+                    top: ink.top.min(y),
+                    right: ink.right.max(x),
+                    bottom: ink.bottom.max(y),
+                },
+            })
+        })
+        .expect("the label draws")
+}
+
+// The pixels `label` drawn as `ink` draws it darkens, as columns and rows.
+fn dark_pixels(label: &'static str, span: SpanStyle, paragraph: ParagraphStyle) -> Vec<(u32, u32)> {
     let style = TextStyle {
         span_style: SpanStyle {
             color: Some(Color::BLACK),
@@ -60,34 +83,14 @@ fn ink(label: &'static str, span: SpanStyle, paragraph: ParagraphStyle) -> Ink {
         },
         &mut picture,
     );
-    let dark = picture
+    picture
         .as_chunks::<4>()
         .0
         .iter()
         .enumerate()
         .filter(|(_, pixel)| pixel[0] < 128)
-        .map(|(index, _)| (index as u32 % WIDTH, index as u32 / WIDTH));
-    dark.fold(None, |ink: Option<Ink>, (x, y)| {
-        Some(match ink {
-            None => Ink {
-                left: x,
-                top: y,
-                right: x,
-                bottom: y,
-            },
-            Some(ink) => Ink {
-                left: ink.left.min(x),
-                top: ink.top.min(y),
-                right: ink.right.max(x),
-                bottom: ink.bottom.max(y),
-            },
-        })
-    })
-    .expect("the label draws")
-}
-
-fn upright() -> SpanStyle {
-    SpanStyle::default()
+        .map(|(index, _)| (index as u32 % WIDTH, index as u32 / WIDTH))
+        .collect()
 }
 
 fn italic() -> SpanStyle {
@@ -108,7 +111,7 @@ fn stroked(width: f32) -> SpanStyle {
 // the right, past the H's advance, and the slanted part draws.
 #[test]
 fn a_slanted_glyph_draws_past_its_advance() {
-    let plain = ink("H", upright(), ParagraphStyle::default());
+    let plain = ink("H", SpanStyle::default(), ParagraphStyle::default());
     let slanted = ink("H", italic(), ParagraphStyle::default());
     let slant = (plain.bottom - plain.top) / 4;
     assert!(
@@ -120,11 +123,28 @@ fn a_slanted_glyph_draws_past_its_advance() {
     );
 }
 
+// The hook of an `f` reaches past its advance, and draws whole where the
+// `f` ends its line as where a period follows it.
+#[test]
+fn an_f_that_ends_a_line_draws_its_overhang() {
+    let alone = ink("f", SpanStyle::default(), ParagraphStyle::default());
+    let columns: Vec<u32> = dark_pixels("f.", SpanStyle::default(), ParagraphStyle::default())
+        .into_iter()
+        .map(|(x, _)| x)
+        .collect();
+    let followed = first_stretch_end(columns);
+    assert_eq!(
+        alone.right, followed,
+        "the f alone ends at column {}, before a period at {followed}",
+        alone.right
+    );
+}
+
 // A stroke's outer half lies outside the outline, past the line's first and
 // last advance edge, and draws on both sides.
 #[test]
 fn a_stroke_draws_its_outer_half_past_the_line_ends() {
-    let filled = ink("H", upright(), ParagraphStyle::default());
+    let filled = ink("H", SpanStyle::default(), ParagraphStyle::default());
     let stroked = ink("H", stroked(12.0), ParagraphStyle::default());
     assert!(
         stroked.left + 6 <= filled.left && stroked.right >= filled.right + 6,
@@ -142,7 +162,7 @@ fn a_stroke_draws_its_outer_half_past_the_line_ends() {
 fn stacked_marks_draw_above_the_box() {
     let marked = ink(
         "A\u{302}\u{302}\u{302}",
-        upright(),
+        SpanStyle::default(),
         ParagraphStyle::default(),
     );
     assert!(
@@ -195,4 +215,12 @@ fn a_changing_label_changes_the_pixels_of_its_ink() {
         kept.draw_changed_areas(&mut framebuffer, frame);
         assert!(!kept.areas.is_empty(), "frame {frame}: the label changes");
     }
+}
+
+// The last of the first stretch of `columns` with no gap between them.
+fn first_stretch_end(mut columns: Vec<u32>) -> u32 {
+    columns.sort_unstable();
+    columns.dedup();
+    let gap = columns.windows(2).position(|pair| pair[1] > pair[0] + 1);
+    columns[gap.unwrap_or(columns.len() - 1)]
 }

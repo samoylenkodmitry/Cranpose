@@ -11,8 +11,8 @@ use cranpose_ui_graphics::Rect;
 use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
+    glyph_ink::{find_ink_past_lines, may_ink_past_lines},
     index_range::{IndexRange, widen},
-    ink_bounds::{InkBounds, InkCache},
     laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
     paragraph::TextAlign,
@@ -40,6 +40,8 @@ pub struct TextLayout {
     // edge of the leftmost to the right edge of the rightmost. Kept beside
     // the body, so a renderer reads it in the layout it holds.
     reach: (f32, f32),
+    // Whether the body holds ink past the lines, kept beside it as `reach`.
+    inks_past_lines: bool,
 }
 
 impl PartialEq for TextLayout {
@@ -311,6 +313,7 @@ impl TextLayout {
             wrap,
             id: 0,
             reach: (0.0, 0.0),
+            inks_past_lines: false,
         };
         layout.take_lines();
         layout
@@ -347,11 +350,6 @@ impl TextLayout {
     // how far their visible text reaches.
     fn take_lines(&mut self) {
         self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed).max(1);
-        // Every caller holds the body alone, as it has just filled or moved
-        // its lines, whose ink found before lies where they were.
-        if let Some(body) = Arc::get_mut(&mut self.body) {
-            body.ink = InkCache::default();
-        }
         self.reach = self
             .body
             .lines
@@ -361,6 +359,13 @@ impl TextLayout {
                 (left.min(line_left), right.max(line_right))
             })
             .unwrap_or_default();
+        let ink = may_ink_past_lines(&self.body)
+            .then(|| find_ink_past_lines(self))
+            .flatten();
+        self.inks_past_lines = ink.is_some();
+        // The body is the layout's alone here: it was just filled or its
+        // lines moved.
+        Arc::make_mut(&mut self.body).ink = ink.map(Box::new);
     }
 
     /// Whether the text laid out again between `min_width` and `max_width`,
@@ -492,11 +497,24 @@ impl TextLayout {
         self.reach
     }
 
-    /// Where the glyphs put ink, as their outlines give it: `None` when no
-    /// glyph has any. Found on the first call, and kept for the copies that
-    /// share the layout's lines.
-    pub fn ink_bounds(&self) -> Option<InkBounds> {
-        self.body.ink.of(self)
+    /// The typefaces the glyphs come from.
+    pub fn typefaces(&self) -> &[Typeface] {
+        &self.body.faces
+    }
+
+    /// Whether a glyph puts ink past the visible text of its line or past the
+    /// layout's box, as the overhang of an `f` that ends a line does: then
+    /// [`TextLayout::ink_past_lines`] says where.
+    pub fn inks_past_lines(&self) -> bool {
+        self.inks_past_lines
+    }
+
+    /// The box around the ink that glyphs put past the visible text of their
+    /// lines or past the layout's box, as their outlines give it, in pixels
+    /// from the layout's top left corner; `None` when every glyph's ink lies
+    /// within them.
+    pub fn ink_past_lines(&self) -> Option<Rect> {
+        self.body.ink.as_deref().copied()
     }
 
     /// Whether the text had more lines than the line limit: Compose's

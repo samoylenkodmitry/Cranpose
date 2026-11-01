@@ -3,7 +3,7 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    glyph_reach::{InkSpread, glyph_part},
+    glyph_reach::{InkStyle, glyph_part},
     graph::{InlineNode, LayerChange, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
@@ -121,9 +121,6 @@ pub(crate) struct TextDraw {
     pub layout: cranpose_text::TextLayout,
     // Whether the glyphs paint or only their shadows.
     pub ink: cranpose_render_common::text_raster::GlyphInk,
-    // How far past their outlines the glyphs put ink, as the text, the
-    // style and the layout set it.
-    pub spread: InkSpread,
     pub color: Color,
     pub text_style: Arc<TextStyle>,
     pub font_size: f32,
@@ -165,7 +162,9 @@ impl TextDraw {
         if casts_shadow(self.text.as_ref().into(), &self.text_style) {
             rect
         } else {
-            glyph_part(rect, &self.layout, self.scale, self.spread)
+            let spread =
+                InkStyle::of(&self.text_style, &self.text.span_styles).spread(&self.layout);
+            glyph_part(rect, &self.layout, self.scale, spread)
         }
     }
 

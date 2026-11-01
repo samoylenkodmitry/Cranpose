@@ -107,8 +107,8 @@ pub struct TextPrimitiveNode {
     pub font_size: f32,
     /// How the text was laid out to handle text that does not fit.
     pub overflow: TextOverflow,
-    /// Rectangle that cuts the glyphs, or `None` when overflow is visible and the text does not
-    /// pan.
+    /// Rectangle that cuts the glyphs: the node's box when the layout overflows it and overflow
+    /// is not visible, or when the text pans; `None` otherwise, as Compose cuts a text.
     pub clip: Option<Rect>,
     /// What a renderer reads of `text_style` and `text`'s spans to draw the
     /// glyphs, so that drawing a plain text does not load the style.

@@ -39,6 +39,10 @@ pub(crate) struct PackedGlyph {
 }
 
 impl PackedGlyph {
+    pub(crate) fn id(self) -> GlyphId {
+        GlyphId(u32::from(self.id))
+    }
+
     // `glyph` in eight bytes, its id and advance cut to their low bits, and
     // whether they fit them. No branch, so a layout's glyphs pack in one
     // pass.

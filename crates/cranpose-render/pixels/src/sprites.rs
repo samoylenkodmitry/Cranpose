@@ -615,8 +615,6 @@ fn hash_text(hasher: &mut FxHasher, draw: &TextDraw) {
         text,
         layout,
         ink,
-        // Follows from the text, the style and the layout.
-        spread: _,
         color,
         text_style,
         font_size,
