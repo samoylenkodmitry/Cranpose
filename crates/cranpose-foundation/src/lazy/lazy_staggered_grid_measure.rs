@@ -561,7 +561,7 @@ fn publish<S: LazyStaggeredItemSource>(
     let first_visible = visible
         .iter()
         .find(|item| item.offset + item.main_axis_size + config.spacing > pass.before)
-        .or(visible.last());
+        .or_else(|| visible.last());
     let first = first_visible.map_or(anchor, |item| item.index);
     let first_offset = scroll - lanes.slots[first].start;
     match first_visible {
