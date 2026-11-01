@@ -211,7 +211,14 @@ class HostLockProcesses(unittest.TestCase):
         cargo = self.bin / "cargo"
         cargo.write_text(f"#!/bin/sh\n: > '{called}'\nexit 79\n")
         cargo.chmod(0o755)
-        self.env.update(CRANPOSE_ROBOT_PARALLEL="1", CRANPOSE_USE_LOCAL_TMPDIR="0", CARGO_BUILD_JOBS="1")
+        # The host's temperature is not under test: a host above the guard's
+        # limit would wait out a cooldown and overrun the timeout.
+        self.env.update(
+            CRANPOSE_ROBOT_PARALLEL="1",
+            CRANPOSE_USE_LOCAL_TMPDIR="0",
+            CARGO_BUILD_JOBS="1",
+            CRANPOSE_HOST_GUARD="0",
+        )
         for fault in ("none", "all", "shared"):
             with self.subTest(fault=fault):
                 self.faulty_backend(fault)

@@ -310,8 +310,9 @@ jobs:
   architecture-budget:
     name: architecture budgets (linux)
     if: github.event_name != 'pull_request'
-    # The binary-size budget is pinned against Linux codegen.
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    # The binary-size budget is pinned against Linux codegen. Needs no GPU,
+    # so it also takes samarch's overflow runner.
+    runs-on: [self-hosted, Linux, cranpose-linux]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
