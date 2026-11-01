@@ -16,9 +16,9 @@
 // instructions, the line of the instruction that missed for data. With
 // `kind=count` no cache is modelled: a "miss" is an instruction run, and
 // each line is the start of a block of code with the instructions run in it.
-// Options:
-// kind, lo, hi, size, ways, line, frame, skip, frames, out. The ESP32-S3's
-// defaults: its 32 KB instruction cache of 8 ways and 32-byte lines over
+// QEMU exits once the counts are written. Options: kind, lo, hi, size, ways,
+// line, frame, skip, frames, out. The ESP32-S3's defaults: its 32 KB
+// instruction cache of 8 ways and 32-byte lines over
 // 0x42000000-0x44000000, and for data its 64 KB data cache of 8 ways and
 // 64-byte lines over 0x3C000000-0x3E000000, where the chip maps its flash's
 // read-only data and its PSRAM.
@@ -115,6 +115,8 @@ static void next_frame(void)
         if (n_counted == frames) {
             done = true;
             write_out();
+            // The counts are out: nothing the run does later is counted.
+            exit(0);
         }
     }
     memset(&current, 0, sizeof(current));

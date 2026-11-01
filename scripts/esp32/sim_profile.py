@@ -11,10 +11,12 @@ most waiting for. With `--cache data` the misses are those of the data
 cache, at the instructions that made them: the code that waits for PSRAM
 and for the flash's read-only data. With `--cache count` each count is the
 instructions run, the profile of a version's work where a change adds or
-drops some. A frame starts at the app shell's update.
+drops some; `--icount 2` runs the chip's clock on its instructions, so a
+build's runs repeat and two builds draw the same frames. A frame starts at
+the app shell's update.
 
 Usage: sim_profile.py ELF LOG [--cache instructions|data|count] [--bootloader BIN]
-       [--skip N] [--frames N]
+       [--skip N] [--frames N] [--icount SHIFT]
 """
 
 import argparse
@@ -54,6 +56,7 @@ def main():
     # host's time, more while it builds something else: the timeout only
     # stops a run that hangs.
     parser.add_argument("--timeout", type=float, default=900.0)
+    parser.add_argument("--icount", type=int, metavar="SHIFT")
     args = parser.parse_args()
 
     qemu = PLUGINS / "bin/qemu-system-xtensa"
@@ -71,6 +74,8 @@ def main():
         ]
         if args.bootloader:
             command += ["--bootloader", str(args.bootloader)]
+        if args.icount is not None:
+            command += ["--icount", str(args.icount)]
         # QEMU now and then stays in the ROM at boot; a second run boots.
         for _ in range(3):
             subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
