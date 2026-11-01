@@ -9,7 +9,7 @@ use std::{
 use cranpose_core::PackedU64;
 use cranpose_ui_layout::Constraints;
 
-use super::layout_node::{DescendantDirt, LayoutDirt};
+use super::layout_dirt::{DescendantDirt, LayoutDirt};
 use crate::layout::MeasuredNode;
 
 #[derive(Clone)]
@@ -99,6 +99,11 @@ impl NodeCacheState {
 pub(crate) struct NodeCache {
     cache: RefCell<NodeCacheState>,
     dirt: Cell<LayoutDirt>,
+    // Counts the clears, which every change of the node's parent data runs,
+    // and the node's drop, after which a recycled node may take its id with
+    // other parts. A parent's record that saw the same count binds the node
+    // again without looking it up.
+    revision: Cell<u32>,
 }
 
 impl NodeCache {
@@ -176,11 +181,20 @@ impl NodeCache {
     }
 
     pub(crate) fn clear(&self) {
+        self.advance_revision();
         let mut state = self.cache.borrow_mut();
         state.retire_measurement();
         state.intrinsics.clear();
         state.intrinsics_read = false;
         state.epoch = PackedU64::default();
+    }
+
+    pub(crate) fn revision(&self) -> u32 {
+        self.revision.get()
+    }
+
+    pub(crate) fn advance_revision(&self) {
+        self.revision.set(self.revision.get().wrapping_add(1));
     }
 
     pub(crate) fn activate(&self, epoch: u64) {

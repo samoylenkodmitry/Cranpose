@@ -76,7 +76,7 @@ pub struct AppContext {
     last_fling_velocity_bits: Cell<u32>,
     scroll_motion_contexts: crate::scroll::ScrollMotionContextStore,
     lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState,
-    layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
+    layout_node_registry: crate::widgets::nodes::LayoutNodeRegistryState,
     pointer_dispatch: crate::dirty_node_queue::DirtyNodeQueue,
     mouse_input: crate::mouse_input::MouseInputQueue,
     pointer_claim: Cell<Option<NodeId>>,
@@ -171,8 +171,7 @@ impl AppContext {
             last_fling_velocity_bits: Cell::new(0.0f32.to_bits()),
             scroll_motion_contexts: crate::scroll::ScrollMotionContextStore::new(),
             lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState::new(),
-            layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState::new(
-            ),
+            layout_node_registry: crate::widgets::nodes::LayoutNodeRegistryState::new(),
             pointer_dispatch: crate::dirty_node_queue::DirtyNodeQueue::new(),
             mouse_input: crate::mouse_input::MouseInputQueue::default(),
             pointer_claim: Cell::new(None),
@@ -643,7 +642,7 @@ pub(crate) fn current_app_context_id() -> AppContextId {
 
 pub(crate) fn with_layout_node_registry_by_app_context<R>(
     id: AppContextId,
-    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState) -> R,
+    f: impl FnOnce(&crate::widgets::nodes::LayoutNodeRegistryState) -> R,
 ) -> Option<R> {
     with_app_context_by_id(id, |context| f(&context.layout_node_registry))
 }
@@ -764,7 +763,7 @@ pub(crate) fn layout_frame_arena_placement_scratch_count() -> usize {
 /// Runs `f` on the current app context's layout node registry and returns
 /// that context's id.
 pub(crate) fn with_current_layout_node_registry(
-    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState),
+    f: impl FnOnce(&crate::widgets::nodes::LayoutNodeRegistryState),
 ) -> AppContextId {
     let context = require_current_app_context("layout node registry access");
     f(&context.layout_node_registry);
@@ -772,7 +771,7 @@ pub(crate) fn with_current_layout_node_registry(
 }
 
 pub(crate) fn with_layout_node_registry<R>(
-    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState) -> R,
+    f: impl FnOnce(&crate::widgets::nodes::LayoutNodeRegistryState) -> R,
 ) -> R {
     let context = require_current_app_context("layout node registry access");
     f(&context.layout_node_registry)

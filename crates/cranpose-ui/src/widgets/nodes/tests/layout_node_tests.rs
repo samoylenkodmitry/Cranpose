@@ -4,7 +4,12 @@ use cranpose_ui_graphics::Size as GeometrySize;
 use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
 
 use super::*;
-use crate::MovedSceneNode;
+use crate::{
+    MovedSceneNode,
+    widgets::nodes::layout_node_registry::{
+        MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY, layout_node_registry_stats,
+    },
+};
 
 /// The node that places the nodes of these tests.
 const PLACER: Option<NodeId> = Some(NodeId(3));
