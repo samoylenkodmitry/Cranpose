@@ -21,6 +21,7 @@ pub mod font_family_resolver;
 pub mod font_feature;
 /// Glyph indices.
 pub mod glyph_id;
+mod glyph_ink;
 /// Glyph outlines drawn as coverage.
 pub mod glyph_outline;
 #[cfg(feature = "hyphenation")]
@@ -58,6 +59,8 @@ pub mod shaping_span;
 mod simple_glyf;
 /// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
+/// The bold and the italic a layout's glyphs ask of faces that lack them.
+pub mod synthesized_style;
 /// A paragraph laid out in lines, and Compose's `TextLayoutResult` queries.
 pub mod text_layout;
 /// Laying paragraphs out in lines.
@@ -82,7 +85,7 @@ pub use font::{
     LoadedTypefacePath,
 };
 pub use font_family_resolver::{FontFamilyResolver, FontRequest};
-pub use font_feature::{FontFeature, font_feature_settings};
+pub use font_feature::{FontFeature, FontFeatureSettings, font_feature_settings};
 pub use glyph_id::GlyphId;
 pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
 #[cfg(feature = "hyphenation")]
@@ -105,6 +108,7 @@ pub use style::{
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
 };
+pub use synthesized_style::SynthesizedStyle;
 pub use text_layout::{CaretDirection, GlyphRun, PositionedGlyph, TextLayout};
 pub use text_layouter::TextLayouter;
 pub use typeface::{

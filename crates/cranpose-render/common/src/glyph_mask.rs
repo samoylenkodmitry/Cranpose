@@ -13,7 +13,7 @@ use tiny_skia::{LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform
 use crate::text_mask_gamma::unit_to_u8;
 
 // Compose's stroke miter limit for stroked text.
-const STROKE_MITER_LIMIT: f32 = 4.0;
+pub(crate) const STROKE_MITER_LIMIT: f32 = 4.0;
 
 /// How a glyph is drawn: filled, or stroked `stroke` device pixels wide,
 /// grown by `embolden` device pixels for a synthesized bold and slanted by

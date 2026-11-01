@@ -14,7 +14,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{ProvidedValue, hash::default};
+use cranpose_core::{PackedU64, ProvidedValue, hash::default};
 pub use cranpose_ui_graphics::{DrawScope, Size};
 pub use cranpose_ui_layout::{Constraints, Measurable};
 
@@ -2137,7 +2137,7 @@ struct TypedModifierElement<E: ModifierNodeElement> {
     /// The element's hash, worked out the first time a chain rebuilding
     /// asks for it: most elements are built for a recomposition and only
     /// compared with the last ones.
-    hash: Cell<Option<u64>>,
+    hash: Cell<Option<PackedU64>>,
     provides_locals: bool,
 }
 
@@ -2207,12 +2207,12 @@ where
 
     fn hash_code(&self) -> u64 {
         if let Some(hash) = self.hash.get() {
-            return hash;
+            return hash.get();
         }
         let mut hasher = default::new();
         self.element.hash(&mut hasher);
         let hash = hasher.finish();
-        self.hash.set(Some(hash));
+        self.hash.set(Some(PackedU64::new(hash)));
         hash
     }
 

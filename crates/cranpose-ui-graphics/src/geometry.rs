@@ -58,7 +58,7 @@ impl Size {
 }
 
 /// An axis-aligned rectangle given by its top-left corner and its size, in logical pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
     /// Left edge, in logical pixels.
     pub x: f32,

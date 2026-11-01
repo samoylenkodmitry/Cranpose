@@ -28,6 +28,7 @@ use crate::{
     },
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
     shaper::font_bytes,
+    typeface::Typeface,
     word_split::{class_index, moves},
 };
 
@@ -209,18 +210,18 @@ impl PlainGlyphs {
 
     // Appends the plain glyphs of `range` of `text` at `font`'s advances,
     // kerned as the plan kerns them, when every one is plain, and returns
-    // whether it did.
+    // whether the ink of one leaves its advance or the band of the ASCII ink
+    // of `typeface`, whose font `font` is; `None`, appending none, when one
+    // is not plain.
     pub(crate) fn append(
         &mut self,
-        font: &Font,
+        (font, typeface): (&Font, &Typeface),
         text: &str,
         range: Range<usize>,
         glyphs: &mut ShapedGlyphs,
-    ) -> bool {
+    ) -> Option<bool> {
         let first = glyphs.len();
-        let Some(run) = text.get(range.clone()) else {
-            return false;
-        };
+        let run = text.get(range.clone())?;
         let Self {
             busy,
             substitutes,
@@ -229,6 +230,8 @@ impl PlainGlyphs {
             chars,
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
+        // What a run given up on before left.
+        chars.take_inked();
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
             let read = || {
@@ -237,13 +240,16 @@ impl PlainGlyphs {
                 Some(CharGlyph {
                     glyph,
                     advance,
+                    inks_out: typeface
+                        .glyph_inks()
+                        .leaves_band(typeface, glyph_id::GlyphId(glyph)),
                     pairs: pairs.get(starts).is_some_and(|&(first, _)| first == glyph)
                         || kerning.starts(font_bytes(font), glyph.into()),
                 })
             };
             let Some(plain) = chars.char(ch, read) else {
                 glyphs.truncate(first);
-                return false;
+                return None;
             };
             // A glyph that starts no pair kerns with nothing after it.
             let fit = previous
@@ -267,7 +273,7 @@ impl PlainGlyphs {
             let kern = match fit {
                 PairFit::Joins => {
                     glyphs.truncate(first);
-                    return false;
+                    return None;
                 }
                 PairFit::Kern(kern) => kern,
             };
@@ -291,7 +297,7 @@ impl PlainGlyphs {
                 GlyphOffset::default(),
             );
         }
-        true
+        Some(chars.take_inked())
     }
 }
 

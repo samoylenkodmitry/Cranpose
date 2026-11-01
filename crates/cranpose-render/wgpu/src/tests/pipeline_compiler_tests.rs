@@ -1,8 +1,9 @@
-use std::sync::mpsc;
+use std::sync::{Arc, atomic::Ordering, mpsc};
 
 use web_time::{Duration, Instant};
 
 use super::{CompileLane, MOVING_FRAMES_PER_BUILD, PacedLanding, PipelineCompiler};
+use crate::present_runtime::PresentStatus;
 
 /// Both lanes run every job off the calling thread. Each starts its jobs in
 /// queue order, on several threads, so they may finish in any.
@@ -264,6 +265,33 @@ fn a_pipeline_landing_after_a_placeholder_wakes_the_app_once() {
     assert!(wakes.try_recv().is_err(), "once");
     assert!(landing.take_landed());
     assert!(!landing.take_landed(), "reading the landing clears it");
+}
+
+// The present thread writes its account of a frame after it read the
+// landing: a pipeline that lands in between leaves the account saying no
+// frame is due, and the landing keeps the next frame due until a frame
+// takes it. The app the landing woke must not sleep on the account.
+#[test]
+fn a_landing_keeps_a_frame_due_over_a_present_account_read_before_it() {
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
+    let landing = compiler
+        .landing()
+        .expect("a spawned compiler reports landings");
+    let status = PresentStatus::default();
+    assert!(status.landing.set(Arc::clone(&landing)).is_ok());
+    landing.await_since(landing.built());
+    status.needs_frame_warmup.store(false, Ordering::Relaxed);
+    assert!(!status.warmup_due(), "nothing has landed yet");
+    build_one(&compiler);
+    assert!(
+        status.warmup_due(),
+        "the landing asks for the frame that draws its pipeline"
+    );
+    assert!(landing.take_landed());
+    assert!(
+        !status.warmup_due(),
+        "the frame that takes the landing ends what it asked"
+    );
 }
 
 #[test]

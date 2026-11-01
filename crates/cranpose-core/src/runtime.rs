@@ -825,7 +825,6 @@ impl Runtime {
         RuntimeHandle {
             inner: Rc::downgrade(&self.inner),
             dispatcher: UiDispatcher::new(UiDispatcherRef::clone(&self.inner.ui_dispatcher)),
-            ui_thread_id: self.inner.ui_thread_id,
             id: self.inner.runtime_id,
         }
     }
@@ -960,7 +959,6 @@ impl TestRuntime {
 pub struct RuntimeHandle {
     inner: Weak<RuntimeInner>,
     dispatcher: UiDispatcher,
-    ui_thread_id: ThreadId,
     id: RuntimeId,
 }
 
@@ -1400,9 +1398,10 @@ impl RuntimeHandle {
 
     /// Panics in debug builds when called off the runtime's UI thread.
     pub fn assert_ui_thread(&self) {
-        debug_assert_eq!(
-            std::thread::current().id(),
-            self.ui_thread_id,
+        debug_assert!(
+            self.inner
+                .upgrade()
+                .is_none_or(|inner| inner.ui_thread_id == std::thread::current().id()),
             "state mutated off the runtime's UI thread"
         );
     }

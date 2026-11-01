@@ -80,6 +80,18 @@ pub(crate) struct PresentStatus {
     pub(crate) thread_id: AtomicI32,
 }
 
+impl PresentStatus {
+    // Whether the producer must draw another frame for the renderer: the
+    // present thread's account of its last frame, or a pipeline that landed
+    // for a placeholder since. The present thread reads the landing before
+    // it writes its account, so a pipeline that lands in between is only in
+    // the landing, and the app it woke reads it there.
+    pub(crate) fn warmup_due(&self) -> bool {
+        self.needs_frame_warmup.load(Ordering::Relaxed)
+            || self.landing.get().is_some_and(|landing| landing.landed())
+    }
+}
+
 pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> u64 {
     let code: u64 = match outcome {
         PresentOutcome::NotRun => 0,
@@ -130,13 +142,11 @@ impl PresentState {
         if let Some(landing) = gpu_renderer.pipelines.landing() {
             let _ = status.landing.set(landing);
         }
+        // The landing tells the app the frame is due: the present thread
+        // alone writes its account.
         gpu_renderer.pipelines.wake_on_landing(Box::new({
-            let status = Arc::clone(&status);
             let waker = Arc::clone(&waker);
-            move || {
-                status.needs_frame_warmup.store(true, Ordering::Relaxed);
-                waker();
-            }
+            move || waker()
         }));
         Self {
             gpu_renderer,

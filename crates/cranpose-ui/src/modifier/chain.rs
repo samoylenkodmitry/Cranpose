@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, PackedU64};
 #[expect(unused_imports, reason = "only some cfgs read it")]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
@@ -60,7 +60,7 @@ pub struct ModifierChainHandle {
     /// change to the chain's nodes, their layout direction or their
     /// attachment: a reader that keeps what it derived from a chain knows
     /// when to derive it again, also after its node takes a new chain.
-    revision: u64,
+    revision: PackedU64,
 }
 
 /// What an update in place of a modifier element changes beyond its own
@@ -130,7 +130,7 @@ impl ModifierChainHandle {
             aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: None,
             debug_logging: false,
-            revision: next_revision(),
+            revision: PackedU64::new(next_revision()),
         }
     }
 
@@ -153,7 +153,7 @@ impl ModifierChainHandle {
 
     /// The chain's current revision; see the field.
     pub(crate) fn revision(&self) -> u64 {
-        self.revision
+        self.revision.get()
     }
 
     pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) -> bool {
@@ -161,7 +161,7 @@ impl ModifierChainHandle {
             return false;
         }
         self.layout_direction = direction;
-        self.revision = next_revision();
+        self.revision = PackedU64::new(next_revision());
         self.update_offset_direction();
         self.resolve();
         true
@@ -254,7 +254,7 @@ impl ModifierChainHandle {
         resolver: &mut ModifierLocalAncestorResolver<'_>,
         context: &mut BasicModifierNodeContext,
     ) -> ModifierInvalidations {
-        self.revision = next_revision();
+        self.revision = PackedU64::new(next_revision());
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), context);
         if self.layout_direction.is_rtl() {
@@ -293,7 +293,7 @@ impl ModifierChainHandle {
         if previous == id {
             return;
         }
-        self.revision = next_revision();
+        self.revision = PackedU64::new(next_revision());
         if id.is_some() {
             self.chain.detach_nodes();
             self.chain.attach_nodes(context);
@@ -311,7 +311,7 @@ impl ModifierChainHandle {
     /// Attaches the chain's nodes again on a remount of node `node_id`; what
     /// they ask for, its next chain operation reports.
     pub(crate) fn remount(&mut self, node_id: Option<NodeId>) {
-        self.revision = next_revision();
+        self.revision = PackedU64::new(next_revision());
         let mut context = self.context(node_id);
         self.chain.attach_nodes(&mut context);
         self.keep_for_next(context);
@@ -324,7 +324,7 @@ impl ModifierChainHandle {
 
     /// Returns mutable access to the modifier node chain.
     pub fn chain_mut(&mut self) -> &mut ModifierNodeChain {
-        self.revision = next_revision();
+        self.revision = PackedU64::new(next_revision());
         &mut self.chain
     }
 

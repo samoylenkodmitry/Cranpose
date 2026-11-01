@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, PackedU64};
 use cranpose_foundation::{InvalidationKind, ModifierNodeContext, NodeCapabilities};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
 
@@ -178,7 +178,7 @@ pub(super) struct CoordinatorChain {
     /// The chain revision the nodes were last synced at and the inputs it
     /// gave: a node whose modifiers did not change since measures again
     /// without walking its chain.
-    synced: Option<(u64, ModifierChainInputs)>,
+    synced: Option<(PackedU64, ModifierChainInputs)>,
     // Whether a measure placed the coordinators, whose rects the nodes'
     // sizes and offsets give, and whether one of them moved since the scene
     // last heard of the node.
@@ -191,13 +191,13 @@ impl CoordinatorChain {
         let density = node.density();
         let revision = node.modifier_chain().revision();
         if let Some((synced, inputs)) = self.synced
-            && synced == revision
+            && synced.get() == revision
             && inputs.density == density
         {
             return inputs;
         }
         let inputs = self.walk(node, density);
-        self.synced = Some((revision, inputs));
+        self.synced = Some((PackedU64::new(revision), inputs));
         // Other modifiers may place other coordinators.
         self.moved.set(true);
         inputs

@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::collections::pass_aged::{IDLE_PASSES, PassAgedCache};
+use cranpose_core::{
+    PackedU64,
+    collections::pass_aged::{IDLE_PASSES, PassAgedCache},
+};
 use cranpose_text::{
     CaretDirection, FontExtent, FontFamily, FontFamilyResolver, FontRequest, FontStyle, FontWeight,
     LayoutInput, ParagraphIntrinsics, TextLayout, TextLayouter, paragraph_line_box,
@@ -56,8 +59,8 @@ pub struct PreparedTextLayout {
     /// `text` as a renderer draws it, and its
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
     /// converted on first use: see [`PreparedTextLayout::render_text`].
-    pub render_text: OnceCell<(Arc<RenderString>, u64)>,
-    pub(crate) visual_style_hash: OnceCell<u64>,
+    pub render_text: OnceCell<(Arc<RenderString>, PackedU64)>,
+    pub(crate) visual_style_hash: OnceCell<PackedU64>,
     // The layout as a draw scope carries it, made on first use.
     layout_handle: OnceCell<TextLayoutHandle>,
 }
@@ -230,7 +233,7 @@ impl PreparedTextLayout {
     /// it never loads the string.
     pub fn render_text_hash(&self) -> u64 {
         if let Some((_, hash)) = self.render_text.get() {
-            return *hash;
+            return hash.get();
         }
         self.convert_render_text().1
     }
@@ -238,7 +241,9 @@ impl PreparedTextLayout {
     fn convert_render_text(&self) -> (Arc<RenderString>, u64) {
         let converted = Arc::new(self.text.render_string());
         let hash = converted.render_hash();
-        let _ = self.render_text.set((Arc::clone(&converted), hash));
+        let _ = self
+            .render_text
+            .set((Arc::clone(&converted), PackedU64::new(hash)));
         (converted, hash)
     }
 
@@ -246,10 +251,10 @@ impl PreparedTextLayout {
     /// layout, or handed over by the node that knows its style's hash.
     pub fn visual_style_hash(&self) -> u64 {
         if let Some(hash) = self.visual_style_hash.get() {
-            return *hash;
+            return hash.get();
         }
         let hash = self.visual_style.render_hash();
-        let _ = self.visual_style_hash.set(hash);
+        let _ = self.visual_style_hash.set(PackedU64::new(hash));
         hash
     }
 

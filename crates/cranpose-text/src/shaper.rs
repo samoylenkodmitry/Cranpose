@@ -14,12 +14,14 @@ use read_fonts::FontRef;
 use smallvec::SmallVec;
 
 use crate::{
-    font::{FontStyle, FontWeight},
+    font::{FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
+    glyph_ink::InkReach,
     itemizer::TextItem,
     plain_glyphs::PlainGlyphs,
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
     shaping_span::ShapingSpan,
+    synthesized_style::SynthesizedStyle,
     typeface::Typeface,
     word_cache::WordCache,
     word_split::{SpaceCut, WordSplit, word_split},
@@ -37,6 +39,11 @@ pub struct Shaper {
     // and their glyphs, reused from item to item.
     word_ends: Vec<usize>,
     pieces: Vec<(Range<usize>, Range<usize>)>,
+    // Whether a glyph shaped since the layouter last took it puts ink past
+    // its advance or its typeface's lines, and the bold and the italic the
+    // glyphs ask of faces that lack them.
+    inks_out: bool,
+    synthesized: SynthesizedStyle,
 }
 
 struct ShapingFace {
@@ -88,8 +95,10 @@ struct HarfRustPlan {
 // What one shaping call shapes with.
 struct Setting<'a> {
     font: ShaperFont<'a, 'a>,
-    // The font `font` shapes with, which plain glyphs read.
+    // The font `font` shapes with, which plain glyphs read, and its
+    // typeface, whose glyphs' ink they read.
     face: &'a Font,
+    typeface: &'a Typeface,
     plan: &'a ShapePlan,
     features: &'a [Feature],
     direction: Direction,
@@ -110,6 +119,8 @@ impl Default for Shaper {
             words: WordCache::default(),
             word_ends: Vec::new(),
             pieces: Vec::new(),
+            inks_out: false,
+            synthesized: SynthesizedStyle::default(),
         }
     }
 }
@@ -128,6 +139,7 @@ impl Shaper {
         glyphs: &mut ShapedGlyphs,
     ) {
         let face = self.face(item.typeface, span.font.weight, span.font.style);
+        self.note_synthesis(item, span);
         let asked = (span.language.is_none() && span.features.is_empty()).then_some(PlanAsk {
             rtl: item.level.is_rtl(),
             script: item.script.tag(),
@@ -146,14 +158,47 @@ impl Shaper {
         } = &mut self.faces[face];
         // A run of plain glyphs needs neither shaping nor words.
         if let Some(index) = plans[plan].plain
-            && plain[index].append(font, text, item.range.clone(), glyphs)
+            && let Some(inks_out) =
+                plain[index].append((font, item.typeface), text, item.range.clone(), glyphs)
         {
+            self.inks_out |= inks_out;
             return;
         }
         // Made here, the HarfRust plan does not take its stack under the
         // shaping font's.
         plans[plan].harfrust(font);
+        let start = glyphs.len();
         self.shape_with_plan((face, plan), text, (item, span, settings), context, glyphs);
+        let inks = item.typeface.glyph_inks();
+        self.inks_out |= glyphs[start..]
+            .iter()
+            .any(|glyph| inks.leaves_band(item.typeface, glyph.id()));
+    }
+
+    // Whether a glyph shaped since the last call puts ink past its advance
+    // or the band of its typeface's ASCII ink, and the bold and the italic
+    // the glyphs ask of faces that lack them.
+    pub(crate) fn take_ink_reach(&mut self) -> (InkReach, SynthesizedStyle) {
+        let reach = if std::mem::take(&mut self.inks_out) {
+            InkReach::Past
+        } else {
+            InkReach::Within
+        };
+        (reach, std::mem::take(&mut self.synthesized))
+    }
+
+    // Notes glyphs taken from a layout, whose ink reaches as `reach` says.
+    pub(crate) fn note_ink_reach(&mut self, reach: InkReach) {
+        self.inks_out |= reach == InkReach::Past;
+    }
+
+    // Notes the glyphs of `item` in `span`, shaped or taken from a layout,
+    // and the bold and the italic they ask of the item's face.
+    pub(crate) fn note_synthesis(&mut self, item: &TextItem<'_>, span: &ShapingSpan<'_>) {
+        let synthesis =
+            item.typeface
+                .synthesis(span.font.weight, span.font.style, FontSynthesis::All);
+        self.synthesized.add(synthesis, span.size);
     }
 
     // The plan of face `face` for `item` in `span`, which did not take the
@@ -193,6 +238,9 @@ impl Shaper {
             words,
             word_ends,
             pieces,
+            // `shape` reads the item's glyphs once they are all placed.
+            inks_out: _,
+            synthesized: _,
         } = self;
         let (direction, script, language) =
             settings.unwrap_or_else(|| shaping_settings(features, item, span));
@@ -206,6 +254,7 @@ impl Shaper {
         let setting = Setting {
             font: ShaperFont::new(font),
             face: font,
+            typeface: item.typeface,
             plan: &harfrust.plan,
             features,
             direction,
@@ -580,12 +629,12 @@ impl WordShaping<'_> {
         let Some(word_text) = self.text.get(word.clone()) else {
             return;
         };
-        let face = self.setting.face;
-        if self
-            .plain
-            .as_deref_mut()
-            .is_some_and(|plain| plain.append(face, self.text, word.clone(), glyphs))
-        {
+        let faces = (self.setting.face, self.setting.typeface);
+        if self.plain.as_deref_mut().is_some_and(|plain| {
+            plain
+                .append(faces, self.text, word.clone(), glyphs)
+                .is_some()
+        }) {
             return;
         }
         let keeps = stands_alone(self.text, &word, &self.context);

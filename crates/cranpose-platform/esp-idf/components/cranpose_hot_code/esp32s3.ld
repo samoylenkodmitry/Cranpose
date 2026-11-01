@@ -69,7 +69,7 @@ SECTIONS
     *(.literal._RNvM*Cs*_18cranpose_app_shellINt*8AppShellNtCs*_22cranpose_render_pixels14PixelsRendererE22update_with_frame_time* .text._RNvM*Cs*_18cranpose_app_shellINt*8AppShellNtCs*_22cranpose_render_pixels14PixelsRendererE22update_with_frame_time*)
     *(.literal._RNvM*NtCs*_11cranpose_ui12render_stateNt*10AppContext11enter_scope* .text._RNvM*NtCs*_11cranpose_ui12render_stateNt*10AppContext11enter_scope*)
     *(.literal._RNvM*NtCs*_11cranpose_ui12render_stateNt*10AppContext17has_focused_field* .text._RNvM*NtCs*_11cranpose_ui12render_stateNt*10AppContext17has_focused_field*)
-    *(.literal._RNvM*NtCs*_11cranpose_ui12render_stateNt*12DirtyNodeSet21take_dirty_nodes_into* .text._RNvM*NtCs*_11cranpose_ui12render_stateNt*12DirtyNodeSet21take_dirty_nodes_into*)
+    *(.literal._RNvM*NtNtCs*_11cranpose_ui12render_state14dirty_node_setNt*12DirtyNodeSet21take_dirty_nodes_into* .text._RNvM*NtNtCs*_11cranpose_ui12render_state14dirty_node_setNt*12DirtyNodeSet21take_dirty_nodes_into*)
     *(.literal._RNvM*NtCs*_11cranpose_ui16text_field_focusNt*19TextFieldFocusState17has_focused_field* .text._RNvM*NtCs*_11cranpose_ui16text_field_focusNt*19TextFieldFocusState17has_focused_field*)
     *(.literal._RNvM*NtCs*_11cranpose_ui17subcompose_layoutNt*20SubcomposeLayoutNode24modifier_slices_snapshot* .text._RNvM*NtCs*_11cranpose_ui17subcompose_layoutNt*20SubcomposeLayoutNode24modifier_slices_snapshot*)
     *(.literal._RNvM*NtCs*_11cranpose_ui6layoutNt*18LayoutBuilderState12measure_node* .text._RNvM*NtCs*_11cranpose_ui6layoutNt*18LayoutBuilderState12measure_node*)

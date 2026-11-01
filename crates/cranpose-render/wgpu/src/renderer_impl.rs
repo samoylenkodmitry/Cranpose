@@ -135,10 +135,7 @@ impl Renderer for WgpuRenderer {
         match &self.backend {
             PresentBackend::Sync(sync) => sync.renderer.needs_frame_warmup(),
             #[cfg(not(target_arch = "wasm32"))]
-            PresentBackend::Threaded(handle) => handle
-                .status()
-                .needs_frame_warmup
-                .load(std::sync::atomic::Ordering::Relaxed),
+            PresentBackend::Threaded(handle) => handle.status().warmup_due(),
             PresentBackend::None => false,
         }
     }

@@ -521,6 +521,13 @@ ci-contract-gates:
 
 # Check the workspace with the oldest toolchain the crates declare
 # (`rust-version`), so the declared minimum stays true.
+# The benchmark app (benchmarks/compose-vs-cranpose/cranpose-app), a Cargo
+# project of its own that the workspace's checks do not reach: its lints and
+# its tests. Nightly runs it.
+bench-app-check:
+    cargo clippy --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml --all-targets -- -D warnings
+    cargo test --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
+
 msrv-check:
     #!/usr/bin/env bash
     set -euo pipefail
