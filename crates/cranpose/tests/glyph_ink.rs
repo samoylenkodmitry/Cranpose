@@ -72,15 +72,14 @@ fn pixels_after(
     label: &'static str,
     (span, paragraph): (SpanStyle, ParagraphStyle),
 ) -> Vec<(u32, u32)> {
-    let style = TextStyle {
-        span_style: SpanStyle {
+    let style = TextStyle::new(
+        SpanStyle {
             color: Some(Color::BLACK),
             font_size: text::TextUnit::Sp(40.0),
             ..span
         },
-        paragraph_style: paragraph,
-        ..TextStyle::default()
-    };
+        paragraph,
+    );
     let first = before.first().copied().unwrap_or(label);
     let (mut framebuffer, state) = label_screen(first, style);
     for (frame, next) in (2..).zip(before.iter().skip(1).chain([&label])) {
@@ -178,7 +177,7 @@ fn a_shaped_f_that_ends_a_line_draws_its_overhang() {
 fn an_f_met_before_that_ends_a_line_draws_its_overhang() {
     let plain = (SpanStyle::default(), ParagraphStyle::default());
     let alone = ink("Hf", SpanStyle::default(), ParagraphStyle::default());
-    let again: Vec<u32> = dark_pixels_after(&["f"], "Hf", plain.clone())
+    let again: Vec<u32> = dark_pixels_after(&["f"], "Hf", plain)
         .into_iter()
         .map(|(x, _)| x)
         .collect();
