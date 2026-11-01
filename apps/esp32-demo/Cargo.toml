@@ -29,6 +29,10 @@ workload = []
 # For the benchmarks against LVGL and Slint: in place of the demo's screen,
 # a dashboard that changes most of the display every frame.
 dashboard = []
+# For board A/Bs: the four screens above one after another, six seconds
+# each, with the dashboard last when `dashboard` is on too, and frame
+# statistics every second, so one image measures them all.
+screens-in-turn = []
 
 [dependencies]
 cranpose = { path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }

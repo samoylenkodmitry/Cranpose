@@ -38,7 +38,7 @@ BOARDS = {
     "es3c35p": {"mcu": "esp32s3", "console": "usb", "port": "/dev/cu.usbmodem*",
                 "baud": 921600, "partitions": "partitions.csv"},
     "e32r35t": {"mcu": "esp32", "console": "uart", "port": "/dev/cu.usbserial-*",
-                "baud": 460800, "partitions": "partitions_4mb.csv"},
+                "baud": 2000000, "partitions": "partitions_4mb.csv"},
 }
 SUMMARY = re.compile(r"first frame|frames in|PERF|HEAP|SAMPLER total|panic|abort\(\)|memory allocation")
 
@@ -56,13 +56,13 @@ def one(pattern, what):
     return found[0]
 
 
-def build_rust(app, binary, board, components, extra_sdkconfig, features, log):
-    """Builds the Rust app in `app`, with the demo's ESP-IDF settings and
-    the ESP-IDF `components` linked in. They replace the app's own list in
-    its Cargo.toml, not its dependencies' lists."""
+def build_rust(app, binary, board, components, extra_sdkconfig, features, log, demo=DEMO):
+    """Builds the Rust app in `app`, with the ESP-IDF settings of the demo in
+    `demo` and the ESP-IDF `components` linked in. They replace the app's own
+    list in its Cargo.toml, not its dependencies' lists."""
     config = BOARDS[board]
     target = f"xtensa-{config['mcu']}-espidf"
-    defaults = ";".join([str(DEMO / "sdkconfig.defaults"), str(DEMO / f"sdkconfig.{board}"),
+    defaults = ";".join([str(demo / "sdkconfig.defaults"), str(demo / f"sdkconfig.{board}"),
                          *map(str, extra_sdkconfig)])
     env = dict(os.environ, MCU=config["mcu"], ESP_IDF_SDKCONFIG_DEFAULTS=defaults)
     if components:
@@ -72,13 +72,13 @@ def build_rust(app, binary, board, components, extra_sdkconfig, features, log):
         env["ESP_IDF_SYS_EXTRA_COMPONENTS_FILE"] = str(extra)
     # esp-idf-sys rebuilds its CMake project only when its own inputs change,
     # so a component added or removed since the last build needs a nudge.
-    (DEMO / "sdkconfig.defaults").touch()
+    (demo / "sdkconfig.defaults").touch()
     command = ["cargo", "build", "--release", "--target", target]
     if features:
         command += ["--features", ",".join(features)]
     run(command, app, env, log.with_suffix(".build"))
     release = app / "target" / target / "release"
-    return release / binary, release / "bootloader.bin", DEMO / config["partitions"]
+    return release / binary, release / "bootloader.bin", demo / config["partitions"]
 
 
 SLINT_CORE = "i-slint-core-1.18.1"
@@ -260,4 +260,5 @@ def main():
             print(line.strip())
 
 
-main()
+if __name__ == "__main__":
+    main()

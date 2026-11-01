@@ -72,6 +72,9 @@ pub struct DisplayConfig {
     /// two RGB565 buffers the panel reads by DMA in turn. Taller strips cost
     /// fewer draw and transfer calls a picture.
     pub strip_rows: u32,
+    /// How often the loop logs its frame statistics: the frames, their
+    /// average update and draw times, the bytes sent and the heap left.
+    pub stats_window: Duration,
 }
 
 impl DisplayConfig {
@@ -88,6 +91,7 @@ impl Default for DisplayConfig {
             frame_interval: Duration::from_micros(16_667),
             fonts: &[],
             strip_rows: Self::DEFAULT_STRIP_ROWS,
+            stats_window: Duration::from_secs(5),
         }
     }
 }
@@ -301,7 +305,13 @@ impl Screen<'_, '_> {
             present: presented.duration_since(updated),
             sent,
         };
-        FrameStats::record_into(&mut self.stats, self.start, phases, presented);
+        FrameStats::record_into(
+            &mut self.stats,
+            self.config.stats_window,
+            self.start,
+            phases,
+            presented,
+        );
         Ok(())
     }
 
@@ -392,8 +402,6 @@ impl Pacer {
     }
 }
 
-const STATS_WINDOW: Duration = Duration::from_secs(5);
-
 #[derive(Clone, Copy)]
 struct FramePhases {
     update: Duration,
@@ -427,12 +435,13 @@ impl FrameStats {
     /// own, starts.
     fn record_into(
         stats: &mut Option<Self>,
+        window: Duration,
         start: Instant,
         phases: FramePhases,
         presented: Instant,
     ) {
         match stats.as_mut() {
-            Some(stats) => stats.record(phases, presented),
+            Some(stats) => stats.record(window, phases, presented),
             None => {
                 log::info!(
                     "first frame after {} ms: update {} ms, draw and send {} ms",
@@ -445,14 +454,14 @@ impl FrameStats {
         }
     }
 
-    fn record(&mut self, phases: FramePhases, presented: Instant) {
+    fn record(&mut self, length: Duration, phases: FramePhases, presented: Instant) {
         self.frames += 1;
         self.update += phases.update;
         self.present += phases.present;
         self.sent += phases.sent;
         self.slowest = self.slowest.max(phases.update + phases.present);
         let window = presented.duration_since(self.window_start);
-        if window < STATS_WINDOW {
+        if window < length {
             return;
         }
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;

@@ -1,11 +1,13 @@
 // Counts events of core 0, where the UI task runs, with two Xtensa
-// performance counters at a time, over 5 s windows after a first one that
-// warms up: each window prints one pair, the time core 0 spent idle and the
-// heap, and sets up the next pair. An esp_timer callback does it; the
-// esp_timer task runs on core 0.
+// performance counters at a time, over windows of
+// CONFIG_PERFSTATS_WINDOW_MS (5 s by default) after a first one that warms
+// up: each window logs one pair, the time core 0 spent idle and the heap,
+// and sets up the next pair. An esp_timer callback does it; the esp_timer
+// task runs on core 0. The log's timestamps tell which of the demo's
+// screens a window counted when they show in turn.
 #include <stdbool.h>
-#include <stdio.h>
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +26,8 @@ static const event_t PAIRS[][2] = {
     {{"i-stall-busy", XTPERF_CNT_I_STALL, XTPERF_MASK_I_STALL_BUSY}, {"d-stall-busy", XTPERF_CNT_D_STALL, XTPERF_MASK_D_STALL_BUSY}},
 };
 #define PAIR_COUNT (sizeof(PAIRS) / sizeof(PAIRS[0]))
+
+static const char *TAG = "perfstats";
 
 static unsigned pair;
 static int64_t window_start;
@@ -58,14 +62,14 @@ static void report(void *arg)
         arm();
         return;
     }
-    printf("PERF %.3f s %s %u %s %u idle %.3f s\n", (now - window_start) / 1e6,
+    ESP_LOGI(TAG, "PERF %.3f s %s %u %s %u idle %.3f s", (now - window_start) / 1e6,
            PAIRS[pair][0].name, (unsigned)xtensa_perfmon_value(0),
            PAIRS[pair][1].name, (unsigned)xtensa_perfmon_value(1),
            (idle_time() - idle_start) / 1e6);
     // Byte-addressable internal RAM: the IRAM heap of the classic ESP32 only
     // takes 32-bit allocations, which neither app uses.
     const uint32_t ram = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-    printf("HEAP internal free %u lowest %u largest %u, psram free %u\n",
+    ESP_LOGI(TAG, "HEAP internal free %u lowest %u largest %u, psram free %u",
            (unsigned)heap_caps_get_free_size(ram),
            (unsigned)heap_caps_get_minimum_free_size(ram),
            (unsigned)heap_caps_get_largest_free_block(ram),
@@ -82,7 +86,7 @@ void __wrap_app_main(void)
     esp_timer_create_args_t args = {.callback = report, .name = "perfstats"};
     if (esp_timer_create(&args, &timer) == ESP_OK) {
         arm();
-        esp_timer_start_periodic(timer, 5000000);
+        esp_timer_start_periodic(timer, CONFIG_PERFSTATS_WINDOW_MS * 1000);
     }
     __real_app_main();
 }
