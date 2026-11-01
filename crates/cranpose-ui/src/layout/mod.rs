@@ -1472,7 +1472,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(
             &mut applier,
-            (node_id, parts.runtime_state()),
+            (node_id, &parts),
             &pools.child_ids,
             ChildPass::Measure,
         )?;
@@ -1536,7 +1536,6 @@ impl LayoutBuilderState {
         cache.clear_layout_dirt();
         layout_state.set_size(measurement.size, &self.context);
         layout_state.set_content_offset(measurement.content_offset);
-        layout_state.set_places_children_with_z_index(runtime_state.places_children_with_z_index());
 
         Ok(Some(measured))
     }
@@ -1570,7 +1569,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(
             &mut applier,
-            (node_id, parts.runtime_state()),
+            (node_id, &parts),
             &pools.child_ids,
             ChildPass::Intrinsics,
         )?;

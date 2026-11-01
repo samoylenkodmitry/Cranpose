@@ -6,7 +6,8 @@ use std::{any::Any, borrow::Cow, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size, SubcomposeLayoutNode,
+    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size,
+    SubcomposeLayoutNode, widgets::LayoutState,
 };
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
@@ -497,7 +498,7 @@ pub(super) struct PlacedGeometry {
 }
 
 impl PlacedGeometry {
-    fn of_placed(state: &cranpose_ui::widgets::LayoutState) -> Option<Self> {
+    fn of_placed(state: &LayoutState) -> Option<Self> {
         state.is_placed().then(|| Self {
             position: state.position(),
             size: state.size(),
@@ -528,10 +529,9 @@ pub(super) fn read_node_data<R>(
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
     if let Some(node) = node.downcast_ref::<LayoutNode>() {
-        let layout_state = node.layout_state();
-        let z_order = z_ordered_children(applier, &node.children, &layout_state);
+        let z_order = z_ordered_children(applier, node_id, &node.children);
         return Some(read(SnapshotNodeData {
-            layout_state,
+            layout_state: node.layout_state(),
             modifier_slices: node.modifier_slices_snapshot(),
             children: z_order.as_deref().unwrap_or(&node.children),
             window_root: node.is_window_root(),
@@ -541,7 +541,7 @@ pub(super) fn read_node_data<R>(
     let layout_state = node.layout_state();
     let modifier_slices = node.modifier_slices_snapshot();
     Some(node.with_active_children(|children| {
-        let z_order = z_ordered_children(applier, children, &layout_state);
+        let z_order = z_ordered_children(applier, node_id, children);
         read(SnapshotNodeData {
             layout_state,
             modifier_slices,
@@ -554,24 +554,29 @@ pub(super) fn read_node_data<R>(
 /// `children` in the order they draw and take taps when a z index moves one
 /// of them: by the sum of its `z_index` modifiers and its placement's, and in
 /// composition order among equal ones, as Compose's `zSortedChildren`.
-/// `None` while no `z_index` modifier exists and `parent`, the parent's
-/// layout state, placed no child with a z index: then nothing moves.
+/// `None` while no `z_index` modifier exists and `parent` placed no child
+/// with a z index: then nothing moves.
 #[inline]
 fn z_ordered_children(
     applier: &MemoryApplier,
+    parent: NodeId,
     children: &[NodeId],
-    parent: &cranpose_ui::widgets::LayoutState,
 ) -> Option<Vec<NodeId>> {
-    if children.len() < 2
-        || !(cranpose_ui::z_index_in_use() || parent.places_children_with_z_index())
-    {
+    if children.len() < 2 || !cranpose_ui::z_index_in_use() {
         return None;
     }
-    z_sorted_children(applier, children)
+    z_sorted_children(applier, parent, children)
 }
 
 #[inline(never)]
-fn z_sorted_children(applier: &MemoryApplier, children: &[NodeId]) -> Option<Vec<NodeId>> {
+fn z_sorted_children(
+    applier: &MemoryApplier,
+    parent: NodeId,
+    children: &[NodeId],
+) -> Option<Vec<NodeId>> {
+    if !cranpose_ui::z_index_modifier_in_use() && !places_children_with_z_index(applier, parent) {
+        return None;
+    }
     let mut previous = f32::NEG_INFINITY;
     let in_order = children.iter().all(|&child| {
         let z_index = node_z_index(applier, child);
@@ -590,6 +595,18 @@ fn z_sorted_children(applier: &MemoryApplier, children: &[NodeId]) -> Option<Vec
     Some(ordered.into_iter().map(|(_, child)| child).collect())
 }
 
+fn places_children_with_z_index(applier: &MemoryApplier, node_id: NodeId) -> bool {
+    let Ok(node) = applier.get_ref(node_id) else {
+        return false;
+    };
+    let node: &dyn Any = node;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        return node.with_layout_state(LayoutState::places_children_with_z_index);
+    }
+    node.downcast_ref::<SubcomposeLayoutNode>()
+        .is_some_and(|node| node.layout_state().places_children_with_z_index())
+}
+
 fn node_z_index(applier: &MemoryApplier, node_id: NodeId) -> f32 {
     let Ok(node) = applier.get_ref(node_id) else {
         return 0.0;
@@ -597,7 +614,7 @@ fn node_z_index(applier: &MemoryApplier, node_id: NodeId) -> f32 {
     let node: &dyn Any = node;
     if let Some(node) = node.downcast_ref::<LayoutNode>() {
         return node.modifier_slices_snapshot().z_index()
-            + node.with_layout_state(cranpose_ui::widgets::LayoutState::z_index);
+            + node.with_layout_state(LayoutState::z_index);
     }
     node.downcast_ref::<SubcomposeLayoutNode>()
         .map_or(0.0, |node| {
@@ -634,7 +651,7 @@ pub(super) fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
 pub(super) fn prepare_node_layer(
     node_id: NodeId,
     slices: &Rc<ModifierNodeSlices>,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &LayoutState,
     context: LowerContext,
 ) -> (LayerHead, LowerContext) {
     let size = layout_state.size();

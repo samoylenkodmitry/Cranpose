@@ -55,7 +55,7 @@ impl PlacementPass {
 }
 
 /// The measured size and placed position that a layout node kept from its latest layout pass.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct LayoutState {
     size: Size,
     position: Point,
@@ -162,7 +162,10 @@ impl LayoutState {
     }
 
     pub(crate) fn set_places_children_with_z_index(&mut self, places: bool) {
-        self.places_children_with_z_index = places;
+        if self.places_children_with_z_index != places {
+            self.places_children_with_z_index = places;
+            count_z_index_placer(places);
+        }
     }
 
     // Places the node where `at` says, with its z index.
@@ -237,4 +240,17 @@ impl LayoutState {
             crate::semantics_layout_log::record_layout_change(id, &mut self.semantics_stamp);
         }
     }
+}
+
+// Counts a layout node whose last placement gave a child a z index among the
+// thread's reasons to order siblings, when `places`, or takes it out.
+pub(super) fn count_z_index_placer(places: bool) {
+    crate::thread_state::cells(|cells| {
+        let reasons = &cells.z_order_reasons;
+        reasons.set(if places {
+            reasons.get() + 1
+        } else {
+            reasons.get().saturating_sub(1)
+        });
+    });
 }

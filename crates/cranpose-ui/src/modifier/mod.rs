@@ -101,7 +101,7 @@ pub use window_root::{
     WindowRootRoutingScratch, is_window_root, nearest_window_root, nearest_window_roots,
     nearest_window_roots_into, window_roots, window_roots_revision,
 };
-pub use z_index::z_index_in_use;
+pub use z_index::{z_index_in_use, z_index_modifier_in_use};
 
 pub(crate) use crate::draw::{DrawCacheBuilder, DrawCommand};
 use crate::modifier_nodes::ClipToBoundsElement;

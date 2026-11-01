@@ -65,3 +65,13 @@ impl LayoutParts {
             .placed_coordinator_rect(ordinal, node_size)
     }
 }
+
+// A node whose last placement gave a child a z index counts among the
+// scene's reasons to order siblings until its parts end.
+impl Drop for LayoutParts {
+    fn drop(&mut self) {
+        if self.layout_state.get_mut().places_children_with_z_index() {
+            super::layout_state::count_z_index_placer(false);
+        }
+    }
+}

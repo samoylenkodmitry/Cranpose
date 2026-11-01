@@ -227,6 +227,7 @@ pub use modifier::{
     WindowRootRoutingScratch, collect_modifier_slices, collect_semantics_from_modifier,
     collect_slices_from_modifier, is_window_root, nearest_window_root, nearest_window_roots,
     nearest_window_roots_into, window_roots, window_roots_revision, z_index_in_use,
+    z_index_modifier_in_use,
 };
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};

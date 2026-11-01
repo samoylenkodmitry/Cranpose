@@ -724,7 +724,7 @@ impl LayoutNode {
 
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
-        self.parts.layout_state().borrow().clone()
+        *self.parts.layout_state().borrow()
     }
 
     /// Returns the measured size of this node.
