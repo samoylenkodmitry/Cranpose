@@ -116,6 +116,45 @@ fn release_assets_are_content_addressed_as_one_consistent_bundle() {
 }
 
 #[test]
+fn javascript_snippets_are_published_and_change_the_bundle_url() {
+    let workspace_root = workspace_root();
+    let test_root = unique_test_root(&workspace_root);
+    let package_dir = test_root.join("pkg");
+    write_fixture(&package_dir, b"wasm");
+    let snippet = Path::new("snippets/cranpose-services/src/file_picker/web_folder.mjs");
+    fs::create_dir_all(package_dir.join(snippet).parent().unwrap()).unwrap();
+    fs::write(
+        package_dir.join("desktop_app.js"),
+        format!("export {{ folderName }} from './{}';\n", snippet.display()),
+    )
+    .unwrap();
+    let script = workspace_root.join("apps/desktop-demo/package-web.sh");
+    let index = workspace_root.join("apps/desktop-demo/index.html");
+    let mut previous_module = None;
+    for (version, source) in [
+        "export const folderName = () => 'first';\n",
+        "export const folderName = () => 'second';\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fs::write(package_dir.join(snippet), source).unwrap();
+        let output = test_root.join(format!("site-{version}"));
+        let manifest = package_site(&script, &output, &package_dir, &index);
+        let module = manifest["module"].as_str().unwrap();
+        let published = output.join(module).parent().unwrap().join(snippet);
+        assert_eq!(fs::read_to_string(published).unwrap(), source);
+        if let Some(previous) = previous_module {
+            assert_ne!(
+                previous, module,
+                "snippet changes must invalidate cached bundles"
+            );
+        }
+        previous_module = Some(module.to_owned());
+    }
+}
+
+#[test]
 fn the_packaged_site_serves_every_icon_its_page_links() {
     let workspace_root = workspace_root();
     let test_root = unique_test_root(&workspace_root);

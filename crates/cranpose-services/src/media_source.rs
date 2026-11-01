@@ -79,6 +79,14 @@ pub trait MediaSourceOpener: Send + Sync {
     fn reference(&self, path: &Path) -> io::Result<String> {
         Ok(crate::media::uri_for_path(path))
     }
+
+    /// Derives a child reference from a previously retained folder grant.
+    /// `relative` contains only normal path components inside that folder.
+    fn child_reference(&self, folder: &str, relative: &Path) -> io::Result<String> {
+        let root = crate::media::path_from_uri(folder)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "folder media references"))?;
+        Ok(crate::media::uri_for_path(&root.join(relative)))
+    }
 }
 
 /// Shared handle to the platform media source opener.
@@ -89,5 +97,25 @@ pub(crate) fn media_reference(path: &Path) -> io::Result<String> {
     match PLATFORM_MEDIA_SOURCE.get() {
         Some(opener) => opener.reference(path),
         None => Ok(crate::media::uri_for_path(path)),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn media_child_reference(folder: &str, relative: &Path) -> io::Result<String> {
+    if relative
+        .components()
+        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(io::Error::other(
+            "media path is outside the selected folder",
+        ));
+    }
+    match PLATFORM_MEDIA_SOURCE.get() {
+        Some(opener) => opener.child_reference(folder, relative),
+        None => {
+            let root = crate::media::path_from_uri(folder)
+                .ok_or_else(|| io::Error::other("invalid folder media reference"))?;
+            Ok(crate::media::uri_for_path(&root.join(relative)))
+        }
     }
 }

@@ -37,7 +37,16 @@ fi
 
 module_hash="$(sha256 "$MODULE_FILE")"
 wasm_hash="$(sha256 "$WASM_FILE")"
-bundle_hash="$(printf '%s%s' "$module_hash" "$wasm_hash" | sha256)"
+snippet_hash="$(
+    if [ -d "$PACKAGE_DIR/snippets" ]; then
+        cd "$PACKAGE_DIR"
+        find snippets -type f | LC_ALL=C sort | while IFS= read -r file; do
+            printf '%s\0' "$file"
+            sha256 "$file"
+        done
+    fi | sha256
+)"
+bundle_hash="$(printf '%s%s%s' "$module_hash" "$wasm_hash" "$snippet_hash" | sha256)"
 bundle_relative="assets/$bundle_hash"
 bundle_dir="$OUTPUT_DIR/$bundle_relative"
 
@@ -47,6 +56,9 @@ cp "$FAVICON_FILE" "$OUTPUT_DIR/favicon.svg"
 cp "$TOUCH_ICON_FILE" "$OUTPUT_DIR/apple-touch-icon.png"
 cp "$MODULE_FILE" "$bundle_dir/desktop_app.js"
 cp "$WASM_FILE" "$bundle_dir/desktop_app_bg.wasm"
+if [ -d "$PACKAGE_DIR/snippets" ]; then
+    cp -R "$PACKAGE_DIR/snippets" "$bundle_dir/snippets"
+fi
 touch "$OUTPUT_DIR/.nojekyll"
 
 printf '{\n  "version": 1,\n  "module": "%s/desktop_app.js",\n  "wasm": "%s/desktop_app_bg.wasm"\n}\n' \

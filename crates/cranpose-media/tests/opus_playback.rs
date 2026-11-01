@@ -39,6 +39,13 @@ fn common_audio_containers_play_from_the_original_files() {
     }
 }
 
+#[test]
+fn dolby_audio_plays_from_original_containers() {
+    for name in ["ac3.mkv", "eac3.m4a", "ac3-surround.mkv"] {
+        play_fixture(name);
+    }
+}
+
 fn play_fixture(name: &str) {
     let output: Output = Arc::new(Mutex::new(None));
     let receiver = Arc::clone(&output);
@@ -51,6 +58,14 @@ fn play_fixture(name: &str) {
         .join("tests/fixtures")
         .join(name);
     let item = MediaItem::new(cranpose_media::uri_for_path(&fixture));
+    if name.contains("ac3") {
+        assert!(
+            player
+                .probe_duration(&item)
+                .is_some_and(|duration| duration >= Duration::from_millis(190)),
+            "{name}: duration missing"
+        );
+    }
     player
         .prepare(&item)
         .unwrap_or_else(|error| panic!("open original {name}: {error}"));

@@ -50,7 +50,7 @@ pub(super) fn pick_files(
 pub(super) fn pick_folder(
     _options: FilePickerOptions,
 ) -> PickerFuture<Result<Option<ContentFolderRef>, FilePickerError>> {
-    Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
+    super::web_folder::pick_folder()
 }
 
 pub(super) fn pick_writable_folder(

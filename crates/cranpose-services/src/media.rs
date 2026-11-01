@@ -1297,7 +1297,7 @@ pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
     let rest = match uri.split_once("://") {
         Some(("file", rest)) => rest,
         Some(_) => return None,
-        None => return non_empty_path(uri),
+        None => return crate::media_uri::bare_path(uri),
     };
     let path = rest.strip_prefix('/')?;
     let decoded = crate::content::percent_decode(path)?;

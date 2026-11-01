@@ -9,6 +9,7 @@ use symphonia::core::{
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
     io::{MediaSource, MediaSourceStream},
     meta::MetadataOptions,
+    packet::Packet,
     units::{Duration as TimeBaseUnits, Time, TimeBase},
 };
 
@@ -19,6 +20,7 @@ use crate::{
 
 pub(crate) struct Decoder {
     format: Box<dyn FormatReader>,
+    pending_packet: Option<Packet>,
     decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     channels: ChannelCount,
@@ -58,7 +60,11 @@ impl Decoder {
         Self::from_format(format, seekable)
     }
 
-    fn from_format(format: Box<dyn FormatReader>, seekable: bool) -> Result<Self, MediaError> {
+    #[allow(
+        unused_mut,
+        reason = "The all-codecs build reads Dolby headers before opening output"
+    )]
+    fn from_format(mut format: Box<dyn FormatReader>, seekable: bool) -> Result<Self, MediaError> {
         let track = format
             .first_track(TrackType::Audio)
             .ok_or_else(|| MediaError::Failed("the item has no audio track".to_owned()))?;
@@ -67,12 +73,17 @@ impl Decoder {
         let num_frames = track.num_frames;
         let duration = track.duration;
 
-        let Some(CodecParameters::Audio(params)) = track.codec_params.clone() else {
+        let Some(CodecParameters::Audio(mut params)) = track.codec_params.clone() else {
             return Err(MediaError::Failed(
                 "the item's audio track states no codec".to_owned(),
             ));
         };
 
+        #[cfg(feature = "all-codecs")]
+        let pending_packet = crate::dolby::initialize(format.as_mut(), track_id, &mut params)
+            .map_err(|error| MediaError::Failed(error.to_string()))?;
+        #[cfg(not(feature = "all-codecs"))]
+        let pending_packet = None;
         let decoder =
             audio_decoder(&params).map_err(|error| MediaError::Failed(error.to_string()))?;
 
@@ -88,13 +99,23 @@ impl Decoder {
             .and_then(ChannelCount::new)
             .ok_or_else(|| MediaError::Failed("the item states no channel layout".to_owned()))?;
 
+        let total_duration =
+            track_duration(num_frames, sample_rate, time_base, duration).or_else(|| {
+                track_duration(
+                    None,
+                    sample_rate,
+                    format.media_info().time_base,
+                    format.media_info().duration,
+                )
+            });
         Ok(Self {
             format,
+            pending_packet,
             decoder,
             track_id,
             channels,
             sample_rate,
-            total_duration: track_duration(num_frames, sample_rate, time_base, duration),
+            total_duration,
             block: Vec::new(),
             read: 0,
             exhausted: false,
@@ -121,7 +142,11 @@ impl Decoder {
             if self.exhausted {
                 return false;
             }
-            let packet = match self.format.next_packet() {
+            let next = self
+                .pending_packet
+                .take()
+                .map_or_else(|| self.format.next_packet(), |p| Ok(Some(p)));
+            let packet = match next {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
                     self.exhausted = true;
@@ -237,6 +262,7 @@ impl SampleSource for Decoder {
             .get()
             .saturating_sub(seeked.actual_ts.get())
             .max(0) as u64;
+        self.pending_packet = None;
         self.decoder.reset();
         self.block.clear();
         self.read = 0;
@@ -274,6 +300,14 @@ fn audio_decoder(
     #[cfg(feature = "all-codecs")]
     if params.codec == symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS {
         return Ok(Box::new(crate::opus::Opus::new(params)?));
+    }
+    #[cfg(feature = "all-codecs")]
+    if matches!(
+        params.codec,
+        symphonia::core::codecs::audio::well_known::CODEC_ID_AC3
+            | symphonia::core::codecs::audio::well_known::CODEC_ID_EAC3
+    ) {
+        return Ok(Box::new(crate::dolby::Dolby::new(params)?));
     }
     symphonia::default::get_codecs().make_audio_decoder(params, &AudioDecoderOptions::default())
 }

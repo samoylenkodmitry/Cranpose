@@ -1,5 +1,7 @@
 #![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
+mod stream;
+
 use std::{
     cell::{Cell, RefCell},
     io::Write,
@@ -10,7 +12,7 @@ use std::{
 use cranpose_services::{
     BlockingSink, Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
     ContentFuture, ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink,
-    ContentSinkRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
+    ContentSinkRef, ContentStreamRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
     SaveDocumentRequest, open_threaded, set_platform_file_picker, threaded_sink,
 };
 use objc2::{
@@ -22,7 +24,7 @@ use objc2_ui_kit::{
     UIApplication, UIDocumentPickerDelegate, UIDocumentPickerViewController, UIViewController,
     UIWindowScene,
 };
-use objc2_uniform_type_identifiers::{UTType, UTTypeDirectory, UTTypeItem};
+use objc2_uniform_type_identifiers::{UTType, UTTypeFolder, UTTypeItem};
 
 pub(crate) fn register() {
     set_platform_file_picker(Rc::new(IosFilePicker));
@@ -209,15 +211,16 @@ fn present(
 
 fn present_open(kind: Kind) -> PickerFuture<PickResult> {
     present(move |mtm| {
-        // SAFETY: `UTTypeItem`/`UTTypeDirectory` are immutable framework
+        // SAFETY: `UTTypeItem`/`UTTypeFolder` are immutable framework
         // constants.
         let ty: &UTType = match kind {
             Kind::File | Kind::Files => unsafe { UTTypeItem },
-            Kind::Folder => unsafe { UTTypeDirectory },
+            Kind::Folder => unsafe { UTTypeFolder },
         };
-        let picker = UIDocumentPickerViewController::initForOpeningContentTypes(
+        let picker = UIDocumentPickerViewController::initForOpeningContentTypes_asCopy(
             UIDocumentPickerViewController::alloc(mtm),
             &NSArray::from_slice(&[ty]),
+            false,
         );
         picker.setAllowsMultipleSelection(kind == Kind::Files);
         picker
@@ -249,11 +252,15 @@ fn url_path(url: &NSURL) -> PathBuf {
 
 struct SecurityScope {
     url: Retained<NSURL>,
+    reference: RefCell<Option<String>>,
 }
 
 impl SecurityScope {
     fn new(url: Retained<NSURL>) -> Self {
-        Self { url }
+        Self {
+            url,
+            reference: RefCell::new(None),
+        }
     }
 
     /// Opens the scope until the returned access is dropped.
@@ -301,6 +308,7 @@ fn scoped_file(url: Retained<NSURL>, path: PathBuf) -> ContentHandle {
     Rc::new(IosFile {
         scope: Rc::new(SecurityScope::new(url)),
         path,
+        metadata: None,
     })
 }
 
@@ -327,15 +335,41 @@ fn metadata_for(scope: &SecurityScope, path: &Path) -> ContentMetadata {
 struct IosFile {
     scope: Rc<SecurityScope>,
     path: PathBuf,
+    metadata: Option<ContentMetadata>,
 }
 
 impl Content for IosFile {
     fn metadata(&self) -> ContentMetadata {
-        metadata_for(&self.scope, &self.path)
+        self.metadata
+            .clone()
+            .unwrap_or_else(|| metadata_for(&self.scope, &self.path))
     }
 
     fn media_uri(&self) -> Result<String, ContentError> {
         crate::apple::media_source::reference(&self.scope.url, &self.path).map_err(map_io)
+    }
+
+    fn media_uri_async(&self) -> ContentFuture<'_, Result<String, ContentError>> {
+        Box::pin(async move {
+            let retained = self.scope.reference.borrow().clone();
+            let root = url_path(&self.scope.url);
+            let retained = if let Some(retained) = retained {
+                retained
+            } else {
+                let url = self.scope.url.retain();
+                let scope_path = root.clone();
+                let retained = cranpose_services::run_threaded(move || {
+                    crate::apple::media_source::reference(&url, &scope_path).map_err(map_io)
+                })
+                .await?;
+                *self.scope.reference.borrow_mut() = Some(retained.clone());
+                retained
+            };
+            let relative = self.path.strip_prefix(root).map_err(|_| {
+                ContentError::Io("audio file is outside the selected resource".into())
+            })?;
+            crate::apple::media_source::child_reference(&retained, relative).map_err(map_io)
+        })
     }
 
     /// The file opens inside its security scope, which stays open while the
@@ -380,18 +414,14 @@ impl ContentFolder for IosFolder {
         let scope = Rc::clone(&self.scope);
         let path = self.path.clone();
         Box::pin(async move {
-            let children = scope.enter(|| {
-                let mut children = Vec::new();
-                for child in std::fs::read_dir(&path)? {
-                    let child = child?;
-                    children.push((child.path(), child.path().is_dir()));
-                }
-                Ok(children)
-            })?;
+            let _access = scope.access();
+            let children = cranpose_services::file_folder(path).entries().await?;
             Ok(children
                 .into_iter()
-                .map(|(path, is_dir)| {
-                    if is_dir {
+                .map(|entry| {
+                    let metadata = entry.metadata();
+                    let path = PathBuf::from(&metadata.identifier);
+                    if matches!(entry, ContentEntry::Folder(_)) {
                         ContentEntry::Folder(Rc::new(Self {
                             scope: Rc::clone(&scope),
                             path,
@@ -400,11 +430,15 @@ impl ContentFolder for IosFolder {
                         ContentEntry::File(Rc::new(IosFile {
                             scope: Rc::clone(&scope),
                             path,
+                            metadata: Some(metadata),
                         }))
                     }
                 })
                 .collect())
         })
+    }
+    fn stream_files(&self) -> Option<ContentStreamRef> {
+        Some(stream::open(Rc::clone(&self.scope), self.path.clone()))
     }
 }
 

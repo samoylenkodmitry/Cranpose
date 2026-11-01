@@ -2,6 +2,7 @@ mod app_info_integration;
 mod audio_haptics_integration;
 mod capability_state_integration;
 mod composition_support;
+mod content_resolution;
 mod content_work_bounds;
 mod file_preferences_regressions;
 mod hook_caller_identity;
@@ -21,3 +22,7 @@ mod saver_forms;
 mod theme_integration;
 mod uri_handler_integration;
 mod windowless_command;
+
+mod folder_media_reference;
+mod folder_streaming;
+mod webdav;

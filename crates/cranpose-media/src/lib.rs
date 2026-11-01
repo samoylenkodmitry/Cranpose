@@ -5,6 +5,8 @@
 mod analysis;
 #[cfg(not(target_arch = "wasm32"))]
 mod decode;
+#[cfg(all(not(target_arch = "wasm32"), feature = "all-codecs"))]
+mod dolby;
 #[cfg(not(target_arch = "wasm32"))]
 mod equalizer;
 #[cfg(not(target_arch = "wasm32"))]
@@ -13,6 +15,8 @@ mod file_source;
 mod http;
 #[cfg(all(not(target_arch = "wasm32"), feature = "all-codecs"))]
 mod opus;
+#[cfg(all(not(target_arch = "wasm32"), feature = "all-codecs"))]
+mod packet_decoder;
 #[cfg(not(target_arch = "wasm32"))]
 mod player;
 #[cfg(not(target_arch = "wasm32"))]

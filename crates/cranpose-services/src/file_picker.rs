@@ -418,6 +418,9 @@ mod desktop;
 #[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
 mod web;
 
+#[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
+mod web_folder;
+
 #[cfg(test)]
 #[path = "tests/file_picker_tests.rs"]
 mod tests;

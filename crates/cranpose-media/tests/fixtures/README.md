@@ -9,3 +9,8 @@ The WAV, FLAC, AIFF, MP2 and ALAC/M4A files contain the same generated tone from
 ```sh
 ffmpeg -f lavfi -i color=black:s=16x16:d=0.12 -i tone.wav -c:v libvpx-vp9 -c:a libopus -shortest video.webm
 ```
+
+`ac3.mkv`, `eac3.m4a` and `ac3-surround.mkv` contain generated 0.2-second
+sine waves encoded with FFmpeg's `ac3` and `eac3` encoders. The surround
+fixture has six distinct tones in 5.1 order. They exercise original MKV and
+MP4 playback without an intermediate audio file.
