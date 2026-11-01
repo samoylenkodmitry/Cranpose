@@ -36,5 +36,9 @@ where
                 });
             }
         }
+        // The moves came after the frame's UI tasks ran, and what they
+        // change schedules its work as UI tasks, such as the redraw of a node
+        // whose draw reads the hover; that work belongs to this frame.
+        self.app.runtime.runtime_handle().drain_ui();
     }
 }
