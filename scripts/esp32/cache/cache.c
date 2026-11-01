@@ -1,5 +1,5 @@
 // A QEMU TCG plugin that counts the cache misses of core 0, of its
-// instruction cache or of its data cache.
+// instruction cache or of its data cache, or the instructions it runs.
 //
 // With `kind=instructions`, code fetched from [lo, hi), the range the chip
 // reads through its cache, goes through a set-associative LRU cache of
@@ -13,7 +13,10 @@
 //   line 0xADDR misses M
 //
 // for each frame, then for each line that missed: the code line itself for
-// instructions, the line of the instruction that missed for data. Options:
+// instructions, the line of the instruction that missed for data. With
+// `kind=count` no cache is modelled: a "miss" is an instruction run, and
+// each line is the start of a block of code with the instructions run in it.
+// Options:
 // kind, lo, hi, size, ways, line, frame, skip, frames, out. The ESP32-S3's
 // defaults: its 32 KB instruction cache of 8 ways and 32-byte lines over
 // 0x42000000-0x44000000, and for data its 64 KB data cache of 8 ways and
@@ -30,7 +33,7 @@
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
-static bool data;
+static bool data, count;
 static uint64_t lo, hi, cache_size, ways, line_size;
 static uint64_t frame_pc;
 static uint64_t skip = 60, frames = 60;
@@ -43,7 +46,8 @@ static uint64_t sets;
 static uint64_t *tags, *stamps, clock_;
 // Instructions: the misses of each line of [lo, hi).
 static uint32_t *line_misses;
-// Data: the instructions that access memory, each with its misses.
+// Data: the instructions that access memory, each with its misses. Count:
+// the blocks, each with its instructions run.
 static GPtrArray *accesses;
 
 typedef struct {
@@ -55,7 +59,7 @@ static uint64_t frame_no, n_counted;
 static bool done;
 
 typedef struct {
-    uint64_t first_line, last_line;
+    uint64_t first_line, last_line, start, run;
     uint32_t insns;
     bool cached, starts_frame;
 } Block;
@@ -79,7 +83,14 @@ static void write_out(void)
         fprintf(f, "frame %" PRIu64 " insn %" PRIu64 " misses %" PRIu64 "\n", i, counted[i].insn,
                 counted[i].misses);
     }
-    if (data) {
+    if (count) {
+        for (guint i = 0; i < accesses->len; i++) {
+            Block *block = g_ptr_array_index(accesses, i);
+            if (block->run) {
+                fprintf(f, "line 0x%" PRIx64 " misses %" PRIu64 "\n", block->start, block->run);
+            }
+        }
+    } else if (data) {
         for (guint i = 0; i < accesses->len; i++) {
             Access *access = g_ptr_array_index(accesses, i);
             if (access->misses) {
@@ -143,6 +154,10 @@ static void block_exec(unsigned int vcpu, void *udata)
     }
     if (counting()) {
         current.insn += block->insns;
+        if (count) {
+            current.misses += block->insns;
+            block->run += block->insns;
+        }
     }
     if (block->cached) {
         for (uint64_t line = block->first_line; line <= block->last_line; line++) {
@@ -178,7 +193,11 @@ static void block_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     struct qemu_plugin_insn *last = qemu_plugin_tb_get_insn(tb, n - 1);
     uint64_t end = qemu_plugin_insn_vaddr(last) + qemu_plugin_insn_size(last);
     block->insns = n;
-    block->cached = !data && start >= lo && end <= hi;
+    block->start = start;
+    block->cached = !data && !count && start >= lo && end <= hi;
+    if (count) {
+        g_ptr_array_add(accesses, block);
+    }
     block->first_line = start >> line_shift;
     block->last_line = (end - 1) >> line_shift;
     for (size_t i = 0; i < n; i++) {
@@ -210,6 +229,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "kind=data")) {
             data = true;
+        } else if (!strcmp(argv[i], "kind=count")) {
+            count = true;
         }
     }
     if (data) {
@@ -250,12 +271,12 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
     tags = calloc(sets * ways, sizeof(uint64_t));
     stamps = calloc(sets * ways, sizeof(uint64_t));
     counted = calloc(frames, sizeof(FrameCount));
-    if (data) {
+    if (data || count) {
         accesses = g_ptr_array_new();
     } else {
         line_misses = calloc((hi - lo) >> line_shift, sizeof(uint32_t));
     }
-    if (!tags || !stamps || !counted || (!data && !line_misses)) {
+    if (!tags || !stamps || !counted || (!data && !count && !line_misses)) {
         return -1;
     }
     qemu_plugin_register_vcpu_tb_trans_cb(id, block_trans);
