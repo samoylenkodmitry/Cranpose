@@ -5,7 +5,7 @@ use std::{
 };
 
 use cranpose_services::{
-    HostController, PlatformDirectories, set_application_id, set_host_controller,
+    HostController, PlatformDirectories, SystemBarIcons, set_application_id, set_host_controller,
 };
 use jni::{
     Env, EnvUnowned, jni_sig, jni_str,
@@ -54,6 +54,18 @@ impl HostController for AndroidHost {
             jni_str!("cranposeSetKeepScreenOn"),
             jni_sig!("(Z)V"),
             &[enabled.into()],
+        );
+    }
+    fn set_system_bar_icons(&self, icons: SystemBarIcons) {
+        let icons: i32 = match icons {
+            SystemBarIcons::FollowSystem => 0,
+            SystemBarIcons::Dark => 1,
+            SystemBarIcons::Light => 2,
+        };
+        self.call_activity(
+            jni_str!("cranposeSetSystemBarIcons"),
+            jni_sig!("(I)V"),
+            &[icons.into()],
         );
     }
     fn platform_directories(&self) -> Option<PlatformDirectories> {

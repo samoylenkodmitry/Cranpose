@@ -548,7 +548,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         self.shell = Some(shell);
         self.accessibility = accessibility;
         self.window = Some(Arc::clone(&window));
-        super::scene::hold_window(window.as_ref());
+        super::scene::hold_window(Arc::clone(&window));
         window.request_redraw();
     }
 

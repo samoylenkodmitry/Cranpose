@@ -93,6 +93,11 @@ pub struct LifecycleEvent {
 pub trait HostController: Send + Sync {
     /// Keeps the host window awake while enabled.
     fn set_keep_screen_on(&self, enabled: bool);
+    /// Shows `icons` in the system bars drawn over the app. A host without
+    /// system bars over the app keeps this default, which does nothing.
+    fn set_system_bar_icons(&self, icons: crate::SystemBarIcons) {
+        let _ = icons;
+    }
     /// Returns platform directory roots inside the application's host sandbox.
     fn platform_directories(&self) -> Option<PlatformDirectories>;
     /// Finishes/backgrounds the host.
@@ -138,6 +143,9 @@ pub fn set_host_controller(value: HostControllerRef) {
         *slot = Some(value);
     }
     KEEP_SCREEN_ON.store(0, Ordering::Release);
+    // A new host, such as a recreated Android activity, starts with the
+    // platform's bars.
+    crate::system_bars::show_current_system_bar_icons();
 }
 /// Removes the installed host controller.
 pub fn clear_host_controller() {
@@ -453,4 +461,4 @@ pub fn ProvideLifecycle(content: impl FnOnce()) {
 
 #[cfg(test)]
 #[path = "tests/host_tests.rs"]
-mod tests;
+pub(crate) mod tests;
