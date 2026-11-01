@@ -16,6 +16,7 @@ use smallvec::SmallVec;
 use crate::{
     font::{FontStyle, FontWeight},
     glyph_id::GlyphId,
+    glyph_ink::InkReach,
     itemizer::TextItem,
     plain_glyphs::PlainGlyphs,
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
@@ -37,6 +38,9 @@ pub struct Shaper {
     // and their glyphs, reused from item to item.
     word_ends: Vec<usize>,
     pieces: Vec<(Range<usize>, Range<usize>)>,
+    // Whether a glyph shaped since the layouter last took it puts ink past
+    // its advance or its typeface's lines.
+    inks_out: bool,
 }
 
 struct ShapingFace {
@@ -110,6 +114,7 @@ impl Default for Shaper {
             words: WordCache::default(),
             word_ends: Vec::new(),
             pieces: Vec::new(),
+            inks_out: false,
         }
     }
 }
@@ -146,14 +151,35 @@ impl Shaper {
         } = &mut self.faces[face];
         // A run of plain glyphs needs neither shaping nor words.
         if let Some(index) = plans[plan].plain
-            && plain[index].append(font, text, item.range.clone(), glyphs)
+            && let Some(inks_out) = plain[index].append(font, text, item.range.clone(), glyphs)
         {
+            self.inks_out |= inks_out;
             return;
         }
         // Made here, the HarfRust plan does not take its stack under the
         // shaping font's.
         plans[plan].harfrust(font);
+        let start = glyphs.len();
         self.shape_with_plan((face, plan), text, (item, span, settings), context, glyphs);
+        let inks = item.typeface.glyph_inks();
+        self.inks_out |= glyphs[start..]
+            .iter()
+            .any(|glyph| inks.out(item.typeface, glyph.id()));
+    }
+
+    // Whether a glyph shaped since the last call puts ink past its advance
+    // or its typeface's lines.
+    pub(crate) fn take_ink_reach(&mut self) -> InkReach {
+        if std::mem::take(&mut self.inks_out) {
+            InkReach::Past
+        } else {
+            InkReach::Within
+        }
+    }
+
+    // Notes glyphs taken from a layout, whose ink reaches as `reach` says.
+    pub(crate) fn note_ink_reach(&mut self, reach: InkReach) {
+        self.inks_out |= reach == InkReach::Past;
     }
 
     // The plan of face `face` for `item` in `span`, which did not take the
@@ -193,6 +219,8 @@ impl Shaper {
             words,
             word_ends,
             pieces,
+            // `shape` reads the item's glyphs once they are all placed.
+            inks_out: _,
         } = self;
         let (direction, script, language) =
             settings.unwrap_or_else(|| shaping_settings(features, item, span));
@@ -581,11 +609,11 @@ impl WordShaping<'_> {
             return;
         };
         let face = self.setting.face;
-        if self
-            .plain
-            .as_deref_mut()
-            .is_some_and(|plain| plain.append(face, self.text, word.clone(), glyphs))
-        {
+        if self.plain.as_deref_mut().is_some_and(|plain| {
+            plain
+                .append(face, self.text, word.clone(), glyphs)
+                .is_some()
+        }) {
             return;
         }
         let keeps = stands_alone(self.text, &word, &self.context);

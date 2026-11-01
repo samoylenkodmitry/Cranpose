@@ -219,7 +219,9 @@ struct TextPlacement {
 
 impl TextPlacement {
     // Where the text of `parts`, laid out as `prepared`, draws; `None` when
-    // its node has no width to draw it in.
+    // its node has no width to draw it in. Inline: every text node places
+    // its text each time the scene takes it.
+    #[inline]
     fn of(parts: &TextNodeParts, prepared: &PreparedTextLayout) -> Option<Self> {
         let text_rect = parts.text_rect;
         let options = parts.text_layout_options.unwrap_or_default().normalized();

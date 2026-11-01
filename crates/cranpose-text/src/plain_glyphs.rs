@@ -20,6 +20,7 @@ use read_fonts::{
 use crate::{
     font_fallback::needs_no_glyph,
     glyph_id,
+    glyph_ink::font_glyph_inks_out,
     plain_chars::{CharGlyph, PairFit, PlainChar, PlainChars},
     plain_kerning::{KernSubtable, PlainKerning},
     script_lookups::{
@@ -209,17 +210,18 @@ impl PlainGlyphs {
 
     // Appends the plain glyphs of `range` of `text` at `font`'s advances,
     // kerned as the plan kerns them, when every one is plain, and returns
-    // whether it did.
+    // whether the ink of one reaches past its advance or the font's lines;
+    // `None`, appending none, when one is not plain.
     pub(crate) fn append(
         &mut self,
         font: &Font,
         text: &str,
         range: Range<usize>,
         glyphs: &mut ShapedGlyphs,
-    ) -> bool {
+    ) -> Option<bool> {
         let first = glyphs.len();
         let Some(run) = text.get(range.clone()) else {
-            return false;
+            return None;
         };
         let Self {
             busy,
@@ -230,6 +232,7 @@ impl PlainGlyphs {
         } = self;
         let chars = chars.get_or_insert_with(PlainChars::default);
         let mut previous: Option<PlainChar> = None;
+        let mut inks_out = false;
         for (at, ch) in run.char_indices() {
             let read = || {
                 let (glyph, advance) = plain_glyph(font, (busy, substitutes), ch)?;
@@ -237,14 +240,16 @@ impl PlainGlyphs {
                 Some(CharGlyph {
                     glyph,
                     advance,
+                    inks_out: font_glyph_inks_out(font, glyph, advance),
                     pairs: pairs.get(starts).is_some_and(|&(first, _)| first == glyph)
                         || kerning.starts(font_bytes(font), glyph.into()),
                 })
             };
             let Some(plain) = chars.char(ch, read) else {
                 glyphs.truncate(first);
-                return false;
+                return None;
             };
+            inks_out |= plain.inks_out;
             // A glyph that starts no pair kerns with nothing after it.
             let fit = previous
                 .filter(|before| before.pairs)
@@ -267,7 +272,7 @@ impl PlainGlyphs {
             let kern = match fit {
                 PairFit::Joins => {
                     glyphs.truncate(first);
-                    return false;
+                    return None;
                 }
                 PairFit::Kern(kern) => kern,
             };
@@ -291,7 +296,7 @@ impl PlainGlyphs {
                 GlyphOffset::default(),
             );
         }
-        true
+        Some(inks_out)
     }
 }
 

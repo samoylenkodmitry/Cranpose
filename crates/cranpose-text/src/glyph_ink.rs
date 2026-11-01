@@ -1,6 +1,10 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use cranpose_ui_graphics::Rect;
+use read_fonts::{
+    model::{Font, metrics::GlyphExtents},
+    types::GlyphId as FontGlyphId,
+};
 
 use crate::{
     glyph_id::GlyphId,
@@ -10,6 +14,14 @@ use crate::{
     text_layout::{LayoutLine, LineRun},
     typeface::Typeface,
 };
+
+// Whether some glyph of a layout puts ink past its own advance or its
+// typeface's lines, as the shaper finds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InkReach {
+    Within,
+    Past,
+}
 
 // What a glyph's two bits say: not read yet, its ink inside its advance and
 // the typeface's ascent and descent, or reaching past one of them.
@@ -44,7 +56,7 @@ impl GlyphInks {
     // Whether the ink of `glyph` of `typeface`, whose table this is, reaches
     // past its advance, the ascent or the descent. A glyph the font does not
     // count is out.
-    fn out(&self, typeface: &Typeface, glyph: GlyphId) -> bool {
+    pub(crate) fn out(&self, typeface: &Typeface, glyph: GlyphId) -> bool {
         let index = widen(glyph.0);
         let Some(cell) = self.states.get(index / 4) else {
             return true;
@@ -61,16 +73,34 @@ impl GlyphInks {
     #[inline(never)]
     fn read(&self, typeface: &Typeface, glyph: GlyphId, (cell, shift): (&AtomicU8, usize)) -> bool {
         let out = typeface.glyph_extents(glyph).is_some_and(|ink| {
-            ink.width > 0.0
-                && ink.height > 0.0
-                && (ink.x_bearing < 0.0
-                    || ink.x_bearing + ink.width > typeface.advance(glyph)
-                    || ink.y_bearing > self.ascent
-                    || ink.y_bearing - ink.height < self.descent)
+            reaches_out(&ink, typeface.advance(glyph), (self.ascent, self.descent))
         });
         cell.fetch_or((if out { OUT } else { INSIDE }) << shift, Ordering::Relaxed);
         out
     }
+}
+
+// Whether the ink `extents` gives reaches past `advance` or the lines from
+// `ascent` down to `descent`, all in design units, the descent below zero.
+fn reaches_out(extents: &GlyphExtents<f32>, advance: f32, (ascent, descent): (f32, f32)) -> bool {
+    extents.width > 0.0
+        && extents.height > 0.0
+        && (extents.x_bearing < 0.0
+            || extents.x_bearing + extents.width > advance
+            || extents.y_bearing > ascent
+            || extents.y_bearing - extents.height < descent)
+}
+
+// Whether the ink of glyph `glyph` of `font`, whose advance is `advance`,
+// reaches past it or the font's lines, as `GlyphInks` tells of a typeface's
+// glyph.
+pub(crate) fn font_glyph_inks_out(font: &Font, glyph: u32, advance: i32) -> bool {
+    let (ascent, descent) = font.metrics().h_line().map_or((0.0, 0.0), |line| {
+        (line.ascender.to_f32(), line.descender.to_f32())
+    });
+    font.glyph_metrics()
+        .extents(FontGlyphId::new(glyph))
+        .is_some_and(|ink| reaches_out(&ink, advance as f32, (ascent, descent)))
 }
 
 // The box around the ink that the glyphs of `layout` put past the visible
@@ -141,15 +171,15 @@ fn any_out(glyphs: RunGlyphs<'_>, face: &Typeface, inks: &GlyphInks) -> bool {
 }
 
 // Whether a glyph of `body` may put ink past the visible text of its line or
-// past the layout's box: the test `find_ink_past_lines` makes before it
-// places any glyph, which most layouts pass.
-pub(crate) fn may_ink_past_lines(body: &LayoutBody) -> bool {
-    body.lines.iter().any(|line| {
-        body.runs[line.runs.range()].iter().any(|run| {
-            let face = &body.faces[widen(run.face)];
-            let inks = face.glyph_inks();
-            run_leaves_lines(body, line, run, inks)
-                || any_out(body.glyphs.run(run.glyphs.range()), face, inks)
+// past the layout's box, `glyphs` telling whether one puts ink past its own
+// advance or its typeface's lines: the test `find_ink_past_lines` makes
+// before it places any glyph, which most layouts pass.
+pub(crate) fn may_ink_past_lines(body: &LayoutBody, glyphs: InkReach) -> bool {
+    glyphs == InkReach::Past
+        || body.lines.iter().any(|line| {
+            body.runs[line.runs.range()].iter().any(|run| {
+                let face = &body.faces[widen(run.face)];
+                run_leaves_lines(body, line, run, face.glyph_inks())
+            })
         })
-    })
 }

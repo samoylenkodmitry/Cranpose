@@ -11,7 +11,7 @@ use cranpose_ui_graphics::Rect;
 use crate::{
     bidi_level::BidiLevel,
     glyph_id::GlyphId,
-    glyph_ink::{find_ink_past_lines, may_ink_past_lines},
+    glyph_ink::{InkReach, find_ink_past_lines, may_ink_past_lines},
     index_range::{IndexRange, widen},
     laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
@@ -64,8 +64,10 @@ fn next_id() -> u32 {
 }
 
 // Takes the lines `body` now holds in their places: how far their visible
-// text reaches, and whether glyphs put ink past it, whose box the body keeps.
-fn take_lines(body: &mut LayoutBody) -> ((f32, f32), bool) {
+// text reaches, and whether glyphs put ink past it, whose box the body keeps;
+// `glyphs` tells whether a glyph puts ink past its advance or its typeface's
+// lines.
+fn take_lines(body: &mut LayoutBody, glyphs: InkReach) -> ((f32, f32), bool) {
     let reach = body
         .lines
         .iter()
@@ -74,7 +76,7 @@ fn take_lines(body: &mut LayoutBody) -> ((f32, f32), bool) {
             (left.min(line_left), right.max(line_right))
         })
         .unwrap_or_default();
-    let ink = may_ink_past_lines(body)
+    let ink = may_ink_past_lines(body, glyphs)
         .then(|| find_ink_past_lines(body))
         .flatten();
     let inks_past_lines = ink.is_some();
@@ -328,9 +330,14 @@ impl GlyphRun<'_> {
 impl TextLayout {
     // The layout of `body`, whose lines wrap at `wrap`, laid out between
     // `widths`, the narrowest and the widest it may be.
-    pub(crate) fn new(mut body: LayoutBody, wrap: f32, widths: (f32, f32)) -> Self {
+    pub(crate) fn new(
+        mut body: LayoutBody,
+        wrap: f32,
+        widths: (f32, f32),
+        glyphs: InkReach,
+    ) -> Self {
         let width = body.width_between(widths.0, widths.1);
-        let (reach, inks_past_lines) = take_lines(&mut body);
+        let (reach, inks_past_lines) = take_lines(&mut body, glyphs);
         Self {
             did_overflow_width: body.widest > width || width > widths.1,
             body: Arc::new(body),
@@ -345,15 +352,20 @@ impl TextLayout {
     // Lays the layout out again between `widths`: `fill` fills its body, in
     // the body's own storage when no copy shares it, and gives the width its
     // lines wrap at.
-    pub(crate) fn refill(&mut self, widths: (f32, f32), fill: impl FnOnce(&mut LayoutBody) -> f32) {
+    pub(crate) fn refill(
+        &mut self,
+        widths: (f32, f32),
+        fill: impl FnOnce(&mut LayoutBody) -> (f32, InkReach),
+    ) {
         if Arc::get_mut(&mut self.body).is_none() {
             self.body = Arc::default();
         }
         let body = Arc::make_mut(&mut self.body);
-        self.wrap = fill(body);
+        let glyphs;
+        (self.wrap, glyphs) = fill(body);
         self.width = body.width_between(widths.0, widths.1);
         self.did_overflow_width = body.widest > self.width || self.width > widths.1;
-        (self.reach, self.inks_past_lines) = take_lines(body);
+        (self.reach, self.inks_past_lines) = take_lines(body, glyphs);
         self.id = next_id();
     }
 
@@ -466,7 +478,10 @@ impl TextLayout {
     fn move_lines(&mut self, align: TextAlign) {
         let body = Arc::make_mut(&mut self.body);
         if body.align_lines(self.width, align) {
-            (self.reach, self.inks_past_lines) = take_lines(body);
+            // Moved across, the glyphs and the lines' heights stay: ink
+            // past the lines before may lie past them still.
+            let glyphs = body.ink_reach();
+            (self.reach, self.inks_past_lines) = take_lines(body, glyphs);
             self.id = next_id();
         }
     }

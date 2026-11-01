@@ -3,6 +3,7 @@ use smallvec::SmallVec;
 
 use crate::{
     bidi_level::BidiLevel,
+    glyph_ink::InkReach,
     index_range::widen,
     laid_glyphs::{LaidGlyphs, RunGlyphs},
     paragraph::TextAlign,
@@ -54,6 +55,16 @@ pub(crate) struct LayoutBody {
 }
 
 impl LayoutBody {
+    // Whether the glyphs put ink past the lines in their places now, and so
+    // may past their own advances or their typefaces' lines.
+    pub(crate) fn ink_reach(&self) -> InkReach {
+        if self.ink.is_some() {
+            InkReach::Past
+        } else {
+            InkReach::Within
+        }
+    }
+
     // The glyph runs of `line`, left to right.
     pub(crate) fn glyph_runs(&self, line: usize) -> impl Iterator<Item = GlyphRun<'_>> + '_ {
         let line = &self.lines[line];

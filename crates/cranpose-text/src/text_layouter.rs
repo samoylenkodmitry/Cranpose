@@ -126,7 +126,8 @@ impl TextLayouter {
         let width = self.fill(input, resolver, shaped, &mut body);
         // A layout kept holds each part in storage of its own length.
         body.shrink_to_fit();
-        TextLayout::new(body, width, (input.min_width, input.max_width))
+        let reach = self.shaper.take_ink_reach();
+        TextLayout::new(body, width, (input.min_width, input.max_width), reach)
     }
 
     /// Lays `input` out into `layout` in place of what it held, in the
@@ -140,7 +141,8 @@ impl TextLayouter {
         layout.refill((input.min_width, input.max_width), |body| {
             body.clear();
             self.shape(input, resolver, None, &mut body.faces);
-            self.fill(input, resolver, None, body)
+            let width = self.fill(input, resolver, None, body);
+            (width, self.shaper.take_ink_reach())
         });
     }
 
@@ -536,6 +538,7 @@ impl TextLayouter {
     ) {
         self.items.clear();
         self.glyphs.clear();
+        self.shaper.take_ink_reach();
         // A glyph takes at least a byte of text, so the glyphs grow once.
         self.glyphs.reserve(input.text.len());
         let text = input.text;
@@ -548,6 +551,7 @@ impl TextLayouter {
                 match &mut taken {
                     Some((body, from)) => {
                         *from = body.glyphs.take(*from..body.shaped, &item.range, glyphs);
+                        shaper.note_ink_reach(body.ink_reach());
                     }
                     None => {
                         shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs);

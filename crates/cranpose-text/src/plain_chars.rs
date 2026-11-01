@@ -22,6 +22,8 @@ pub(crate) struct PlainChar {
     pub(crate) glyph: u16,
     pub(crate) advance: i16,
     pub(crate) pairs: bool,
+    // Whether the glyph's ink reaches past its advance or the font's lines.
+    pub(crate) inks_out: bool,
     slot: u8,
 }
 
@@ -31,6 +33,7 @@ pub(crate) struct CharGlyph {
     pub(crate) glyph: u32,
     pub(crate) advance: i32,
     pub(crate) pairs: bool,
+    pub(crate) inks_out: bool,
 }
 
 // What stands between the glyphs of two characters side by side.
@@ -46,11 +49,13 @@ const SLOT_BITS: u32 = 7;
 const SLOTS: usize = 1 << SLOT_BITS;
 // A slot holds its character in bits 32 to 52, the character's glyph in
 // bits 16 to 31 and its advance in the low 16. `FILLED` marks a slot that
-// holds a character, `PLAIN` one whose character is plain and `PAIRS` one
-// whose glyph may kern with or join the next.
+// holds a character, `PLAIN` one whose character is plain, `PAIRS` one
+// whose glyph may kern with or join the next and `INKS_OUT` one whose
+// glyph's ink reaches past its advance or the font's lines.
 const FILLED: u64 = 1 << 63;
 const PLAIN: u64 = 1 << 62;
 const PAIRS: u64 = 1 << 61;
+const INKS_OUT: u64 = 1 << 60;
 // A pair cell not read yet, one a ligature joins and one with no kerning;
 // a cell from `KERNED` on holds the kerning `kerns` holds at its distance
 // from `KERNED`.
@@ -84,11 +89,12 @@ impl PlainChars {
         let slot = (code & (SLOTS as u32 - 1)) as u8;
         let packed = self.slots[usize::from(slot)];
         let known = (FILLED >> 32) | u64::from(code);
-        if (packed >> 32) & !(PAIRS >> 32) == known | (PLAIN >> 32) {
+        if (packed >> 32) & !((PAIRS | INKS_OUT) >> 32) == known | (PLAIN >> 32) {
             return Some(PlainChar {
                 glyph: (packed >> 16) as u16,
                 advance: packed as u16 as i16,
                 pairs: packed & PAIRS != 0,
+                inks_out: packed & INKS_OUT != 0,
                 slot,
             });
         }
@@ -113,6 +119,7 @@ impl PlainChars {
                 glyph: u16::try_from(read.glyph).ok()?,
                 advance: i16::try_from(read.advance).ok()?,
                 pairs: read.pairs,
+                inks_out: read.inks_out,
                 slot,
             })
         });
@@ -122,7 +129,12 @@ impl PlainChars {
         self.slots[usize::from(slot)] = known << 32
             | plain.map_or(0, |plain| {
                 let pairs = if plain.pairs { PAIRS } else { 0 };
-                PLAIN | pairs | u64::from(plain.glyph) << 16 | u64::from(plain.advance as u16)
+                let inks_out = if plain.inks_out { INKS_OUT } else { 0 };
+                PLAIN
+                    | pairs
+                    | inks_out
+                    | u64::from(plain.glyph) << 16
+                    | u64::from(plain.advance as u16)
             });
         plain
     }

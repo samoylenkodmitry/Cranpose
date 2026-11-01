@@ -132,10 +132,27 @@ fn an_f_that_ends_a_line_draws_its_overhang() {
         .into_iter()
         .map(|(x, _)| x)
         .collect();
-    let followed = first_stretch_end(columns);
+    let followed = last_before_last_gap(columns);
     assert_eq!(
         alone.right, followed,
         "the f alone ends at column {}, before a period at {followed}",
+        alone.right
+    );
+}
+
+// An `f` after a ligature, which the shaper places, ends its line with its
+// hook whole too.
+#[test]
+fn a_shaped_f_that_ends_a_line_draws_its_overhang() {
+    let alone = ink("fif", SpanStyle::default(), ParagraphStyle::default());
+    let columns: Vec<u32> = dark_pixels("fif.", SpanStyle::default(), ParagraphStyle::default())
+        .into_iter()
+        .map(|(x, _)| x)
+        .collect();
+    let followed = last_before_last_gap(columns);
+    assert_eq!(
+        alone.right, followed,
+        "the last f alone ends at column {}, before a period at {followed}",
         alone.right
     );
 }
@@ -217,10 +234,11 @@ fn a_changing_label_changes_the_pixels_of_its_ink() {
     }
 }
 
-// The last of the first stretch of `columns` with no gap between them.
-fn first_stretch_end(mut columns: Vec<u32>) -> u32 {
+// The last of `columns` before the last gap between them: where the glyph
+// before a period ends.
+fn last_before_last_gap(mut columns: Vec<u32>) -> u32 {
     columns.sort_unstable();
     columns.dedup();
-    let gap = columns.windows(2).position(|pair| pair[1] > pair[0] + 1);
+    let gap = columns.windows(2).rposition(|pair| pair[1] > pair[0] + 1);
     columns[gap.unwrap_or(columns.len() - 1)]
 }

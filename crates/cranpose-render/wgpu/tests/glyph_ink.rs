@@ -114,7 +114,7 @@ fn an_f_that_ends_a_line_draws_its_overhang() {
         return;
     };
     let columns: Vec<u32> = followed.into_iter().map(|(x, _)| x).collect();
-    let followed = first_stretch_end(columns);
+    let followed = last_before_last_gap(columns);
     assert_eq!(
         alone[2], followed,
         "the f alone ends at column {}, before a period at {followed}",
@@ -139,10 +139,11 @@ fn a_stroke_draws_its_outer_half_past_the_line_ends() {
     );
 }
 
-// The last of the first stretch of `columns` with no gap between them.
-fn first_stretch_end(mut columns: Vec<u32>) -> u32 {
+// The last of `columns` before the last gap between them: where the glyph
+// before a period ends.
+fn last_before_last_gap(mut columns: Vec<u32>) -> u32 {
     columns.sort_unstable();
     columns.dedup();
-    let gap = columns.windows(2).position(|pair| pair[1] > pair[0] + 1);
+    let gap = columns.windows(2).rposition(|pair| pair[1] > pair[0] + 1);
     columns[gap.unwrap_or(columns.len() - 1)]
 }
