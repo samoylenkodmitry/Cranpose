@@ -207,10 +207,11 @@ manual_assert = "warn"
 # the extra block expects this lint with the reason.
 multiple_inherent_impl = "deny"
 
-# The workspace builds the fork from forks/. Crates name it by version, so a
-# published crate takes the same fork from crates.io.
+# The workspace builds the forks from forks/. Crates name them by version, so
+# a published crate takes the same forks from crates.io.
 [patch.crates-io]
 cranpose-wgpu = { path = "forks/wgpu/wgpu" }
+cranpose-opus-pure = { path = "forks/opus-pure/opus-pure" }
 
 # Faster local debug builds while preserving useful panic locations.
 [profile.dev]

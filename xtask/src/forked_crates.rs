@@ -2,6 +2,7 @@
 /// (forks/README.md). They keep the upstream version and publish ahead of
 /// the release crates instead of in lockstep with them.
 pub(crate) const FORKED_CRATES: &[&str] = &[
+    "cranpose-opus-pure",
     "cranpose-wgpu",
     "cranpose-wgpu-core",
     "cranpose-wgpu-core-deps-apple",

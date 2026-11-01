@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 rust-version = "1.88.0"
-name = "opus-pure"
+name = "cranpose-opus-pure"
 version = "0.2.2"
 build = false
 exclude = [
@@ -24,7 +24,8 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "Pure-Rust Opus audio codec (RFC 6716) with Ogg encapsulation (RFC 7845)"
+description = "Cranpose's patched fork of opus-pure 0.2.2 (forks/README.md in the Cranpose repository). Pure-Rust Opus audio codec (RFC 6716) with Ogg encapsulation (RFC 7845)"
+homepage = "https://github.com/samoylenkodmitry/Cranpose/tree/main/forks"
 readme = "README.md"
 keywords = [
     "opus",
@@ -38,7 +39,7 @@ categories = [
     "multimedia::encoding",
 ]
 license = "BSD-3-Clause"
-repository = "https://github.com/stephenberry/opus-pure"
+repository = "https://github.com/samoylenkodmitry/Cranpose"
 
 [package.metadata.docs.rs]
 all-features = false

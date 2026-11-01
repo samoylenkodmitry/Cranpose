@@ -489,3 +489,24 @@ whole (36 of 36).
 2. Rename the packages and point the forked dependencies at their sibling
    directories (`package = "cranpose-..."`, `path = "../..."`), as before.
 3. Reapply the patch, or drop the fork once upstream ships the fix.
+
+## opus-pure 0.2.2
+
+Upstream: <https://github.com/stephenberry/opus-pure>, the crates.io package
+of 0.2.2 (commit `cf954a76381ae8968b2bc35bb5d578b3a2311d53`).
+`cranpose-opus-pure` keeps 0.2.2 and its library name `opus_pure`.
+`cranpose-media` takes it for the Opus decoder under `all-codecs`.
+
+| fork | upstream |
+| --- | --- |
+| `cranpose-opus-pure` | `opus-pure` |
+
+### The patch: 32-bit x86 builds the x86 SIMD code
+
+The SIMD paths compile for `target_arch = "x86"` and `"x86_64"`, but 0.2.2
+imports `std::arch::x86_64` in them, which 32-bit x86 does not have, so it
+does not build for `i686-linux-android`. `lib.rs` names the native module once
+as `crate::x86_intrinsics` and the CELT and SILK code imports from it. The
+intrinsics exist in both modules, so 64-bit x86 is unchanged. Offered
+upstream as [stephenberry/opus-pure#6](https://github.com/stephenberry/opus-pure/pull/6);
+the fork goes when a release has it.

@@ -62,20 +62,22 @@ jobs:
         run: |
           set -euo pipefail
           for fork in \
-            wgpu-hal \
-            wgpu-core-deps-apple \
-            wgpu-core-deps-emscripten \
-            wgpu-core-deps-wasm \
-            wgpu-core-deps-windows-linux-android \
-            wgpu-core \
-            wgpu; do
-            manifest="forks/wgpu/${fork}/Cargo.toml"
+            wgpu/wgpu-hal \
+            wgpu/wgpu-core-deps-apple \
+            wgpu/wgpu-core-deps-emscripten \
+            wgpu/wgpu-core-deps-wasm \
+            wgpu/wgpu-core-deps-windows-linux-android \
+            wgpu/wgpu-core \
+            wgpu/wgpu \
+            opus-pure/opus-pure; do
+            manifest="forks/${fork}/Cargo.toml"
+            crate="cranpose-${fork#*/}"
             version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
-            if cargo xtask crate-published "cranpose-${fork}" "$version"; then
-              echo "Skipping cranpose-${fork} ${version} (already published)."
+            if cargo xtask crate-published "$crate" "$version"; then
+              echo "Skipping ${crate} ${version} (already published)."
               continue
             elif [ "$?" -ne 1 ]; then
-              echo "Failed to determine publish status for cranpose-${fork} ${version}." >&2
+              echo "Failed to determine publish status for ${crate} ${version}." >&2
               exit 1
             fi
             cargo publish --manifest-path "$manifest"
