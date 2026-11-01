@@ -60,3 +60,4 @@
 - The browser-safe-time static test scans `cfg(test)` modules of the wasm-delivered crates too: import `web_time::{Duration, Instant}` in wgpu crate tests, never `std::time`.
 - A composite rule gated on "translated" silently drops for a scaled child: the showcase star's pulse showed the glass band as a square because the rounded mask required translation; gate on the geometry the mask needs (uniform scale plus translation), and reproduce with a scratch showcase copy patched to the local crates.
 - Android accessibility reconnect tests require no active user accessibility service; use a dedicated device when a shared control service keeps accessibility enabled.
+- android-activity's `AndroidApp::config()` keeps the configuration NativeActivity read at launch; read a value that changes while the app runs, such as night mode, from the activity's `Resources.getConfiguration()`.
