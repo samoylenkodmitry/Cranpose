@@ -5,8 +5,11 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    graph::DrawCommandId, layer_shadow::ShadowRRect, text_glyphs::lines_part,
-    text_paint::TextPaint, text_raster::TextRasterRequest,
+    glyph_reach::{InkSpread, glyph_part},
+    graph::DrawCommandId,
+    layer_shadow::ShadowRRect,
+    text_paint::TextPaint,
+    text_raster::TextRasterRequest,
 };
 use cranpose_ui::{TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
@@ -288,11 +291,22 @@ pub(crate) struct DrawnText {
     gradient: bool,
     shadow: bool,
     static_motion: bool,
+    spread: InkSpread,
 }
 
 impl DrawnText {
-    /// `string` drawn in `style`, its facts read from both.
-    pub(crate) fn of(string: Arc<RenderString>, style: &TextStyle) -> Self {
+    // `string` drawn in `style`, laid out as `layout`.
+    pub(crate) fn of_laid_out(
+        string: Arc<RenderString>,
+        style: &TextStyle,
+        layout: &cranpose_text::TextLayout,
+    ) -> Self {
+        let spread = InkSpread::of_text(style, string.span_styles(), layout);
+        Self::of(string, style, spread)
+    }
+
+    /// `string` drawn in `style`, its glyphs' ink spread by `spread`.
+    pub(crate) fn of(string: Arc<RenderString>, style: &TextStyle, spread: InkSpread) -> Self {
         let paints_gradient = |span: &cranpose_ui::text::SpanStyle| {
             span.brush
                 .as_ref()
@@ -320,6 +334,7 @@ impl DrawnText {
                 .text_motion
                 .unwrap_or(cranpose_ui::text::TextMotion::Static)
                 == cranpose_ui::text::TextMotion::Static,
+            spread,
             string,
         }
     }
@@ -335,6 +350,7 @@ impl DrawnText {
             gradient: false,
             shadow: paint.casts_shadow,
             static_motion: paint.static_motion,
+            spread: paint.spread,
         }
     }
 
@@ -401,12 +417,12 @@ impl TextDraw {
 
     // The part of `rect`, where the text draws from its top left corner at
     // `scale` units of `rect` a layout pixel, in which its glyphs draw: its
-    // lines, or all of it for a text that casts a shadow.
+    // lines and their ink, or all of it for a text that casts a shadow.
     pub(crate) fn glyph_reach(&self, rect: Rect, scale: f32) -> Rect {
         if self.text.shadow() {
             rect
         } else {
-            lines_part(rect, &self.layout, scale)
+            glyph_part(rect, &self.layout, scale, self.text.spread)
         }
     }
 }

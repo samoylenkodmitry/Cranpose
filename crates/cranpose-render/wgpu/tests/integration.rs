@@ -50,6 +50,7 @@ mod glass_specialization_parity;
 mod glass_surface_refraction;
 mod glass_underlay_scroll;
 mod glass_vibrancy;
+mod glyph_ink;
 mod gpu_fence_uploads;
 mod gradient_blur_reference;
 mod held_images;

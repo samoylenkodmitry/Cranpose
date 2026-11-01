@@ -33,7 +33,11 @@ pub(super) fn push_text_effect<S: TextStyleDrawSink>(
         node_id: node.node_id,
         rect: text_rect,
         snap_anchor: None,
-        text: DrawnText::of(Arc::new(mask_text.render_string()), &style),
+        text: DrawnText::of(
+            Arc::new(mask_text.render_string()),
+            &style,
+            node.paint().spread,
+        ),
         layout: node.layout.clone(),
         color,
         style_hash: style.render_hash(),

@@ -6,7 +6,7 @@ use std::{
 use foldhash::fast::FixedState;
 use read_fonts::{
     FontRef, TableProvider,
-    model::{Blob, Font, Source, Variation, attribute::Style, name::NameId},
+    model::{Blob, Font, Source, Variation, attribute::Style, metrics::GlyphExtents, name::NameId},
     types::{Fixed, GlyphId as FontGlyphId, Tag},
 };
 use smallvec::SmallVec;
@@ -15,7 +15,8 @@ use crate::{
     coverage::Coverage,
     font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
-    simple_glyf::GlyfTables,
+    glyph_ink::GlyphInks,
+    simple_glyf::{self, GlyfTables},
 };
 
 /// The bytes a typeface is read from.
@@ -118,13 +119,22 @@ struct Loaded {
     // The axis positions the typeface is instanced at, sorted by tag.
     variations: Box<[([u8; 4], f32)]>,
     content_hash: u64,
-    coverage: OnceLock<Coverage>,
-    glyf: OnceLock<Option<GlyfTables>>,
+    found: Found,
     // The normal track of the font's `trak` table: the tracking in ems at
     // each point size it lists, ascending; empty without one.
     tracking: Box<[(f32, f32)]>,
     // The glyph of the space, whose advance justification stretches.
     space: Option<GlyphId>,
+}
+
+// What a typeface reads of its font on first use.
+#[derive(Default)]
+struct Found {
+    coverage: OnceLock<Coverage>,
+    glyf: OnceLock<Option<GlyfTables>>,
+    // Which glyphs put ink past their advance or the font's lines, read as
+    // layouts meet them.
+    inks: OnceLock<GlyphInks>,
 }
 
 impl Typeface {
@@ -161,8 +171,7 @@ impl Typeface {
             is_color: is_color(&font),
             variations: Box::default(),
             content_hash,
-            coverage: OnceLock::new(),
-            glyf: OnceLock::new(),
+            found: Found::default(),
             tracking: normal_track(&font),
             space: space_glyph(&font),
             font,
@@ -222,8 +231,7 @@ impl Typeface {
             is_color: is_color(&font),
             variations: applied.into_boxed_slice(),
             content_hash,
-            coverage: OnceLock::new(),
-            glyf: OnceLock::new(),
+            found: Found::default(),
             tracking: normal_track(&font),
             space: space_glyph(&font),
             font,
@@ -291,7 +299,7 @@ impl Typeface {
 
     // The characters the font maps to glyphs, read from the `cmap` on first use.
     pub(crate) fn coverage(&self) -> &Coverage {
-        self.0.coverage.get_or_init(|| {
+        self.0.found.coverage.get_or_init(|| {
             Coverage::from_codepoints(
                 self.0
                     .font
@@ -424,10 +432,26 @@ impl Typeface {
         &self.0.font
     }
 
+    // Where `glyph` puts ink, in design units: from its `glyf` header for a
+    // simple TrueType font, otherwise as the general loader measures it.
+    pub(crate) fn glyph_extents(&self, glyph: GlyphId) -> Option<GlyphExtents<f32>> {
+        let id = FontGlyphId::new(glyph.0);
+        match self.glyf_tables() {
+            Some(tables) => simple_glyf::extents(&self.0.font, tables, id),
+            None => self.0.font.glyph_metrics().extents(id),
+        }
+    }
+
+    // Which glyphs put ink past their advance or the font's lines.
+    pub(crate) fn glyph_inks(&self) -> &GlyphInks {
+        self.0.found.inks.get_or_init(|| GlyphInks::of(self))
+    }
+
     // Where the font keeps its simple glyphs, found on first use; `None`
     // for a font the general loader draws.
     pub(crate) fn glyf_tables(&self) -> Option<&GlyfTables> {
         self.0
+            .found
             .glyf
             .get_or_init(|| GlyfTables::of(&self.0.font))
             .as_ref()

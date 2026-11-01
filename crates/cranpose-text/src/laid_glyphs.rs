@@ -39,6 +39,10 @@ pub(crate) struct PackedGlyph {
 }
 
 impl PackedGlyph {
+    pub(crate) fn id(self) -> GlyphId {
+        GlyphId(u32::from(self.id))
+    }
+
     // `glyph` in eight bytes, its id and advance cut to their low bits, and
     // whether they fit them. No branch, so a layout's glyphs pack in one
     // pass.
@@ -146,6 +150,11 @@ impl LaidGlyphs {
             Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
             Glyphs::Full(glyphs) => RunGlyphs::Full(glyphs),
         }
+    }
+
+    // Whether a glyph draws off its pen.
+    pub(crate) fn has_offsets(&self) -> bool {
+        self.offsets.is_some()
     }
 
     // Where the first glyphs of `range` draw from the pen, when any glyph

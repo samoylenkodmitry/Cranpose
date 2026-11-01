@@ -1,5 +1,7 @@
 #[cfg(feature = "framebuffer")]
 mod framebuffer;
+#[cfg(feature = "framebuffer")]
+mod glyph_ink;
 mod host_effects;
 mod ios_scene_static;
 mod prelude_surface;

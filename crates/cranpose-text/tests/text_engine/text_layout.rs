@@ -1,10 +1,12 @@
 use cranpose_text::{
-    CaretDirection, FontFamily, FontFamilyResolver, LayoutInput, ParagraphLengths, ParagraphStyle,
-    ShapingSpan, TextAlign, TextDirection, TextLayout, TextLayoutOptions, TextLayouter,
-    TextOverflow,
+    CaretDirection, FontFamily, FontFamilyResolver, FontStyle, LayoutInput, ParagraphLengths,
+    ParagraphStyle, ShapingSpan, SynthesizedStyle, TextAlign, TextDirection, TextLayout,
+    TextLayoutOptions, TextLayouter, TextOverflow,
 };
 
-use crate::fonts::{ARABIC_VF, DEVANAGARI_VF, ROBOTO, TEST_WIDE, lay_out, span, typeface};
+use crate::fonts::{
+    ARABIC_VF, DEVANAGARI_VF, ROBOTO, ROBOTO_BOLD, TEST_WIDE, lay_out, span, typeface,
+};
 
 fn layout(
     resolver: &FontFamilyResolver,
@@ -289,6 +291,57 @@ fn a_line_with_a_taller_fallback_font_makes_room_for_it() {
         "{} {}",
         height(&mixed),
         height(&latin)
+    );
+}
+
+// A renderer synthesizes the bold and the italic a face lacks, which spread
+// the ink of its glyphs; the layout names them, laid out anew or from the
+// glyphs of another layout.
+#[test]
+fn a_layout_names_the_bold_and_the_italic_its_faces_lack() {
+    let family = FontFamily::Default;
+    let text = "regular bold";
+    let mut bold = span(8..text.len(), &family, 700);
+    bold.size = 24.0;
+    let spans = [span(0..8, &family, 400), bold];
+    let mut italic = span(0..text.len(), &family, 400);
+    italic.font.style = FontStyle::Italic;
+    let paragraph = ParagraphStyle::default();
+    let input = |spans| LayoutInput {
+        text,
+        spans,
+        paragraph: &paragraph,
+        lengths: ParagraphLengths::default(),
+        min_width: 0.0,
+        max_width: f32::INFINITY,
+        options: TextLayoutOptions::default(),
+    };
+    let regular_only = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let with_bold = FontFamilyResolver::new([typeface(ROBOTO), typeface(ROBOTO_BOLD)]);
+    let mut layouter = TextLayouter::default();
+
+    let synthesized = layouter.layout(&input(&spans), &regular_only);
+    let bold_only = SynthesizedStyle {
+        bold_size: Some(24.0),
+        italic: false,
+    };
+    assert_eq!(synthesized.synthesized_style(), bold_only);
+    let again = layouter.relayout(&input(&spans), &regular_only, &synthesized);
+    assert_eq!(again.synthesized_style(), bold_only);
+    assert_eq!(
+        layouter
+            .layout(&input(&spans), &with_bold)
+            .synthesized_style(),
+        SynthesizedStyle::default()
+    );
+    assert_eq!(
+        layouter
+            .layout(&input(&[italic]), &regular_only)
+            .synthesized_style(),
+        SynthesizedStyle {
+            bold_size: None,
+            italic: true,
+        }
     );
 }
 
