@@ -148,6 +148,12 @@
 struct Readme;
 
 // ---- Public API ----
+// Both Intel targets use the same intrinsics through their native-width module.
+#[cfg(target_arch = "x86")]
+pub(crate) use std::arch::x86 as x86_intrinsics;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use std::arch::x86_64 as x86_intrinsics;
+
 mod config;
 mod decoder;
 mod encoder;

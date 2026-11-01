@@ -313,7 +313,7 @@ unsafe fn pitch_xcorr_neon(x: &[f32], y: &[f32], xcorr: &mut [f32], len: usize, 
 #[inline(always)]
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn inner_prod_sse(x: &[f32], y: &[f32], n: usize) -> f32 {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads below walk `n` elements of each input; trimming to `n` here is
     // what puts them in bounds.
@@ -360,7 +360,7 @@ unsafe fn inner_prod_sse(x: &[f32], y: &[f32], n: usize) -> f32 {
 #[inline(always)]
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn dual_inner_prod_sse(x: &[f32], y1: &[f32], y2: &[f32], n: usize) -> (f32, f32) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads below walk `n` elements of each input; trimming to `n` here is
     // what puts them in bounds.
@@ -406,7 +406,7 @@ unsafe fn dual_inner_prod_sse(x: &[f32], y1: &[f32], y2: &[f32], n: usize) -> (f
 #[inline(always)]
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn xcorr_kernel_sse(x: &[f32], y: &[f32], sum: &mut [f32; 4], len: usize) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // Four taps of `x` per step, each against a four-wide window of `y` that
     // starts three elements later, so the reads reach `x[len - 1]` and
@@ -498,7 +498,7 @@ unsafe fn pitch_xcorr_sse(x: &[f32], y: &[f32], xcorr: &mut [f32], len: usize, m
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx,fma")]
 unsafe fn inner_prod_avx(x: &[f32], y: &[f32], n: usize) -> f32 {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads below walk `n` elements of each input; trimming to `n` here is
     // what puts them in bounds.
@@ -547,7 +547,7 @@ unsafe fn inner_prod_avx(x: &[f32], y: &[f32], n: usize) -> f32 {
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx,fma")]
 unsafe fn dual_inner_prod_avx(x: &[f32], y1: &[f32], y2: &[f32], n: usize) -> (f32, f32) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads below walk `n` elements of each input; trimming to `n` here is
     // what puts them in bounds.
@@ -635,7 +635,7 @@ unsafe fn pitch_xcorr_avx(x: &[f32], y: &[f32], xcorr: &mut [f32], len: usize, m
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx,fma")]
 unsafe fn xcorr_kernel_avx(x: &[f32], y: &[f32], sum: &mut [f32; 4], len: usize) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // Four taps of `x` per step, each against a four-wide window of `y` that
     // starts three elements later, so the reads reach `x[len - 1]` and
@@ -965,7 +965,7 @@ fn find_best_pitch(
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let mut syy = unsafe {
         if std::arch::is_x86_feature_detected!("avx") {
-            use std::arch::x86_64::*;
+            use crate::x86_intrinsics::*;
             let mut acc0 = _mm256_setzero_ps();
             let mut acc1 = _mm256_setzero_ps();
             let mut j = 0;

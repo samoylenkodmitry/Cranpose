@@ -1114,7 +1114,7 @@ pub fn silk_scale_copy_vector16(
 }
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use crate::x86_intrinsics::*;
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]

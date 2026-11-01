@@ -2094,7 +2094,7 @@ fn compute_band_energy_neon(band: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 unsafe fn compute_band_energy_avx2(band: &[f32]) -> f32 {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     let n = band.len();
     let mut i = 0usize;
@@ -2241,7 +2241,7 @@ pub fn normalise_bands(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn scale_slice_avx2(src: &[f32], dst: &mut [f32], scale: f32, n: usize) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads and stores below walk `n` elements; trimming to `n` here is
     // what puts them in bounds.
@@ -2443,7 +2443,7 @@ unsafe fn renormalise_vector_neon(x: &mut [f32], n: usize, gain: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 unsafe fn renormalise_vector_avx2(x: &mut [f32], n: usize, gain: f32) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads and stores below walk `n` elements; trimming to `n` here is
     // what puts them in bounds.

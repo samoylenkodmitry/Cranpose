@@ -349,8 +349,8 @@ fn mdct_backward_post_rotation_scalar(
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx")]
 #[inline]
-unsafe fn reverse_ps_avx(v: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+unsafe fn reverse_ps_avx(v: crate::x86_intrinsics::__m256) -> crate::x86_intrinsics::__m256 {
+    use crate::x86_intrinsics::*;
     let swapped = _mm256_permute2f128_ps(v, v, 0x01);
     _mm256_shuffle_ps(swapped, swapped, 0b00_01_10_11)
 }
@@ -358,7 +358,7 @@ unsafe fn reverse_ps_avx(v: std::arch::x86_64::__m256) -> std::arch::x86_64::__m
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx")]
 unsafe fn mdct_tdac_avx(output: &mut [f32], window: &[f32], overlap: usize) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The fold pairs `output[i]` with `output[overlap - 1 - i]` across the
     // whole window, so both buffers are covered by their first `overlap`

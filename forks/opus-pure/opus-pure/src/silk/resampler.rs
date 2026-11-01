@@ -73,7 +73,7 @@ fn resampler_fir12_8(buf: &[i16], bi: usize, ti: usize) -> i32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn resampler_fir12_8_sse2(buf8: &[i16], c: &[i16; 8]) -> i32 {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
     let b = _mm_loadu_si128(buf8.as_ptr() as *const __m128i);
     let cc = _mm_loadu_si128(c.as_ptr() as *const __m128i);
     let m = _mm_madd_epi16(b, cc); // 4x i32: pairwise products summed

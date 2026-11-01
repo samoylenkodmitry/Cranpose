@@ -214,7 +214,7 @@ fn l1_metric(tmp: &[f32], n: usize, lm: i32, bias: f32) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 unsafe fn sum_abs_avx(x: &[f32], n: usize) -> f32 {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     // The loads below walk `n` elements; trimming to `n` here is what puts
     // them in bounds.
@@ -757,7 +757,7 @@ unsafe fn comb_filter_const_sse(
     g11: f32,
     g12: f32,
 ) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     let g10v = _mm_set1_ps(g10);
     let g11v = _mm_set1_ps(g11);
@@ -833,7 +833,7 @@ unsafe fn comb_filter_const_avx(
     g11: f32,
     g12: f32,
 ) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     let g10v = _mm256_set1_ps(g10);
     let g11v = _mm256_set1_ps(g11);
@@ -946,7 +946,7 @@ unsafe fn comb_filter_const_sse_fma(
     g11: f32,
     g12: f32,
 ) {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
 
     let g10v = _mm_set1_ps(g10);
     let g11v = _mm_set1_ps(g11);
@@ -1317,7 +1317,7 @@ unsafe fn comb_filter_const_avx2(
     g11: f32,
     g12: f32,
 ) -> usize {
-    use std::arch::x86_64::*;
+    use crate::x86_intrinsics::*;
     let vg10 = _mm256_set1_ps(g10);
     let vg11 = _mm256_set1_ps(g11);
     let vg12 = _mm256_set1_ps(g12);
