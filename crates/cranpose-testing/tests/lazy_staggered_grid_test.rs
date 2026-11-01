@@ -11,7 +11,7 @@ use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_nod
 use cranpose_ui::{
     Axis, Box, BoxSpec, GridCells, LayoutDirection, LazyHorizontalStaggeredGrid,
     LazyHorizontalStaggeredGridSpec, LazyStaggeredGridState, LazyVerticalStaggeredGrid,
-    LazyVerticalStaggeredGridSpec, Modifier, ProvideLayoutDirection, Rect,
+    LazyVerticalStaggeredGridSpec, Modifier, PaddingValues, ProvideLayoutDirection, Rect,
     rememberLazyStaggeredGridState,
 };
 
@@ -370,4 +370,30 @@ fn a_focused_item_keeps_the_focus_when_the_grid_scrolls_it_far_out_of_view() {
     grid.shell.update();
     assert_eq!(grid.state().first_visible_item_index(), 240);
     assert_eq!(focused(&mut grid).as_deref(), Some("item 3"));
+}
+
+#[test]
+fn an_item_in_the_start_padding_is_not_the_first_visible() {
+    let mut grid = Grid::vertical(
+        LazyVerticalStaggeredGridSpec::new(GridCells::Fixed(2))
+            .content_padding(PaddingValues::new(0.0, 30.0, 0.0, 0.0)),
+        &[40.0; 12],
+        &[],
+        LayoutDirection::Ltr,
+    );
+    grid.scroll_by(50.0);
+    assert_eq!(
+        [grid.at(0), grid.at(2)],
+        [Some((0.0, -20.0, 150.0)), Some((0.0, 20.0, 150.0))],
+        "items 0 and 1 lie in the padding"
+    );
+    let state = grid.state();
+    assert_eq!(
+        (
+            state.first_visible_item_index(),
+            state.first_visible_item_scroll_offset()
+        ),
+        (2, 10.0),
+        "item 2 is the first to end past the padding, 10 above its edge"
+    );
 }

@@ -93,12 +93,7 @@ where
         first_item_scroll_offset: f32,
     ) -> Result<ItemMeasurePass, S::Refusal> {
         let start_time = Instant::now();
-        let leading_padding = if first_item_index == 0 {
-            self.config.before_content_padding
-        } else {
-            0.0
-        };
-        let start_offset = leading_padding - first_item_scroll_offset;
+        let start_offset = self.config.before_content_padding - first_item_scroll_offset;
         let viewport_end = self.effective_viewport_size;
         let content_end =
             (self.effective_viewport_size - self.config.after_content_padding).max(0.0);
@@ -190,12 +185,10 @@ where
         for item in visible_items.iter_mut() {
             item.offset += spare;
         }
+        // The items before fill the start padding too.
         let mut top = visible_items[0].offset;
         let mut idx = first_item_index;
-        while idx > 0
-            && top > self.config.before_content_padding + 0.5
-            && visible_items.len() < MAX_VISIBLE_ITEMS_SAFETY
-        {
+        while idx > 0 && top > 0.5 && visible_items.len() < MAX_VISIBLE_ITEMS_SAFETY {
             idx -= 1;
             let mut item = self.item(idx)?;
             top -= item.main_axis_size + self.config.spacing;
@@ -227,8 +220,12 @@ where
         let mut current_index = start_index;
         let mut current_offset = start_offset;
 
+        // An item that starts at the start padding's edge is measured even
+        // where the padding is as long as the viewport, so one item ends
+        // past the edge.
+        let before = self.config.before_content_padding;
         while current_index < self.items_count
-            && current_offset < viewport_end
+            && (current_offset < viewport_end || current_offset <= before)
             && items.len() < MAX_VISIBLE_ITEMS_SAFETY
         {
             let mut item = self.item(current_index)?;

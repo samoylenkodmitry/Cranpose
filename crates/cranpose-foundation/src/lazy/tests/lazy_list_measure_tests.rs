@@ -776,14 +776,16 @@ fn leading_content_padding_scrolls_away_without_recycling_visible_item() {
             "offset={}",
             item0.offset
         );
-        assert_eq!(partial.first_visible_item_index, 0);
-        assert!((partial.first_visible_item_scroll_offset - 120.0).abs() < 0.01);
+        // Item 0 and item 1 lie in the start padding; item 2 is the first
+        // to end past its edge, 20 above it.
+        assert_eq!(partial.first_visible_item_index, 2);
+        assert!((partial.first_visible_item_scroll_offset - 20.0).abs() < 0.01);
         assert_eq!(state.layout_info().viewport_start_offset, 0.0);
         assert_eq!(state.layout_info().viewport_end_offset, 200.0);
 
         state.dispatch_scroll_delta(-31.0);
         let gone = measure_lazy_list(10, &state, 200.0, 300.0, &config, measure);
-        assert_eq!(gone.first_visible_item_index, 1);
+        assert_eq!(gone.first_visible_item_index, 3);
         assert!(
             state
                 .layout_info()

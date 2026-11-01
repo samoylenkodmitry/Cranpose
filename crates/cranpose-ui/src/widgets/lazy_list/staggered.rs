@@ -139,18 +139,19 @@ pub fn rememberLazyStaggeredGridState() -> LazyStaggeredGridState {
 }
 
 impl LazyStaggeredGridState {
-    /// The first item the grid shows, by index. A composable that reads it
-    /// recomposes when it changes.
+    /// The first item that ends past the edge of the start content padding,
+    /// by index. A composable that reads it recomposes when it changes.
     pub fn first_visible_item_index(&self) -> usize {
         self.list.first_visible_item_index()
     }
 
-    /// How far the viewport starts past the start of that item.
+    /// How far that item is scrolled past the start padding's edge.
     pub fn first_visible_item_scroll_offset(&self) -> f32 {
         self.list.first_visible_item_scroll_offset()
     }
 
-    /// Scrolls so that item `index` starts `offset` before the top.
+    /// Scrolls so that item `index` starts `offset` before the edge of the
+    /// start content padding.
     pub fn scroll_to_item(&self, index: usize, offset: f32) {
         self.list.scroll_to_item(index, offset);
     }

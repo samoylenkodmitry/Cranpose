@@ -368,7 +368,7 @@ where
         items_count,
         effective_viewport_size,
         measure_state.average_item_size,
-        VecDeque::from(pre_measured),
+        pre_measured,
     )
     .with_beyond_bounds_item_count(adaptive_beyond_bounds)
     .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
@@ -404,11 +404,7 @@ where
             first_index,
             first_offset,
             measurement_pass.start_index,
-            if measurement_pass.start_index == 0 {
-                config.before_content_padding - measurement_pass.start_offset
-            } else {
-                -measurement_pass.start_offset
-            },
+            config.before_content_padding - measurement_pass.start_offset,
             position.index,
             position.offset,
             measurement_pass.measured_visible_items,
@@ -428,29 +424,23 @@ where
     ))
 }
 
-// The content padding before the item at `index`: the list's for its first.
-fn leading_padding(config: &LazyListMeasureConfig, index: usize) -> f32 {
-    if index == 0 {
-        config.before_content_padding
-    } else {
-        0.0
-    }
-}
-
 // Where a pass starts measuring: the first item and how far it is scrolled
-// once the pending scroll applies, with the items measured to find them.
+// past the start padding's edge once the pending scroll applies, with the
+// items measured to find them. The pass starts at the item that reaches the
+// viewport's start, so the items before the first visible one fill the
+// start padding.
 fn resolve_start<S>(
     resolver: &ScrollPositionResolver<'_>,
     state: &LazyListState,
     config: &LazyListMeasureConfig,
     items_count: usize,
     source: &mut S,
-) -> Result<(usize, f32, Vec<LazyListMeasuredItem>), S::Refusal>
+) -> Result<(usize, f32, VecDeque<LazyListMeasuredItem>), S::Refusal>
 where
     S: LazyItemSource,
 {
     let (mut first_index, mut first_offset) = resolver.apply_pending_scroll_delta();
-    let mut pre_measured = Vec::new();
+    let mut pre_measured = VecDeque::new();
 
     if first_offset < 0.0 && first_index > 0 {
         (first_index, first_offset) = resolver.normalize_backward_jump(first_index, first_offset);
@@ -458,12 +448,8 @@ where
             first_index -= 1;
             let item = source.measure(first_index)?;
             first_offset += item.main_axis_size + config.spacing;
-            if first_index == 0 {
-                first_offset += config.before_content_padding;
-            }
-            pre_measured.push(item);
+            pre_measured.push_front(item);
         }
-        pre_measured.reverse();
     }
 
     first_index = first_index.min(items_count.saturating_sub(1));
@@ -475,7 +461,7 @@ where
         } else {
             0.0
         };
-        leading_padding(config, index) + item_size + spacing_after
+        item_size + spacing_after
     };
     let mut offset_known_within_current_item = state
         .get_cached_size(first_index)
@@ -486,13 +472,19 @@ where
         let item_extent = item_extent_at(first_index, item.main_axis_size);
 
         if first_offset + 0.001 < item_extent {
-            pre_measured.push(item);
+            pre_measured.push_back(item);
             offset_known_within_current_item = true;
         }
     }
 
     if !offset_known_within_current_item {
         (first_index, first_offset) = resolver.normalize_forward(first_index, first_offset);
+    }
+    while first_offset < config.before_content_padding && first_index > 0 {
+        first_index -= 1;
+        let item = source.measure(first_index)?;
+        first_offset += item.main_axis_size + config.spacing;
+        pre_measured.push_front(item);
     }
     Ok((first_index, first_offset, pre_measured))
 }
@@ -552,31 +544,34 @@ fn final_position(
     items_count: usize,
     pending_scroll_delta: f32,
 ) -> FinalPosition {
+    // The first visible item is the first to end past the start padding's
+    // edge: the ones in the padding show, but the position does not count
+    // from them.
+    let before = config.before_content_padding;
     let actual_first_visible = visible_items
         .iter()
-        .find(|item| item_end_with_spacing(item, items_count, config.spacing) > 0.0);
+        .find(|item| item_end_with_spacing(item, items_count, config.spacing) > before);
     let unresolved =
         pass.hit_time_budget && !pass.viewport_filled && actual_first_visible.is_none();
 
     let (index, offset) = if let Some(first) = actual_first_visible {
-        let offset = leading_padding(config, first.index) - first.offset;
-        (first.index, offset.max(0.0))
+        (first.index, (before - first.offset).max(0.0))
     } else if unresolved {
         if pending_scroll_delta > 0.001 {
-            let preserved_offset =
-                (leading_padding(config, pass.start_index) - pass.start_offset).max(0.0);
-            (pass.start_index, preserved_offset)
+            (pass.start_index, (before - pass.start_offset).max(0.0))
         } else {
             let next_index = pass.next_index.min(items_count.saturating_sub(1));
             if next_index + 1 >= items_count {
                 (next_index, 0.0)
             } else {
-                let next_offset = (leading_padding(config, next_index) - pass.next_offset).max(0.0);
-                (next_index, next_offset)
+                (next_index, (before - pass.next_offset).max(0.0))
             }
         }
-    } else if !visible_items.is_empty() {
-        (visible_items[0].index, 0.0)
+    } else if let Some(last) = visible_items.last() {
+        // No item ends past the start padding, as when the padding is as
+        // long as the viewport: the position counts from the last, as
+        // Compose's does.
+        (last.index, (before - last.offset).max(0.0))
     } else {
         (0, 0.0)
     };

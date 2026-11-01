@@ -552,11 +552,19 @@ fn publish<S: LazyStaggeredItemSource>(
     for item in &mut visible {
         item.offset += pass.before - scroll;
     }
-    let first = visible.first().map_or(anchor, |item| item.index);
-    let last = visible.last().map_or(first, |item| item.index);
-    let placed = place_beyond(lanes, pass, config, scroll, first..last + 1, source);
+    let shown_first = visible.first().map_or(anchor, |item| item.index);
+    let last = visible.last().map_or(shown_first, |item| item.index);
+    let placed = place_beyond(lanes, pass, config, scroll, shown_first..last + 1, source);
+    // As in Compose, the first visible item is the first to end past the
+    // start padding's edge: the ones in the padding show, but the position
+    // does not count from them.
+    let first_visible = visible
+        .iter()
+        .find(|item| item.offset + item.main_axis_size + config.spacing > pass.before)
+        .or_else(|| visible.last());
+    let first = first_visible.map_or(anchor, |item| item.index);
     let first_offset = scroll - lanes.slots[first].start;
-    match visible.first() {
+    match first_visible {
         Some(item) => state.update_scroll_position_with_key(first, first_offset, item.key),
         None => state.update_scroll_position(first, first_offset),
     }
