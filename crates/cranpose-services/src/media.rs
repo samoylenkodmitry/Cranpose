@@ -50,8 +50,8 @@ use observers::{
     COMMAND_OBSERVERS, FOCUS_OBSERVERS, PROGRESS_OBSERVERS, SAMPLE_OBSERVERS, STATE_OBSERVERS,
 };
 pub use observers::{
-    MediaObserver, observe_audio_focus, observe_media_commands, observe_media_samples,
-    observe_playback_progress, observe_playback_state,
+    MediaObserver, observe_audio_focus, observe_media_commands, observe_media_metadata,
+    observe_media_samples, observe_playback_progress, observe_playback_state,
 };
 
 use crate::{
@@ -1108,18 +1108,16 @@ pub fn set_media_equalizer(settings: EqualizerSettings) -> bool {
 ///
 /// Called when tags finish parsing, which is usually after playback started.
 pub fn set_media_metadata(metadata: MediaMetadata) {
-    {
-        let mut item = CURRENT_ITEM.lock();
-        let Some(item) = item.as_mut() else {
-            return;
-        };
-        item.metadata = metadata.clone();
+    match CURRENT_ITEM.lock().as_mut() {
+        Some(item) => item.metadata = metadata.clone(),
+        None => return,
     }
     if let Some(player) = media_player()
         && player.capabilities().session
     {
         player.set_session_metadata(&metadata);
     }
+    observers::metadata_changed(&metadata);
 }
 
 static BACKGROUND_LEASE: Mutex<Option<BackgroundWorkLease>> = Mutex::new(None);

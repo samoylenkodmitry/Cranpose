@@ -1149,6 +1149,11 @@ robot-linux-fast: robot-gpu-fast
 vulkan-sync:
     scripts/ci/vulkan_sync.sh
 
+# The MPRIS player a desktop app publishes, read and driven over a disposable
+# session bus.
+mpris:
+    dbus-run-session -- cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,media,embedded-default-font --lib media_controls -- --include-ignored
+
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
     ./liquid_cheatsheets.sh

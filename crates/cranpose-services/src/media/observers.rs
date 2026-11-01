@@ -7,8 +7,8 @@ use parking_lot::Mutex;
 use portable_atomic::AtomicU64;
 
 use super::{
-    AudioFocus, MediaCommand, MediaSamples, PlaybackProgress, PlaybackState, audio_focus,
-    playback_progress, playback_state,
+    AudioFocus, MediaCommand, MediaMetadata, MediaSamples, PlaybackProgress, PlaybackState,
+    audio_focus, playback_progress, playback_state,
 };
 
 pub(super) struct ObserverList<T: ?Sized> {
@@ -52,12 +52,14 @@ type ProgressObserverFn = dyn Fn(PlaybackProgress) + Send + Sync;
 type CommandObserverFn = dyn Fn(MediaCommand) + Send + Sync;
 type FocusObserverFn = dyn Fn(AudioFocus) + Send + Sync;
 type SampleObserverFn = dyn Fn(MediaSamples) + Send + Sync;
+type MetadataObserverFn = dyn Fn(&MediaMetadata) + Send + Sync;
 
 pub(super) static STATE_OBSERVERS: ObserverList<StateObserverFn> = ObserverList::new();
 pub(super) static PROGRESS_OBSERVERS: ObserverList<ProgressObserverFn> = ObserverList::new();
 pub(super) static COMMAND_OBSERVERS: ObserverList<CommandObserverFn> = ObserverList::new();
 pub(super) static FOCUS_OBSERVERS: ObserverList<FocusObserverFn> = ObserverList::new();
 pub(super) static SAMPLE_OBSERVERS: ObserverList<SampleObserverFn> = ObserverList::new();
+static METADATA_OBSERVERS: ObserverList<MetadataObserverFn> = ObserverList::new();
 
 /// Keeps a media observer registered until it is dropped.
 pub struct MediaObserver {
@@ -97,6 +99,24 @@ pub fn observe_playback_progress(
     MediaObserver {
         id,
         remove: |id| PROGRESS_OBSERVERS.remove(id),
+    }
+}
+
+/// Registers `observer` for the metadata [`set_media_metadata`](super::set_media_metadata)
+/// gives the open item, such as a cover that finished loading after playback started.
+pub fn observe_media_metadata(
+    observer: impl Fn(&MediaMetadata) + Send + Sync + 'static,
+) -> MediaObserver {
+    let id = METADATA_OBSERVERS.add(Arc::new(observer));
+    MediaObserver {
+        id,
+        remove: |id| METADATA_OBSERVERS.remove(id),
+    }
+}
+
+pub(super) fn metadata_changed(metadata: &MediaMetadata) {
+    for observer in METADATA_OBSERVERS.snapshot() {
+        observer(metadata);
     }
 }
 
@@ -141,4 +161,5 @@ pub(super) fn clear() {
     COMMAND_OBSERVERS.clear();
     FOCUS_OBSERVERS.clear();
     SAMPLE_OBSERVERS.clear();
+    METADATA_OBSERVERS.clear();
 }

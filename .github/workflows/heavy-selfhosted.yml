@@ -113,6 +113,10 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: just vulkan-sync
 
+      - name: Check the MPRIS player over a session bus
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
+        run: just mpris
+
       - name: sccache stats
         if: always() && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'

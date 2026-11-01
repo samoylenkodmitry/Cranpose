@@ -43,6 +43,16 @@ pub(crate) mod mobile;
 ))]
 pub(crate) mod network;
 #[cfg(any(
+    all(
+        feature = "media-backend",
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        target_os = "macos"
+    ),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) mod now_playing;
+#[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(
         feature = "desktop-shell",
