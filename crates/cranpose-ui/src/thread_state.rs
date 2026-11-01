@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, OnceCell, RefCell},
-    num::NonZeroU64,
+    num::NonZeroU32,
     rc::{Rc, Weak},
 };
 
@@ -28,7 +28,7 @@ type IconPaths = Vec<(&'static str, Option<Rc<VectorPath>>)>;
 
 pub(crate) struct ThreadCells {
     pub(crate) current_draw_node: Cell<Option<NodeId>>,
-    pub(crate) next_app_context_id: Cell<NonZeroU64>,
+    pub(crate) next_app_context_id: Cell<NonZeroU32>,
     pub(crate) keyboard_focus_visible: Cell<bool>,
     pub(crate) clean_slot_skips: Cell<u64>,
     pub(crate) retained_measures: Cell<u64>,
@@ -51,7 +51,7 @@ impl ThreadCells {
     const fn new() -> Self {
         Self {
             current_draw_node: Cell::new(None),
-            next_app_context_id: Cell::new(NonZeroU64::MIN),
+            next_app_context_id: Cell::new(NonZeroU32::MIN),
             keyboard_focus_visible: Cell::new(false),
             clean_slot_skips: Cell::new(0),
             retained_measures: Cell::new(0),

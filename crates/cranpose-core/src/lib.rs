@@ -95,7 +95,9 @@ mod phase;
 pub use phase::Phase;
 mod anchor_id;
 pub use anchor_id::AnchorId;
+mod packed_u64;
 pub use node_error::NodeError;
+pub use packed_u64::PackedU64;
 /// `Owned`, the handle to a value that a composition remembers.
 pub mod owned;
 mod pausable;
@@ -224,8 +226,9 @@ pub use slot::{
 pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Identifies a composition group: the hash of its call site, or of an explicit key together with
-/// its call site.
+/// its call site. Kept at a 32-bit word's alignment on ESP-IDF, as a [`PackedU64`] is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(target_os = "espidf", repr(C, packed(4)))]
 pub struct Key(pub u64);
 
 impl Key {
@@ -242,7 +245,7 @@ impl Key {
 
 impl std::fmt::Display for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        { self.0 }.fmt(f)
     }
 }
 /// Identifies a node in an applier.

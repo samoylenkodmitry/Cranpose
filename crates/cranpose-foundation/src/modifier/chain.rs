@@ -3,7 +3,7 @@
 
 use std::{any::TypeId, cell::RefCell, rc::Rc};
 
-use cranpose_core::collections::map::HashMap;
+use cranpose_core::{PackedU64, collections::map::HashMap};
 
 use super::{
     AnyModifierElement, DynModifierElement, InvalidationKind, MAX_DELEGATE_DEPTH,
@@ -16,7 +16,7 @@ use super::{
 /// element updated in place on every frame is not hashed for it.
 #[derive(Debug)]
 struct ModifierNodeEntry {
-    key: Option<u64>,
+    key: Option<PackedU64>,
     element: DynModifierElement,
     node: Rc<RefCell<dyn ModifierNode>>,
     capabilities: NodeCapabilities,
@@ -27,7 +27,7 @@ struct ModifierNodeEntry {
 
 impl ModifierNodeEntry {
     fn new(
-        key: Option<u64>,
+        key: Option<PackedU64>,
         element: DynModifierElement,
         node: Rc<RefCell<dyn ModifierNode>>,
         capabilities: NodeCapabilities,
@@ -228,7 +228,7 @@ impl EntryIndex {
                 (entry.element.element_type(), entry.element.node_type());
             if let Some(key_value) = entry.key {
                 keyed
-                    .entry((element_type, node_type, key_value))
+                    .entry((element_type, node_type, key_value.get()))
                     .or_insert_with(Vec::new)
                     .push(i);
             } else {
@@ -318,7 +318,7 @@ fn update_entry_in_place(
 ) -> Option<InPlace> {
     if entry.element.element_type() != element.element_type()
         || entry.element.node_type() != element.node_type()
-        || entry.key != element.key()
+        || entry.key.map(PackedU64::get) != element.key()
         || !element.can_update_node(&*entry.node.borrow())
     {
         return None;
@@ -357,7 +357,7 @@ fn fresh_entry(
 ) -> ModifierNodeEntry {
     let capabilities = element.capabilities();
     let entry = ModifierNodeEntry::new(
-        element.key(),
+        element.key().map(PackedU64::new),
         Rc::clone(&element),
         element.create_node(),
         capabilities,
@@ -421,7 +421,7 @@ fn reconcile_element(
     if idx != new_pos {
         request_auto_invalidations(context, capabilities);
     }
-    entry.key = key;
+    entry.key = key.map(PackedU64::new);
     entry.capabilities = capabilities;
     entry
         .node

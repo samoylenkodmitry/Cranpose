@@ -6,6 +6,7 @@ use std::{
     rc::Rc,
 };
 
+use cranpose_core::PackedU64;
 use cranpose_ui_layout::Constraints;
 
 use super::layout_node::{DescendantDirt, LayoutDirt};
@@ -72,7 +73,7 @@ impl Hash for IntrinsicKind {
 
 #[derive(Default)]
 struct NodeCacheState {
-    epoch: u64,
+    epoch: PackedU64,
     measurement: Option<MeasurementCacheEntry>,
     /// The measurement the cache last let go of. It is never served: the
     /// node's next measure takes it to fill its memory in place of new
@@ -179,16 +180,16 @@ impl NodeCache {
         state.retire_measurement();
         state.intrinsics.clear();
         state.intrinsics_read = false;
-        state.epoch = 0;
+        state.epoch = PackedU64::default();
     }
 
     pub(crate) fn activate(&self, epoch: u64) {
         let mut state = self.cache.borrow_mut();
-        if state.epoch != epoch {
+        if state.epoch.get() != epoch {
             state.retire_measurement();
             state.intrinsics.clear();
             state.intrinsics_read = false;
-            state.epoch = epoch;
+            state.epoch = PackedU64::new(epoch);
         }
     }
 
@@ -222,7 +223,7 @@ impl NodeCache {
     }
 
     pub(crate) fn epoch(&self) -> u64 {
-        self.cache.borrow().epoch
+        self.cache.borrow().epoch.get()
     }
 
     /// The measurement the cache holds for `constraints`: one made under

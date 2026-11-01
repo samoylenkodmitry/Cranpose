@@ -1,3 +1,5 @@
+use cranpose_core::PackedU64;
+
 /// The nodes a layout pass names to the scene, each once a take: a node
 /// keeps the take it was last noted in, so a second note in the same take
 /// is dropped with one comparison instead of a hash. A node pushed without
@@ -16,9 +18,9 @@ impl<T> NotedSceneNodes<T> {
         }
     }
 
-    pub(super) fn note(&mut self, node: T, noted_in: &mut u64) {
-        if *noted_in != self.take {
-            *noted_in = self.take;
+    pub(super) fn note(&mut self, node: T, noted_in: &mut PackedU64) {
+        if noted_in.get() != self.take {
+            *noted_in = PackedU64::new(self.take);
             self.nodes.push(node);
         }
     }

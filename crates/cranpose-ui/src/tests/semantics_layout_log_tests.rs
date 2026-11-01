@@ -1,4 +1,4 @@
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, PackedU64};
 
 use super::{LayoutSync, MAX_PENDING, SemanticsLayoutLog, record_layout_change};
 
@@ -11,7 +11,7 @@ fn synced(log: &SemanticsLayoutLog) -> (LayoutSync, Vec<NodeId>) {
 #[test]
 fn nothing_is_recorded_before_a_tree_reads_the_log() {
     let log = SemanticsLayoutLog::default();
-    let mut stamp = 0;
+    let mut stamp = PackedU64::default();
     log.record(NodeId(7), &mut stamp);
     let (sync, changed) = synced(&log);
     assert!(!sync.continuous, "the first reader walks the whole tree");
@@ -22,7 +22,7 @@ fn nothing_is_recorded_before_a_tree_reads_the_log() {
 fn each_node_is_recorded_once_between_reads() {
     let log = SemanticsLayoutLog::default();
     synced(&log);
-    let (mut first, mut second) = (0, 0);
+    let (mut first, mut second) = (PackedU64::default(), PackedU64::default());
     log.record(NodeId(1), &mut first);
     log.record(NodeId(1), &mut first);
     log.record(NodeId(2), &mut second);
@@ -42,11 +42,11 @@ fn each_node_is_recorded_once_between_reads() {
 fn an_overflowing_log_stops_recording_and_starts_a_new_epoch() {
     let log = SemanticsLayoutLog::default();
     let (before, _) = synced(&log);
-    let mut stamps = vec![0; MAX_PENDING + 1];
+    let mut stamps = vec![PackedU64::default(); MAX_PENDING + 1];
     for (id, stamp) in stamps.iter_mut().enumerate() {
         log.record(NodeId(id), stamp);
     }
-    let mut late = 0;
+    let mut late = PackedU64::default();
     log.record(NodeId(99_999), &mut late);
     let (sync, changed) = synced(&log);
     assert!(!sync.continuous, "the reader walks the whole tree again");
@@ -58,7 +58,7 @@ fn an_overflowing_log_stops_recording_and_starts_a_new_epoch() {
 #[test]
 fn changes_are_recorded_in_the_current_app_context_only_while_armed() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut stamp = 0;
+    let mut stamp = PackedU64::default();
     record_layout_change(NodeId(3), &mut stamp);
     let drain = || {
         crate::render_state::with_current_semantics_layout_log(synced).map(|(_, changed)| changed)

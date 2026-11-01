@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use cranpose_core::PackedU64;
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, InvalidationKind, LayoutModifierNode,
     Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
@@ -44,7 +45,7 @@ struct TextPreparedLayoutCacheEntry {
     // The max widths at which the text laid out from `min_width` gives
     // `layout` again.
     max_widths: cranpose_ui_layout::BoundRange,
-    text_generation: u64,
+    text_generation: PackedU64,
     font_scale_fingerprint: u32,
     layout: Rc<crate::text::PreparedTextLayout>,
 }
@@ -58,7 +59,7 @@ impl TextPreparedLayoutCacheEntry {
         Self {
             min_width,
             max_widths: layout.max_widths_kept(min_width),
-            text_generation,
+            text_generation: PackedU64::new(text_generation),
             font_scale_fingerprint,
             layout,
         }
@@ -68,7 +69,7 @@ impl TextPreparedLayoutCacheEntry {
     // and `max_width` as it is: its lines and size the same.
     fn keeps(&self, (min_width, max_width): (f32, f32), stamp: (u64, u32)) -> bool {
         self.min_width.to_bits() == min_width.to_bits()
-            && (self.text_generation, self.font_scale_fingerprint) == stamp
+            && (self.text_generation.get(), self.font_scale_fingerprint) == stamp
             && self.max_widths.contains(max_width)
     }
 }
@@ -92,7 +93,7 @@ struct TextPreparedLayoutOwner {
 struct TextLayoutSource {
     text: Rc<AnnotatedString>,
     style: Arc<TextStyle>,
-    style_hash: u64,
+    style_hash: PackedU64,
     options: TextLayoutOptions,
     // How the text service's shared cache keeps the layouts: those of a
     // text changed in place, as a ticker's is every frame, once it comes
@@ -118,7 +119,7 @@ pub(crate) struct TextPreparedLayoutHandle {
 
 impl TextPreparedLayoutOwner {
     fn new(text: Rc<AnnotatedString>, style: Arc<TextStyle>, options: TextLayoutOptions) -> Self {
-        let style_hash = style.render_hash();
+        let style_hash = PackedU64::new(style.render_hash());
         Self {
             source: RefCell::new(TextLayoutSource {
                 text,
@@ -151,7 +152,7 @@ impl TextPreparedLayoutOwner {
             return;
         }
         if !same_style {
-            source.style_hash = style.render_hash();
+            source.style_hash = PackedU64::new(style.render_hash());
         }
         if !shared_style {
             source.style = Arc::clone(style);
@@ -207,7 +208,7 @@ impl TextPreparedLayoutOwner {
             return false;
         };
         // Its style, equal to the source's, gives the alignment.
-        if (latest.text_generation, latest.font_scale_fingerprint) == stamp
+        if (latest.text_generation.get(), latest.font_scale_fingerprint) == stamp
             && let Some(prepared) = Rc::get_mut(&mut latest.layout)
             && prepared.try_realign(widths, prepared.visual_style.paragraph_style.text_align)
         {
@@ -246,7 +247,9 @@ impl TextPreparedLayoutOwner {
             let cache = self.cache.borrow();
             let latest = cache
                 .first()
-                .filter(|entry| (entry.text_generation, entry.font_scale_fingerprint) == stamp)
+                .filter(|entry| {
+                    (entry.text_generation.get(), entry.font_scale_fingerprint) == stamp
+                })
                 .map(|entry| &entry.layout);
             match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
                 Some(latest) => latest.at_widths(widths, align, spare),
@@ -254,7 +257,7 @@ impl TextPreparedLayoutOwner {
                     let text = crate::text::measure::SharedText {
                         text: &source.text,
                         style: &source.style,
-                        style_hash: source.style_hash,
+                        style_hash: source.style_hash.get(),
                     };
                     let shaped = latest.map(|latest| &latest.layout);
                     crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)

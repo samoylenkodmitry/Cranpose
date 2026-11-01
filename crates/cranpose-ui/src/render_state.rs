@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, SnapshotStateObserver};
+use cranpose_core::{MemoryApplier, NodeId, PackedU64, SnapshotStateObserver};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
@@ -97,7 +97,7 @@ pub struct AppContext {
 /// Nonzero, so that an absent one takes no more room than one: every
 /// layout node keeps the id of the context it registered with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AppContextId(std::num::NonZeroU64);
+pub(crate) struct AppContextId(std::num::NonZeroU32);
 
 impl RenderState {
     fn new_with_density(density: f32) -> Self {
@@ -129,7 +129,7 @@ fn next_app_context_id() -> AppContextId {
     crate::thread_state::cells(|cells| {
         let next = &cells.next_app_context_id;
         let id = next.get();
-        next.set(id.checked_add(1).unwrap_or(std::num::NonZeroU64::MIN));
+        next.set(id.checked_add(1).unwrap_or(std::num::NonZeroU32::MIN));
         AppContextId(id)
     })
 }
@@ -481,7 +481,7 @@ impl AppContext {
 
     /// Notes that the layout pass changed `node_id`'s geometry. `noted_in`
     /// is the node's own record of the take it was last noted in.
-    pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId, noted_in: &mut u64) {
+    pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId, noted_in: &mut PackedU64) {
         self.state
             .geometry_scene_nodes
             .borrow_mut()
@@ -496,7 +496,7 @@ impl AppContext {
         &self,
         node_id: NodeId,
         placer: Option<NodeId>,
-        noted_in: &mut u64,
+        noted_in: &mut PackedU64,
     ) {
         self.state.moved_scene_nodes.borrow_mut().note(
             MovedSceneNode {

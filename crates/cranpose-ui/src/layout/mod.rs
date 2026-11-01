@@ -25,7 +25,7 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    Applier, ApplierHost, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId, PackedU64,
     RuntimeHandle,
 };
 use cranpose_foundation::{
@@ -2661,7 +2661,7 @@ struct LayoutChildMeasureState {
     // Whether the record writes the child's size and placed flag: see
     // `LayoutChildBinding::layout_node`.
     layout_node: Cell<bool>,
-    cache_epoch: Cell<u64>,
+    cache_epoch: Cell<PackedU64>,
     force_remeasure: Cell<bool>,
     parent_data: Cell<Option<cranpose_ui_layout::ParentData>>,
     /// The constraints the parent's last measure gave the child.
@@ -2698,7 +2698,7 @@ impl LayoutChildMeasureState {
             frame,
             parts: Cell::new(None),
             layout_node: Cell::new(false),
-            cache_epoch: Cell::new(0),
+            cache_epoch: Cell::default(),
             force_remeasure: Cell::new(true),
             parent_data: Cell::new(None),
             measured_constraints: Cell::new(None),
@@ -2727,7 +2727,7 @@ impl LayoutChildMeasureState {
             Some(Rc::clone(binding.parts))
         });
         self.layout_node.set(binding.layout_node);
-        self.cache_epoch.set(cache_epoch);
+        self.cache_epoch.set(PackedU64::new(cache_epoch));
         self.force_remeasure.set(stale || binding.descendant_dirty);
         self.parent_data.set(binding.parent_data);
         if self.frame.measures() {
@@ -2803,7 +2803,7 @@ impl LayoutChildMeasureState {
         let parts = read_cell(&self.parts, Clone::clone);
         let cache = parts.as_deref().map(LayoutParts::cache);
         if let Some(cache) = cache {
-            cache.activate(self.cache_epoch.get());
+            cache.activate(self.cache_epoch.get().get());
         }
         if !self.force_remeasure.get()
             && let Some(cached) = cache.and_then(|cache| cache.get_measurement(constraints))
@@ -2861,7 +2861,7 @@ impl LayoutChildMeasurable {
         let parts = read_cell(&state.parts, Clone::clone);
         let cache = parts.as_deref().map(LayoutParts::cache);
         if let Some(cache) = cache {
-            cache.activate(state.cache_epoch.get());
+            cache.activate(state.cache_epoch.get().get());
         }
         if !state.force_remeasure.get()
             && let Some(value) = cache.and_then(|cache| cache.get_intrinsic(&kind))
