@@ -30,11 +30,11 @@ anyhow = { version = "1.0.104", optional = true }
 fluent-bundle = "0.16.0"
 fluent-langneg = { version = "0.13.1", features = ["cldr"] }
 fluent-syntax = "0.12.0"
-icu_calendar = { version = "2.3", default-features = false, optional = true, features = ["compiled_data"] }
-icu_datetime = { version = "2.3", default-features = false, optional = true, features = ["compiled_data"] }
-icu_decimal = { version = "2.3", default-features = false, optional = true, features = ["compiled_data", "ryu"] }
-icu_experimental = { version = "0.6", default-features = false, optional = true, features = ["compiled_data"] }
-icu_locale = { version = "2.3", default-features = false, optional = true, features = ["compiled_data"] }
+icu_calendar = { version = "2.4", default-features = false, optional = true, features = ["compiled_data"] }
+icu_datetime = { version = "2.4", default-features = false, optional = true, features = ["compiled_data"] }
+icu_decimal = { version = "2.4", default-features = false, optional = true, features = ["compiled_data", "ryu"] }
+icu_experimental = { version = "0.7", default-features = false, optional = true, features = ["compiled_data"] }
+icu_locale = { version = "2.4", default-features = false, optional = true, features = ["compiled_data"] }
 portable-atomic.workspace = true
 proc-macro2 = { version = "1.0.107", optional = true, features = ["span-locations"] }
 quote = { version = "1.0.47", optional = true }

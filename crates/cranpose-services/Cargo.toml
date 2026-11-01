@@ -75,10 +75,10 @@ file-picker-web = [
 
 # Free space on the volume (`available_storage`).
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.5", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-open = { version = "5.4.4", optional = true }
+open = { version = "5.4.5", optional = true }
 
 # Desktop file picker (Linux/macOS/Windows). xdg-portal exposes mounted
 # locations (GVFS/WebDAV) on Linux. iOS uses its own backend, so exclude it.
@@ -86,9 +86,9 @@ open = { version = "5.4.4", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-js-sys = { version = "0.3.106", optional = true }
+js-sys = { version = "0.3.107", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4.79", optional = true }
+wasm-bindgen-futures = { version = "0.4.80", optional = true }
 rfd = { version = "0.17.2", default-features = false, optional = true, features = ["file-handle-inner"] }
 web-sys = { version = "0.3", features = [
     "Blob",
@@ -128,14 +128,14 @@ reqwest = { version = "0.13.5", default-features = false, features = ["blocking"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-webbrowser = { version = "1.2.4", optional = true }
-webpki-root-certs = { version = "1.0.9", optional = true }
+webbrowser = { version = "1.2.6", optional = true }
+webpki-root-certs = { version = "1.0.11", optional = true }
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest. Turns on the
 # workspace's shared test scratch directory for this crate's own tests.
 cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
-webpki-root-certs = "1.0.9"
+webpki-root-certs = "1.0.11"
 
 [[test]]
 name = "integration"

@@ -1,6 +1,8 @@
 use std::{io, path::PathBuf, sync::Arc};
 
-use cranpose_services::{IncomingContent, publish_incoming_content, publish_opened_link};
+use cranpose_services::{
+    IncomingContent, path_from_uri, publish_incoming_content, publish_opened_link,
+};
 use winit::{
     data_transfer::{DataTransferId, TypeHint, TypedData},
     event::WindowEvent,
@@ -42,11 +44,14 @@ impl FileDrops {
 
     fn receive(&mut self, value: Arc<dyn TypedData>) {
         self.waiting.push(value);
-        self.waiting.retain(|data| match data.try_as_file_paths() {
-            Ok(paths) => {
-                paths.iter().for_each(|path| {
-                    publish_incoming_content(IncomingContent::from_file(path));
-                });
+        self.waiting.retain(|data| match data.try_as_uris() {
+            Ok(uris) => {
+                for uri in uris {
+                    match path_from_uri(&uri) {
+                        Some(path) => publish_incoming_content(IncomingContent::from_file(&path)),
+                        None => log::debug!("dropped item is not a local file: {uri}"),
+                    }
+                }
                 false
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,

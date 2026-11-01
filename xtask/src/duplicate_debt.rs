@@ -51,7 +51,7 @@ pub(crate) const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "objc2",
-        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.3 is on 0.6 (AccessKit/accesskit#616)",
+        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.4 is on 0.6 (AccessKit/accesskit#616)",
     },
     DuplicateDebt {
         family: "objc2-app-kit",
@@ -76,6 +76,13 @@ pub(crate) const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
         family: "rustc-hash",
         reason: "fluent-bundle 0.16.0 and type-map 0.5.1 require rustc-hash 2.x (Askama 0.16 in UniFFI's all-features graph also requires 2.x), while wgpu-core 30.0.7, naga 30.0.1, and naga-types 30.0.1 require 1.1.x; unifying these incompatible major-version constraints would require changing upstream dependencies",
+    },    DuplicateDebt {
+        family: "x11rb",
+        reason: "arboard 3.7.0 (latest) holds x11rb ^0.13 while winit-x11 0.31.0-beta.4 is on ^0.14",
+    },
+    DuplicateDebt {
+        family: "x11rb-protocol",
+        reason: "follows the x11rb split via arboard 3.7.0",
     },
 ];
 

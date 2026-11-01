@@ -79,5 +79,5 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("com.google.android.apps.common.testing.accessibility.framework:accessibility-test-framework:4.1.1")
     androidTestImplementation("com.google.guava:guava:33.7.2-android")
-    androidTestImplementation("org.checkerframework:checker-qual:4.3.0")
+    androidTestImplementation("org.checkerframework:checker-qual:4.3.1")
 }
