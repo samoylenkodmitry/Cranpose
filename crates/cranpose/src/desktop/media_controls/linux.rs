@@ -195,7 +195,8 @@ pub(super) fn bus_name(app: &str) -> String {
 
 fn write_cover(artwork: &MediaArtwork) -> std::io::Result<PathBuf> {
     let directory = cranpose_services::application_directories()
-        .map_or_else(|_| std::env::temp_dir(), |directories| directories.cache)
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .cache
         .join("media-artwork");
     std::fs::create_dir_all(&directory)?;
     let extension = match artwork.mime.as_str() {

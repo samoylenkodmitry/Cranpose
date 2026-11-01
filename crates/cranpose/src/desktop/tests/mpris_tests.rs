@@ -1,4 +1,7 @@
-use cranpose_services::observe_media_commands;
+use cranpose_services::{
+    HostController, PlatformDirectories, clear_application_id, clear_host_controller,
+    observe_media_commands, set_application_id, set_host_controller,
+};
 use zbus::{
     blocking::{Proxy, fdo::PropertiesProxy},
     names::InterfaceName,
@@ -27,6 +30,9 @@ fn a_stopped_or_closed_item_reads_as_stopped() {
 #[test]
 #[ignore = "requires a session bus"]
 fn a_client_reads_the_playing_item_and_its_commands_reach_the_app() {
+    let scratch = crate::test_scratch_dir("mpris");
+    set_host_controller(Arc::new(ScratchHost(scratch.clone())));
+    set_application_id("cranpose-mpris-test").expect("application id");
     let shown = Arc::<Mutex<Shown>>::default();
     let name = bus_name("cranpose-mpris-test");
     let connection = connect(&name, "MPRIS test", &shown).expect("the session bus");
@@ -83,6 +89,28 @@ fn a_client_reads_the_playing_item_and_its_commands_reach_the_app() {
         !std::path::Path::new(path).exists(),
         "the cover file outlived the item"
     );
+    clear_application_id();
+    clear_host_controller();
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+// The app's folders, all in the test's scratch folder.
+struct ScratchHost(PathBuf);
+
+impl HostController for ScratchHost {
+    fn set_keep_screen_on(&self, _enabled: bool) {}
+    fn platform_directories(&self) -> Option<PlatformDirectories> {
+        Some(PlatformDirectories {
+            data: self.0.join("data"),
+            config: self.0.join("config"),
+            cache: self.0.join("cache"),
+            documents: None,
+            temporary: self.0.join("temporary"),
+            shared: None,
+        })
+    }
+    fn exit(&self) {}
+    fn background(&self) {}
 }
 
 fn lock_commands(commands: &Mutex<Vec<MediaCommand>>) -> MutexGuard<'_, Vec<MediaCommand>> {
