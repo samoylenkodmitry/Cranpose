@@ -1,0 +1,52 @@
+//! SILK layer — the speech-optimized half of Opus (RFC 6716 §4.2 encoder,
+//! §4.3 decoder). Module names mirror the reference C files so the two can be
+//! diffed against each other.
+
+pub(crate) mod ana_filt_bank_1;
+pub(crate) mod biquad_alt;
+pub(crate) mod cng;
+pub(crate) mod control_codec;
+pub(crate) mod control_fixed;
+pub(crate) mod control_snr;
+pub(crate) mod dec_api;
+pub(crate) mod decode_core;
+pub(crate) mod decode_frame;
+pub(crate) mod decode_indices;
+pub(crate) mod decode_parameters;
+pub(crate) mod decode_pulses;
+pub(crate) mod decoder_structs;
+pub(crate) mod define;
+pub(crate) mod enc_api;
+pub(crate) mod encode_indices;
+pub(crate) mod encode_pulses;
+pub(crate) mod gain_quant;
+pub(crate) mod hp_variable_cutoff;
+pub(crate) mod init_decoder;
+pub(crate) mod init_encoder;
+pub(crate) mod interpolate;
+pub(crate) mod lpc_analysis;
+pub(crate) mod lpc_fit;
+pub(crate) mod ltp_analysis;
+pub(crate) mod macros;
+pub(crate) mod nlsf;
+pub(crate) mod nlsf_decode;
+pub(crate) mod nlsf_del_dec_quant;
+pub(crate) mod nlsf_encode;
+pub(crate) mod nlsf_unpack;
+pub(crate) mod noise_shape_analysis;
+pub(crate) mod nsq;
+pub(crate) mod nsq_del_dec;
+pub(crate) mod pitch_analysis;
+pub(crate) mod plc;
+pub(crate) mod resampler;
+pub(crate) mod shell_coder;
+pub(crate) mod sigm;
+pub(crate) mod sigproc_fix;
+pub(crate) mod sort;
+pub(crate) mod stereo;
+pub(crate) mod structs;
+pub(crate) mod tables;
+pub(crate) mod tables_nlsf;
+pub(crate) mod tuning_parameters;
+pub(crate) mod vad;
+pub(crate) mod vq_wmat_ec;
