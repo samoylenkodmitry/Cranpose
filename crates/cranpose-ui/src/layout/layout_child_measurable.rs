@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use cranpose_ui_layout::{AlignmentLines, Constraints, PlaceTarget};
+use cranpose_ui_layout::{AlignmentLines, Constraints, FlexParentData, ParentData, PlaceTarget};
 
 use super::{
     LayoutChildMeasureState,
@@ -25,11 +25,13 @@ impl LayoutChildMeasurable {
         Self { state }
     }
 
-    fn resolved_parent_data(&self) -> Option<cranpose_ui_layout::ParentData> {
+    // Runs `read` on the parent data of the record's bind, while the record
+    // is bound to a pass.
+    fn read_parent_data<R>(&self, read: impl FnOnce(&ParentData) -> R) -> Option<R> {
         if self.state.frame.builder.borrow().is_none() {
             return None;
         }
-        read_cell(&self.state.parent_data, Clone::clone)
+        self.state.parent_data.borrow().as_ref().map(read)
     }
 
     // How many state reads the pass that binds the child has kept.
@@ -179,18 +181,15 @@ impl Measurable for LayoutChildMeasurable {
         )
     }
 
-    fn flex_parent_data(&self) -> Option<cranpose_ui_layout::FlexParentData> {
-        let parent_data = self.resolved_parent_data()?;
-        if !parent_data.has_weight() {
-            return None;
-        }
-        Some(cranpose_ui_layout::FlexParentData::new(
-            parent_data.weight,
-            parent_data.fill,
-        ))
+    fn flex_parent_data(&self) -> Option<FlexParentData> {
+        self.read_parent_data(|data| {
+            data.has_weight()
+                .then(|| FlexParentData::new(data.weight, data.fill))
+        })
+        .flatten()
     }
 
-    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        self.resolved_parent_data().unwrap_or_default()
+    fn parent_data(&self) -> ParentData {
+        self.read_parent_data(ParentData::clone).unwrap_or_default()
     }
 }

@@ -1862,13 +1862,7 @@ impl LayoutBuilderState {
         }
         self.child_change(child_id, |view| {
             let parent_data_changed = view.parent_data.as_ref().is_some_and(|data| {
-                read_cell(&state.parent_data, |bound| {
-                    bound.as_ref().is_none_or(|bound| {
-                        runtime_state
-                            .measure_policy
-                            .reads_parent_data_change(bound, data)
-                    })
-                })
+                state.reads_parent_data_change(&*runtime_state.measure_policy, data)
             });
             match state.measured_constraints.get() {
                 Some(constraints) if !state.read_intrinsics.get() && !parent_data_changed => {

@@ -572,13 +572,7 @@ impl LayoutBuilderState {
                 return false;
             }
             if let Some(data) = parent_data
-                && super::read_cell(&record.parent_data, |bound| {
-                    bound.as_ref().is_none_or(|bound| {
-                        runtime_state
-                            .measure_policy
-                            .reads_parent_data_change(bound, data)
-                    })
-                })
+                && record.reads_parent_data_change(&*runtime_state.measure_policy, data)
             {
                 return false;
             }
