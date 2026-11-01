@@ -51,6 +51,37 @@ impl FxHasher {
         self.hash = fold(self.hash, word);
     }
 
+    // [`Hasher::write`] of the bytes of `words`, the same hash, with each word
+    // read by one 32-bit load: the classic ESP32's IRAM takes no byte load.
+    #[cfg(word_heap)]
+    pub(crate) fn write_words(&mut self, words: &[u32]) {
+        let words = if words.len() * 4 >= LANE_BYTES {
+            let (blocks, rest) = words.as_chunks::<8>();
+            let mut lanes = [
+                self.hash,
+                self.hash ^ LANE_SEEDS[0],
+                self.hash ^ LANE_SEEDS[1],
+                self.hash ^ LANE_SEEDS[2],
+            ];
+            for block in blocks {
+                for (lane, &[low, high]) in lanes.iter_mut().zip(block.as_chunks::<2>().0) {
+                    *lane = fold(*lane, u64::from(low) | (u64::from(high) << 32));
+                }
+            }
+            lanes.into_iter().for_each(|lane| self.fold(lane));
+            rest
+        } else {
+            words
+        };
+        let (pairs, tail) = words.as_chunks::<2>();
+        for &[low, high] in pairs {
+            self.fold(u64::from(low) | (u64::from(high) << 32));
+        }
+        if let &[word] = tail {
+            self.fold(u64::from(word) ^ (4 << 56));
+        }
+    }
+
     /// Folds `blocks` into four lanes, word `i` of each block into lane `i`,
     /// then the lanes into the hash in order. Every lane fold is a bijection,
     /// so a change to any one word still changes the hash.

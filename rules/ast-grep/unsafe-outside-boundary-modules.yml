@@ -27,12 +27,16 @@ ignores:
   - crates/cranpose-platform/esp-idf/src/panel.rs
   - crates/cranpose-platform/esp-idf/src/small_alloc.rs
   - crates/cranpose-platform/esp-idf/src/touch.rs
+  - crates/cranpose-platform/esp-idf/src/word_heap.rs
   - crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs
   - crates/cranpose-render/wgpu/src/run_entry.rs
   - crates/cranpose-render/wgpu/src/stage_executor.rs
   - crates/cranpose-render/wgpu/src/worker_pool.rs
   - crates/cranpose-storekit/src/apple.rs
   - crates/cranpose-storekit/src/tests/apple_tests.rs
+  - crates/cranpose-ui-graphics/src/word_heap.rs
+  - crates/cranpose-ui-graphics/src/word_vec.rs
+  - crates/cranpose-ui-graphics/tests/word_heap/main.rs
   - crates/cranpose/src/android/accessibility.rs
   - crates/cranpose/src/android/aeabi_memory.rs
   - crates/cranpose/src/android/app_update.rs

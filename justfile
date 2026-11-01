@@ -587,7 +587,7 @@ test-ide:
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview preview::tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview desktop_launcher_uses_embed_endpoint_before_event_loop
 
-test-features: test-watchos test-localization
+test-features: test-watchos test-localization test-word-heap
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
     cargo test --profile ci -p cranpose-ui --features svg
@@ -609,6 +609,13 @@ test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-testing --features image-loading --test integration async_image
     cargo clippy -p cranpose-services --all-targets --features image-loading,http-native -- -D warnings
     cargo clippy -p cranpose-services --target wasm32-unknown-unknown --features image-loading,web-http -- -D warnings
+
+# The classic ESP32's shape columns, which cranpose-ui-graphics builds with
+# `cfg(word_heap)` for that target only, on the host. The library's own tests
+# read the GPU columns, which that cfg leaves out.
+test-word-heap:
+    RUSTFLAGS="--cfg word_heap" CARGO_TARGET_DIR=target/word-heap cargo test --profile ci -p cranpose-ui-graphics --test word_heap --test integration
+    RUSTFLAGS="--cfg word_heap" CARGO_TARGET_DIR=target/word-heap cargo clippy -p cranpose-ui-graphics --lib --test word_heap --test integration -- -D warnings
 
 # Localization contracts, embedded catalogs, optional feature, and public UI integration.
 test-localization: check-localization

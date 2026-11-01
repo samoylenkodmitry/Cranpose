@@ -13,6 +13,7 @@ mod panel;
 mod present;
 mod small_alloc;
 mod touch;
+mod word_heap;
 
 use std::{
     convert::Infallible,
@@ -178,6 +179,7 @@ pub fn run(
     content: impl FnMut() + 'static,
 ) -> Result<Infallible, RunError> {
     let start = Instant::now();
+    word_heap::install();
     let mut framebuffer = Framebuffer::new(
         panel.width(),
         panel.height(),
@@ -290,6 +292,7 @@ impl Screen<'_, '_> {
         self.last_tick = Some(now);
         let (free, total) = memory::heap_bytes();
         self.framebuffer.report_memory(free, total);
+        word_heap::note_heap(free, total);
         let elapsed = now.duration_since(self.start).as_nanos();
         if !self
             .framebuffer

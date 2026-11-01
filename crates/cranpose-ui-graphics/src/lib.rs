@@ -1,5 +1,6 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
+#![cfg_attr(all(word_heap, target_arch = "xtensa"), feature(asm_experimental_arch))]
 
 /// Host-provided accessibility preferences shared by animation and rendering.
 ///
@@ -76,6 +77,9 @@ mod vector_path;
 mod vector_path_mask;
 mod vertex_gradient;
 pub mod whole;
+mod word_heap;
+#[cfg(word_heap)]
+mod word_vec;
 
 pub use alpha_mask::*;
 pub use brush::*;
@@ -107,6 +111,7 @@ pub use transform::{FrontPolygon, ProjectiveTransform, WindowCoordinates};
 pub use typography::*;
 pub use unit::*;
 pub use vector_path::*;
+pub use word_heap::{WordHeap, set_word_heap, set_word_heap_open};
 
 /// The types an application most often imports: geometry, color, brush, image, pointer icon, stroke
 /// and unit types.

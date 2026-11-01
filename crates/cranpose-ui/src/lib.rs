@@ -139,7 +139,8 @@ pub use cranpose_ui_graphics::{
     ImageBitmap, ImageBitmapError, ImagePixelFormat, ImageSampling, MemoryHeadroom, Path,
     PlaceholderShape, PointerIcon, PointerIconError, RuntimeShaderUniformError, ShaderPlaceholder,
     Stroke, StrokeCap, StrokeJoin, SubstrateSpec, TextMeasurement, TextVerticalAlign, TileMode,
-    WindowCoordinates, glass_material_folds_enabled, set_glass_material_folds,
+    WindowCoordinates, WordHeap, glass_material_folds_enabled, set_glass_material_folds,
+    set_word_heap, set_word_heap_open,
 };
 pub use cranpose_ui_layout::{AlignmentLines, Axis, IntrinsicSize, Measurement};
 pub use cursor_animation::{

@@ -819,8 +819,7 @@ impl RecordTables {
     pub fn fingerprint(&self) -> u64 {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
-            hasher.write(bytemuck::cast_slice(self.shapes.bodies()));
-            hasher.write(bytemuck::cast_slice(self.shapes.curves()));
+            self.shapes.hash_columns(&mut hasher);
             hasher.write(self.shapes.source_bytes());
             hasher.write(bytemuck::cast_slice(&self.brushes));
             hasher.write(bytemuck::cast_slice(&self.stops));

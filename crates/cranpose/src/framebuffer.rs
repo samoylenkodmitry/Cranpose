@@ -20,6 +20,7 @@ use cranpose_services::{
     host::{LifecycleState, dispatch_lifecycle_state},
 };
 use cranpose_ui::{EdgeInsets, current_memory_headroom, set_memory_headroom};
+pub use cranpose_ui::{WordHeap, set_word_heap, set_word_heap_open};
 
 use crate::platform_env::PlatformEnvironment;
 

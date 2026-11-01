@@ -34,3 +34,7 @@ default = []
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "word_heap"
+path = "tests/word_heap/main.rs"

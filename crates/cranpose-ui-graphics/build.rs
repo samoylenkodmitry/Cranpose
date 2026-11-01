@@ -3,7 +3,8 @@
 //! compiler's line numbers still point into the source file. Bakes
 //! `framework_shaders::SOURCES_KEY`: FNV-1a over the name and stripped text
 //! of each file, in name order, so it changes when a shader's code does and
-//! with nothing else.
+//! with nothing else. Sets `cfg(word_heap)` for the classic ESP32, whose
+//! shape columns are built for memory that only 32-bit access reaches.
 
 #![allow(
     clippy::disallowed_methods,
@@ -46,6 +47,10 @@ fn strip(name: &OsStr, text: &str) -> io::Result<String> {
 fn main() -> io::Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=shaders");
+    println!("cargo::rustc-check-cfg=cfg(word_heap)");
+    if env::var("TARGET").as_deref() == Ok("xtensa-esp32-espidf") {
+        println!("cargo::rustc-cfg=word_heap");
+    }
     let dir = Path::new("shaders");
     let mut names = fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.file_name()))

@@ -1,6 +1,15 @@
 use bytemuck::{Pod, Zeroable};
 
-use crate::ShapeRecord;
+#[cfg(word_heap)]
+use crate::word_vec::WordVec;
+use crate::{FxHasher, ShapeRecord};
+
+// The type of the body and curve columns. On the classic ESP32 they may live
+// in its IRAM, which only 32-bit access reaches.
+#[cfg(not(word_heap))]
+type Column<T> = Vec<T>;
+#[cfg(word_heap)]
+type Column<T> = WordVec<T>;
 
 /// Shape properties independent of an arc's angles, in instance-buffer layout.
 #[repr(C)]
@@ -59,8 +68,8 @@ struct RecordSource {
 /// most recordings have none, and keep no column for them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapeRecords {
-    bodies: Vec<ShapeRecordBody>,
-    curves: Vec<ShapeRecordCurve>,
+    bodies: Column<ShapeRecordBody>,
+    curves: Column<ShapeRecordCurve>,
     /// By record index.
     sources: Vec<RecordSource>,
 }
@@ -68,8 +77,8 @@ pub struct ShapeRecords {
 impl ShapeRecords {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
-            bodies: Vec::with_capacity(capacity),
-            curves: Vec::with_capacity(capacity),
+            bodies: Column::with_capacity(capacity),
+            curves: Column::with_capacity(capacity),
             sources: Vec::new(),
         }
     }
@@ -85,11 +94,13 @@ impl ShapeRecords {
     }
 
     /// The angle-independent column, directly usable as GPU instance data.
+    #[cfg(not(word_heap))]
     pub fn bodies(&self) -> &[ShapeRecordBody] {
         &self.bodies
     }
 
     /// The radius and angle column, directly usable as GPU instance data.
+    #[cfg(not(word_heap))]
     pub fn curves(&self) -> &[ShapeRecordCurve] {
         &self.curves
     }
@@ -97,6 +108,7 @@ impl ShapeRecords {
     /// Whether the record at `index` is an opaque fill whose interior is worth
     /// laying down ahead of later paint: the test that marks a segment's
     /// [`occluders`](crate::RecordSegment::occluders). `false` past the end.
+    #[cfg(not(word_heap))]
     pub fn occludes(&self, index: usize) -> bool {
         self.bodies
             .get(index)
@@ -104,20 +116,52 @@ impl ShapeRecords {
             .is_some_and(|(body, curve)| crate::record::interior_occludes(body, curve))
     }
 
+    /// Whether the record at `index` is an opaque fill whose interior is worth
+    /// laying down ahead of later paint: the test that marks a segment's
+    /// [`occluders`](crate::RecordSegment::occluders). `false` past the end.
+    #[cfg(word_heap)]
+    pub fn occludes(&self, index: usize) -> bool {
+        self.bodies
+            .get(index)
+            .zip(self.curves.get(index))
+            .is_some_and(|(body, curve)| crate::record::interior_occludes(&body, &curve))
+    }
+
     /// Reconstructs one complete record, including the original arc arguments.
+    #[cfg(not(word_heap))]
     pub fn get(&self, index: usize) -> Option<ShapeRecord> {
         self.bodies
             .get(index)
             .map(|body| reconstruct(body, &self.curves[index], self.source(index)))
     }
 
+    /// Reconstructs one complete record, including the original arc arguments.
+    #[cfg(word_heap)]
+    pub fn get(&self, index: usize) -> Option<ShapeRecord> {
+        self.bodies
+            .get(index)
+            .zip(self.curves.get(index))
+            .map(|(body, curve)| reconstruct(&body, &curve, self.source(index)))
+    }
+
     /// Iterates over complete records in draw order without allocating.
+    #[cfg(not(word_heap))]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = ShapeRecord> + DoubleEndedIterator + '_ {
         self.bodies
             .iter()
             .zip(&self.curves)
             .enumerate()
             .map(|(index, (body, curve))| reconstruct(body, curve, self.source(index)))
+    }
+
+    /// Iterates over complete records in draw order without allocating.
+    #[cfg(word_heap)]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = ShapeRecord> + DoubleEndedIterator + '_ {
+        self.bodies
+            .iter()
+            .zip(self.curves.iter())
+            .enumerate()
+            .map(|(index, (body, curve))| reconstruct(&body, &curve, self.source(index)))
     }
 
     /// The original arguments of record `index`: zeros for a record kept
@@ -145,6 +189,22 @@ impl ShapeRecords {
         bytemuck::cast_slice(&self.sources)
     }
 
+    // Hashes the body and curve columns: on the classic ESP32, those in its
+    // IRAM by whole words, as byte loads fault there.
+    pub(crate) fn hash_columns(&self, hasher: &mut FxHasher) {
+        #[cfg(not(word_heap))]
+        {
+            use std::hash::Hasher;
+            hasher.write(bytemuck::cast_slice(&self.bodies));
+            hasher.write(bytemuck::cast_slice(&self.curves));
+        }
+        #[cfg(word_heap)]
+        {
+            self.bodies.hash_into(hasher);
+            self.curves.hash_into(hasher);
+        }
+    }
+
     pub(crate) fn clear(&mut self) {
         self.bodies.clear();
         self.curves.clear();
@@ -152,8 +212,16 @@ impl ShapeRecords {
     }
 
     pub(crate) fn trim_growth(&mut self) {
-        trim_growth(&mut self.bodies);
-        trim_growth(&mut self.curves);
+        #[cfg(not(word_heap))]
+        {
+            trim_growth(&mut self.bodies);
+            trim_growth(&mut self.curves);
+        }
+        #[cfg(word_heap)]
+        {
+            self.bodies.trim_growth();
+            self.curves.trim_growth();
+        }
         trim_growth(&mut self.sources);
     }
 
