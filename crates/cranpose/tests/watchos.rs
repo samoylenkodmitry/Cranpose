@@ -137,6 +137,54 @@ fn the_safe_area_reaches_content() {
     assert_eq!(seen.get(), EdgeInsets::from_components(0.0, 32.0, 0.0, 0.0));
 }
 
+// A composition counter that equals itself while it counts, so the reader
+// that holds it skips when nothing it reads changed.
+#[derive(Clone, Default)]
+struct Count(Rc<Cell<u32>>);
+
+impl PartialEq for Count {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Count {
+    fn add(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+#[composable]
+fn SafeAreaReader(compositions: Count, seen: Rc<Cell<EdgeInsets>>) {
+    compositions.add();
+    seen.set(local_safe_area_insets().current());
+}
+
+#[test]
+fn a_safe_area_change_composes_its_readers_and_not_the_root() {
+    let (roots, readers) = (Count::default(), Count::default());
+    let seen = Rc::new(Cell::new(EdgeInsets::default()));
+    let (root, reader, sink) = (roots.clone(), readers.clone(), Rc::clone(&seen));
+    let mut app = Application::new(100, 100, 2.0, move || {
+        root.add();
+        SafeAreaReader(reader.clone(), Rc::clone(&sink));
+    })
+    .expect("valid surface");
+    app.set_active(true);
+    app.tick(1);
+    let (root_compositions, reader_compositions) = (roots.0.get(), readers.0.get());
+
+    app.set_safe_area(0.0, 32.0, 0.0, 0.0);
+    app.tick(16_000_001);
+    assert_eq!(seen.get(), EdgeInsets::from_components(0.0, 32.0, 0.0, 0.0));
+    assert_eq!(
+        readers.0.get(),
+        reader_compositions + 1,
+        "the reader composes again"
+    );
+    assert_eq!(roots.0.get(), root_compositions, "the root does not");
+}
+
 /// The scroll indicator draws where its list stands: after the crown moves the
 /// list, the next frame carries the moved thumb, the same picture a frame
 /// drawn from scratch gives.

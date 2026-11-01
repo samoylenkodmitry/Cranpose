@@ -373,12 +373,9 @@ pub(crate) fn apply_pending_platform_signals(
             bottom: INSETS_BOTTOM_PX.load(Ordering::Acquire) as f32 / density,
         };
         let env = super::android_platform_env();
-        let changed = env.set_safe_area(insets);
+        env.set_safe_area(insets);
         if let Some(shell) = shell {
             shell.set_safe_area(env.safe_area());
-            if changed {
-                shell.request_root_render();
-            }
         }
     }
 }

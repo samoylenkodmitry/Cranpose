@@ -229,17 +229,17 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
     fn refresh_environment(&mut self, window: &Arc<dyn Window>) {
         let insets = safe_area_insets(window);
-        let mut changed = self.platform_env.set_safe_area(insets);
+        self.platform_env.set_safe_area(insets);
         if let Some(shell) = self.shell.as_mut() {
             shell.set_safe_area(insets);
         }
-        if let Some(theme) = window.theme() {
-            changed |= self.platform_env.set_system_theme(match theme {
+        let theme_changed = window.theme().is_some_and(|theme| {
+            self.platform_env.set_system_theme(match theme {
                 winit::window::Theme::Dark => cranpose_services::SystemTheme::Dark,
                 winit::window::Theme::Light => cranpose_services::SystemTheme::Light,
-            });
-        }
-        if changed && let Some(shell) = self.shell.as_mut() {
+            })
+        });
+        if theme_changed && let Some(shell) = self.shell.as_mut() {
             shell.request_root_render();
         }
     }
@@ -272,7 +272,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
     fn render(&mut self) -> bool {
         #[cfg(feature = "webview")]
         self.webviews.dispatch(&self.platform_env.native_views);
-        let mut ime_changed = false;
         if super::keyboard::keyboard_poll_active() {
             if let Some(bottom) = super::keyboard::poll_keyboard_bottom_inset()
                 && (self.last_keyboard_bottom - bottom).abs() > 0.5
@@ -282,7 +281,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
                     bottom,
                     ..EdgeInsets::default()
                 });
-                ime_changed = true;
             }
             self.event_proxy.wake_up();
         }
@@ -304,10 +302,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return false;
         };
-        if ime_changed {
-            shell.request_root_render();
-        }
-
         for op in super::keyboard::take_ime_ops() {
             match op {
                 super::keyboard::ImeOp::Replace(start, end, text) => {

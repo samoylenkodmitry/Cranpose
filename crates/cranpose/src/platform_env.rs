@@ -1,5 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
+use cranpose_core::{MutableState, mutableStateOf, remember};
 use cranpose_services::{SystemTheme, set_platform_system_theme};
 use cranpose_ui::{
     Configuration, EdgeInsets, UiModeType, composable, local_configuration, local_ime_insets,
@@ -21,7 +22,27 @@ pub(crate) struct PlatformEnvironment {
     pub(crate) native_views: crate::native_view::NativeViewHost,
     safe_area: Cell<EdgeInsets>,
     ime_insets: Cell<EdgeInsets>,
+    // The insets as content reads them, once the root composed.
+    inset_states: Cell<Option<InsetStates>>,
     configuration: Cell<Configuration>,
+}
+
+// The insets as states their readers subscribe to: a change composes the
+// readers again, not the root.
+#[derive(Clone, Copy)]
+struct InsetStates {
+    safe_area: MutableState<EdgeInsets>,
+    ime: MutableState<EdgeInsets>,
+}
+
+impl InsetStates {
+    fn publish(self, safe_area: EdgeInsets, ime: EdgeInsets) {
+        for (state, insets) in [(self.safe_area, safe_area), (self.ime, ime)] {
+            if state.get_non_reactive() != insets {
+                state.set(insets);
+            }
+        }
+    }
 }
 
 impl PlatformEnvironment {
@@ -62,20 +83,26 @@ impl PlatformEnvironment {
             reason = "only Android, iOS and the framebuffer backend report a safe area"
         )
     )]
-    pub(crate) fn set_safe_area(&self, insets: EdgeInsets) -> bool {
-        let changed = self.safe_area.get() != insets;
+    // The content that reads the insets composes again, not the root.
+    pub(crate) fn set_safe_area(&self, insets: EdgeInsets) {
         self.safe_area.set(insets);
-        changed
+        self.publish_insets();
     }
 
     #[cfg_attr(
         not(any(target_os = "android", target_os = "ios")),
         expect(dead_code, reason = "only Android and iOS report keyboard insets")
     )]
-    pub(crate) fn set_ime_insets(&self, insets: EdgeInsets) -> bool {
-        let changed = self.ime_insets.get() != insets;
+    // The content that reads the insets composes again, not the root.
+    pub(crate) fn set_ime_insets(&self, insets: EdgeInsets) {
         self.ime_insets.set(insets);
-        changed
+        self.publish_insets();
+    }
+
+    fn publish_insets(&self) {
+        if let Some(states) = self.inset_states.get() {
+            states.publish(self.safe_area(), self.ime_insets.get());
+        }
     }
 
     #[cfg_attr(
@@ -91,7 +118,10 @@ impl PlatformEnvironment {
         expect(dead_code, reason = "only Android and watchOS report a device kind")
     )]
     pub(crate) fn set_configuration(&self, configuration: Configuration) -> bool {
-        self.configuration.replace(configuration) != configuration
+        let changed = self.configuration.replace(configuration) != configuration;
+        // A TV keeps content inside its overscan margins.
+        self.publish_insets();
+        changed
     }
 
     pub(crate) fn set_system_theme(&self, theme: SystemTheme) -> bool {
@@ -105,10 +135,16 @@ impl PlatformEnvironment {
     pub(crate) fn compose_root(&self, content: impl FnOnce()) {
         let theme = cranpose_services::default_system_theme();
         let launch_args = cranpose_services::launch_args();
+        let states = remember(|| InsetStates {
+            safe_area: mutableStateOf(self.safe_area()),
+            ime: mutableStateOf(self.ime_insets.get()),
+        })
+        .with(|states| *states);
+        self.inset_states.set(Some(states));
         cranpose_core::CompositionLocalProvider(
             [
-                local_safe_area_insets().provides(self.safe_area()),
-                local_ime_insets().provides(self.ime_insets.get()),
+                local_safe_area_insets().provides_computed(move |_| states.safe_area.get()),
+                local_ime_insets().provides_computed(move |_| states.ime.get()),
                 local_configuration().provides(self.configuration.get()),
                 cranpose_services::local_system_theme().provides(theme),
                 cranpose_services::local_launch_args().provides(launch_args),

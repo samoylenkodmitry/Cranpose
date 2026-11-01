@@ -140,9 +140,7 @@ impl Framebuffer {
     /// on. Content reads it from `local_safe_area_insets`.
     pub fn set_safe_area(&mut self, insets: EdgeInsets) {
         self.shell.set_safe_area(insets);
-        if self.environment.set_safe_area(insets) {
-            self.shell.request_root_render();
-        }
+        self.environment.set_safe_area(insets);
     }
 
     /// Applies a new physical display size without replacing the composition.
