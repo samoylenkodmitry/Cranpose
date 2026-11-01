@@ -49,6 +49,10 @@ fn shown_cursor(connection: &impl Connection, wanted: u32) -> Option<u32> {
         if shown == Some(wanted) || Instant::now() > deadline {
             return shown;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test waits for another X client's request to land"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     }
 }

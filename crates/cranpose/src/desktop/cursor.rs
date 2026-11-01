@@ -106,7 +106,7 @@ pub(crate) struct DesktopCursors {
     uploaded: HashMap<CursorKey, CustomCursor>,
     rejected: HashSet<CursorKey>,
     applied: HashMap<WindowId, PointerIcon>,
-    shown_once: HashMap<WindowId, CustomCursor>,
+    shown_once: cranpose_core::collections::map::HashMap<WindowId, CustomCursor>,
     /// Cursors winit cannot build, sized in points rather than one point to a
     /// pixel.
     #[cfg(target_os = "macos")]
