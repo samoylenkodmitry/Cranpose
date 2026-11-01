@@ -3,8 +3,9 @@ use std::rc::Rc;
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, MovableIndex, NodeRecord, PayloadAnchorRegistry,
     SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
-    growth::GrowthSlack, payload_store::PayloadStore,
+    payload_store::PayloadStore,
 };
+use crate::collections::growth_slack::GrowthSlack;
 
 mod metadata;
 mod mutation;

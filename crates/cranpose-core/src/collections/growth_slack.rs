@@ -1,3 +1,7 @@
+//! Giving back the room a collection's growth left past its items: a
+//! collection that lives as long as a screen and doubled to take one more
+//! item would keep room for as many again.
+
 use std::{
     collections::HashMap,
     hash::{BuildHasher, Hash},
@@ -10,7 +14,10 @@ fn slack_target(len: usize, capacity: usize) -> Option<usize> {
     (slack > (len / 4).max(MIN_TRIMMED_SLACK)).then_some(len + len / 8)
 }
 
-pub(in crate::slot) trait GrowthSlack {
+/// A collection that can give back the room its growth left past its items.
+pub trait GrowthSlack {
+    /// Gives back the room past the items once it is more than a quarter of
+    /// them, and 16 at least, down to an eighth of them.
     fn trim_growth_slack(&mut self);
 }
 

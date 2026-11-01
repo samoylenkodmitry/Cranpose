@@ -1,4 +1,4 @@
-use super::growth::GrowthSlack;
+use crate::collections::growth_slack::GrowthSlack;
 
 pub(super) struct DenseIdMap<T> {
     entries: Vec<Option<T>>,

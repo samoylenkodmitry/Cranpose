@@ -2,7 +2,8 @@ use std::ops::Range;
 
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
-use super::{PayloadRecord, checked_usize_to_u32, growth::GrowthSlack, segments::SegmentItems};
+use super::{PayloadRecord, checked_usize_to_u32, segments::SegmentItems};
+use crate::collections::growth_slack::GrowthSlack;
 
 const ORDER_ENTRY_BYTES: usize = size_of::<u32>();
 
