@@ -8,6 +8,7 @@ use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
 
 use super::{
     core::{Alignment, Measurable},
+    layout_child_measure_state::LayoutChildBinding,
     *,
 };
 use crate::{
