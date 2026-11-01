@@ -834,7 +834,7 @@ impl GraphicsLayerNode {
         }
     }
 
-    fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
+    pub(crate) fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
         let changed = self
             .layer_resolver
             .as_ref()

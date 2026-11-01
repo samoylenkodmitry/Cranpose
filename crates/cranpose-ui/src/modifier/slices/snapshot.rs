@@ -1,7 +1,10 @@
 //! Collecting a chain's slices: the snapshot a node shares with the render
 //! graph, and the walk over the chain that fills it.
 
-use std::rc::Rc;
+use std::{
+    any::{Any, TypeId},
+    rc::Rc,
+};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities};
 use cranpose_ui_graphics::{EdgeInsets, RoundedCornerShape};
@@ -15,6 +18,7 @@ use crate::{
     draw::DrawCommand,
     modifier::{
         Modifier,
+        offset::OffsetPxNode,
         scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
     },
     modifier_nodes::{
@@ -31,7 +35,7 @@ use crate::{
 ///
 /// The chain is walked head to tail, so the innermost declaration is the last
 /// one written and the one that survives.
-fn collect_pointer_icon(node: &dyn std::any::Any, slices: &mut ModifierNodeSlices) {
+fn collect_pointer_icon(node: &dyn Any, slices: &mut ModifierNodeSlices) {
     if let Some(icon_node) = node.downcast_ref::<PointerIconNode>() {
         slices.rare_mut().pointer_icon = Some(icon_node.icon().clone());
     }
@@ -304,7 +308,7 @@ impl Backgrounds {
 /// Where layout reports a node's window geometry: a scroll viewport's rect,
 /// or the origin of a selectable text, whose content is `text`'s rect.
 fn collect_window_geometry_sink(
-    any: &dyn std::any::Any,
+    any: &dyn Any,
     text: CoordinatorRect,
     slices: &mut ModifierNodeSlices,
 ) {
@@ -325,19 +329,22 @@ fn collect_draw_node(
     backgrounds: &mut Backgrounds,
 ) {
     let any = node.as_any();
-    if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
+    // The node's type, asked once: each check below compares it, where a
+    // downcast would ask the node again.
+    let kind = Any::type_id(any);
+    if let Some(bg_node) = as_kind::<BackgroundNode>(any, kind) {
         backgrounds.push(bg_node.color(), bg_node.shape(), site, slices);
     }
 
-    if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
+    if let Some(shape_node) = as_kind::<CornerShapeNode>(any, kind) {
         backgrounds.shape(shape_node.shape());
     }
 
-    if let Some(z_index_node) = any.downcast_ref::<crate::modifier::z_index::ZIndexNode>() {
+    if let Some(z_index_node) = as_kind::<crate::modifier::z_index::ZIndexNode>(any, kind) {
         slices.rare_mut().z_index += z_index_node.z_index();
     }
 
-    if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
+    if let Some(commands) = as_kind::<DrawCommandNode>(any, kind) {
         slices.draw_commands.extend(
             commands
                 .observed_commands(site.modifier_index)
@@ -349,7 +356,9 @@ fn collect_draw_node(
         collect_draw_closures(draw_node, site, slices);
     }
 
-    if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
+    let layer_node = as_kind::<GraphicsLayerNode>(any, kind)
+        .or_else(|| as_kind::<OffsetPxNode>(any, kind).map(OffsetPxNode::layer));
+    if let Some(layer_node) = layer_node {
         slices.mark_layer_draw_boundary();
         slices.push_graphics_layer(
             layer_node.layer_snapshot(),
@@ -358,10 +367,19 @@ fn collect_draw_node(
         slices.enter_layer(site);
     }
 
-    if any.is::<ClipToBoundsNode>() {
+    if kind == TypeId::of::<ClipToBoundsNode>() {
         slices.mark_layer_draw_boundary();
         slices.clip_to_bounds = true;
         slices.enter_layer(site);
+    }
+}
+
+// `any` as a `T` when its type `kind` is `T`.
+fn as_kind<T: Any>(any: &dyn Any, kind: TypeId) -> Option<&T> {
+    if kind == TypeId::of::<T>() {
+        any.downcast_ref::<T>()
+    } else {
+        None
     }
 }
 
