@@ -176,7 +176,7 @@ pub(super) fn text_node_from_parts(parts: &TextNodeParts) -> Option<TextPrimitiv
             visual_style,
             prepared.visual_style_hash(),
             &prepared.text.span_styles,
-            font_size,
+            (font_size, &prepared.layout),
             (prepared.render_text_hash(), prepared.text.text.is_empty()),
         )),
     })
@@ -244,12 +244,15 @@ impl TextPlacement {
         };
         // As Compose cuts a text at its box only when the layout overflows
         // it, glyph ink past a fitting layout draws; a text that pans cuts.
-        let overflows = prepared.layout.did_overflow_width()
-            || prepared.layout.did_overflow_height()
-            || rect.width > text_bounds.width
-            || rect.height > text_bounds.height;
-        let clip = (text_pan.is_some() || (options.overflow != TextOverflow::Visible && overflows))
-            .then(|| pad_clip_rect(text_bounds));
+        let overflows = || {
+            rect.width > text_bounds.width
+                || rect.height > text_bounds.height
+                || prepared.layout.did_overflow_width()
+                || prepared.layout.did_overflow_height()
+        };
+        let clip = (text_pan.is_some()
+            || (options.overflow != TextOverflow::Visible && overflows()))
+        .then(|| pad_clip_rect(text_bounds));
         Some(Self {
             rect,
             clip,

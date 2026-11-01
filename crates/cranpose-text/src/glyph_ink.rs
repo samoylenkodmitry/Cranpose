@@ -1,14 +1,13 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use cranpose_ui_graphics::Rect;
-use read_fonts::types::GlyphId as FontGlyphId;
 
 use crate::{
     glyph_id::GlyphId,
     index_range::widen,
     laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
-    text_layout::{LayoutLine, LineRun, TextLayout},
+    text_layout::{LayoutLine, LineRun},
     typeface::Typeface,
 };
 
@@ -61,13 +60,11 @@ impl GlyphInks {
     // as a typeface meets each glyph once.
     #[inline(never)]
     fn read(&self, typeface: &Typeface, glyph: GlyphId, (cell, shift): (&AtomicU8, usize)) -> bool {
-        let id = FontGlyphId::new(glyph.0);
-        let metrics = typeface.font().glyph_metrics();
-        let out = metrics.extents(id).is_some_and(|ink| {
+        let out = typeface.glyph_extents(glyph).is_some_and(|ink| {
             ink.width > 0.0
                 && ink.height > 0.0
                 && (ink.x_bearing < 0.0
-                    || ink.x_bearing + ink.width > metrics.h_advance(id)
+                    || ink.x_bearing + ink.width > typeface.advance(glyph)
                     || ink.y_bearing > self.ascent
                     || ink.y_bearing - ink.height < self.descent)
         });
@@ -82,25 +79,23 @@ impl GlyphInks {
 // inside its advance and its typeface's ascent and descent draws within
 // both, unless its run spaces its glyphs closer than their advances, moves
 // them off their pen, or sits on a line too short for the typeface.
-pub(crate) fn find_ink_past_lines(layout: &TextLayout) -> Option<Rect> {
-    let body = layout.body();
+pub(crate) fn find_ink_past_lines(body: &LayoutBody) -> Option<Rect> {
     let mut ink: Option<Rect> = None;
     for (index, line) in body.lines.iter().enumerate() {
         let runs = &body.runs[line.runs.range()];
-        for (run, glyph_run) in runs.iter().zip(layout.glyph_runs(index)) {
+        for (run, glyph_run) in runs.iter().zip(body.glyph_runs(index)) {
             let face = glyph_run.typeface;
             let inks = face.glyph_inks();
             let every = run_leaves_lines(body, line, run, inks);
             if !every && !any_out(body.glyphs.run(run.glyphs.range()), face, inks) {
                 continue;
             }
-            let metrics = face.font().glyph_metrics();
             let scale = glyph_run.size / f32::from(face.units_per_em());
             for glyph in glyph_run.positions() {
                 if !every && !inks.out(face, glyph.id) {
                     continue;
                 }
-                let Some(extents) = metrics.extents(FontGlyphId::new(glyph.id.0)) else {
+                let Some(extents) = face.glyph_extents(glyph.id) else {
                     continue;
                 };
                 if extents.width <= 0.0 || extents.height <= 0.0 {

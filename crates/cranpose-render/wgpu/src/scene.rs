@@ -5,7 +5,7 @@ use std::{ops::Range, sync::Arc};
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
-    glyph_reach::{InkSpread, InkStyle, glyph_part},
+    glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
     layer_shadow::ShadowRRect,
     text_paint::TextPaint,
@@ -295,12 +295,8 @@ pub(crate) struct DrawnText {
 }
 
 impl DrawnText {
-    /// `string` drawn in `style` and laid out as `layout`, facts read from all.
-    pub(crate) fn of(
-        string: Arc<RenderString>,
-        style: &TextStyle,
-        layout: &cranpose_text::TextLayout,
-    ) -> Self {
+    /// `string` drawn in `style`, its glyphs' ink spread by `spread`.
+    pub(crate) fn of(string: Arc<RenderString>, style: &TextStyle, spread: InkSpread) -> Self {
         let paints_gradient = |span: &cranpose_ui::text::SpanStyle| {
             span.brush
                 .as_ref()
@@ -328,19 +324,15 @@ impl DrawnText {
                 .text_motion
                 .unwrap_or(cranpose_ui::text::TextMotion::Static)
                 == cranpose_ui::text::TextMotion::Static,
-            spread: InkStyle::of(style, string.span_styles()).spread(layout),
+            spread,
             string,
         }
     }
 
-    /// The string of a plain text (see [`TextPaint::plain`]) laid out as
-    /// `layout`, its facts taken from the paint its node worked out: a plain
-    /// text paints no gradient, in its style or in a span.
-    pub(crate) fn plain(
-        string: Arc<RenderString>,
-        paint: &TextPaint,
-        layout: &cranpose_text::TextLayout,
-    ) -> Self {
+    /// The string of a plain text (see [`TextPaint::plain`]), its facts
+    /// taken from the paint its node worked out: a plain text paints no
+    /// gradient, in its style or in a span.
+    pub(crate) fn plain(string: Arc<RenderString>, paint: &TextPaint) -> Self {
         Self {
             string,
             hash: paint.text_hash,
@@ -348,7 +340,7 @@ impl DrawnText {
             gradient: false,
             shadow: paint.casts_shadow,
             static_motion: paint.static_motion,
-            spread: paint.ink_style.spread(layout),
+            spread: paint.spread,
         }
     }
 

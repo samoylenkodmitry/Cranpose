@@ -9,7 +9,7 @@ use cranpose_ui::{
     text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextMotion},
 };
 
-use crate::glyph_reach::InkStyle;
+use crate::glyph_reach::{InkSpread, InkStyle};
 
 /// The paint of a text node's glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,24 +38,24 @@ pub struct TextPaint {
     /// Whether the style or a span casts a shadow, which spreads past the
     /// glyphs.
     pub casts_shadow: bool,
-    /// What the style and the spans set that puts ink past the glyphs'
-    /// outlines.
-    pub ink_style: InkStyle,
+    /// How far past their outlines the glyphs put ink: a stroke's outer
+    /// half, and the bold or italic a face of the layout synthesizes.
+    pub spread: InkSpread,
 }
 
 impl TextPaint {
     /// The paint of a text in `style`, whose [`TextStyle::render_hash`] is
-    /// `style_hash`, with `spans`, at `font_size`, whose string's
-    /// `RenderString::render_hash` and emptiness are `text`.
+    /// `style_hash`, with `spans`, at `font_size`, laid out as `layout`, whose
+    /// string's `RenderString::render_hash` and emptiness are `text`.
     pub fn of(
         style: &TextStyle,
         style_hash: u64,
         spans: &[RangeStyle<SpanStyle>],
-        font_size: f32,
+        (font_size, layout): (f32, &cranpose_text::TextLayout),
         (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
-        let ink_style = InkStyle::of(style, spans);
+        let spread = InkStyle::of(style, spans).spread(layout);
         let spans = SpanPaint::of(spans);
         let plain = span_style.background.is_none()
             && span_style.shadow.is_none()
@@ -83,7 +83,7 @@ impl TextPaint {
                 .unwrap_or(TextMotion::Static)
                 == TextMotion::Static,
             casts_shadow: span_style.shadow.is_some() || spans.shadow,
-            ink_style,
+            spread,
         }
     }
 }

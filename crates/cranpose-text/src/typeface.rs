@@ -6,7 +6,7 @@ use std::{
 use foldhash::fast::FixedState;
 use read_fonts::{
     FontRef, TableProvider,
-    model::{Blob, Font, Source, Variation, attribute::Style, name::NameId},
+    model::{Blob, Font, Source, Variation, attribute::Style, metrics::GlyphExtents, name::NameId},
     types::{Fixed, GlyphId as FontGlyphId, Tag},
 };
 use smallvec::SmallVec;
@@ -16,7 +16,7 @@ use crate::{
     font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
     glyph_ink::GlyphInks,
-    simple_glyf::GlyfTables,
+    simple_glyf::{self, GlyfTables},
 };
 
 /// The bytes a typeface is read from.
@@ -430,6 +430,16 @@ impl Typeface {
     // The font model at the typeface's instance.
     pub(crate) fn font(&self) -> &Font {
         &self.0.font
+    }
+
+    // Where `glyph` puts ink, in design units: from its `glyf` header for a
+    // simple TrueType font, otherwise as the general loader measures it.
+    pub(crate) fn glyph_extents(&self, glyph: GlyphId) -> Option<GlyphExtents<f32>> {
+        let id = FontGlyphId::new(glyph.0);
+        match self.glyf_tables() {
+            Some(tables) => simple_glyf::extents(&self.0.font, tables, id),
+            None => self.0.font.glyph_metrics().extents(id),
+        }
     }
 
     // Which glyphs put ink past their advance or the font's lines.

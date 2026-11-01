@@ -7,6 +7,7 @@ use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
+    glyph_reach::InkStyle,
     graph::TextPrimitiveNode,
     hit_graph::collect_hits_from_graph,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
@@ -36,6 +37,7 @@ use crate::scene::{
 };
 
 mod style;
+mod text_effect;
 use cranpose_render_common::{
     style_shared::resolve_layer_brush,
     text_decoration::{visit_text_backgrounds, visit_text_lines},
@@ -45,6 +47,7 @@ use cranpose_render_common::{
     },
 };
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
+use text_effect::{mask_style, push_text_effect};
 
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
 const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
@@ -670,54 +673,6 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     true
 }
 
-// `style` with its glyphs filled in `color` and unpainted otherwise: the mask
-// a text's effect paints through.
-fn mask_style(style: &TextStyle, color: Color) -> (Arc<TextStyle>, Color) {
-    let mut mask = style.clone();
-    mask.span_style.brush = None;
-    mask.span_style.alpha = None;
-    mask.span_style.color = Some(color);
-    mask.span_style.draw_style = Some(TextDrawStyle::Fill);
-    (Arc::new(mask), color)
-}
-
-// Pushes `mask_text`, the glyphs of `node` over `text_rect` in the mask
-// style and its color, cut to `clip` grown by the effect's padding, then the
-// layer of `effect` over `effect_rect`, which paints through them.
-fn push_text_effect<S: TextStyleDrawSink>(
-    sink: &mut S,
-    node: &TextPrimitiveNode,
-    (text_rect, text_scale, clip): (Rect, f32, Option<Rect>),
-    (mask_text, style, color): (&cranpose_ui::text::AnnotatedString, Arc<TextStyle>, Color),
-    (effect, effect_rect): (RenderEffect, Rect),
-) {
-    let z_start = sink.current_z();
-    sink.push_text(TextDraw {
-        node_id: node.node_id,
-        rect: text_rect,
-        snap_anchor: None,
-        text: DrawnText::of(Arc::new(mask_text.render_string()), &style, &node.layout),
-        layout: node.layout.clone(),
-        color,
-        style_hash: style.render_hash(),
-        text_style: style,
-        font_size: node.font_size,
-        scale: text_scale,
-        clip: clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
-    });
-    let z_end = sink.current_z();
-    sink.push_effect_layer(EffectLayer {
-        rect: effect_rect,
-        clip,
-        snap_anchor: None,
-        effect: Some(effect),
-        blend_mode: BlendMode::SrcOver,
-        composite_alpha: 1.0,
-        z_start,
-        z_end,
-    });
-}
-
 fn emit_text_style_draws<S: TextStyleDrawSink>(
     sink: &mut S,
     node: &TextPrimitiveNode,
@@ -793,7 +748,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 node_id,
                 rect: apply_layer_to_rect(shadow_rect, rect, content_layer),
                 snap_anchor: None,
-                text: DrawnText::of(shadow_text, &shadow_text_style, layout),
+                text: DrawnText::of(shadow_text, &shadow_text_style, node.paint().spread),
                 layout: layout.clone(),
                 color: shadow_color,
                 text_style: Arc::new(shadow_text_style),
@@ -868,7 +823,7 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
         node_id: node.node_id,
         rect: text_rect,
         snap_anchor: None,
-        text: DrawnText::of(Arc::clone(&node.render_text), style, &node.layout),
+        text: DrawnText::of(Arc::clone(&node.render_text), style, node.paint().spread),
         layout: node.layout.clone(),
         color,
         text_style: Arc::clone(style),
@@ -905,7 +860,7 @@ pub(crate) fn push_text_style_draws(
             rect: apply_layer_to_rect(placement.text_rect, placement.bounds, placement.layer),
             // A plain text pushes its glyphs and nothing else.
             snap_anchor: placement.snap_anchor,
-            text: DrawnText::plain(Arc::clone(&node.render_text), &paint, &node.layout),
+            text: DrawnText::plain(Arc::clone(&node.render_text), &paint),
             layout: node.layout.clone(),
             color: apply_layer_to_color(paint.color, placement.layer),
             text_style: Arc::clone(&node.text_style),
@@ -1093,11 +1048,12 @@ pub(crate) fn push_draw_primitive(
 
         fn push_text(&mut self, params: TextDrawParams) {
             let render_text = shared_plain_render_string(&params.text.text);
+            let spread = InkStyle::of(&params.text_style, &[]).spread(&params.layout);
             self.scene.push_text(TextDraw {
                 node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
                 rect: params.rect,
                 snap_anchor: None,
-                text: DrawnText::of(render_text, &params.text_style, &params.layout),
+                text: DrawnText::of(render_text, &params.text_style, spread),
                 layout: params.layout,
                 color: params.color,
                 text_style: params.text_style,

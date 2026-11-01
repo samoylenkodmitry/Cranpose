@@ -636,7 +636,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         text: DrawnText::of(
             cranpose_ui::text::shared_plain_render_string("MM"),
             &style,
-            &layout,
+            Default::default(),
         ),
         layout,
         color,

@@ -123,7 +123,7 @@ impl TextPrimitiveNode {
                 &self.text_style,
                 self.text_style.render_hash(),
                 self.render_text.span_styles(),
-                self.font_size,
+                (self.font_size, &self.layout),
                 (self.render_text.render_hash(), self.render_text.is_empty()),
             )
         })
@@ -152,9 +152,12 @@ impl TextPrimitiveNode {
                 .iter()
                 .all(|span| !stroked(&span.item)))
         .then(|| {
-            let spread = self.paint().ink_style.spread(&self.layout);
-            self.rect
-                .union(glyph_part(self.rect, &self.layout, 1.0, spread))
+            self.rect.union(glyph_part(
+                self.rect,
+                &self.layout,
+                1.0,
+                self.paint().spread,
+            ))
         })
     }
 

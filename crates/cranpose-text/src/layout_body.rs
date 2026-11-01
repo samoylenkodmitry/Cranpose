@@ -6,7 +6,7 @@ use crate::{
     index_range::widen,
     laid_glyphs::{LaidGlyphs, RunGlyphs},
     paragraph::TextAlign,
-    text_layout::{LayoutLine, LineRun, WidthRange},
+    text_layout::{GlyphRun, LayoutLine, LineRun, WidthRange},
     typeface::Typeface,
 };
 
@@ -54,6 +54,22 @@ pub(crate) struct LayoutBody {
 }
 
 impl LayoutBody {
+    // The glyph runs of `line`, left to right.
+    pub(crate) fn glyph_runs(&self, line: usize) -> impl Iterator<Item = GlyphRun<'_>> + '_ {
+        let line = &self.lines[line];
+        self.runs[line.runs.range()]
+            .iter()
+            .map(move |run| GlyphRun {
+                typeface: &self.faces[widen(run.face)],
+                size: run.size,
+                glyphs: self.glyphs.run(run.glyphs.range()),
+                offsets: self.glyphs.offsets(run.glyphs.range()),
+                run,
+                pen: line.left + run.left(),
+                baseline: line.baseline,
+            })
+    }
+
     // The width the lines wrap at between `min_width` and `max_width`, as
     // Compose's `finalMaxWidth` gives it.
     pub(crate) fn wrap_width(&self, min_width: f32, max_width: f32) -> f32 {

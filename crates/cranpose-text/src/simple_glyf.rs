@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use read_fonts::{
     FontData, FontRead, TableProvider,
-    model::{Font, Source, glyph::outline::PathSink},
+    model::{Font, Source, glyph::outline::PathSink, metrics::GlyphExtents},
     tables::{
         glyf::{
             Glyph, PointFlags,
@@ -172,6 +172,38 @@ pub(crate) fn draw(
         &mut sink,
     )
     .then_some(())
+}
+
+// Where `glyph` of `font` puts ink, in design units, from the box its
+// `glyf` header states and the side bearing `hmtx` places it at, as the
+// loader draws a glyph at the default location; `None` when the tables do
+// not hold the glyph.
+pub(crate) fn extents(
+    font: &Font,
+    tables: &GlyfTables,
+    glyph: GlyphId,
+) -> Option<GlyphExtents<f32>> {
+    let bytes = font_bytes(font)?;
+    let index = usize::try_from(glyph.to_u32()).ok()?;
+    let (start, end) = (
+        tables.offset(bytes, index)?,
+        tables.offset(bytes, index.checked_add(1)?)?,
+    );
+    if start == end {
+        return Some(GlyphExtents::default());
+    }
+    let header: [u8; 10] = bytes[tables.glyf.clone()]
+        .get(start..start.checked_add(10)?)?
+        .try_into()
+        .ok()?;
+    let at = |offset: usize| f32::from(i16::from_be_bytes([header[offset], header[offset + 1]]));
+    let (x_min, y_min, x_max, y_max) = (at(2), at(4), at(6), at(8));
+    Some(GlyphExtents {
+        x_bearing: tables.side_bearing(bytes, index).map_or(x_min, f32::from),
+        y_bearing: y_max,
+        width: x_max - x_min,
+        height: y_max - y_min,
+    })
 }
 
 // Entry `index` of a table of `N`-byte entries.

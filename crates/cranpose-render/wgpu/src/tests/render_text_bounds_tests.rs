@@ -35,7 +35,7 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
         text: DrawnText::of(
             cranpose_ui::text::shared_plain_render_string("bounds"),
             &cranpose_ui::TextStyle::default(),
-            &layout,
+            Default::default(),
         ),
         layout,
         color: Color::WHITE,
@@ -82,7 +82,7 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
     draw.text = DrawnText::of(
         cranpose_ui::text::shared_plain_render_string(""),
         &draw.text_style,
-        &draw.layout,
+        Default::default(),
     );
     assert_eq!(text_draw_bounds(&draw, 2.0), None);
 }
