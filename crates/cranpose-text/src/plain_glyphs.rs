@@ -232,22 +232,23 @@ impl PlainGlyphs {
         let chars = chars.get_or_insert_with(PlainChars::default);
         // What a run given up on before left.
         chars.take_inked();
+        // Made once, so a character the slots hold passes one reference.
+        let read = |ch| {
+            let (glyph, advance) = plain_glyph(font, (busy, substitutes), ch)?;
+            let starts = pairs.partition_point(|&(first, _)| first < glyph);
+            Some(CharGlyph {
+                glyph,
+                advance,
+                inks_out: typeface
+                    .glyph_inks()
+                    .leaves_band(typeface, glyph_id::GlyphId(glyph)),
+                pairs: pairs.get(starts).is_some_and(|&(first, _)| first == glyph)
+                    || kerning.starts(font_bytes(font), glyph.into()),
+            })
+        };
         let mut previous: Option<PlainChar> = None;
         for (at, ch) in run.char_indices() {
-            let read = || {
-                let (glyph, advance) = plain_glyph(font, (busy, substitutes), ch)?;
-                let starts = pairs.partition_point(|&(first, _)| first < glyph);
-                Some(CharGlyph {
-                    glyph,
-                    advance,
-                    inks_out: typeface
-                        .glyph_inks()
-                        .leaves_band(typeface, glyph_id::GlyphId(glyph)),
-                    pairs: pairs.get(starts).is_some_and(|&(first, _)| first == glyph)
-                        || kerning.starts(font_bytes(font), glyph.into()),
-                })
-            };
-            let Some(plain) = chars.char(ch, read) else {
+            let Some(plain) = chars.char(ch, &read) else {
                 glyphs.truncate(first);
                 return None;
             };
