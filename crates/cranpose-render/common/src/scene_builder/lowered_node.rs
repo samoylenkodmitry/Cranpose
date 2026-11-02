@@ -4,7 +4,7 @@
 // the same way or keeps as it drew it before.
 
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_ui::Rect;
+use cranpose_ui::{Point, Rect};
 
 use super::{
     Level, LowerContext, children_context, inline_leaf::lower_placed_child, layer_and_node_bounds,
@@ -97,30 +97,47 @@ pub fn visit_kept_node<R>(
     })
 }
 
-/// The identity of the outermost node the placed child `node_id` lowers
-/// to under `context`, as the node's `node_id` and `wraps` read, and that
-/// node's transform to its parent, without lowering it: what a renderer
-/// compares with the child it kept, whose own state did not change since.
-/// `None` as for [`lower_node_alone`].
+/// Where a placed child lies in its parent's layer: the identity of the
+/// outermost node it lowers to, as the node's `node_id` and `wraps` read,
+/// and that node's transform to its parent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChildPlacement {
+    /// The node's `node_id` and `wraps`.
+    pub identity: (Option<NodeId>, Option<NodeId>),
+    /// The node's transform to its parent.
+    pub transform: ProjectiveTransform,
+    /// The child's top left in its parent's content, as its layout placed it.
+    pub position: Point,
+}
+
+/// Where the placed child `node_id` lies under `context`, read without
+/// lowering it: what a renderer compares with the child it kept, whose own
+/// state did not change since, and places the subtree it kept at. `None` as
+/// for [`lower_node_alone`].
 pub fn kept_child_placement(
     applier: &MemoryApplier,
     node_id: NodeId,
     context: LowerContext,
-) -> Option<((Option<NodeId>, Option<NodeId>), ProjectiveTransform)> {
+) -> Option<ChildPlacement> {
     read_placed_node_data(applier, node_id, Level::Child, |data| {
         let slices = &data.modifier_slices;
         let size = data.layout_state.size();
-        let placement = data.layout_state.position();
+        let position = data.layout_state.position();
         let offset = context.parent_content_offset;
         if slices.outer_draw_command_count() > 0 {
-            let transform = placed_transform(Rect::from_size(size), placement, None, offset);
-            return ((None, Some(node_id)), transform);
+            return ChildPlacement {
+                identity: (None, Some(node_id)),
+                transform: placed_transform(Rect::from_size(size), position, None, offset),
+                position,
+            };
         }
         let (local_bounds, _) = layer_and_node_bounds(slices, size);
         let graphics_layer = shaped_graphics_layer(slices, local_bounds);
-        let transform =
-            placed_transform(local_bounds, placement, graphics_layer.as_deref(), offset);
-        ((Some(node_id), None), transform)
+        ChildPlacement {
+            identity: (Some(node_id), None),
+            transform: placed_transform(local_bounds, position, graphics_layer.as_deref(), offset),
+            position,
+        }
     })
 }
 

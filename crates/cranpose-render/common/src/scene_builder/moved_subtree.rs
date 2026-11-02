@@ -7,9 +7,8 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::Point;
 
 use super::{
-    Level, LowerContext, RecordingStore, inline_leaf::lower_placed_child,
+    ChildPlacement, Level, LowerContext, RecordingStore, inline_leaf::lower_placed_child,
     publish_retained_window_geometry, read_placed_node_data, recycle_lowered,
-    translate_retained_child,
 };
 use crate::graph::RenderNode;
 
@@ -50,31 +49,33 @@ impl MovedSubtree {
         &self.root
     }
 
-    /// Places the subtree where its child, unchanged since it was lowered,
-    /// now lies under `context`, and publishes where its layers that publish
-    /// window origins now lie. False when `context` passes down other state
-    /// than the subtree was lowered with, or the child is no longer placed.
-    pub fn follow(&mut self, applier: &MemoryApplier, context: LowerContext) -> bool {
+    /// Places the subtree at `placement`, where its child, unchanged since
+    /// it was lowered, now lies under `context`, and publishes where its
+    /// layers that publish window origins now lie. False when `context`
+    /// passes down other state than the subtree was lowered with, or the
+    /// child lowers to another outermost node.
+    pub fn follow(
+        &mut self,
+        applier: &MemoryApplier,
+        placement: ChildPlacement,
+        context: LowerContext,
+    ) -> bool {
         if Inherited::of(context) != self.lowered_with {
             return false;
         }
-        let Some(position) = read_placed_node_data(applier, self.node, Level::Child, |data| {
-            data.layout_state.position()
-        }) else {
-            return false;
-        };
-        let offset = context.parent_content_offset;
         match &mut self.root {
-            RenderNode::Layer(layer) => {
-                translate_retained_child(layer, position, offset);
+            RenderNode::Layer(layer) if (layer.node_id, layer.wraps) == placement.identity => {
+                layer.transform_to_parent = placement.transform;
+                layer.origin_in_parent = placement.position;
                 if let Some(parent_abs) = context.parent_abs {
                     publish_retained_window_geometry(applier, layer, parent_abs);
                 }
             }
-            RenderNode::Inline(inline) => {
+            RenderNode::Inline(inline) if placement.identity == (Some(inline.node_id), None) => {
+                let (position, offset) = (placement.position, context.parent_content_offset);
                 inline.origin = Point::new(position.x + offset.x, position.y + offset.y);
             }
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => return false,
+            _ => return false,
         }
         true
     }

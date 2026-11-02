@@ -38,7 +38,7 @@ use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
 mod lowered_node;
 pub use lowered_node::{
-    LoweredNode, NodePlace, kept_child_placement, lower_node_alone, recycle_lowered,
+    ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone, recycle_lowered,
     release_lowered, root_layer_bounds, visit_kept_node,
 };
 mod moved_subtree;

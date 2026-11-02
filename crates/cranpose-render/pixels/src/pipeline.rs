@@ -12,6 +12,7 @@ use cranpose_render_common::{
     layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::resolve_clip,
+    scene_builder::ChildPlacement,
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
@@ -148,22 +149,25 @@ impl Reuse<'_> {
         }
     }
 
-    // Queues the copy of the old subtree of the node with `identity` when
-    // the old scene holds it at the cursor or one subtree on, placed by
-    // `transform`, under a walk `context` above that passed down what it did
-    // then.
+    // Queues the copy of the old subtree of the node that `placement` names
+    // when the old scene holds it at the cursor or one subtree on, placed by
+    // its transform, under a walk `context` above that passed down what it
+    // did then.
     // Returns whether it did.
     pub(crate) fn keep(
         &mut self,
         scene: &mut RasterScene,
-        (identity, transform): ((Option<NodeId>, Option<NodeId>), ProjectiveTransform),
+        placement: ChildPlacement,
         context: &RasterTraversalContext<'_>,
     ) -> bool {
-        let Some(index) = self.find(identity).filter(|_| context.same_as_before) else {
+        let Some(index) = self
+            .find(placement.identity)
+            .filter(|_| context.same_as_before)
+        else {
             return false;
         };
         let record = &self.old.subtrees[index];
-        if record.transform != transform {
+        if record.transform != placement.transform {
             return false;
         }
         let (end, stop) = (record.end, record.stop);
