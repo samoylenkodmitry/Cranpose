@@ -44,8 +44,10 @@ BOOT_SECONDS = 2
 # The classic ESP32 runs out of memory on the dashboard.
 DASHBOARD = {"es3c35p": True, "e32r35t": False}
 GAPS = 6
-# Below this many bytes; a cache way is 4 KB on the ES3C35P.
-LARGEST_GAP = 4096
+# Below this many bytes; a cache way is 4 KB on the ES3C35P. The E32R35T
+# maps 3,342,304 bytes of flash code, of which the demo leaves about 15 KB,
+# so its gaps stay within a third of that.
+LARGEST_GAP = {"es3c35p": 4096, "e32r35t": 2048}
 
 
 def git(*args, cwd=ROOT):
@@ -61,14 +63,14 @@ def worktree(board):
     return tree
 
 
-def gapped(order, seed, out):
+def gapped(order, seed, out, largest):
     """`order` with an empty gap before its first pattern and `GAPS` more
-    where `seed` picks, each a multiple of 4 bytes below `LARGEST_GAP`."""
+    where `seed` picks, each a multiple of 4 bytes below `largest`."""
     lines = order.read_text().splitlines()
     patterns = [index for index, line in enumerate(lines) if line.lstrip().startswith("*(")]
     rng = random.Random(seed)
     places = sorted({patterns[0], *rng.sample(patterns[1:], GAPS)})
-    sizes = {place: 4 * rng.randrange(LARGEST_GAP // 4) for place in places}
+    sizes = {place: 4 * rng.randrange(largest // 4) for place in places}
     text = []
     for index, line in enumerate(lines):
         if index in sizes:
@@ -126,7 +128,7 @@ def build(tree, board, commit, placements):
             shutil.copy(elf, target)
             continue
         gaps = out / f"gaps{seed}.order"
-        gapped(order, seed, gaps)
+        gapped(order, seed, gaps, LARGEST_GAP[board])
         relink(out / "link", gaps, target)
     return out, elves
 
