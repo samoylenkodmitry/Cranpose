@@ -27,6 +27,9 @@ struct Places {
     passed_down: usize,
 }
 
+// The room for changed areas a rewrite keeps from one to the next.
+const KEPT_AREAS: usize = 32;
+
 // A record the rewrite put in place of the old record of its node, and
 // what the old record held: where its subtree's records and items ended,
 // and its passed-down entry.
@@ -359,12 +362,19 @@ impl Rewrite {
         self.opened.clear();
     }
 
-    // Hands back the reach list the rewrite took, whether it still holds
-    // where each item of the scene reaches, and the areas it changed.
+    // Hands back the reach list the rewrite took and whether it still holds
+    // where each item of the scene reaches, and adds the areas it changed
+    // to `areas`. The room a rewrite of many items took for their areas
+    // goes: a canvas drawn again each frame holds what one drawn once does.
     pub(crate) fn results(
         &mut self,
-    ) -> (Vec<Option<ClipBounds>>, UpdatedReach, &mut Vec<ClipBounds>) {
-        (std::mem::take(&mut self.reach), self.held, &mut self.areas)
+        areas: &mut Vec<ClipBounds>,
+    ) -> (Vec<Option<ClipBounds>>, UpdatedReach) {
+        areas.append(&mut self.areas);
+        if self.areas.capacity() > KEPT_AREAS {
+            self.areas = Vec::new();
+        }
+        (std::mem::take(&mut self.reach), self.held)
     }
 
     // Lets the spill's storage go.

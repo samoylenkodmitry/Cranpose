@@ -112,43 +112,49 @@ pub enum RecordingStore {
     /// frames: a command records again into the buffers it filled before.
     Command,
     /// One pool every command takes from, for a renderer that turns a
-    /// recording into its own items at once and holds none after: it drops
-    /// the nodes that hold the recordings, which the pool then hands out
-    /// again.
+    /// recording into its own items at once and holds none after: it hands
+    /// the nodes that hold the recordings to `recycle_lowered`, which gives
+    /// the recordings back to the pool.
     Shared,
 }
 
-// A recording of the pool every command takes from that no reader holds:
-// first one whose shape columns none shares either, then any, whose
-// recording takes new columns; a new one, which the pool keeps, when none is
-// free. A recording of no shapes shares the one empty column.
+// The recordings `RecordingStore::Shared` keeps for the next draws to
+// record into: as many as the draws of a walk's nested nodes hold at once,
+// and no more, as each keeps the room of the largest draw it took.
+const SHARED_RECORDINGS: usize = 8;
+
+// A recording out of the pool every command takes from, for one draw to
+// record into: first one whose shape columns no reader shares, then any,
+// whose recording takes new columns; a new one when the pool has none. A
+// recording of no shapes shares the one empty column.
 fn acquire_shared() -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
         let mut pool = state.shared_recordings.borrow_mut();
-        let free = |recording: &&Rc<CommandRecording>| {
-            Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
-        };
-        let unshared = pool
+        let at = pool
             .iter()
-            .filter(free)
-            .find(|recording| !recording.shares_shapes());
-        if let Some(free) = unshared.or_else(|| pool.iter().find(free)) {
-            return Rc::clone(free);
-        }
-        let recording = Rc::<CommandRecording>::default();
-        pool.push(Rc::clone(&recording));
-        recording
+            .position(|recording| !recording.shares_shapes())
+            .or_else(|| pool.len().checked_sub(1));
+        at.map_or_else(Rc::default, |at| pool.swap_remove(at))
     })
 }
 
-/// Lets the buffers of the shared recordings no reader holds go.
-pub fn release_shared_recordings() {
+// Gives `recording` back to the pool every command takes from, when no
+// reader holds it any more and the pool has room.
+pub(crate) fn give_back_shared(recording: Rc<CommandRecording>) {
+    if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
+        return;
+    }
     crate::thread_state::with(|state| {
-        state
-            .shared_recordings
-            .borrow_mut()
-            .retain(|recording| Rc::strong_count(recording) > 1);
+        let mut pool = state.shared_recordings.borrow_mut();
+        if pool.len() < SHARED_RECORDINGS {
+            pool.push(recording);
+        }
     });
+}
+
+/// Lets the buffers of the shared recordings go.
+pub fn release_shared_recordings() {
+    crate::thread_state::with(|state| state.shared_recordings.borrow_mut().clear());
 }
 
 pub(super) enum DrawPass<'a> {

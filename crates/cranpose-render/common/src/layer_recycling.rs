@@ -101,6 +101,33 @@ pub(crate) fn recycle_node(node: RenderNode) {
     crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_node(node));
 }
 
+// Moves the boxes of `node`, a node lowered with shared recordings, into
+// the pool, and gives its draw runs' recordings back to theirs.
+pub(crate) fn recycle_shared_node(mut node: RenderNode) {
+    give_back_recordings(&mut node);
+    recycle_node(node);
+}
+
+fn give_back_recordings(node: &mut RenderNode) {
+    let nodes = match node {
+        RenderNode::Layer(layer) => &mut layer.children,
+        RenderNode::Inline(inline) => &mut inline.content,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => return,
+    };
+    for child in nodes.drain(..) {
+        match child {
+            RenderNode::DrawRun(run) => {
+                crate::scene_builder::give_back_shared(run.recording);
+            }
+            mut nested @ (RenderNode::Layer(_) | RenderNode::Inline(_)) => {
+                give_back_recordings(&mut nested);
+                recycle_node(nested);
+            }
+            primitive @ RenderNode::Primitive(_) => recycle_node(primitive),
+        }
+    }
+}
+
 // Moves the text boxes of `inline`'s content into the pool, before the
 // content is written again in its emptied list.
 pub(crate) fn recycle_content(inline: &mut InlineNode) {

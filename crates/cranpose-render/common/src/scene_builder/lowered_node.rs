@@ -134,9 +134,10 @@ pub fn root_layer_bounds(applier: &MemoryApplier, root: NodeId) -> Option<Rect> 
 }
 
 /// Moves the boxes of `node`, a node [`lower_node_alone`] gave whose items
-/// a renderer took, into the pool the next lowered nodes take theirs from.
+/// a renderer took, into the pool the next lowered nodes take theirs from,
+/// and gives the recordings of its draws back to theirs.
 pub fn recycle_lowered(node: RenderNode) {
-    crate::layer_recycling::recycle_node(node);
+    crate::layer_recycling::recycle_shared_node(node);
 }
 
 /// Frees the boxes the lowered nodes of a walk left in the pool, when the

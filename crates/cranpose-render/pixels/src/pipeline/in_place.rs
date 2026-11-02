@@ -260,9 +260,7 @@ impl Repush<'_> {
             .take()
             .expect("the rewrite started above");
         rewrite.finish(self.scene, record);
-        let (reach, held, areas) = rewrite.results();
-        (*self.reach, self.held) = (reach, held);
-        self.areas.append(areas);
+        (*self.reach, self.held) = rewrite.results(self.areas);
         *self.rewrite = Some(rewrite);
         Ok(())
     }
