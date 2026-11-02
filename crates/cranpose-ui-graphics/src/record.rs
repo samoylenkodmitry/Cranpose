@@ -949,11 +949,11 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 /// across threads; [`CommandRecording`] wraps it with the other lane.
 #[derive(Clone, Debug)]
 pub struct ShapeRecorder {
-    tables: RecordTables,
+    pub(crate) tables: RecordTables,
     // The colour and stop lists of each brush record's gradient as the app
     // gave them, shared: a materialized shape takes them, not copies the
     // tables hold.
-    gradient_lists: Vec<GradientLists>,
+    pub(crate) gradient_lists: Vec<GradientLists>,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -975,7 +975,7 @@ impl Default for ShapeRecorder {
 
 // A gradient's colours and stop positions.
 #[derive(Clone, Debug)]
-struct GradientLists {
+pub(crate) struct GradientLists {
     colors: Arc<[Color]>,
     stops: Option<Arc<[f32]>>,
 }
@@ -1754,16 +1754,16 @@ impl ShapeRecorder {
 /// [`Self::record`] records it anew in place, [`Self::edit`] records more after it.
 #[derive(Clone, Debug)]
 pub struct CommandRecording {
-    shapes: Arc<ShapeRecorder>,
-    content: RecordingContent,
+    pub(crate) shapes: Arc<ShapeRecorder>,
+    pub(crate) content: RecordingContent,
     fingerprint: OnceCell<u64>,
 }
 
 #[derive(Clone, Debug)]
-struct RecordingContent {
-    others: Vec<DrawPrimitive>,
+pub(crate) struct RecordingContent {
+    pub(crate) others: Vec<DrawPrimitive>,
     /// The groups that [`RecordLane::GroupStart`] segments open.
-    groups: Vec<DrawGroup>,
+    pub(crate) groups: Vec<DrawGroup>,
     /// While recording, the groups open now, outermost first, as indices
     /// into `groups`. Empty once the recording is finished.
     open_groups: Vec<u32>,

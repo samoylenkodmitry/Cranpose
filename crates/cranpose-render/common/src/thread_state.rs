@@ -10,7 +10,7 @@ use cranpose_ui_graphics::{CommandRecording, FxBuildHasher};
 use crate::{
     NodeUpdate,
     layer_recycling::Pool,
-    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
+    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, RedrawnBuffers, TranslateScratch},
 };
 
 pub(crate) struct RenderThreadState {
@@ -24,11 +24,12 @@ pub(crate) struct RenderThreadState {
     pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<HashMap<RecorderKey, RecorderSlot, FxBuildHasher>>,
     pub(crate) recording_generation: Cell<u64>,
-    // The recordings of `RecordingStore::Redrawn`, of the commands that drew
-    // in two updates in a row, and the update each command drew in last;
-    // and the update that draws now.
+    // What the commands of `RecordingStore::Redrawn` keep to record into:
+    // the recordings of those that drew in two updates in a row, the room of
+    // the others', and the update each command drew in last; and the update
+    // that draws now.
     pub(crate) redrawn_recordings:
-        RefCell<HashMap<RecorderKey, (Option<Rc<CommandRecording>>, u64), FxBuildHasher>>,
+        RefCell<HashMap<RecorderKey, (Option<RedrawnBuffers>, u64), FxBuildHasher>>,
     pub(crate) redrawn_update: Cell<u64>,
     // The recordings the commands of the update that runs gave back, for its
     // next commands.

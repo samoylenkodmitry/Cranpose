@@ -18,7 +18,9 @@ use draw_recording::{
     DrawPass, DrawTarget, append_draw_nodes, bump_recording_generation, draw_nodes,
     layer_node_capacity,
 };
-pub(crate) use draw_recording::{RecorderKey, RecorderSlot, end_redrawn_update, give_back_redrawn};
+pub(crate) use draw_recording::{
+    RecorderKey, RecorderSlot, RedrawnBuffers, end_redrawn_update, give_back_redrawn,
+};
 pub use draw_recording::{
     RecordingStore, clear_command_recordings_for_tests, draw_command_nodes_for_tests,
     release_redrawn_recordings,
