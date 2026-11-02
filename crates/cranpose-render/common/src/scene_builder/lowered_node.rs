@@ -157,9 +157,17 @@ pub fn recycle_lowered(node: RenderNode) {
     crate::layer_recycling::recycle_redrawn_node(node);
 }
 
-/// Frees the boxes the lowered nodes of a walk left in the pool, and the
-/// recordings of the commands it did not draw again, when the walk ends.
+/// Frees the boxes the lowered nodes of a walk left in the pool past those
+/// the next walk takes, and the recordings of the commands it did not draw
+/// again, when the walk ends.
 pub fn release_lowered() {
-    crate::layer_recycling::release();
+    crate::layer_recycling::keep_for_next_walk();
     super::end_redrawn_update();
+}
+
+/// Lets go what walks keep for the next: the boxes of lowered nodes and the
+/// recordings of the commands they draw again.
+pub fn release_walk_storage() {
+    crate::layer_recycling::release();
+    super::release_redrawn_recordings();
 }

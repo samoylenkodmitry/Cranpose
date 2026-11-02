@@ -20,10 +20,10 @@ use draw_recording::{
 };
 pub(crate) use draw_recording::{
     RecorderKey, RecorderSlot, RedrawnBuffers, end_redrawn_update, give_back_redrawn,
+    release_redrawn_recordings,
 };
 pub use draw_recording::{
     RecordingStore, clear_command_recordings_for_tests, draw_command_nodes_for_tests,
-    release_redrawn_recordings,
 };
 mod graph_changes;
 use graph_changes::GraphChanges;
@@ -41,7 +41,7 @@ use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translat
 mod lowered_node;
 pub use lowered_node::{
     ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone,
-    recycle_lowered, release_lowered, root_layer_bounds, visit_kept_node,
+    recycle_lowered, release_lowered, release_walk_storage, root_layer_bounds, visit_kept_node,
 };
 mod moved_subtree;
 pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};

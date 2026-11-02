@@ -181,12 +181,15 @@ pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecordin
             .entry(RecorderKey::from(id))
             .or_insert((None, u64::MAX));
         let again = entry.1 == update.wrapping_sub(1) || entry.1 == update;
-        let keeps = again
-            && (!state.redrawn_tight.get() || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES);
+        let keeps =
+            again && (!state.redrawn_tight.get() || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES);
         let (kept, spare) = if keeps {
             (RedrawnBuffers::Recording(recording), None)
         } else {
-            (RedrawnBuffers::Room(RecordingRoom::of(&recording)), Some(recording))
+            (
+                RedrawnBuffers::Room(RecordingRoom::of(&recording)),
+                Some(recording),
+            )
         };
         *entry = (Some(kept), update);
         drop(recordings);
@@ -216,7 +219,7 @@ pub(crate) fn end_redrawn_update() {
 }
 
 /// Lets the recordings an update keeps for its commands' next draws go.
-pub fn release_redrawn_recordings() {
+pub(crate) fn release_redrawn_recordings() {
     crate::thread_state::with(|state| {
         state.redrawn_recordings.borrow_mut().clear();
         state.spare_recordings.borrow_mut().clear();

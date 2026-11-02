@@ -1,7 +1,8 @@
 //! The allocations of the layers a scene update replaces, which the layers
-//! built in their place take instead of allocating their own. The update
+//! built in their place take instead of allocating their own. A graph update
 //! frees whatever it did not take when it ends, so nothing is held between
-//! frames.
+//! frames; a walk that lowers nodes alone keeps as many as it asked for,
+//! which the next walk takes.
 
 use crate::graph::{
     InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode,
@@ -19,6 +20,16 @@ pub(crate) struct Pool {
     /// takes one replaces.
     texts: Vec<Box<TextPrimitiveNode>>,
     lists: Vec<Vec<RenderNode>>,
+    // How many layer boxes, inline boxes and child lists were asked for
+    // since the pool was last released or trimmed.
+    asked: Asked,
+}
+
+#[derive(Default)]
+struct Asked {
+    layers: usize,
+    inlines: usize,
+    lists: usize,
 }
 
 impl Pool {
@@ -153,8 +164,12 @@ pub(crate) fn recycle_list(list: Vec<RenderNode>) {
 /// A child list with room for `capacity` children, recycled when the pool
 /// has one; see [`reserve_nodes`].
 pub(crate) fn child_list(capacity: usize) -> Vec<RenderNode> {
-    let mut list = crate::thread_state::with(|state| state.layer_pool.borrow_mut().lists.pop())
-        .unwrap_or_default();
+    let mut list = crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.lists += 1;
+        pool.lists.pop()
+    })
+    .unwrap_or_default();
     reserve_nodes(&mut list, capacity);
     list
 }
@@ -172,14 +187,22 @@ pub(crate) fn reserve_nodes(list: &mut Vec<RenderNode>, additional: usize) {
 }
 
 pub(crate) fn layer_box() -> Box<LayerNode> {
-    crate::thread_state::with(|state| state.layer_pool.borrow_mut().layers.pop())
-        .unwrap_or_default()
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.layers += 1;
+        pool.layers.pop()
+    })
+    .unwrap_or_default()
 }
 
 // An inline node's box with an empty content list, recycled when the pool
 // has one.
 pub(crate) fn inline_box() -> Option<Box<InlineNode>> {
-    crate::thread_state::with(|state| state.layer_pool.borrow_mut().inlines.pop())
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.inlines += 1;
+        pool.inlines.pop()
+    })
 }
 
 /// `text` in a recycled box when the pool has one.
@@ -201,5 +224,20 @@ pub(crate) fn release() {
         pool.inlines.clear();
         pool.texts.clear();
         pool.lists.clear();
+        pool.asked = Asked::default();
+    });
+}
+
+/// Keeps as many layer boxes, inline boxes and child lists as the walk that
+/// ends asked for, for the next walk, which asks for about as many, and
+/// frees the rest and the text boxes, which hold the text they drew.
+pub(crate) fn keep_for_next_walk() {
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        let asked = std::mem::take(&mut pool.asked);
+        pool.layers.truncate(asked.layers);
+        pool.inlines.truncate(asked.inlines);
+        pool.lists.truncate(asked.lists);
+        pool.texts.clear();
     });
 }

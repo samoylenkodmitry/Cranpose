@@ -14,7 +14,7 @@ use cranpose_render_common::{
     RenderScene, SceneUpdates,
     graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
     graph_scene::{HitList, HitStorage, RenderDiagnostics},
-    scene_builder::release_redrawn_recordings,
+    scene_builder::release_walk_storage,
 };
 use cranpose_ui_graphics::{Rect, space::Ray};
 
@@ -365,12 +365,12 @@ impl Default for Scene {
     }
 }
 
-// The recordings the scene's commands keep for their next draws live with
-// the thread: a scene that goes lets them go, as no draw of its own takes
-// them again.
+// The recordings the scene's commands keep for their next draws and the
+// boxes its walks keep live with the thread: a scene that goes lets them
+// go, as no walk of its own takes them again.
 impl Drop for Scene {
     fn drop(&mut self) {
-        release_redrawn_recordings();
+        release_walk_storage();
     }
 }
 
