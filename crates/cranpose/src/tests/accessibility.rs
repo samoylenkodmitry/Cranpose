@@ -274,7 +274,7 @@ fn project_test_tree(root: &SemanticsNode) -> Vec<AccessibilityElement> {
     }
     let mut bounds = HashMap::default();
     bounds_for(root, &mut bounds);
-    project_semantics(&placed(root, &bounds))
+    project(&placed(root, &bounds))
 }
 
 fn merged_test_row(children: Vec<SemanticsNode>) -> SemanticsNode {
@@ -564,7 +564,7 @@ fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
         (NodeId(4), AccessibilityRect::new(16.0, 80.0, 100.0, 28.0)),
     ]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 2);
     assert_eq!(projected[0].node_id, button_id);
@@ -596,7 +596,7 @@ fn drawn_controls_become_elements_positioned_inside_their_canvas() {
     let bounds =
         HashMap::from_iter([(canvas_id, AccessibilityRect::new(20.0, 100.0, 200.0, 300.0))]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 3);
     assert!(projected.iter().all(|element| element.node_id == canvas_id));
@@ -667,7 +667,7 @@ fn tabs_in_a_group_know_their_place() {
         (NodeId(4), AccessibilityRect::new(200.0, 0.0, 100.0, 60.0)),
     ]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(
         projected[0].details().collection,
@@ -720,7 +720,7 @@ fn a_tab_pages_the_list_around_its_group() {
         (NodeId(3), AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
     ]);
 
-    let projected = project_semantics(&placed(&root_of(list), &bounds));
+    let projected = project(&placed(&root_of(list), &bounds));
     let tab = projected.last().expect("the tab is published");
 
     assert_eq!(
@@ -805,7 +805,7 @@ fn a_pane_is_published_with_its_title_and_no_label() {
         (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
-    let projected = project_semantics(&placed(&screen, &bounds));
+    let projected = project(&placed(&screen, &bounds));
 
     assert_eq!(projected.len(), 2, "the pane and its text: {projected:?}");
     assert_eq!(projected[0].label, "");
@@ -868,7 +868,7 @@ fn a_merged_row_is_one_stop() {
         (1..=5).map(|id| (NodeId(id), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0))),
     );
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 1, "the row is one stop: {projected:?}");
     assert_eq!(projected[0].label, "Milk, 2, 3.40");
@@ -906,7 +906,7 @@ fn a_hidden_node_and_everything_under_it_stay_out() {
         (NodeId(3), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert!(
         projected.is_empty(),
@@ -926,7 +926,7 @@ fn projected_field(name: Option<&str>, text: &str, password: bool) -> Vec<Access
     field.update_details(|details| details.password = password);
     field.text = Some(text.to_owned());
     let (root, bounds) = rows_tree(vec![field]);
-    project_semantics(&placed(&root, &bounds))
+    project(&placed(&root, &bounds))
 }
 
 #[test]
@@ -964,7 +964,7 @@ fn drawn_controls_without_a_label_or_a_size_are_not_published() {
     );
     let bounds = HashMap::from_iter([(canvas_id, AccessibilityRect::new(0.0, 0.0, 100.0, 200.0))]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 1);
     assert_eq!(projected[0].label, "Visible");
@@ -998,7 +998,7 @@ fn a_labelled_canvas_keeps_its_own_element_ahead_of_its_drawn_controls() {
     });
     let bounds = HashMap::from_iter([(canvas_id, AccessibilityRect::new(0.0, 0.0, 200.0, 200.0))]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 3);
     assert_eq!(projected[0].canvas_key, None);
@@ -1035,7 +1035,7 @@ fn custom_action_labels_reach_the_platform_in_publication_order() {
     });
     let bounds = HashMap::from_iter([(arena_id, AccessibilityRect::new(0.0, 0.0, 200.0, 200.0))]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 1);
     assert_eq!(
@@ -1100,7 +1100,7 @@ fn rebuilding_a_custom_action_handler_is_not_a_published_change() {
         root.update_details(|details| {
             details.custom_actions = vec![SemanticsCustomAction::new("Pause", handler)];
         });
-        project_semantics(&placed(&root, &bounds))
+        project(&placed(&root, &bounds))
     };
 
     assert_eq!(project(|| {}), project(|| panic!("must not run")));
@@ -1248,7 +1248,7 @@ fn a_traversal_index_moves_a_node_in_the_reading_order() {
         (NodeId(3), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
     let labels: Vec<&str> = projected
         .iter()
         .map(|element| element.label.as_str())
@@ -1285,7 +1285,7 @@ fn a_control_that_opens_reads_as_closed_and_back() {
         (NodeId(2), AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
     ]);
 
-    let closed = project_semantics(&placed(&root, &bounds));
+    let closed = project(&placed(&root, &bounds));
     assert_eq!(
         closed[0].details().expanded,
         Some(false),
@@ -1313,7 +1313,7 @@ fn a_control_that_opens_reads_as_closed_and_back() {
         None,
         vec![open],
     );
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
     assert_eq!(projected[0].details().expanded, Some(true));
     assert_eq!(expansion_word(&projected[0]), Some("expanded"));
     assert!(set_expanded(&root, NodeId(2), false));
@@ -1346,7 +1346,7 @@ fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
         (NodeId(3), AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
     ]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
     assert!(
         projected[0].details().dismissable,
         "the row says it has a way out"
@@ -1384,7 +1384,7 @@ fn the_way_out_sits_after_the_actions_the_app_named() {
     });
     let (root, bounds) = rows_tree(vec![row]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
     assert_eq!(listed_actions(&projected[0]), vec!["Pin", DISMISS_LABEL]);
 
     assert!(perform_listed_action(&root, NodeId(2), None, 1, 0));
@@ -1412,7 +1412,7 @@ fn a_long_press_is_named_and_sits_after_the_custom_actions() {
     });
     let (root, bounds) = rows_tree(vec![row]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
     assert_eq!(
         projected[0].details().long_click_label.as_deref(),
         Some("Remove receipt")
@@ -1435,7 +1435,7 @@ fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
     let mut plain = text_node(NodeId(2), "Milk");
     let (root, bounds) = rows_tree(vec![plain.clone()]);
     assert_eq!(
-        project_semantics(&placed(&root, &bounds))[0]
+        project(&placed(&root, &bounds))[0]
             .details()
             .long_click_label,
         None
@@ -1448,7 +1448,7 @@ fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
     plain.update_details(|details| details.on_long_click_label = Some("   ".into()));
     let (root, bounds) = rows_tree(vec![plain]);
     assert_eq!(
-        project_semantics(&placed(&root, &bounds))[0]
+        project(&placed(&root, &bounds))[0]
             .details()
             .long_click_label
             .as_deref(),
@@ -1481,7 +1481,7 @@ fn a_dropdown_and_a_picker_keep_their_own_roles() {
     picker.widget_role = Some(cranpose_ui::SemanticsWidgetRole::ValuePicker);
     let (root, bounds) = rows_tree(vec![dropdown, picker]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(projected[0].role, AccessibilityRole::DropdownList);
     assert_eq!(projected[1].role, AccessibilityRole::ValuePicker);
@@ -1536,7 +1536,7 @@ fn a_live_region_reaches_every_control_under_it() {
     root.update_details(|details| {
         details.live_region = Some(LiveRegionMode::Assertive);
     });
-    let elements = project_semantics(&placed(&root, &bounds));
+    let elements = project(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
     assert_eq!(
         elements[0].details().live_region,
@@ -1566,7 +1566,7 @@ fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
         }));
     });
 
-    let elements = project_semantics(&placed(&root, &bounds));
+    let elements = project(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
     let published = elements[0]
         .details()
@@ -1676,7 +1676,7 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
         }));
     });
     let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(
         reader_actions(&projected[0]),
@@ -1691,7 +1691,7 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
 
     root.update_details(|details| details.on_long_click = None);
     root.update_details(|details| details.on_long_click_label = None);
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
     assert_eq!(
         reader_actions(&projected[0]),
         vec!["Flash", "Take the photo"]
@@ -1713,7 +1713,7 @@ fn voice_control_names_and_a_language_reach_the_element() {
     root.update_details(|details| details.language = Some("de".into()));
     let bounds = HashMap::from_iter([(NodeId(7), AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
 
-    let projected = project_semantics(&placed(&root, &bounds));
+    let projected = project(&placed(&root, &bounds));
 
     assert_eq!(
         projected[0].details().input_labels,
@@ -1793,7 +1793,7 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
         });
         let (root, bounds) = rows_tree(vec![field]);
 
-        let projected = project_semantics(&placed(&root, &bounds));
+        let projected = project(&placed(&root, &bounds));
 
         assert_eq!(projected[0].details().text_selection, expected);
         assert!(projected[0].details().multiline);
@@ -1891,7 +1891,7 @@ fn a_list_publishes_its_rows_and_takes_a_row_number() {
         }));
     });
 
-    let elements = project_semantics(&placed(&root, &bounds));
+    let elements = project(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
     assert!(elements[0].details().scroll_to_index);
     assert_eq!(row_count(&elements[0]), 500, "the last row is 499");
@@ -1961,7 +1961,7 @@ fn the_projection_names_the_list_above_each_row() {
         ],
     );
 
-    let elements = project_semantics(&placed(&root, &bounds));
+    let elements = project(&placed(&root, &bounds));
     let by_id = |id: NodeId| {
         elements
             .iter()
@@ -1996,7 +1996,7 @@ fn a_control_without_a_range_is_never_adjustable() {
         Some("Volume"),
         Vec::new(),
     );
-    let elements = project_semantics(&placed(&root, &bounds));
+    let elements = project(&placed(&root, &bounds));
     assert!(elements[0].details().progress.is_none());
     assert!(!elements[0].details().adjustable);
 }
@@ -2101,11 +2101,18 @@ fn busy_screen(y: f32) -> SemanticsNode {
     placed(&pane, &bounds)
 }
 
+// The elements of `root` with the bounds layout gave its nodes, as a scene
+// that draws none of them leaves them.
+fn project(root: &SemanticsNode) -> Vec<AccessibilityElement> {
+    project_semantics(root, &WindowBounds::default())
+}
+
 fn project_over(
     root: &SemanticsNode,
     spare: Vec<AccessibilityElement>,
 ) -> Vec<AccessibilityElement> {
-    let mut projection = Projection::new(spare);
+    let bounds = WindowBounds::default();
+    let mut projection = Projection::new(spare, &bounds);
     project_node(root, false, None, None, &mut projection);
     projection.finish()
 }
@@ -2113,9 +2120,9 @@ fn project_over(
 #[test]
 fn a_projection_over_another_snapshot_says_what_a_fresh_one_does() {
     let screen = busy_screen(0.0);
-    let fresh = project_semantics(&screen);
+    let fresh = project(&screen);
     assert_eq!(fresh.len(), 5, "{fresh:?}");
-    let mut stale: Vec<AccessibilityElement> = project_semantics(&busy_screen(7.0))
+    let mut stale: Vec<AccessibilityElement> = project(&busy_screen(7.0))
         .into_iter()
         .rev()
         .map(|mut element| {
@@ -2136,7 +2143,7 @@ fn a_projection_over_another_snapshot_says_what_a_fresh_one_does() {
 
 #[test]
 fn a_projection_like_the_last_one_reuses_its_strings() {
-    let first = project_semantics(&busy_screen(0.0));
+    let first = project(&busy_screen(0.0));
     let labels: Vec<*const u8> = first.iter().map(|element| element.label.as_ptr()).collect();
     let values: Vec<Option<*const u8>> = first
         .iter()
@@ -2158,7 +2165,7 @@ fn a_projection_like_the_last_one_reuses_its_strings() {
             .collect::<Vec<_>>(),
         values
     );
-    assert_eq!(moved, project_semantics(&busy_screen(12.5)));
+    assert_eq!(moved, project(&busy_screen(12.5)));
 }
 
 #[test]
@@ -2238,5 +2245,106 @@ fn a_test_tag_reaches_no_screen_reader() {
     assert!(
         !published.contains("pay-button") && !published.contains("spacer-tag"),
         "a tag reached the accessibility tree: {published}"
+    );
+}
+
+// A button 40 by 30 that its own lazy graphics layer moves by (50, 70),
+// inside a box its graphics layer moves 100 to the right.
+#[cfg(feature = "renderer-wgpu")]
+#[cranpose_ui::composable]
+fn moved_button() {
+    use cranpose_ui::{Box, BoxSpec, GraphicsLayer, Modifier};
+    let parent = GraphicsLayer {
+        translation_x: 100.0,
+        ..GraphicsLayer::default()
+    };
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .graphics_layer_value(parent),
+        BoxSpec::new(),
+        || {
+            Box(
+                Modifier::empty()
+                    .size_points(40.0, 30.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        translation_x: 50.0,
+                        translation_y: 70.0,
+                        ..GraphicsLayer::default()
+                    })
+                    .clickable(|_| {})
+                    .content_description("Moved"),
+                BoxSpec::new(),
+                || {},
+            );
+        },
+    );
+}
+
+#[cfg(feature = "renderer-wgpu")]
+fn moved_button_shell() -> AppShell<cranpose_render_wgpu::WgpuRenderer> {
+    let mut shell = AppShell::new(
+        cranpose_render_wgpu::WgpuRenderer::new(&[]),
+        cranpose_core::location_key(file!(), line!(), column!()),
+        moved_button,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell
+}
+
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn a_reader_finds_a_node_where_its_layers_draw_it() {
+    let mut shell = moved_button_shell();
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let elements =
+        snapshot_if_changed(&mut shell, &mut None, &mut AccessibilitySnapshot::default())
+            .expect("a first snapshot");
+    let moved = elements
+        .iter()
+        .find(|element| element.label == "Moved")
+        .expect("the button is published");
+    assert_eq!(
+        moved.bounds,
+        AccessibilityRect::new(150.0, 70.0, 40.0, 30.0)
+    );
+}
+
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn the_inspector_outlines_a_node_where_its_layers_draw_it() {
+    let mut shell = moved_button_shell();
+    install_inspector(&mut shell, Some(true));
+    shell.update();
+    let toggle = shell
+        .inspector_state()
+        .controls
+        .iter()
+        .find(|control| control.action == cranpose_app_shell::inspector::InspectorAction::Toggle)
+        .expect("the inspector's toggle")
+        .bounds;
+    shell.set_cursor(
+        toggle.x + toggle.width / 2.0,
+        toggle.y + toggle.height / 2.0,
+    );
+    assert!(shell.pointer_pressed());
+    assert!(shell.pointer_released());
+    shell.update();
+    let moved = shell
+        .inspector_state()
+        .nodes
+        .iter()
+        .find(|node| node.label.starts_with("Moved"))
+        .expect("the inspector lists the button");
+    assert_eq!(
+        moved.bounds,
+        cranpose_ui::Rect {
+            x: 150.0,
+            y: 70.0,
+            width: 40.0,
+            height: 30.0,
+        }
     );
 }

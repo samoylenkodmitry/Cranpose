@@ -1,7 +1,10 @@
 use super::*;
 use crate::inspector::{InspectorAction, InspectorNode};
 
-fn project(semantics: &SemanticsTree) -> Vec<InspectorNode> {
+fn project(
+    semantics: &SemanticsTree,
+    _bounds: &cranpose_core::collections::map::HashMap<NodeId, Rect>,
+) -> Vec<InspectorNode> {
     vec![InspectorNode {
         node_id: semantics.root().node_id,
         canvas_key: None,

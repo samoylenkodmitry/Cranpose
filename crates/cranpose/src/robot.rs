@@ -7,9 +7,7 @@ use std::{
 use cranpose_app_shell::{
     AppShell, Key, KeyEventType, Modifiers, PointerSource, RuntimeLeakDebugStats,
 };
-use cranpose_render_common::{
-    RenderScene, Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
-};
+use cranpose_render_common::{RenderScene, Renderer};
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
 use cranpose_ui::{PointerButton, SemanticsAction, SemanticsNode, SemanticsRole};
@@ -1838,10 +1836,10 @@ fn semantics_node_clickable(sem_node: &SemanticsNode) -> bool {
         .any(|action| matches!(action, SemanticsAction::Click { .. }))
 }
 
-/// Where each node of `root`'s tree shows in the window: as layout and the
-/// layers place it, and for a hit target on a mesh surface as the scene's
-/// camera shows it, which the layout walk does not follow through a
-/// doorway.
+/// Where each node of `root`'s tree shows in the window: where the scene
+/// draws it, through the graphics layers above it and its own, and for a hit
+/// target on a mesh surface as the scene's camera shows it; where layout put
+/// a node the scene does not draw.
 fn semantic_bounds_index<R>(
     app: &mut AppShell<R>,
     root: &cranpose_ui::LayoutBox,
@@ -1850,86 +1848,39 @@ where
     R: Renderer,
     R::Error: std::fmt::Debug,
 {
-    let mut surfaces = HashMap::new();
-    app.scene().surface_windows(&mut |node_id, content| {
-        surfaces.insert(node_id, content);
-    });
     let mut bounds = HashMap::new();
-    app.debug_enter_app_context(|| {
-        collect_semantic_bounds(
-            root,
-            (ProjectiveTransform::identity(), &surfaces),
-            &mut bounds,
+    index_layout_bounds(root, &mut bounds);
+    let scene = app.scene();
+    scene.node_window_bounds(&mut |node_id, shown| {
+        bounds.insert(
+            node_id,
+            semantic_rect(scene.surface_window_bounds(node_id).unwrap_or(shown)),
         );
     });
-    let scene = app.scene();
-    for (&node_id, rect) in &mut bounds {
-        if let Some(shown) = scene.surface_window_bounds(node_id) {
-            *rect = SemanticRect {
-                x: shown.x,
-                y: shown.y,
-                width: shown.width,
-                height: shown.height,
-            };
-        }
-    }
     bounds
 }
 
-/// Records where each node of `layout_box`'s subtree shows in the window,
-/// through the graphics layers above it: `parent` maps the parent's
-/// children to the window, and `surfaces` holds the map from the content of
-/// each mesh surface the window's eyes see to the window.
-fn collect_semantic_bounds(
+fn index_layout_bounds(
     layout_box: &cranpose_ui::LayoutBox,
-    (parent, surfaces): (
-        ProjectiveTransform,
-        &HashMap<cranpose_core::NodeId, ProjectiveTransform>,
-    ),
     bounds: &mut HashMap<cranpose_core::NodeId, SemanticRect>,
 ) {
-    let laid_out = bounds_from_layout_box(layout_box);
-    let rect = cranpose_ui::Rect {
-        x: laid_out.x,
-        y: laid_out.y,
-        width: laid_out.width,
-        height: laid_out.height,
-    };
-    let size = cranpose_ui::Size {
+    bounds.insert(layout_box.node_id, bounds_from_layout_box(layout_box));
+    for child in &layout_box.children {
+        index_layout_bounds(child, bounds);
+    }
+}
+
+fn semantic_rect(rect: cranpose_ui::Rect) -> SemanticRect {
+    SemanticRect {
+        x: rect.x,
+        y: rect.y,
         width: rect.width,
         height: rect.height,
-    };
-    let origin = cranpose_ui::Point::new(rect.x, rect.y);
-    let slices = &layout_box.node_data.modifier_slices;
-    let layer = slices.graphics_layer();
-    let window = match surfaces.get(&layout_box.node_id) {
-        Some(content) => ProjectiveTransform::translation(-origin.x, -origin.y).then(*content),
-        None => layer.as_ref().map_or(parent, |layer| {
-            layer_transform_to_window(parent, origin, slices.layer_bounds(size), layer)
-        }),
-    };
-    let shown = window.bounds_for_rect(rect);
-    bounds.insert(
-        layout_box.node_id,
-        SemanticRect {
-            x: shown.x,
-            y: shown.y,
-            width: shown.width,
-            height: shown.height,
-        },
-    );
-    for child in &layout_box.children {
-        collect_semantic_bounds(child, (window, surfaces), bounds);
     }
 }
 
 fn bounds_from_layout_box(layout_box: &cranpose_ui::LayoutBox) -> SemanticRect {
-    SemanticRect {
-        x: layout_box.rect.x,
-        y: layout_box.rect.y,
-        width: layout_box.rect.width,
-        height: layout_box.rect.height,
-    }
+    semantic_rect(layout_box.rect)
 }
 
 pub(crate) fn subtree_contains_matching_text(

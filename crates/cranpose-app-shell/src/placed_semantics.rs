@@ -43,7 +43,7 @@
 
 use cranpose_core::{MemoryApplier, NodeError, NodeId, collections::map::HashMap};
 use cranpose_render_common::{
-    Renderer,
+    RenderScene, Renderer,
     graph::{HitTestNode, ProjectiveTransform},
     graph_scene::HitGeometry,
     hit_graph::{HitGraphSink, collect_hits_from_graph},
@@ -307,7 +307,7 @@ fn join(
 }
 
 /// The placed tree of a semantics tree and the layout it was measured in,
-/// without touch bounds: what a shell offers after a frame.
+/// without touch bounds.
 pub fn placed_semantics_from_trees(
     semantics: &SemanticsNode,
     layout: &LayoutTree,
@@ -317,15 +317,24 @@ pub fn placed_semantics_from_trees(
     join(semantics, &layout_bounds, &HashMap::default())
 }
 
-/// The placed tree of what a shell shows right now. `None` before the first
-/// frame, or while the shell does not build semantics; turn them on with
+/// The placed tree of what a shell shows right now, with the touch bounds of
+/// the hit targets its last scene draws. `None` before the first frame, or
+/// while the shell does not build semantics; turn them on with
 /// `set_semantics_enabled(true)` first.
 pub fn placed_semantics_from_shell<R>(shell: &mut AppShell<R>) -> Option<PlacedSemanticsNode>
 where
     R: Renderer,
     R::Error: std::fmt::Debug,
 {
-    let layout = shell.layout_tree()?.clone();
-    let semantics = shell.semantics_tree()?.root().clone();
-    placed_semantics_from_trees(&semantics, &layout).ok()
+    let mut layout_bounds = HashMap::default();
+    index_layout_bounds(shell.layout_tree()?.root(), &mut layout_bounds);
+    let mut touch_bounds = HashMap::default();
+    let scene = shell.scene();
+    scene.node_window_bounds(&mut |node_id, rect| {
+        if scene.find_target(node_id).is_some() {
+            touch_bounds.insert(node_id, rect);
+        }
+    });
+    let semantics = shell.semantics_tree()?;
+    join(semantics.root(), &layout_bounds, &touch_bounds).ok()
 }
