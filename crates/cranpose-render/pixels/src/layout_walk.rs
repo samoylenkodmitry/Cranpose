@@ -477,6 +477,7 @@ impl ChildSlot<'_> {
         context: &RasterTraversalContext<'_>,
     ) {
         let walk = self.walk;
+        let placed_as_before = self.placed_as_before();
         for &child in self.children {
             let found = OldChildren::find(&scene.subtrees, (old.cursor, old.end), child);
             let Some(at) = found else {
@@ -493,11 +494,11 @@ impl ChildSlot<'_> {
             let record = &scene.subtrees[at];
             let clean = walk.is_clean(child);
             // A child whose owner placed it as before lies where it did.
-            let placement = (clean && context.same_as_before && !self.placed_as_before())
+            let placement = (clean && context.same_as_before && !placed_as_before)
                 .then(|| kept_child_placement(walk.applier, child, self.context))
                 .flatten();
             let lies_as_before = context.same_as_before
-                && (self.placed_as_before()
+                && (placed_as_before
                     || placement.is_some_and(|placement| {
                         (placement.identity, placement.transform)
                             == (record.identity, record.transform)
