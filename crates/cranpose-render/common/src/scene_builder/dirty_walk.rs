@@ -6,9 +6,9 @@ use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap}
 use cranpose_ui::Point;
 
 use super::{
-    AbsOrigin, Level, LowerContext, TranslateAncestorContext, children_have_origin_sinks,
-    inline_leaf::fold_kept_leaf, layer_identity, note_space_change, read_placed_node_data,
-    rebuild_tracking_hits, release_for_rebuild, remove_dirty_descendants,
+    AbsOrigin, GraphChanges, Level, LowerContext, TranslateAncestorContext,
+    children_have_origin_sinks, inline_leaf::fold_kept_leaf, layer_identity, note_space_change,
+    read_placed_node_data, rebuild_tracking_hits, release_for_rebuild, remove_dirty_descendants,
     try_update_retained_layer, update_dirty_inline, write_node_layer,
 };
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ReplaceDirtyLayersReport {
     updated: bool,
-    pub(super) hit_graph_dirty: bool,
+    pub(super) changes: GraphChanges,
 }
 
 /// The dirty nodes a scene update has yet to find, and every node above
@@ -300,29 +300,31 @@ fn update_at_step(
     update: u64,
 ) -> Option<ReplaceDirtyLayersReport> {
     let (&(index, _), rest) = steps.split_first()?;
-    let hit_graph_dirty = match (layer.children.get_mut(index)?, rest.is_empty()) {
+    let changes = match (layer.children.get_mut(index)?, rest.is_empty()) {
         (slot @ RenderNode::Layer(_), true) => {
             let RenderNode::Layer(child) = slot else {
                 unreachable!("the slot holds a layer");
             };
-            let hit_graph_dirty =
+            let changes =
                 update_dirty_layer(applier, child, path.node, kind, dirty, path.pass, update)?.0;
             fold_kept_leaf(applier, slot, path.pass.content_offset);
-            hit_graph_dirty
+            changes
         }
         (RenderNode::Layer(child), false) => {
-            update_at_step(applier, child, path, rest, kind, dirty, update)?.hit_graph_dirty
+            update_at_step(applier, child, path, rest, kind, dirty, update)?.changes
         }
         (slot @ RenderNode::Inline(_), true) => {
             let context = path.pass.lower_context();
-            update_dirty_inline(applier, slot, path.node, kind, context, dirty)?
+            GraphChanges::hits(update_dirty_inline(
+                applier, slot, path.node, kind, context, dirty,
+            )?)
         }
         _ => return None,
     };
     note_updated_children(layer, update);
     Some(ReplaceDirtyLayersReport {
         updated: true,
-        hit_graph_dirty,
+        changes,
     })
 }
 
@@ -374,7 +376,7 @@ fn replace_dirty_layers_from_applier(
             && let Some(node_id) = identity
             && let Some(kind) = dirty.nodes.remove(&node_id)
         {
-            let (hit_graph_dirty, retained) = update_dirty_layer(
+            let (changes, retained) = update_dirty_layer(
                 applier,
                 child_layer,
                 node_id,
@@ -383,7 +385,7 @@ fn replace_dirty_layers_from_applier(
                 pass,
                 update,
             )?;
-            report.hit_graph_dirty |= hit_graph_dirty;
+            report.changes |= changes;
             report.updated = true;
             if retained {
                 let child_children = parent_children.children_of(child_layer);
@@ -395,7 +397,7 @@ fn replace_dirty_layers_from_applier(
                     child_inherited_translated_content_context,
                     update,
                 )?;
-                report.hit_graph_dirty |= child_report.hit_graph_dirty;
+                report.changes |= child_report.changes;
             }
             fold_kept_leaf(applier, child, pass.content_offset);
             continue;
@@ -414,7 +416,7 @@ fn replace_dirty_layers_from_applier(
             update,
         )?;
         report.updated |= child_report.updated;
-        report.hit_graph_dirty |= child_report.hit_graph_dirty;
+        report.changes |= child_report.changes;
     }
 
     if report.updated {
@@ -446,8 +448,14 @@ fn update_inline_child(
         return Some(());
     };
     let context = pass.lower_context();
-    report.hit_graph_dirty |=
-        update_dirty_inline(applier, child, node_id, kind, context, dirty.nodes)?;
+    report.changes |= GraphChanges::hits(update_dirty_inline(
+        applier,
+        child,
+        node_id,
+        kind,
+        context,
+        dirty.nodes,
+    )?);
     report.updated = true;
     Some(())
 }
@@ -498,7 +506,7 @@ impl ParentPass {
 
 /// Updates `layer`, the layer of the dirty node `node_id`, for the change
 /// `kind`: in place when the layer can keep what it drew, else lowered
-/// again from the node. Returns whether hit geometry changed and whether
+/// again from the node. Returns what changed beyond the frame and whether
 /// the layer was kept, whose children may hold dirty layers yet; a layer
 /// lowered again drops the dirty nodes beneath it from `dirty_nodes`.
 /// `None` when the node's data is gone.
@@ -510,8 +518,8 @@ fn update_dirty_layer(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     pass: ParentPass,
     update: u64,
-) -> Option<(bool, bool)> {
-    if let Some(hit_graph_dirty) = try_update_retained_layer(
+) -> Option<(GraphChanges, bool)> {
+    if let Some(changes) = try_update_retained_layer(
         applier,
         layer,
         dirty_nodes,
@@ -525,7 +533,7 @@ fn update_dirty_layer(
             parent_abs: pass.children,
         },
     ) {
-        return Some((hit_graph_dirty, true));
+        return Some((changes, true));
     }
     // Nodes that leave this subtree are gone from the scene: nothing
     // remains to update for them, and a dirty one would otherwise go
@@ -541,5 +549,5 @@ fn update_dirty_layer(
     })?;
     remove_dirty_descendants(layer, dirty_nodes);
     layer.note_content_change(update);
-    Some((hit_graph_dirty, false))
+    Some((GraphChanges::hits(hit_graph_dirty), false))
 }

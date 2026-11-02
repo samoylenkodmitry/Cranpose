@@ -596,6 +596,9 @@ pub struct Scene {
     // not walk the graph for targets.
     hits: RefCell<HitList>,
     diagnostics: Rc<RenderDiagnostics>,
+    // The updates that moved a layer with no layout pass, and the rebuilds,
+    // which may have.
+    layer_moves: u64,
 }
 
 /// How many hit targets a [`Scene`] holds and has room for, and the same for
@@ -619,6 +622,7 @@ impl Scene {
             graph: None,
             hits: RefCell::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
+            layer_moves: 0,
         }
     }
 
@@ -632,6 +636,7 @@ impl Scene {
     pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         let previous = self.graph.take();
         self.hits.get_mut().stale = true;
+        self.layer_moves += 1;
         let Some(graph) =
             crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
         else {
@@ -707,6 +712,7 @@ impl Scene {
         if report.hit_graph_dirty {
             self.hits.get_mut().stale = true;
         }
+        self.layer_moves += u64::from(report.layers_moved);
     }
 
     // Adds an interactive target in draw order, ignoring targets that neither
@@ -846,6 +852,10 @@ impl RenderScene for Scene {
             &surfaces,
             visit,
         );
+    }
+
+    fn layer_moves(&self) -> u64 {
+        self.layer_moves
     }
 
     fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {

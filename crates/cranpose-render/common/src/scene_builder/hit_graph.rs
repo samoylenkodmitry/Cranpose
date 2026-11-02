@@ -1,6 +1,7 @@
 use cranpose_ui::Rect;
 use cranpose_ui_graphics::LayerShape;
 
+use super::graph_changes::GraphChanges;
 use crate::graph::{LayerNode, ProjectiveTransform, RenderNode};
 
 /// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
@@ -76,6 +77,12 @@ impl HitGraphState {
             shape: layer.graphics_layer.shape,
             space: layer.graphics_layer.space.is_some(),
         }
+    }
+
+    #[inline]
+    pub(super) fn changes_against(&self, replacement: &Self) -> GraphChanges {
+        GraphChanges::hits(self.dirty_against(replacement))
+            | GraphChanges::moves(self.transform_to_parent != replacement.transform_to_parent)
     }
 
     pub(super) fn dirty_against(&self, replacement: &Self) -> bool {
