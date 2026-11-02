@@ -74,6 +74,11 @@ impl DirtyMarks {
     pub(crate) fn changed(&self, applier: &MemoryApplier, node: NodeId) -> bool {
         decode(self.marks.get(applier, node)).is_some()
     }
+
+    // The update `node` itself takes, when it changed.
+    pub(crate) fn update_of(&self, applier: &MemoryApplier, node: NodeId) -> Option<NodeUpdate> {
+        decode(self.marks.get(applier, node))
+    }
 }
 
 fn encode(update: NodeUpdate) -> u8 {
@@ -364,6 +369,12 @@ impl ChildSlot<'_> {
         self.owner
     }
 
+    // Whether the owner placed its children where it did before: so it did
+    // when only state its draws read changed.
+    fn placed_as_before(&self) -> bool {
+        self.walk.marks.update_of(self.walk.applier, self.owner) == Some(NodeUpdate::Draws)
+    }
+
     // Pushes the children's subtrees under `context`, copying from `reuse`'s
     // scene those whose nodes did not change and that lie where they did.
     pub(crate) fn push_children(
@@ -420,8 +431,9 @@ impl ChildSlot<'_> {
             let record = &scene.subtrees[at];
             if context.same_as_before
                 && walk.is_clean(child)
-                && kept_child_placement(walk.applier, child, self.context)
-                    == Some((record.identity, record.transform))
+                && (self.placed_as_before()
+                    || kept_child_placement(walk.applier, child, self.context)
+                        == Some((record.identity, record.transform)))
                 && let Some(mut rewrite) = scene.rewrite.take()
             {
                 rewrite.keep(scene, at);
