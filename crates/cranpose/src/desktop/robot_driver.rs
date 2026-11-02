@@ -14,6 +14,7 @@ use super::{
     update_app_with_native_window_registry,
 };
 use crate::{
+    accessibility::{self, AccessibilitySnapshot},
     native_window,
     robot::{Robot, RobotChannel, RobotCommand, RobotResponse, RobotScreenshot, extract_semantics},
 };
@@ -35,12 +36,24 @@ fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand)
         RobotCommand::GetInspectorState => {
             RobotResponse::InspectorState(Box::new(app.inspector_state().clone()))
         }
-        RobotCommand::GetSpokenTree => {
-            RobotResponse::SpokenTree(crate::accessibility::spoken_tree(app))
-        }
+        RobotCommand::GetSpokenTree => RobotResponse::SpokenTree(spoken_tree(app)),
         RobotCommand::AuditAccessibility => audit_response(app),
         _ => RobotResponse::Semantics(extract_semantics(app)),
     }
+}
+
+// Every control on the screen the way a reader speaks it, one per line, in
+// reading order.
+fn spoken_tree(app: &mut AppShell<WgpuRenderer>) -> String {
+    accessibility::snapshot(app, &mut AccessibilitySnapshot::default())
+        .iter()
+        .map(accessibility::spoken_line)
+        .filter(|line| !line.is_empty())
+        .fold(String::new(), |mut tree, line| {
+            tree.push_str(&line);
+            tree.push('\n');
+            tree
+        })
 }
 
 /// The answer to a robot query that the app answers in its own context.

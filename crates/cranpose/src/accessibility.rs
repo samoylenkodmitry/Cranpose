@@ -607,7 +607,7 @@ where
 /// The elements a reader reaches, written over the elements `published`
 /// holds no longer: a snapshot like the one before reuses their strings and
 /// lists instead of allocating its own.
-fn snapshot<R>(
+pub(crate) fn snapshot<R>(
     shell: &mut AppShell<R>,
     published: &mut AccessibilitySnapshot,
 ) -> Vec<AccessibilityElement>
@@ -2173,25 +2173,6 @@ fn spoken_percent(progress: &ProgressBarRangeInfo) -> Option<String> {
         let percent = ((progress.current - progress.start) / span * 100.0).round();
         format!("{percent} percent")
     })
-}
-
-/// Every control on the screen the way a reader speaks it, one per line, in
-/// reading order: what the robot's `spoken_tree` prints.
-#[cfg(feature = "robot")]
-pub(crate) fn spoken_tree<R>(shell: &mut AppShell<R>) -> String
-where
-    R: Renderer,
-    R::Error: Debug,
-{
-    snapshot(shell, &mut AccessibilitySnapshot::default())
-        .iter()
-        .map(spoken_line)
-        .filter(|line| !line.is_empty())
-        .fold(String::new(), |mut tree, line| {
-            tree.push_str(&line);
-            tree.push('\n');
-            tree
-        })
 }
 
 #[cfg(test)]
