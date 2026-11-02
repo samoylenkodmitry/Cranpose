@@ -56,7 +56,7 @@ fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
     let root = composition.root().expect("root");
     let mut applier = composition.applier_mut();
     let stored_children = applier
-        .with_node::<LayoutNode, _>(root, |node| node.children.as_ptr())
+        .with_node::<LayoutNode, _>(root, |node| node.children().as_ptr())
         .expect("root layout node");
     read_node_data(&applier, root, |data| {
         assert_eq!(data.children.as_ptr(), stored_children);
@@ -3172,7 +3172,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
                     node.modifier_slices_snapshot()
                         .text_content()
                         .map(|text| text.to_string()),
-                    node.children.clone()
+                    node.children().to_vec()
                 )
             }) {
                 summary

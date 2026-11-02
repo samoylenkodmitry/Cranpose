@@ -963,7 +963,7 @@ fn refresh_layout_box_data(
             .with_node::<LayoutNode, _>(layout.node_id, |node| {
                 node.clear_needs_redraw();
                 (
-                    node.modifier.clone(),
+                    node.modifier(),
                     node.resolved_modifiers(),
                     node.modifier_slices_snapshot(),
                     node.semantics_configuration(),

@@ -38,12 +38,12 @@ use crate::{
 #[repr(C)]
 pub struct LayoutNode {
     parts: Rc<LayoutParts>,
-    /// The actual children of this node (folded view - includes virtual nodes as-is)
-    pub children: Vec<NodeId>,
+    // The actual children of this node (folded view - includes virtual nodes as-is)
+    pub(crate) children: Vec<NodeId>,
 
-    /// Policy that measures and places the children of this node. Change it through
-    /// `set_measure_policy` so that a measure is scheduled.
-    pub measure_policy: Rc<dyn MeasurePolicy>,
+    // Policy that measures and places the children of this node. Change it through
+    // `set_measure_policy` so that a measure is scheduled.
+    pub(crate) measure_policy: Rc<dyn MeasurePolicy>,
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
     density: crate::density::Density,
@@ -70,9 +70,9 @@ pub struct LayoutNode {
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
     modifier_chain: ModifierChainHandle,
-    /// The modifier of this node. Change it through `set_modifier` so that the modifier chain
-    /// updates.
-    pub modifier: Modifier,
+    // The modifier of this node. Change it through `set_modifier` so that the modifier chain
+    // updates.
+    pub(crate) modifier: Modifier,
     /// Composable definitions responsible for this node, captured only for inspection builds.
     #[cfg(feature = "inspection")]
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
@@ -152,6 +152,16 @@ impl LayoutNode {
         };
         node.sync_modifier_chain(None);
         node
+    }
+
+    /// The node's children, in the order they were inserted, virtual nodes as they are.
+    pub fn children(&self) -> &[NodeId] {
+        &self.children
+    }
+
+    /// Returns the modifier that was last set on this node.
+    pub fn modifier(&self) -> Modifier {
+        self.modifier.clone()
     }
 
     /// Replaces the node's modifier and updates its modifier chain, invalidating the work that the

@@ -75,7 +75,7 @@ fn test_complex_modifier_chain_ordering() {
 
     let child_count = applier
         .with_node(root, |node: &mut cranpose_ui::LayoutNode| {
-            node.children.len()
+            node.children().len()
         })
         .unwrap();
 
@@ -255,7 +255,7 @@ fn test_nested_layouts_with_modifiers() {
 
     let children = applier
         .with_node(root, |node: &mut cranpose_ui::LayoutNode| {
-            node.children.clone()
+            node.children().to_vec()
         })
         .unwrap();
 

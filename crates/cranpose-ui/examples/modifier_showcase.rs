@@ -204,7 +204,7 @@ fn count_nodes(applier: &mut MemoryApplier, node_id: NodeId, _depth: usize) -> u
     let mut count = 1;
 
     if let Ok(children) = applier.with_node(node_id, |node: &mut cranpose_ui::LayoutNode| {
-        node.children.clone()
+        node.children().to_vec()
     }) {
         for child_id in children {
             count += count_nodes(applier, child_id, _depth + 1);
