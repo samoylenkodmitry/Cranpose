@@ -57,7 +57,7 @@ impl SlotTable {
             anchors: AnchorRegistry::new(),
             payload_anchors: PayloadAnchorRegistry::new(),
             movables: MovableIndex::default(),
-            diagnostics: SlotTableDiagnostics::default(),
+            diagnostics: Default::default(),
             stale_group_indexes: metadata::StaleGroupIndexes::default(),
             next_group_generation: 1,
         }

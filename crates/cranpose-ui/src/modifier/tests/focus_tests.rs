@@ -8,17 +8,13 @@ fn focus_target_node_lifecycle() {
     let mut context = BasicModifierNodeContext::new();
 
     assert_eq!(node.focus_state(), FocusState::Inactive);
-    assert!(!node.node_state().is_attached());
 
     node.on_attach(&mut context);
-    assert!(node.node_state().is_attached());
-
     node.set_focus_state(FocusState::Active);
     assert_eq!(node.focus_state(), FocusState::Active);
     assert!(node.focus_state().is_focused());
 
     node.on_detach();
-    assert!(!node.node_state().is_attached());
     assert_eq!(node.focus_state(), FocusState::Inactive);
 }
 

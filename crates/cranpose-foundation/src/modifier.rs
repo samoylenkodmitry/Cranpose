@@ -284,8 +284,8 @@ impl NodeState {
         self.capabilities.get()
     }
 
-    /// Marks the node as attached to a chain or as detached from it.
-    pub fn set_attached(&self, attached: bool) {
+    // The chain marks a node attached before `on_attach` and detached after `on_detach`.
+    pub(crate) fn set_attached(&self, attached: bool) {
         self.attached.set(attached);
     }
 

@@ -1,7 +1,6 @@
 use super::{
     GroupRecord, SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup,
     SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableLocalDebugStats,
-    SlotTableMutationDebugStats,
 };
 use crate::{Key, RecomposeScope, ScopeId};
 
@@ -45,9 +44,10 @@ impl SlotTable {
             free_anchor_count: self.anchors.free_len(),
             anchor_capacity: self.anchors.capacity(),
             anchor_heap_bytes: self.anchors.heap_bytes(),
-            mutation: SlotTableMutationDebugStats {
+            #[cfg(any(test, feature = "leak-debug"))]
+            mutation: super::SlotTableMutationDebugStats {
                 payload_shift_bytes: self.payloads.shift_bytes(),
-                ..self.diagnostics.mutation()
+                ..self.diagnostics
             },
         }
     }

@@ -12,6 +12,7 @@ pub(in crate::slot) struct PayloadStore {
     order: Vec<u32>,
     slots: Vec<Option<PayloadRecord>>,
     free: Vec<u32>,
+    #[cfg(any(test, feature = "leak-debug"))]
     shift_bytes: usize,
 }
 
@@ -96,15 +97,20 @@ impl PayloadStore {
             + self.slots.capacity() * size_of::<Option<PayloadRecord>>()
     }
 
+    #[cfg(any(test, feature = "leak-debug"))]
     pub(in crate::slot) fn shift_bytes(&self) -> usize {
         self.shift_bytes
     }
 
+    #[cfg(any(test, feature = "leak-debug"))]
     fn note_shift(&mut self, entries: usize) {
         self.shift_bytes = self
             .shift_bytes
             .saturating_add(entries.saturating_mul(ORDER_ENTRY_BYTES));
     }
+
+    #[cfg(not(any(test, feature = "leak-debug")))]
+    fn note_shift(&mut self, _entries: usize) {}
 
     fn occupy(
         slots: &mut Vec<Option<PayloadRecord>>,

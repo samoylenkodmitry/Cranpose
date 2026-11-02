@@ -20,7 +20,11 @@ fn a_redraw_asked_before_the_id_reaches_the_surface_once_and_waits_while_detache
             .collect();
         let detached = applier.create(Box::new(LayoutNode::new_virtual()));
         applier
-            .with_node::<LayoutNode, _>(root, |node| node.children.clone_from(&children))
+            .with_node::<LayoutNode, _>(root, |node| {
+                for &child in &children {
+                    cranpose_core::Node::insert_child(node, child);
+                }
+            })
             .expect("root");
         for &id in [root].iter().chain(&children).chain([&detached]) {
             applier

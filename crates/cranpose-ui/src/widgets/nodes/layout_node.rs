@@ -4,13 +4,14 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{Node, NodeId};
+use cranpose_core::{Node, NodeId, NodeIdCell};
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
 };
 use cranpose_ui_layout::MeasurePolicy;
 
+use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
 #[cfg(test)]
 use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
@@ -28,76 +29,6 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy)]
-enum LayoutInvalidationDispatchDiag {
-    Disabled,
-    All,
-    Node(NodeId),
-}
-
-fn layout_invalidation_dispatch_diag() -> LayoutInvalidationDispatchDiag {
-    cranpose_core::DIAGNOSTICS
-        .layout_invalidation_dispatch_diag
-        .with(|value| match value {
-            None => LayoutInvalidationDispatchDiag::Disabled,
-            Some("all") => LayoutInvalidationDispatchDiag::All,
-            Some(value) => value.parse::<NodeId>().map_or(
-                LayoutInvalidationDispatchDiag::Disabled,
-                LayoutInvalidationDispatchDiag::Node,
-            ),
-        })
-}
-
-fn log_layout_invalidation_dispatch(
-    id: NodeId,
-    invalidation: &ModifierInvalidation,
-    curr_caps: NodeCapabilities,
-    prev_caps: NodeCapabilities,
-    modifier: &Modifier,
-) {
-    let enabled = match layout_invalidation_dispatch_diag() {
-        LayoutInvalidationDispatchDiag::Disabled => false,
-        LayoutInvalidationDispatchDiag::All => true,
-        LayoutInvalidationDispatchDiag::Node(target) => target == id,
-    };
-    if enabled {
-        log::warn!(
-            "[layout-invalidation-dispatch] node={id} invalidation={invalidation:?} curr_caps={curr_caps:?} prev_caps={prev_caps:?} modifier={modifier}"
-        );
-    }
-}
-
-/// A node id or none in one word, where `Cell<Option<NodeId>>` takes two: a
-/// layout node keeps three, and the 24 bytes kept it out of jemalloc's
-/// 640-byte size class.
-struct NodeIdCell(Cell<NodeId>);
-
-/// The id a [`NodeIdCell`] holds for none: no node gets it, as ids index
-/// the applier's nodes.
-const NO_NODE_ID: NodeId = NodeId(usize::MAX);
-
-impl NodeIdCell {
-    fn new(id: Option<NodeId>) -> Self {
-        Self(Cell::new(id.unwrap_or(NO_NODE_ID)))
-    }
-
-    fn get(&self) -> Option<NodeId> {
-        let id = self.0.get();
-        (id != NO_NODE_ID).then_some(id)
-    }
-
-    fn set(&self, id: Option<NodeId>) {
-        debug_assert_ne!(id, Some(NO_NODE_ID), "no node takes the none id");
-        self.0.set(id.unwrap_or(NO_NODE_ID));
-    }
-
-    fn replace(&self, id: Option<NodeId>) -> Option<NodeId> {
-        let previous = self.get();
-        self.set(id);
-        previous
-    }
-}
-
 /// A node of the layout tree.
 ///
 /// Its fields keep the order they are declared in: what a layout pass reads
@@ -107,12 +38,12 @@ impl NodeIdCell {
 #[repr(C)]
 pub struct LayoutNode {
     parts: Rc<LayoutParts>,
-    /// The actual children of this node (folded view - includes virtual nodes as-is)
-    pub children: Vec<NodeId>,
+    // The actual children of this node (folded view - includes virtual nodes as-is)
+    pub(crate) children: Vec<NodeId>,
 
-    /// Policy that measures and places the children of this node. Change it through
-    /// `set_measure_policy` so that a measure is scheduled.
-    pub measure_policy: Rc<dyn MeasurePolicy>,
+    // Policy that measures and places the children of this node. Change it through
+    // `set_measure_policy` so that a measure is scheduled.
+    pub(crate) measure_policy: Rc<dyn MeasurePolicy>,
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
     density: crate::density::Density,
@@ -139,9 +70,9 @@ pub struct LayoutNode {
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
     modifier_chain: ModifierChainHandle,
-    /// The modifier of this node. Change it through `set_modifier` so that the modifier chain
-    /// updates.
-    pub modifier: Modifier,
+    // The modifier of this node. Change it through `set_modifier` so that the modifier chain
+    // updates.
+    pub(crate) modifier: Modifier,
     /// Composable definitions responsible for this node, captured only for inspection builds.
     #[cfg(feature = "inspection")]
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
@@ -221,6 +152,16 @@ impl LayoutNode {
         };
         node.sync_modifier_chain(None);
         node
+    }
+
+    /// The node's children, in the order they were inserted, virtual nodes as they are.
+    pub fn children(&self) -> &[NodeId] {
+        &self.children
+    }
+
+    /// Returns the modifier that was last set on this node.
+    pub fn modifier(&self) -> Modifier {
+        self.modifier.clone()
     }
 
     /// Replaces the node's modifier and updates its modifier chain, invalidating the work that the

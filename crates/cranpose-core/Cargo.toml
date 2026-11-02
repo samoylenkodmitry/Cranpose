@@ -42,6 +42,9 @@ inspection = []
 # The diagnostic and ablation switches of `diagnostics::DIAGNOSTICS`; without
 # it every switch reads as unset and the code behind it compiles out.
 diagnostics = []
+# The counters that the slot table and each composition pass keep for leak
+# and memory tests; without it they compile out.
+leak-debug = []
 # The workspace's one answer to where a test writes real files.
 test-helpers = []
 

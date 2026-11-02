@@ -199,13 +199,11 @@ struct LongPressNode {
 
 impl ModifierNode for LongPressNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.state.set_attached(true);
         self.press.node.set(context.node_id());
         context.invalidate(cranpose_foundation::InvalidationKind::PointerInput);
     }
 
     fn on_detach(&mut self) {
-        self.state.set_attached(false);
         self.press.end();
         self.press.node.set(None);
     }

@@ -529,11 +529,11 @@ pub(super) fn read_node_data<R>(
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
     if let Some(node) = node.downcast_ref::<LayoutNode>() {
-        let z_order = z_ordered_children(applier, node_id, &node.children);
+        let z_order = z_ordered_children(applier, node_id, node.children());
         return Some(read(SnapshotNodeData {
             layout_state: node.layout_state(),
             modifier_slices: node.modifier_slices_snapshot(),
-            children: z_order.as_deref().unwrap_or(&node.children),
+            children: z_order.as_deref().unwrap_or_else(|| node.children()),
             window_root: node.is_window_root(),
         }));
     }

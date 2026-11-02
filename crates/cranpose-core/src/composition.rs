@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
-    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, ConcreteApplierHost, DIAGNOSTICS,
+    Applier, ApplierGuard, ApplierHost, Composer, ConcreteApplierHost, DIAGNOSTICS,
     DefaultScheduler, Key, NodeError, NodeId, PausableContent, RecomposeScope, RetentionPolicy,
     Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
     collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
@@ -25,7 +25,8 @@ pub struct Composition<A: Applier + 'static> {
     pub(crate) root: Option<NodeId>,
     pub(crate) root_key: Option<Key>,
     pub(crate) root_render_requested: bool,
-    pub(crate) last_pass_stats: CompositionPassDebugStats,
+    #[cfg(any(test, feature = "leak-debug"))]
+    last_pass_stats: CompositionPassDebugStats,
     teardown: Option<runtime::StateTeardownScope>,
 }
 
@@ -82,6 +83,7 @@ impl<A: Applier + 'static> Composition<A> {
             root: None,
             root_key: None,
             root_render_requested: false,
+            #[cfg(any(test, feature = "leak-debug"))]
             last_pass_stats: CompositionPassDebugStats::default(),
             teardown: None,
         }
@@ -107,10 +109,6 @@ impl<A: Applier + 'static> Composition<A> {
         Rc::<ConcreteApplierHost<A>>::clone(&self.applier)
     }
 
-    fn reset_last_pass_stats(&mut self) {
-        self.last_pass_stats = CompositionPassDebugStats::default();
-    }
-
     #[expect(clippy::print_stderr, reason = "COMPOSE_DEBUG_SLOT_TABLE asks for it")]
     fn maybe_dump_slot_table(&self, label: &str) {
         if !DIAGNOSTICS.compose_debug_slot_table.is_set() {
@@ -133,48 +131,6 @@ impl<A: Applier + 'static> Composition<A> {
         self.runtime.handle().schedule();
     }
 
-    fn record_pass_stats(
-        &mut self,
-        commands: &CommandQueue,
-        side_effects: &Vec<Box<dyn FnOnce()>>,
-    ) {
-        self.last_pass_stats.commands_len = self.last_pass_stats.commands_len.max(commands.len());
-        self.last_pass_stats.commands_cap =
-            self.last_pass_stats.commands_cap.max(commands.capacity());
-        self.last_pass_stats.command_payload_len_bytes = self
-            .last_pass_stats
-            .command_payload_len_bytes
-            .max(commands.payload_len_bytes());
-        self.last_pass_stats.command_payload_cap_bytes = self
-            .last_pass_stats
-            .command_payload_cap_bytes
-            .max(commands.payload_capacity_bytes());
-        self.last_pass_stats.sync_children_len = self
-            .last_pass_stats
-            .sync_children_len
-            .max(commands.sync_children.len());
-        self.last_pass_stats.sync_children_cap = self
-            .last_pass_stats
-            .sync_children_cap
-            .max(commands.sync_children.capacity());
-        self.last_pass_stats.sync_child_ids_len = self
-            .last_pass_stats
-            .sync_child_ids_len
-            .max(commands.sync_child_ids.len());
-        self.last_pass_stats.sync_child_ids_cap = self
-            .last_pass_stats
-            .sync_child_ids_cap
-            .max(commands.sync_child_ids.capacity());
-        self.last_pass_stats.side_effects_len = self
-            .last_pass_stats
-            .side_effects_len
-            .max(side_effects.len());
-        self.last_pass_stats.side_effects_cap = self
-            .last_pass_stats
-            .side_effects_cap
-            .max(side_effects.capacity());
-    }
-
     fn finalize_runtime_state(&mut self) {
         if !self.runtime.has_updates()
             && !self.runtime.has_invalid_scopes()
@@ -192,19 +148,6 @@ impl<A: Applier + 'static> Composition<A> {
         }
         self.root_render_requested = true;
         self.finalize_runtime_state();
-    }
-
-    /// Notes a finished pass's queue and side effects in the debug stats,
-    /// then applies its commands.
-    fn apply_pass(
-        &mut self,
-        host: &Rc<SlotsHost>,
-        runtime_handle: &RuntimeHandle,
-        composer: &Composer,
-        side_effects: &Vec<Box<dyn FnOnce()>>,
-    ) -> Result<(), NodeError> {
-        composer.with_commands(|commands| self.record_pass_stats(commands, side_effects));
-        self.apply_commands_and_updates_for_host(host, runtime_handle, composer)
     }
 
     /// Applies the commands `composer`'s pass queued, in its queue, which
@@ -258,11 +201,12 @@ impl<A: Applier + 'static> Composition<A> {
                 let side_effects = composer.take_side_effects();
                 Ok((root, side_effects, outcome.compacted))
             })?;
-            self.apply_pass(
+            #[cfg(any(test, feature = "leak-debug"))]
+            composer.with_commands(|commands| self.last_pass_stats.record(commands, &side_effects));
+            self.apply_commands_and_updates_for_host(
                 &Rc::clone(&self.slots),
                 &runtime_handle,
                 &composer,
-                &side_effects,
             )?;
             if compact_applier {
                 self.applier.compact();
@@ -314,7 +258,10 @@ impl<A: Applier + 'static> Composition<A> {
     /// Composes `content` as the root group identified by `key`, then recomposes the scopes that
     /// became invalid during the pass.
     pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
-        self.reset_last_pass_stats();
+        #[cfg(any(test, feature = "leak-debug"))]
+        {
+            self.last_pass_stats = CompositionPassDebugStats::default();
+        }
         self.render_root_pass(key, &mut content)?;
         let _ = self.process_invalid_scopes()?;
         Ok(())
@@ -323,7 +270,10 @@ impl<A: Applier + 'static> Composition<A> {
     /// Perform a root render and continue replaying any resulting root-render
     /// requests until the composition reaches a stable fixpoint.
     pub fn render_stable(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
-        self.reset_last_pass_stats();
+        #[cfg(any(test, feature = "leak-debug"))]
+        {
+            self.last_pass_stats = CompositionPassDebugStats::default();
+        }
         self.render_root_pass(key, &mut content)?;
         let _ = self.reconcile_with_content(key, &mut content)?;
         Ok(())
@@ -434,6 +384,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     /// Returns the buffer sizes of the last composition pass, for debugging.
+    #[cfg(any(test, feature = "leak-debug"))]
     pub fn debug_last_pass_stats(&self) -> CompositionPassDebugStats {
         self.last_pass_stats
     }
@@ -620,7 +571,9 @@ impl<A: Applier + 'static> Composition<A> {
                 let requested_root_render = composer.take_root_render_request();
                 Ok((root, side_effects, requested_root_render, outcome.compacted))
             })?;
-        self.apply_pass(host, runtime_handle, &composer, &side_effects)?;
+        #[cfg(any(test, feature = "leak-debug"))]
+        composer.with_commands(|commands| self.last_pass_stats.record(commands, &side_effects));
+        self.apply_commands_and_updates_for_host(host, runtime_handle, &composer)?;
         if compact_applier {
             self.applier.compact();
             self.applier.borrow_dyn().clear_recycled_nodes();
@@ -788,6 +741,7 @@ impl<A: Applier + 'static> Drop for Composition<A> {
 
 /// The largest sizes that the command queues and the side effect list reached during one
 /// composition pass, for debugging memory use.
+#[cfg(any(test, feature = "leak-debug"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CompositionPassDebugStats {
     /// Most node commands queued at once.
@@ -810,4 +764,28 @@ pub struct CompositionPassDebugStats {
     pub side_effects_len: usize,
     /// Largest capacity reserved for the side effects.
     pub side_effects_cap: usize,
+}
+
+#[cfg(any(test, feature = "leak-debug"))]
+impl CompositionPassDebugStats {
+    fn record(&mut self, commands: &crate::CommandQueue, side_effects: &Vec<Box<dyn FnOnce()>>) {
+        self.commands_len = self.commands_len.max(commands.len());
+        self.commands_cap = self.commands_cap.max(commands.capacity());
+        self.command_payload_len_bytes = self
+            .command_payload_len_bytes
+            .max(commands.payload_len_bytes());
+        self.command_payload_cap_bytes = self
+            .command_payload_cap_bytes
+            .max(commands.payload_capacity_bytes());
+        self.sync_children_len = self.sync_children_len.max(commands.sync_children.len());
+        self.sync_children_cap = self
+            .sync_children_cap
+            .max(commands.sync_children.capacity());
+        self.sync_child_ids_len = self.sync_child_ids_len.max(commands.sync_child_ids.len());
+        self.sync_child_ids_cap = self
+            .sync_child_ids_cap
+            .max(commands.sync_child_ids.capacity());
+        self.side_effects_len = self.side_effects_len.max(side_effects.len());
+        self.side_effects_cap = self.side_effects_cap.max(side_effects.capacity());
+    }
 }
