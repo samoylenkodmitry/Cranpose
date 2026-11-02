@@ -39,6 +39,16 @@ struct GpuResources {
     surface_dirty: bool,
 }
 
+// What a redraw left the display.
+enum Redraw {
+    Presented,
+    // The surface gave no image or had to be configured again, so the frame
+    // it owes is still to draw.
+    Owed,
+    // The display needs no frame, or the app is off screen.
+    Settled,
+}
+
 struct IosApp<F: FnMut() + 'static> {
     #[cfg(feature = "webview")]
     webviews: crate::webview_host::WebViews<wry::WebView>,
@@ -269,21 +279,26 @@ impl<F: FnMut() + 'static> IosApp<F> {
         }
     }
 
-    fn render(&mut self) -> bool {
+    fn follow_keyboard(&mut self) {
+        if !super::keyboard::keyboard_poll_active() {
+            return;
+        }
+        if let Some(bottom) = super::keyboard::poll_keyboard_bottom_inset()
+            && (self.last_keyboard_bottom - bottom).abs() > 0.5
+        {
+            self.last_keyboard_bottom = bottom;
+            self.platform_env.set_ime_insets(EdgeInsets {
+                bottom,
+                ..EdgeInsets::default()
+            });
+        }
+        self.event_proxy.wake_up();
+    }
+
+    fn render(&mut self) -> Redraw {
         #[cfg(feature = "webview")]
         self.webviews.dispatch(&self.platform_env.native_views);
-        if super::keyboard::keyboard_poll_active() {
-            if let Some(bottom) = super::keyboard::poll_keyboard_bottom_inset()
-                && (self.last_keyboard_bottom - bottom).abs() > 0.5
-            {
-                self.last_keyboard_bottom = bottom;
-                self.platform_env.set_ime_insets(EdgeInsets {
-                    bottom,
-                    ..EdgeInsets::default()
-                });
-            }
-            self.event_proxy.wake_up();
-        }
+        self.follow_keyboard();
 
         if let (Some(accessibility), Some(shell)) =
             (self.accessibility.as_mut(), self.shell.as_mut())
@@ -300,7 +315,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         }
 
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
-            return false;
+            return Redraw::Settled;
         };
         for op in super::keyboard::take_ime_ops() {
             match op {
@@ -346,14 +361,14 @@ impl<F: FnMut() + 'static> IosApp<F> {
         }
         if super::background::app_is_off_screen() {
             gpu.surface_dirty = true;
-            return false;
+            return Redraw::Settled;
         }
         let PresentStep::Present = surface_present_step(
             dirty_before,
             update_result.visual_changed,
             &mut shell.primary(),
         ) else {
-            return false;
+            return Redraw::Settled;
         };
 
         match current_surface_texture(&gpu.surface, "ios") {
@@ -371,18 +386,28 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 gpu.surface_dirty = false;
                 self.device_loss.presented();
                 self.device_loss_drill.presented();
-                true
+                Redraw::Presented
             }
             SurfaceFrame::Reconfigure => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
                 gpu.surface_dirty = true;
                 shell.mark_dirty();
-                false
+                Redraw::Owed
             }
             SurfaceFrame::Skip => {
+                log::warn!("iOS surface gave no image in a second; drawing the frame again");
                 gpu.surface_dirty = true;
-                false
+                Redraw::Owed
             }
+        }
+    }
+
+    fn redraw(&mut self) {
+        match self.render() {
+            Redraw::Presented => self.request_owed_frame(),
+            // Nothing else asks iOS to draw this frame again.
+            Redraw::Owed => self.event_proxy.wake_up(),
+            Redraw::Settled => {}
         }
     }
 
@@ -607,9 +632,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if self.render() {
-                    self.request_owed_frame();
-                }
+                self.redraw();
                 self.schedule_wake(event_loop);
             }
             WindowEvent::CloseRequested => {
