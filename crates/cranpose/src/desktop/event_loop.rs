@@ -31,6 +31,7 @@ use crate::{
         self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
         NativeWindowRequest, WindowFocus, WindowResizeDirection, WindowState,
     },
+    refresh_interval::{DEFAULT_REFRESH_INTERVAL, monitor_refresh_interval},
     wgpu_surface::{
         PresentStep, SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
         present_initial_placeholder_frame_cleared_to, surface_present_step,
@@ -181,7 +182,7 @@ mod loop_control;
 mod robot_driver;
 #[path = "robot_seat.rs"]
 mod robot_seat;
-use loop_control::{LoopControlInputs, event_loop_control_flow};
+use loop_control::{LoopControlInputs, NativeWaits, event_loop_control_flow};
 #[cfg(feature = "robot")]
 use robot_driver::{RobotController, RobotTurn};
 use robot_seat::RobotSeat;
@@ -506,6 +507,10 @@ impl App {
         let applied_frame_pacing_mode = settings.frame_pacing_mode;
         let custom_cursor_size = settings.custom_cursor_size;
 
+        // The loop runs idle prefetch passes while it waits for a frame
+        // (`LoopControlInputs::prefetch_idle`): a lazy list leaves them the
+        // items beyond its viewport that its scroll does not soon reach.
+        cranpose_ui::set_idle_prefetch_passes(true);
         let platform_env = crate::platform_env::PlatformEnvironment::new();
         let env_for_content = Rc::clone(&platform_env);
         let mut content = content;
@@ -570,7 +575,7 @@ impl App {
             #[cfg(target_os = "macos")]
             primary_staged: false,
             gpu_start,
-            vsync_interval: default_vsync_interval(),
+            vsync_interval: DEFAULT_REFRESH_INTERVAL,
             exiting: false,
             file_drops: super::incoming::FileDrops::default(),
         }
@@ -1696,7 +1701,7 @@ impl App {
             last_cursor_physical_position: None,
             last_frame_start_time: None,
             last_redraw_empty: false,
-            vsync_interval: default_vsync_interval(),
+            vsync_interval: DEFAULT_REFRESH_INTERVAL,
             pending_outer_positions: PendingNativeWindowPositions::default(),
             active_drag: None,
             held_press: None,
@@ -4961,26 +4966,11 @@ fn native_resize_direction(direction: WindowResizeDirection) -> ResizeDirection 
     }
 }
 
-fn default_vsync_interval() -> Duration {
-    Duration::from_nanos(16_666_667)
-}
-
 fn system_theme_from_winit(theme: winit::window::Theme) -> cranpose_services::SystemTheme {
     match theme {
         winit::window::Theme::Dark => cranpose_services::SystemTheme::Dark,
         winit::window::Theme::Light => cranpose_services::SystemTheme::Light,
     }
-}
-
-fn monitor_refresh_interval(window: &Arc<dyn Window>) -> Duration {
-    window
-        .current_monitor()
-        .and_then(|monitor| monitor.current_video_mode())
-        .and_then(|mode| mode.refresh_rate_millihertz())
-        .map_or_else(default_vsync_interval, |millihertz| {
-            let nanos = 1_000_000_000_000u64 / u64::from(millihertz.get());
-            Duration::from_nanos(nanos)
-        })
 }
 
 fn dispatch_ime_event(surface: &mut SurfaceMut<'_, WgpuRenderer>, ime_event: winit::event::Ime) {
@@ -5818,7 +5808,6 @@ impl ApplicationHandler for App {
         let webview_deadline = None;
 
         let Some(app) = self.app.as_mut() else { return };
-        let mut native_drag_deadline: Option<Instant> = None;
         let native_position_poll_deadline = self
             .native_windows
             .values()
@@ -5830,56 +5819,7 @@ impl ApplicationHandler for App {
                 )
             })
             .then_some(self.next_native_window_position_poll_at);
-        let mut native_frame_cap_deadline: Option<Instant> = None;
-        let mut native_next_event_time: Option<Instant> = None;
-        let pacing_mode = app.frame_pacing_mode();
-        for native in self.native_windows.values_mut() {
-            if !native.presentable() {
-                continue;
-            }
-            let Some(surface) = native_surface(app, native) else {
-                continue;
-            };
-
-            let frame_schedule = surface.frame_schedule();
-            let needs_redraw = native_surface_needs_frame(
-                frame_schedule.needs_frame,
-                surface.frame_owed(),
-                surface.needs_redraw(),
-                native.surface_dirty,
-            );
-            let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
-                native
-                    .frame_interval(pacing_mode)
-                    .map(|interval| started_at + interval)
-            });
-            let waiting_for_frame_cap =
-                needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
-
-            if needs_redraw && !waiting_for_frame_cap {
-                native.window.request_redraw();
-            }
-            if let Some(next_poll_at) = native.active_drag.and_then(|active_drag| {
-                native_window_drag_poll_deadline(
-                    active_drag.next_poll_at,
-                    NATIVE_WINDOW_GLOBAL_POINTER_POLLED,
-                )
-            }) {
-                native_drag_deadline = Some(
-                    native_drag_deadline.map_or(next_poll_at, |current| current.min(next_poll_at)),
-                );
-            }
-            if waiting_for_frame_cap && let Some(deadline) = next_frame_time {
-                native_frame_cap_deadline = Some(
-                    native_frame_cap_deadline.map_or(deadline, |current| current.min(deadline)),
-                );
-            }
-            if let Some(next_time) = frame_schedule.next_deadline {
-                native_next_event_time = Some(
-                    native_next_event_time.map_or(next_time, |current| current.min(next_time)),
-                );
-            }
-        }
+        let native = NativeWaits::request_frames(app, self.native_windows.values_mut(), now);
 
         let robot_needs_poll = self.robot.awaiting_progress();
 
@@ -5893,12 +5833,13 @@ impl ApplicationHandler for App {
                         needs_redraw,
                         self.primary_redraw_pending,
                     ),
+                redraw_requested: self.primary_redraw_pending || native.redraw_requested,
                 primary_pointer_polled,
-                drag_poll_deadline: native_drag_deadline,
+                drag_poll_deadline: native.drag_poll,
                 position_poll_deadline: native_position_poll_deadline,
                 frame_cap_deadline: [
                     next_frame_time.filter(|_| waiting_for_frame_cap),
-                    native_frame_cap_deadline,
+                    native.frame_cap,
                 ]
                 .into_iter()
                 .flatten()
@@ -5907,7 +5848,7 @@ impl ApplicationHandler for App {
                 next_event_time: [
                     webview_deadline,
                     primary_next_event_time,
-                    native_next_event_time,
+                    native.next_event,
                     self.accessibility
                         .as_ref()
                         .and_then(super::accessibility::DesktopAccessibilityBridge::wake_deadline),
@@ -5915,7 +5856,8 @@ impl ApplicationHandler for App {
                 .into_iter()
                 .flatten()
                 .min(),
-            },
+            }
+            .prefetch_idle(app, now, self.vsync_interval),
         );
 
         let control_flow = self.robot.bound_park(control_flow, now);

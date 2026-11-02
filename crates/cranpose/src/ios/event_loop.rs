@@ -69,6 +69,11 @@ struct IosApp<F: FnMut() + 'static> {
     next_off_screen_render: Option<Instant>,
     device_loss: crate::gpu_loss::LossSignal,
     device_loss_drill: crate::gpu_loss::LossDrill,
+    // The refresh interval of the display the window shows on.
+    refresh_interval: Duration,
+    // Whether idle prefetch passes ran and left lazy list items, so the loop
+    // looks again at once.
+    prefetch_left: bool,
 }
 
 const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
@@ -114,6 +119,10 @@ impl<F: FnMut() + 'static> IosApp<F> {
         event_proxy: EventLoopProxy,
         launch_error: Rc<RefCell<Option<LaunchError>>>,
     ) -> Self {
+        // Each display frame's end and a wait with no frame due run idle
+        // prefetch passes (`prefetch_until`): a lazy list leaves them the
+        // items beyond its viewport that its scroll does not soon reach.
+        cranpose_ui::set_idle_prefetch_passes(true);
         let device_loss = crate::gpu_loss::LossSignal::default();
         let drill_proxy = event_proxy.clone();
         let device_loss_drill =
@@ -140,6 +149,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
             next_off_screen_render: None,
             device_loss,
             device_loss_drill,
+            refresh_interval: crate::refresh_interval::DEFAULT_REFRESH_INTERVAL,
+            prefetch_left: false,
         }
     }
 
@@ -169,8 +180,19 @@ impl<F: FnMut() + 'static> IosApp<F> {
             .next_off_screen_render
             .into_iter()
             .chain(accessibility)
+            .chain(self.prefetch_left.then(Instant::now))
             .min();
         event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+    }
+
+    // Composes the lazy list items frames left beyond their viewports until
+    // `until`, the start of the next display frame, while the app shows on
+    // screen (`crate::idle_prefetch::prefetch_until`).
+    fn prefetch_until(&mut self, until: Instant) {
+        self.prefetch_left = !super::background::app_is_off_screen()
+            && self.shell.as_mut().is_some_and(|shell| {
+                crate::idle_prefetch::prefetch_until(shell, Instant::now(), until)
+            });
     }
 
     fn publish_held_accessibility(&mut self) {
@@ -238,6 +260,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
     }
 
     fn refresh_environment(&mut self, window: &Arc<dyn Window>) {
+        self.refresh_interval = crate::refresh_interval::monitor_refresh_interval(window);
         let insets = safe_area_insets(window);
         self.platform_env.set_safe_area(insets);
         if let Some(shell) = self.shell.as_mut() {
@@ -442,6 +465,18 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         self.pump_off_screen(_event_loop);
     }
 
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // A frame due now runs its passes at its end.
+        let frame_due = self
+            .shell
+            .as_ref()
+            .is_none_or(|shell| shell.frame_schedule().needs_frame);
+        if !frame_due {
+            self.prefetch_until(Instant::now() + self.refresh_interval);
+            self.schedule_wake(event_loop);
+        }
+    }
+
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
             self.publish_held_accessibility();
@@ -632,7 +667,9 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let frame_started = Instant::now();
                 self.redraw();
+                self.prefetch_until(frame_started + self.refresh_interval);
                 self.schedule_wake(event_loop);
             }
             WindowEvent::CloseRequested => {

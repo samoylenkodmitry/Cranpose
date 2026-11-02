@@ -507,6 +507,16 @@ mod process_info;
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
+mod idle_prefetch;
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+mod refresh_interval;
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
 mod winit_pointer;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]

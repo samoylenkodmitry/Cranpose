@@ -63,50 +63,6 @@ fn a_window_told_never_to_take_focus_leaves_it_even_alone() {
     ));
 }
 
-fn quiet_loop() -> LoopControlInputs {
-    LoopControlInputs {
-        robot_needs_poll: false,
-        free_running: false,
-        primary_pointer_polled: false,
-        drag_poll_deadline: None,
-        position_poll_deadline: None,
-        frame_cap_deadline: None,
-        has_active_animations: false,
-        next_event_time: None,
-    }
-}
-
-#[test]
-fn a_drag_poll_ahead_is_waited_for_and_one_that_is_due_is_run() {
-    let now = Instant::now();
-    let ahead = now + Duration::from_millis(16);
-    assert_eq!(
-        event_loop_control_flow(
-            now,
-            LoopControlInputs {
-                drag_poll_deadline: Some(ahead),
-                ..quiet_loop()
-            }
-        ),
-        ControlFlow::WaitUntil(ahead),
-        "a poll ahead is a deadline, not a reason to spin"
-    );
-    assert_eq!(
-        event_loop_control_flow(
-            now,
-            LoopControlInputs {
-                drag_poll_deadline: Some(now),
-                ..quiet_loop()
-            }
-        ),
-        ControlFlow::Poll
-    );
-    assert_eq!(
-        event_loop_control_flow(now, quiet_loop()),
-        ControlFlow::Wait
-    );
-}
-
 #[test]
 fn a_build_that_cannot_read_the_pointer_never_polls_a_drag() {
     let now = Instant::now();
@@ -322,13 +278,13 @@ fn a_drag_polls_from_the_anchor_the_press_recorded() {
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::{
-    App, ControlFlow, DesktopRect, FramePacingMode, HandedPress, HeldPressStep, LoopControlInputs,
-    NativeWindowOptions, NativeWindowPointerState, NativeWindowPollingDragSession,
-    NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
-    PressBelongsHere, PressToHandOver, PrimaryPointerGesturePollAction, RootId, WindowFocus,
-    WinitWindowId, clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
-    frame_cap_interval, frame_interval_for_mode, free_running_frame, held_press_after_step,
-    held_press_step, held_press_to_hand_over, initial_present_redraw_needed, input_frame_request,
+    App, DesktopRect, FramePacingMode, HandedPress, HeldPressStep, NativeWindowOptions,
+    NativeWindowPointerState, NativeWindowPollingDragSession, NativeWindowPositionObservation,
+    NativeWindowPositionOrigin, PendingNativeWindowPositions, PressBelongsHere, PressToHandOver,
+    PrimaryPointerGesturePollAction, RootId, WindowFocus, WinitWindowId,
+    clamp_rect_to_monitor_delta, desired_frame_latency, frame_cap_interval,
+    frame_interval_for_mode, free_running_frame, held_press_after_step, held_press_step,
+    held_press_to_hand_over, initial_present_redraw_needed, input_frame_request,
     native_window_drag_poll_deadline, native_window_options_change_is_position_only,
     native_window_position_poll_needed, native_window_redraw_held_while_hidden,
     nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
