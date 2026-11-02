@@ -174,11 +174,14 @@ fn open_urls(_urls: &[String]) -> Result<(), String> {
 
 #[path = "device_loss.rs"]
 mod device_loss;
+#[path = "loop_control.rs"]
+mod loop_control;
 #[cfg(feature = "robot")]
 #[path = "robot_driver.rs"]
 mod robot_driver;
 #[path = "robot_seat.rs"]
 mod robot_seat;
+use loop_control::{LoopControlInputs, event_loop_control_flow};
 #[cfg(feature = "robot")]
 use robot_driver::{RobotController, RobotTurn};
 use robot_seat::RobotSeat;
@@ -3225,44 +3228,6 @@ fn free_running_frame(
     redraw_pending: bool,
 ) -> bool {
     frame_interval.is_none() && (needs_redraw || redraw_pending)
-}
-
-struct LoopControlInputs {
-    robot_needs_poll: bool,
-    free_running: bool,
-    primary_pointer_polled: bool,
-    drag_poll_deadline: Option<Instant>,
-    position_poll_deadline: Option<Instant>,
-    frame_cap_deadline: Option<Instant>,
-    has_active_animations: bool,
-    next_event_time: Option<Instant>,
-}
-
-fn event_loop_control_flow(now: Instant, inputs: LoopControlInputs) -> ControlFlow {
-    let due = |deadline: Option<Instant>| deadline.is_some_and(|deadline| deadline <= now);
-    if inputs.robot_needs_poll
-        || inputs.free_running
-        || inputs.primary_pointer_polled
-        || due(inputs.drag_poll_deadline)
-        || due(inputs.position_poll_deadline)
-    {
-        return ControlFlow::Poll;
-    }
-    let deadline = [
-        inputs.frame_cap_deadline,
-        inputs.position_poll_deadline,
-        inputs.drag_poll_deadline,
-    ]
-    .into_iter()
-    .flatten()
-    .min();
-    match deadline {
-        Some(deadline) => ControlFlow::WaitUntil(deadline),
-        None if inputs.has_active_animations => ControlFlow::Poll,
-        None => inputs
-            .next_event_time
-            .map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
-    }
 }
 
 fn native_window_drag_poll_deadline(
