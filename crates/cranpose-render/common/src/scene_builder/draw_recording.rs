@@ -113,17 +113,23 @@ pub enum RecordingStore {
     Command,
     /// Each command's recording of the update before only, for a renderer
     /// that turns a recording into its own items at once and holds none
-    /// after: it hands the nodes that hold them to `recycle_lowered`. While
-    /// memory is ample, a command that draws again each update records into
-    /// the buffers it filled; one an update does not draw keeps none, and
-    /// with little memory left none does. Within an update, a command
-    /// records into the buffers of one an earlier command gave back.
+    /// after: it hands the nodes that hold them to `recycle_lowered`. A
+    /// command that draws again each update records into the buffers it
+    /// filled, with little memory left only one of a few shapes; one an
+    /// update does not draw keeps none. Within an update, a command records
+    /// into the buffers of one an earlier command gave back.
     Redrawn,
 }
 
 // The spare recordings an update keeps for its next commands at most: the
 // commands of nested nodes give theirs back in the order they took them.
 const SPARE_RECORDINGS: usize = 4;
+
+// The most heap a recording's tables may hold for its command to keep it to
+// the next update with little memory left: a gauge's or a switch's few
+// shapes, whose buffers cost more to allocate each update than they hold,
+// not a chart's or a canvas's many.
+const TIGHT_KEPT_BYTES: usize = 1024;
 
 // The recording of the command `id` that the update before kept, for the
 // command to record into again; else one an earlier command of this update
@@ -143,9 +149,9 @@ fn acquire_redrawn(id: DrawCommandId) -> Rc<CommandRecording> {
 // Keeps `recording`, the command `id` drew in this update, when no reader
 // holds it any more: until the next update, when the command drew in the
 // update before as well, so that a command drawn each update records into
-// the buffers it filled; else, and with little memory left always, for the
-// next commands of this update only. A canvas drawn each frame then holds
-// what one drawn once does between updates.
+// the buffers it filled; else for the next commands of this update only.
+// With little memory left only a small recording stays to the next update:
+// a canvas drawn each frame then holds what one drawn once does.
 pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecording>) {
     if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
         return;
@@ -157,9 +163,11 @@ pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecordin
             .entry(RecorderKey::from(id))
             .or_insert((None, u64::MAX));
         let again = entry.1 == update.wrapping_sub(1) || entry.1 == update;
-        let tight =
-            cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight;
-        let (kept, spare) = if again && !tight {
+        let fits = || {
+            cranpose_ui::current_memory_headroom() != cranpose_ui_graphics::MemoryHeadroom::Tight
+                || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES
+        };
+        let (kept, spare) = if again && fits() {
             (Some(recording), None)
         } else {
             (None, Some(recording))
