@@ -677,7 +677,7 @@ fn push_layer_surface(
         },
         (record, None),
         &mut None,
-        slot,
+        slot.map(ChildSlot::into_surface),
     );
     items.close_subtree(record);
     if let Some(image) = rasterize_surface(

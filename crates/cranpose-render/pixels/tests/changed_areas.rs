@@ -278,6 +278,38 @@ fn ClippingParent(captured: Step) {
     );
 }
 
+/// A parent its layer turns, which draws through a surface of its own, over
+/// a child whose colour changes each step.
+#[composable]
+fn TurnedParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(80.0, 50.0)
+            .width(80.0)
+            .height(60.0)
+            .graphics_layer(|| GraphicsLayer {
+                rotation_z: 30.0,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        move || {
+            let shade = (step.value() % 4) as u8 * 60;
+            Box(
+                Modifier::empty()
+                    .offset(10.0, 10.0)
+                    .width(40.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(200, shade, 40)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
 /// A parent that never changes, translucent, tinted and clipped, over child
 /// layers that change one at a time: one fades, one moves across the
 /// parent's clip, and one stays still over a child of its own that changes
@@ -423,9 +455,10 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
         fresh
             .primary()
             .with_renderer(|renderer| renderer.draw(&mut full, WIDTH, HEIGHT));
-        // The first change after the first frame of a state that only a
-        // layer block reads does not reach a scene updated in place, nor the
-        // retained graph a renderer draws; the next change does.
+        // The second shell lowers the same node ids on the same thread and
+        // takes over the draw observations of the first shell's layer
+        // block, so the first change after it builds reaches only the
+        // second shell; main does the same.
         if frame == 1 {
             continue;
         }
@@ -465,6 +498,11 @@ fn a_parent_clip_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
 #[test]
 fn layers_that_change_under_a_still_parent_keep_its_alpha_tint_and_clip() {
     kept_frames_match_full_redraws(1.5, StillParent);
+}
+
+#[test]
+fn a_child_that_changes_under_a_turned_parent_redraws_in_its_surface() {
+    kept_frames_match_full_redraws(1.0, TurnedParent);
 }
 
 #[composable]

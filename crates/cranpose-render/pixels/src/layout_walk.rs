@@ -423,6 +423,13 @@ impl ChildSlot<'_> {
         self.owner
     }
 
+    // Pushes the children anew, into the scene of the owner's own surface,
+    // which holds none of their old records.
+    pub(crate) fn into_surface(&mut self) -> &mut Self {
+        self.old = None;
+        self
+    }
+
     // Whether the owner placed its children where it did before: so it did
     // when only state its draws read changed.
     fn placed_as_before(&self) -> bool {
