@@ -669,6 +669,23 @@ fn cross_table_value_slot_write_reports_foreign_table_before_anchor_resolution()
 }
 
 #[test]
+fn a_value_slot_of_a_dropped_table_is_foreign_to_later_tables() {
+    let mut first = SlotHarness::new();
+    let first_slot = compose_single_i32_value_slot(&mut first, Key(23), 55);
+    drop(first);
+
+    // Kept at once, the tables take many of the allocations the dropped one
+    // gave back.
+    let later: Vec<SlotTable> = (0..64).map(|_| SlotTable::new()).collect();
+    for table in &later {
+        assert!(matches!(
+            table.try_value_at::<i32>(first_slot, None),
+            Err(ValueSlotError::ForeignTable { .. })
+        ));
+    }
+}
+
+#[test]
 fn read_value_type_mismatch_panics_consistently() {
     let mut harness = SlotHarness::new();
 

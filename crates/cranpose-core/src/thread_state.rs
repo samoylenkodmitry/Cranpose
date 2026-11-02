@@ -33,6 +33,7 @@ pub(crate) struct ThreadCells {
     pub(crate) in_event_handler: Cell<bool>,
     pub(crate) in_applied_snapshot: Cell<bool>,
     pub(crate) scope_activity_epoch: Cell<u64>,
+    pub(crate) next_slot_storage_id: Cell<usize>,
     pub(crate) thread_exiting: Cell<bool>,
     #[cfg(any(test, debug_assertions))]
     pub(crate) location_key_collisions: Cell<usize>,
@@ -55,6 +56,7 @@ impl ThreadCells {
             in_event_handler: Cell::new(false),
             in_applied_snapshot: Cell::new(false),
             scope_activity_epoch: Cell::new(1),
+            next_slot_storage_id: Cell::new(1),
             thread_exiting: Cell::new(false),
             #[cfg(any(test, debug_assertions))]
             location_key_collisions: Cell::new(0),

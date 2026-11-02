@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, MovableIndex, NodeRecord, PayloadAnchorRegistry,
     SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
@@ -14,15 +12,23 @@ mod values;
 #[cfg(test)]
 pub(crate) use values::ValueSlotError;
 
-struct SlotStorageIdentity(Rc<()>);
+// A table's number, which no other table of its thread takes: maps key
+// hosts by it and a value slot names its table by it, so a table made where
+// a dropped one lay is not taken for it, and the maps' order does not follow
+// the heap's layout.
+struct SlotStorageIdentity(usize);
 
 impl SlotStorageIdentity {
     fn new() -> Self {
-        Self(Rc::new(()))
+        crate::thread_state::cells(|cells| {
+            let id = cells.next_slot_storage_id.get();
+            cells.next_slot_storage_id.set(id + 1);
+            Self(id)
+        })
     }
 
     fn id(&self) -> usize {
-        Rc::as_ptr(&self.0).addr()
+        self.0
     }
 }
 
