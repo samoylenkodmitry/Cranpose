@@ -1,11 +1,10 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    rc::Rc,
 };
 
 use cranpose_core::collections::map::HashMap as NodeMap;
-use cranpose_ui_graphics::{CommandRecording, FxBuildHasher};
+use cranpose_ui_graphics::FxBuildHasher;
 
 use crate::{
     NodeUpdate,
@@ -32,9 +31,6 @@ pub(crate) struct RenderThreadState {
     pub(crate) redrawn_update: Cell<u64>,
     // Whether the memory left was little when the last update ended.
     pub(crate) redrawn_tight: Cell<bool>,
-    // The recordings the commands of the update that runs gave back, for its
-    // next commands.
-    pub(crate) spare_recordings: RefCell<Vec<Rc<CommandRecording>>>,
     /// Whether a scene update or build changed a layer in 3D since the
     /// window's scenes last published where their layers show and their
     /// eyes' worlds.
@@ -55,7 +51,6 @@ impl RenderThreadState {
             redrawn_recordings: RefCell::new(NodeMap::default()),
             redrawn_update: Cell::new(0),
             redrawn_tight: Cell::new(false),
-            spare_recordings: RefCell::new(Vec::new()),
             space_changed: Cell::new(false),
             #[cfg(test)]
             lowered_layer_count: Cell::new(0),
