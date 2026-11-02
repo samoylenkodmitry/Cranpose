@@ -148,7 +148,6 @@ impl DelegatableNode for FocusTargetNode {
 
 impl ModifierNode for FocusTargetNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.state.set_attached(true);
         if let Some(node_id) = context.node_id() {
             self.registered_node_id.set(Some(node_id));
             focus_dispatch::register_focus_target(node_id, Rc::clone(&self.handle));
@@ -156,7 +155,6 @@ impl ModifierNode for FocusTargetNode {
     }
 
     fn on_detach(&mut self) {
-        self.state.set_attached(false);
         if let Some(node_id) = self.registered_node_id.take() {
             focus_dispatch::unregister_focus_target(node_id, &self.handle);
         }
@@ -383,13 +381,11 @@ impl DelegatableNode for FocusRequesterNode {
 
 impl ModifierNode for FocusRequesterNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.state.set_attached(true);
         self.requester
             .bind(FocusRequester::binding_here(context.node_id()));
     }
 
     fn on_detach(&mut self) {
-        self.state.set_attached(false);
         self.requester.bind(None);
     }
 }
@@ -525,7 +521,6 @@ impl DelegatableNode for FocusGroupNode {
 
 impl ModifierNode for FocusGroupNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.state.set_attached(true);
         if let Some(node_id) = context.node_id() {
             self.registered_node_id = Some(node_id);
             focus_dispatch::register_focus_group(node_id, self.restorer.clone());
@@ -533,7 +528,6 @@ impl ModifierNode for FocusGroupNode {
     }
 
     fn on_detach(&mut self) {
-        self.state.set_attached(false);
         if let Some(node_id) = self.registered_node_id.take() {
             focus_dispatch::unregister_focus_group(node_id);
         }

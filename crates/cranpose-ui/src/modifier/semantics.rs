@@ -162,13 +162,11 @@ impl DelegatableNode for SemanticsRequesterNode {
 
 impl ModifierNode for SemanticsRequesterNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.state.set_attached(true);
         self.requester
             .bind(SemanticsRequester::binding_here(context.node_id()));
     }
 
     fn on_detach(&mut self) {
-        self.state.set_attached(false);
         self.requester.bind(None);
     }
 }
