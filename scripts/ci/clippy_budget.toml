@@ -6,11 +6,11 @@
 "clippy::cast_possible_truncation" = 961
 "clippy::cast_sign_loss" = 511
 "clippy::disallowed_methods" = 163
-"clippy::disallowed_types" = 177
+"clippy::disallowed_types" = 175
 "clippy::float_cmp" = 155
 "clippy::fn_params_excessive_bools" = 5
 "clippy::inline_always" = 63
-"clippy::iter_over_hash_type" = 32
+"clippy::iter_over_hash_type" = 31
 "clippy::let_underscore_must_use" = 263
 "clippy::let_underscore_untyped" = 675
 "clippy::missing_assert_message" = 185
