@@ -19,7 +19,7 @@ use crate::geometry::{Point, Rect};
 /// Maximum recursion depth for adaptive curve flattening.
 const MAX_FLATTEN_DEPTH: u32 = 12;
 /// Curve flattening tolerance in path units.
-const FLATTEN_TOLERANCE: f32 = 0.05;
+pub(crate) const FLATTEN_TOLERANCE: f32 = 0.05;
 /// Arc sampling: maximum angle step per segment.
 const ARC_MAX_ANGLE_STEP: f32 = std::f32::consts::PI / 16.0;
 /// Anti-aliasing sub-scanlines per pixel row.
