@@ -57,6 +57,7 @@ mod liquid_widget_shaders;
 mod memory_headroom;
 mod path;
 mod path_fill;
+mod path_recording;
 mod pointer_icon;
 mod record;
 pub mod render_effect;

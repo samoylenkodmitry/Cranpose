@@ -7,13 +7,11 @@ use crate::{
     DrawTransform, GroupMarker, ImageBitmap, ImageSampling, PathFillRule, Trapezoid,
     normalized_band,
     path::{DrawStyle, Path},
-    stroke::{LineGeometry, Stroke},
+    path_recording::{record_path, record_vector_path, vector_mask_rect},
+    stroke::Stroke,
     text_primitive::{TextBlockAt, TextPrimitive, measured_text, text_primitive},
     typography::{DrawTextMeasurer, DrawTextStyle, TextMeasurement},
-    vector_path_mask::{
-        PathSide, VECTOR_PATH_SUPERSAMPLE, rasterize_vector_path, vector_path_mask_cache_get,
-        vector_path_mask_cache_put, vector_path_mask_key,
-    },
+    vector_path_mask::PathSide,
 };
 
 /// A position in two dimensions, in logical pixels. Compose's `Offset`.
@@ -1250,19 +1248,6 @@ pub trait DrawScope {
     fn into_primitives(self) -> Vec<DrawPrimitive>;
 }
 
-/// The rect a path's coverage mask covers: its bounds out to whole pixels and
-/// one pixel more each way, so the anti-aliased edge fits.
-fn vector_mask_rect(bounds: Rect) -> Rect {
-    let x = bounds.x.floor() - 1.0;
-    let y = bounds.y.floor() - 1.0;
-    Rect {
-        x,
-        y,
-        width: (bounds.x + bounds.width).ceil() - x + 1.0,
-        height: (bounds.y + bounds.height).ceil() - y + 1.0,
-    }
-}
-
 /// The `DrawScope` the framework passes to draw closures. It records the primitives drawn in draw
 /// order, in place, into a [`CommandRecording`] its caller holds: a recording
 /// kept from an earlier frame is drawn again in the storage it has.
@@ -1363,34 +1348,6 @@ impl<'a> DrawScopeDefault<'a> {
         self.recording.push_scope_arc(args, &geometry);
     }
 
-    /// Records the fill of `path` as the slices the GPU draws, its brush
-    /// resolved against the scope's rect; a path that cannot be sliced is
-    /// rasterized into a mask instead.
-    fn push_path_fill(&mut self, path: &Path, brush: &Brush, blend_mode: BlendMode) {
-        let brush_rect = Rect::from_size(self.size);
-        let recording = &mut self.recording;
-        let sliced = crate::thread_state::with(|state| {
-            let mut slicer = state.path_slicer.borrow_mut();
-            let contours = path
-                .contours()
-                .iter()
-                .map(|contour| contour.points.as_slice());
-            slicer
-                .slice(contours, PathFillRule::NonZero)
-                .map(|slices| recording.push_trapezoids(brush_rect, slices, brush, blend_mode))
-                .is_some()
-        });
-        if !sliced {
-            self.push_vector_path(
-                &path.to_vector_path(PathFillRule::NonZero),
-                brush,
-                brush_rect,
-                blend_mode,
-                PathSide::Inside,
-            );
-        }
-    }
-
     /// Draws `block` under the `rest` of its steps in a group that `mask`'s
     /// fill cuts. The group ends with a mask that erases what lies outside
     /// the fill: a blend every renderer draws, where keeping what lies inside
@@ -1404,7 +1361,8 @@ impl<'a> DrawScopeDefault<'a> {
         let rect = vector_mask_rect(mask.bounds());
         self.recording.push_group_start(DrawGroup::masked(rect));
         self.with_transform(rest, block);
-        self.push_vector_path(
+        record_vector_path(
+            &mut self.recording,
             mask,
             &Brush::solid(Color::BLACK),
             rect,
@@ -1412,70 +1370,6 @@ impl<'a> DrawScopeDefault<'a> {
             PathSide::Outside,
         );
         self.recording.push_group_end();
-    }
-
-    /// Rasterizes the `side` of `path`'s edge into a cached image and
-    /// records it, blended by `blend_mode`. A gradient `brush` resolves
-    /// against `brush_rect`.
-    fn push_vector_path(
-        &mut self,
-        path: &crate::VectorPath,
-        brush: &Brush,
-        brush_rect: Rect,
-        blend_mode: BlendMode,
-        side: PathSide,
-    ) {
-        const MAX_MASK_PIXELS: f32 = 4096.0;
-
-        if path.is_empty() || !brush.paints() {
-            return;
-        }
-        let bounds = path.bounds();
-        if bounds.width <= 0.0 || bounds.height <= 0.0 {
-            return;
-        }
-
-        let rect = vector_mask_rect(bounds);
-        let origin = Point::new(rect.x, rect.y);
-        let mask_width = (rect.width * VECTOR_PATH_SUPERSAMPLE)
-            .ceil()
-            .clamp(1.0, MAX_MASK_PIXELS) as usize;
-        let mask_height = (rect.height * VECTOR_PATH_SUPERSAMPLE)
-            .ceil()
-            .clamp(1.0, MAX_MASK_PIXELS) as usize;
-        let mask_size = (mask_width, mask_height);
-
-        let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect, side);
-        let image = match vector_path_mask_cache_get(key) {
-            Some(image) => image,
-            None => {
-                let Some(image) =
-                    rasterize_vector_path(path, brush, brush_rect, origin, mask_size, side)
-                else {
-                    return;
-                };
-                vector_path_mask_cache_put(key, image.clone());
-                image
-            }
-        };
-
-        let image = DrawPrimitive::Image {
-            rect,
-            image,
-            alpha: 1.0,
-            color_filter: None,
-            sampling: ImageSampling::Linear,
-            src_rect: None,
-        };
-        self.recording
-            .push_other(if blend_mode == BlendMode::SrcOver {
-                image
-            } else {
-                DrawPrimitive::Blend {
-                    primitive: Box::new(image),
-                    blend_mode,
-                }
-            });
     }
 }
 
@@ -1744,38 +1638,14 @@ impl DrawScope for DrawScopeDefault<'_> {
         style: DrawStyle,
         blend_mode: BlendMode,
     ) {
-        let (stroke, dash) = match style {
-            DrawStyle::Fill => {
-                self.push_path_fill(path, &brush, blend_mode);
-                return;
-            }
-            DrawStyle::Stroke(stroke) => (stroke, None),
-            DrawStyle::DashedStroke(stroke, dash) => (stroke, Some(dash)),
-        };
-        if !stroke.is_visible() {
-            return;
-        }
-        let mut run = self.recording.line_run(&brush, stroke, blend_mode);
-        let mut push = |line: LineGeometry| run.push(line.start, line.end, line.cap);
-        for contour in path.contours() {
-            let Some(dash) = dash else {
-                crate::for_each_stroke_line(&contour.points, contour.closed, stroke, &mut push);
-                continue;
-            };
-            let closing = contour
-                .closed
-                .then(|| contour.points.first().copied())
-                .flatten();
-            let points: std::borrow::Cow<'_, [Point]> = match closing {
-                Some(first) => {
-                    std::borrow::Cow::Owned(contour.points.iter().copied().chain([first]).collect())
-                }
-                None => std::borrow::Cow::Borrowed(&contour.points),
-            };
-            dash.for_each_dash(&points, |piece| {
-                crate::for_each_stroke_line(piece, false, stroke, &mut push);
-            });
-        }
+        record_path(
+            &mut self.recording,
+            self.size,
+            path,
+            brush,
+            style,
+            blend_mode,
+        );
     }
 
     fn draw_annular_sector(
@@ -1980,7 +1850,8 @@ impl DrawScope for DrawScopeDefault<'_> {
     }
 
     fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush) {
-        self.push_vector_path(
+        record_vector_path(
+            &mut self.recording,
             path,
             &brush,
             Rect::from_size(self.size),
