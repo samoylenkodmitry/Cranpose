@@ -17,8 +17,8 @@ fn active_focus_target_tracking() {
 #[test]
 fn active_focus_target_is_scoped_by_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let first = crate::render_state::AppContext::new_with_density(1.0);
-    let second = crate::render_state::AppContext::new_with_density(1.0);
+    let first = crate::render_state::AppContext::new_with_density(1.0, None);
+    let second = crate::render_state::AppContext::new_with_density(1.0, None);
 
     first.enter(|| set_active_focus_target(Some(NodeId(17))));
     second.enter(|| {

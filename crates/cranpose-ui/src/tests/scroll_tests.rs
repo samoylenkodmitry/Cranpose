@@ -789,8 +789,8 @@ fn scroll_motion_frame_clear_preserves_persistent_gesture_motion() {
 #[test]
 fn scroll_motion_contexts_are_scoped_by_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let first = crate::render_state::AppContext::new_with_density(1.0);
-    let second = crate::render_state::AppContext::new_with_density(1.0);
+    let first = crate::render_state::AppContext::new_with_density(1.0, None);
+    let second = crate::render_state::AppContext::new_with_density(1.0, None);
     let key = ScrollMotionContextKey::ScrollState {
         state_id: 42,
         axis: Axis::Vertical,

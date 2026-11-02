@@ -159,8 +159,8 @@ fn a_processor_schedules_work_for_the_next_pass() {
 #[test]
 fn each_app_context_has_its_own_queues() {
     let _app_context = app_context_test_scope();
-    let first = AppContext::new_with_density(1.0);
-    let second = AppContext::new_with_density(1.0);
+    let first = AppContext::new_with_density(1.0, None);
+    let second = AppContext::new_with_density(1.0, None);
     for queue in &QUEUES {
         first.enter(|| {
             (queue.clear)();

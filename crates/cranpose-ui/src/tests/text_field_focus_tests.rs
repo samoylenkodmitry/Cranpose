@@ -330,8 +330,8 @@ fn stale_focus_detection_hides_platform_keyboard() {
 #[test]
 fn text_field_focus_is_scoped_by_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let first = crate::render_state::AppContext::new_with_density(1.0);
-    let second = crate::render_state::AppContext::new_with_density(1.0);
+    let first = crate::render_state::AppContext::new_with_density(1.0, None);
+    let second = crate::render_state::AppContext::new_with_density(1.0, None);
     let first_focus = Rc::new(RefCell::new(false));
     let second_focus = Rc::new(RefCell::new(false));
 

@@ -173,7 +173,7 @@ fn background_before_drop_shadow_renders_shadow_on_top() {
 
 #[test]
 fn static_shadow_uses_density_when_converted_to_px() {
-    let app_context = AppContext::new_with_density(2.0);
+    let app_context = AppContext::new_with_density(2.0, None);
     app_context.enter(|| {
         let modifier = Modifier::empty().inner_shadow_value(
             LayerShape::Rectangle,

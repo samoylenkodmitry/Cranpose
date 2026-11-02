@@ -772,7 +772,7 @@ impl Renderer for TestRenderer {
     type Scene = TestScene;
     type Error = ();
 
-    fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
+    fn attach_app_context_services(&mut self, app_context: &AppContext) {
         if let Some(fonts) = &self.fonts {
             app_context.set_text_fonts(fonts.resolver());
         }

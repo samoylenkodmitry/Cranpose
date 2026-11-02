@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, PackedU64, SnapshotStateObserver, internal::NodeReads};
+use cranpose_core::{MemoryApplier, NodeId, PackedU64, RuntimeHandle, SnapshotStateObserver};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
@@ -65,7 +65,7 @@ pub struct AppContext {
     state: RenderState,
     draw_observer: SnapshotStateObserver,
     // What each node's last measure read: a change measures the node again.
-    pub(crate) measure_reads: Rc<NodeReads>,
+    pub(crate) measure_reads: Rc<cranpose_core::internal::NodeReads>,
     text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
     /// The host the next layout pass lends its applier to; `None` while a
@@ -152,16 +152,16 @@ impl Drop for AppContextScope {
 
 impl AppContext {
     pub fn new() -> Rc<Self> {
-        Self::new_with_density(1.0)
+        Self::new_with_density(1.0, None)
     }
 
-    pub fn new_with_density(density: f32) -> Rc<Self> {
+    pub fn new_with_density(density: f32, runtime: Option<RuntimeHandle>) -> Rc<Self> {
         let id = next_app_context_id();
         let context = Rc::new(Self {
             id,
             self_weak: RefCell::new(Weak::new()),
             state: RenderState::new_with_density(density),
-            draw_observer: new_draw_observer(),
+            draw_observer: new_draw_observer(runtime),
             measure_reads: measure_reads::new(id),
             text: crate::text::measure::TextService::new(),
             layout_frame_arena: RefCell::new(crate::layout::FrameLayoutArena::default()),

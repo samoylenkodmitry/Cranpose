@@ -459,7 +459,8 @@ impl DerefMut for TestApplierGuard<'_> {
 
 /// Build a composition with a simple in-memory applier and run the provided closure once.
 pub fn run_test_composition(build: impl FnMut() + 'static) -> TestComposition {
-    let app_context = AppContext::new();
+    let composition = Composition::new(MemoryApplier::new());
+    let app_context = AppContext::new_with_density(1.0, Some(composition.runtime_handle()));
     app_context.enter(|| {
         #[cfg(test)]
         reset_render_state_for_tests();
@@ -467,7 +468,7 @@ pub fn run_test_composition(build: impl FnMut() + 'static) -> TestComposition {
     let mut test_composition = TestComposition {
         _scope: app_context.enter_scope(),
         app_context,
-        composition: Composition::new(MemoryApplier::new()),
+        composition,
         root_content: None,
     };
     test_composition

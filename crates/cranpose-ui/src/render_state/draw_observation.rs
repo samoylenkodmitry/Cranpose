@@ -2,7 +2,7 @@
 //! records, schedule the redraw of its node when the state changes.
 
 use cranpose_core::{
-    NodeId, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
+    NodeId, RuntimeHandle, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
 };
 
 use super::{
@@ -45,13 +45,16 @@ impl DrawObservationScope {
     }
 }
 
-pub(super) fn new_draw_observer() -> SnapshotStateObserver {
-    let observer = SnapshotStateObserver::new(|callback| {
-        if let Some(runtime) = current_runtime_handle() {
-            runtime.enqueue_ui_task(callback);
-        } else {
-            callback();
-        }
+// A change a draw read reaches the context's own `runtime`, which wakes for
+// it: the thread's current runtime may be another shell's. A context made
+// without a runtime takes the thread's current one.
+pub(super) fn new_draw_observer(runtime: Option<RuntimeHandle>) -> SnapshotStateObserver {
+    let observer = SnapshotStateObserver::new(move |callback| match &runtime {
+        Some(runtime) => runtime.enqueue_ui_task(callback),
+        None => match current_runtime_handle() {
+            Some(runtime) => runtime.enqueue_ui_task(callback),
+            None => callback(),
+        },
     });
     observer.start();
     observer
