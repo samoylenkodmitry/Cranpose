@@ -10,12 +10,9 @@
 //! Outside a host nothing is ever received and [`send_to_host`] reports that
 //! no one listened, so the same application runs standalone unchanged.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
-};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use cranpose_core::{EventStream, ProcessIds, rememberEventStream};
+use cranpose_core::{EventStream, ProcessIds, collections::map::HashMap, rememberEventStream};
 
 /// One message on the line between the application and its host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,7 +45,7 @@ impl Mailbox {
     fn new() -> Self {
         Self {
             observers: Vec::new(),
-            latest: HashMap::new(),
+            latest: HashMap::default(),
         }
     }
 

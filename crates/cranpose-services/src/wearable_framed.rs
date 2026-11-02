@@ -16,7 +16,6 @@
 //! second.
 
 use std::{
-    collections::HashMap,
     io::{self, Read, Write},
     sync::{
         Arc,
@@ -25,6 +24,7 @@ use std::{
     },
 };
 
+use cranpose_core::collections::map::HashMap;
 use parking_lot::Mutex;
 
 use crate::wearable::{
@@ -93,7 +93,7 @@ impl<T: WearableTransport> FramedWearableLink<T> {
         Self {
             transport: Arc::new(transport),
             next_stream: AtomicU32::new(0),
-            incoming: Mutex::new(HashMap::new()),
+            incoming: Mutex::new(HashMap::default()),
         }
     }
 

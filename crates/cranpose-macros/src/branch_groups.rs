@@ -209,7 +209,7 @@ struct BranchGroupInjector<'a> {
 /// never the enclosing groups or unrelated siblings.
 struct HotPaths {
     enabled: bool,
-    scopes: Vec<(String, std::collections::HashMap<String, u32>)>,
+    scopes: Vec<(String, std::collections::BTreeMap<String, u32>)>,
     #[cfg(test)]
     allocated: Vec<String>,
 }

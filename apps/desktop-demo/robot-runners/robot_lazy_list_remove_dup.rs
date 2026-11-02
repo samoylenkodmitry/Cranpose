@@ -1,6 +1,8 @@
 use crate::robot_launch;
 
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
+
+use cranpose_core::collections::map::HashMap;
 
 use cranpose_testing::{
     collect_by_text_exact, collect_text_prefix_counts, find_button_in_semantics,
@@ -88,7 +90,7 @@ pub(crate) fn main() {
             }
 
             println!("\n--- Step 4: Check for duplicate item rows ---");
-            let mut row_counts: HashMap<String, usize> = HashMap::new();
+            let mut row_counts: HashMap<String, usize> = HashMap::default();
             collect_text_prefix_counts(elements, "ItemRow #", &mut row_counts);
             let mut duplicates: Vec<(String, usize)> = row_counts
                 .into_iter()

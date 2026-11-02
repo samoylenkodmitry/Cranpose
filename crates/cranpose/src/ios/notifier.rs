@@ -1,11 +1,9 @@
 #![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use block2::RcBlock;
+use cranpose_core::collections::map::HashMap;
 use cranpose_services::{Notifier, NotifyRequest, publish_opened_link, set_platform_notifier};
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
@@ -21,7 +19,7 @@ use objc2_user_notifications::{
 
 fn deeplink_map() -> &'static Mutex<HashMap<String, String>> {
     static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+    MAP.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 pub(crate) fn register() {

@@ -4,7 +4,6 @@
 //! request nobody waits for any more stops, and a missing image fails.
 
 use std::{
-    collections::HashMap,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
     path::PathBuf,
@@ -12,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use cranpose_core::{Composition, MemoryApplier, location_key};
+use cranpose_core::{Composition, MemoryApplier, collections::map::HashMap, location_key};
 use cranpose_services::{
     HttpClientRef, ImageCacheLimits, ImageLoadError, ImageLoadState, ImageLoader, ImageRequest,
     default_http_client, rememberAsyncImage,
@@ -30,7 +29,7 @@ impl Server {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a local port");
         let base = format!("http://{}", listener.local_addr().expect("an address"));
-        let hits = Arc::new(Mutex::new(HashMap::new()));
+        let hits = Arc::new(Mutex::new(HashMap::default()));
         let hold = Arc::new((Mutex::new(false), Condvar::new()));
         let png = png(40, 20);
         let (counted, held) = (Arc::clone(&hits), Arc::clone(&hold));

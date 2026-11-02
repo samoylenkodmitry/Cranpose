@@ -17,7 +17,7 @@
 //! function, and each constant as a numbered literal, and puts the directives
 //! and the macros in their place in the written text.
 
-use std::{collections::HashMap, fmt::Write as _};
+use std::{collections::BTreeMap, fmt::Write as _};
 
 use naga::{
     Arena, BinaryOperator, Block, Expression, Function, Handle, Literal, MathFunction, Module,
@@ -139,7 +139,7 @@ pub fn generate(
     let analysis = Analysis { module: &original };
     let mut definitions = Definitions::default();
     let (texts, reach) = directives(&analysis, root, &mut definitions);
-    let markers: HashMap<String, Handle<Function>> = texts
+    let markers: BTreeMap<String, Handle<Function>> = texts
         .iter()
         .enumerate()
         .map(|(index, text)| {
@@ -236,7 +236,7 @@ fn rewrite(
     module: &mut Module,
     analysis: &Analysis<'_>,
     reach: &[String],
-    markers: &HashMap<String, Handle<Function>>,
+    markers: &BTreeMap<String, Handle<Function>>,
     definitions: &mut Definitions,
 ) {
     let mut apply = Directives::Apply(markers);
@@ -402,7 +402,7 @@ fn marker(index: usize) -> Function {
 /// as calls of their markers.
 enum Directives<'a> {
     Collect(Vec<String>),
-    Apply(&'a HashMap<String, Handle<Function>>),
+    Apply(&'a BTreeMap<String, Handle<Function>>),
 }
 
 impl Directives<'_> {
@@ -652,7 +652,7 @@ const MAX_INLINE: usize = 24;
 /// name an expression alike, so they share the code around it.
 #[derive(Default)]
 struct Definitions {
-    names: HashMap<String, String>,
+    names: BTreeMap<String, String>,
     /// Name and text, in the order made: a text names only earlier ones.
     texts: Vec<(String, String)>,
 }

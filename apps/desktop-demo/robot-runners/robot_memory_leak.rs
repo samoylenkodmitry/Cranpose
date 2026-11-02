@@ -1,5 +1,5 @@
 #[cfg(target_os = "linux")]
-use std::collections::HashMap;
+use cranpose_core::collections::map::HashMap;
 use std::time::Duration;
 
 use cranpose_testing::{find_button_exact_in_semantics, find_text_by_prefix_in_semantics};
@@ -286,7 +286,7 @@ fn log_smaps_top(phase: &str) {
     };
 
     let mut current_mapping = String::from("[unknown]");
-    let mut rss_by_mapping: HashMap<String, (u64, usize)> = HashMap::new();
+    let mut rss_by_mapping: HashMap<String, (u64, usize)> = HashMap::default();
 
     for line in smaps.lines() {
         let is_header =

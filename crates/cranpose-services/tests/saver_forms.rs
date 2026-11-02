@@ -1,8 +1,7 @@
 //! `Saver::list` and `Saver::map` store a value as strings of any text and
 //! read back only what they stored.
 
-use std::collections::HashMap;
-
+use cranpose_core::collections::map::HashMap;
 use cranpose_services::Saver;
 
 #[derive(Clone, Debug, PartialEq)]

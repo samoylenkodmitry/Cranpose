@@ -5,11 +5,9 @@
 //! here avoids repeating. A skin whose every control carries its own cursor
 //! would otherwise rebuild the same handful of images on each pointer move.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
+use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_ui::{CursorIcon, CustomPointerIcon, PointerIcon};
 use winit::{
     cursor::{Cursor, CustomCursor, CustomCursorSource},
@@ -106,7 +104,7 @@ pub(crate) struct DesktopCursors {
     uploaded: HashMap<CursorKey, CustomCursor>,
     rejected: HashSet<CursorKey>,
     applied: HashMap<WindowId, PointerIcon>,
-    shown_once: cranpose_core::collections::map::HashMap<WindowId, CustomCursor>,
+    shown_once: HashMap<WindowId, CustomCursor>,
     /// Cursors winit cannot build, sized in points rather than one point to a
     /// pixel.
     #[cfg(target_os = "macos")]

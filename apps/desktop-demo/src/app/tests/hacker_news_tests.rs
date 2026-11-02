@@ -1,6 +1,5 @@
 use std::{
     cell::Cell,
-    collections::HashMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, MutexGuard, OnceLock, PoisonError,
@@ -8,7 +7,9 @@ use std::{
     time::Duration,
 };
 
-use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider, NodeId};
+use cranpose_core::{
+    collections::map::HashMap, run_in_mutable_snapshot, CompositionLocalProvider, NodeId,
+};
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_services::HttpClientRef;
 use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
@@ -835,7 +836,7 @@ fn fetch_stories_page_loads_native_items_in_parallel() {
 #[test]
 fn load_initial_comment_page_preserves_depth_first_thread_order() {
     let client_impl = Arc::new(CommentThreadHttpClient::new(
-        HashMap::from([
+        HashMap::from_iter([
             (1, comment_json(1, "root-a", "A", &[11, 12])),
             (11, comment_json(11, "child-a1", "A1", &[])),
             (12, comment_json(12, "child-a2", "A2", &[])),
@@ -873,7 +874,7 @@ fn load_initial_comment_page_preserves_depth_first_thread_order() {
 #[test]
 fn load_initial_comment_page_fetches_comments_in_parallel() {
     let client_impl = Arc::new(CommentThreadHttpClient::new(
-        HashMap::from([
+        HashMap::from_iter([
             (1, comment_json(1, "root-a", "A", &[11])),
             (2, comment_json(2, "root-b", "B", &[])),
             (3, comment_json(3, "root-c", "C", &[])),
@@ -903,7 +904,7 @@ fn load_initial_comment_page_fetches_comments_in_parallel() {
 #[test]
 fn load_comment_page_appends_next_depth_first_batch() {
     let client_impl = Arc::new(CommentThreadHttpClient::new(
-        HashMap::from([
+        HashMap::from_iter([
             (1, comment_json(1, "root-a", "A", &[11])),
             (11, comment_json(11, "child-a1", "A1", &[111])),
             (111, comment_json(111, "child-a1-1", "A1.1", &[])),

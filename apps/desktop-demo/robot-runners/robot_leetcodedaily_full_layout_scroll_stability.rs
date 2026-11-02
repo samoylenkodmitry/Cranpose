@@ -7,7 +7,7 @@ use crate::{output_paths, perf_robot_stats, scroll_stability_external_helpers, t
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::BTreeMap,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -264,7 +264,7 @@ struct LeetcodeDailyImageCache {
     ui_icons_44: Option<Option<ImageBitmap>>,
     ui_icons_58: Option<Option<ImageBitmap>>,
     preview: Option<ImageBitmap>,
-    sharp: HashMap<SharpBitmapKey, ImageBitmap>,
+    sharp: cranpose_core::collections::map::HashMap<SharpBitmapKey, ImageBitmap>,
 }
 
 impl LeetcodeDailyImageCache {
@@ -8615,7 +8615,7 @@ fn screenshot_red_strength_edge_energy(screenshot: &cranpose::RobotScreenshot) -
 }
 
 fn screenshot_unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
-    let mut colors = HashSet::new();
+    let mut colors = cranpose_core::collections::map::HashSet::default();
     for rgba in screenshot.pixels.as_chunks::<4>().0 {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
@@ -8684,7 +8684,7 @@ fn assert_initial_leetcodedaily_frame_health(robot: &cranpose::Robot) {
 }
 
 fn screenshot_color_health(screenshot: &cranpose::RobotScreenshot) -> ScreenshotColorHealth {
-    let mut colors = HashSet::new();
+    let mut colors = cranpose_core::collections::map::HashSet::default();
     let mut colorful_pixels = 0usize;
     let mut blue_cyan_pixels = 0usize;
     let mut dark_pixels = 0usize;

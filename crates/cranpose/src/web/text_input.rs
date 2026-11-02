@@ -10,11 +10,11 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::{Rc, Weak},
 };
 
 use cranpose_app_shell::AppShell;
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{
     ContentType, ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType,

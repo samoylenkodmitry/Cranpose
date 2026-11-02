@@ -2,7 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     fmt,
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -102,7 +102,7 @@ impl std::error::Error for AssetError {
 #[derive(Debug)]
 pub struct AssetManager {
     roots: Vec<PathBuf>,
-    cache: Mutex<HashMap<PathBuf, Arc<[u8]>>>,
+    cache: Mutex<BTreeMap<PathBuf, Arc<[u8]>>>,
 }
 
 impl AssetManager {
@@ -116,7 +116,7 @@ impl AssetManager {
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
         Self {
             roots: vec![root.into()],
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -178,7 +178,7 @@ impl AssetManager {
             .find(|candidate| candidate.is_file())
     }
 
-    fn cache(&self) -> MutexGuard<'_, HashMap<PathBuf, Arc<[u8]>>> {
+    fn cache(&self) -> MutexGuard<'_, BTreeMap<PathBuf, Arc<[u8]>>> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

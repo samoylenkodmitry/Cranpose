@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::BTreeMap,
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
@@ -130,7 +130,7 @@ impl<F: Future<Output = ()> + Send + 'static> Schedule for SendTask<F> {
 }
 
 thread_local! {
-    static LOCAL_TASKS: RefCell<HashMap<u64, LocalFuture>> = RefCell::new(HashMap::new());
+    static LOCAL_TASKS: RefCell<BTreeMap<u64, LocalFuture>> = RefCell::new(BTreeMap::new());
 }
 
 static NEXT_LOCAL_TASK: AtomicU64 = AtomicU64::new(0);

@@ -1,6 +1,6 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_foundation::lazy::{
     LazyItems, LazyListScope, rememberLazyListState, rememberLazyListStateWithPosition,
 };
@@ -219,7 +219,7 @@ fn find_nearest_draw_ancestor_for_text<'a>(
 
 #[test]
 fn lazy_column_jump_does_not_alias_remembered_item_state() {
-    let captured_slots = Rc::new(RefCell::new(HashMap::new()));
+    let captured_slots = Rc::new(RefCell::new(HashMap::default()));
     let (mut composition, captured_state) = compose_with_list_state({
         let captured_slots = Rc::clone(&captured_slots);
         move |list_state| {

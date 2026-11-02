@@ -9,16 +9,16 @@ use std::cell::Cell;
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-use std::collections::HashMap;
+use std::hash::Hash;
+use std::{fmt, rc::Rc};
+
+use cranpose_core::MutableState;
 #[cfg(all(
     feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-use std::hash::Hash;
-use std::{fmt, rc::Rc};
-
-use cranpose_core::MutableState;
+use cranpose_core::collections::map::HashMap;
 use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, composable};
 
 #[cfg(all(

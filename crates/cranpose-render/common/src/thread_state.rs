@@ -1,10 +1,7 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-};
+use std::cell::{Cell, RefCell};
 
 use cranpose_core::collections::map::HashMap as NodeMap;
-use cranpose_ui_graphics::FxBuildHasher;
+use cranpose_ui_graphics::FxHashMap;
 
 use crate::{
     NodeUpdate,
@@ -21,7 +18,7 @@ pub(crate) struct RenderThreadState {
     /// The dirty nodes of a scene update, kept empty between updates so no
     /// frame makes or allocates the map.
     pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
-    pub(crate) command_recordings: RefCell<HashMap<RecorderKey, RecorderSlot, FxBuildHasher>>,
+    pub(crate) command_recordings: RefCell<FxHashMap<RecorderKey, RecorderSlot>>,
     pub(crate) recording_generation: Cell<u64>,
     /// Whether a scene update or build changed a layer in 3D since the
     /// window's scenes last published where their layers show and their
@@ -38,7 +35,7 @@ impl RenderThreadState {
             translate_scratch: RefCell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),
-            command_recordings: RefCell::new(HashMap::default()),
+            command_recordings: RefCell::new(FxHashMap::default()),
             recording_generation: Cell::new(0),
             space_changed: Cell::new(false),
             #[cfg(test)]

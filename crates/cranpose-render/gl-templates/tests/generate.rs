@@ -263,7 +263,7 @@ fn the_written_source_puts_each_template_together_from_its_pieces() {
         .map(|(name, source)| (*name, module_templates(source).expect("generates")))
         .collect();
     let source = cranpose_gl_templates::rust_source(&modules);
-    let mut pieces = std::collections::HashMap::new();
+    let mut pieces = std::collections::BTreeMap::new();
     for line in source.lines().filter(|line| line.starts_with("const P")) {
         let (name, literal) = line
             .strip_prefix("const ")

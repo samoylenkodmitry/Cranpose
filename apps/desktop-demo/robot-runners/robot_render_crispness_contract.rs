@@ -95,7 +95,7 @@ fn edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
 }
 
 fn unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
-    let mut colors = std::collections::HashSet::new();
+    let mut colors = cranpose_core::collections::map::HashSet::default();
     for rgba in screenshot.pixels.as_chunks::<4>().0 {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }

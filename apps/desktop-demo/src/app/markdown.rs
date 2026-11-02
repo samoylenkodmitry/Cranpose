@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_foundation::{
     lazy::rememberLazyListState, text::TextFieldState, SemanticsConfiguration,
@@ -977,7 +977,7 @@ const MARKDOWN_IMAGE_CACHE_CAPACITY: usize = 24;
 
 #[derive(Default)]
 struct ImageCache {
-    entries: HashMap<String, ImageBitmap>,
+    entries: cranpose_core::collections::map::HashMap<String, ImageBitmap>,
     order: Vec<String>,
 }
 

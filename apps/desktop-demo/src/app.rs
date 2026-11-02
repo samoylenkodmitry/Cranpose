@@ -225,8 +225,8 @@ fn fallback_demo_random_u32() -> u32 {
 
 fn cached_recursive_static_text(value: &'static str) -> Rc<cranpose_ui::text::AnnotatedString> {
     thread_local! {
-        static TEXTS: RefCell<std::collections::HashMap<&'static str, Rc<cranpose_ui::text::AnnotatedString>>> =
-            RefCell::new(std::collections::HashMap::new());
+        static TEXTS: RefCell<cranpose_core::collections::map::HashMap<&'static str, Rc<cranpose_ui::text::AnnotatedString>>> =
+            RefCell::new(cranpose_core::collections::map::HashMap::default());
     }
 
     TEXTS.with(|texts| {

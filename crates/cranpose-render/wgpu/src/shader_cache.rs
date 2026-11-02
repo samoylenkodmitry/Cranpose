@@ -1,12 +1,11 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::{
-    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     sync::Arc,
 };
 
-use cranpose_ui_graphics::{DrawSpecialization, FxBuildHasher, RuntimeShader, ShaderTarget};
+use cranpose_ui_graphics::{DrawSpecialization, FxHashMap, FxHashSet, RuntimeShader, ShaderTarget};
 #[cfg(not(target_arch = "wasm32"))]
 use cranpose_ui_graphics::{runtime_shader_overrides_hash, runtime_shader_source_hash};
 
@@ -220,11 +219,11 @@ impl PipelineJob {
 pub(crate) struct ShaderPipelineCache {
     factory: PipelineFactory,
     compiler: PipelineCompiler,
-    sources: HashMap<u64, ShaderSource, FxBuildHasher>,
-    pipelines: HashMap<PipelineKey, LazyGpuResource<Option<wgpu::RenderPipeline>>, FxBuildHasher>,
+    sources: FxHashMap<u64, ShaderSource>,
+    pipelines: FxHashMap<PipelineKey, LazyGpuResource<Option<wgpu::RenderPipeline>>>,
     /// Pipelines a frame has asked for, queued on the demanded lane even
     /// when a warm-up of theirs already waits on the other.
-    demanded: HashSet<PipelineKey, FxBuildHasher>,
+    demanded: FxHashSet<PipelineKey>,
     forced: Vec<&'static str>,
     forced_hash: u64,
     /// The shared stand-ins of the last launch's first screen.
@@ -234,11 +233,11 @@ pub(crate) struct ShaderPipelineCache {
     after_first_frame: Vec<(PipelineKey, Vec<(&'static str, f64)>)>,
     /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
-    noted: HashSet<PipelineKey, FxBuildHasher>,
+    noted: FxHashSet<PipelineKey>,
     /// The pipelines this build's launches drew, which the loaded driver
     /// cache holds: a draw builds one in its frame as a cache hit.
     #[cfg(not(target_arch = "wasm32"))]
-    cached: HashSet<PipelineIdentity, FxBuildHasher>,
+    cached: FxHashSet<PipelineIdentity>,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
@@ -270,17 +269,17 @@ impl ShaderPipelineCache {
                 counters: Arc::default(),
             },
             compiler,
-            sources: HashMap::default(),
-            pipelines: HashMap::default(),
-            demanded: HashSet::default(),
+            sources: FxHashMap::default(),
+            pipelines: FxHashMap::default(),
+            demanded: FxHashSet::default(),
             forced: Vec::new(),
             forced_hash: 0,
             stand_ins: Vec::new(),
             after_first_frame: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            noted: HashSet::default(),
+            noted: FxHashSet::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            cached: HashSet::default(),
+            cached: FxHashSet::default(),
             recorder,
         }
     }

@@ -5,13 +5,14 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
 };
+
+use cranpose_core::collections::map::HashMap;
 
 mod support;
 

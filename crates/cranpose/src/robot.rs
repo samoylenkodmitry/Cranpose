@@ -1,12 +1,12 @@
 use std::{
     any::Any,
-    collections::HashMap,
     sync::{Arc, mpsc},
 };
 
 use cranpose_app_shell::{
     AppShell, Key, KeyEventType, Modifiers, PointerSource, RuntimeLeakDebugStats,
 };
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::{RenderScene, Renderer};
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
@@ -1848,7 +1848,7 @@ where
     R: Renderer,
     R::Error: std::fmt::Debug,
 {
-    let mut bounds = HashMap::new();
+    let mut bounds = HashMap::default();
     index_layout_bounds(root, &mut bounds);
     let scene = app.scene();
     scene.node_window_bounds(&mut |node_id, shown| {

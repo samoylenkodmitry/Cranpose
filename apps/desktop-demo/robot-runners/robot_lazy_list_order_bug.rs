@@ -160,7 +160,7 @@ pub(crate) fn main() {
                 all_passed = false;
             } else {
                 let mut order_issues = Vec::new();
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = cranpose_core::collections::map::HashSet::default();
 
                 for (i, window) in scrolled_items.windows(2).enumerate() {
                     let prev = window[0];

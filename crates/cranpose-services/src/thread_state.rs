@@ -1,9 +1,8 @@
+use std::cell::{Cell, RefCell};
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-};
+
+use cranpose_core::collections::map::HashMap;
 
 use crate::{
     accessibility_state::AccessibilityState,
@@ -68,9 +67,9 @@ impl ServiceThreadState {
             detected_system_theme: Cell::new(None),
             local_saves: RefCell::default(),
             retained: RefCell::default(),
-            recovered_picks: RefCell::new(HashMap::new()),
+            recovered_picks: RefCell::new(HashMap::default()),
             in_flight_request: RefCell::new(None),
-            registered_request_keys: RefCell::new(HashMap::new()),
+            registered_request_keys: RefCell::new(HashMap::default()),
             #[cfg(all(target_arch = "wasm32", feature = "image-loading"))]
             image_loader: RefCell::new(None),
             #[cfg(target_arch = "wasm32")]

@@ -2,13 +2,13 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
     fmt::Debug,
     rc::Rc,
     time::Instant,
 };
 
 use cranpose_app_shell::AppShell;
+use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_render_common::Renderer;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
@@ -311,7 +311,7 @@ impl IosAccessibilityBridge {
             #[cfg(feature = "webview")]
             hosted_revision: 0,
             host_view,
-            native_elements: HashMap::new(),
+            native_elements: HashMap::default(),
             snapshot: accessibility::AccessibilitySnapshot::default(),
             watch: accessibility::TreeWatch::default(),
             seen_input: false,

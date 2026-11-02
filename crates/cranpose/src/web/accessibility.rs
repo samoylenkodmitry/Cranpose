@@ -1,11 +1,11 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     fmt::Write,
     rc::Rc,
 };
 
 use cranpose_app_shell::AppShell;
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::LiveRegionMode;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
@@ -929,7 +929,7 @@ impl Mirror {
             attributes: AttributeRoom::default(),
             orders: MirrorOrders::default(),
             dirty: false,
-            entries: HashMap::new(),
+            entries: HashMap::default(),
             links,
             text_input,
             focused_element: None,

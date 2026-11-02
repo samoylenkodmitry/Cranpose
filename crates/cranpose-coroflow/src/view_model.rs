@@ -1,13 +1,15 @@
 use std::{
     any::{Any, TypeId},
     cell::RefCell,
-    collections::HashMap,
     hash::Hash,
     rc::Rc,
 };
 
 use coroflow::MainScope;
-use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf, remember};
+use cranpose_core::{
+    CompositionLocal, CompositionLocalProvider, collections::map::HashMap, compositionLocalOf,
+    remember,
+};
 
 use crate::{
     dispatcher::require_main_dispatcher,
@@ -65,7 +67,7 @@ impl ViewModelStore {
             .models
             .borrow_mut()
             .entry(slot::<K, VM>())
-            .or_insert_with(|| Box::new(Models::<K, VM>::new()))
+            .or_insert_with(|| Box::new(Models::<K, VM>::default()))
             .downcast_mut::<Models<K, VM>>()
             .and_then(|models| models.insert(key, Rc::clone(&model)));
         drop(replaced);

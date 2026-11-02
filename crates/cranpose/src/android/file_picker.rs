@@ -1,7 +1,6 @@
 #![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 use std::{
-    collections::HashMap,
     fs::File,
     future::Future,
     io::{self, Write},
@@ -15,6 +14,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use cranpose_core::collections::map::HashMap;
 use cranpose_services::{
     BlockingSink, Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
     ContentFuture, ContentHandle, ContentMetadata, ContentReaderRef, ContentResolver,
@@ -197,17 +197,17 @@ type Registry<T> = Mutex<HashMap<i64, Slot<T>>>;
 fn document_picks() -> &'static Registry<Result<Vec<ContentMetadata>, FilePickerError>> {
     static SLOT: OnceLock<Registry<Result<Vec<ContentMetadata>, FilePickerError>>> =
         OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+    SLOT.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 fn tree_picks() -> &'static Registry<Result<Option<String>, FilePickerError>> {
     static SLOT: OnceLock<Registry<Result<Option<String>, FilePickerError>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+    SLOT.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 fn created_documents() -> &'static Registry<Result<Option<String>, FilePickerError>> {
     static SLOT: OnceLock<Registry<Result<Option<String>, FilePickerError>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+    SLOT.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 fn deliver<T>(registry: &'static Registry<T>, token: i64, value: T) {
@@ -657,7 +657,7 @@ struct FolderWalk {
 
 fn folder_walks() -> &'static Mutex<HashMap<i64, FolderWalk>> {
     static SLOT: OnceLock<Mutex<HashMap<i64, FolderWalk>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+    SLOT.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 struct AndroidFolderStream {

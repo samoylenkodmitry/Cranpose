@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, hash_map::Entry},
+    collections::hash_map::Entry,
     rc::Rc,
     sync::Arc,
 };
@@ -12,6 +12,7 @@ use android_activity::{
 use cranpose_app_shell::{
     ImeEditorState, Key, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
 };
+use cranpose_core::collections::map::HashMap;
 
 use super::text_input::{
     AndroidImeEventQueue, hide_android_text_input, place_android_text_input,
@@ -217,7 +218,7 @@ impl AndroidKeyTranslator {
     pub(crate) fn new(app: AndroidApp) -> Self {
         Self {
             app,
-            key_maps: HashMap::new(),
+            key_maps: HashMap::default(),
             combining_accent: None,
         }
     }

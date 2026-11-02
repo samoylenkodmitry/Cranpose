@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use cranpose_core::collections::map::HashSet;
 
 use super::*;
 

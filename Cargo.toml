@@ -170,9 +170,10 @@ print_stderr = "warn"
 # `a + &b` hides an allocation; `push_str` or `format!` shows it.
 string_add = "warn"
 
-# clippy.toml lists what these forbid. They stay off here while
-# scripts/ci/clippy_budget.py still counts sites left for them.
-disallowed_types = "allow"
+# clippy.toml lists what these forbid: std's SipHash maps, and the methods.
+# `disallowed_methods` stays off here while scripts/ci/clippy_budget.py still
+# counts sites left for it.
+disallowed_types = "deny"
 disallowed_methods = "allow"
 
 # Work the code asks for and then throws away: a clone nobody needed, a default

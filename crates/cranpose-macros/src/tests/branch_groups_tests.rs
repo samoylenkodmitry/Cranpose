@@ -148,7 +148,7 @@ fn hot_paths_are_unique_and_distinguish_branches() {
         Text("x");
         Text("y");
     }));
-    let unique: std::collections::HashSet<_> = all.iter().collect();
+    let unique: std::collections::BTreeSet<_> = all.iter().collect();
     assert_eq!(unique.len(), all.len(), "duplicate paths: {all:#?}");
     for expected in [
         "Card/then:a#0",
