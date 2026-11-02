@@ -61,3 +61,36 @@ fn a_click_follows_a_layer_translation() {
 fn a_click_follows_a_layer_translation_in_a_popup() {
     assert_eq!(clicks_after_translation(true), (0, 1));
 }
+
+// A control found by its tag is clicked and measured where its layer draws
+// it, 200 below where layout put it.
+#[test]
+fn a_tagged_control_is_found_where_its_layer_draws_it() {
+    let clicks = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&clicks);
+    let mut robot = create_headless_robot_test(300, 400, move || {
+        let counted = Rc::clone(&counted);
+        Box(
+            Modifier::empty()
+                .size(Size::new(100.0, 50.0))
+                .graphics_layer(|| GraphicsLayer {
+                    translation_y: 200.0,
+                    ..GraphicsLayer::default()
+                })
+                .clickable(move |_| counted.set(counted.get() + 1))
+                .test_tag("moved"),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    let bounds = robot.find_by_tag("moved").bounds();
+    assert_eq!(
+        bounds,
+        Some(Rect::from_origin_size(
+            Point::new(0.0, 200.0),
+            Size::new(100.0, 50.0)
+        ))
+    );
+    assert!(robot.find_by_tag("moved").click());
+    assert_eq!(clicks.get(), 1);
+}
