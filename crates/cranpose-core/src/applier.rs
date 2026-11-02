@@ -62,10 +62,6 @@ pub trait Applier: Any {
     /// preventing stale slot entries from matching recycled nodes.
     fn node_generation(&self, id: NodeId) -> u32;
 
-    /// Stores `node` as a virtual node, one that lays out nothing itself
-    /// while its parent lays out its children, and returns its new id.
-    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId;
-
     /// Reinserts a recycled node at its retained stable ID, or creates a fresh ID if that
     /// retained ID is no longer available.
     fn insert_recycled_node_or_create(

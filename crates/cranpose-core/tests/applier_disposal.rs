@@ -174,10 +174,6 @@ impl Applier for RetryApplier {
         self.inner.node_generation(id)
     }
 
-    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
-        self.inner.create_virtual(node)
-    }
-
     fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         self.inner.get_ref(id)
     }

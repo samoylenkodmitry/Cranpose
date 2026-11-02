@@ -34,7 +34,6 @@ pub(crate) struct MemoryApplierState {
     pub(crate) layout_runtime: Option<RuntimeHandle>,
     pub(crate) recycle_pools: HashMap<TypeId, RecyclePool>,
     pub(crate) structural_change_parents: Vec<NodeId>,
-    pub(crate) virtual_node_ids: HashSet<NodeId>,
     pub(crate) bubble_passes: bubble_passes::BubblePasses,
     pub(crate) layout_dirt_roots: layout_dirt_roots::LayoutDirtRoots,
 }
@@ -188,7 +187,7 @@ impl MemoryApplier {
     /// scoped scene update — an id the graph cannot resolve forces it to give
     /// up and rebuild the whole scene.
     pub fn scene_node_attached_to(&mut self, node_id: NodeId, root: NodeId) -> Option<NodeId> {
-        let resolved = self.first_non_virtual_ancestor(node_id)?;
+        let (resolved, _) = self.first_non_virtual_ancestor(node_id)?;
         self.is_attached_to(resolved, root).then_some(resolved)
     }
 
@@ -246,11 +245,10 @@ impl MemoryApplier {
         output.reserve(lower_bound);
         scratch.path.clear();
         for node_id in nodes {
-            let Some(resolved) = self.first_non_virtual_ancestor(node_id) else {
+            let Some((resolved, mut current)) = self.first_non_virtual_ancestor(node_id) else {
                 output.push(None);
                 continue;
             };
-            let mut current = MarkPlace::of(self, resolved);
             scratch.path.clear();
             let answer = loop {
                 match scratch.attached.mark_at(current) {
@@ -286,7 +284,7 @@ impl MemoryApplier {
         self.take_structural_change_parents_into(&mut candidates);
         let mut seen = HashSet::<NodeId>::default();
         candidates.retain_mut(|parent_id| {
-            let Some(resolved) = self.first_non_virtual_ancestor(*parent_id) else {
+            let Some((resolved, _)) = self.first_non_virtual_ancestor(*parent_id) else {
                 return false;
             };
             *parent_id = resolved;
@@ -312,19 +310,22 @@ impl MemoryApplier {
         std::mem::swap(&mut self.state.structural_change_parents, output);
     }
 
-    fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
-        if self.state.virtual_node_ids.is_empty() {
-            return Some(node_id);
-        }
+    // The first of `node_id` and its ancestors that is not virtual, and
+    // where it is stored; an id with no node is its own answer.
+    fn first_non_virtual_ancestor(&self, node_id: NodeId) -> Option<(NodeId, MarkPlace)> {
         let mut current = node_id;
         for _ in 0..100_000 {
-            if !self.state.virtual_node_ids.contains(&current) {
-                return Some(current);
+            let (place, is_virtual) = match self.state.stable_index.slot_and_virtual(current) {
+                Some((slot, is_virtual)) => (MarkPlace::Dense(slot), is_virtual),
+                None => (
+                    MarkPlace::Elsewhere(current),
+                    self.high_id_node(current).is_ok_and(Node::is_virtual),
+                ),
+            };
+            if !is_virtual {
+                return Some((current, place));
             }
-            match self.get_mut(current) {
-                Ok(node) => current = node.parent()?,
-                Err(_) => return None,
-            }
+            current = self.parent_at(place)?;
         }
         None
     }
@@ -694,6 +695,7 @@ impl MemoryApplier {
             return;
         }
 
+        let is_virtual = node.is_virtual();
         let physical_id = if let Some(Reverse(free_physical_id)) = self.state.free_ids.pop() {
             self.state.nodes[free_physical_id] = Some(node);
             self.state.physical_stable_ids[free_physical_id] = Self::pack_stable_id(stable_id);
@@ -715,6 +717,9 @@ impl MemoryApplier {
         self.state.next_stable_id = self.state.next_stable_id.max(stable_id.next());
         self.state.physical_stable_ids[physical_id] = Self::pack_stable_id(stable_id);
         self.state.stable_index.set_slot(stable_id, physical_id);
+        if is_virtual {
+            self.state.stable_index.mark_virtual(stable_id);
+        }
     }
 
     /// Borrows a live node without requiring exclusive access to the tree.
@@ -776,7 +781,6 @@ impl MemoryApplier {
     }
 
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
-        self.state.virtual_node_ids.remove(&node_id);
         if let Some(slot) = self.state.high_ids.get_mut(&node_id)
             && let Some(node) = slot.node.take()
         {

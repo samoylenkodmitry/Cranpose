@@ -1038,13 +1038,12 @@ impl Composer {
         }
     }
 
-    /// Stores a virtual node in the Applier and returns its id.
-    ///
-    /// Assigns the node's ID so its layout registry and invalidation metadata
-    /// belong to the node stored in the applier.
+    /// Stores a virtual node ([`Node::is_virtual`]) in the Applier and returns its id, assigned
+    /// to the node so its layout registry and invalidation metadata belong to the stored node.
     pub fn create_virtual_node(&self, node: Box<dyn Node>) -> NodeId {
+        debug_assert!(node.is_virtual(), "a virtual node reports `is_virtual`");
         let mut applier = self.borrow_applier();
-        let node_id = applier.create_virtual(node);
+        let node_id = applier.create(node);
         if let Ok(node) = applier.get_mut(node_id) {
             node.set_node_id(node_id);
         }

@@ -5,11 +5,16 @@ pub(crate) trait FixtureLeaf: std::any::Any {}
 pub(crate) struct ParentTracked<T> {
     node: T,
     parent: Option<NodeId>,
+    pub(crate) is_virtual: bool,
 }
 
 impl<T> ParentTracked<T> {
     pub(crate) fn new(node: T) -> Self {
-        Self { node, parent: None }
+        Self {
+            node,
+            parent: None,
+            is_virtual: false,
+        }
     }
 }
 
@@ -41,6 +46,10 @@ impl<T: FixtureLeaf> Node for ParentTracked<T> {
 
     fn parent(&self) -> Option<NodeId> {
         self.parent
+    }
+
+    fn is_virtual(&self) -> bool {
+        self.is_virtual
     }
 }
 

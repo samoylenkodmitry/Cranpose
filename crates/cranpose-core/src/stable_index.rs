@@ -14,6 +14,9 @@ const PAGE_LEN: usize = 1 << PAGE_BITS;
 const DIRECTORY_BITS: usize = 7;
 const DIRECTORY_LEN: usize = 1 << DIRECTORY_BITS;
 const NO_SLOT: u32 = u32::MAX;
+// The bit of a generation that says the id's node is virtual, set while the
+// id has a slot: a walk up the tree finds it with the slot it looks up.
+const VIRTUAL: u32 = 1 << 31;
 
 #[derive(Clone, Copy)]
 struct Entry {
@@ -101,9 +104,19 @@ impl StableIndex {
         (slot != NO_SLOT).then_some(slot as usize)
     }
 
+    // The dense storage slot `id`'s node sits in, and whether that node is
+    // virtual.
+    #[inline]
+    pub(crate) fn slot_and_virtual(&self, id: NodeId) -> Option<(usize, bool)> {
+        let entry = self.entry(id);
+        entry
+            .has_slot()
+            .then_some((entry.slot as usize, entry.generation & VIRTUAL != 0))
+    }
+
     /// How many times `id`'s node left the tree; `0` for an id never seen.
     pub(crate) fn generation(&self, id: NodeId) -> u32 {
-        self.entry(id).generation
+        self.entry(id).generation & !VIRTUAL
     }
 
     /// Puts `id`'s node in dense storage `slot`, keeping its generation.
@@ -121,11 +134,19 @@ impl StableIndex {
         });
     }
 
+    // Notes that the node `id`'s slot holds is virtual, until it leaves.
+    pub(crate) fn mark_virtual(&mut self, id: NodeId) {
+        self.update(id, |entry| {
+            debug_assert!(entry.has_slot(), "only a stored node is virtual");
+            entry.generation |= VIRTUAL;
+        });
+    }
+
     /// Takes `id`'s node out of dense storage and counts one more generation.
     pub(crate) fn release(&mut self, id: NodeId) {
         self.update(id, |entry| {
             entry.slot = NO_SLOT;
-            entry.generation = entry.generation.wrapping_add(1);
+            entry.generation = (entry.generation & !VIRTUAL).wrapping_add(1) & !VIRTUAL;
         });
     }
 

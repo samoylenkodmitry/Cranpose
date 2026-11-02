@@ -551,11 +551,16 @@ struct RecordingNode {
     parent: Option<NodeId>,
     children: Vec<NodeId>,
     operations: Vec<Operation>,
+    is_virtual: bool,
 }
 
 impl Node for RecordingNode {
     fn parent(&self) -> Option<NodeId> {
         self.parent
+    }
+
+    fn is_virtual(&self) -> bool {
+        self.is_virtual
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {

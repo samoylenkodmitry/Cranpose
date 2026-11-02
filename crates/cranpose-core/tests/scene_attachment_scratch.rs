@@ -96,3 +96,35 @@ fn structural_change_apis_drain_candidates_and_filter_the_attached_parent() {
         "the raw API leaves filtering to its caller"
     );
 }
+
+// A virtual node resolves to its parent after compaction moves it, and a
+// node stored later in the slot it left is not virtual.
+#[test]
+fn a_virtual_node_stays_virtual_through_compaction_and_its_slot_does_not() {
+    let mut applier = MemoryApplier::new();
+    let root = applier.create(Box::new(OrderedParent::default()));
+    let gone = applier.create(Box::new(ParentTracked::new(Leaf)));
+    let mut wrapper = ParentTracked::new(Leaf);
+    wrapper.is_virtual = true;
+    let wrapper = applier.create(Box::new(wrapper));
+    let attach = |applier: &mut MemoryApplier, child| {
+        applier.get_mut(root).expect("root").insert_child(child);
+        applier
+            .get_mut(child)
+            .expect("child")
+            .on_attached_to_parent(root);
+    };
+    attach(&mut applier, wrapper);
+    applier.remove(gone).expect("gone");
+    applier.compact();
+    assert_eq!(
+        applier.scene_nodes_attached_to([wrapper], root),
+        [Some(root)]
+    );
+
+    applier.get_mut(root).expect("root").remove_child(wrapper);
+    applier.remove(wrapper).expect("wrapper");
+    let leaf = applier.create(Box::new(ParentTracked::new(Leaf)));
+    attach(&mut applier, leaf);
+    assert_eq!(applier.scene_nodes_attached_to([leaf], root), [Some(leaf)]);
+}
