@@ -116,33 +116,38 @@ pub enum RecordingStore {
     /// after: it hands the nodes that hold them to `recycle_lowered`. While
     /// memory is ample, a command that draws again each update records into
     /// the buffers it filled; one an update does not draw keeps none, and
-    /// with little memory left none does.
+    /// with little memory left none does. Within an update, a command
+    /// records into the buffers of one an earlier command gave back.
     Redrawn,
 }
 
+// The spare recordings an update keeps for its next commands at most: the
+// commands of nested nodes give theirs back in the order they took them.
+const SPARE_RECORDINGS: usize = 4;
+
 // The recording of the command `id` that the update before kept, for the
-// command to record into again; a new one when it kept none.
+// command to record into again; else one an earlier command of this update
+// gave back; a new one when there is neither.
 fn acquire_redrawn(id: DrawCommandId) -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
-        state
+        let kept = state
             .redrawn_recordings
             .borrow_mut()
             .get_mut(&RecorderKey::from(id))
-            .and_then(|(recording, _)| recording.take())
+            .and_then(|(recording, _)| recording.take());
+        kept.or_else(|| state.spare_recordings.borrow_mut().pop())
             .unwrap_or_default()
     })
 }
 
-// Keeps `recording`, the command `id` drew in this update, until the next
-// update, when no reader holds it any more and the command drew in the
-// update before as well: a command drawn once keeps no buffers, one drawn
-// each update records into the ones it filled. With little memory left the
-// buffers go: a canvas drawn each frame then holds what one drawn once does.
+// Keeps `recording`, the command `id` drew in this update, when no reader
+// holds it any more: until the next update, when the command drew in the
+// update before as well, so that a command drawn each update records into
+// the buffers it filled; else, and with little memory left always, for the
+// next commands of this update only. A canvas drawn each frame then holds
+// what one drawn once does between updates.
 pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecording>) {
-    if Rc::strong_count(&recording) != 1
-        || Rc::weak_count(&recording) != 0
-        || cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight
-    {
+    if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
         return;
     }
     crate::thread_state::with(|state| {
@@ -152,12 +157,24 @@ pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecordin
             .entry(RecorderKey::from(id))
             .or_insert((None, u64::MAX));
         let again = entry.1 == update.wrapping_sub(1) || entry.1 == update;
-        *entry = (again.then_some(recording), update);
+        let tight =
+            cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight;
+        let (kept, spare) = if again && !tight {
+            (Some(recording), None)
+        } else {
+            (None, Some(recording))
+        };
+        *entry = (kept, update);
+        drop(recordings);
+        let mut spares = state.spare_recordings.borrow_mut();
+        if let Some(spare) = spare.filter(|_| spares.len() < SPARE_RECORDINGS) {
+            spares.push(spare);
+        }
     });
 }
 
-// Lets go the recordings of the commands this update did not draw, as it
-// ends.
+// Lets go the recordings of the commands this update did not draw, and the
+// spare ones, as it ends.
 pub(crate) fn end_redrawn_update() {
     crate::thread_state::with(|state| {
         let update = state.redrawn_update.get();
@@ -165,13 +182,17 @@ pub(crate) fn end_redrawn_update() {
             .redrawn_recordings
             .borrow_mut()
             .retain(|_, (_, drawn)| *drawn == update);
+        state.spare_recordings.borrow_mut().clear();
         state.redrawn_update.set(update.wrapping_add(1));
     });
 }
 
 /// Lets the recordings an update keeps for its commands' next draws go.
 pub fn release_redrawn_recordings() {
-    crate::thread_state::with(|state| state.redrawn_recordings.borrow_mut().clear());
+    crate::thread_state::with(|state| {
+        state.redrawn_recordings.borrow_mut().clear();
+        state.spare_recordings.borrow_mut().clear();
+    });
 }
 
 pub(super) enum DrawPass<'a> {

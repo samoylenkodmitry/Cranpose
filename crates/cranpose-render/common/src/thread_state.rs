@@ -30,6 +30,9 @@ pub(crate) struct RenderThreadState {
     pub(crate) redrawn_recordings:
         RefCell<HashMap<RecorderKey, (Option<Rc<CommandRecording>>, u64), FxBuildHasher>>,
     pub(crate) redrawn_update: Cell<u64>,
+    // The recordings the commands of the update that runs gave back, for its
+    // next commands.
+    pub(crate) spare_recordings: RefCell<Vec<Rc<CommandRecording>>>,
     /// Whether a scene update or build changed a layer in 3D since the
     /// window's scenes last published where their layers show and their
     /// eyes' worlds.
@@ -49,6 +52,7 @@ impl RenderThreadState {
             recording_generation: Cell::new(0),
             redrawn_recordings: RefCell::new(HashMap::default()),
             redrawn_update: Cell::new(0),
+            spare_recordings: RefCell::new(Vec::new()),
             space_changed: Cell::new(false),
             #[cfg(test)]
             lowered_layer_count: Cell::new(0),
