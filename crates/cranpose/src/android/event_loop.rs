@@ -84,14 +84,14 @@ fn set_android_ime_density(density: f32) {
     crate::thread_state::with(|state| state.android_ime_density.set(density.max(f32::EPSILON)));
 }
 
-fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
+fn set_android_ime_bottom_px(bottom_px: i32) {
     let density = crate::thread_state::with(|state| state.android_ime_density.get());
     let bottom = (bottom_px.max(0) as f32) / density;
     let insets = cranpose_ui::EdgeInsets {
         bottom,
         ..cranpose_ui::EdgeInsets::default()
     };
-    android_platform_env().set_ime_insets(insets)
+    android_platform_env().set_ime_insets(insets);
 }
 
 fn drain_accessibility_activations(
@@ -296,11 +296,7 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
         AndroidImeEvent::EditorAction { action } => {
             let _ = shell.on_ime_action(text_input::ime_action_from_android(action));
         }
-        AndroidImeEvent::ImeInsetsChanged { bottom_px } => {
-            if set_android_ime_bottom_px(bottom_px) {
-                shell.request_root_render();
-            }
-        }
+        AndroidImeEvent::ImeInsetsChanged { bottom_px } => set_android_ime_bottom_px(bottom_px),
     }
 }
 
