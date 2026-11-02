@@ -111,50 +111,62 @@ pub enum RecordingStore {
     /// Each command's own recordings, which a render graph holds between
     /// frames: a command records again into the buffers it filled before.
     Command,
-    /// One pool every command takes from, for a renderer that turns a
-    /// recording into its own items at once and holds none after: it hands
-    /// the nodes that hold the recordings to `recycle_lowered`, which gives
-    /// the recordings back to the pool.
-    Shared,
+    /// Each command's recording of the update before only, for a renderer
+    /// that turns a recording into its own items at once and holds none
+    /// after: it hands the nodes that hold them to `recycle_lowered`. A
+    /// command that draws again each update records into the buffers it
+    /// filled; one an update does not draw keeps none.
+    Redrawn,
 }
 
-// The recordings `RecordingStore::Shared` keeps for the next draws to
-// record into: as many as the draws of a walk's nested nodes hold at once,
-// and no more, as each keeps the room of the largest draw it took.
-const SHARED_RECORDINGS: usize = 8;
-
-// A recording out of the pool every command takes from, for one draw to
-// record into: first one whose shape columns no reader shares, then any,
-// whose recording takes new columns; a new one when the pool has none. A
-// recording of no shapes shares the one empty column.
-fn acquire_shared() -> Rc<CommandRecording> {
+// The recording of the command `id` that the update before kept, for the
+// command to record into again; a new one when it kept none.
+fn acquire_redrawn(id: DrawCommandId) -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
-        let mut pool = state.shared_recordings.borrow_mut();
-        let at = pool
-            .iter()
-            .position(|recording| !recording.shares_shapes())
-            .or_else(|| pool.len().checked_sub(1));
-        at.map_or_else(Rc::default, |at| pool.swap_remove(at))
+        state
+            .redrawn_recordings
+            .borrow_mut()
+            .get_mut(&RecorderKey::from(id))
+            .and_then(|(recording, _)| recording.take())
+            .unwrap_or_default()
     })
 }
 
-// Gives `recording` back to the pool every command takes from, when no
-// reader holds it any more and the pool has room.
-pub(crate) fn give_back_shared(recording: Rc<CommandRecording>) {
+// Keeps `recording`, the command `id` drew in this update, until the next
+// update, when no reader holds it any more and the command drew in the
+// update before as well: a command drawn once keeps no buffers, one drawn
+// each update records into the ones it filled.
+pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecording>) {
     if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
         return;
     }
     crate::thread_state::with(|state| {
-        let mut pool = state.shared_recordings.borrow_mut();
-        if pool.len() < SHARED_RECORDINGS {
-            pool.push(recording);
-        }
+        let update = state.redrawn_update.get();
+        let mut recordings = state.redrawn_recordings.borrow_mut();
+        let entry = recordings
+            .entry(RecorderKey::from(id))
+            .or_insert((None, u64::MAX));
+        let again = entry.1 == update.wrapping_sub(1) || entry.1 == update;
+        *entry = (again.then_some(recording), update);
     });
 }
 
-/// Lets the buffers of the shared recordings go.
-pub fn release_shared_recordings() {
-    crate::thread_state::with(|state| state.shared_recordings.borrow_mut().clear());
+// Lets go the recordings of the commands this update did not draw, as it
+// ends.
+pub(crate) fn end_redrawn_update() {
+    crate::thread_state::with(|state| {
+        let update = state.redrawn_update.get();
+        state
+            .redrawn_recordings
+            .borrow_mut()
+            .retain(|_, (_, drawn)| *drawn == update);
+        state.redrawn_update.set(update.wrapping_add(1));
+    });
+}
+
+/// Lets the recordings an update keeps for its commands' next draws go.
+pub fn release_redrawn_recordings() {
+    crate::thread_state::with(|state| state.redrawn_recordings.borrow_mut().clear());
 }
 
 pub(super) enum DrawPass<'a> {
@@ -425,14 +437,14 @@ pub(super) fn append_draw_nodes(
             let Some((recording, segments)) =
                 recording_for_placement_reusing(command, placement, size, || match store {
                     RecordingStore::Command => acquire_storage(id),
-                    RecordingStore::Shared => acquire_shared(),
+                    RecordingStore::Redrawn => acquire_redrawn(id),
                 })
             else {
                 continue;
             };
             match store {
                 RecordingStore::Command => (publish_recording(id, recording), segments),
-                RecordingStore::Shared => (recording, segments),
+                RecordingStore::Redrawn => (recording, segments),
             }
         };
         let grouped = shared.summary().has_groups

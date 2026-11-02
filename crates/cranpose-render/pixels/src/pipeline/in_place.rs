@@ -115,7 +115,7 @@ impl InPlaceUpdate<'_> {
             scale,
             text,
         };
-        let context = LowerContext::root(RecordingStore::Shared);
+        let context = LowerContext::root(RecordingStore::Redrawn);
         let walked = repush.visit_node(walk, (root, NodePlace::Root), context, (0, None));
         release_lowered();
         let held = repush.held;

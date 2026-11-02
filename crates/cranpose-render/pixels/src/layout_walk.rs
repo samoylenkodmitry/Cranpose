@@ -234,7 +234,7 @@ impl<'a> LayoutWalk<'a> {
         root: NodeId,
         push: impl FnOnce(&RenderNode, Option<&mut ChildSlot<'_>>),
     ) -> bool {
-        let context = LowerContext::root(RecordingStore::Shared);
+        let context = LowerContext::root(RecordingStore::Redrawn);
         let mut push = Some(push);
         let lowered = lower_node_alone(self.applier, (root, NodePlace::Root), context, |lowered| {
             let LoweredNode {

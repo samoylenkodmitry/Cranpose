@@ -101,9 +101,10 @@ pub(crate) fn recycle_node(node: RenderNode) {
     crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_node(node));
 }
 
-// Moves the boxes of `node`, a node lowered with shared recordings, into
-// the pool, and gives its draw runs' recordings back to theirs.
-pub(crate) fn recycle_shared_node(mut node: RenderNode) {
+// Moves the boxes of `node`, a node lowered with recordings it does not
+// keep, into the pool, and keeps its draw runs' recordings for their
+// commands' next draws.
+pub(crate) fn recycle_redrawn_node(mut node: RenderNode) {
     give_back_recordings(&mut node);
     recycle_node(node);
 }
@@ -117,7 +118,9 @@ fn give_back_recordings(node: &mut RenderNode) {
     for child in nodes.drain(..) {
         match child {
             RenderNode::DrawRun(run) => {
-                crate::scene_builder::give_back_shared(run.recording);
+                if let Some(id) = run.command {
+                    crate::scene_builder::give_back_redrawn(id, run.recording);
+                }
             }
             mut nested @ (RenderNode::Layer(_) | RenderNode::Inline(_)) => {
                 give_back_recordings(&mut nested);
