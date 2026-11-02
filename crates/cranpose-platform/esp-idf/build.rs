@@ -2,7 +2,9 @@
 //! copy of this crate. esp-idf-sys configures its CMake project once and
 //! runs it again only when its own settings change, so an application that
 //! moves to another Cranpose revision keeps the components of the revision
-//! it first built: the old IRAM function list and C code.
+//! it first built: the old IRAM function list and C code. Sets
+//! `cfg(esp32_classic)` for the classic ESP32, which has no PSRAM on the
+//! boards Cranpose runs on.
 
 #![allow(
     clippy::disallowed_methods,
@@ -13,6 +15,10 @@ use std::{env, path::Path, process::ExitCode};
 
 fn main() -> ExitCode {
     println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rustc-check-cfg=cfg(esp32_classic)");
+    if env::var("TARGET").as_deref() == Ok("xtensa-esp32-espidf") {
+        println!("cargo::rustc-cfg=esp32_classic");
+    }
     println!("cargo::rerun-if-env-changed=DEP_ESP_IDF_EMBUILD_LINK_ARGS");
     let (Some(args), Some(manifest_dir)) = (
         env::var_os("DEP_ESP_IDF_EMBUILD_LINK_ARGS"),
