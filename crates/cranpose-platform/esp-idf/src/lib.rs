@@ -178,6 +178,12 @@ pub fn run(
     content: impl FnMut() + 'static,
 ) -> Result<Infallible, RunError> {
     let start = Instant::now();
+    // The framebuffer composes its content as it starts. On the classic
+    // ESP32 that composition can leave no DMA block the strips' size, so the
+    // strips come first there. Other chips keep the order their benchmarks
+    // run in.
+    #[cfg(esp32_classic)]
+    let presenter = Presenter::new(&panel, config.strip_rows)?;
     let mut framebuffer = Framebuffer::new(
         panel.width(),
         panel.height(),
@@ -186,6 +192,7 @@ pub fn run(
         config.fonts,
         content,
     )?;
+    #[cfg(not(esp32_classic))]
     let presenter = Presenter::new(&panel, config.strip_rows)?;
     let wake = Arc::new(Wake::new()?);
     let waker = Arc::clone(&wake);
