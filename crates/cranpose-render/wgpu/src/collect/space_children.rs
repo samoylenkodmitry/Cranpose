@@ -84,7 +84,7 @@ pub(super) fn collect_space_children(
             RenderNode::Inline(inline) => collect_inline(inline, context, out),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
                 push_content(out, child, content);
-                node_is_pixel_sensitive(child)
+                context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
             }
         };
     });
