@@ -1,6 +1,11 @@
 // The demo's own screen: a title, a line of text, a bar that sweeps its
 // width, a line that changes and a box that counts taps.
 
+#[cfg(not(any(
+    feature = "text-drawn",
+    feature = "text-composed",
+    feature = "workload"
+)))]
 use std::time::Duration;
 
 use cranpose::{prelude::*, text::TextUnit};
@@ -59,12 +64,21 @@ fn Pulse() {
 // clock or a sensor reading does, drawn by a draw scope that reads it
 // (`text-drawn`: frames draw it again without composing or laying out) or
 // composed in a `Text` (`text-composed`), or the work of a busier screen
-// (`workload`).
+// (`workload`). A line no feature shows is left out: the line passes
+// through `StatusLine`'s parameter, so the build cannot drop the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Line {
+    #[cfg(not(any(
+        feature = "text-drawn",
+        feature = "text-composed",
+        feature = "workload"
+    )))]
     Seconds,
+    #[cfg(any(feature = "text-drawn", feature = "screens-in-turn"))]
     Drawn,
+    #[cfg(any(feature = "text-composed", feature = "screens-in-turn"))]
     Composed,
+    #[cfg(any(feature = "workload", feature = "screens-in-turn"))]
     Workload,
 }
 
@@ -76,33 +90,58 @@ pub enum Line {
 compile_error!("text-drawn, text-composed and workload each replace the seconds line: pick one");
 
 // The line the build's features choose.
-#[cfg(not(feature = "screens-in-turn"))]
-pub const LINE: Line = if cfg!(feature = "text-drawn") {
-    Line::Drawn
-} else if cfg!(feature = "text-composed") {
-    Line::Composed
-} else if cfg!(feature = "workload") {
-    Line::Workload
-} else {
-    Line::Seconds
-};
+#[cfg(feature = "text-drawn")]
+pub const LINE: Line = Line::Drawn;
+#[cfg(feature = "text-composed")]
+pub const LINE: Line = Line::Composed;
+#[cfg(feature = "workload")]
+pub const LINE: Line = Line::Workload;
+#[cfg(not(any(
+    feature = "text-drawn",
+    feature = "text-composed",
+    feature = "workload",
+    feature = "screens-in-turn"
+)))]
+pub const LINE: Line = Line::Seconds;
 
+#[cfg(any(
+    feature = "text-drawn",
+    feature = "text-composed",
+    feature = "screens-in-turn"
+))]
 #[path = "../../../crates/cranpose/tests/support/reading.rs"]
 mod reading;
+#[cfg(any(feature = "workload", feature = "screens-in-turn"))]
 #[path = "../../../crates/cranpose/tests/support/workload.rs"]
 mod workload;
 
+// The color and size of the line under the bar.
+const LINE_COLOR: Color = Color::from_rgb_u8(200, 204, 220);
+const LINE_SIZE: f32 = 14.0;
+
 #[composable]
 fn StatusLine(line: Line) {
-    let style = text_style(Color::from_rgb_u8(200, 204, 220), 14.0);
     match line {
-        Line::Seconds => Seconds(style),
-        Line::Drawn => reading::DrawnReading(Color::from_rgb_u8(200, 204, 220), 14.0),
-        Line::Composed => reading::ComposedReading(style),
-        Line::Workload => workload::Workload(style),
+        #[cfg(not(any(
+            feature = "text-drawn",
+            feature = "text-composed",
+            feature = "workload"
+        )))]
+        Line::Seconds => Seconds(text_style(LINE_COLOR, LINE_SIZE)),
+        #[cfg(any(feature = "text-drawn", feature = "screens-in-turn"))]
+        Line::Drawn => reading::DrawnReading(LINE_COLOR, LINE_SIZE),
+        #[cfg(any(feature = "text-composed", feature = "screens-in-turn"))]
+        Line::Composed => reading::ComposedReading(text_style(LINE_COLOR, LINE_SIZE)),
+        #[cfg(any(feature = "workload", feature = "screens-in-turn"))]
+        Line::Workload => workload::Workload(text_style(LINE_COLOR, LINE_SIZE)),
     }
 }
 
+#[cfg(not(any(
+    feature = "text-drawn",
+    feature = "text-composed",
+    feature = "workload"
+)))]
 #[composable]
 fn Seconds(style: TextStyle) {
     let seconds = cranpose_core::rememberMutableStateOf(|| 0u32);
