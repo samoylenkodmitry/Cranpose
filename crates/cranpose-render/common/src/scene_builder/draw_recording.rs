@@ -454,9 +454,40 @@ pub(super) fn append_draw_nodes(
     node_id: NodeId,
     commands: &[DrawCommand],
     first_command_index: usize,
-    mut pass: DrawPass<'_>,
+    pass: DrawPass<'_>,
     draws: DrawTarget,
     phase: PrimitivePhase,
+) {
+    let node_commands = (node_id, commands, first_command_index);
+    // The store is chosen once a node, not for each command it records.
+    match draws.store {
+        RecordingStore::Command => append_recorded(
+            nodes,
+            node_commands,
+            pass,
+            (draws, phase),
+            (acquire_storage, publish_recording),
+        ),
+        RecordingStore::Redrawn => append_recorded(
+            nodes,
+            node_commands,
+            pass,
+            (draws, phase),
+            (acquire_redrawn, |_, recording| recording),
+        ),
+    }
+}
+
+#[inline]
+fn append_recorded(
+    nodes: &mut Vec<RenderNode>,
+    (node_id, commands, first_command_index): (NodeId, &[DrawCommand], usize),
+    mut pass: DrawPass<'_>,
+    (draws, phase): (DrawTarget, PrimitivePhase),
+    (acquire, publish): (
+        impl Fn(DrawCommandId) -> Rc<CommandRecording>,
+        impl Fn(DrawCommandId, Rc<CommandRecording>) -> Rc<CommandRecording>,
+    ),
 ) {
     let size = draws.size;
     let placement = pass.placement();
@@ -470,19 +501,12 @@ pub(super) fn append_draw_nodes(
             let segments = shared.content_split(DrawPlacement::Overlay);
             (shared, segments)
         } else {
-            let store = draws.store;
             let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || match store {
-                    RecordingStore::Command => acquire_storage(id),
-                    RecordingStore::Redrawn => acquire_redrawn(id),
-                })
+                recording_for_placement_reusing(command, placement, size, || acquire(id))
             else {
                 continue;
             };
-            match store {
-                RecordingStore::Command => (publish_recording(id, recording), segments),
-                RecordingStore::Redrawn => (recording, segments),
-            }
+            (publish(id, recording), segments)
         };
         let grouped = shared.summary().has_groups
             && shared
