@@ -8,7 +8,6 @@ use cranpose_render_common::{
         RenderGraph, RenderNode, TextPrimitiveNode, for_each_in_draw_order,
     },
     graph_scene::RenderDiagnostics,
-    hit_graph::collect_hits_from_graph,
     layer_composition::folded_layer_alpha,
     layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
@@ -16,7 +15,7 @@ use cranpose_render_common::{
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
-use cranpose_ui::{LayoutBox, text::TextStyle};
+use cranpose_ui::text::TextStyle;
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, GraphicsLayer, Point, Rect, RenderEffect, TransformOrigin,
 };
@@ -24,7 +23,7 @@ use cranpose_ui_graphics::{
 use crate::{
     draw::TextRaster,
     layout_walk::{ChildSlot, LayoutWalk},
-    scene::{ItemCounts, PassedDown, RasterScene, Scene, Subtree, TextDraw},
+    raster_scene::{ItemCounts, PassedDown, RasterScene, Subtree, TextDraw},
     style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
@@ -243,12 +242,6 @@ fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnos
             "Pixels renderer does not support render/backdrop effects or non-SrcOver layer blend modes; falling back to base layer rendering"
         );
     }
-}
-
-pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
-    collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
-    scene.replace_graph(graph);
 }
 
 fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
@@ -686,16 +679,6 @@ pub(crate) fn populate_draws_from_graph(
         && let Some(index) = reuse.find(subtree.identity())
         && let Some(record) = reuse.old.subtrees.get(index)
     {
-        // The layer's number covers its subtree, save its placement.
-        if context.same_as_before
-            && record.change == subtree.change()
-            && record.transform == subtree.transform_to_parent()
-        {
-            let (end, stop) = (record.end, record.stop);
-            reuse.cursor = end;
-            reuse.copy_later(scene, index, end, stop);
-            return;
-        }
         reuse.cursor = index + 1;
         before = Some((record.end, record.passed_down));
     }

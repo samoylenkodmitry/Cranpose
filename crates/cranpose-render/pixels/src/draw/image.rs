@@ -5,7 +5,7 @@ use cranpose_render_common::graph_scene::RenderDiagnostics;
 use cranpose_ui_graphics::{BlendMode, Point, Rect, whole};
 
 use super::{ClipBounds, Target, UNIT, clip_rect_to_bounds, snap_delta_for_anchor};
-use crate::{pixel::Pixel, scene::ImageDraw};
+use crate::{pixel::Pixel, raster_scene::ImageDraw};
 
 /// The device pixels an image covers: its rect where it lands, or the box
 /// of its turned rect.

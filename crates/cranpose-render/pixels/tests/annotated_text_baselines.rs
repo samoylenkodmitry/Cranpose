@@ -1,7 +1,7 @@
 #[path = "../../common/tests/support/annotated_text.rs"]
 mod annotated_fixture;
 
-use cranpose_render_pixels::{Scene, draw_scene};
+use cranpose_render_pixels::draw_graph;
 use cranpose_ui::text::{
     LineHeightAlignment, LineHeightStyle, LineHeightTrim, SpanStyle, TextStyle, TextUnit,
 };
@@ -22,8 +22,7 @@ fn pixels_renderer_aligns_small_and_large_spans_on_each_visible_line() {
                 ..Default::default()
             });
         }
-        let mut scene = Scene::new();
-        scene.replace_graph(annotated_fixture::text_graph(
+        let graph = annotated_fixture::text_graph(
             annotated_fixture::mixed_size_pairs(),
             style,
             Rect {
@@ -38,9 +37,9 @@ fn pixels_renderer_aligns_small_and_large_spans_on_each_visible_line() {
                 width: 100.0,
                 height: 100.0,
             },
-        ));
+        );
         let mut pixels = vec![0; 100 * 100 * 4];
-        cranpose_ui::AppContext::new().enter(|| draw_scene(&mut pixels, 100, 100, &scene));
+        cranpose_ui::AppContext::new().enter(|| draw_graph(&mut pixels, 100, 100, &graph));
         let bottoms = |channel: usize| {
             let mut bottoms = Vec::new();
             for (y, row) in pixels.as_chunks::<400>().0.iter().enumerate() {

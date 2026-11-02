@@ -36,10 +36,10 @@ fn a_turned_draw_group_reaches_the_sprite_compositor_as_a_texture() {
         .pop()
         .expect("the draw groups case has a fixture");
     let mut renderer = PixelsRenderer::new();
-    renderer.scene_mut().graph = Some(fixture.graph);
+    renderer.show_graph_for_tests(&fixture.graph);
     let mut frame = SpriteFrame::default();
     app_context.enter(|| {
-        renderer.compose_sprites(&mut frame, fixture.width, fixture.height, 1.0);
+        renderer.compose_sprites(&mut frame, fixture.width, fixture.height);
     });
     let upright = texture_alpha_at(&frame, 90.5, 8.5);
     assert!(

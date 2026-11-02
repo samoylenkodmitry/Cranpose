@@ -2,7 +2,7 @@ use cranpose_render_common::graph::{LayerNode, ProjectiveTransform};
 use cranpose_ui_graphics::Rect;
 
 use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph};
-use crate::scene::{RasterScene, Subtree};
+use crate::raster_scene::{RasterScene, Subtree};
 
 /// Draws `surfaces`, which the eye of a scene sees, each placed by its
 /// parent map, with the scene layer's content style and clip.

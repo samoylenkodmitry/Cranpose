@@ -4,16 +4,13 @@
 
 use cranpose_core::collections::growth_slack::GrowthSlack;
 
-use crate::Picture;
+use crate::{draw::ClipBounds, raster_scene::RasterScene};
 
-// Gives back the room past the items of each list of `picture`'s scene and
-// of the list of where each item reaches. Out of line: a frame with ample
-// memory only tests the headroom it reads anyway.
+// Gives back the room past the items of each list of `scene` and of
+// `reach`, the list of where each item reaches. Out of line: a frame with
+// ample memory only tests the headroom it reads anyway.
 #[inline(never)]
-pub(crate) fn trim(picture: &mut Picture) {
-    let Some(scene) = picture.raster.as_mut() else {
-        return;
-    };
+pub(crate) fn trim(scene: &mut RasterScene, reach: &mut Vec<Option<ClipBounds>>) {
     scene.shapes.trim_growth_slack();
     scene.images.trim_growth_slack();
     scene.texts.trim_growth_slack();
@@ -21,5 +18,5 @@ pub(crate) fn trim(picture: &mut Picture) {
     scene.order.trim_growth_slack();
     scene.subtrees.trim_growth_slack();
     scene.passed_down.trim_growth_slack();
-    picture.reach.trim_growth_slack();
+    reach.trim_growth_slack();
 }

@@ -118,18 +118,21 @@ pub enum RecordingStore {
     Shared,
 }
 
-// A recording of the pool every command takes from that no reader holds,
-// and whose shape columns none shares; a new one, which the pool keeps,
-// when none is free.
+// A recording of the pool every command takes from that no reader holds:
+// first one whose shape columns none shares either, then any, whose
+// recording takes new columns; a new one, which the pool keeps, when none is
+// free. A recording of no shapes shares the one empty column.
 fn acquire_shared() -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
         let mut pool = state.shared_recordings.borrow_mut();
-        let free = pool.iter().find(|recording| {
-            Rc::strong_count(recording) == 1
-                && Rc::weak_count(recording) == 0
-                && !recording.shares_shapes()
-        });
-        if let Some(free) = free {
+        let free = |recording: &&Rc<CommandRecording>| {
+            Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
+        };
+        let unshared = pool
+            .iter()
+            .filter(free)
+            .find(|recording| !recording.shares_shapes());
+        if let Some(free) = unshared.or_else(|| pool.iter().find(free)) {
             return Rc::clone(free);
         }
         let recording = Rc::<CommandRecording>::default();

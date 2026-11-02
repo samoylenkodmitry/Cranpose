@@ -2,12 +2,12 @@
 #![doc = include_str!("../README.md")]
 
 mod damage;
-mod direct_check;
 mod draw;
 mod growth_trim;
 mod layout_walk;
 mod pipeline;
 mod pixel;
+mod raster_scene;
 mod rewrite;
 /// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
@@ -23,11 +23,12 @@ pub use cranpose_render_common::rgb565::Rgb565Order;
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates,
     rgb565::{Rgb565Be, Rgb565Le},
+    scene_builder::build_graph_from_layout_tree,
     text_fonts::TextFonts,
 };
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::{MemoryHeadroom, Size};
-pub use draw::draw_scene;
+pub use draw::draw_graph;
 use pixel::Pixel;
 pub use scene::{HitRegion, Scene};
 
@@ -54,21 +55,13 @@ fn pixel_rect(bounds: draw::ClipBounds) -> PixelRect {
     }
 }
 
-/// The picture a host drew last. [`PixelsRenderer::update_picture`] moves it
-/// to the current scene and finds the pixels that change, and
-/// [`PixelsRenderer::draw_picture_area`] draws any part of it.
-#[derive(Default)]
-pub struct Picture {
-    raster: Option<scene::RasterScene>,
-    /// What an update in place pushes each changed layer again with.
-    rewrite: Option<Box<rewrite::Rewrite>>,
-    width: u32,
-    height: u32,
-    scale: f32,
-    changed: Vec<draw::ClipBounds>,
-    // Where each item of `raster` can draw in the frame, in its order: each
-    // strip a host draws passes over the items that miss it.
-    reach: Vec<Option<draw::ClipBounds>>,
+fn clip_bounds(area: PixelRect) -> draw::ClipBounds {
+    draw::ClipBounds {
+        min_x: i32::try_from(area.x).unwrap_or(i32::MAX),
+        min_y: i32::try_from(area.y).unwrap_or(i32::MAX),
+        max_x: i32::try_from(area.x.saturating_add(area.width)).unwrap_or(i32::MAX),
+        max_y: i32::try_from(area.y.saturating_add(area.height)).unwrap_or(i32::MAX),
+    }
 }
 
 fn valid_scale(scale: f32) -> f32 {
@@ -85,7 +78,6 @@ pub struct PixelsRenderer {
     text: draw::TextRaster,
     /// The app context this renderer gave its text measurer.
     app_context: Option<std::rc::Weak<cranpose_ui::AppContext>>,
-    direct: direct_check::DirectCheck,
 }
 
 impl Default for PixelsRenderer {
@@ -109,199 +101,63 @@ impl PixelsRenderer {
             scene: Scene::new(),
             text: draw::TextRaster::new(TextFonts::from_fonts_or_default(fonts)),
             app_context: None,
-            direct: direct_check::DirectCheck::new(),
         }
     }
 
-    /// Draws the scene into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device
-    /// pixel per logical pixel.
+    /// Draws the scene into `frame`, an RGBA8 buffer of `width` by `height`
+    /// pixels, at the scale the renderer builds it at (see
+    /// [`Renderer::set_root_scale`]).
     pub fn draw(&self, frame: &mut [u8], width: u32, height: u32) {
-        draw::draw_scene_scaled(frame, width, height, &self.scene, &self.text, 1.0);
-    }
-
-    /// Rasterizes logical scene coordinates at `scale` device pixels per point.
-    /// Hit regions stay in logical coordinates. Invalid scales use 1.0.
-    pub fn draw_scaled(&self, frame: &mut [u8], width: u32, height: u32, scale: f32) {
-        draw::draw_scene_scaled(
+        draw::draw_raster_frame(
             frame,
-            width,
-            height,
-            &self.scene,
+            (width, height),
+            self.scene.raster(),
+            self.scene.diagnostics(),
             &self.text,
-            valid_scale(scale),
         );
     }
 
-    /// Fills `raster` with the scene at `scale`, keeping its storage, and
-    /// copying from `previous`, the frame before's, what did not change.
-    fn fill_raster_scene(
-        &self,
-        raster: &mut scene::RasterScene,
-        scale: f32,
-        previous: Option<&scene::RasterScene>,
-    ) {
-        match self.scene.graph.as_ref() {
-            Some(graph) => pipeline::fill_raster_scene(
-                raster,
-                graph,
-                self.scene.diagnostics(),
-                scale,
-                previous,
-                &self.text,
-            ),
-            None => raster.clear(),
-        }
-    }
-
-    /// Moves `picture` to the current scene, drawn `width` by `height` device
-    /// pixels at `scale` device pixels per point, and puts into `changed` the
-    /// areas whose pixels differ from the picture it held: the whole frame the
-    /// first time and after a change of size or scale. Invalid scales use 1.0.
-    pub fn update_picture(
-        &self,
-        picture: &mut Picture,
-        width: u32,
-        height: u32,
-        scale: f32,
-        changed: &mut Vec<PixelRect>,
-    ) {
-        let scale = valid_scale(scale);
-        if let Some(reach) = self.update_picture_in_place(picture, width, height, scale) {
-            changed.clear();
-            changed.extend(picture.changed.iter().copied().map(pixel_rect));
-            match reach {
-                pipeline::UpdatedReach::Held => {}
-                pipeline::UpdatedReach::Lost => picture.measure_reach(),
-            }
-            // With little memory left, the spill an update took for a
-            // subtree that pushed other items than before goes, and so does
-            // the room the scene's lists grew past their items.
-            if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight {
-                if let Some(rewrite) = picture.rewrite.as_mut() {
-                    rewrite.release_spill();
-                }
-                growth_trim::trim(picture);
-            }
-            if let Some(raster) = &picture.raster {
-                self.direct.compare(raster, scale);
-            }
-            return;
-        }
-        // An update in place that gave up after it changed part of the scene
-        // left the areas it changed: the scene holds those changes already.
-        let updated = (!picture.changed.is_empty()).then(|| std::mem::take(&mut picture.changed));
-        let mut raster = picture
-            .rewrite
-            .as_mut()
-            .map(|rewrite| rewrite.take_storage())
-            .unwrap_or_default();
-        self.fill_raster_scene(&mut raster, scale, picture.raster.as_ref());
+    /// Puts into `changed` the areas of the display, `width` by `height`
+    /// device pixels, whose pixels differ from the picture the host took
+    /// before: the whole display the first time and after a change of size
+    /// or scale. The host draws them with [`Self::draw_picture_area`].
+    pub fn update_picture(&mut self, width: u32, height: u32, changed: &mut Vec<PixelRect>) {
+        let frame = clip_bounds(PixelRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        });
+        let mut areas = Vec::new();
+        self.scene.take_changes(frame, &mut areas);
         changed.clear();
-        match picture.raster.as_ref() {
-            Some(old)
-                if (picture.width, picture.height, picture.scale) == (width, height, scale) =>
-            {
-                damage::changed_areas(
-                    old,
-                    &picture.reach,
-                    &raster,
-                    picture.frame(),
-                    &mut picture.changed,
-                );
-                if let Some(mut updated) = updated {
-                    picture.changed.append(&mut updated);
-                    damage::merge_areas(&mut picture.changed);
-                }
-                changed.extend(picture.changed.iter().copied().map(pixel_rect));
-            }
-            _ if width > 0 && height > 0 => changed.push(PixelRect {
-                x: 0,
-                y: 0,
-                width,
-                height,
-            }),
-            _ => {}
-        }
-        picture.raster = Some(raster);
-        picture.width = width;
-        picture.height = height;
-        picture.scale = scale;
-        picture.measure_reach();
+        changed.extend(areas.into_iter().map(pixel_rect));
+        // With little memory left, the spill an update took for a subtree
+        // that pushed other items than before goes, and so does the room the
+        // scene's lists grew past their items.
         if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight {
-            growth_trim::trim(picture);
-        }
-        if let Some(raster) = &picture.raster {
-            self.direct.compare(raster, scale);
+            self.scene.trim();
         }
     }
 
-    // Brings `picture`'s scene up to the current scene in place, and puts
-    // the areas the changed layers changed into `picture.changed`. `None`
-    // when the scene must be built again: the first time, after a change of
-    // size, scale or light, or of the root layer, or when a layer's records
-    // no longer lie in one run, with the areas the update changed before it
-    // stopped in `picture.changed`.
-    fn update_picture_in_place(
-        &self,
-        picture: &mut Picture,
-        width: u32,
-        height: u32,
-        scale: f32,
-    ) -> Option<pipeline::UpdatedReach> {
-        picture.changed.clear();
-        let (Some(raster), Some(graph)) = (picture.raster.as_mut(), self.scene.graph.as_ref())
-        else {
-            return None;
-        };
-        if (picture.width, picture.height, picture.scale) != (width, height, scale) {
-            return None;
-        }
-        let window = draw::ClipBounds {
-            min_x: 0,
-            min_y: 0,
-            max_x: i32::try_from(width).unwrap_or(i32::MAX),
-            max_y: i32::try_from(height).unwrap_or(i32::MAX),
-        };
-        pipeline::InPlaceUpdate {
-            scene: raster,
-            reach: &mut picture.reach,
-            rewrite: &mut picture.rewrite,
-        }
-        .run(
-            graph,
-            self.scene.diagnostics(),
-            scale,
-            &self.text,
-            window,
-            &mut picture.changed,
-        )
-    }
-
-    /// Rasterizes the glyphs of the text in `area` of `picture` into the
+    /// Rasterizes the glyphs of the text in `area` of the picture into the
     /// renderer's glyph cache, so that drawing the area later takes them from
     /// it. A host calls it while it waits anyway, such as for a display that
     /// is still starting up.
-    pub fn prepare_picture_area(&self, picture: &Picture, area: PixelRect) {
-        let Some(raster) = picture.raster.as_ref() else {
-            return;
-        };
-        let window = draw::ClipBounds {
-            min_x: i32::try_from(area.x).unwrap_or(i32::MAX),
-            min_y: i32::try_from(area.y).unwrap_or(i32::MAX),
-            max_x: i32::try_from(area.x.saturating_add(area.width)).unwrap_or(i32::MAX),
-            max_y: i32::try_from(area.y.saturating_add(area.height)).unwrap_or(i32::MAX),
-        };
-        draw::prepare_raster_window(raster, window, &self.text);
+    pub fn prepare_picture_area(&self, area: PixelRect) {
+        if let Some(raster) = self.scene.raster() {
+            draw::prepare_raster_window(raster, clip_bounds(area), &self.text);
+        }
     }
 
-    /// Draws `area` of `picture` into `pixels` as straight-alpha RGBA8 rows of
-    /// `area.width` pixels, `area.height` of them. Draws nothing before the
-    /// first [`Self::update_picture`] or when `pixels` is shorter than the area.
-    pub fn draw_picture_area(&self, picture: &Picture, area: PixelRect, pixels: &mut [u8]) {
-        self.draw_picture_area_as(picture, area, pixels.as_chunks_mut::<4>().0);
+    /// Draws `area` of the picture into `pixels` as straight-alpha RGBA8 rows
+    /// of `area.width` pixels, `area.height` of them. Draws nothing before
+    /// the first scene build or when `pixels` is shorter than the area.
+    pub fn draw_picture_area(&self, area: PixelRect, pixels: &mut [u8]) {
+        self.draw_picture_area_as(area, pixels.as_chunks_mut::<4>().0);
     }
 
-    /// Draws `area` of `picture` into `pixels` as rows of 16-bit pixels, 5
+    /// Draws `area` of the picture into `pixels` as rows of 16-bit pixels, 5
     /// bits of red, 6 of green and 5 of blue, stored in `order`, as a display
     /// takes them: `area.width` pixels a row, `area.height` rows. Each pixel
     /// keeps the high bits of the bytes [`Self::draw_picture_area`] draws,
@@ -309,30 +165,25 @@ impl PixelsRenderer {
     /// 16-bit pixel.
     pub fn draw_picture_area_rgb565(
         &self,
-        picture: &Picture,
         area: PixelRect,
         pixels: &mut [u16],
         order: Rgb565Order,
     ) {
         match order {
-            Rgb565Order::LittleEndian => self.draw_picture_area_as::<Rgb565Le>(
-                picture,
-                area,
-                bytemuck::cast_slice_mut(pixels),
-            ),
-            Rgb565Order::BigEndian => self.draw_picture_area_as::<Rgb565Be>(
-                picture,
-                area,
-                bytemuck::cast_slice_mut(pixels),
-            ),
+            Rgb565Order::LittleEndian => {
+                self.draw_picture_area_as::<Rgb565Le>(area, bytemuck::cast_slice_mut(pixels));
+            }
+            Rgb565Order::BigEndian => {
+                self.draw_picture_area_as::<Rgb565Be>(area, bytemuck::cast_slice_mut(pixels));
+            }
         }
     }
 
     // Out of line, one function a format: a display takes one byte order, and
     // a build that keeps its drawing in fast memory keeps only that one.
     #[inline(never)]
-    fn draw_picture_area_as<P: Pixel>(&self, picture: &Picture, area: PixelRect, pixels: &mut [P]) {
-        let Some(raster) = picture.raster.as_ref() else {
+    fn draw_picture_area_as<P: Pixel>(&self, area: PixelRect, pixels: &mut [P]) {
+        let Some(raster) = self.scene.raster() else {
             return;
         };
         let len = area.width as usize * area.height as usize;
@@ -349,45 +200,52 @@ impl PixelsRenderer {
         draw::draw_raster_window(
             &mut target,
             raster,
-            &picture.reach,
+            self.scene.reach(),
             self.scene.diagnostics(),
             &self.text,
         );
     }
 
-    /// The scene at `scale` device pixels per point as sprites for a GPU
-    /// compositor, into `frame`, which keeps its textures from the frames
-    /// before. Invalid scales use 1.0.
-    pub fn compose_sprites(
-        &self,
-        frame: &mut sprites::SpriteFrame,
-        width: u32,
-        height: u32,
-        scale: f32,
-    ) {
-        let mut scene = std::mem::take(&mut frame.scene);
-        self.fill_raster_scene(&mut scene, valid_scale(scale), None);
-        frame.compose(&scene, width, height, self.scene.diagnostics(), &self.text);
-        frame.scene = scene;
-    }
-}
-
-impl Picture {
-    fn frame(&self) -> draw::ClipBounds {
-        draw::ClipBounds {
-            min_x: 0,
-            min_y: 0,
-            max_x: i32::try_from(self.width).unwrap_or(i32::MAX),
-            max_y: i32::try_from(self.height).unwrap_or(i32::MAX),
+    /// The scene as sprites for a GPU compositor of a `width` by `height`
+    /// display, into `frame`, which keeps its textures from the frames
+    /// before.
+    pub fn compose_sprites(&self, frame: &mut sprites::SpriteFrame, width: u32, height: u32) {
+        if let Some(raster) = self.scene.raster() {
+            frame.compose(raster, width, height, self.scene.diagnostics(), &self.text);
         }
     }
 
-    fn measure_reach(&mut self) {
-        let frame = self.frame();
-        match self.raster.as_ref() {
-            Some(raster) => raster.reach_into(frame, &mut self.reach),
-            None => self.reach.clear(),
-        }
+    /// Shows `graph`, a hand-built render graph, as the scene, for tests of
+    /// what a renderer draws for a graph.
+    #[doc(hidden)]
+    pub fn show_graph_for_tests(&mut self, graph: &cranpose_render_common::graph::RenderGraph) {
+        self.scene.rebuild_from_graph(graph, &self.text);
+    }
+
+    /// Builds a scene anew from the layout tree beside each update from now
+    /// on, which [`Self::draw_fresh_build_for_tests`] draws: tests compare a
+    /// scene updated in place with it.
+    #[doc(hidden)]
+    pub fn keep_fresh_builds_for_tests(&mut self) {
+        self.scene.keep_fresh_builds();
+    }
+
+    /// Draws the scene the last update built anew beside the updated one
+    /// into `frame`, as [`Self::draw`] draws the updated one.
+    #[doc(hidden)]
+    pub fn draw_fresh_build_for_tests(&self, frame: &mut [u8], width: u32, height: u32) {
+        draw::draw_raster_frame(
+            frame,
+            (width, height),
+            self.scene.fresh_build(),
+            self.scene.diagnostics(),
+            &self.text,
+        );
+    }
+
+    fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
+        app_context.set_text_fonts(self.text.fonts.resolver());
+        self.app_context = Some(app_context.downgrade());
     }
 }
 
@@ -396,8 +254,7 @@ impl Renderer for PixelsRenderer {
     type Error = std::convert::Infallible;
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        app_context.set_text_fonts(self.text.fonts.resolver());
-        self.app_context = Some(app_context.downgrade());
+        Self::attach_app_context_services(self, app_context);
     }
 
     #[cfg(feature = "installed-fonts")]
@@ -412,12 +269,12 @@ impl Renderer for PixelsRenderer {
             .and_then(std::rc::Weak::upgrade)
             .is_some_and(|attached| std::ptr::eq(&*attached, app_context));
         if attached {
-            self.attach_app_context_services(app_context);
+            Self::attach_app_context_services(self, app_context);
         }
     }
 
     fn set_root_scale(&mut self, scale: f32) {
-        self.direct.set_scale(scale);
+        self.scene.set_scale(valid_scale(scale));
     }
 
     fn scene(&self) -> &Self::Scene {
@@ -434,7 +291,8 @@ impl Renderer for PixelsRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
-        pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
+        let graph = build_graph_from_layout_tree(layout_tree.root(), 1.0);
+        self.scene.rebuild_from_graph(&graph, &self.text);
         Ok(())
     }
 
@@ -444,9 +302,7 @@ impl Renderer for PixelsRenderer {
         root: cranpose_core::NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.rebuild_from_applier(applier, root);
-        self.direct
-            .build(applier, root, None, (self.scene.diagnostics(), &self.text));
+        self.scene.rebuild(applier, root, &self.text);
         Ok(())
     }
 
@@ -457,13 +313,7 @@ impl Renderer for PixelsRenderer {
         _viewport: Size,
         updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        self.scene.update_from_applier(applier, root, updates);
-        self.direct.build(
-            applier,
-            root,
-            Some(updates),
-            (self.scene.diagnostics(), &self.text),
-        );
+        self.scene.update(applier, root, updates, &self.text);
         Ok(())
     }
 }

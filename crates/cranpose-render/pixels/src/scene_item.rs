@@ -5,7 +5,7 @@ use cranpose_ui_graphics::Point;
 
 use crate::{
     draw::RenderItem,
-    scene::{DrawShape, ImageDraw, ItemCounts, RasterScene, ShadowDraw, TextDraw},
+    raster_scene::{DrawShape, ImageDraw, ItemCounts, RasterScene, ShadowDraw, TextDraw},
 };
 
 // An item of a scene, borrowed from its list.

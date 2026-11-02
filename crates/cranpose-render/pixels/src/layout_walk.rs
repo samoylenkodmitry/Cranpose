@@ -3,19 +3,21 @@
 //! items at once and lets the node go, and copies from the scene before the
 //! subtrees whose nodes did not change since.
 
+use std::cell::RefCell;
+
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks};
 use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        LowerContext, LoweredNode, NodePlace, RecordingStore, kept_child_placement,
-        lower_node_alone, recycle_lowered, release_lowered,
+        LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, kept_child_placement,
+        lower_node_alone, lower_space_fragment, recycle_lowered, release_lowered,
     },
 };
 
 use crate::{
     pipeline::{RasterTraversalContext, Reuse, populate_draws_from_graph},
-    scene::{RasterScene, Subtree, SubtreeItems},
+    raster_scene::{RasterScene, Subtree, SubtreeItems},
 };
 
 // The mark of a node above a dirty node.
@@ -32,10 +34,13 @@ pub(crate) struct DirtyMarks {
 
 impl DirtyMarks {
     // Marks the nodes of `updates` with their updates, merged for a node
-    // named more than once, and the nodes above them.
-    pub(crate) fn mark(&mut self, applier: &MemoryApplier, updates: SceneUpdates<'_>) {
+    // named more than once, and the nodes above them. Returns whether an
+    // update may move a layer with no layout pass.
+    pub(crate) fn mark(&mut self, applier: &MemoryApplier, updates: SceneUpdates<'_>) -> bool {
         self.marks.reset(applier);
+        let mut moves = false;
         for &(node, update) in updates {
+            moves |= !matches!(update, NodeUpdate::Content | NodeUpdate::Draws);
             let mark = self.marks.get(applier, node);
             let merged = decode(mark).map_or(update, |before| before.merge(update));
             self.marks.set(
@@ -45,11 +50,19 @@ impl DirtyMarks {
             );
             self.marks.add_with_ancestors(applier, node, 0, ABOVE_DIRTY);
         }
+        moves
     }
 
     // Unmarks every node: a build with no marks lowers every node.
     pub(crate) fn clear(&mut self, applier: &MemoryApplier) {
         self.marks.reset(applier);
+    }
+
+    // Marks with no node marked.
+    pub(crate) fn cleared(applier: &MemoryApplier) -> Self {
+        let mut marks = Self::default();
+        marks.clear(applier);
+        marks
     }
 
     // Whether neither `node` nor a node beneath it changed.
@@ -160,16 +173,34 @@ impl OldChildren {
     }
 }
 
+// A subtree whose layer holds a 3D space, which the scene keeps whole, and
+// whether the scene published where its surfaces show since the walk
+// lowered it.
+pub(crate) struct KeptSpace {
+    pub space: SpaceFragment,
+    pub published: bool,
+}
+
 // A walk of one window's layout tree, with the marks of the update it
-// pushes.
+// pushes, and the subtrees whose layers hold a 3D space, which the scene
+// keeps whole.
 pub(crate) struct LayoutWalk<'a> {
     applier: &'a MemoryApplier,
     marks: &'a DirtyMarks,
+    spaces: &'a RefCell<Vec<KeptSpace>>,
 }
 
 impl<'a> LayoutWalk<'a> {
-    pub(crate) fn new(applier: &'a MemoryApplier, marks: &'a DirtyMarks) -> Self {
-        Self { applier, marks }
+    pub(crate) fn new(
+        applier: &'a MemoryApplier,
+        marks: &'a DirtyMarks,
+        spaces: &'a RefCell<Vec<KeptSpace>>,
+    ) -> Self {
+        Self {
+            applier,
+            marks,
+            spaces,
+        }
     }
 
     pub(crate) fn applier(&self) -> &'a MemoryApplier {
@@ -186,100 +217,133 @@ impl<'a> LayoutWalk<'a> {
         self.marks.changed(self.applier, node)
     }
 
-    // Lowers `node` at `place` alone under `lower_context` and pushes its
-    // subtree under `context`, over its old subtree, whose children's old
-    // records are `old`, while a rewrite pushes it again.
-    pub(crate) fn push_node(
-        &self,
-        (node, place): (NodeId, NodePlace),
-        lower_context: LowerContext,
-        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
-        old: OldChildren,
-    ) {
-        lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
-            let LoweredNode {
-                node: lowered,
-                children,
-                child_context,
-            } = lowered;
-            if let Some(subtree) = Subtree::of_child(&lowered) {
-                let mut slot = ChildSlot {
-                    walk: self,
-                    owner: node,
-                    children,
-                    context: child_context,
-                    old: Some(old),
-                };
-                let slot = (!children.is_empty()).then_some(&mut slot);
-                populate_draws_from_graph(subtree, scene, context, &mut None, slot);
-            }
-            recycle_lowered(lowered);
-        });
+    // Whether the scene keeps `node`'s subtree whole, as its layer holds a
+    // 3D space.
+    pub(crate) fn holds_space(&self, node: NodeId) -> bool {
+        self.spaces
+            .borrow()
+            .iter()
+            .any(|kept| kept.space.node() == node)
     }
 
-    // Lowers the window's root `root` alone and hands its layer and the slot
-    // of its children to `push`. False when the root is not placed.
+    // Lowers the window's root `root` alone, or whole when its layer holds a
+    // 3D space, and hands its layer and the slot of its children to `push`.
+    // False when the root is not placed.
     pub(crate) fn lower_root(
         &self,
         root: NodeId,
         push: impl FnOnce(&RenderNode, Option<&mut ChildSlot<'_>>),
     ) -> bool {
         let context = LowerContext::root(RecordingStore::Shared);
+        let mut push = Some(push);
         let lowered = lower_node_alone(self.applier, (root, NodePlace::Root), context, |lowered| {
             let LoweredNode {
                 node,
                 children,
                 child_context,
             } = lowered;
-            let mut slot = ChildSlot {
-                walk: self,
-                owner: root,
-                children,
-                context: child_context,
-                old: None,
-            };
-            push(&node, (!children.is_empty()).then_some(&mut slot));
+            let space = holds_space(&node);
+            if !space && let Some(push) = push.take() {
+                let mut slot = ChildSlot {
+                    walk: self,
+                    owner: root,
+                    children,
+                    context: child_context,
+                    old: None,
+                };
+                push(&node, (!children.is_empty()).then_some(&mut slot));
+            }
             recycle_lowered(node);
+            space
         });
+        if lowered == Some(true)
+            && let Some(push) = push.take()
+            && let Some(space) =
+                lower_space_fragment(self.applier, (root, NodePlace::Root), context)
+        {
+            push(space.root(), None);
+            self.keep_space(space);
+        }
         release_lowered();
         lowered.is_some()
     }
 
-    // Lowers `child` alone under `lower_context` and pushes its subtree
-    // under `context`, over its old subtree, whose children's old records
-    // are `old`, while a rewrite pushes the subtree it is in again.
-    fn push_child(
+    // Lowers `node` at `place` alone under `lower_context` and pushes its
+    // subtree under `context`: over its old subtree, whose children's old
+    // records are `old`, while a rewrite pushes the subtree it is in again.
+    // A node whose layer holds a 3D space lowers whole, and the scene keeps
+    // its subtree.
+    pub(crate) fn push(
         &self,
-        (child, lower_context): (NodeId, LowerContext),
+        (node, place): (NodeId, NodePlace),
+        lower_context: LowerContext,
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         reuse: &mut Option<Reuse<'_>>,
         old: Option<OldChildren>,
     ) {
-        lower_node_alone(
-            self.applier,
-            (child, NodePlace::Child),
-            lower_context,
-            |lowered| {
-                let LoweredNode {
-                    node,
+        let lowered = lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
+            let LoweredNode {
+                node: lowered,
+                children,
+                child_context,
+            } = lowered;
+            let space = holds_space(&lowered);
+            if !space && let Some(subtree) = Subtree::of_child(&lowered) {
+                let mut slot = ChildSlot {
+                    walk: self,
+                    owner: node,
                     children,
-                    child_context,
-                } = lowered;
-                if let Some(subtree) = Subtree::of_child(&node) {
-                    let mut slot = ChildSlot {
-                        walk: self,
-                        owner: child,
-                        children,
-                        context: child_context,
-                        old,
-                    };
-                    let slot = (!children.is_empty()).then_some(&mut slot);
-                    populate_draws_from_graph(subtree, scene, context, reuse, slot);
-                }
-                recycle_lowered(node);
-            },
-        );
+                    context: child_context,
+                    old,
+                };
+                let slot = (!children.is_empty()).then_some(&mut slot);
+                populate_draws_from_graph(subtree, scene, context, reuse, slot);
+            }
+            recycle_lowered(lowered);
+            space
+        });
+        if lowered == Some(true)
+            && let Some(space) = lower_space_fragment(self.applier, (node, place), lower_context)
+        {
+            if let Some(subtree) = Subtree::of_child(space.root()) {
+                populate_draws_from_graph(subtree, scene, context, reuse, None);
+            }
+            self.keep_space(space);
+        }
     }
+
+    // Keeps `space` in place of the subtree the scene kept for its node.
+    fn keep_space(&self, space: SpaceFragment) {
+        let mut spaces = self.spaces.borrow_mut();
+        let kept = KeptSpace {
+            space,
+            published: false,
+        };
+        match spaces
+            .iter_mut()
+            .find(|old| old.space.node() == kept.space.node())
+        {
+            Some(old) => *old = kept,
+            None => spaces.push(kept),
+        }
+    }
+}
+
+// Whether `node`, a node lowered alone, holds a 3D space in its own layer.
+fn holds_space(node: &RenderNode) -> bool {
+    let RenderNode::Layer(layer) = node else {
+        return false;
+    };
+    if layer.graphics_layer.space.is_some() {
+        return true;
+    }
+    // The wrapper of a node's outer draws holds the node's layer.
+    layer.wraps.is_some_and(|wrapped| {
+        layer.children.iter().any(|child| {
+            matches!(child, RenderNode::Layer(inner)
+                if inner.node_id == Some(wrapped) && inner.graphics_layer.space.is_some())
+        })
+    })
 }
 
 // The layout children of a lowered node, which its own layer pushes between
@@ -320,7 +384,13 @@ impl ChildSlot<'_> {
             {
                 continue;
             }
-            walk.push_child((child, self.context), (scene, context), reuse, None);
+            walk.push(
+                (child, NodePlace::Child),
+                self.context,
+                (scene, context),
+                reuse,
+                None,
+            );
         }
     }
 
@@ -337,7 +407,13 @@ impl ChildSlot<'_> {
         for &child in self.children {
             let found = OldChildren::find(&scene.subtrees, (old.cursor, old.end), child);
             let Some(at) = found else {
-                walk.push_child((child, self.context), (scene, context), &mut None, None);
+                walk.push(
+                    (child, NodePlace::Child),
+                    self.context,
+                    (scene, context),
+                    &mut None,
+                    None,
+                );
                 continue;
             };
             let end = scene.subtrees[at].end;
@@ -352,8 +428,9 @@ impl ChildSlot<'_> {
                 scene.rewrite = Some(rewrite);
             } else {
                 let children = OldChildren::of(&scene.subtrees, at, child);
-                walk.push_child(
-                    (child, self.context),
+                walk.push(
+                    (child, NodePlace::Child),
+                    self.context,
                     (scene, context),
                     &mut None,
                     Some(children),

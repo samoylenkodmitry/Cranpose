@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
-    scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
+    raster_scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
     scene_item::ItemRef,
 };
 

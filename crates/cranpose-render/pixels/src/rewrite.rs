@@ -14,7 +14,7 @@ use crate::{
     damage::{ItemReach, add_changed_pair, add_changed_runs},
     draw::{ClipBounds, RenderItem},
     pipeline::UpdatedReach,
-    scene::{ItemCounts, PassedDown, RasterScene, SubtreeItems},
+    raster_scene::{HitLayer, ItemCounts, PassedDown, RasterScene, SubtreeItems},
     scene_item::SceneItem,
 };
 
@@ -161,10 +161,11 @@ impl Rewrite {
     // next one, when that one is of the same node and its items start where
     // the record's do; else into the spill. Returns where the record would
     // lie, were the spill in place.
+    // The old record's box of hit facts takes the new ones in place.
     pub(crate) fn place_record(
         &mut self,
         records: &mut [SubtreeItems],
-        record: SubtreeItems,
+        (record, hits): (SubtreeItems, Option<HitLayer>),
     ) -> usize {
         if self.spilled_at.is_none() {
             let index = self.next.records;
@@ -178,8 +179,10 @@ impl Rewrite {
                     passed_down: old.passed_down,
                 });
                 self.own_items_end = own_items_end(records, index, old.end, old.stop);
+                let kept = records[index].hits.take();
                 records[index] = SubtreeItems {
                     end: index + 1,
+                    hits: boxed_hits(kept, hits),
                     ..record
                 };
                 self.next.records += 1;
@@ -190,6 +193,7 @@ impl Rewrite {
         let index = self.record_count();
         self.spill.subtrees.push(SubtreeItems {
             end: index + 1,
+            hits: hits.map(Box::new),
             ..record
         });
         index
@@ -371,6 +375,22 @@ impl Rewrite {
     // The storage of the spill, for a scene built anew.
     pub(crate) fn take_storage(&mut self) -> RasterScene {
         std::mem::take(&mut self.spill)
+    }
+
+    // Takes `scene`, emptied, as the spill's storage.
+    pub(crate) fn give_storage(&mut self, scene: RasterScene) {
+        self.spill = scene;
+    }
+}
+
+// `hits` in `kept`, the box of an old record, when there is one.
+fn boxed_hits(kept: Option<Box<HitLayer>>, hits: Option<HitLayer>) -> Option<Box<HitLayer>> {
+    match (kept, hits) {
+        (Some(mut kept), Some(hits)) => {
+            *kept = hits;
+            Some(kept)
+        }
+        (_, hits) => hits.map(Box::new),
     }
 }
 

@@ -9,7 +9,7 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
-use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
+use cranpose_render_pixels::{PixelRect, PixelsRenderer};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
 use cranpose_ui_graphics::{
     Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
@@ -357,8 +357,11 @@ fn StillParent(captured: Step) {
 fn shell(scale: f32, scenes: fn(Step)) -> (AppShell<PixelsRenderer>, Step) {
     let captured: Step = Rc::default();
     let content = Rc::clone(&captured);
+    // The full redraw each frame compares with draws a scene built anew.
+    let mut renderer = PixelsRenderer::new();
+    renderer.keep_fresh_builds_for_tests();
     let shell = AppShell::new_with_size_and_density(
-        PixelsRenderer::new(),
+        renderer,
         location_key(file!(), line!(), column!()),
         move || scenes(Rc::clone(&content)),
         (WIDTH, HEIGHT),
@@ -388,7 +391,6 @@ fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
 
 fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
     let (mut shell, captured) = shell(scale, scenes);
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
@@ -400,13 +402,13 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
         }
         shell.update();
         shell.primary().with_renderer(|renderer| {
-            renderer.update_picture(&mut picture, WIDTH, HEIGHT, scale, &mut areas);
+            renderer.update_picture(WIDTH, HEIGHT, &mut areas);
             for area in &areas {
                 area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
-                renderer.draw_picture_area(&picture, *area, &mut area_pixels);
+                renderer.draw_picture_area(*area, &mut area_pixels);
                 apply(&mut kept, *area, &area_pixels);
             }
-            renderer.draw_scaled(&mut full, WIDTH, HEIGHT, scale);
+            renderer.draw_fresh_build_for_tests(&mut full, WIDTH, HEIGHT);
         });
         assert_eq!(
             first_difference(&kept, &full),
@@ -487,11 +489,10 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert_eq!(
         areas,
@@ -505,7 +506,7 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
 
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert!(areas.is_empty(), "a still frame changed {areas:?}");
 
@@ -513,7 +514,7 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
     step.set(7);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     let changed: u32 = areas.iter().map(|area| area.width * area.height).sum();
     assert!(!areas.is_empty());
@@ -565,18 +566,17 @@ fn a_growing_bar_changes_only_the_strip_at_its_end() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     // The bar's end moves from x = 60 to 63, and its corners reach 8 in.
     assert_eq!(
@@ -635,18 +635,17 @@ fn many_changes_far_apart_leave_the_still_pixels_between_them() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert!(
         areas
@@ -707,18 +706,17 @@ fn a_row_added_below_still_content_leaves_that_content() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     assert!(
         areas
@@ -818,18 +816,17 @@ fn a_growing_ring_changes_only_the_area_around_its_end() {
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
-    let mut picture = Picture::default();
     let mut areas = Vec::new();
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
 
     let step = (*captured.borrow()).expect("the composition remembered the step");
     step.set(1);
     shell.update();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
     });
     // The end moves from 23 to 44 degrees past the top, clockwise: the ring
     // and its track left of the top stay.

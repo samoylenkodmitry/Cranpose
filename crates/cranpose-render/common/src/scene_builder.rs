@@ -43,6 +43,7 @@ pub use lowered_node::{
 };
 mod node_layer;
 pub use node_layer::LowerContext;
+mod space_fragment;
 use node_layer::{
     AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_context,
     children_have_origin_sinks, hit_test_from_slices, layer_and_node_bounds, layer_identity,
@@ -51,6 +52,7 @@ use node_layer::{
     read_placed_node_data, slices_hit_something, take_wrapped_layer, write_node_content,
     write_node_layer, write_snapshot_layer, write_wrapper,
 };
+pub use space_fragment::{SpaceFragment, lower_space_fragment};
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
 use translate_layer::{
