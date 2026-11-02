@@ -20,6 +20,8 @@ const TIGHT_KEPT_BYTES: usize = 1024;
 pub(crate) struct RedrawnRecordings {
     kept: NodeMap<RecorderKey, Kept>,
     update: u64,
+    // How many commands kept their buffers in the update that draws now.
+    kept_now: usize,
     tight: bool,
 }
 
@@ -42,16 +44,18 @@ impl RedrawnRecordings {
     // the command to record into again, or a new one with the room the kept
     // one had; a new one when there is none. A command takes no buffers
     // another command filled: a node that keeps its recording past the
-    // update, as a moved subtree does, would hold their room.
+    // update, as a moved subtree does, would hold their room. A kept room
+    // stays in its box, which the command's next room takes.
     pub(crate) fn acquire(&mut self, id: DrawCommandId) -> Rc<CommandRecording> {
-        let kept = self
-            .kept
-            .get_mut(&RecorderKey::from(id))
-            .and_then(|kept| kept.buffers.take());
-        match kept {
-            Some(RedrawnBuffers::Recording(recording)) => recording,
+        let Some(kept) = self.kept.get_mut(&RecorderKey::from(id)) else {
+            return Rc::default();
+        };
+        match &mut kept.buffers {
             Some(RedrawnBuffers::Room(room)) => Rc::new(room.empty_recording()),
-            None => Rc::default(),
+            buffers => match buffers.take() {
+                Some(RedrawnBuffers::Recording(recording)) => recording,
+                _ => Rc::default(),
+            },
         }
     }
 
@@ -70,27 +74,39 @@ impl RedrawnRecordings {
             buffers: None,
             drawn: u64::MAX,
         });
+        if kept.drawn != update {
+            self.kept_now += 1;
+        }
         let again = kept.drawn == update.wrapping_sub(1) || kept.drawn == update;
         let keeps = again && (!self.tight || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES);
-        kept.buffers = Some(if keeps {
-            RedrawnBuffers::Recording(recording)
-        } else {
-            RedrawnBuffers::Room(Box::new(RecordingRoom::of(&recording)))
-        });
+        match &mut kept.buffers {
+            buffers if keeps => *buffers = Some(RedrawnBuffers::Recording(recording)),
+            Some(RedrawnBuffers::Room(room)) => **room = RecordingRoom::of(&recording),
+            buffers => {
+                *buffers = Some(RedrawnBuffers::Room(Box::new(RecordingRoom::of(
+                    &recording,
+                ))));
+            }
+        }
         kept.drawn = update;
     }
 
     // Lets go the recordings of the commands this update did not draw as it
     // ends; `tight` is whether the memory left is little, which the next
-    // update keeps recordings by.
+    // update keeps recordings by. An update that drew every command kept
+    // has none to let go.
     pub(crate) fn end_update(&mut self, tight: bool) {
         self.tight = tight;
         let update = self.update;
-        self.kept.retain(|_, kept| kept.drawn == update);
+        if self.kept_now < self.kept.len() {
+            self.kept.retain(|_, kept| kept.drawn == update);
+        }
+        self.kept_now = 0;
         self.update = update.wrapping_add(1);
     }
 
     pub(crate) fn clear(&mut self) {
         self.kept.clear();
+        self.kept_now = 0;
     }
 }
