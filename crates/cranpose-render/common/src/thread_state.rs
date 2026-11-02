@@ -30,6 +30,8 @@ pub(crate) struct RenderThreadState {
     // that draws now.
     pub(crate) redrawn_recordings: RefCell<NodeMap<RecorderKey, (Option<RedrawnBuffers>, u64)>>,
     pub(crate) redrawn_update: Cell<u64>,
+    // Whether the memory left was little when the last update ended.
+    pub(crate) redrawn_tight: Cell<bool>,
     // The recordings the commands of the update that runs gave back, for its
     // next commands.
     pub(crate) spare_recordings: RefCell<Vec<Rc<CommandRecording>>>,
@@ -52,6 +54,7 @@ impl RenderThreadState {
             recording_generation: Cell::new(0),
             redrawn_recordings: RefCell::new(NodeMap::default()),
             redrawn_update: Cell::new(0),
+            redrawn_tight: Cell::new(false),
             spare_recordings: RefCell::new(Vec::new()),
             space_changed: Cell::new(false),
             #[cfg(test)]

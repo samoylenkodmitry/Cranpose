@@ -181,11 +181,9 @@ pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecordin
             .entry(RecorderKey::from(id))
             .or_insert((None, u64::MAX));
         let again = entry.1 == update.wrapping_sub(1) || entry.1 == update;
-        let fits = || {
-            cranpose_ui::current_memory_headroom() != cranpose_ui_graphics::MemoryHeadroom::Tight
-                || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES
-        };
-        let (kept, spare) = if again && fits() {
+        let keeps = again
+            && (!state.redrawn_tight.get() || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES);
+        let (kept, spare) = if keeps {
             (RedrawnBuffers::Recording(recording), None)
         } else {
             (RedrawnBuffers::Room(RecordingRoom::of(&recording)), Some(recording))
@@ -200,9 +198,13 @@ pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecordin
 }
 
 // Lets go the recordings of the commands this update did not draw, and the
-// spare ones, as it ends.
+// spare ones, as it ends, and reads the memory headroom the next update
+// keeps recordings by.
 pub(crate) fn end_redrawn_update() {
+    let tight =
+        cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight;
     crate::thread_state::with(|state| {
+        state.redrawn_tight.set(tight);
         let update = state.redrawn_update.get();
         state
             .redrawn_recordings
