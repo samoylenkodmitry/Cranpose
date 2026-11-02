@@ -112,10 +112,11 @@ pub(crate) fn recycle_node(node: RenderNode) {
     crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_node(node));
 }
 
-// Moves the boxes of `node`, a node lowered with recordings it does not
-// keep, into the pool, and keeps its draw runs' recordings for their
-// commands' next draws.
-pub(crate) fn recycle_redrawn_node(mut node: RenderNode) {
+/// Moves the boxes of `node`, a node
+/// [`lower_node_alone`](crate::scene_builder::lower_node_alone) gave whose
+/// items a renderer took, into the pool the next lowered nodes take theirs
+/// from, and keeps the recordings of its draws for their next draws.
+pub fn recycle_lowered(mut node: RenderNode) {
     give_back_recordings(&mut node);
     recycle_node(node);
 }

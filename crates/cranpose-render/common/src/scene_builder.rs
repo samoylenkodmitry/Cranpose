@@ -41,8 +41,10 @@ use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translat
 mod lowered_node;
 pub use lowered_node::{
     ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone,
-    recycle_lowered, release_lowered, release_walk_storage, root_layer_bounds, visit_kept_node,
+    release_lowered, release_walk_storage, root_layer_bounds, visit_kept_node,
 };
+
+pub use crate::layer_recycling::recycle_lowered;
 mod moved_subtree;
 pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};
 mod lower_context;
