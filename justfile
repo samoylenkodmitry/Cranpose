@@ -339,13 +339,15 @@ clippy-robot:
 # android job pairs the feature with renderer-wgpu, which is how #631 stayed
 # hidden: two gates named `android` alone and reached for renderer-wgpu items,
 # so a configuration the manifest offers was one no build ever tried. One
-# crate, one ABI, `check` only.
+# crate, one ABI, with warnings denied: the Android host needs the renderer,
+# so an item only that host uses gates on renderer-wgpu, or it is dead code
+# in this build.
 #
 # The third line lints the Android media backend, which no in-repo app
 # enables: it gathered lint errors unseen until an app turned `media` on.
 clippy-android:
     cargo ndk --platform 24 -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
-    cargo check --target aarch64-linux-android -p cranpose --no-default-features --features android
+    cargo clippy --target aarch64-linux-android -p cranpose --no-default-features --features android -- -D warnings -A clippy::missing_const_for_thread_local
     cargo ndk --platform 24 -t arm64-v8a clippy -p cranpose --no-default-features --features android,renderer-wgpu,media -- -D warnings -A clippy::missing_const_for_thread_local
 
 # --- code quality gates -----------------------------------------------------

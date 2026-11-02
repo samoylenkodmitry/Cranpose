@@ -5,6 +5,8 @@ use std::{
     sync::atomic::{AtomicBool, AtomicI64, Ordering},
 };
 
+use crate::vsync_period::{MAX_VSYNC_PERIOD_NS, MIN_VSYNC_PERIOD_NS};
+
 const DEFAULT_WINDOW_FRAMES: usize = 120;
 const PROP_VALUE_MAX: usize = 92;
 
@@ -153,9 +155,6 @@ static VSYNC_LAST_NS: AtomicI64 = AtomicI64::new(0);
 static VSYNC_PERIOD_NS: AtomicI64 = AtomicI64::new(0);
 static VSYNC_PROBE_RUNNING: AtomicBool = AtomicBool::new(false);
 static DISPLAY_PERIOD_KNOWN: AtomicBool = AtomicBool::new(false);
-
-const MIN_VSYNC_PERIOD_NS: i64 = 4_000_000;
-const MAX_VSYNC_PERIOD_NS: i64 = 40_000_000;
 
 pub(crate) fn start_vsync_probe_if_enabled() {
     if !property_flag("debug.cranpose.vsync_probe") {

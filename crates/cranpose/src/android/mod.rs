@@ -11,11 +11,11 @@ pub(crate) mod accessibility_wire;
 mod activity_window_layout;
 #[cfg(all(target_os = "android", target_arch = "arm"))]
 mod aeabi_memory;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod app_info;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod app_update;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod camera;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod configuration;
@@ -23,44 +23,47 @@ mod configuration;
 pub(crate) mod display_timing;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod event_loop;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod file_picker;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod finish;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod font_scale;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod frame_rate;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod frame_telemetry;
+#[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod frame_work;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod haptics_queue;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod heart_rate;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod host;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod host_window_requests;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod input;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod jni;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod keyboard;
+#[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod launch_args;
 #[cfg(all(feature = "media-backend", target_os = "android"))]
 pub(crate) mod media;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone_standby;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod overlay_window;
+#[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod panic_hook;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod perf_hint;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod permissions;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod pipeline_cache;
@@ -90,14 +93,15 @@ mod shell_creation;
 pub(crate) mod surface;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod text_input;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod vsync;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod wearable;
 #[cfg(all(feature = "webview", feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod webview;
+#[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod wire_escape;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod writable_folder;
 
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
