@@ -15,7 +15,6 @@ use cranpose_render_common::{
         recycle_lowered, release_lowered,
     },
 };
-
 use cranpose_ui_graphics::Point;
 
 use crate::{

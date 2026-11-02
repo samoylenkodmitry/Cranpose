@@ -55,7 +55,12 @@ impl MovedSubtree {
     /// Publishes where its layers that publish window origins now lie.
     /// False when `context` passes down other state than the subtree was
     /// lowered with.
-    pub fn follow(&mut self, applier: &MemoryApplier, position: Point, context: LowerContext) -> bool {
+    pub fn follow(
+        &mut self,
+        applier: &MemoryApplier,
+        position: Point,
+        context: LowerContext,
+    ) -> bool {
         if Inherited::of(context) != self.lowered_with {
             return false;
         }

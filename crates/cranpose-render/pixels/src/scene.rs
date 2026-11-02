@@ -8,10 +8,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{
-    MemoryApplier, NodeId,
-    collections::map::HashMap,
-};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 pub use cranpose_render_common::graph_scene::HitRegion;
 use cranpose_render_common::{
     RenderScene, SceneUpdates,
@@ -352,7 +349,6 @@ impl Scene {
         }
         self.hits.borrow()
     }
-
 }
 
 impl Default for Scene {
@@ -544,7 +540,11 @@ impl RenderScene for Scene {
 
     fn visit_retained_visual_observation_nodes(&self, visit: &mut dyn FnMut(NodeId)) -> bool {
         if let Some(raster) = &self.raster {
-            for node in raster.subtrees.iter().filter_map(|record| record.identity.0) {
+            for node in raster
+                .subtrees
+                .iter()
+                .filter_map(|record| record.identity.0)
+            {
                 visit(node);
             }
         }

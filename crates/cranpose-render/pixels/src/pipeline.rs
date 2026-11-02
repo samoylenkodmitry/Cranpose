@@ -1,18 +1,17 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Brush,
     graph::{
-        InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode, TextPrimitiveNode, for_each_in_draw_order,
+        InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderGraph,
+        RenderNode, TextPrimitiveNode, for_each_in_draw_order,
     },
     graph_scene::RenderDiagnostics,
     layer_composition::folded_layer_alpha,
     layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::resolve_clip,
-    scene_builder::ChildPlacement,
     text_decoration::{visit_text_backgrounds, visit_text_lines},
     text_raster::GlyphInk,
 };
@@ -24,7 +23,7 @@ use cranpose_ui_graphics::{
 use crate::{
     draw::TextRaster,
     layout_walk::{ChildSlot, LayoutWalk},
-    raster_scene::{ItemCounts, PassedDown, RasterScene, Subtree, TextDraw},
+    raster_scene::{PassedDown, RasterScene, Subtree, TextDraw},
     style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
@@ -104,92 +103,6 @@ pub(crate) struct RasterTraversalContext<'a> {
     /// Whether the walk lies in a scene's space, whose scene draws the
     /// mesh surfaces and 3D transforms there, as its eye sees them.
     in_space: bool,
-}
-
-/// The scene the frame before built, whose items a walk copies for each
-/// subtree that did not change since.
-pub(crate) struct Reuse<'a> {
-    old: &'a RasterScene,
-    /// The old record of the layer the walk reaches next, while the graph
-    /// keeps the shape it had.
-    cursor: usize,
-    /// The old records of unchanged subtrees, siblings one after another,
-    /// to copy before the scene takes anything else, and the counts their
-    /// items reach there: a run of them copies as one.
-    pending: Option<(Range<usize>, ItemCounts)>,
-}
-
-impl Reuse<'_> {
-    /// The index of the old record of the node with `identity`, at the
-    /// cursor or one subtree on, after a sibling before it went away.
-    fn find(&self, identity: (Option<NodeId>, Option<NodeId>)) -> Option<usize> {
-        let records = &self.old.subtrees;
-        let at = records.get(self.cursor)?;
-        if at.identity == identity {
-            return Some(self.cursor);
-        }
-        records
-            .get(at.end)
-            .is_some_and(|next| next.identity == identity)
-            .then_some(at.end)
-    }
-
-    /// Queues the copy of the subtree of the old record `index`, which ends
-    /// at `end` and pushed its items up to `stop`.
-    fn copy_later(&mut self, scene: &mut RasterScene, index: usize, end: usize, stop: ItemCounts) {
-        match &mut self.pending {
-            Some((records, pending_stop)) if records.end == index => {
-                records.end = end;
-                *pending_stop = stop;
-            }
-            _ => {
-                self.flush(scene);
-                self.pending = Some((index..end, stop));
-            }
-        }
-    }
-
-    // Queues the copy of the old subtree of the node that `placement` names
-    // when the old scene holds it at the cursor or one subtree on, placed by
-    // its transform, under a walk `context` above that passed down what it
-    // did then.
-    // Returns whether it did.
-    pub(crate) fn keep(
-        &mut self,
-        scene: &mut RasterScene,
-        placement: ChildPlacement,
-        context: &RasterTraversalContext<'_>,
-    ) -> bool {
-        let Some(index) = self
-            .find(placement.identity)
-            .filter(|_| context.same_as_before)
-        else {
-            return false;
-        };
-        let record = &self.old.subtrees[index];
-        if record.transform != placement.transform {
-            return false;
-        }
-        let (end, stop) = (record.end, record.stop);
-        self.cursor = end;
-        self.copy_later(scene, index, end, stop);
-        true
-    }
-
-    /// Copies the queued subtrees into `scene`.
-    fn flush(&mut self, scene: &mut RasterScene) {
-        if let Some((records, stop)) = self.pending.take() {
-            scene.copy_subtrees(self.old, records, stop);
-        }
-    }
-}
-
-/// Copies the subtrees `reuse` queued into `scene`, before it takes items of
-/// its own.
-fn flush_copies(reuse: &mut Option<Reuse<'_>>, scene: &mut RasterScene) {
-    if let Some(reuse) = reuse.as_mut() {
-        reuse.flush(scene);
-    }
 }
 
 fn contains_text_primitives(nodes: &[RenderNode]) -> bool {
@@ -385,15 +298,20 @@ pub(crate) fn build_raster_scene(
 /// copied from it.
 mod draw_child;
 mod in_place;
+mod layer_children;
 mod layer_shadow;
+mod reuse;
 mod space;
 
 #[cfg(test)]
 pub(crate) use draw_child::push_draw_primitive;
 use draw_child::render_draw_child;
 pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
+use layer_children::{LayerChildren, Next, for_each_around_children};
 use layer_shadow::push_layer_shadow;
-use space::{push_seen_surfaces, seen_surfaces};
+pub(crate) use reuse::Reuse;
+use reuse::flush_copies;
+use space::seen_surfaces;
 
 /// The shadow light of a scene `graph` gives at `scale`.
 fn scene_light(graph: &RenderGraph, scale: f32) -> ShadowLight {
@@ -879,136 +797,6 @@ fn push_layer_items(
             children.push(Next::Node(child), scene, reuse);
         });
     }
-}
-
-// What a layer's children push under: the walk above it, what it passes
-// down to its child layers, the paint of its own draws, the surfaces of a
-// scene it shows, and the slot of its node's layout children.
-struct LayerChildren<'a, 's, 'w> {
-    context: &'a RasterTraversalContext<'a>,
-    record: usize,
-    passed_down_before: Option<usize>,
-    transform: ProjectiveTransform,
-    visual_clip: Option<Rect>,
-    translated_snap_anchor: Option<Point>,
-    translated: bool,
-    content_style: &'a ContentStyle,
-    primitive_context: PrimitiveRenderContext<'a>,
-    seen: Option<Vec<(&'a LayerNode, ProjectiveTransform)>>,
-    in_space: bool,
-    // Worked out at the first child layer: most layers have none.
-    same_as_before: Option<bool>,
-    own_slot: Option<&'s mut ChildSlot<'w>>,
-    passed_slot: Option<&'s mut ChildSlot<'w>>,
-}
-
-impl LayerChildren<'_, '_, '_> {
-    // Pushes `child`, the next in draw order.
-    fn push(&mut self, child: Next<'_>, scene: &mut RasterScene, reuse: &mut Option<Reuse<'_>>) {
-        let subtree = match child {
-            Next::Node(node) => {
-                let Some(subtree) = Subtree::of_child(node) else {
-                    flush_copies(reuse, scene);
-                    return render_draw_child(scene, node, self.primitive_context);
-                };
-                if let Subtree::Layer(child_layer) = subtree {
-                    if let Some(surfaces) = self.seen.take_if(|_| child_layer.has_space()) {
-                        flush_copies(reuse, scene);
-                        push_seen_surfaces(
-                            surfaces,
-                            scene,
-                            self.context,
-                            (self.content_style, self.visual_clip),
-                        );
-                    }
-                    if drawn_by_its_scene(child_layer, self.in_space) {
-                        return;
-                    }
-                }
-                Some(subtree)
-            }
-            Next::Children => None,
-        };
-        let same_as_before = match self.same_as_before {
-            Some(same) => same,
-            None => {
-                let passed_down = PassedDown {
-                    transform: self.transform,
-                    alpha: self.content_style.alpha,
-                    color_filter: self.content_style.color_filter.clone(),
-                    clip: self.visual_clip,
-                    snap_anchor: self.translated_snap_anchor,
-                    translated: self.translated,
-                };
-                let same = note_passed_down(
-                    scene,
-                    self.record,
-                    passed_down,
-                    self.context,
-                    self.passed_down_before,
-                    reuse,
-                );
-                *self.same_as_before.insert(same)
-            }
-        };
-        let child_context = RasterTraversalContext {
-            parent_transform: &self.transform,
-            parent_content_style: self.content_style,
-            parent_visual_clip: self.visual_clip,
-            inherited_translated_snap_anchor: self.translated_snap_anchor,
-            inherited_translated_content_context: self.translated,
-            diagnostics: self.context.diagnostics,
-            light: self.context.light,
-            same_as_before,
-            text: self.context.text,
-            surface_root: false,
-            in_space: self.in_space,
-        };
-        match subtree {
-            Some(subtree) => {
-                let slot = self.passed_slot.take_if(|slot| {
-                    matches!(subtree, Subtree::Layer(layer) if layer.node_id == Some(slot.owner()))
-                });
-                populate_draws_from_graph(subtree, scene, &child_context, reuse, slot);
-            }
-            None => {
-                if let Some(slot) = self.own_slot.as_deref_mut() {
-                    slot.push_children(scene, &child_context, reuse);
-                }
-            }
-        }
-    }
-}
-
-// What a layer pushes next in draw order: a node of its own child list, or
-// the layout children of its node, which a walk of the layout tree visits
-// where a lowered node's layer leaves them out.
-#[derive(Clone, Copy)]
-enum Next<'a> {
-    Node(&'a RenderNode),
-    Children,
-}
-
-// Visits `children`, a lowered node's own list, in draw order around the
-// node's layout children: its draws before them, the children, then the
-// draws after them.
-fn for_each_around_children<'a>(children: &'a [RenderNode], mut visit: impl FnMut(Next<'a>)) {
-    let draws_after = |node: &RenderNode| node.draw_phase() == Some(PrimitivePhase::AfterChildren);
-    let after = children
-        .iter()
-        .position(draws_after)
-        .unwrap_or(children.len());
-    debug_assert!(
-        children[after..].iter().all(draws_after),
-        "a lowered node's draws after its children follow the ones before"
-    );
-    children[..after]
-        .iter()
-        .for_each(|node| visit(Next::Node(node)));
-    visit(Next::Children);
-    children[after..]
-        .iter()
-        .for_each(|node| visit(Next::Node(node)));
 }
 
 // Pushes the content of `inline`, a node drawn in its parent's layer,

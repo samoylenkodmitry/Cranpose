@@ -40,13 +40,14 @@ use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
 mod lowered_node;
 pub use lowered_node::{
-    ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone, recycle_lowered,
-    release_lowered, root_layer_bounds, visit_kept_node,
+    ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone,
+    recycle_lowered, release_lowered, root_layer_bounds, visit_kept_node,
 };
 mod moved_subtree;
 pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};
+mod lower_context;
+pub use lower_context::LowerContext;
 mod node_layer;
-pub use node_layer::LowerContext;
 mod space_fragment;
 use node_layer::{
     AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_context,
