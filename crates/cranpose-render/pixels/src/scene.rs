@@ -17,6 +17,7 @@ use cranpose_render_common::{
     RenderScene, SceneUpdates,
     graph::{LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
     graph_scene::{HitList, HitStorage, RenderDiagnostics},
+    scene_builder::release_redrawn_recordings,
 };
 use cranpose_ui_graphics::{Rect, space::Ray};
 
@@ -391,6 +392,15 @@ impl Scene {
 impl Default for Scene {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// The recordings the scene's commands keep for their next draws live with
+// the thread: a scene that goes lets them go, as no draw of its own takes
+// them again.
+impl Drop for Scene {
+    fn drop(&mut self) {
+        release_redrawn_recordings();
     }
 }
 

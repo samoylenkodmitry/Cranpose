@@ -140,6 +140,14 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");
     assert!(busy < LEFT_BEHIND_BOUND, "busy: {busy} bytes");
+    let still = held(|| Bars(false, BARS), MemoryHeadroom::Tight);
+    let moving = held(|| Bars(true, BARS), MemoryHeadroom::Tight);
+    println!("held: still bars {still} bytes, moving bars {moving} bytes");
+    assert!(
+        moving - still < REDRAW_BOUND,
+        "moving bars hold {} bytes more",
+        moving - still
+    );
     let full = held(|| Bars(false, FULL_BARS), MemoryHeadroom::Tight);
     let past_full = held(|| Bars(false, FULL_BARS + 1), MemoryHeadroom::Tight);
     println!("held with little memory: {FULL_BARS} bars {full} bytes, one more {past_full} bytes");
@@ -147,13 +155,5 @@ fn screens_that_change_every_frame_leave_no_memory_behind() {
         past_full - full < BAR_BOUND,
         "one bar more holds {} bytes more",
         past_full - full
-    );
-    let still = held(|| Bars(false, BARS), MemoryHeadroom::Tight);
-    let moving = held(|| Bars(true, BARS), MemoryHeadroom::Tight);
-    println!("held with little memory: still bars {still} bytes, moving bars {moving} bytes");
-    assert!(
-        moving - still < REDRAW_BOUND,
-        "moving bars hold {} bytes more",
-        moving - still
     );
 }
