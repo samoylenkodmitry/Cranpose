@@ -119,16 +119,15 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         self.slots.warm(key);
     }
 
-    /// Queues the build of `key` and of the interior it lays down for a
-    /// frame after this one (see [`CompileLane::Later`]), handing `awaited`
-    /// each still to land.
-    pub(crate) fn warm_later(
+    /// Queues the build of `key` and of the interior it lays down on the
+    /// demanded lane, handing `awaited` each still to land.
+    pub(crate) fn demand_with_interior(
         &mut self,
         key: ShapePipelineKey,
         awaited: &mut impl FnMut(Pending<B::Output>),
     ) {
         for key in std::iter::once(key).chain(key.interior()) {
-            if let Some(pending) = self.slots.warm_on(key, CompileLane::Later) {
+            if let Some(pending) = self.slots.warm_on(key, CompileLane::Demanded) {
                 awaited(pending);
             }
         }

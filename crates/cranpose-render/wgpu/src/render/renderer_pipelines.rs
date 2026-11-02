@@ -233,18 +233,18 @@ impl RendererPipelines {
         }
     }
 
-    /// Queues for a later frame the shape pipelines `keys` name, their interiors and the stand-ins
-    /// of a pass with a depth buffer (instant, aligned glyphs), handing `awaited` each to land.
-    pub(crate) fn warm_depth_later(
+    /// Queues on the demanded lane the shape pipelines `keys` name, their interiors and the
+    /// stand-ins of a pass with a depth buffer (instant, aligned glyphs), handing `awaited` each.
+    pub(crate) fn demand_depth(
         &mut self,
         keys: &PipelineDemand,
         awaited: &mut Vec<Pending<wgpu::RenderPipeline>>,
     ) {
         for key in keys.keys() {
             self.shape_pipelines
-                .warm_later(key, &mut |pending| awaited.push(pending));
+                .demand_with_interior(key, &mut |pending| awaited.push(pending));
         }
-        let (depth, lane) = (PassDepth::On, CompileLane::Later);
+        let (depth, lane) = (PassDepth::On, CompileLane::Demanded);
         let aligned = self.glyph_atlas_pipeline_resource(depth, GlyphQuads::Aligned);
         awaited.extend(
             aligned.prefetch(lane, &self.compiler, self.adapter_backend, || {
@@ -253,7 +253,7 @@ impl RendererPipelines {
         );
         #[cfg(not(target_arch = "wasm32"))]
         awaited.extend(self.instant.pipeline(PassDepth::On).prefetch(
-            CompileLane::Later,
+            CompileLane::Demanded,
             &self.compiler,
             self.adapter_backend,
             || {
@@ -543,7 +543,7 @@ impl RendererPipelines {
             );
         }
         // With a depth buffer it is built as passes may start laying
-        // interiors first: see `warm_depth_later`.
+        // interiors first: see `demand_depth`.
         let depth = PassDepth::Off;
         self.instant.pipeline(depth).queue(
             compiler,
