@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use cranpose_core::collections::map::HashMap;
 use cranpose_ui::{Point, Size};
 
 use super::{carried_by, lined_up_with_neighbours, touching, Pane};
@@ -47,7 +46,7 @@ fn windows_that_only_touch_at_a_corner_are_not_attached() {
 
 #[test]
 fn a_window_carries_the_ones_attached_to_it_and_what_is_attached_to_those() {
-    let mut panes = HashMap::new();
+    let mut panes = HashMap::default();
     panes.insert(1, pane(0.0, 0.0, 100.0, 100.0));
     panes.insert(2, pane(0.0, 100.0, 100.0, 100.0));
     panes.insert(3, pane(0.0, 200.0, 100.0, 100.0));

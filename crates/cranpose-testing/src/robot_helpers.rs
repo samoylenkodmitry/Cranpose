@@ -4,7 +4,6 @@
 //! with UI elements during robot testing.
 
 use std::{
-    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -13,6 +12,7 @@ use std::{
 };
 
 use cranpose::SemanticElement;
+use cranpose_core::collections::map::HashMap;
 
 use crate::robot_assertions::{Bounds, SemanticElementLike};
 

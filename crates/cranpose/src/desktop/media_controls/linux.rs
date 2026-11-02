@@ -1,11 +1,11 @@
 use std::{
-    collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
+use cranpose_core::collections::map::HashMap;
 use cranpose_services::{
     MediaArtwork, MediaCommand, MediaMetadata, playback_progress, publish_media_command,
     uri_for_path,
@@ -66,7 +66,7 @@ impl Controls {
             self.tracks += 1;
             self.show_cover(now.and_then(|now| now.metadata.artwork.as_ref()));
         }
-        let metadata = now.map_or_else(HashMap::new, |now| self.metadata_of(&now.metadata));
+        let metadata = now.map_or_else(HashMap::default, |now| self.metadata_of(&now.metadata));
         {
             let mut shown = lock(&self.shown);
             shown.status = now.map(|now| now.status);
@@ -75,7 +75,7 @@ impl Controls {
             shown.metadata.clone_from(&metadata);
         }
         let playing = now.is_some();
-        let changed: HashMap<&str, Value<'_>> = HashMap::from([
+        let changed: HashMap<&str, Value<'_>> = HashMap::from_iter([
             (
                 "PlaybackStatus",
                 Value::from(status_name(now.map(|now| now.status))),

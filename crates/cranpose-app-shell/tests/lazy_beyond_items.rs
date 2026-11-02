@@ -1,11 +1,12 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
+use cranpose_core::{
+    MutableState, collections::map::HashMap, location_key, rememberMutableStateOf,
+};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_macros::composable;
 use cranpose_render_common::{RenderScene, Renderer, graph_scene::Scene};

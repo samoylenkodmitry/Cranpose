@@ -45,7 +45,7 @@ fn generate_guide_previews(workspace: &Path) -> Result<(), Box<dyn std::error::E
     let mut registrations = String::from("static PREVIEWS: &[Preview] = &[\n");
     let mut active = None;
     let mut code = String::new();
-    let mut names = std::collections::HashSet::new();
+    let mut names = std::collections::BTreeSet::new();
     for event in Parser::new(&markdown) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {

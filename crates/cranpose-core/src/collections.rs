@@ -34,24 +34,30 @@ const FIXED_STATE: FixedState = std::hash::BuildHasherDefault::new();
 /// A hash map with a fixed hash seed. Unlike [`map::HashMap`], an empty one
 /// can be made in a `const` context, which a `thread_local!` initializer
 /// needs to stay eagerly initialized.
+#[expect(clippy::disallowed_types, reason = "the alias names its hasher")]
 pub type FixedHashMap<K, V> = std::collections::HashMap<K, V, FixedState>;
 
 /// The set counterpart of [`FixedHashMap`].
+#[expect(clippy::disallowed_types, reason = "the alias names its hasher")]
 pub type FixedHashSet<K> = std::collections::HashSet<K, FixedState>;
 
 /// An empty [`FixedHashMap`].
 pub const fn fixed_hash_map<K, V>() -> FixedHashMap<K, V> {
-    std::collections::HashMap::with_hasher(FIXED_STATE)
+    FixedHashMap::with_hasher(FIXED_STATE)
 }
 
 /// An empty [`FixedHashSet`].
 pub const fn fixed_hash_set<K>() -> FixedHashSet<K> {
-    std::collections::HashSet::with_hasher(FIXED_STATE)
+    FixedHashSet::with_hasher(FIXED_STATE)
 }
 
 /// Hash map and set types, backed by the standard library's default hasher.
 #[cfg(feature = "std-hash")]
 pub mod map {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the std-hash feature asks for std's hasher"
+    )]
     pub use std::collections::{
         HashMap, HashSet,
         hash_map::{Entry, RandomState},
@@ -78,8 +84,10 @@ pub mod map {
     pub type RandomState = std::hash::BuildHasherDefault<super::WordHasher>;
 
     /// A hash map hashed by [`RandomState`].
+    #[expect(clippy::disallowed_types, reason = "the alias names its hasher")]
     pub type HashMap<K, V> = std::collections::HashMap<K, V, RandomState>;
 
     /// A hash set hashed by [`RandomState`].
+    #[expect(clippy::disallowed_types, reason = "the alias names its hasher")]
     pub type HashSet<K> = std::collections::HashSet<K, RandomState>;
 }

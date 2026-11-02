@@ -2,12 +2,12 @@ use crate::{output_paths, robot_launch};
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     process::Command,
     time::{Duration, Instant},
 };
 
 use cranpose::AppLauncher;
+use cranpose_core::collections::map::HashMap;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app::{self, DemoTab};
 use image::RgbaImage;
@@ -473,7 +473,7 @@ fn wmctrl_window_ids_by_title(pid: u32) -> Option<HashMap<String, u64>> {
     }
 
     let pid = pid.to_string();
-    let mut windows = HashMap::new();
+    let mut windows = HashMap::default();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let parts: Vec<_> = line.split_whitespace().collect();
         if parts.len() < 9 || parts[2] != pid {

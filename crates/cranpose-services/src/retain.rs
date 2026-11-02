@@ -1,7 +1,9 @@
 //! `retain`: a remembered value that outlives its composable's leaving the
 //! composition while the saveable scope it was made in lives.
 
-use std::{any::Any, collections::HashMap, rc::Rc};
+use std::{any::Any, rc::Rc};
+
+use cranpose_core::collections::map::HashMap;
 
 use crate::SaveableScope;
 

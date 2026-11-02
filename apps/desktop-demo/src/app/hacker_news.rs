@@ -1,12 +1,12 @@
 #[cfg(test)]
 use std::cell::Cell;
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose::LazyItems;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_core::{self};
+use cranpose_core::{self, collections::map::HashMap};
 use cranpose_foundation::{lazy::LazyListScope, SemanticsConfiguration};
 use cranpose_services::{
     isSystemInDarkTheme, local_http_client, local_uri_handler, map_ordered_concurrent,
@@ -148,7 +148,7 @@ impl CommentThreadData {
             comments: Vec::new(),
             pager: CommentPager {
                 pending,
-                ready_results: HashMap::new(),
+                ready_results: HashMap::default(),
                 hit_depth_limit: false,
             },
             is_loading_more: false,
@@ -847,7 +847,7 @@ fn discussion_status_detail(data: &CommentThreadData) -> String {
 
 #[cfg(test)]
 thread_local! {
-    static DEBUG_SCOPE_TAGS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::new());
+    static DEBUG_SCOPE_TAGS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
     static STORIES_PANE_CALLS: Cell<usize> = const { Cell::new(0) };
     static THREAD_PANE_CALLS: Cell<usize> = const { Cell::new(0) };
     static LAST_STORIES_PANE_NODE_ID: RefCell<Option<cranpose_core::NodeId>> = const { RefCell::new(None) };

@@ -8,7 +8,7 @@
 //! backups: it can be downloaded again from its address.
 
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::hash_map::Entry,
     fs::{self, File, OpenOptions},
     io::{self, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -17,6 +17,7 @@ use std::{
 };
 
 use block2::RcBlock;
+use cranpose_core::collections::map::HashMap;
 use cranpose_services::{
     CancelTransfer, HttpControl, HttpError, HttpFuture, HttpProgress, PlatformDownloader,
     async_io::Signal, set_platform_downloader,

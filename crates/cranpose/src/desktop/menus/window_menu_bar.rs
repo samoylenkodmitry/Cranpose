@@ -4,11 +4,13 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
-use cranpose_core::{LaunchedEffect, MutableState, SideEffect, remember, rememberMutableStateOf};
+use cranpose_core::{
+    LaunchedEffect, MutableState, SideEffect, collections::map::HashMap, remember,
+    rememberMutableStateOf,
+};
 use cranpose_ui::{
     Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester, IntrinsicSize, Key, KeyEvent,
     KeyEventType, Modifier, Point, Rect, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
@@ -128,7 +130,8 @@ fn shortcut_action(entries: &[MenuEntry], pressed: KeyShortcut) -> Option<Rc<dyn
 fn Bar(menus: Rc<Vec<Menu>>, open: OpenPath) {
     let bar_rect = remember(|| Rc::new(Cell::new(Rect::EMPTY))).with(Rc::clone);
     let title_rects: TitleRects = remember(|| Rc::new(RefCell::new(Vec::new()))).with(Rc::clone);
-    let row_rects: RowRects = remember(|| Rc::new(RefCell::new(HashMap::new()))).with(Rc::clone);
+    let row_rects: RowRects =
+        remember(|| Rc::new(RefCell::new(HashMap::default()))).with(Rc::clone);
     title_rects
         .borrow_mut()
         .resize_with(menus.len(), || Rc::new(Cell::new(Rect::EMPTY)));

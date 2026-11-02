@@ -45,6 +45,14 @@ pub struct FxHasher {
 /// per-frame path.
 pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
+/// A `HashMap` hashed by [`FxHasher`].
+#[expect(clippy::disallowed_types, reason = "the alias names its hasher")]
+pub type FxHashMap<K, V> = std::collections::HashMap<K, V, FxBuildHasher>;
+
+/// A `HashSet` hashed by [`FxHasher`].
+#[expect(clippy::disallowed_types, reason = "the alias names its hasher")]
+pub type FxHashSet<K> = std::collections::HashSet<K, FxBuildHasher>;
+
 impl FxHasher {
     #[inline]
     fn fold(&mut self, word: u64) {

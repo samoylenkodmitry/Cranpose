@@ -10,7 +10,7 @@ fn hash_of<T: Hash>(value: &T) -> u64 {
 
 #[test]
 fn single_words_never_collide() {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::BTreeSet::new();
     for value in 0u64..200_000 {
         assert!(seen.insert(hash_of(&value)), "collision at {value}");
     }
@@ -18,7 +18,7 @@ fn single_words_never_collide() {
 
 #[test]
 fn adjacent_f32_bit_patterns_stay_distinct() {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::BTreeSet::new();
     for step in 0u32..200_000 {
         let value = f32::from_bits(0x3f80_0000 + step);
         assert!(
@@ -44,7 +44,7 @@ fn byte_tail_length_matters() {
 
 #[test]
 fn strings_of_every_length_stay_distinct() {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::BTreeSet::new();
     for len in 0..512usize {
         let value = "x".repeat(len);
         assert!(seen.insert(hash_of(&value)), "collision at len {len}");
@@ -122,7 +122,7 @@ fn words_trading_places_in_a_long_write_change_the_hash() {
 #[test]
 fn long_writes_of_every_length_stay_distinct() {
     let base = column();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::BTreeSet::new();
     for len in 0..=base.len() {
         assert!(
             seen.insert(hash_bytes(&base[..len])),

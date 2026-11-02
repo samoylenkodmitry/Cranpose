@@ -25,7 +25,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     io::{self, BufReader, BufWriter, Write},
     net::TcpStream,
     rc::Rc,
@@ -37,7 +37,7 @@ use std::{
 };
 
 use cranpose_app_shell::{AppShell, FrameSchedule, RootId, default_root_key};
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use cranpose_services::{
@@ -301,9 +301,9 @@ impl EmbeddedHost {
             registry,
             input: EmbedInput::new(),
             surfaces: BTreeMap::from([(PRIMARY_SURFACE, primary)]),
-            windows: HashMap::new(),
-            overlays: HashMap::new(),
-            pending_overlays: HashMap::new(),
+            windows: HashMap::default(),
+            overlays: HashMap::default(),
+            pending_overlays: HashMap::default(),
             next_surface: PRIMARY_SURFACE + 1,
             commands: Rc::new(RefCell::new(Vec::new())),
             primary_size: size,

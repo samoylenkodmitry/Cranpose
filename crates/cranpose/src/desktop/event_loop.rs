@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet, VecDeque},
+    collections::VecDeque,
     rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
@@ -9,6 +9,7 @@ use std::{
 use cranpose_app_shell::{
     AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut, default_root_key,
 };
+use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{GpuTarget, WgpuRenderer, WgpuTextSystem};
@@ -523,11 +524,11 @@ impl App {
             accessibility: None,
             platform: None,
             gpu_context: None,
-            native_windows: HashMap::new(),
+            native_windows: HashMap::default(),
             native_window_registry: Rc::new(native_window::NativeWindowRegistry::default()),
-            native_window_ids: HashMap::new(),
-            native_window_positions: HashMap::new(),
-            closed_native_windows: HashSet::new(),
+            native_window_ids: HashMap::default(),
+            native_window_positions: HashMap::default(),
+            closed_native_windows: HashSet::default(),
             next_native_window_position_poll_at: Instant::now()
                 + NATIVE_WINDOW_POSITION_POLL_INTERVAL,
             native_window_platform_probe: NativeWindowPlatformProbe::default(),
@@ -1097,8 +1098,7 @@ impl App {
 
         let sync_started = Instant::now();
         let requests = native_window::native_window_requests(&self.native_window_registry);
-        let active_keys: HashSet<NativeWindowKey> =
-            requests.iter().map(|request| request.key).collect();
+        let active_keys: HashSet<_> = requests.iter().map(|request| request.key).collect();
         trace_native_window_timing!(
             "sync start requests={} existing={}",
             requests.len(),
@@ -1388,7 +1388,7 @@ impl App {
             return;
         }
 
-        let mut groups: HashMap<NativeWindowKey, Vec<usize>> = HashMap::new();
+        let mut groups: HashMap<NativeWindowKey, Vec<usize>> = HashMap::default();
         for (index, request) in requests.iter().enumerate() {
             if !request.options.visible
                 || !Self::native_window_options_have_screen_position(&request.options)

@@ -1,6 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
-use crate::FxBuildHasher;
+use crate::{FxBuildHasher, FxHashMap};
 
 /// A value a [`ContentPool`] holds, which tells whether a holder outside the
 /// pool keeps it.
@@ -27,7 +27,7 @@ const FIRST_SWEEP: usize = 16;
 /// screen shows, then: a text that changes every frame leaves once the
 /// frames that drew it are gone, on any platform's memory.
 pub struct ContentPool<V> {
-    values: HashMap<u64, V, FxBuildHasher>,
+    values: FxHashMap<u64, V>,
     sweep_at: usize,
 }
 
@@ -35,7 +35,7 @@ impl<V: PooledValue> ContentPool<V> {
     /// An empty pool.
     pub const fn new() -> Self {
         Self {
-            values: HashMap::with_hasher(FxBuildHasher::new()),
+            values: FxHashMap::with_hasher(FxBuildHasher::new()),
             sweep_at: FIRST_SWEEP,
         }
     }

@@ -5,10 +5,11 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     time::Duration,
 };
+
+use cranpose_core::collections::map::HashMap;
 
 mod support;
 

@@ -13,14 +13,15 @@
 //! `http-native` (or `web-http`) feature as it does for its own requests.
 
 use std::{
-    collections::HashMap,
     future::Future,
     path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex, PoisonError},
 };
 
-use cranpose_core::{LaunchedEffectAsync, State, mutableStateOf, rememberKeyed};
+use cranpose_core::{
+    LaunchedEffectAsync, State, collections::map::HashMap, mutableStateOf, rememberKeyed,
+};
 use cranpose_macros::composable;
 use cranpose_ui_graphics::ImageBitmap;
 use futures_util::future::{FutureExt, Shared, WeakShared};
@@ -190,7 +191,7 @@ impl ImageLoader {
             inner: Handle::new(LoaderState {
                 memory: Mutex::new(MemoryCache::new(limits.memory_bytes)),
                 disk: disk_dir.map(|dir| Arc::new(DiskCache::new(dir, limits.disk_bytes))),
-                in_flight: Mutex::new(HashMap::new()),
+                in_flight: Mutex::new(HashMap::default()),
             }),
         }
     }
@@ -487,7 +488,7 @@ struct MemoryCache {
 impl MemoryCache {
     fn new(limit: usize) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: HashMap::default(),
             bytes: 0,
             limit,
             clock: 0,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::slot::segments::SegmentItems;
+use crate::{collections::map::HashSet, slot::segments::SegmentItems};
 
 #[test]
 fn fast_integrity_rejects_active_anchor_count_mismatch() {

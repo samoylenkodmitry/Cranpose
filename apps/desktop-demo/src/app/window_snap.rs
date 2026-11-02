@@ -1,7 +1,5 @@
-use std::collections::HashMap;
-
 use cranpose::WindowState;
-use cranpose_core::MutableState;
+use cranpose_core::{collections::map::HashMap, MutableState};
 use cranpose_ui::{Point, Size};
 
 /// How near an edge has to come before the window lines up with it.
@@ -107,7 +105,7 @@ fn meet(a: f32, b: f32) -> bool {
 /// tells the next move which of its neighbours were lined up with it.
 ///
 /// Remember one of these per set of windows that snap together, with
-/// `rememberMutableStateOf(HashMap::new)`.
+/// `rememberMutableStateOf(HashMap::default)`.
 pub(super) type RestingPlaces = MutableState<HashMap<u64, Point>>;
 
 /// Forgets a window that is no longer on screen.

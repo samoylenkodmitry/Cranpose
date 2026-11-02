@@ -1,7 +1,7 @@
 use std::{
     any::{Any, TypeId},
     cell::Cell,
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     fmt::Write as _,
     mem,
     panic::{self, AssertUnwindSafe},

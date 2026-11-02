@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::location_key;
+use cranpose_core::{collections::map::HashMap, location_key};
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
@@ -362,8 +362,7 @@ fn the_capsule_the_composed_build_drew_is_a_tie_broken_the_other_way() {
 }
 
 fn modal_row_colour(frame: &CapturedFrame, y: u32) -> Option<(u8, u8, u8)> {
-    let mut counts: std::collections::HashMap<(u8, u8, u8), usize> =
-        std::collections::HashMap::new();
+    let mut counts: HashMap<(u8, u8, u8), usize> = HashMap::default();
     for x in 0..SIZE {
         let got = pixel(frame, x, y);
         if got != (0, 0, 0) {

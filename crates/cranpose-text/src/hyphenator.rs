@@ -1,5 +1,6 @@
-use std::{collections::HashMap, io::Read, path::Path};
+use std::{io::Read, path::Path};
 
+use foldhash::HashMap;
 use hyphenation::{Hyphenator as _, Language, Load, Standard};
 
 /// Why a hyphenation dictionary could not be registered.

@@ -1,6 +1,7 @@
-use std::{collections::HashMap, fmt};
+use std::fmt;
 
 use super::mesh::{Mesh, MeshError, smooth_normals};
+use crate::FxHashMap;
 
 /// Why the text given to [`Mesh::from_obj`] does not make a mesh.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,7 +46,7 @@ struct Builder {
     positions: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     normals: Vec<[f32; 3]>,
-    corners: HashMap<(usize, Option<usize>, Option<usize>), u32>,
+    corners: FxHashMap<(usize, Option<usize>, Option<usize>), u32>,
     out_positions: Vec<[f32; 3]>,
     out_uvs: Vec<[f32; 2]>,
     out_normals: Vec<Option<[f32; 3]>>,

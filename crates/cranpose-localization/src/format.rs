@@ -1,6 +1,6 @@
 //! Optional locale-sensitive formatting for dates, numbers, percentages, and currencies.
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::BTreeMap, sync::Mutex};
 
 use icu_calendar::{
     Date,
@@ -75,7 +75,7 @@ pub struct LocaleFormatters {
     decimal: DecimalFormatter,
     percent: PercentFormatter<DecimalFormatter>,
     currency_preferences: CurrencyFormatterPreferences,
-    currencies: Mutex<HashMap<CurrencyType, CurrencyFormatter<DecimalFormatter>>>,
+    currencies: Mutex<BTreeMap<CurrencyType, CurrencyFormatter<DecimalFormatter>>>,
 }
 
 /// The date and time formatters of one locale.
@@ -145,7 +145,7 @@ impl LocaleFormatters {
             decimal,
             percent,
             currency_preferences,
-            currencies: Mutex::new(HashMap::new()),
+            currencies: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -258,8 +258,8 @@ impl LocaleFormatters {
             detail: "currency formatter cache is unavailable".to_owned(),
         })?;
         let formatter = match currencies.entry(code) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
                 let formatter = CurrencyFormatter::<DecimalFormatter>::try_new_symbol(
                     self.currency_preferences,
                     code,

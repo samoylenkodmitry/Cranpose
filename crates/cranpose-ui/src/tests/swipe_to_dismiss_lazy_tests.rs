@@ -1,5 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
+use cranpose_core::collections::map::HashSet;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui_graphics::Size as ViewportSize;
 
@@ -151,7 +152,7 @@ fn a_keyed_lazy_item_supplies_its_key_to_its_content() {
         keys.iter().all(Option::is_some),
         "a keyed item must report an identity, got {keys:?}"
     );
-    let distinct: std::collections::HashSet<_> = keys.iter().copied().collect();
+    let distinct: HashSet<_> = keys.iter().copied().collect();
     assert!(
         distinct.len() > 1,
         "each item must report its own identity, got {keys:?}"

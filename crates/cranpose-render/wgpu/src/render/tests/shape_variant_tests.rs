@@ -1,3 +1,4 @@
+use cranpose_core::collections::map::HashSet;
 use cranpose_ui_graphics::{
     BRUSH_KIND_LINEAR, BlendMode, FRAGMENT_KIND_FILL, RecordLane, RecordSegment,
 };
@@ -258,7 +259,7 @@ fn every_shape_program_lowers_to_webgl_with_its_decided_branches_removed() {
             });
         }
     }
-    let mut lowered = std::collections::HashSet::new();
+    let mut lowered = HashSet::default();
     for key in keys {
         let program = key.program(webgl);
         let constants = naga::back::PipelineConstants::from_iter(

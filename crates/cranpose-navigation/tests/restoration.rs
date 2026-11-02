@@ -1,10 +1,11 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
     time::Duration,
 };
+
+use cranpose_core::collections::map::HashMap;
 
 mod support;
 

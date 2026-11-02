@@ -201,7 +201,7 @@ fn stream_mentions_ident(tokens: &TokenStream2, name: &str) -> bool {
 
 fn filter_generics(
     generics: &syn::Generics,
-    strip: &std::collections::HashSet<String>,
+    strip: &std::collections::BTreeSet<String>,
 ) -> syn::Generics {
     let mut filtered = generics.clone();
     filtered.params = filtered
@@ -478,7 +478,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|callback| callback.as_ref().is_some_and(CallbackParam::boxes))
             .collect();
 
-        let mut strippable: std::collections::HashSet<String> = param_info
+        let mut strippable: std::collections::BTreeSet<String> = param_info
             .iter()
             .zip(&param_erased)
             .filter(|(info, erased)| **erased && !info.is_impl_trait)

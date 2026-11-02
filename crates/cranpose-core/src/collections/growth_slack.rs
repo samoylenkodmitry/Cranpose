@@ -2,10 +2,7 @@
 //! collection that lives as long as a screen and doubled to take one more
 //! item would keep room for as many again.
 
-use std::{
-    collections::HashMap,
-    hash::{BuildHasher, Hash},
-};
+use std::hash::{BuildHasher, Hash};
 
 const MIN_TRIMMED_SLACK: usize = 16;
 
@@ -29,7 +26,11 @@ impl<T> GrowthSlack for Vec<T> {
     }
 }
 
-impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for HashMap<K, V, S> {
+#[expect(
+    clippy::disallowed_types,
+    reason = "every hash map trims alike, whatever it hashes with"
+)]
+impl<K: Eq + Hash, V, S: BuildHasher> GrowthSlack for std::collections::HashMap<K, V, S> {
     fn trim_growth_slack(&mut self) {
         if let Some(target) = slack_target(self.len(), self.capacity()) {
             self.shrink_to(target);

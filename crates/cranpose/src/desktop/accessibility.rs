@@ -1,7 +1,6 @@
 #![allow(unsafe_code, reason = "AccessKit takes raw window handles")]
 
 use std::{
-    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -15,6 +14,7 @@ use accesskit::{
     TextPosition, TextSelection, Toggled, TreeId, TreeInfo, TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
+use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{Announcement, LiveRegionMode, ToggleableState};
 use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
@@ -579,7 +579,7 @@ fn nested_children(
         .filter(|element| element.canvas_key.is_none())
         .map(|element| element.node_id)
         .collect();
-    let mut nested: HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> = HashMap::new();
+    let mut nested: HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> = HashMap::default();
     for (id, element) in ids.iter().zip(elements) {
         let parent = element
             .scroll_parent

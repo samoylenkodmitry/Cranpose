@@ -1,9 +1,9 @@
-use std::{cell::Cell, collections::HashMap, rc::Rc};
+use std::{cell::Cell, rc::Rc};
 
 use cranpose::{
     rememberWindowStateAt, LocalWindowState, WindowConfig, WindowModifierExt, WindowState,
 };
-use cranpose_core::{key, rememberMutableStateOf, MutableState};
+use cranpose_core::{collections::map::HashMap, key, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
     composable, Box, BoxSpec, Color, Column, ColumnSpec, Modifier, Point, PointerEvent,
     PointerEventKind, PointerInputScope, Row, RowSpec, Size, Text, VerticalAlignment,
@@ -95,7 +95,7 @@ pub fn tool_windows_app() {
             .collect::<Vec<_>>()
             .join(",")
     );
-    let resting = rememberMutableStateOf(HashMap::new);
+    let resting = rememberMutableStateOf(HashMap::default);
     let mut windows = Vec::new();
     for tool in tools() {
         let origin = snapshot

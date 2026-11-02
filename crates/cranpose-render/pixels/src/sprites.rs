@@ -12,7 +12,7 @@
 //! A sprite is [`SPRITE_FLOATS`] numbers; [`field`] names where each part
 //! starts. Positions are device pixels with the origin at the top left.
 
-use std::{collections::HashMap, fmt::Write as _, hash::Hasher};
+use std::{fmt::Write as _, hash::Hasher};
 
 use cranpose_render_common::{
     brush_sampling::color_to_rgba,
@@ -20,7 +20,7 @@ use cranpose_render_common::{
     layer_shadow::{ShadowHole, ShadowRRect},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, FxBuildHasher, FxHasher, Point, Rect, StrokeCap, StrokeJoin, TileMode,
+    BlendMode, Brush, Color, FxHashMap, FxHasher, Point, Rect, StrokeCap, StrokeJoin, TileMode,
     whole,
 };
 
@@ -106,7 +106,7 @@ pub struct SpriteFrame {
     sprites: Vec<f32>,
     uploads: Vec<TextureUpload>,
     releases: Vec<u32>,
-    textures: HashMap<u64, CachedTexture, FxBuildHasher>,
+    textures: FxHashMap<u64, CachedTexture>,
     next_texture: u32,
     generation: u64,
 }

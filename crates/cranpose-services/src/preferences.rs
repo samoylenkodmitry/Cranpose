@@ -15,6 +15,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+use cranpose_core::collections::map::HashMap;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod file;
 #[cfg(not(target_arch = "wasm32"))]
@@ -349,7 +351,7 @@ impl<T: 'static> Saver<T> {
     /// twice keeps its last string.
     pub fn map(
         save: impl Fn(&T) -> Vec<(String, String)> + 'static,
-        restore: impl Fn(&std::collections::HashMap<String, String>) -> Option<T> + 'static,
+        restore: impl Fn(&HashMap<String, String>) -> Option<T> + 'static,
     ) -> Self {
         Self::new(
             move |value| {
@@ -366,7 +368,8 @@ impl<T: 'static> Saver<T> {
                 if items.len() % 2 != 0 {
                     return None;
                 }
-                let mut map = std::collections::HashMap::with_capacity(items.len() / 2);
+                let mut map =
+                    HashMap::with_capacity_and_hasher(items.len() / 2, Default::default());
                 let mut items = items.into_iter();
                 while let (Some(name), Some(text)) = (items.next(), items.next()) {
                     map.insert(name, text);

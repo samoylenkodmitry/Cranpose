@@ -11,8 +11,9 @@
 //! canvas's own cursor is hidden, and an element carrying the image follows
 //! the pointer, at its drawn size in CSS pixels whatever the system does.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
+use cranpose_core::collections::map::HashMap;
 use cranpose_ui::{CustomPointerIcon, PointerIcon};
 use wasm_bindgen::{Clamped, JsCast, JsValue, prelude::Closure};
 use web_sys::{Document, HtmlCanvasElement, HtmlElement, ImageData, PointerEvent};
@@ -148,7 +149,7 @@ impl WebCursors {
         }
         Self {
             size,
-            data_urls: HashMap::new(),
+            data_urls: HashMap::default(),
             applied: None,
             drawn,
         }
