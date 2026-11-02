@@ -498,7 +498,7 @@ impl GpuRenderer {
         }
     }
 
-    /// Queues for a later frame the pipelines a pass drawn without the
+    /// Queues on the demanded lane the pipelines a pass drawn without the
     /// depth pre-pass it takes would have drawn with: its shapes' with
     /// `depth_keys` and the interiors they lay down, and its images', glyphs',
     /// shadows' and blits' with a depth buffer. The depth gate opens once they
@@ -510,11 +510,11 @@ impl GpuRenderer {
         depth_keys: &PipelineDemand,
     ) {
         let mut awaited = self.depth_gate.take_awaited();
-        self.pipelines.warm_depth_later(depth_keys, &mut awaited);
+        self.pipelines.demand_depth(depth_keys, &mut awaited);
         self.prefetch_overlay_pipelines(
             batches,
             scratch,
-            (PassDepth::On, CompileLane::Later),
+            (PassDepth::On, CompileLane::Demanded),
             &mut |pending| awaited.push(pending),
         );
         self.depth_gate.waited_for(awaited);

@@ -5,12 +5,12 @@ use crate::lazy_resource::Pending;
 /// Whether passes lay their opaque interiors down first, in a depth
 /// pre-pass (see [`crate::draw_pass::lays_interiors_first`]). The pre-pass
 /// takes pipelines of its own: where pipelines build on the compiler's
-/// threads, a launch's first frames draw without it while its pipelines
-/// build behind the frames' own, and it starts once the pipelines a frame
-/// drawn without it would have taken have landed. On a Mate 20 X the
-/// gauntlet's first frame took 12 pipelines without the pre-pass and 17
-/// with it, and its content showed 383-399 ms after the first frame
-/// against 499-516.
+/// threads, a launch's first frames draw without it (a Mate 20 X showed the
+/// gauntlet 383-399 ms after its first frame, against 499-516 with it), its
+/// pipelines build as demanded, and it starts once they have landed. Queued
+/// behind the warm-ups, they landed 1.9 s after a Mi TV Stick's renderer
+/// started, and its cold frames, at twice a warm frame's GPU work, ran the
+/// gauntlet at 17 fps in its second and third seconds against 23-31.
 pub(crate) struct DepthGate {
     state: GateState,
     /// The depth pipelines the frame's passes drawn without their pre-pass
