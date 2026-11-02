@@ -6,10 +6,10 @@ use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap}
 use cranpose_ui::Point;
 
 use super::{
-    AbsOrigin, GraphChanges, Level, LowerContext, TranslateAncestorContext,
-    children_have_origin_sinks, inline_leaf::fold_kept_leaf, layer_identity, note_space_change,
-    read_placed_node_data, rebuild_tracking_hits, release_for_rebuild, remove_dirty_descendants,
-    try_update_retained_layer, update_dirty_inline, write_node_layer,
+    AbsOrigin, GraphChanges, Level, LowerContext, RecordingStore, TranslateAncestorContext,
+    children_have_origin_sinks, inline_leaf::fold_kept_leaf, layer_identity, node_layer::Children,
+    note_space_change, read_placed_node_data, rebuild_tracking_hits, release_for_rebuild,
+    remove_dirty_descendants, try_update_retained_layer, update_dirty_inline, write_node_layer,
 };
 use crate::{
     NodeUpdate,
@@ -500,6 +500,7 @@ impl ParentPass {
             inherited_translated_content_context: self.translated_content_context,
             parent_abs: Some(self.children),
             parent_content_offset: self.content_offset,
+            store: RecordingStore::Command,
         }
     }
 }
@@ -543,7 +544,7 @@ fn update_dirty_layer(
     let hit_graph_dirty = rebuild_tracking_hits(layer, |layer| {
         release_for_rebuild(layer);
         read_placed_node_data(applier, node_id, Level::Child, |data| {
-            write_node_layer(applier, node_id, data, context, layer);
+            write_node_layer(applier, node_id, data, (context, Children::Lower), layer);
         })
         .is_some()
     })?;

@@ -32,6 +32,7 @@ pub(super) fn push_seen_surfaces(
                 in_space: true,
             },
             &mut None,
+            None,
         );
     }
 }

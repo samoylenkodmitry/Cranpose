@@ -104,6 +104,50 @@ pub(super) fn publish_recording(
     })
 }
 
+/// Where the recordings of a node's draw commands keep their buffers for
+/// the next time they record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordingStore {
+    /// Each command's own recordings, which a render graph holds between
+    /// frames: a command records again into the buffers it filled before.
+    Command,
+    /// One pool every command takes from, for a renderer that turns a
+    /// recording into its own items at once and holds none after: it drops
+    /// the nodes that hold the recordings, which the pool then hands out
+    /// again.
+    Shared,
+}
+
+// A recording of the pool every command takes from that no reader holds,
+// and whose shape columns none shares; a new one, which the pool keeps,
+// when none is free.
+fn acquire_shared() -> Rc<CommandRecording> {
+    crate::thread_state::with(|state| {
+        let mut pool = state.shared_recordings.borrow_mut();
+        let free = pool.iter().find(|recording| {
+            Rc::strong_count(recording) == 1
+                && Rc::weak_count(recording) == 0
+                && !recording.shares_shapes()
+        });
+        if let Some(free) = free {
+            return Rc::clone(free);
+        }
+        let recording = Rc::<CommandRecording>::default();
+        pool.push(Rc::clone(&recording));
+        recording
+    })
+}
+
+/// Lets the buffers of the shared recordings no reader holds go.
+pub fn release_shared_recordings() {
+    crate::thread_state::with(|state| {
+        state
+            .shared_recordings
+            .borrow_mut()
+            .retain(|recording| Rc::strong_count(recording) > 1);
+    });
+}
+
 pub(super) enum DrawPass<'a> {
     Record(DrawPlacement),
     OverlayFrom(std::slice::Iter<'a, RenderNode>),
@@ -157,6 +201,7 @@ pub(super) struct DrawTarget<'a> {
     pub(super) size: Size,
     pub(super) motion_context_animated: bool,
     pub(super) layer: Option<&'a GraphicsLayer>,
+    pub(super) store: RecordingStore,
 }
 
 /// Writes the part of one draw command's recording that a draw pass draws,
@@ -367,12 +412,19 @@ pub(super) fn append_draw_nodes(
             let segments = shared.content_split(DrawPlacement::Overlay);
             (shared, segments)
         } else {
+            let store = draws.store;
             let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
+                recording_for_placement_reusing(command, placement, size, || match store {
+                    RecordingStore::Command => acquire_storage(id),
+                    RecordingStore::Shared => acquire_shared(),
+                })
             else {
                 continue;
             };
-            (publish_recording(id, recording), segments)
+            match store {
+                RecordingStore::Command => (publish_recording(id, recording), segments),
+                RecordingStore::Shared => (recording, segments),
+            }
         };
         let grouped = shared.summary().has_groups
             && shared
@@ -404,6 +456,7 @@ pub fn draw_command_nodes_for_tests(
         size,
         motion_context_animated: false,
         layer: None,
+        store: RecordingStore::Command,
     };
     draw_nodes(node_id, commands, 0, placement, draws, phase)
 }

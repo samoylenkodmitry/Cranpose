@@ -2,8 +2,10 @@
 #![doc = include_str!("../README.md")]
 
 mod damage;
+mod direct_check;
 mod draw;
 mod growth_trim;
+mod layout_walk;
 mod pipeline;
 mod pixel;
 mod rewrite;
@@ -83,6 +85,7 @@ pub struct PixelsRenderer {
     text: draw::TextRaster,
     /// The app context this renderer gave its text measurer.
     app_context: Option<std::rc::Weak<cranpose_ui::AppContext>>,
+    direct: direct_check::DirectCheck,
 }
 
 impl Default for PixelsRenderer {
@@ -106,6 +109,7 @@ impl PixelsRenderer {
             scene: Scene::new(),
             text: draw::TextRaster::new(TextFonts::from_fonts_or_default(fonts)),
             app_context: None,
+            direct: direct_check::DirectCheck::new(),
         }
     }
 
@@ -178,6 +182,9 @@ impl PixelsRenderer {
                 }
                 growth_trim::trim(picture);
             }
+            if let Some(raster) = &picture.raster {
+                self.direct.compare(raster, scale);
+            }
             return;
         }
         // An update in place that gave up after it changed part of the scene
@@ -222,6 +229,9 @@ impl PixelsRenderer {
         picture.measure_reach();
         if cranpose_ui::current_memory_headroom() == MemoryHeadroom::Tight {
             growth_trim::trim(picture);
+        }
+        if let Some(raster) = &picture.raster {
+            self.direct.compare(raster, scale);
         }
     }
 
@@ -406,6 +416,10 @@ impl Renderer for PixelsRenderer {
         }
     }
 
+    fn set_root_scale(&mut self, scale: f32) {
+        self.direct.set_scale(scale);
+    }
+
     fn scene(&self) -> &Self::Scene {
         &self.scene
     }
@@ -431,6 +445,8 @@ impl Renderer for PixelsRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.rebuild_from_applier(applier, root);
+        self.direct
+            .build(applier, root, None, (self.scene.diagnostics(), &self.text));
         Ok(())
     }
 
@@ -442,6 +458,12 @@ impl Renderer for PixelsRenderer {
         updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
         self.scene.update_from_applier(applier, root, updates);
+        self.direct.build(
+            applier,
+            root,
+            Some(updates),
+            (self.scene.diagnostics(), &self.text),
+        );
         Ok(())
     }
 }

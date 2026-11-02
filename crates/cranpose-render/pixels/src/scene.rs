@@ -450,18 +450,28 @@ impl RasterScene {
         index
     }
 
-    /// Notes in the record `index` what its layer passes down.
-    pub(crate) fn note_passed_down(&mut self, index: usize, passed_down: PassedDown) {
-        let at = match self.rewrite.as_deref_mut() {
-            Some(rewrite) => rewrite.place_passed_down(&mut self.passed_down, passed_down),
+    // Notes in the record `index` what its layer passes down. While a
+    // subtree is rewritten, returns whether that is what the old record of
+    // the layer passed down; `None` otherwise.
+    pub(crate) fn note_passed_down(
+        &mut self,
+        index: usize,
+        passed_down: PassedDown,
+    ) -> Option<bool> {
+        let (at, same) = match self.rewrite.as_deref_mut() {
+            Some(rewrite) => {
+                let (at, same) = rewrite.place_passed_down(&mut self.passed_down, passed_down);
+                (at, Some(same))
+            }
             None => {
                 self.passed_down.push(passed_down);
-                self.passed_down.len() - 1
+                (self.passed_down.len() - 1, None)
             }
         };
         if let Some(record) = self.record_mut(index) {
             record.passed_down = Some(at);
         }
+        same
     }
 
     /// Closes the record `index`: the subtree pushed everything since it
@@ -475,6 +485,9 @@ impl RasterScene {
         if let Some(record) = self.record_mut(index) {
             record.end = end;
             record.stop = stop;
+        }
+        if let Some(rewrite) = self.rewrite.as_deref_mut() {
+            rewrite.close_record(&self.subtrees);
         }
     }
 
@@ -560,6 +573,73 @@ impl RasterScene {
                     passed_down.len() - 1
                 });
         }
+    }
+
+    // Pushes copies of the items, records and passed-down entries of the
+    // subtree `old` holds at `records`, whose items end at `stop` and whose
+    // entries start at `first_entry`, as a spill whose items, records and
+    // entries would start at `to` in the scene it is spliced into.
+    pub(crate) fn copy_subtrees_to(
+        &mut self,
+        old: &Self,
+        records: Range<usize>,
+        (stop, first_entry): (ItemCounts, usize),
+        to: (ItemCounts, usize, usize),
+    ) {
+        let Some(from) = old.subtrees.get(records.start).map(|first| first.start) else {
+            return;
+        };
+        let (to_items, to_records, to_entries) = to;
+        let base = ItemCounts {
+            order: self.order.len(),
+            shapes: self.shapes.len(),
+            images: self.images.len(),
+            texts: self.texts.len(),
+            shadows: self.shadows.len(),
+        };
+        self.shapes
+            .extend_from_slice(&old.shapes[from.shapes..stop.shapes]);
+        self.images
+            .extend_from_slice(&old.images[from.images..stop.images]);
+        self.texts
+            .extend_from_slice(&old.texts[from.texts..stop.texts]);
+        self.shadows
+            .extend_from_slice(&old.shadows[from.shadows..stop.shadows]);
+        let moved = |index: usize, from: usize, to: usize| to + (index - from);
+        self.order.extend(
+            old.order[from.order..stop.order]
+                .iter()
+                .map(|item| match *item {
+                    RenderItem::Shape(index) => {
+                        RenderItem::Shape(moved(index, from.shapes, base.shapes))
+                    }
+                    RenderItem::Image(index) => {
+                        RenderItem::Image(moved(index, from.images, base.images))
+                    }
+                    RenderItem::Text(index) => {
+                        RenderItem::Text(moved(index, from.texts, base.texts))
+                    }
+                    RenderItem::Shadow(index) => {
+                        RenderItem::Shadow(moved(index, from.shadows, base.shadows))
+                    }
+                }),
+        );
+        let first = records.start;
+        let mut entries = 0;
+        for record in &old.subtrees[records] {
+            entries += usize::from(record.passed_down.is_some());
+            self.subtrees.push(SubtreeItems {
+                end: moved(record.end, first, to_records),
+                start: record.start.moved(from, to_items),
+                stop: record.stop.moved(from, to_items),
+                passed_down: record
+                    .passed_down
+                    .map(|at| moved(at, first_entry, to_entries)),
+                ..*record
+            });
+        }
+        self.passed_down
+            .extend_from_slice(&old.passed_down[first_entry..first_entry + entries]);
     }
 
     /// The extent of the subtree whose record is `record`, and the index of

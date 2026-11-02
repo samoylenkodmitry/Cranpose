@@ -6,8 +6,10 @@ use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
     BuildNodeSnapshot, DrawTarget, Level, LowerContext, SnapshotNodeData, assign_layer,
-    modifier_slices_have_origin_sinks, note_layer_lowered, prepare_node_layer, read_node_data,
-    read_placed_node_data, remove_dirty_descendants, slices_hit_something,
+    modifier_slices_have_origin_sinks,
+    node_layer::Children,
+    note_layer_lowered, prepare_node_layer, read_node_data, read_placed_node_data,
+    remove_dirty_descendants, slices_hit_something,
     text_node::{TextNodeParts, drawn_text, refresh_text_node},
     translate_layer::holds_hit_geometry,
     write_node_content, write_node_layer,
@@ -59,7 +61,7 @@ pub(super) fn lower_child(
     })
 }
 
-fn lower_placed_child(
+pub(super) fn lower_placed_child(
     applier: &MemoryApplier,
     node_id: NodeId,
     data: SnapshotNodeData<'_>,
@@ -67,7 +69,13 @@ fn lower_placed_child(
 ) -> RenderNode {
     if !lowers_inline(&data) {
         let mut layer = crate::layer_recycling::layer_box();
-        write_node_layer(applier, node_id, data, context, &mut layer);
+        write_node_layer(
+            applier,
+            node_id,
+            data,
+            (context, Children::Lower),
+            &mut layer,
+        );
         return RenderNode::Layer(layer);
     }
     let mut inline = crate::layer_recycling::inline_box().unwrap_or_default();
@@ -97,6 +105,7 @@ fn write_inline(
         size,
         motion_context_animated: inline.motion_context_animated,
         layer: None,
+        store: context.store,
     };
     write_node_content(&mut inline.content, node_id, slices, draws, (0, 0), |_| {});
     inline.note_change();
