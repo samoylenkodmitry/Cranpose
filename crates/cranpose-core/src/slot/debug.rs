@@ -51,6 +51,7 @@ pub struct SlotTableLocalDebugStats {
     /// Heap bytes reserved by the group anchor registry.
     pub anchor_heap_bytes: usize,
     /// Counters for subtree moves and index refreshes.
+    #[cfg(any(test, feature = "leak-debug"))]
     pub mutation: SlotTableMutationDebugStats,
 }
 
@@ -154,6 +155,7 @@ pub struct SlotTableDebugStats {
     /// Subtrees dropped from retention since the composition started.
     pub retained_evictions_total: usize,
     /// Counters for subtree moves and index refreshes.
+    #[cfg(any(test, feature = "leak-debug"))]
     pub mutation: SlotTableMutationDebugStats,
 }
 
@@ -197,6 +199,7 @@ impl SlotTableDebugStats {
             retained_anchor_count: retention.retained_anchor_count,
             retained_heap_bytes: retention.retained_heap_bytes,
             retained_evictions_total: retention.retained_evictions_total,
+            #[cfg(any(test, feature = "leak-debug"))]
             mutation: local.mutation,
         }
     }
@@ -205,6 +208,7 @@ impl SlotTableDebugStats {
 /// Counters for work the slot table does when groups move, from the table's debug stats.
 /// `*_count` fields count operations or items summed over all operations; `*_max_span` fields
 /// hold the largest single operation.
+#[cfg(any(test, feature = "leak-debug"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SlotTableMutationDebugStats {
     /// Subtree moves done.
@@ -254,48 +258,34 @@ pub struct SlotTableMutationDebugStats {
     pub payload_shift_bytes: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SlotTableDiagnostics {
-    mutation: SlotTableMutationDebugStats,
-}
+// The slot table's mutation counters, or without leak-debug a stand-in whose
+// records compile out.
+#[cfg(any(test, feature = "leak-debug"))]
+pub(crate) type SlotTableDiagnostics = SlotTableMutationDebugStats;
 
+#[cfg(not(any(test, feature = "leak-debug")))]
+#[derive(Default)]
+pub(crate) struct SlotTableDiagnostics;
+
+#[cfg(not(any(test, feature = "leak-debug")))]
 impl SlotTableDiagnostics {
-    pub(crate) fn mutation(&self) -> SlotTableMutationDebugStats {
-        self.mutation
-    }
-
-    pub(crate) fn record_subtree_move(
-        &mut self,
-        group_span: usize,
-        payload_span: usize,
-        node_span: usize,
-    ) {
-        self.mutation
-            .record_subtree_move(group_span, payload_span, node_span);
-    }
+    pub(crate) fn record_subtree_move(&mut self, _groups: usize, _payloads: usize, _nodes: usize) {}
 
     pub(crate) fn record_payload_location_range_refresh(
         &mut self,
-        group_span: usize,
-        payload_span: usize,
+        _groups: usize,
+        _payloads: usize,
     ) {
-        self.mutation
-            .record_payload_location_range_refresh(group_span, payload_span);
     }
 
-    pub(crate) fn record_group_index_refresh(&mut self, group_span: usize) {
-        self.mutation.record_group_index_refresh(group_span);
-    }
+    pub(crate) fn record_group_index_refresh(&mut self, _groups: usize) {}
 
-    pub(crate) fn record_payload_location_refresh(&mut self, payload_span: usize) {
-        self.mutation.record_payload_location_refresh(payload_span);
-    }
+    pub(crate) fn record_payload_location_refresh(&mut self, _payloads: usize) {}
 
-    pub(crate) fn record_segment_range_update(&mut self, group_span: usize) {
-        self.mutation.record_segment_range_update(group_span);
-    }
+    pub(crate) fn record_segment_range_update(&mut self, _groups: usize) {}
 }
 
+#[cfg(any(test, feature = "leak-debug"))]
 impl SlotTableMutationDebugStats {
     pub(crate) fn record_subtree_move(
         &mut self,

@@ -22,7 +22,7 @@ workspace = true
 [features]
 default = []
 clipboard-native = ["dep:arboard"]
-test-support = []
+test-support = ["cranpose-core/leak-debug"]
 # Fonts an app installs while it runs: renderers take them in before the next
 # frame's layout.
 installed-fonts = ["cranpose-render-common/installed-fonts"]
@@ -42,6 +42,7 @@ web-time = { workspace = true }
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
+cranpose-core = { workspace = true, features = ["internal", "leak-debug"] }
 cranpose-liquid = { path = "../cranpose-liquid" }
 # Tests lay text out with Cranpose Test Mono.
 cranpose-ui = { workspace = true, features = ["test-helpers"] }

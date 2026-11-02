@@ -224,6 +224,7 @@ impl CommandQueue {
         self.tags.capacity()
     }
 
+    #[cfg(any(test, feature = "leak-debug"))]
     pub(crate) fn payload_len_bytes(&self) -> usize {
         self.bubble_dirty
             .len()
@@ -272,6 +273,7 @@ impl CommandQueue {
             )
     }
 
+    #[cfg(any(test, feature = "leak-debug"))]
     pub(crate) fn payload_capacity_bytes(&self) -> usize {
         self.bubble_dirty
             .capacity()

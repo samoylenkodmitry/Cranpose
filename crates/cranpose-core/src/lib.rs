@@ -176,9 +176,9 @@ pub use composer::{
     ValueSlotHandle,
 };
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
-pub use composition::{
-    Composition, CompositionPassDebugStats, LayoutBudget, ROOT_RENDER_REPLAY_LIMIT,
-};
+#[cfg(any(test, feature = "leak-debug"))]
+pub use composition::CompositionPassDebugStats;
+pub use composition::{Composition, LayoutBudget, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
     CompositionLocal, CompositionLocalAccessorScope, CompositionLocalProvider, ProvidedValue,
     ReadableCompositionLocal, StaticCompositionLocal, compositionLocalOf,
@@ -227,10 +227,12 @@ pub use runtime::{
     current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
 };
 pub use runtime_cell::RuntimeCell;
+#[cfg(any(test, feature = "leak-debug"))]
+pub use slot::SlotTableMutationDebugStats;
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
     SlotDebugSnapshot, SlotRetentionDebugStats, SlotTable, SlotTableDebugStats,
-    SlotTableLocalDebugStats, SlotTableMutationDebugStats,
+    SlotTableLocalDebugStats,
 };
 pub use snapshot_state_observer::SnapshotStateObserver;
 

@@ -34,10 +34,11 @@ pub(in crate::slot) use checked::{
     CheckedU32Delta, checked_u32_delta, checked_usize_to_i64, shift_u32_values,
 };
 pub(crate) use debug::SlotLifecycleDebugStats;
+#[cfg(any(test, feature = "leak-debug"))]
+pub use debug::SlotTableMutationDebugStats;
 pub use debug::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
     SlotDebugSnapshot, SlotRetentionDebugStats, SlotTableDebugStats, SlotTableLocalDebugStats,
-    SlotTableMutationDebugStats,
 };
 pub(crate) use detach::dispose_detached_node_now;
 use groups::GroupRecord;
