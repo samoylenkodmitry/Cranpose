@@ -75,6 +75,13 @@ def main():
             (args.output / 'command-error.log').write_bytes(output.encode() if isinstance(output, str) else output)
         raise
     finally:
+        # The app's own log: its pipeline builds and frames it could not draw.
+        try:
+            (args.output / 'app.log').write_text(command(
+                'xcrun', 'simctl', 'spawn', args.device, 'log', 'show', '--last', '1h', '--style', 'compact',
+                '--predicate', f'subsystem == "{info["CFBundleIdentifier"]}"'))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            report['app_log_error'] = str(error)
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2))
 
