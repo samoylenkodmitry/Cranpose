@@ -18,6 +18,7 @@ impl Applier for MemoryApplier {
             return stable_id;
         }
 
+        let is_virtual = node.is_virtual();
         let physical_id = if let Some(Reverse(id)) = self.state.free_ids.pop() {
             debug_assert!(
                 self.state.nodes[id].is_none(),
@@ -40,6 +41,9 @@ impl Applier for MemoryApplier {
             id
         };
         self.state.stable_index.insert_fresh(stable_id, physical_id);
+        if is_virtual {
+            self.state.stable_index.mark_virtual(stable_id);
+        }
         stable_id
     }
 
