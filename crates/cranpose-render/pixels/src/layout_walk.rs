@@ -10,12 +10,13 @@ use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        ChildPlacement, LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment,
-        kept_child_placement,
-        lower_moved_subtree, lower_node_alone, lower_space_fragment, recycle_lowered,
-        release_lowered,
+        LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, kept_child_placement,
+        lower_moved_subtree, lower_node_alone, lower_space_fragment, placed_child_position,
+        recycle_lowered, release_lowered,
     },
 };
+
+use cranpose_ui_graphics::Point;
 
 use crate::{
     moved_subtrees::MovedSubtrees,
@@ -327,15 +328,16 @@ impl<'a> LayoutWalk<'a> {
     }
 
     // Pushes under `context` the subtree of `child`, which did not change,
-    // though it moved to `placement` or lies under other state than before,
-    // over its old subtree at the record `at`: from the subtree lowered
-    // whole when it moved in the updates before, placed where it now lies,
-    // else lowered whole now, which the scene keeps while the child moves.
+    // though it moved or lies under other state than before, over its old
+    // subtree at the record `at`: from the subtree lowered whole when it
+    // moved in the updates before, placed where it now lies, else lowered
+    // whole now, which the scene keeps while the child moves. `position` is
+    // where the child lies in its parent's content, when the walk read it.
     // False for a subtree that holds a 3D space, which the walk lowers as
     // any other.
     pub(crate) fn push_moved(
         &self,
-        (child, placement): (NodeId, ChildPlacement),
+        (child, position): (NodeId, Option<Point>),
         lower_context: LowerContext,
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         at: usize,
@@ -343,13 +345,16 @@ impl<'a> LayoutWalk<'a> {
         if self.keeps_space(&scene.subtrees, at) {
             return false;
         }
+        // A child no longer placed pushes nothing.
+        let Some(position) = position.or_else(|| placed_child_position(self.applier, child)) else {
+            return true;
+        };
         let mut kept = self.moved.borrow_mut().take(child);
         if let Some(stale) =
-            kept.take_if(|subtree| !subtree.follow(self.applier, placement, lower_context))
+            kept.take_if(|subtree| !subtree.follow(self.applier, position, lower_context))
         {
             stale.recycle();
         }
-        // A child no longer placed pushes nothing.
         let Some(subtree) =
             kept.or_else(|| lower_moved_subtree(self.applier, child, lower_context))
         else {
@@ -487,26 +492,30 @@ impl ChildSlot<'_> {
             let end = scene.subtrees[at].end;
             let record = &scene.subtrees[at];
             let clean = walk.is_clean(child);
-            let placed_as_before = context.same_as_before && self.placed_as_before();
             // A child whose owner placed it as before lies where it did.
-            let placement = (clean && !placed_as_before)
+            let placement = (clean && context.same_as_before && !self.placed_as_before())
                 .then(|| kept_child_placement(walk.applier, child, self.context))
                 .flatten();
-            let lies_as_before = placed_as_before
-                || context.same_as_before
-                    && placement.is_some_and(|placement| {
+            let lies_as_before = context.same_as_before
+                && (self.placed_as_before()
+                    || placement.is_some_and(|placement| {
                         (placement.identity, placement.transform)
                             == (record.identity, record.transform)
-                    });
+                    }));
             if clean
                 && lies_as_before
                 && let Some(mut rewrite) = scene.rewrite.take()
             {
                 rewrite.keep(scene, at);
                 scene.rewrite = Some(rewrite);
-            } else if !placement.is_some_and(|placement| {
-                walk.push_moved((child, placement), self.context, (scene, context), at)
-            }) {
+            } else if !(clean
+                && walk.push_moved(
+                    (child, placement.map(|placement| placement.position)),
+                    self.context,
+                    (scene, context),
+                    at,
+                ))
+            {
                 let children = OldChildren::of(&scene.subtrees, at, child);
                 walk.push(
                     (child, NodePlace::Child),
