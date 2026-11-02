@@ -147,6 +147,40 @@ fn a_warm_up_waits_while_demanded_jobs_are_queued() {
     assert_eq!(order.recv_timeout(Duration::from_secs(5)), Ok("warm-up"));
 }
 
+// A first screen's stand-ins build side by side, one on each thread.
+#[test]
+fn stand_ins_take_every_thread() {
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
+    let threads = 1 + compiler.warm_up_threads();
+    let _held = hold(&compiler, CompileLane::StandIn, threads);
+}
+
+// No other job starts while a stand-in builds: a driver compiles the jobs
+// it is given side by side, and a launch's first frame waits for its
+// stand-ins.
+#[test]
+fn nothing_starts_while_a_stand_in_builds() {
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
+    compiler.spread_demand(true);
+    let held = hold(&compiler, CompileLane::StandIn, 1);
+    let (ran, order) = mpsc::channel();
+    let warm_up = ran.clone();
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        warm_up.send("warm-up").unwrap();
+    });
+    compiler.enqueue(CompileLane::Demanded, move || ran.send("demanded").unwrap());
+    assert!(
+        order.recv_timeout(Duration::from_millis(100)).is_err(),
+        "both wait for the stand-in"
+    );
+    drop(held);
+    let mut started: Vec<_> = (0..2)
+        .map(|_| order.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect();
+    started.sort_unstable();
+    assert_eq!(started, ["demanded", "warm-up"]);
+}
+
 #[test]
 fn dropping_every_handle_skips_the_jobs_not_started() {
     let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);

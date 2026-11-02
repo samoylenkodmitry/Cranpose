@@ -52,9 +52,22 @@ pub(crate) struct Loaded {
     /// Whether another build wrote the records: an update, whose compiled
     /// pipelines are gone.
     pub(crate) updated: bool,
-    /// Whether the driver cache was filled from this build's compiled
-    /// pipelines, so a recorded pipeline builds from it as a cache hit.
-    pub(crate) holds_recorded: bool,
+    pub(crate) first_screen: FirstScreenPipelines,
+}
+
+// Whether a launch finds its first screen's pipelines compiled.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FirstScreenPipelines {
+    // The driver cache was filled from this build's compiled pipelines, so a
+    // recorded pipeline builds from it as a cache hit.
+    Cached,
+    // A launch of this build recorded its first screen, and the system keeps
+    // what it compiled: Metal offers no cache of the app's own.
+    Compiled,
+    // A fresh install, cleared data or an update: everything compiles, the
+    // stand-ins first, as a driver compiling the rest beside them holds the
+    // first frame.
+    Cold,
 }
 
 pub(crate) fn load(device: &wgpu::Device) -> Loaded {
@@ -76,8 +89,18 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
         .and_then(|contents| contents.blob)
         .filter(|blob| !blob.is_empty());
     let cache = driver_cache(device, data, file.as_deref(), updated);
+    let first_screen = if data.is_some() && cache.is_some() {
+        FirstScreenPipelines::Cached
+    } else if contents
+        .as_ref()
+        .is_some_and(|contents| contents.this_build && !contents.first_screen.0.is_empty())
+    {
+        FirstScreenPipelines::Compiled
+    } else {
+        FirstScreenPipelines::Cold
+    };
     Loaded {
-        holds_recorded: data.is_some() && cache.is_some(),
+        first_screen,
         cache,
         records: Arc::new(contents.map(Contents::into_records).unwrap_or_default()),
         updated,

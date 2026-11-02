@@ -512,11 +512,24 @@ impl RendererPipelines {
     /// Queues, ahead of every other pipeline, what draws take while their
     /// own compile: see [`crate::instant_triangles`].
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn warm_instant_tier(&self) {
-        let (compiler, lane, backend) =
-            (&self.compiler, CompileLane::Demanded, self.adapter_backend);
+    pub(super) fn warm_instant_tier(
+        &self,
+        first_screen: crate::pipeline_disk_cache::FirstScreenPipelines,
+    ) {
+        let lane = match first_screen {
+            crate::pipeline_disk_cache::FirstScreenPipelines::Cold => CompileLane::StandIn,
+            crate::pipeline_disk_cache::FirstScreenPipelines::Cached
+            | crate::pipeline_disk_cache::FirstScreenPipelines::Compiled => CompileLane::Demanded,
+        };
+        let (compiler, backend) = (&self.compiler, self.adapter_backend);
         let (device, format) = (&self.device, self.composition_format);
         for depth in PassDepth::BOTH {
+            // A launch's first frames draw without a depth buffer: the depth
+            // twin never holds them.
+            let lane = match depth {
+                PassDepth::Off => lane,
+                PassDepth::On => CompileLane::Demanded,
+            };
             self.mesh_pipelines[depth.index()].queue(
                 compiler,
                 lane,

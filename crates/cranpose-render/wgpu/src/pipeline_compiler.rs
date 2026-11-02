@@ -136,6 +136,12 @@ impl<T: ?Sized> CompilerSync for T {}
 /// Why a pipeline is queued, which decides the thread that builds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompileLane {
+    // A stand-in a first screen draws while its own pipeline compiles:
+    // every thread takes these first, and starts nothing else until all of
+    // them have landed, so the compiles a driver runs side by side do not
+    // hold the first frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    StandIn,
     /// A frame drew without this pipeline, with a stand-in, a placeholder or
     /// fallback triangles, or left its draw out, until it is ready.
     Demanded,
@@ -279,6 +285,11 @@ struct DiscoveryFrame {
 /// The jobs waiting for a compiler thread, or on WebGL for a frame's end, per lane.
 #[derive(Default)]
 struct Queues {
+    #[cfg(not(target_arch = "wasm32"))]
+    stand_ins: VecDeque<Job>,
+    // The stand-ins queued or building.
+    #[cfg(not(target_arch = "wasm32"))]
+    stand_ins_pending: usize,
     demanded: VecDeque<Job>,
     warm_up: VecDeque<Job>,
     /// Set by the last handle: the threads start nothing more.
@@ -289,6 +300,8 @@ struct Queues {
 impl Queues {
     fn push(&mut self, lane: CompileLane, job: Job) {
         match lane {
+            #[cfg(not(target_arch = "wasm32"))]
+            CompileLane::StandIn => self.stand_ins.push_back(job),
             CompileLane::Demanded => self.demanded.push_back(job),
             CompileLane::WarmUp | CompileLane::Later => self.warm_up.push_back(job),
         }
@@ -322,6 +335,15 @@ impl Pool {
         self.queues.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn stand_in_landed(&self) {
+        let mut queues = self.queues();
+        queues.stand_ins_pending -= 1;
+        if queues.stand_ins_pending == 0 {
+            drop(queues);
+            self.queued.notify_all();
+        }
+    }
+
     /// Waits for the next job a thread taking `warm_ups` or only demanded
     /// jobs starts; `None` once the pool is closed.
     fn take(&self, warm_ups: bool) -> Option<Job> {
@@ -330,7 +352,12 @@ impl Pool {
             if queues.closed {
                 return None;
             }
-            if let Some(job) = queues.next(warm_ups, self.spread.load(Ordering::Acquire)) {
+            if let Some(job) = queues.stand_ins.pop_front() {
+                return Some(job);
+            }
+            if queues.stand_ins_pending == 0
+                && let Some(job) = queues.next(warm_ups, self.spread.load(Ordering::Acquire))
+            {
                 return Some(job);
             }
             queues = self
@@ -338,6 +365,18 @@ impl Pool {
                 .wait(queues)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+    }
+}
+
+// Counts a stand-in landed when its job ends or is dropped unstarted, so a
+// compile that panics does not hold the other threads.
+#[cfg(not(target_arch = "wasm32"))]
+struct StandInLanded(Arc<Pool>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for StandInLanded {
+    fn drop(&mut self) {
+        self.0.stand_in_landed();
     }
 }
 
@@ -361,6 +400,7 @@ impl Drop for Workers {
             let mut queues = self.pool.queues();
             queues.closed = true;
             (
+                std::mem::take(&mut queues.stand_ins),
                 std::mem::take(&mut queues.demanded),
                 std::mem::take(&mut queues.warm_up),
                 std::mem::take(self.later.get_mut().unwrap_or_else(PoisonError::into_inner)),
@@ -761,7 +801,21 @@ impl PipelineCompiler {
                 return;
             }
             workers.landing.queued.fetch_add(1, Ordering::AcqRel);
-            workers.pool.queues().push(lane, Box::new(job));
+            let job: Job = if lane == CompileLane::StandIn {
+                let landed = StandInLanded(Arc::clone(&workers.pool));
+                Box::new(move || {
+                    job();
+                    drop(landed);
+                })
+            } else {
+                Box::new(job)
+            };
+            let mut queues = workers.pool.queues();
+            if lane == CompileLane::StandIn {
+                queues.stand_ins_pending += 1;
+            }
+            queues.push(lane, job);
+            drop(queues);
             // A warm-up wakes every thread: the one taking only demanded
             // jobs may be the one woken, and it would leave the job queued.
             workers.pool.queued.notify_all();
