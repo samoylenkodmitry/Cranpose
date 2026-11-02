@@ -23,7 +23,7 @@ use crate::{
     draw::{ClipBounds, TextRaster},
     layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, names},
     moved_subtrees::MovedSubtrees,
-    pipeline::{self, InPlaceUpdate, UpdatedReach},
+    pipeline::{self, InPlaceUpdate, PushTarget, UpdatedReach},
     pixel_rect,
     raster_scene::{RasterScene, SubtreeItems},
     rewrite::Rewrite,
@@ -36,8 +36,10 @@ pub struct Scene {
     // Where each item of `raster` can draw in `frame`, in its order: each
     // strip a host draws passes over the items that miss it.
     reach: Vec<Option<ClipBounds>>,
-    // What an update in place pushes each changed subtree again with.
+    // What an update in place pushes each changed subtree again with, and
+    // the room for the nodes whose subtrees it pushes again.
     rewrite: Option<Box<Rewrite>>,
+    push_targets: Vec<PushTarget>,
     marks: DirtyMarks,
     scale: f32,
     // The frame the host took the picture in last, which the changes and
@@ -81,6 +83,7 @@ impl Scene {
             raster: None,
             reach: Vec::new(),
             rewrite: None,
+            push_targets: Vec::new(),
             marks: DirtyMarks::default(),
             scale: 1.0,
             frame: OPEN_FRAME,
@@ -209,6 +212,7 @@ impl Scene {
             scene: raster,
             reach: &mut self.reach,
             rewrite: &mut self.rewrite,
+            targets: &mut self.push_targets,
         }
         .run_layout(
             (&walk, root),
@@ -324,6 +328,7 @@ impl Scene {
         if let Some(rewrite) = self.rewrite.as_mut() {
             rewrite.release_spill();
         }
+        self.push_targets = Vec::new();
         if let Some(raster) = self.raster.as_mut() {
             crate::growth_trim::trim(raster, &mut self.reach);
         }
