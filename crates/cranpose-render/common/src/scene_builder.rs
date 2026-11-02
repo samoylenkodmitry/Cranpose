@@ -41,6 +41,8 @@ pub use lowered_node::{
     LoweredNode, NodePlace, kept_child_placement, lower_node_alone, recycle_lowered,
     release_lowered, root_layer_bounds, visit_kept_node,
 };
+mod moved_subtree;
+pub use moved_subtree::{MovedSubtree, lower_moved_subtree};
 mod node_layer;
 pub use node_layer::LowerContext;
 mod space_fragment;

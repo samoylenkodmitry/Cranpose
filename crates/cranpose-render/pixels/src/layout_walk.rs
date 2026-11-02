@@ -11,11 +11,13 @@ use cranpose_render_common::{
     graph::RenderNode,
     scene_builder::{
         LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, kept_child_placement,
-        lower_node_alone, lower_space_fragment, recycle_lowered, release_lowered,
+        lower_moved_subtree, lower_node_alone, lower_space_fragment, recycle_lowered,
+        release_lowered,
     },
 };
 
 use crate::{
+    moved_subtrees::MovedSubtrees,
     pipeline::{RasterTraversalContext, Reuse, populate_draws_from_graph},
     raster_scene::{RasterScene, Subtree, SubtreeItems},
 };
@@ -187,25 +189,33 @@ pub(crate) struct KeptSpace {
 }
 
 // A walk of one window's layout tree, with the marks of the update it
-// pushes, and the subtrees whose layers hold a 3D space, which the scene
-// keeps whole.
+// pushes, the subtrees whose layers hold a 3D space, which the scene keeps
+// whole, and the subtrees of the children that moved in the update before.
 pub(crate) struct LayoutWalk<'a> {
     applier: &'a MemoryApplier,
     marks: &'a DirtyMarks,
     spaces: &'a RefCell<Vec<KeptSpace>>,
+    moved: &'a RefCell<MovedSubtrees>,
 }
 
 impl<'a> LayoutWalk<'a> {
     pub(crate) fn new(
         applier: &'a MemoryApplier,
         marks: &'a DirtyMarks,
-        spaces: &'a RefCell<Vec<KeptSpace>>,
+        (spaces, moved): (&'a RefCell<Vec<KeptSpace>>, &'a RefCell<MovedSubtrees>),
     ) -> Self {
         Self {
             applier,
             marks,
             spaces,
+            moved,
         }
+    }
+
+    // Lets go what the walk lowered and did not keep, as it ends.
+    pub(crate) fn release(&self) {
+        self.moved.borrow_mut().end_update();
+        release_lowered();
     }
 
     pub(crate) fn applier(&self) -> &'a MemoryApplier {
@@ -269,7 +279,7 @@ impl<'a> LayoutWalk<'a> {
             push(space.root(), None);
             self.keep_space(space);
         }
-        release_lowered();
+        self.release();
         lowered.is_some()
     }
 
@@ -315,6 +325,51 @@ impl<'a> LayoutWalk<'a> {
             }
             self.keep_space(space);
         }
+    }
+
+    // Pushes under `context` the subtree of `child`, which did not change,
+    // though it moved or lies under other state than before, over its old
+    // subtree at the record `at`: from the subtree lowered whole when it
+    // moved in the update before, placed where it now lies, else lowered
+    // whole now, which the scene keeps while the child moves. False for a
+    // subtree that holds a 3D space, which the walk lowers as any other.
+    pub(crate) fn push_moved(
+        &self,
+        child: NodeId,
+        lower_context: LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+        at: usize,
+    ) -> bool {
+        if self.keeps_space(&scene.subtrees, at) {
+            return false;
+        }
+        let mut kept = self.moved.borrow_mut().take(child);
+        if let Some(stale) = kept.take_if(|subtree| !subtree.follow(self.applier, lower_context)) {
+            stale.recycle();
+        }
+        // A child no longer placed pushes nothing.
+        let Some(subtree) =
+            kept.or_else(|| lower_moved_subtree(self.applier, child, lower_context))
+        else {
+            return true;
+        };
+        if let Some(node) = Subtree::of_child(subtree.root()) {
+            populate_draws_from_graph(node, scene, context, &mut None, None);
+        }
+        self.moved.borrow_mut().keep(subtree);
+        true
+    }
+
+    // Whether the old subtree at the record `at` holds a subtree the scene
+    // keeps whole for its 3D space.
+    fn keeps_space(&self, records: &[SubtreeItems], at: usize) -> bool {
+        let spaces = self.spaces.borrow();
+        !spaces.is_empty()
+            && records[at..records[at].end].iter().any(|record| {
+                spaces
+                    .iter()
+                    .any(|kept| names(record.identity, kept.space.node()))
+            })
     }
 
     // Keeps `space` in place of the subtree the scene kept for its node.
@@ -429,8 +484,9 @@ impl ChildSlot<'_> {
             };
             let end = scene.subtrees[at].end;
             let record = &scene.subtrees[at];
-            if context.same_as_before
-                && walk.is_clean(child)
+            let clean = walk.is_clean(child);
+            if clean
+                && context.same_as_before
                 && (self.placed_as_before()
                     || kept_child_placement(walk.applier, child, self.context)
                         == Some((record.identity, record.transform)))
@@ -438,7 +494,7 @@ impl ChildSlot<'_> {
             {
                 rewrite.keep(scene, at);
                 scene.rewrite = Some(rewrite);
-            } else {
+            } else if !(clean && walk.push_moved(child, self.context, (scene, context), at)) {
                 let children = OldChildren::of(&scene.subtrees, at, child);
                 walk.push(
                     (child, NodePlace::Child),

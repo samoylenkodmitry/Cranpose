@@ -24,6 +24,7 @@ use crate::{
     damage,
     draw::{ClipBounds, TextRaster},
     layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, names},
+    moved_subtrees::MovedSubtrees,
     pipeline::{self, InPlaceUpdate, UpdatedReach},
     raster_scene::{RasterScene, SubtreeItems},
     rewrite::Rewrite,
@@ -55,6 +56,8 @@ pub struct Scene {
     // draw their surfaces out of the tree's order and take input through
     // their eyes.
     spaces: RefCell<Vec<KeptSpace>>,
+    // The subtrees of the children that moved in the update before.
+    moved: RefCell<MovedSubtrees>,
     // A scene built anew beside each update, which tests compare the
     // updated one with.
     fresh: Option<Option<RasterScene>>,
@@ -90,6 +93,7 @@ impl Scene {
             diagnostics: Rc::new(RenderDiagnostics::new()),
             layer_moves: 0,
             spaces: RefCell::default(),
+            moved: RefCell::default(),
             fresh: None,
         }
     }
@@ -210,7 +214,7 @@ impl Scene {
         let Some(raster) = self.raster.as_mut() else {
             return false;
         };
-        let walk = LayoutWalk::new(applier, &self.marks, &self.spaces);
+        let walk = LayoutWalk::new(applier, &self.marks, (&self.spaces, &self.moved));
         let mut areas = Vec::new();
         let updated = InPlaceUpdate {
             scene: raster,
@@ -247,7 +251,7 @@ impl Scene {
         text: &TextRaster,
     ) {
         let mut raster = self.storage();
-        let walk = LayoutWalk::new(applier, &self.marks, &self.spaces);
+        let walk = LayoutWalk::new(applier, &self.marks, (&self.spaces, &self.moved));
         let built = pipeline::fill_raster_scene_from_layout(
             &mut raster,
             (&walk, root),
@@ -360,8 +364,8 @@ impl Scene {
             return;
         }
         let marks = DirtyMarks::cleared(applier);
-        let spaces = RefCell::default();
-        let walk = LayoutWalk::new(applier, &marks, &spaces);
+        let (spaces, moved) = (RefCell::default(), RefCell::default());
+        let walk = LayoutWalk::new(applier, &marks, (&spaces, &moved));
         let mut raster = RasterScene::new();
         let built = pipeline::fill_raster_scene_from_layout(
             &mut raster,
@@ -506,6 +510,7 @@ impl RenderScene for Scene {
         self.changed = Changed::Whole;
         self.hits.get_mut().clear();
         self.spaces.get_mut().clear();
+        self.moved.get_mut().clear();
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {

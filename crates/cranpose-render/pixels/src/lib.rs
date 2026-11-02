@@ -5,6 +5,7 @@ mod damage;
 mod draw;
 mod growth_trim;
 mod layout_walk;
+mod moved_subtrees;
 mod pipeline;
 mod pixel;
 mod raster_scene;
