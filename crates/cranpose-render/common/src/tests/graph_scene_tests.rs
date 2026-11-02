@@ -129,13 +129,11 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
 }
 
 #[test]
-fn collecting_observation_owners_clears_an_empty_scene() {
+fn an_empty_scene_visits_no_observation_owner() {
     let scene = Scene::new();
-    let mut nodes = HashSet::from_iter([NodeId(13), NodeId(17)]);
-    let capacity = nodes.capacity();
-    assert!(scene.collect_retained_visual_observation_nodes(&mut nodes));
+    let mut nodes = Vec::new();
+    assert!(scene.visit_retained_visual_observation_nodes(&mut |node| nodes.push(node)));
     assert!(nodes.is_empty());
-    assert_eq!(nodes.capacity(), capacity);
 }
 
 #[test]

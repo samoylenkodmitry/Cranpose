@@ -9,6 +9,7 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
+use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_render_pixels::{PixelRect, PixelsRenderer};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
 use cranpose_ui_graphics::{
@@ -357,11 +358,8 @@ fn StillParent(captured: Step) {
 fn shell(scale: f32, scenes: fn(Step)) -> (AppShell<PixelsRenderer>, Step) {
     let captured: Step = Rc::default();
     let content = Rc::clone(&captured);
-    // The full redraw each frame compares with draws a scene built anew.
-    let mut renderer = PixelsRenderer::new();
-    renderer.keep_fresh_builds_for_tests();
     let shell = AppShell::new_with_size_and_density(
-        renderer,
+        PixelsRenderer::new(),
         location_key(file!(), line!(), column!()),
         move || scenes(Rc::clone(&content)),
         (WIDTH, HEIGHT),
@@ -389,17 +387,24 @@ fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
     Some((pixel % WIDTH as usize, pixel / WIDTH as usize))
 }
 
+// A shell updated in place draws only the areas it reports into a kept
+// frame; a second shell of the same scenes, whose scene goes before each
+// update that renders its root again, builds it anew and draws it whole.
 fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
     let (mut shell, captured) = shell(scale, scenes);
+    let (mut fresh, fresh_captured) = self::shell(scale, scenes);
     let mut areas = Vec::new();
     let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut area_pixels = Vec::new();
-    for frame in 0..FRAMES {
+    let set_step = |captured: &Step, frame: u32| {
         if frame > 0 {
             let step = (*captured.borrow()).expect("the composition remembered the step");
             step.set(frame);
         }
+    };
+    for frame in 0..FRAMES {
+        set_step(&captured, frame);
         shell.update();
         shell.primary().with_renderer(|renderer| {
             renderer.update_picture(WIDTH, HEIGHT, &mut areas);
@@ -408,8 +413,16 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
                 renderer.draw_picture_area(*area, &mut area_pixels);
                 apply(&mut kept, *area, &area_pixels);
             }
-            renderer.draw_fresh_build_for_tests(&mut full, WIDTH, HEIGHT);
         });
+        set_step(&fresh_captured, frame);
+        fresh
+            .primary()
+            .with_renderer(|renderer| renderer.scene_mut().clear());
+        fresh.request_root_render();
+        fresh.update();
+        fresh
+            .primary()
+            .with_renderer(|renderer| renderer.draw(&mut full, WIDTH, HEIGHT));
         assert_eq!(
             first_difference(&kept, &full),
             None,

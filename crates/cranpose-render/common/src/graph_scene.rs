@@ -719,11 +719,9 @@ impl RenderScene for Scene {
         self.layer_moves
     }
 
-    fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
+    fn visit_retained_visual_observation_nodes(&self, visit: &mut dyn FnMut(NodeId)) -> bool {
         if let Some(graph) = &self.graph {
-            graph.collect_retained_visual_observation_nodes(nodes);
-        } else {
-            nodes.clear();
+            graph.visit_retained_visual_observation_nodes(visit);
         }
         true
     }

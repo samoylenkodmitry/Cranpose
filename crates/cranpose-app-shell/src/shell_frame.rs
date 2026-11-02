@@ -592,12 +592,13 @@ where
         self.app.rebuilt_frames_since_observation_prune = 0;
         let mut retained_visual_nodes = HashSet::default();
         let mut any_graph = false;
-        for surface in &mut self.surfaces {
+        for surface in &self.surfaces {
             any_graph |= surface
                 .renderer
                 .scene()
-                .collect_retained_visual_observation_nodes(&mut surface.retained_visual_nodes);
-            retained_visual_nodes.extend(surface.retained_visual_nodes.iter().copied());
+                .visit_retained_visual_observation_nodes(&mut |node| {
+                    retained_visual_nodes.insert(node);
+                });
         }
         if any_graph {
             cranpose_ui::prune_draw_observations_to_nodes(&retained_visual_nodes);
