@@ -74,9 +74,13 @@ class LinuxAdapter(NativeAdapter):
             try:
                 return self._nodes()
             except self.error_type as error:
-                removed = error.message.startswith('Unknown object ') or (
-                    error.domain == 'atspi_error' and error.code == 1
-                    and error.message.startswith('/org/a11y/atspi/accessible/'))
+                # AtspiError codes, which GI does not expose: 0 is
+                # APPLICATION_GONE and 1 is IPC. libatspi disposes a node when
+                # the app's RemoveAccessible signal arrives, and a later call
+                # on that node reports the application gone.
+                removed = error.message.startswith('Unknown object ') or error.domain == 'atspi_error' and (
+                    error.code == 0
+                    or error.code == 1 and error.message.startswith('/org/a11y/atspi/accessible/'))
                 if attempt == 2 or not removed:
                     raise
                 time.sleep(0.02)
