@@ -6,7 +6,7 @@ use cranpose_ui_graphics::FxHashMap;
 use crate::{
     NodeUpdate,
     layer_recycling::Pool,
-    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
+    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, RedrawnBuffers, TranslateScratch},
 };
 
 pub(crate) struct RenderThreadState {
@@ -20,6 +20,14 @@ pub(crate) struct RenderThreadState {
     pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<FxHashMap<RecorderKey, RecorderSlot>>,
     pub(crate) recording_generation: Cell<u64>,
+    // What the commands of `RecordingStore::Redrawn` keep to record into:
+    // the recordings of those that drew in two updates in a row, the room of
+    // the others', and the update each command drew in last; and the update
+    // that draws now.
+    pub(crate) redrawn_recordings: RefCell<NodeMap<RecorderKey, (Option<RedrawnBuffers>, u64)>>,
+    pub(crate) redrawn_update: Cell<u64>,
+    // Whether the memory left was little when the last update ended.
+    pub(crate) redrawn_tight: Cell<bool>,
     /// Whether a scene update or build changed a layer in 3D since the
     /// window's scenes last published where their layers show and their
     /// eyes' worlds.
@@ -37,6 +45,9 @@ impl RenderThreadState {
             dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(FxHashMap::default()),
             recording_generation: Cell::new(0),
+            redrawn_recordings: RefCell::new(NodeMap::default()),
+            redrawn_update: Cell::new(0),
+            redrawn_tight: Cell::new(false),
             space_changed: Cell::new(false),
             #[cfg(test)]
             lowered_layer_count: Cell::new(0),

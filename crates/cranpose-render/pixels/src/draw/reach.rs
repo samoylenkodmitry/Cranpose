@@ -8,7 +8,7 @@ use super::{
     paints_opaque, place_shape, placed_shadow, snap_delta_for_anchor, text_raster_rect,
 };
 use crate::{
-    scene::{RasterScene, TextDraw},
+    raster_scene::{RasterScene, TextDraw},
     scene_item::ItemRef,
     style::point_in_resolved_rounded_rect,
 };

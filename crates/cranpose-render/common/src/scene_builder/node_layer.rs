@@ -300,6 +300,7 @@ pub(super) fn write_snapshot_layer(
         size,
         motion_context_animated: head.motion_context_animated,
         layer: None,
+        store: context.store,
     };
     let outer = outer_draws(
         node_id,
@@ -347,6 +348,7 @@ fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: LowerContext) -> R
         size,
         motion_context_animated,
         layer: None,
+        store: context.store,
     };
     let mut content = Vec::new();
     write_node_content(&mut content, node_id, &slices, draws, (0, 0), |_| {});
@@ -442,7 +444,13 @@ pub(super) fn lower_root_into(
     target: &mut LayerNode,
 ) -> bool {
     read_placed_node_data(applier, node_id, Level::Root, |data| {
-        write_node_layer(applier, node_id, data, LowerContext::ROOT, target);
+        write_node_layer(
+            applier,
+            node_id,
+            data,
+            (LowerContext::ROOT, Children::Lower),
+            target,
+        );
     })
     .is_some()
 }
@@ -605,6 +613,48 @@ pub(super) fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
     !slices.pointer_inputs().is_empty() || slices.pointer_icon().is_some()
 }
 
+// The window geometry of the node of `slices` and `layout_state` under
+// `context`, when its parent's is known, and what its children lower with.
+fn node_geometry(
+    slices: &ModifierNodeSlices,
+    layout_state: &LayoutState,
+    (local_bounds, graphics_layer): (Rect, Option<&GraphicsLayer>),
+    context: LowerContext,
+) -> (Option<TranslateGeometry>, LowerContext) {
+    let geometry = context.parent_abs.map(|parent_abs| {
+        TranslateGeometry::new(
+            layout_state,
+            graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
+            local_bounds,
+            parent_abs,
+        )
+    });
+    let child_context = context.for_children(
+        slices,
+        layout_state.content_offset(),
+        geometry.map(TranslateGeometry::child_abs),
+    );
+    (geometry, child_context)
+}
+
+// What the children of the node of `slices` and `layout_state` lower with
+// under `context`, for a node kept as it lowered before.
+pub(super) fn children_context(
+    slices: &ModifierNodeSlices,
+    layout_state: &LayoutState,
+    context: LowerContext,
+) -> LowerContext {
+    let (local_bounds, _) = layer_and_node_bounds(slices, layout_state.size());
+    let graphics_layer = shaped_graphics_layer(slices, local_bounds);
+    node_geometry(
+        slices,
+        layout_state,
+        (local_bounds, graphics_layer.as_deref()),
+        context,
+    )
+    .1
+}
+
 pub(super) fn prepare_node_layer(
     node_id: NodeId,
     slices: &Rc<ModifierNodeSlices>,
@@ -615,25 +665,18 @@ pub(super) fn prepare_node_layer(
     let placement = layout_state.position();
     let (local_bounds, node_bounds) = layer_and_node_bounds(slices, size);
     let graphics_layer = shaped_graphics_layer(slices, local_bounds);
-    let geometry = context.parent_abs.map(|parent_abs| {
-        TranslateGeometry::new(
-            layout_state,
-            graphics_layer.as_deref().unwrap_or(&GraphicsLayer::DEFAULT),
-            local_bounds,
-            parent_abs,
-        )
-    });
+    let (geometry, child_context) = node_geometry(
+        slices,
+        layout_state,
+        (local_bounds, graphics_layer.as_deref()),
+        context,
+    );
     if let Some(geometry) = geometry {
         slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
     } else {
         slices.publish_pointer_input_size(size);
     }
     let content_offset = layout_state.content_offset();
-    let child_context = context.for_children(
-        slices,
-        content_offset,
-        geometry.map(TranslateGeometry::child_abs),
-    );
     let head = node_layer_head(
         node_id,
         slices,
@@ -650,14 +693,24 @@ pub(super) fn prepare_node_layer(
     (head, child_context)
 }
 
+// Whether a layer's writer lowers its node's children into the layer, or
+// leaves them to its caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Children {
+    Lower,
+    Leave,
+}
+
+// Writes the layer of the node `node_id` of `data` into `target`, and
+// returns what its children lower with.
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
 pub(super) fn write_node_layer(
     applier: &MemoryApplier,
     node_id: NodeId,
     data: SnapshotNodeData<'_>,
-    context: LowerContext,
+    (context, mode): (LowerContext, Children),
     target: &mut LayerNode,
-) {
+) -> LowerContext {
     let SnapshotNodeData {
         layout_state,
         modifier_slices: slices,
@@ -677,6 +730,7 @@ pub(super) fn write_node_layer(
         size,
         motion_context_animated: head.motion_context_animated,
         layer: None,
+        store: context.store,
     };
     let outer = outer_draws(
         node_id,
@@ -684,6 +738,10 @@ pub(super) fn write_node_layer(
         slices.outer_draw_command_count(),
         draws,
     );
+    let written = match mode {
+        Children::Lower => children.len(),
+        Children::Leave => 0,
+    };
     write_layer_with_outer(
         target,
         head,
@@ -692,7 +750,10 @@ pub(super) fn write_node_layer(
         context.parent_content_offset,
         |list, layer| {
             let draws = DrawTarget { layer, ..draws };
-            write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
+            write_node_content(list, node_id, &slices, draws, (0, written), |list| {
+                if mode == Children::Leave {
+                    return;
+                }
                 for &child_id in children {
                     if let Some(child) = lower_child(applier, child_id, child_context) {
                         list.push(child);
@@ -701,6 +762,7 @@ pub(super) fn write_node_layer(
             });
         },
     );
+    child_context
 }
 
 pub(super) struct OuterDraws {

@@ -33,7 +33,7 @@ fn left_edges(shell: &mut AppShell<PixelsRenderer>) -> [[u8; 4]; 2] {
     let mut image = vec![0; (WIDTH * HEIGHT * 4) as usize];
     shell
         .primary()
-        .with_renderer(|renderer| renderer.draw_scaled(&mut image, WIDTH, HEIGHT, 1.0));
+        .with_renderer(|renderer| renderer.draw(&mut image, WIDTH, HEIGHT));
     [20, 60].map(|y| {
         image[y * WIDTH as usize * 4..][..4]
             .try_into()

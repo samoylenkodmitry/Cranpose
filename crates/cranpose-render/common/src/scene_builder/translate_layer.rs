@@ -12,8 +12,8 @@ use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, GraphChanges, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
-    TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
+    DrawTarget, GraphChanges, KeptChild, LowerContext, PlacedGeometry, RecordingStore,
+    SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
     children_have_origin_sinks, content_layer_mut, forget_dirty_node, hit_test_from_slices,
     layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
     move_kept_child, outer_draws, placed_child_geometry, placed_transform, read_node_data,
@@ -84,6 +84,7 @@ fn try_translate_scrolled_layer(
             size,
             motion_context_animated: inner.motion_context_animated,
             layer: None,
+            store: RecordingStore::Command,
         };
         let outer = outer_draws(node_id, slices.draw_commands(), outer_count, draws)
             .expect("outer command count is nonzero");
@@ -484,6 +485,7 @@ pub(super) fn write_own_content_around_children(
         size,
         motion_context_animated: container.motion_context_animated,
         layer: container.graphics_layer.get(),
+        store: RecordingStore::Command,
     };
     write_node_content(
         &mut container.children,

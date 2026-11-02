@@ -18,8 +18,13 @@ use draw_recording::{
     DrawPass, DrawTarget, append_draw_nodes, bump_recording_generation, draw_nodes,
     layer_node_capacity,
 };
-pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
-pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
+pub(crate) use draw_recording::{
+    RecorderKey, RecorderSlot, RedrawnBuffers, end_redrawn_update, give_back_redrawn,
+    release_redrawn_recordings,
+};
+pub use draw_recording::{
+    RecordingStore, clear_command_recordings_for_tests, draw_command_nodes_for_tests,
+};
 mod graph_changes;
 use graph_changes::GraphChanges;
 mod hit_graph;
@@ -33,17 +38,26 @@ mod text_node;
 mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
-mod lower_context;
-use lower_context::LowerContext;
-mod node_layer;
-use node_layer::{
-    AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_have_origin_sinks,
-    hit_test_from_slices, layer_and_node_bounds, layer_identity, layout_box_to_snapshot,
-    lower_root_into, modifier_slices_have_origin_sinks, outer_draws, placed_child_geometry,
-    placed_transform, prepare_node_layer, read_node_data, read_placed_node_data,
-    slices_hit_something, take_wrapped_layer, write_node_content, write_node_layer,
-    write_snapshot_layer, write_wrapper,
+mod lowered_node;
+pub use lowered_node::{
+    ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone,
+    recycle_lowered, release_lowered, release_walk_storage, root_layer_bounds, visit_kept_node,
 };
+mod moved_subtree;
+pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};
+mod lower_context;
+pub use lower_context::LowerContext;
+mod node_layer;
+mod space_fragment;
+use node_layer::{
+    AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_context,
+    children_have_origin_sinks, hit_test_from_slices, layer_and_node_bounds, layer_identity,
+    layout_box_to_snapshot, lower_root_into, modifier_slices_have_origin_sinks, outer_draws,
+    placed_child_geometry, placed_transform, prepare_node_layer, read_node_data,
+    read_placed_node_data, slices_hit_something, take_wrapped_layer, write_node_content,
+    write_node_layer, write_snapshot_layer, write_wrapper,
+};
+pub use space_fragment::{SpaceFragment, lower_space_fragment};
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
 use translate_layer::{

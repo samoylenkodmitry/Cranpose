@@ -1,12 +1,14 @@
 use std::ops::Range;
 
 use cranpose_core::NodeId;
+use cranpose_render_common::scene_builder::ChildPlacement;
 
-use crate::scene::{ItemCounts, RasterScene};
+use super::RasterTraversalContext;
+use crate::raster_scene::{ItemCounts, RasterScene};
 
 /// The scene the frame before built, whose items a walk copies for each
 /// subtree that did not change since.
-pub(super) struct Reuse<'a> {
+pub(crate) struct Reuse<'a> {
     pub(super) old: &'a RasterScene,
     /// The old record of the layer the walk reaches next, while the graph
     /// keeps the shape it had.
@@ -34,13 +36,7 @@ impl Reuse<'_> {
 
     /// Queues the copy of the subtree of the old record `index`, which ends
     /// at `end` and pushed its items up to `stop`.
-    pub(super) fn copy_later(
-        &mut self,
-        scene: &mut RasterScene,
-        index: usize,
-        end: usize,
-        stop: ItemCounts,
-    ) {
+    fn copy_later(&mut self, scene: &mut RasterScene, index: usize, end: usize, stop: ItemCounts) {
         match &mut self.pending {
             Some((records, pending_stop)) if records.end == index => {
                 records.end = end;
@@ -51,6 +47,33 @@ impl Reuse<'_> {
                 self.pending = Some((index..end, stop));
             }
         }
+    }
+
+    // Queues the copy of the old subtree of the node that `placement` names
+    // when the old scene holds it at the cursor or one subtree on, placed by
+    // its transform, under a walk `context` above that passed down what it
+    // did then.
+    // Returns whether it did.
+    pub(crate) fn keep(
+        &mut self,
+        scene: &mut RasterScene,
+        placement: ChildPlacement,
+        context: &RasterTraversalContext<'_>,
+    ) -> bool {
+        let Some(index) = self
+            .find(placement.identity)
+            .filter(|_| context.same_as_before)
+        else {
+            return false;
+        };
+        let record = &self.old.subtrees[index];
+        if record.transform != placement.transform {
+            return false;
+        }
+        let (end, stop) = (record.end, record.stop);
+        self.cursor = end;
+        self.copy_later(scene, index, end, stop);
+        true
     }
 
     /// Copies the queued subtrees into `scene`.

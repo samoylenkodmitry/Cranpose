@@ -1,11 +1,41 @@
 //! A layer the sprite compositor's shapes cannot follow, as a turned draw
 //! group, reaches it as a texture that holds the layer's pixels.
 
-use cranpose_render_common::{Renderer, render_contract::SharedRenderCase};
+use cranpose_app_shell::AppShell;
+use cranpose_core::location_key;
+use cranpose_macros::composable;
 use cranpose_render_pixels::{
     PixelsRenderer,
     sprites::{SPRITE_FLOATS, SpriteFrame, SpriteKind, field},
 };
+use cranpose_ui::{Box, BoxSpec, Modifier};
+use cranpose_ui_graphics::{Brush, Color, Point, Rect, Size};
+
+const WIDTH: u32 = 120;
+const HEIGHT: u32 = 60;
+
+/// A bar across the right half that a draw group turns upright about its
+/// centre.
+#[composable]
+fn TurnedBar() {
+    Box(
+        Modifier::empty()
+            .size(Size::new(WIDTH as f32, HEIGHT as f32))
+            .draw_behind(|scope| {
+                let bar = Rect {
+                    x: 64.0,
+                    y: 26.0,
+                    width: 52.0,
+                    height: 8.0,
+                };
+                scope.rotate(90.0, Point::new(90.0, 30.0), &mut |scope| {
+                    scope.draw_rect_at(bar, Brush::solid(Color::WHITE));
+                });
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
 
 /// The alpha the texture sprites of `frame` put at device pixel `x`, `y`.
 fn texture_alpha_at(frame: &SpriteFrame, x: f32, y: f32) -> Option<u8> {
@@ -30,17 +60,19 @@ fn texture_alpha_at(frame: &SpriteFrame, x: f32, y: f32) -> Option<u8> {
 
 #[test]
 fn a_turned_draw_group_reaches_the_sprite_compositor_as_a_texture() {
-    let app_context = cranpose_ui::AppContext::new();
-    let fixture = SharedRenderCase::DrawScopeGroups
-        .fixtures()
-        .pop()
-        .expect("the draw groups case has a fixture");
-    let mut renderer = PixelsRenderer::new();
-    renderer.scene_mut().graph = Some(fixture.graph);
+    let mut shell = AppShell::new_with_size_and_density(
+        PixelsRenderer::new(),
+        location_key(file!(), line!(), column!()),
+        TurnedBar,
+        (WIDTH, HEIGHT),
+        (WIDTH as f32, HEIGHT as f32),
+        1.0,
+    );
+    shell.update();
     let mut frame = SpriteFrame::default();
-    app_context.enter(|| {
-        renderer.compose_sprites(&mut frame, fixture.width, fixture.height, 1.0);
-    });
+    shell
+        .primary()
+        .with_renderer(|renderer| renderer.compose_sprites(&mut frame, WIDTH, HEIGHT));
     let upright = texture_alpha_at(&frame, 90.5, 8.5);
     assert!(
         upright.is_some_and(|alpha| alpha > 200),
