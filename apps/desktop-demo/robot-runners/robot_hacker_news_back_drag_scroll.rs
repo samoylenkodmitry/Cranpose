@@ -8,12 +8,11 @@ use cranpose_testing::{find_in_semantics, find_text_exact};
 use desktop_app::app::{self, DemoTab};
 use hacker_news_robot_support::{
     click_button, click_first_visible_comments_button, create_mock_client, fail, raw_drag,
-    semantics_bounds, settle_visible_mock_story_numbers, visible_mock_story_numbers,
+    semantics_bounds, settled_visible_mock_story_numbers, visible_mock_story_numbers,
     wait_for_comments_data, wait_for_no_text, wait_for_text,
 };
 
 const DRAG_MEASUREMENT_GESTURES: usize = 1;
-const DRAG_SETTLE_ATTEMPTS: usize = 8;
 const REWIND_GESTURE_LIMIT: usize = 3;
 
 #[derive(Debug)]
@@ -46,12 +45,7 @@ fn measure_drag_progress(
             12,
             Duration::from_millis(16),
         );
-        after_visible = settle_visible_mock_story_numbers(
-            robot,
-            list_bounds,
-            DRAG_SETTLE_ATTEMPTS,
-            Duration::from_millis(40),
-        );
+        after_visible = settled_visible_mock_story_numbers(robot, list_bounds);
 
         let reopened_discussion = find_in_semantics(robot, |elem| find_text_exact(elem, "Back"))
             .is_some()
@@ -131,12 +125,7 @@ fn rewind_story_list_to_top(robot: &cranpose::Robot, list_bounds: (f32, f32, f32
             12,
             Duration::from_millis(16),
         );
-        let _ = settle_visible_mock_story_numbers(
-            robot,
-            list_bounds,
-            DRAG_SETTLE_ATTEMPTS,
-            Duration::from_millis(40),
-        );
+        let _ = settled_visible_mock_story_numbers(robot, list_bounds);
     }
 
     let visible = visible_mock_story_numbers(robot, list_bounds);

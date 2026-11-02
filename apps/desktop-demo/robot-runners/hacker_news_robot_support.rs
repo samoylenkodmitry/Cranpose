@@ -472,30 +472,16 @@ pub(crate) fn visible_mock_story_numbers(
     numbers
 }
 
-pub(crate) fn settle_visible_mock_story_numbers(
+// The stories the list shows once a drag's fling has come to rest. A fling
+// arms a frame callback every frame until it stops, and the robot's idle
+// wait lasts while one is armed; two equal samples a few frames apart only
+// show a slow fling between two rows.
+pub(crate) fn settled_visible_mock_story_numbers(
     robot: &cranpose::Robot,
     list_bounds: Bounds,
-    max_attempts: usize,
-    sample_delay: Duration,
 ) -> Vec<usize> {
-    let mut previous = visible_mock_story_numbers(robot, list_bounds);
-    let mut stable_samples = 0usize;
-
-    for _ in 0..max_attempts {
-        std::thread::sleep(sample_delay);
-        let current = visible_mock_story_numbers(robot, list_bounds);
-        if current == previous {
-            stable_samples += 1;
-            if stable_samples >= 2 {
-                return current;
-            }
-        } else {
-            stable_samples = 0;
-            previous = current;
-        }
-    }
-
-    previous
+    let _ = robot.wait_for_idle();
+    visible_mock_story_numbers(robot, list_bounds)
 }
 
 pub(crate) fn raw_drag(
