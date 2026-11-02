@@ -20,7 +20,10 @@ pub(crate) struct CranposeThreadState {
     ))]
     pub(crate) native_window_registry: ScopedWeakStack<crate::native_window::NativeWindowRegistry>,
     #[cfg_attr(
-        not(any(test, all(feature = "android", target_os = "android"))),
+        not(any(
+            test,
+            all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+        )),
         expect(dead_code, reason = "only the Android backend registers host windows")
     )]
     pub(crate) android_host_window_registry: ScopedWeakStack<AndroidHostWindowRegistry>,
@@ -45,7 +48,7 @@ pub(crate) struct CranposeThreadState {
         )
     )]
     pub(crate) unlabeled_controls_warned: RefCell<std::collections::HashSet<cranpose_core::NodeId>>,
-    #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub(crate) android_font_scale: std::cell::Cell<cranpose_ui::FontScaleCurve>,
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub(crate) android_platform_env:
@@ -102,7 +105,7 @@ impl CranposeThreadState {
             gpu_context_local: OnceCell::new(),
             #[cfg(debug_assertions)]
             unlabeled_controls_warned: RefCell::new(std::collections::HashSet::new()),
-            #[cfg(all(feature = "android", target_os = "android"))]
+            #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
             android_font_scale: std::cell::Cell::new(cranpose_ui::FontScaleCurve::linear(1.0)),
             #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
             android_platform_env: OnceCell::new(),

@@ -48,7 +48,7 @@ pub mod native_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod offscreen_instance;
 mod scoped_weak_stack;
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::file_picker::open_content_uri;
 #[cfg(any(
     test,
@@ -68,7 +68,7 @@ mod accessibility;
 mod accessibility_publish_policy;
 mod android_entry;
 #[cfg_attr(
-    not(all(feature = "android", target_os = "android")),
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
     expect(dead_code, reason = "only the Android backend hosts windows")
 )]
 #[cfg_attr(
@@ -80,7 +80,7 @@ mod android_entry;
 )]
 mod android_host_window;
 mod android_input;
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod android_symbols;
 mod app_launcher;
 #[cfg(feature = "framebuffer")]
@@ -409,7 +409,7 @@ pub(crate) mod platform_env;
 
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", target_os = "android"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "ios", target_os = "ios"),
     feature = "embed"
 ))]
@@ -456,7 +456,10 @@ mod frame_pacer;
     )
 )]
 pub(crate) mod gpu_limits;
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
 mod vsync_period;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]

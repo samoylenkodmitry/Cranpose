@@ -2,8 +2,8 @@
 //! loop asks for.
 
 /// The refresh periods a display can plausibly have: 250 Hz down to 20 Hz.
-const MIN_VSYNC_PERIOD_NS: i64 = 4_000_000;
-const MAX_VSYNC_PERIOD_NS: i64 = 50_000_000;
+pub(crate) const MIN_VSYNC_PERIOD_NS: i64 = 4_000_000;
+pub(crate) const MAX_VSYNC_PERIOD_NS: i64 = 50_000_000;
 
 /// Folds the gap between two vsync callbacks into the refresh-period
 /// estimate `period_ns` (`0` while none is known) and returns the new one.

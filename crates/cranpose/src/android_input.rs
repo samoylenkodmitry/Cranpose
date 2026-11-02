@@ -1,7 +1,7 @@
 use cranpose_app_shell::PointerSource;
 
 #[cfg_attr(
-    not(all(feature = "android", target_os = "android")),
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
     allow(dead_code, reason = "only the Android backend reads Android input")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,7 +13,7 @@ pub(crate) enum AndroidToolKind {
 }
 
 #[cfg_attr(
-    not(all(feature = "android", target_os = "android")),
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
     allow(dead_code, reason = "only the Android backend reads Android input")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub(crate) enum AndroidSourceKind {
 }
 
 #[cfg_attr(
-    not(all(feature = "android", target_os = "android")),
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
     allow(dead_code, reason = "only the Android backend reads Android input")
 )]
 pub(crate) fn resolve_pointer_source(
@@ -48,7 +48,7 @@ pub(crate) fn resolve_pointer_source(
 pub(crate) const ANDROID_SOURCE_ROTARY_ENCODER: u32 = 0x0040_0000;
 
 #[cfg_attr(
-    not(all(feature = "android", target_os = "android")),
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
     allow(dead_code, reason = "only the Android backend reads Android input")
 )]
 pub(crate) fn is_rotary_encoder_source(source_bits: u32) -> bool {
@@ -56,7 +56,7 @@ pub(crate) fn is_rotary_encoder_source(source_bits: u32) -> bool {
 }
 
 #[cfg_attr(
-    not(all(feature = "android", target_os = "android")),
+    not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")),
     allow(dead_code, reason = "only the Android backend reads Android input")
 )]
 pub(crate) fn android_rotary_scroll_factor(density: f32) -> f32 {
