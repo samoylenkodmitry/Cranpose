@@ -1,4 +1,5 @@
 mod layout_dirt;
+mod layout_invalidation_diag;
 pub(crate) mod layout_node;
 mod layout_node_registry;
 mod layout_parts;

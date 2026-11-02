@@ -11,6 +11,7 @@ use cranpose_foundation::{
 };
 use cranpose_ui_layout::MeasurePolicy;
 
+use super::layout_invalidation_diag::log_layout_invalidation_dispatch;
 #[cfg(test)]
 use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
@@ -27,45 +28,6 @@ use crate::{
         },
     },
 };
-
-#[derive(Clone, Copy)]
-enum LayoutInvalidationDispatchDiag {
-    Disabled,
-    All,
-    Node(NodeId),
-}
-
-fn layout_invalidation_dispatch_diag() -> LayoutInvalidationDispatchDiag {
-    cranpose_core::DIAGNOSTICS
-        .layout_invalidation_dispatch_diag
-        .with(|value| match value {
-            None => LayoutInvalidationDispatchDiag::Disabled,
-            Some("all") => LayoutInvalidationDispatchDiag::All,
-            Some(value) => value.parse::<NodeId>().map_or(
-                LayoutInvalidationDispatchDiag::Disabled,
-                LayoutInvalidationDispatchDiag::Node,
-            ),
-        })
-}
-
-fn log_layout_invalidation_dispatch(
-    id: NodeId,
-    invalidation: &ModifierInvalidation,
-    curr_caps: NodeCapabilities,
-    prev_caps: NodeCapabilities,
-    modifier: &Modifier,
-) {
-    let enabled = match layout_invalidation_dispatch_diag() {
-        LayoutInvalidationDispatchDiag::Disabled => false,
-        LayoutInvalidationDispatchDiag::All => true,
-        LayoutInvalidationDispatchDiag::Node(target) => target == id,
-    };
-    if enabled {
-        log::warn!(
-            "[layout-invalidation-dispatch] node={id} invalidation={invalidation:?} curr_caps={curr_caps:?} prev_caps={prev_caps:?} modifier={modifier}"
-        );
-    }
-}
 
 /// A node of the layout tree.
 ///
