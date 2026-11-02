@@ -9,8 +9,9 @@ use smallvec::SmallVec;
 #[cfg(feature = "inspection")]
 use crate::source_trace;
 use crate::{
-    AnchorId, Composer, LocalStackSnapshot, NodeId, PackedU64, RetentionMode, RuntimeHandle,
-    ScopeId, SlotsHost, StateId, collections::map::HashSet, composer, runtime, thread_state,
+    AnchorId, Composer, LocalStackSnapshot, NodeId, NodeIdCell, PackedU64, RetentionMode,
+    RuntimeHandle, ScopeId, SlotsHost, StateId, collections::map::HashSet, composer, runtime,
+    thread_state,
 };
 
 // Whether a scope's body ran to its end or was skipped.
@@ -68,10 +69,6 @@ enum OwnerKind {
 
 /// The scope a scope's lifetime follows, and how it is tied to it.
 type OwnerLink = Cell<Option<(OwnerKind, Weak<RecomposeScopeInner>)>>;
-
-/// The node id a scope's `parent_hint` holds for none: ids index the
-/// applier's nodes, which never reach it.
-const NO_PARENT_HINT: NodeId = NodeId(usize::MAX);
 
 // A hand-written body that recomposes a scope.
 type RecomposeClosure = Box<dyn FnMut(&Composer)>;
@@ -156,8 +153,7 @@ pub(crate) struct RecomposeScopeInner {
     active_epoch: Cell<PackedU64>,
     deactivations: Cell<PackedU64>,
     retention_mode: Cell<RetentionMode>,
-    /// [`NO_PARENT_HINT`] for none.
-    parent_hint: Cell<NodeId>,
+    parent_hint: NodeIdCell,
     group_anchor: Cell<AnchorId>,
     // What runs the scope's body again: a `#[composable]` function's
     // generated recompose function, or a hand-written closure when the
@@ -246,7 +242,7 @@ impl RecomposeScopeInner {
             active_epoch: Cell::default(),
             deactivations: Cell::default(),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
-            parent_hint: Cell::new(NO_PARENT_HINT),
+            parent_hint: NodeIdCell::new(None),
             group_anchor: Cell::new(AnchorId::INVALID),
             recompose: Cell::new(None),
             recompose_closure: Cell::new(None),
@@ -700,7 +696,7 @@ impl RecomposeScope {
     }
 
     pub(crate) fn set_parent_hint(&self, parent: Option<NodeId>) {
-        self.inner.parent_hint.set(parent.unwrap_or(NO_PARENT_HINT));
+        self.inner.parent_hint.set(parent);
     }
 
     /// Ties the scope to the scope its lifetime follows, or to none.
@@ -757,7 +753,7 @@ impl RecomposeScope {
     }
 
     pub(crate) fn parent_hint(&self) -> Option<NodeId> {
-        Some(self.inner.parent_hint.get()).filter(|&hint| hint != NO_PARENT_HINT)
+        self.inner.parent_hint.get()
     }
 
     pub(crate) fn group_anchor(&self) -> AnchorId {

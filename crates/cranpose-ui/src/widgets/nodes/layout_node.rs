@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{Node, NodeId};
+use cranpose_core::{Node, NodeId, NodeIdCell};
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
@@ -64,37 +64,6 @@ fn log_layout_invalidation_dispatch(
         log::warn!(
             "[layout-invalidation-dispatch] node={id} invalidation={invalidation:?} curr_caps={curr_caps:?} prev_caps={prev_caps:?} modifier={modifier}"
         );
-    }
-}
-
-/// A node id or none in one word, where `Cell<Option<NodeId>>` takes two: a
-/// layout node keeps three, and the 24 bytes kept it out of jemalloc's
-/// 640-byte size class.
-struct NodeIdCell(Cell<NodeId>);
-
-/// The id a [`NodeIdCell`] holds for none: no node gets it, as ids index
-/// the applier's nodes.
-const NO_NODE_ID: NodeId = NodeId(usize::MAX);
-
-impl NodeIdCell {
-    fn new(id: Option<NodeId>) -> Self {
-        Self(Cell::new(id.unwrap_or(NO_NODE_ID)))
-    }
-
-    fn get(&self) -> Option<NodeId> {
-        let id = self.0.get();
-        (id != NO_NODE_ID).then_some(id)
-    }
-
-    fn set(&self, id: Option<NodeId>) {
-        debug_assert_ne!(id, Some(NO_NODE_ID), "no node takes the none id");
-        self.0.set(id.unwrap_or(NO_NODE_ID));
-    }
-
-    fn replace(&self, id: Option<NodeId>) -> Option<NodeId> {
-        let previous = self.get();
-        self.set(id);
-        previous
     }
 }
 

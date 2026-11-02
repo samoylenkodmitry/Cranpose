@@ -92,6 +92,8 @@ pub use node::{
     pop_parent, push_parent, queue_semantics_invalidation, with_node_mut,
 };
 mod node_error;
+mod node_id_cell;
+pub use node_id_cell::NodeIdCell;
 mod node_marks;
 mod phase;
 pub use phase::Phase;
