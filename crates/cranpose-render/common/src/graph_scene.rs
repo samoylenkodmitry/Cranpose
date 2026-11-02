@@ -832,6 +832,22 @@ impl RenderScene for Scene {
             .window_bounds(&surface.content_to_local, hit.local_bounds)
     }
 
+    fn node_window_bounds(&self, visit: &mut dyn FnMut(NodeId, Rect)) {
+        let Some(graph) = &self.graph else {
+            return;
+        };
+        let mut surfaces = HashMap::default();
+        self.surface_windows(&mut |node_id, content| {
+            surfaces.insert(node_id, content);
+        });
+        crate::node_window_bounds::for_each_node_window_bounds(
+            &graph.root,
+            ProjectiveTransform::identity(),
+            &surfaces,
+            visit,
+        );
+    }
+
     fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
         if let Some(graph) = &self.graph {
             graph.collect_retained_visual_observation_nodes(nodes);

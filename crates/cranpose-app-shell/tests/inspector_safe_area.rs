@@ -23,7 +23,10 @@ const INSETS: EdgeInsets = EdgeInsets {
     bottom: 34.0,
 };
 
-fn project(semantics: &cranpose_ui::SemanticsTree) -> Vec<InspectorNode> {
+fn project(
+    semantics: &cranpose_ui::SemanticsTree,
+    _bounds: &cranpose_core::collections::map::HashMap<cranpose_core::NodeId, Rect>,
+) -> Vec<InspectorNode> {
     vec![InspectorNode {
         node_id: semantics.root().node_id,
         canvas_key: None,

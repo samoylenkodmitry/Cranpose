@@ -2,8 +2,8 @@
 
 use std::fmt::Debug;
 
-use cranpose_core::NodeId;
-use cranpose_render_common::Renderer;
+use cranpose_core::{NodeId, collections::map::HashMap};
+use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{Key, KeyEvent, KeyEventType, SemanticsTree};
 use cranpose_ui_graphics::{EdgeInsets, Point, Rect, Size};
 
@@ -102,8 +102,9 @@ pub struct InspectorState {
     pub panel_position: Option<Point>,
 }
 
-/// Projects a surface's semantics tree using the same policy as its platform bridge.
-pub type InspectorProjector = fn(&SemanticsTree) -> Vec<InspectorNode>;
+/// Projects a surface's semantics tree using the same policy as its platform bridge, given
+/// the window bounds of each node the surface's scene draws: where its layers show it.
+pub type InspectorProjector = fn(&SemanticsTree, &HashMap<NodeId, Rect>) -> Vec<InspectorNode>;
 
 #[derive(Default)]
 pub(crate) struct DeveloperInspector {
@@ -473,10 +474,17 @@ fn refresh_with<R: Renderer>(
     }
     if surface.inspector.state.open && surface.inspector.revision != Some(revision) {
         surface.semantics_tree_in_context(app);
+        let mut bounds = HashMap::default();
+        surface
+            .renderer
+            .scene()
+            .node_window_bounds(&mut |node_id, rect| {
+                bounds.insert(node_id, rect);
+            });
         let nodes = surface
             .semantics_tree
             .as_ref()
-            .map_or_else(Vec::new, projector);
+            .map_or_else(Vec::new, |tree| projector(tree, &bounds));
         surface.inspector.replace_nodes(nodes);
         surface.inspector.revision = Some(revision);
     }

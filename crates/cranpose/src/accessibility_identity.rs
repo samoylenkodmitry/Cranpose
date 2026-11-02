@@ -1,4 +1,5 @@
 use cranpose_core::{NodeId, collections::map::HashMap};
+use cranpose_render_common::RenderScene;
 
 use crate::accessibility::AccessibilityElement;
 
@@ -50,6 +51,7 @@ pub(crate) struct AccessibilitySnapshot {
     last_id: i32,
     indices: HashMap<i32, usize>,
     spare: Vec<AccessibilityElement>,
+    window_bounds: super::WindowBounds,
 }
 
 impl AccessibilitySnapshot {
@@ -110,6 +112,16 @@ impl AccessibilitySnapshot {
         } else {
             spare
         }
+    }
+
+    // The spare elements and the window bounds of each node `scene` draws,
+    // for a projection to write over and read.
+    pub(crate) fn placed(
+        &mut self,
+        scene: &impl RenderScene,
+    ) -> (Vec<AccessibilityElement>, &super::WindowBounds) {
+        super::window_bounds::place(scene, &mut self.window_bounds);
+        (self.take_spare(), &self.window_bounds)
     }
 
     pub(crate) fn recycle(&mut self, elements: Vec<AccessibilityElement>) {

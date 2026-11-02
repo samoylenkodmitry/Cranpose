@@ -35,6 +35,7 @@ mod layer_recycling;
 pub mod layer_shadow;
 /// Transform math of a graphics layer, re-exported from `cranpose_ui_graphics`.
 pub mod layer_transform;
+mod node_window_bounds;
 /// Lowering of draw primitives to the shape, image and text draw calls of a renderer.
 pub mod primitive_emit;
 /// Keys of the cached rasters of layers.
@@ -240,6 +241,15 @@ pub trait RenderScene {
         _node_id: cranpose_core::NodeId,
     ) -> Option<cranpose_ui_graphics::Rect> {
         None
+    }
+
+    /// Visits each layout node the scene draws with the bounds of its rect
+    /// in the window, through the graphics layers above it and its own, and
+    /// on a mesh surface as the scene's camera shows it: where it shows.
+    fn node_window_bounds(
+        &self,
+        _visit: &mut dyn FnMut(cranpose_core::NodeId, cranpose_ui_graphics::Rect),
+    ) {
     }
 
     /// Replaces the set with retained visual observation owners, preserving its capacity.

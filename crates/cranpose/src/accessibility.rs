@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use cranpose_app_shell::AppShell;
+use cranpose_app_shell::{AppShell, inspector::InspectorNode};
 use cranpose_core::{
     NodeId,
     collections::rare::{RareProperties, rare, update_rare},
@@ -8,12 +8,14 @@ use cranpose_core::{
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
     Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
-    SemanticsAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
-    ToggleableState,
+    SemanticsAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsTree,
+    SemanticsWidgetRole, ToggleableState,
 };
 
 #[path = "accessibility_identity.rs"]
 mod identity;
+#[path = "accessibility_window_bounds.rs"]
+mod window_bounds;
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -25,6 +27,7 @@ pub(crate) use identity::AccessibilitySnapshot;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) use identity::Replaced;
+use window_bounds::WindowBounds;
 
 #[cfg(any(
     test,
@@ -615,19 +618,20 @@ where
     if !shell.semantics_active() {
         return Vec::new();
     }
+    let (spare, bounds) = published.placed(shell.scene());
+    let mut projection = Projection::new(spare, bounds);
     let Some(semantics_tree) = shell.semantics_tree() else {
-        return Vec::new();
+        return projection.finish();
     };
-    let mut projection = Projection::new(published.take_spare());
     project_node(semantics_tree.root(), false, None, None, &mut projection);
     let elements = projection.finish();
     #[cfg(debug_assertions)]
-    assert_same_elements(&elements, &project_semantics(semantics_tree.root()));
+    assert_same_elements(&elements, &project_semantics(semantics_tree.root(), bounds));
     elements
 }
 
-fn project_semantics(root: &SemanticsNode) -> Vec<AccessibilityElement> {
-    let mut projection = Projection::new(Vec::new());
+fn project_semantics(root: &SemanticsNode, bounds: &WindowBounds) -> Vec<AccessibilityElement> {
+    let mut projection = Projection::new(Vec::new(), bounds);
     project_node(root, false, None, None, &mut projection);
     projection.finish()
 }
@@ -648,18 +652,20 @@ fn assert_same_elements(reused: &[AccessibilityElement], fresh: &[AccessibilityE
     }
 }
 
-struct Projection {
+struct Projection<'a> {
     elements: Vec<AccessibilityElement>,
     written: usize,
     members: Vec<usize>,
+    bounds: &'a WindowBounds,
 }
 
-impl Projection {
-    fn new(elements: Vec<AccessibilityElement>) -> Self {
+impl<'a> Projection<'a> {
+    fn new(elements: Vec<AccessibilityElement>, bounds: &'a WindowBounds) -> Self {
         Self {
             elements,
             written: 0,
             members: Vec::new(),
+            bounds,
         }
     }
 
@@ -723,16 +729,14 @@ where
 }
 
 #[cfg_attr(test, allow(dead_code, reason = "platform runtimes call it"))]
-fn inspector_nodes(
-    semantics: &cranpose_ui::SemanticsTree,
-) -> Vec<cranpose_app_shell::inspector::InspectorNode> {
-    project_semantics(semantics.root())
+fn inspector_nodes(semantics: &SemanticsTree, bounds: &WindowBounds) -> Vec<InspectorNode> {
+    project_semantics(semantics.root(), bounds)
         .into_iter()
         .map(inspector_node)
         .collect()
 }
 
-fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspector::InspectorNode {
+fn inspector_node(element: AccessibilityElement) -> InspectorNode {
     let details = element.details();
     let value = if details.password {
         "[protected]"
@@ -777,7 +781,7 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
         details.progress,
         details.error.as_deref().unwrap_or("")
     );
-    cranpose_app_shell::inspector::InspectorNode {
+    InspectorNode {
         node_id: element.node_id,
         canvas_key: element.canvas_key,
         bounds: cranpose_ui::Rect {
@@ -812,13 +816,7 @@ fn project_node(
     let actionable = clickable || node.details().editable_text;
     let merges = node.merges_accessibility_descendants();
     let boundary = node.is_accessibility_boundary();
-    let rect = AccessibilityRect::new(
-        node.bounds.x,
-        node.bounds.y,
-        node.bounds.width,
-        node.bounds.height,
-    );
-
+    let rect = window_bounds::rect_of(node, out.bounds);
     let container = is_container(node);
     if rect.is_visible() {
         let named = boundary || !suppress_static_text;
