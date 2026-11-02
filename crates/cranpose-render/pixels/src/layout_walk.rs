@@ -60,13 +60,6 @@ impl DirtyMarks {
         self.marks.reset(applier);
     }
 
-    // Marks with no node marked.
-    pub(crate) fn cleared(applier: &MemoryApplier) -> Self {
-        let mut marks = Self::default();
-        marks.clear(applier);
-        marks
-    }
-
     // Whether neither `node` nor a node beneath it changed.
     pub(crate) fn is_clean(&self, applier: &MemoryApplier, node: NodeId) -> bool {
         self.marks.get(applier, node) == 0

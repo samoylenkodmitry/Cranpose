@@ -216,34 +216,6 @@ impl PixelsRenderer {
         }
     }
 
-    /// Shows `graph`, a hand-built render graph, as the scene, for tests of
-    /// what a renderer draws for a graph.
-    #[doc(hidden)]
-    pub fn show_graph_for_tests(&mut self, graph: &cranpose_render_common::graph::RenderGraph) {
-        self.scene.rebuild_from_graph(graph, &self.text);
-    }
-
-    /// Builds a scene anew from the layout tree beside each update from now
-    /// on, which [`Self::draw_fresh_build_for_tests`] draws: tests compare a
-    /// scene updated in place with it.
-    #[doc(hidden)]
-    pub fn keep_fresh_builds_for_tests(&mut self) {
-        self.scene.keep_fresh_builds();
-    }
-
-    /// Draws the scene the last update built anew beside the updated one
-    /// into `frame`, as [`Self::draw`] draws the updated one.
-    #[doc(hidden)]
-    pub fn draw_fresh_build_for_tests(&self, frame: &mut [u8], width: u32, height: u32) {
-        draw::draw_raster_frame(
-            frame,
-            (width, height),
-            self.scene.fresh_build(),
-            self.scene.diagnostics(),
-            &self.text,
-        );
-    }
-
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
         app_context.set_text_fonts(self.text.fonts.resolver());
         self.app_context = Some(app_context.downgrade());

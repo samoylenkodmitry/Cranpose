@@ -59,9 +59,6 @@ pub struct Scene {
     spaces: RefCell<Vec<KeptSpace>>,
     // The subtrees of the children that moved in the update before.
     moved: RefCell<MovedSubtrees>,
-    // A scene built anew beside each update, which tests compare the
-    // updated one with.
-    fresh: Option<Option<RasterScene>>,
 }
 
 // The pixels of the scene that changed since a host took its picture: the
@@ -95,7 +92,6 @@ impl Scene {
             layer_moves: 0,
             spaces: RefCell::default(),
             moved: RefCell::default(),
-            fresh: None,
         }
     }
 
@@ -137,7 +133,6 @@ impl Scene {
         self.build(applier, root, None, text);
         self.layer_moves += 1;
         self.finish_spaces(applier);
-        self.build_fresh(applier, root, text);
     }
 
     // Brings the scene up to the window `applier` holds below `root` after
@@ -160,7 +155,6 @@ impl Scene {
             self.build(applier, root, previous, text);
         }
         self.finish_spaces(applier);
-        self.build_fresh(applier, root, text);
     }
 
     // Lets go the 3D subtrees the scene no longer draws, and publishes where
@@ -359,34 +353,6 @@ impl Scene {
         self.hits.borrow()
     }
 
-    // Builds a scene anew beside the updated one, for tests to compare.
-    fn build_fresh(&mut self, applier: &MemoryApplier, root: NodeId, text: &TextRaster) {
-        if self.fresh.is_none() {
-            return;
-        }
-        let marks = DirtyMarks::cleared(applier);
-        let (spaces, moved) = (RefCell::default(), RefCell::default());
-        let walk = LayoutWalk::new(applier, &marks, (&spaces, &moved));
-        let mut raster = RasterScene::new();
-        let built = pipeline::fill_raster_scene_from_layout(
-            &mut raster,
-            (&walk, root),
-            (self.scale, None),
-            &self.diagnostics,
-            text,
-        );
-        self.fresh = Some(built.then_some(raster));
-    }
-
-    // Builds a scene anew beside each update from now on.
-    pub(crate) fn keep_fresh_builds(&mut self) {
-        self.fresh.get_or_insert(None);
-    }
-
-    // The scene the last update built anew beside the updated one.
-    pub(crate) fn fresh_build(&self) -> Option<&RasterScene> {
-        self.fresh.as_ref()?.as_ref()
-    }
 }
 
 impl Default for Scene {
