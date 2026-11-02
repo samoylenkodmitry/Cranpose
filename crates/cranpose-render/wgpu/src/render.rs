@@ -1146,7 +1146,7 @@ impl GpuRenderer {
             cache: pipeline_cache,
             records,
             updated,
-            holds_recorded,
+            first_screen: first_screen_pipelines,
         } = crate::pipeline_disk_cache::load(&device);
         #[cfg(not(target_arch = "wasm32"))]
         let first_screen: Vec<u64> = records
@@ -1304,7 +1304,7 @@ impl GpuRenderer {
             drawn_scene_update: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
-        renderer.warm_first_screen(&records, holds_recorded);
+        renderer.warm_first_screen(&records, first_screen_pipelines);
         renderer.warm_requested_shaders();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
@@ -1316,26 +1316,24 @@ impl GpuRenderer {
     }
 
     /// Prepares the first screen the last launches recorded: its pipelines
-    /// queue as the renderer starts, behind those of the fallback triangles,
-    /// and its first frame waits for none of them. Shapes still compiling
-    /// draw as fallback triangles, runtime shaders as placeholders, and the
-    /// other draws are left out until theirs land. A driver cache that
-    /// `holds_recorded` pipelines builds them as cache hits, so those draw
-    /// from it, and need no stand-in.
+    /// queue behind the stand-ins, and its first frame waits for none of
+    /// them; draws still compiling take stand-ins or placeholders, or are left
+    /// out until theirs land. A driver cache that holds the recorded pipelines
+    /// builds them as cache hits, which need no stand-in.
     #[cfg(not(target_arch = "wasm32"))]
     fn warm_first_screen(
         &mut self,
         records: &crate::pipeline_records::PipelineRecords,
-        holds_recorded: bool,
+        first_screen: crate::pipeline_disk_cache::FirstScreenPipelines,
     ) {
-        self.pipelines.warm_instant_tier();
+        self.pipelines.warm_instant_tier(first_screen);
         self.warm_fixed_pipelines(&|label| {
             records
                 .fixed
                 .iter()
                 .any(|fixed| fixed.first_screen && fixed.entry == label)
         });
-        if holds_recorded {
+        if first_screen == crate::pipeline_disk_cache::FirstScreenPipelines::Cached {
             self.effect_renderer.trust_cached(records);
         }
         self.effect_renderer.warm_first_screen_shaders(
