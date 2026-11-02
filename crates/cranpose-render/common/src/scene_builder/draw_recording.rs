@@ -113,9 +113,10 @@ pub enum RecordingStore {
     Command,
     /// Each command's recording of the update before only, for a renderer
     /// that turns a recording into its own items at once and holds none
-    /// after: it hands the nodes that hold them to `recycle_lowered`. A
-    /// command that draws again each update records into the buffers it
-    /// filled; one an update does not draw keeps none.
+    /// after: it hands the nodes that hold them to `recycle_lowered`. While
+    /// memory is ample, a command that draws again each update records into
+    /// the buffers it filled; one an update does not draw keeps none, and
+    /// with little memory left none does.
     Redrawn,
 }
 
@@ -135,9 +136,13 @@ fn acquire_redrawn(id: DrawCommandId) -> Rc<CommandRecording> {
 // Keeps `recording`, the command `id` drew in this update, until the next
 // update, when no reader holds it any more and the command drew in the
 // update before as well: a command drawn once keeps no buffers, one drawn
-// each update records into the ones it filled.
+// each update records into the ones it filled. With little memory left the
+// buffers go: a canvas drawn each frame then holds what one drawn once does.
 pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecording>) {
-    if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
+    if Rc::strong_count(&recording) != 1
+        || Rc::weak_count(&recording) != 0
+        || cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight
+    {
         return;
     }
     crate::thread_state::with(|state| {
