@@ -316,7 +316,7 @@ fn update_at_step(
         (slot @ RenderNode::Inline(_), true) => {
             let context = path.pass.lower_context();
             GraphChanges::hits(update_dirty_inline(
-                applier, slot, path.node, kind, context, dirty,
+                applier, slot, path.node, kind, &context, dirty,
             )?)
         }
         _ => return None,
@@ -453,7 +453,7 @@ fn update_inline_child(
         child,
         node_id,
         kind,
-        context,
+        &context,
         dirty.nodes,
     )?);
     report.updated = true;
@@ -544,7 +544,7 @@ fn update_dirty_layer(
     let hit_graph_dirty = rebuild_tracking_hits(layer, |layer| {
         release_for_rebuild(layer);
         read_placed_node_data(applier, node_id, Level::Child, |data| {
-            write_node_layer(applier, node_id, data, (context, Children::Lower), layer);
+            write_node_layer(applier, node_id, data, (&context, Children::Lower), layer);
         })
         .is_some()
     })?;

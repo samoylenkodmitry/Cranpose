@@ -4,8 +4,13 @@
 //! frames; a walk that lowers nodes alone keeps as many as it asked for,
 //! which the next walk takes.
 
+use std::rc::Rc;
+
+use cranpose_ui_graphics::CommandRecording;
+
 use crate::graph::{
-    InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode,
+    DrawCommandId, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode,
+    TextPrimitiveNode,
 };
 
 #[derive(Default)]
@@ -33,12 +38,6 @@ struct Asked {
 }
 
 impl Pool {
-    fn recycle_layer(&mut self, mut layer: Box<LayerNode>) {
-        self.recycle_children(&mut layer);
-        layer.hit_test = None;
-        self.layers.push(layer);
-    }
-
     fn recycle_children(&mut self, layer: &mut LayerNode) {
         self.recycle_nodes(&mut layer.children);
     }
@@ -50,20 +49,41 @@ impl Pool {
     }
 
     fn recycle_node(&mut self, node: RenderNode) {
+        self.recycle_keeping(node, &mut |_, _| {});
+    }
+
+    // Moves the boxes of `node` and of the nodes beneath it into the pool,
+    // and hands the recording of each draw run among them to `keep`.
+    fn recycle_keeping(
+        &mut self,
+        node: RenderNode,
+        keep: &mut impl FnMut(DrawCommandId, Rc<CommandRecording>),
+    ) {
         match node {
-            RenderNode::Layer(layer) => self.recycle_layer(layer),
-            RenderNode::Inline(inline) => self.recycle_inline(inline),
+            RenderNode::Layer(mut layer) => {
+                while let Some(child) = layer.children.pop() {
+                    self.recycle_keeping(child, keep);
+                }
+                layer.hit_test = None;
+                self.layers.push(layer);
+            }
+            RenderNode::Inline(mut inline) => {
+                while let Some(child) = inline.content.pop() {
+                    self.recycle_keeping(child, keep);
+                }
+                self.inlines.push(inline);
+            }
             RenderNode::Primitive(PrimitiveEntry {
                 node: PrimitiveNode::Text(text),
                 ..
             }) => self.texts.push(text),
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
+            RenderNode::DrawRun(run) => {
+                if let Some(id) = run.command {
+                    keep(id, run.recording);
+                }
+            }
+            RenderNode::Primitive(_) => {}
         }
-    }
-
-    fn recycle_inline(&mut self, mut inline: Box<InlineNode>) {
-        self.recycle_nodes(&mut inline.content);
-        self.inlines.push(inline);
     }
 }
 
@@ -116,31 +136,14 @@ pub(crate) fn recycle_node(node: RenderNode) {
 /// [`lower_node_alone`](crate::scene_builder::lower_node_alone) gave whose
 /// items a renderer took, into the pool the next lowered nodes take theirs
 /// from, and keeps the recordings of its draws for their next draws.
-pub fn recycle_lowered(mut node: RenderNode) {
-    give_back_recordings(&mut node);
-    recycle_node(node);
-}
-
-fn give_back_recordings(node: &mut RenderNode) {
-    let nodes = match node {
-        RenderNode::Layer(layer) => &mut layer.children,
-        RenderNode::Inline(inline) => &mut inline.content,
-        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => return,
-    };
-    for child in nodes.drain(..) {
-        match child {
-            RenderNode::DrawRun(run) => {
-                if let Some(id) = run.command {
-                    crate::scene_builder::give_back_redrawn(id, run.recording);
-                }
-            }
-            mut nested @ (RenderNode::Layer(_) | RenderNode::Inline(_)) => {
-                give_back_recordings(&mut nested);
-                recycle_node(nested);
-            }
-            primitive @ RenderNode::Primitive(_) => recycle_node(primitive),
-        }
-    }
+pub fn recycle_lowered(node: RenderNode) {
+    crate::thread_state::with(|state| {
+        let mut redrawn = state.redrawn.borrow_mut();
+        state
+            .layer_pool
+            .borrow_mut()
+            .recycle_keeping(node, &mut |id, recording| redrawn.keep(id, recording));
+    });
 }
 
 // Moves the text boxes of `inline`'s content into the pool, before the

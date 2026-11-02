@@ -18,10 +18,7 @@ use draw_recording::{
     DrawPass, DrawTarget, append_draw_nodes, bump_recording_generation, draw_nodes,
     layer_node_capacity,
 };
-pub(crate) use draw_recording::{
-    RecorderKey, RecorderSlot, RedrawnBuffers, end_redrawn_update, give_back_redrawn,
-    release_redrawn_recordings,
-};
+pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
 pub use draw_recording::{
     RecordingStore, clear_command_recordings_for_tests, draw_command_nodes_for_tests,
 };
@@ -50,6 +47,10 @@ pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position
 mod lower_context;
 pub use lower_context::LowerContext;
 mod node_layer;
+mod node_layout;
+mod redrawn_recordings;
+use node_layout::NodeLayout;
+pub(crate) use redrawn_recordings::RedrawnRecordings;
 mod space_fragment;
 use node_layer::{
     AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_context,
@@ -81,7 +82,7 @@ struct BuildNodeSnapshot {
 }
 
 struct SnapshotNodeData<'a> {
-    layout_state: cranpose_ui::widgets::LayoutState,
+    layout_state: NodeLayout,
     modifier_slices: Rc<ModifierNodeSlices>,
     children: &'a [NodeId],
     window_root: bool,
@@ -184,7 +185,7 @@ pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGrap
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
     let mut graph = RenderGraph::new(LayerNode::default());
-    write_snapshot_layer(root_snapshot, LowerContext::ROOT, &mut graph.root);
+    write_snapshot_layer(root_snapshot, &LowerContext::ROOT, &mut graph.root);
     graph
 }
 
@@ -579,7 +580,7 @@ fn move_retained_layer(
     let previous = HitGraphState::of(layer);
     translate_retained_child(layer, placed.position, ancestors.parent_content_offset);
     if layer.has_origin_sinks {
-        publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
+        publish_retained_window_geometry(applier, layer, &ancestors.parent_abs);
     }
     Some(previous.changes_against(&HitGraphState::of(layer)))
 }
@@ -641,7 +642,7 @@ fn update_layer_properties(
         }
         let context = LowerContext::beneath(ancestors);
         let previous = HitGraphState::of(target);
-        let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
+        let (head, child_context) = prepare_node_layer(node_id, slices, state, &context);
         assign_layer(target, head);
         if wrapped {
             target.transform_to_parent = layer_transform_to_parent(
@@ -652,7 +653,7 @@ fn update_layer_properties(
             target.origin_in_parent = Point::default();
         }
         if target.has_origin_sinks
-            && let Some(child_abs) = child_context.parent_abs
+            && let Some(child_abs) = &child_context.parent_abs
         {
             for child in &target.children {
                 if let RenderNode::Layer(child) = child {
@@ -731,7 +732,7 @@ fn publish_content_geometry(
 fn publish_retained_window_geometry(
     applier: &MemoryApplier,
     layer: &LayerNode,
-    parent_abs: AbsOrigin,
+    parent_abs: &AbsOrigin,
 ) {
     if !layer.has_origin_sinks {
         return;
@@ -751,7 +752,7 @@ fn publish_retained_window_geometry(
     }
     for child in &layer.children {
         if let RenderNode::Layer(child) = child {
-            publish_retained_window_geometry(applier, child, child_abs);
+            publish_retained_window_geometry(applier, child, &child_abs);
         }
     }
 }

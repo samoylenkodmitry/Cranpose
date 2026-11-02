@@ -109,7 +109,7 @@ impl SpaceFragment {
 pub fn lower_space_fragment(
     applier: &MemoryApplier,
     (node_id, place): (NodeId, NodePlace),
-    context: LowerContext,
+    context: &LowerContext,
 ) -> Option<SpaceFragment> {
     let level = match place {
         NodePlace::Root => Level::Root,

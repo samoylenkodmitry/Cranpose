@@ -12,8 +12,8 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    BuildNodeSnapshot, DrawPass, DrawTarget, Level, LowerContext, SnapshotNodeData, TextNodeParts,
-    TranslateGeometry, append_draw_nodes, draw_nodes,
+    BuildNodeSnapshot, DrawPass, DrawTarget, Level, LowerContext, NodeLayout, SnapshotNodeData,
+    TextNodeParts, TranslateGeometry, append_draw_nodes, draw_nodes,
     inline_leaf::{lower_child, snapshot_lowers_inline},
     layer_node_capacity,
     layer_shape::{clip_shape, shape_clip},
@@ -62,7 +62,7 @@ fn node_layer_head(
     slices: &Rc<ModifierNodeSlices>,
     frame: NodeFrame,
     graphics_layer: Option<GraphicsLayer>,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> LayerHead {
     let clip_to_bounds = slices.clip_to_bounds();
     let translated_content_context = slices.translated_content_context();
@@ -269,7 +269,7 @@ fn write_layer_with_outer(
 
 pub(super) fn write_snapshot_layer(
     snapshot: BuildNodeSnapshot,
-    context: LowerContext,
+    context: &LowerContext,
     target: &mut LayerNode,
 ) {
     let BuildNodeSnapshot {
@@ -318,7 +318,7 @@ pub(super) fn write_snapshot_layer(
             let draws = DrawTarget { layer, ..draws };
             write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
                 for child in children {
-                    list.push(lower_snapshot_child(child, child_context));
+                    list.push(lower_snapshot_child(child, &child_context));
                 }
             });
         },
@@ -328,7 +328,7 @@ pub(super) fn write_snapshot_layer(
 // Lowers `snapshot`, a child in a layout tree snapshot, into the node its
 // parent holds: inline when it needs no layer of its own, as
 // [`super::inline_leaf::lower_child`] lowers a node of the applier.
-fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: LowerContext) -> RenderNode {
+fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: &LowerContext) -> RenderNode {
     if !snapshot_lowers_inline(&snapshot) {
         let mut layer = crate::layer_recycling::layer_box();
         write_snapshot_layer(snapshot, context, &mut layer);
@@ -397,7 +397,7 @@ impl AbsOrigin {
         window_transform: ProjectiveTransform::identity(),
     };
 
-    pub(super) fn children_of(self, layer: &LayerNode) -> Self {
+    pub(super) fn children_of(&self, layer: &LayerNode) -> Self {
         let top_left = Point {
             x: self.content_origin.x + layer.origin_in_parent.x,
             y: self.content_origin.y + layer.origin_in_parent.y,
@@ -448,7 +448,7 @@ pub(super) fn lower_root_into(
             applier,
             node_id,
             data,
-            (LowerContext::ROOT, Children::Lower),
+            (&LowerContext::ROOT, Children::Lower),
             target,
         );
     })
@@ -496,14 +496,14 @@ pub(super) fn read_node_data<R>(
     if let Some(node) = node.downcast_ref::<LayoutNode>() {
         let z_order = z_ordered_children(applier, node_id, node.children());
         return Some(read(SnapshotNodeData {
-            layout_state: node.layout_state(),
+            layout_state: node.with_layout_state(NodeLayout::of),
             modifier_slices: node.modifier_slices_snapshot(),
             children: z_order.as_deref().unwrap_or_else(|| node.children()),
             window_root: node.is_window_root(),
         }));
     }
     let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
-    let layout_state = node.layout_state();
+    let layout_state = NodeLayout::of(&node.layout_state());
     let modifier_slices = node.modifier_slices_snapshot();
     Some(node.with_active_children(|children| {
         let z_order = z_ordered_children(applier, node_id, children);
@@ -617,11 +617,11 @@ pub(super) fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
 // `context`, when its parent's is known, and what its children lower with.
 fn node_geometry(
     slices: &ModifierNodeSlices,
-    layout_state: &LayoutState,
+    layout_state: &NodeLayout,
     (local_bounds, graphics_layer): (Rect, Option<&GraphicsLayer>),
-    context: LowerContext,
+    context: &LowerContext,
 ) -> (Option<TranslateGeometry>, LowerContext) {
-    let geometry = context.parent_abs.map(|parent_abs| {
+    let geometry = context.parent_abs.as_ref().map(|parent_abs| {
         TranslateGeometry::new(
             layout_state,
             graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
@@ -629,11 +629,8 @@ fn node_geometry(
             parent_abs,
         )
     });
-    let child_context = context.for_children(
-        slices,
-        layout_state.content_offset(),
-        geometry.map(TranslateGeometry::child_abs),
-    );
+    let child_context =
+        context.for_children(slices, layout_state.content_offset(), geometry.as_ref());
     (geometry, child_context)
 }
 
@@ -641,8 +638,8 @@ fn node_geometry(
 // under `context`, for a node kept as it lowered before.
 pub(super) fn children_context(
     slices: &ModifierNodeSlices,
-    layout_state: &LayoutState,
-    context: LowerContext,
+    layout_state: &NodeLayout,
+    context: &LowerContext,
 ) -> LowerContext {
     let (local_bounds, _) = layer_and_node_bounds(slices, layout_state.size());
     let graphics_layer = shaped_graphics_layer(slices, local_bounds);
@@ -658,8 +655,8 @@ pub(super) fn children_context(
 pub(super) fn prepare_node_layer(
     node_id: NodeId,
     slices: &Rc<ModifierNodeSlices>,
-    layout_state: &LayoutState,
-    context: LowerContext,
+    layout_state: &NodeLayout,
+    context: &LowerContext,
 ) -> (LayerHead, LowerContext) {
     let size = layout_state.size();
     let placement = layout_state.position();
@@ -708,7 +705,7 @@ pub(super) fn write_node_layer(
     applier: &MemoryApplier,
     node_id: NodeId,
     data: SnapshotNodeData<'_>,
-    (context, mode): (LowerContext, Children),
+    (context, mode): (&LowerContext, Children),
     target: &mut LayerNode,
 ) -> LowerContext {
     let SnapshotNodeData {
@@ -755,7 +752,7 @@ pub(super) fn write_node_layer(
                     return;
                 }
                 for &child_id in children {
-                    if let Some(child) = lower_child(applier, child_id, child_context) {
+                    if let Some(child) = lower_child(applier, child_id, &child_context) {
                         list.push(child);
                     }
                 }

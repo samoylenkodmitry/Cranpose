@@ -243,30 +243,31 @@ impl<'a> LayoutWalk<'a> {
     ) -> bool {
         let context = LowerContext::root(RecordingStore::Redrawn);
         let mut push = Some(push);
-        let lowered = lower_node_alone(self.applier, (root, NodePlace::Root), context, |lowered| {
-            let LoweredNode {
-                node,
-                children,
-                child_context,
-            } = lowered;
-            let space = holds_space(&node);
-            if !space && let Some(push) = push.take() {
-                let mut slot = ChildSlot {
-                    walk: self,
-                    owner: root,
+        let lowered =
+            lower_node_alone(self.applier, (root, NodePlace::Root), &context, |lowered| {
+                let LoweredNode {
+                    node,
                     children,
-                    context: child_context,
-                    old: None,
-                };
-                push(&node, (!children.is_empty()).then_some(&mut slot));
-            }
-            recycle_lowered(node);
-            space
-        });
+                    child_context,
+                } = lowered;
+                let space = holds_space(&node);
+                if !space && let Some(push) = push.take() {
+                    let mut slot = ChildSlot {
+                        walk: self,
+                        owner: root,
+                        children,
+                        context: child_context,
+                        old: None,
+                    };
+                    push(&node, (!children.is_empty()).then_some(&mut slot));
+                }
+                recycle_lowered(node);
+                space
+            });
         if lowered == Some(true)
             && let Some(push) = push.take()
             && let Some(space) =
-                lower_space_fragment(self.applier, (root, NodePlace::Root), context)
+                lower_space_fragment(self.applier, (root, NodePlace::Root), &context)
         {
             push(space.root(), None);
             self.keep_space(space);
@@ -283,7 +284,7 @@ impl<'a> LayoutWalk<'a> {
     pub(crate) fn push(
         &self,
         (node, place): (NodeId, NodePlace),
-        lower_context: LowerContext,
+        lower_context: &LowerContext,
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         reuse: &mut Option<Reuse<'_>>,
         old: Option<OldChildren>,
@@ -330,7 +331,7 @@ impl<'a> LayoutWalk<'a> {
     pub(crate) fn push_moved(
         &self,
         (child, position): (NodeId, Option<Point>),
-        lower_context: LowerContext,
+        lower_context: &LowerContext,
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         at: usize,
     ) -> bool {
@@ -411,7 +412,7 @@ pub(crate) struct ChildSlot<'w> {
     walk: &'w LayoutWalk<'w>,
     owner: NodeId,
     children: &'w [NodeId],
-    context: LowerContext,
+    context: &'w LowerContext,
     // While a rewrite pushes the owner over its old subtree, where the
     // children's old records lie.
     old: Option<OldChildren>,

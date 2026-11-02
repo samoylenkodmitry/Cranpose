@@ -454,10 +454,17 @@ fn pixels(area: ClipBounds) -> i64 {
 
 // Joins `areas` while they are too many to draw one by one, each time the
 // two whose join takes in the fewest pixels that neither covers, so that
-// changes far apart do not draw the still pixels between them again. Out
-// of line: it runs once an update.
-#[inline(never)]
+// changes far apart do not draw the still pixels between them again. The
+// count is read in line: an update's few areas need no join.
+#[inline]
 pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
+    if areas.len() > MAX_AREAS {
+        join_areas(areas);
+    }
+}
+
+#[inline(never)]
+fn join_areas(areas: &mut Vec<ClipBounds>) {
     while areas.len() > MAX_AREAS {
         let mut cheapest = (0, 1, i64::MAX);
         for (first, &a) in areas.iter().enumerate() {

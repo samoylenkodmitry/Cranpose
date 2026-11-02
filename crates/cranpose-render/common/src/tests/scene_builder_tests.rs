@@ -329,7 +329,7 @@ fn build_layer_node_for_test(
         let mut layer = LayerNode::default();
         write_snapshot_layer(
             snapshot,
-            LowerContext {
+            &LowerContext {
                 inherited_motion_context_animated,
                 ..LowerContext::ROOT
             },

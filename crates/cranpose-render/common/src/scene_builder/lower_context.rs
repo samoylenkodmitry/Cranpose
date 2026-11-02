@@ -2,7 +2,7 @@
 
 use cranpose_ui::{ModifierNodeSlices, Point};
 
-use super::{AbsOrigin, RecordingStore, TranslateAncestorContext};
+use super::{AbsOrigin, RecordingStore, TranslateAncestorContext, TranslateGeometry};
 
 /// What a layout node lowers with from the nodes above it: where its
 /// parent lies in the window and places its content, the motion and
@@ -43,17 +43,17 @@ impl LowerContext {
     }
 
     pub(super) fn for_children(
-        self,
+        &self,
         slices: &ModifierNodeSlices,
         content_offset: Point,
-        parent_abs: Option<AbsOrigin>,
+        geometry: Option<&TranslateGeometry>,
     ) -> Self {
         Self {
             inherited_motion_context_animated: self.inherited_motion_context_animated
                 || slices.motion_context_animated(),
             inherited_translated_content_context: self.inherited_translated_content_context
                 || slices.translated_content_context(),
-            parent_abs,
+            parent_abs: geometry.map(TranslateGeometry::child_abs),
             parent_content_offset: content_offset,
             store: self.store,
         }

@@ -42,7 +42,7 @@ pub struct LoweredNode<'a> {
     /// `node_id` is the node's.
     pub children: &'a [NodeId],
     /// What its children lower with.
-    pub child_context: LowerContext,
+    pub child_context: &'a LowerContext,
 }
 
 /// Lowers the placed node `node_id` at `place` under `context` without its
@@ -52,7 +52,7 @@ pub struct LoweredNode<'a> {
 pub fn lower_node_alone<R>(
     applier: &MemoryApplier,
     (node_id, place): (NodeId, NodePlace),
-    context: LowerContext,
+    context: &LowerContext,
     visit: impl FnOnce(LoweredNode<'_>) -> R,
 ) -> Option<R> {
     read_placed_node_data(applier, node_id, place.level(), |data| {
@@ -76,7 +76,7 @@ pub fn lower_node_alone<R>(
         visit(LoweredNode {
             node: RenderNode::Layer(layer),
             children,
-            child_context,
+            child_context: &child_context,
         })
     })
 }
@@ -88,12 +88,12 @@ pub fn lower_node_alone<R>(
 pub fn visit_kept_node<R>(
     applier: &MemoryApplier,
     (node_id, place): (NodeId, NodePlace),
-    context: LowerContext,
-    visit: impl FnOnce(&[NodeId], LowerContext) -> R,
+    context: &LowerContext,
+    visit: impl FnOnce(&[NodeId], &LowerContext) -> R,
 ) -> Option<R> {
     read_placed_node_data(applier, node_id, place.level(), |data| {
         let child_context = children_context(&data.modifier_slices, &data.layout_state, context);
-        visit(data.children, child_context)
+        visit(data.children, &child_context)
     })
 }
 
@@ -117,7 +117,7 @@ pub struct ChildPlacement {
 pub fn kept_child_placement(
     applier: &MemoryApplier,
     node_id: NodeId,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> Option<ChildPlacement> {
     read_placed_node_data(applier, node_id, Level::Child, |data| {
         let slices = &data.modifier_slices;
@@ -155,12 +155,14 @@ pub fn root_layer_bounds(applier: &MemoryApplier, root: NodeId) -> Option<Rect> 
 /// again, when the walk ends.
 pub fn release_lowered() {
     crate::layer_recycling::keep_for_next_walk();
-    super::end_redrawn_update();
+    let tight =
+        cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight;
+    crate::thread_state::with(|state| state.redrawn.borrow_mut().end_update(tight));
 }
 
 /// Lets go what walks keep for the next: the boxes of lowered nodes and the
 /// recordings of the commands they draw again.
 pub fn release_walk_storage() {
     crate::layer_recycling::release();
-    super::release_redrawn_recordings();
+    crate::thread_state::with(|state| state.redrawn.borrow_mut().clear());
 }

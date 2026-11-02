@@ -310,19 +310,13 @@ impl<'a> Subtree<'a> {
         }
     }
 
-    // What the hit targets beneath the node take from its layer, when it
-    // cuts them or handles a pointer.
-    pub(crate) fn hit_layer(self) -> Option<HitLayer> {
+    // The node's layer, when it cuts the hit targets beneath it or handles
+    // a pointer.
+    pub(crate) fn hit_layer(self) -> Option<&'a LayerNode> {
         let Self::Layer(layer) = self else {
             return None;
         };
-        let clips = layer.clip_rect().is_some();
-        (clips || layer.hit_test.is_some()).then(|| HitLayer {
-            local_bounds: layer.local_bounds,
-            node_bounds: layer.node_bounds,
-            clips,
-            hit_test: layer.hit_test.clone(),
-        })
+        (layer.clip_rect().is_some() || layer.hit_test.is_some()).then_some(layer)
     }
 
     // The node's placement in its parent's layer.
@@ -342,6 +336,26 @@ pub(crate) struct HitLayer {
     pub node_bounds: Option<Rect>,
     pub clips: bool,
     pub hit_test: Option<HitTestNode>,
+}
+
+impl HitLayer {
+    // What the hit targets beneath `layer` take from it.
+    pub(crate) fn of(layer: &LayerNode) -> Self {
+        Self {
+            local_bounds: layer.local_bounds,
+            node_bounds: layer.node_bounds,
+            clips: layer.clip_rect().is_some(),
+            hit_test: layer.hit_test.clone(),
+        }
+    }
+
+    // Takes what the hit targets beneath `layer` take from it, in place.
+    pub(crate) fn take_from(&mut self, layer: &LayerNode) {
+        self.local_bounds = layer.local_bounds;
+        self.node_bounds = layer.node_bounds;
+        self.clips = layer.clip_rect().is_some();
+        self.hit_test.clone_from(&layer.hit_test);
+    }
 }
 
 /// The items a layer's subtree pushed into a scene, in a run of each list,
@@ -472,7 +486,7 @@ impl RasterScene {
         let index = self.subtrees.len();
         self.subtrees.push(SubtreeItems {
             end: index + 1,
-            hits: hits.map(Box::new),
+            hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
             ..record
         });
         index

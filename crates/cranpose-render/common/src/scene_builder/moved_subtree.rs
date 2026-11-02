@@ -30,7 +30,7 @@ struct Inherited {
 }
 
 impl Inherited {
-    fn of(context: LowerContext) -> Self {
+    fn of(context: &LowerContext) -> Self {
         Self {
             motion_context_animated: context.inherited_motion_context_animated,
             translated_content_context: context.inherited_translated_content_context,
@@ -59,7 +59,7 @@ impl MovedSubtree {
         &mut self,
         applier: &MemoryApplier,
         position: Point,
-        context: LowerContext,
+        context: &LowerContext,
     ) -> bool {
         if Inherited::of(context) != self.lowered_with {
             return false;
@@ -68,7 +68,7 @@ impl MovedSubtree {
         match &mut self.root {
             RenderNode::Layer(layer) => {
                 translate_retained_child(layer, position, offset);
-                if let Some(parent_abs) = context.parent_abs {
+                if let Some(parent_abs) = &context.parent_abs {
                     publish_retained_window_geometry(applier, layer, parent_abs);
                 }
             }
@@ -101,7 +101,7 @@ pub fn placed_child_position(applier: &MemoryApplier, node_id: NodeId) -> Option
 pub fn lower_moved_subtree(
     applier: &MemoryApplier,
     node_id: NodeId,
-    context: LowerContext,
+    context: &LowerContext,
 ) -> Option<MovedSubtree> {
     let root = read_placed_node_data(applier, node_id, Level::Child, |data| {
         lower_placed_child(applier, node_id, data, context)

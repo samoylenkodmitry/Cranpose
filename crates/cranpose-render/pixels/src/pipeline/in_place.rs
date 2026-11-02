@@ -113,7 +113,7 @@ impl InPlaceUpdate<'_> {
             text,
         };
         let context = LowerContext::root(RecordingStore::Redrawn);
-        let walked = repush.visit_node(walk, (root, NodePlace::Root), context, (0, None));
+        let walked = repush.visit_node(walk, (root, NodePlace::Root), &context, (0, None));
         walk.release();
         let held = repush.held;
         merge_areas(areas);
@@ -131,7 +131,7 @@ impl Repush<'_> {
         &mut self,
         walk: &LayoutWalk<'_>,
         (node, place): (NodeId, NodePlace),
-        context: LowerContext,
+        context: &LowerContext,
         (record, parent): (usize, Option<usize>),
     ) -> Result<(), Stop> {
         let old = self.scene.subtrees.get(record).ok_or(Stop::OtherLayer)?;
@@ -188,7 +188,7 @@ impl Repush<'_> {
         &mut self,
         walk: &LayoutWalk<'_>,
         (node, place): (NodeId, NodePlace),
-        lower_context: LowerContext,
+        lower_context: &LowerContext,
         (record, parent): (usize, Option<usize>),
     ) -> Result<(), Stop> {
         let old = OldChildren::of(&self.scene.subtrees, record, node);

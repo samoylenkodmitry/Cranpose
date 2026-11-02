@@ -10,6 +10,8 @@
 //! frame mostly pushes a changed subtree as it pushed it before, so the
 //! spill seldom holds anything.
 
+use cranpose_render_common::graph::LayerNode;
+
 use crate::{
     damage::{ItemReach, add_changed_pair, add_changed_runs, merge_areas},
     draw::{ClipBounds, RenderItem},
@@ -171,7 +173,7 @@ impl Rewrite {
     pub(crate) fn place_record(
         &mut self,
         records: &mut [SubtreeItems],
-        (record, hits): (SubtreeItems, Option<HitLayer>),
+        (record, hits): (SubtreeItems, Option<&LayerNode>),
     ) -> usize {
         if self.spilled_at.is_none() {
             let index = self.next.records;
@@ -200,7 +202,7 @@ impl Rewrite {
         let index = self.record_count();
         self.spill.subtrees.push(SubtreeItems {
             end: index + 1,
-            hits: hits.map(Box::new),
+            hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
             ..record
         });
         index
@@ -407,14 +409,15 @@ impl Rewrite {
     }
 }
 
-// `hits` in `kept`, the box of an old record, when there is one.
-fn boxed_hits(kept: Option<Box<HitLayer>>, hits: Option<HitLayer>) -> Option<Box<HitLayer>> {
-    match (kept, hits) {
-        (Some(mut kept), Some(hits)) => {
-            *kept = hits;
+// What the hit targets beneath `layer` take from it, in `kept`, the box of
+// an old record, when there is one.
+fn boxed_hits(kept: Option<Box<HitLayer>>, layer: Option<&LayerNode>) -> Option<Box<HitLayer>> {
+    match (kept, layer) {
+        (Some(mut kept), Some(layer)) => {
+            kept.take_from(layer);
             Some(kept)
         }
-        (_, hits) => hits.map(Box::new),
+        (_, layer) => layer.map(|layer| Box::new(HitLayer::of(layer))),
     }
 }
 

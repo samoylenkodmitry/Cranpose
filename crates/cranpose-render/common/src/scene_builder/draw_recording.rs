@@ -4,7 +4,6 @@ use cranpose_core::NodeId;
 use cranpose_ui::{DrawCommand, Point, Rect, Size};
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, DrawGroup, DrawPlacement, GraphicsLayer, RecordLane,
-    RecordingRoom,
 };
 
 use super::{LayerHead, assign_layer};
@@ -119,91 +118,6 @@ pub enum RecordingStore {
     /// filled, with little memory left only one of a few shapes; one an
     /// update does not draw keeps none.
     Redrawn,
-}
-
-// The most heap a recording's tables may hold for its command to keep it to
-// the next update with little memory left: a gauge's or a switch's few
-// shapes, whose buffers cost more to allocate each update than they hold,
-// not a chart's or a canvas's many.
-const TIGHT_KEPT_BYTES: usize = 1024;
-
-// What a command keeps to the next update to record into.
-pub(crate) enum RedrawnBuffers {
-    // Its recording, to record into again.
-    Recording(Rc<CommandRecording>),
-    // The room its recording had, for a new one to start with.
-    Room(RecordingRoom),
-}
-
-// The recording of the command `id` that the update before kept, for the
-// command to record into again, or a new one with the room the kept one
-// had; a new one when there is none. A command takes no buffers another
-// command filled: a node that keeps its recording past the update, as a
-// moved subtree does, would hold their room.
-fn acquire_redrawn(id: DrawCommandId) -> Rc<CommandRecording> {
-    let kept = crate::thread_state::with(|state| {
-        state
-            .redrawn_recordings
-            .borrow_mut()
-            .get_mut(&RecorderKey::from(id))
-            .and_then(|(buffers, _)| buffers.take())
-    });
-    match kept {
-        Some(RedrawnBuffers::Recording(recording)) => recording,
-        Some(RedrawnBuffers::Room(room)) => Rc::new(room.empty_recording()),
-        None => Rc::default(),
-    }
-}
-
-// Keeps `recording`, the command `id` drew in this update, when no reader
-// holds it any more: until the next update, when the command drew in the
-// update before as well, so that a command drawn each update records into
-// the buffers it filled; else only its room. With little memory left only
-// a small recording stays to the next update: a canvas drawn each frame
-// then holds what one drawn once does.
-pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecording>) {
-    if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
-        return;
-    }
-    crate::thread_state::with(|state| {
-        let update = state.redrawn_update.get();
-        let mut recordings = state.redrawn_recordings.borrow_mut();
-        let entry = recordings
-            .entry(RecorderKey::from(id))
-            .or_insert((None, u64::MAX));
-        let again = entry.1 == update.wrapping_sub(1) || entry.1 == update;
-        let keeps =
-            again && (!state.redrawn_tight.get() || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES);
-        let kept = if keeps {
-            RedrawnBuffers::Recording(recording)
-        } else {
-            RedrawnBuffers::Room(RecordingRoom::of(&recording))
-        };
-        *entry = (Some(kept), update);
-    });
-}
-
-// Lets go the recordings of the commands this update did not draw as it
-// ends, and reads the memory headroom the next update keeps recordings by.
-pub(crate) fn end_redrawn_update() {
-    let tight =
-        cranpose_ui::current_memory_headroom() == cranpose_ui_graphics::MemoryHeadroom::Tight;
-    crate::thread_state::with(|state| {
-        state.redrawn_tight.set(tight);
-        let update = state.redrawn_update.get();
-        state
-            .redrawn_recordings
-            .borrow_mut()
-            .retain(|_, (_, drawn)| *drawn == update);
-        state.redrawn_update.set(update.wrapping_add(1));
-    });
-}
-
-/// Lets the recordings an update keeps for its commands' next draws go.
-pub(crate) fn release_redrawn_recordings() {
-    crate::thread_state::with(|state| {
-        state.redrawn_recordings.borrow_mut().clear();
-    });
 }
 
 pub(super) enum DrawPass<'a> {
@@ -474,7 +388,9 @@ pub(super) fn append_draw_nodes(
             let Some((recording, segments)) =
                 recording_for_placement_reusing(command, placement, size, || match store {
                     RecordingStore::Command => acquire_storage(id),
-                    RecordingStore::Redrawn => acquire_redrawn(id),
+                    RecordingStore::Redrawn => {
+                        crate::thread_state::with(|state| state.redrawn.borrow_mut().acquire(id))
+                    }
                 })
             else {
                 continue;
