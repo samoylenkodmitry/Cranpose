@@ -34,7 +34,6 @@ pub(crate) struct MemoryApplierState {
     pub(crate) layout_runtime: Option<RuntimeHandle>,
     pub(crate) recycle_pools: HashMap<TypeId, RecyclePool>,
     pub(crate) structural_change_parents: Vec<NodeId>,
-    pub(crate) virtual_node_ids: HashSet<NodeId>,
     pub(crate) bubble_passes: bubble_passes::BubblePasses,
     pub(crate) layout_dirt_roots: layout_dirt_roots::LayoutDirtRoots,
 }
@@ -312,18 +311,12 @@ impl MemoryApplier {
         std::mem::swap(&mut self.state.structural_change_parents, output);
     }
 
-    fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
-        if self.state.virtual_node_ids.is_empty() {
-            return Some(node_id);
-        }
+    fn first_non_virtual_ancestor(&self, node_id: NodeId) -> Option<NodeId> {
         let mut current = node_id;
         for _ in 0..100_000 {
-            if !self.state.virtual_node_ids.contains(&current) {
-                return Some(current);
-            }
-            match self.get_mut(current) {
-                Ok(node) => current = node.parent()?,
-                Err(_) => return None,
+            match self.get_ref(current) {
+                Ok(node) if node.is_virtual() => current = node.parent()?,
+                _ => return Some(current),
             }
         }
         None
@@ -776,7 +769,6 @@ impl MemoryApplier {
     }
 
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
-        self.state.virtual_node_ids.remove(&node_id);
         if let Some(slot) = self.state.high_ids.get_mut(&node_id)
             && let Some(node) = slot.node.take()
         {

@@ -112,12 +112,6 @@ impl Applier for MemoryApplier {
         Self::get_ref(self, id)
     }
 
-    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
-        let id = self.create(node);
-        self.state.virtual_node_ids.insert(id);
-        id
-    }
-
     fn insert_recycled_node_or_create(
         &mut self,
         stable_id: NodeId,

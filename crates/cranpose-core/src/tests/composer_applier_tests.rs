@@ -2263,7 +2263,10 @@ fn a_batch_of_scene_nodes_resolves_like_one_node_at_a_time() {
     let sibling = applier.create(Box::new(RecordingNode::default()));
     let detached = applier.create(Box::new(RecordingNode::default()));
     let under_detached = applier.create(Box::new(RecordingNode::default()));
-    let virtual_id = applier.create_virtual(Box::new(RecordingNode::default()));
+    let virtual_id = applier.create(Box::new(RecordingNode {
+        is_virtual: true,
+        ..RecordingNode::default()
+    }));
     for (parent, child) in [
         (root, branch),
         (branch, leaf),

@@ -26,10 +26,6 @@ impl Applier for RemoveFailingApplier {
     fn node_generation(&self, _id: NodeId) -> u32 {
         0
     }
-
-    fn create_virtual(&mut self, _node: Box<dyn Node>) -> NodeId {
-        unreachable!("disposal propagation test does not create nodes")
-    }
 }
 
 #[test]

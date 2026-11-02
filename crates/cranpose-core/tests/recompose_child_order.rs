@@ -56,7 +56,9 @@ fn insert_virtual_child(
     index: usize,
 ) {
     let mut applier = composition.applier_mut();
-    let node_id = applier.create_virtual(Box::new(ParentTracked::new(LabelNode { label })));
+    let mut node = ParentTracked::new(LabelNode { label });
+    node.is_virtual = true;
+    let node_id = applier.create(Box::new(node));
     applier
         .get_mut(node_id)
         .expect("virtual child was inserted")
