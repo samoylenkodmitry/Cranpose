@@ -390,6 +390,9 @@ pub(crate) struct RasterScene {
     pub(crate) snap_anchor: Option<Point>,
     // While a changed subtree pushes again over its old items: where.
     pub(crate) rewrite: Option<Box<Rewrite>>,
+    // Whether a record that hit targets read was pushed, replaced or let go
+    // since the scene's hit targets were collected.
+    pub(crate) hits_changed: bool,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "item reach in draw/reach")]
@@ -407,6 +410,7 @@ impl RasterScene {
             kept: Vec::new(),
             snap_anchor: None,
             rewrite: None,
+            hits_changed: false,
         }
     }
 
@@ -461,6 +465,7 @@ impl RasterScene {
             stop: counts,
         };
         let hits = subtree.hit_layer();
+        self.hits_changed |= hits.is_some();
         if let Some(rewrite) = self.rewrite.as_deref_mut() {
             return rewrite.place_record(&mut self.subtrees, (record, hits));
         }

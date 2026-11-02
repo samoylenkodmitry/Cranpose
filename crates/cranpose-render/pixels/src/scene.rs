@@ -227,10 +227,12 @@ impl Scene {
         if updated == Some(UpdatedReach::Lost) {
             raster.reach_into(self.frame, &mut self.reach);
         }
+        if std::mem::take(&mut raster.hits_changed) {
+            self.hits.get_mut().mark_stale();
+        }
         // An update that gave up after it changed part of the scene leaves
         // the areas it changed, which the scene holds already.
         self.note_changes(&mut areas);
-        self.hits.get_mut().mark_stale();
         updated.is_some()
     }
 
@@ -270,6 +272,7 @@ impl Scene {
             None => self.changed = Changed::Whole,
         }
         raster.reach_into(self.frame, &mut self.reach);
+        raster.hits_changed = false;
         self.raster = Some(raster);
     }
 

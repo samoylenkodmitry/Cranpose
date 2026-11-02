@@ -51,6 +51,8 @@ pub(crate) struct Rewrite {
     own_items_end: usize,
     // The records opened in place and not closed yet, the last innermost.
     opened: Vec<Opened>,
+    // Whether the rewrite replaced or let go a record that hit targets read.
+    hits_replaced: bool,
     // Where the subtree's pushes went on in `spill` from, once one did not
     // match the old item in its place.
     spilled_at: Option<Places>,
@@ -105,6 +107,7 @@ impl Rewrite {
         };
         self.own_items_end = self.next.items.order;
         self.opened.clear();
+        self.hits_replaced = false;
         self.spilled_at = None;
         self.spill.clear();
         self.window = window;
@@ -183,6 +186,7 @@ impl Rewrite {
                 });
                 self.own_items_end = own_items_end(records, index, old.end, old.stop);
                 let kept = records[index].hits.take();
+                self.hits_replaced |= kept.is_some();
                 records[index] = SubtreeItems {
                     end: index + 1,
                     hits: boxed_hits(kept, hits),
@@ -326,6 +330,9 @@ impl Rewrite {
             self.window,
             &mut self.areas,
         );
+        self.hits_replaced |= scene.subtrees[from.records..stop.records]
+            .iter()
+            .any(|record| record.hits.is_some());
         let removed = stop.items.since(from.items);
         let added = self.spill.counts();
         let records = (stop.records - from.records, self.spill.subtrees.len());
@@ -375,6 +382,11 @@ impl Rewrite {
             self.areas = Vec::new();
         }
         (std::mem::take(&mut self.reach), self.held)
+    }
+
+    // Whether the rewrite replaced or let go a record that hit targets read.
+    pub(crate) fn replaced_hits(&self) -> bool {
+        self.hits_replaced
     }
 
     // Lets the spill's storage go.
