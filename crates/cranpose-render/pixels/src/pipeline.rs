@@ -1,6 +1,5 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
-use cranpose_core::NodeId;
 use cranpose_render_common::{
     Brush,
     graph::{
@@ -23,7 +22,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::TextRaster,
-    scene::{ItemCounts, PassedDown, RasterScene, Scene, Subtree, TextDraw},
+    scene::{PassedDown, RasterScene, Scene, Subtree, TextDraw},
     style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
@@ -103,65 +102,6 @@ struct RasterTraversalContext<'a> {
     /// Whether the walk lies in a scene's space, whose scene draws the
     /// mesh surfaces and 3D transforms there, as its eye sees them.
     in_space: bool,
-}
-
-/// The scene the frame before built, whose items a walk copies for each
-/// subtree that did not change since.
-struct Reuse<'a> {
-    old: &'a RasterScene,
-    /// The old record of the layer the walk reaches next, while the graph
-    /// keeps the shape it had.
-    cursor: usize,
-    /// The old records of unchanged subtrees, siblings one after another,
-    /// to copy before the scene takes anything else, and the counts their
-    /// items reach there: a run of them copies as one.
-    pending: Option<(Range<usize>, ItemCounts)>,
-}
-
-impl Reuse<'_> {
-    /// The index of the old record of the node with `identity`, at the
-    /// cursor or one subtree on, after a sibling before it went away.
-    fn find(&self, identity: (Option<NodeId>, Option<NodeId>)) -> Option<usize> {
-        let records = &self.old.subtrees;
-        let at = records.get(self.cursor)?;
-        if at.identity == identity {
-            return Some(self.cursor);
-        }
-        records
-            .get(at.end)
-            .is_some_and(|next| next.identity == identity)
-            .then_some(at.end)
-    }
-
-    /// Queues the copy of the subtree of the old record `index`, which ends
-    /// at `end` and pushed its items up to `stop`.
-    fn copy_later(&mut self, scene: &mut RasterScene, index: usize, end: usize, stop: ItemCounts) {
-        match &mut self.pending {
-            Some((records, pending_stop)) if records.end == index => {
-                records.end = end;
-                *pending_stop = stop;
-            }
-            _ => {
-                self.flush(scene);
-                self.pending = Some((index..end, stop));
-            }
-        }
-    }
-
-    /// Copies the queued subtrees into `scene`.
-    fn flush(&mut self, scene: &mut RasterScene) {
-        if let Some((records, stop)) = self.pending.take() {
-            scene.copy_subtrees(self.old, records, stop);
-        }
-    }
-}
-
-/// Copies the subtrees `reuse` queued into `scene`, before it takes items of
-/// its own.
-fn flush_copies(reuse: &mut Option<Reuse<'_>>, scene: &mut RasterScene) {
-    if let Some(reuse) = reuse.as_mut() {
-        reuse.flush(scene);
-    }
 }
 
 fn contains_text_primitives(nodes: &[RenderNode]) -> bool {
@@ -364,6 +304,7 @@ pub(crate) fn build_raster_scene(
 mod draw_child;
 mod in_place;
 mod layer_shadow;
+mod reuse;
 mod space;
 
 #[cfg(test)]
@@ -371,6 +312,7 @@ pub(crate) use draw_child::push_draw_primitive;
 use draw_child::render_draw_child;
 pub(crate) use in_place::{InPlaceUpdate, UpdatedReach};
 use layer_shadow::push_layer_shadow;
+use reuse::{Reuse, flush_copies};
 use space::{push_seen_surfaces, seen_surfaces};
 
 /// The shadow light of a scene `graph` gives at `scale`.

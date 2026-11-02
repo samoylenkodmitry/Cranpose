@@ -33,9 +33,11 @@ mod text_node;
 mod translate_geometry;
 use text_node::{TextNodeParts, text_node_from_parts, translate_unwrapped};
 use translate_geometry::{KeptChild, TranslateGeometry, move_kept_child, translate_retained_child};
+mod lower_context;
+use lower_context::LowerContext;
 mod node_layer;
 use node_layer::{
-    AbsOrigin, LayerHead, LowerContext, PlacedGeometry, assign_layer, children_have_origin_sinks,
+    AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_have_origin_sinks,
     hit_test_from_slices, layer_and_node_bounds, layer_identity, layout_box_to_snapshot,
     lower_root_into, modifier_slices_have_origin_sinks, outer_draws, placed_child_geometry,
     placed_transform, prepare_node_layer, read_node_data, read_placed_node_data,

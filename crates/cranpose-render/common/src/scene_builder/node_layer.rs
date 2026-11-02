@@ -12,8 +12,8 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
 
 use super::{
-    BuildNodeSnapshot, DrawPass, DrawTarget, Level, SnapshotNodeData, TextNodeParts,
-    TranslateAncestorContext, TranslateGeometry, append_draw_nodes, draw_nodes,
+    BuildNodeSnapshot, DrawPass, DrawTarget, Level, LowerContext, SnapshotNodeData, TextNodeParts,
+    TranslateGeometry, append_draw_nodes, draw_nodes,
     inline_leaf::{lower_child, snapshot_lowers_inline},
     layer_node_capacity,
     layer_shape::{clip_shape, shape_clip},
@@ -28,49 +28,6 @@ use crate::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
 };
-
-#[derive(Clone, Copy)]
-pub(super) struct LowerContext {
-    pub(super) inherited_motion_context_animated: bool,
-    pub(super) inherited_translated_content_context: bool,
-    pub(super) parent_abs: Option<AbsOrigin>,
-    pub(super) parent_content_offset: Point,
-}
-
-impl LowerContext {
-    pub(super) const ROOT: Self = Self {
-        inherited_motion_context_animated: false,
-        inherited_translated_content_context: false,
-        parent_abs: Some(AbsOrigin::ROOT),
-        parent_content_offset: Point { x: 0.0, y: 0.0 },
-    };
-
-    // What a child lowers with beneath `ancestors`.
-    pub(super) fn beneath(ancestors: TranslateAncestorContext) -> Self {
-        Self {
-            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
-            inherited_translated_content_context: ancestors.inherited_translated_content_context,
-            parent_abs: Some(ancestors.parent_abs),
-            parent_content_offset: ancestors.parent_content_offset,
-        }
-    }
-
-    fn for_children(
-        self,
-        slices: &ModifierNodeSlices,
-        content_offset: Point,
-        parent_abs: Option<AbsOrigin>,
-    ) -> Self {
-        Self {
-            inherited_motion_context_animated: self.inherited_motion_context_animated
-                || slices.motion_context_animated(),
-            inherited_translated_content_context: self.inherited_translated_content_context
-                || slices.translated_content_context(),
-            parent_abs,
-            parent_content_offset: content_offset,
-        }
-    }
-}
 
 pub(super) struct LayerHead {
     pub(super) node_id: Option<NodeId>,
