@@ -1016,11 +1016,11 @@ pub trait DrawScope {
     /// Fills or strokes `path` with `brush`: Compose's
     /// `drawPath(path, brush, style)`. A fill closes every contour and
     /// rasterizes it as [`draw_vector_path`](Self::draw_vector_path) does. A
-    /// stroke draws each flattened edge as a line on the GPU, capped at an
-    /// open contour's ends and joined at its corners as
-    /// [`crate::for_each_stroke_line`] describes; a dashed stroke draws the
-    /// dashes its effect cuts. Where edges meet, a translucent stroke is
-    /// painted twice.
+    /// stroke covers each flattened edge as a line, capped at an open
+    /// contour's ends and joined at its corners as [`crate::for_each_stroke_line`]
+    /// describes; a dashed stroke covers the dashes its effect cuts. A stroke
+    /// that is not opaque, or blends other than source-over, fills what its
+    /// lines cover once, so its corners are no deeper than its edges.
     fn draw_path(&mut self, path: &Path, brush: Brush, style: DrawStyle);
     /// As `draw_path`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_path_blend(
@@ -1642,7 +1642,7 @@ impl DrawScope for DrawScopeDefault<'_> {
             &mut self.recording,
             self.size,
             path,
-            brush,
+            &brush,
             style,
             blend_mode,
         );

@@ -68,6 +68,7 @@ mod shadow;
 mod shape_records;
 pub mod space;
 mod stroke;
+mod stroke_outline;
 mod text_primitive;
 mod thread_state;
 pub mod transform;

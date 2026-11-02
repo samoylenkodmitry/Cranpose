@@ -145,9 +145,17 @@ impl Path {
     pub fn line_to(&mut self, point: Point) {
         match self.contours.last_mut() {
             Some(contour) if !contour.closed => contour.points.push(point),
-            _ => self.open_contour().push(point),
+            _ => self.line_to_new_contour(point),
         }
         self.pen = point;
+    }
+
+    // An edge with no open contour to extend: out of line, so the loops an
+    // app builds a path in inline only the push onto the open one.
+    #[cold]
+    #[inline(never)]
+    fn line_to_new_contour(&mut self, point: Point) {
+        self.open_contour().push(point);
     }
 
     /// Adds the quadratic curve from the pen through `control` to `end`:
@@ -225,14 +233,7 @@ impl Path {
 
     /// The path as a fill: every contour closed, under `fill_rule`.
     pub fn to_vector_path(&self, fill_rule: PathFillRule) -> VectorPath {
-        VectorPath::from_subpaths(
-            self.contours
-                .iter()
-                .filter(|contour| contour.points.len() >= 2)
-                .map(|contour| contour.points.clone())
-                .collect(),
-            fill_rule,
-        )
+        contours_vector_path(&self.contours, fill_rule)
     }
 
     /// The contour an edge extends: the last one when it is still open,
@@ -244,6 +245,21 @@ impl Path {
         let last = self.contours.len() - 1;
         &mut self.contours[last].points
     }
+}
+
+// `contours` as a fill: every contour closed, under `fill_rule`.
+pub(crate) fn contours_vector_path(
+    contours: &[PathContour],
+    fill_rule: PathFillRule,
+) -> VectorPath {
+    VectorPath::from_subpaths(
+        contours
+            .iter()
+            .filter(|contour| contour.points.len() >= 2)
+            .map(|contour| contour.points.clone())
+            .collect(),
+        fill_rule,
+    )
 }
 
 impl Drop for Path {

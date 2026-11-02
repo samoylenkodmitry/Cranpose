@@ -1,10 +1,11 @@
 // How a draw scope records a path: a fill as the slices the GPU draws, a
-// stroke as lines, and the cached coverage mask a path that cannot be sliced
+// stroke as lines, or as the fill of its outline where its lines' overlaps
+// would show, and the cached coverage mask a path that cannot be sliced
 // falls back to.
 
 use crate::{
-    BlendMode, Brush, CommandRecorder, DrawPrimitive, ImageSampling, PathFillRule, Point, Rect,
-    Size, VectorPath,
+    BlendMode, Brush, CommandRecorder, DashPathEffect, DrawPrimitive, ImageSampling, PathContour,
+    PathFillRule, Point, Rect, Size, Stroke, TileMode, VectorPath,
     path::{DrawStyle, Path},
     stroke::LineGeometry,
     vector_path_mask::{
@@ -17,13 +18,13 @@ pub(crate) fn record_path(
     recording: &mut CommandRecorder<'_>,
     size: Size,
     path: &Path,
-    brush: Brush,
+    brush: &Brush,
     style: DrawStyle,
     blend_mode: BlendMode,
 ) {
     let (stroke, dash) = match style {
         DrawStyle::Fill => {
-            record_path_fill(recording, size, path, &brush, blend_mode);
+            record_path_fill(recording, size, path.contours(), brush, blend_mode);
             return;
         }
         DrawStyle::Stroke(stroke) => (stroke, None),
@@ -32,11 +33,67 @@ pub(crate) fn record_path(
     if !stroke.is_visible() {
         return;
     }
-    let mut run = recording.line_run(&brush, stroke, blend_mode);
-    let mut push = |line: LineGeometry| run.push(line.start, line.end, line.cap);
+    if overlaps_show(brush, blend_mode) && !is_one_segment(path) {
+        record_stroke_outline(recording, size, path, (stroke, dash), brush, blend_mode);
+        return;
+    }
+    let mut run = recording.line_run(brush, stroke, blend_mode);
+    for_each_line(path, stroke, dash, |line| {
+        run.push(line.start, line.end, line.cap);
+    });
+}
+
+// Whether the lines of a stroke show where they overlap: a brush that is not
+// opaque paints an overlap twice as deep, and a blend other than plain
+// source-over reads what the line beneath drew.
+fn overlaps_show(brush: &Brush, blend_mode: BlendMode) -> bool {
+    blend_mode != BlendMode::SrcOver
+        || match brush {
+            Brush::Solid(color) => color.3 < 1.0,
+            Brush::LinearGradient {
+                tile_mode: TileMode::Decal,
+                ..
+            }
+            | Brush::RadialGradient {
+                tile_mode: TileMode::Decal,
+                ..
+            } => true,
+            gradient => gradient.colors().iter().any(|color| color.3 < 1.0),
+        }
+}
+
+// Whether `path` is one open segment, whose line, or dashes, cannot overlap.
+fn is_one_segment(path: &Path) -> bool {
+    matches!(path.contours(), [contour] if !contour.closed && contour.points.len() <= 2)
+}
+
+// Records a stroke as one fill of what its lines cover, so it paints each
+// point once.
+fn record_stroke_outline(
+    recording: &mut CommandRecorder<'_>,
+    size: Size,
+    path: &Path,
+    (stroke, dash): (Stroke, Option<DashPathEffect>),
+    brush: &Brush,
+    blend_mode: BlendMode,
+) {
+    let mut outline = crate::thread_state::with(|state| state.stroke_outline.take());
+    outline.clear();
+    for_each_line(path, stroke, dash, |line| outline.add_line(line));
+    record_path_fill(recording, size, outline.contours(), brush, blend_mode);
+    crate::thread_state::with(|state| state.stroke_outline.replace(outline));
+}
+
+// Calls `line` with each line a stroke of `path` draws, dashed by `dash`.
+fn for_each_line(
+    path: &Path,
+    stroke: Stroke,
+    dash: Option<DashPathEffect>,
+    mut line: impl FnMut(LineGeometry),
+) {
     for contour in path.contours() {
         let Some(dash) = dash else {
-            crate::for_each_stroke_line(&contour.points, contour.closed, stroke, &mut push);
+            crate::for_each_stroke_line(&contour.points, contour.closed, stroke, &mut line);
             continue;
         };
         let closing = contour
@@ -50,7 +107,7 @@ pub(crate) fn record_path(
             None => std::borrow::Cow::Borrowed(&contour.points),
         };
         dash.for_each_dash(&points, |piece| {
-            crate::for_each_stroke_line(piece, false, stroke, &mut push);
+            crate::for_each_stroke_line(piece, false, stroke, &mut line);
         });
     }
 }
@@ -58,20 +115,19 @@ pub(crate) fn record_path(
 /// Records the fill of `path` as the slices the GPU draws, its brush
 /// resolved against the scope's rect; a path that cannot be sliced is
 /// rasterized into a mask instead.
+// A path's fill and a stroke's outline both come here, so the slicer keeps
+// one caller.
 fn record_path_fill(
     recording: &mut CommandRecorder<'_>,
     size: Size,
-    path: &Path,
+    path: &[PathContour],
     brush: &Brush,
     blend_mode: BlendMode,
 ) {
     let brush_rect = Rect::from_size(size);
     let sliced = crate::thread_state::with(|state| {
         let mut slicer = state.path_slicer.borrow_mut();
-        let contours = path
-            .contours()
-            .iter()
-            .map(|contour| contour.points.as_slice());
+        let contours = path.iter().map(|contour| contour.points.as_slice());
         slicer
             .slice(contours, PathFillRule::NonZero)
             .map(|slices| recording.push_trapezoids(brush_rect, slices, brush, blend_mode))
@@ -80,7 +136,7 @@ fn record_path_fill(
     if !sliced {
         record_vector_path(
             recording,
-            &path.to_vector_path(PathFillRule::NonZero),
+            &crate::path::contours_vector_path(path, PathFillRule::NonZero),
             brush,
             brush_rect,
             blend_mode,

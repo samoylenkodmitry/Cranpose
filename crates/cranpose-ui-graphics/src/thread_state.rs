@@ -12,6 +12,7 @@ use crate::{
     path_fill::PathSlicer,
     record::ShapeRecorder,
     render_effect::ShaderSpecializationCache,
+    stroke_outline::StrokeOutline,
     vector_path_mask::VectorPathMaskCache,
 };
 
@@ -20,6 +21,7 @@ pub(crate) struct GraphicsThreadState {
     pub(crate) vector_path_masks: RefCell<VectorPathMaskCache>,
     pub(crate) shared_texts: RefCell<ContentPool<Rc<str>>>,
     pub(crate) path_slicer: RefCell<PathSlicer>,
+    pub(crate) stroke_outline: RefCell<StrokeOutline>,
     pub(crate) path_buffers: RefCell<PathBuffers>,
     pub(crate) glass_specializations:
         RefCell<ShaderSpecializationCache<GlassCacheKey, GLASS_SPECIALIZATION_CACHE_CAPACITY>>,
@@ -35,6 +37,7 @@ impl GraphicsThreadState {
             vector_path_masks: RefCell::new(VectorPathMaskCache::new()),
             shared_texts: RefCell::new(ContentPool::new()),
             path_slicer: RefCell::new(PathSlicer::new()),
+            stroke_outline: RefCell::new(StrokeOutline::new()),
             path_buffers: RefCell::new(PathBuffers::new()),
             glass_specializations: RefCell::new(ShaderSpecializationCache::new()),
             no_shapes: OnceCell::new(),

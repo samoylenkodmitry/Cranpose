@@ -1318,7 +1318,7 @@ fn record_scope(draw: impl FnOnce(&mut DrawScopeDefault<'_>)) -> CommandRecordin
     recording
 }
 
-/// A stroked path's segments after its first extend their segment of
+/// An opaque stroked path's segments after its first extend their segment of
 /// records without the checks a record alone takes. What they record must
 /// be what the same segments drawn one by one record: in a segment of
 /// their own, and after an arc whose band class they share a segment with
@@ -1342,9 +1342,9 @@ fn a_stroked_path_records_what_its_segments_drawn_one_by_one_record() {
         );
     };
     let whole = record_scope(|scope| {
-        scope.draw_path(&path, solid(), crate::DrawStyle::Stroke(stroke));
+        scope.draw_path(&path, opaque(), crate::DrawStyle::Stroke(stroke));
         arc(scope);
-        scope.draw_path(&path, solid(), crate::DrawStyle::Stroke(stroke));
+        scope.draw_path(&path, opaque(), crate::DrawStyle::Stroke(stroke));
     });
     let mut lines = Vec::new();
     for contour in path.contours() {
@@ -1358,7 +1358,7 @@ fn a_stroked_path_records_what_its_segments_drawn_one_by_one_record() {
                 cap: line.cap,
                 ..stroke
             };
-            scope.draw_line(solid(), line.start, line.end, stroke);
+            scope.draw_line(opaque(), line.start, line.end, stroke);
         }
     };
     let one_by_one = record_scope(|scope| {
