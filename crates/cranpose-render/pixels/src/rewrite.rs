@@ -16,7 +16,7 @@ use crate::{
     damage::{ItemReach, add_changed_pair, add_changed_runs, merge_areas},
     draw::{ClipBounds, RenderItem},
     pipeline::UpdatedReach,
-    raster_scene::{HitLayer, ItemCounts, PassedDown, RasterScene, SubtreeItems},
+    raster_scene::{HitLayer, ItemCounts, PassedDown, RasterScene, Subtree, SubtreeItems},
     scene_item::SceneItem,
 };
 
@@ -111,7 +111,10 @@ impl Rewrite {
         self.opened.clear();
         self.hits_replaced = false;
         self.spilled_at = None;
-        self.spill.clear();
+        debug_assert!(
+            self.spill.order.is_empty() && self.spill.subtrees.is_empty(),
+            "a rewrite leaves its spill empty when it finishes"
+        );
         self.window = window;
         (self.reach, self.held) = (std::mem::take(reach), held);
         true
@@ -165,20 +168,20 @@ impl Rewrite {
         self.spill.push_item(item);
     }
 
-    // Puts `record` in place of the old record where the subtree opens its
-    // next one, when that one is of the same node and its items start where
-    // the record's do; else into the spill. Returns where the record would
-    // lie, were the spill in place.
-    // The old record's box of hit facts takes the new ones in place.
+    // Writes the record of `subtree`, with `hits`, its `hit_layer`, over the
+    // old record where the subtree opens its next one, when that one is of
+    // the same node and its items start where the record's do; else into
+    // the spill. Returns where the record would lie, were the spill in
+    // place. The old record's box of hit facts takes the new ones in place.
     pub(crate) fn place_record(
         &mut self,
         records: &mut [SubtreeItems],
-        (record, hits): (SubtreeItems, Option<&LayerNode>),
+        (subtree, hits): (Subtree<'_>, Option<&LayerNode>),
     ) -> usize {
         if self.spilled_at.is_none() {
             let index = self.next.records;
             if let Some(old) = records[..self.stop.records].get(index)
-                && old.identity == record.identity
+                && old.identity == subtree.identity()
                 && old.start == self.next.items
             {
                 self.opened.push(Opened {
@@ -187,24 +190,25 @@ impl Rewrite {
                     passed_down: old.passed_down,
                 });
                 self.own_items_end = own_items_end(records, index, old.end, old.stop);
-                let kept = records[index].hits.take();
+                let record = &mut records[index];
+                let kept = record.hits.take();
                 self.hits_replaced |= kept.is_some();
-                records[index] = SubtreeItems {
-                    end: index + 1,
-                    hits: boxed_hits(kept, hits),
-                    ..record
-                };
+                record.hits = boxed_hits(kept, hits);
+                record.transform = subtree.transform_to_parent();
+                record.node_size = subtree.node_size();
+                record.passed_down = None;
+                record.end = index + 1;
+                record.stop = self.next.items;
                 self.next.records += 1;
                 return index;
             }
             self.spilled_at = Some(self.next);
         }
         let index = self.record_count();
-        self.spill.subtrees.push(SubtreeItems {
-            end: index + 1,
-            hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
-            ..record
-        });
+        let counts = self.counts();
+        self.spill
+            .subtrees
+            .push(subtree.record(index + 1, counts, hits));
         index
     }
 

@@ -319,6 +319,27 @@ impl<'a> Subtree<'a> {
         (layer.clip_rect().is_some() || layer.hit_test.is_some()).then_some(layer)
     }
 
+    // A record of the node whose items start at `counts`, before the record
+    // `end`, which closing it moves past its descendants', with what the hit
+    // targets beneath take from `hits`, its `hit_layer`.
+    pub(crate) fn record(
+        self,
+        end: usize,
+        counts: ItemCounts,
+        hits: Option<&LayerNode>,
+    ) -> SubtreeItems {
+        SubtreeItems {
+            identity: self.identity(),
+            transform: self.transform_to_parent(),
+            node_size: self.node_size(),
+            hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
+            passed_down: None,
+            end,
+            start: counts,
+            stop: counts,
+        }
+    }
+
     // The node's placement in its parent's layer.
     pub(crate) fn transform_to_parent(self) -> ProjectiveTransform {
         match self {
@@ -467,28 +488,14 @@ impl RasterScene {
     /// Opens the record of `subtree`, whose items come next, and returns its
     /// index for [`Self::close_subtree`].
     pub(crate) fn open_subtree(&mut self, subtree: Subtree<'_>) -> usize {
-        let counts = self.counts();
-        let record = SubtreeItems {
-            identity: subtree.identity(),
-            transform: subtree.transform_to_parent(),
-            node_size: subtree.node_size(),
-            hits: None,
-            passed_down: None,
-            end: 0,
-            start: counts,
-            stop: counts,
-        };
         let hits = subtree.hit_layer();
         self.hits_changed |= hits.is_some();
         if let Some(rewrite) = self.rewrite.as_deref_mut() {
-            return rewrite.place_record(&mut self.subtrees, (record, hits));
+            return rewrite.place_record(&mut self.subtrees, (subtree, hits));
         }
         let index = self.subtrees.len();
-        self.subtrees.push(SubtreeItems {
-            end: index + 1,
-            hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
-            ..record
-        });
+        let counts = self.counts();
+        self.subtrees.push(subtree.record(index + 1, counts, hits));
         index
     }
 
