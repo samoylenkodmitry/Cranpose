@@ -16,7 +16,7 @@ use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{
     PointerButton, PointerButtons, PointerId, PointerSource, RotaryScrollEvent,
 };
-use cranpose_render_common::{NodeUpdate, Renderer};
+use cranpose_render_common::{NodeUpdate, RenderScene, Renderer};
 use cranpose_ui::{
     LayoutNode, LayoutTree, MovedSceneNode, PlatformTextInputHandler, SemanticsTree,
     pointer_icon_session::PointerIconState,
@@ -59,6 +59,9 @@ pub struct RootSurface<R: Renderer> {
     /// A layout pass ran since `semantics_tree` was brought up to date, so
     /// its bounds may be out of date though no node marked its semantics.
     semantics_moved: bool,
+    // The scene's count of layer moves when the semantics revision last
+    // looked: a layer that moves moves the window bounds of what it holds.
+    seen_layer_moves: u64,
     pub(crate) modal_focus: Vec<(NodeId, Option<NodeId>)>,
     // The frames the surface started, counted by `begin_frame`.
     pub(crate) frames: u64,
@@ -118,6 +121,7 @@ impl<R: Renderer> RootSurface<R> {
             layout_tree: None,
             semantics_tree: None,
             semantics_moved: false,
+            seen_layer_moves: 0,
             modal_focus: Vec::new(),
             frames: 0,
             key_moved_focus_at: None,
@@ -214,6 +218,14 @@ impl<R: Renderer> RootSurface<R> {
     pub(crate) fn forget_snapshots(&mut self) {
         self.layout_tree = None;
         self.semantics_moved = true;
+    }
+
+    // Whether the scene moved a layer since the last call.
+    pub(crate) fn layers_moved_since_look(&mut self) -> bool {
+        let moves = self.renderer.scene().layer_moves();
+        let moved = moves != self.seen_layer_moves;
+        self.seen_layer_moves = moves;
+        moved
     }
 
     pub(crate) fn has_active_pointer_gesture(&self) -> bool {

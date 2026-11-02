@@ -1287,6 +1287,7 @@ fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
         GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
             hit_graph_dirty: true,
+            layers_moved: true,
         },
         "dirty child graph updates must not report success when the replacement cannot be rebuilt"
     );

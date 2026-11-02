@@ -20,6 +20,8 @@ use draw_recording::{
 };
 pub(crate) use draw_recording::{RecorderKey, RecorderSlot};
 pub use draw_recording::{clear_command_recordings_for_tests, draw_command_nodes_for_tests};
+mod graph_changes;
+use graph_changes::GraphChanges;
 mod hit_graph;
 pub(crate) use hit_graph::HitGraphState;
 use hit_graph::rebuild_tracking_hits;
@@ -105,9 +107,28 @@ pub struct GraphUpdateReport {
     /// Whether the update changed hit geometry or handlers, so the hit targets must be collected
     /// again.
     pub hit_graph_dirty: bool,
+    /// Whether the update moved a layer in its parent by the layer's own properties, as an
+    /// animated graphics layer or offset moves it, which no layout pass reports.
+    pub layers_moved: bool,
 }
 
 impl GraphUpdateReport {
+    fn patched(changes: GraphChanges) -> Self {
+        Self {
+            update: GraphUpdate::Patched,
+            hit_graph_dirty: changes.contains(GraphChanges::Hits),
+            layers_moved: changes.contains(GraphChanges::Moves),
+        }
+    }
+
+    fn needs_rebuild(reason: GraphRebuildReason) -> Self {
+        Self {
+            update: GraphUpdate::NeedsRebuild(reason),
+            hit_graph_dirty: true,
+            layers_moved: true,
+        }
+    }
+
     /// Whether the graph was patched in place.
     pub fn applied(self) -> bool {
         matches!(self.update, GraphUpdate::Patched)
@@ -219,15 +240,33 @@ pub fn update_graph_from_applier_report(
 
 /// Puts into `dirty` each dirty node with the update it needs, the updates
 /// of a node named more than once merged.
-fn dirty_node_updates(updates: SceneUpdates<'_>, dirty: &mut HashMap<NodeId, NodeUpdate>) {
+// Returns a move when a node's layer change merged into new content: its
+// layer is lowered again, which keeps no record of where it lay.
+fn dirty_node_updates(
+    updates: SceneUpdates<'_>,
+    dirty: &mut HashMap<NodeId, NodeUpdate>,
+) -> GraphChanges {
     dirty.clear();
     dirty.reserve(updates.len());
+    let mut changes = GraphChanges::default();
     for &(id, update) in updates {
         dirty
             .entry(id)
-            .and_modify(|kind| *kind = kind.merge(update))
+            .and_modify(|kind| {
+                let merged = kind.merge(update);
+                if merged == NodeUpdate::Content && (changes_layer(*kind) || changes_layer(update))
+                {
+                    changes = GraphChanges::Moves;
+                }
+                *kind = merged;
+            })
             .or_insert(update);
     }
+    changes
+}
+
+fn changes_layer(update: NodeUpdate) -> bool {
+    matches!(update, NodeUpdate::Layer | NodeUpdate::MovedLayer)
 }
 
 #[expect(clippy::print_stderr, reason = "CRANPOSE_SCENE_UPDATE_DIAG asks")]
@@ -237,10 +276,7 @@ fn update_graph_from_applier_report_inner(
     updates: SceneUpdates<'_>,
 ) -> GraphUpdateReport {
     if updates.is_empty() {
-        return GraphUpdateReport {
-            update: GraphUpdate::Patched,
-            hit_graph_dirty: false,
-        };
+        return GraphUpdateReport::patched(GraphChanges::default());
     }
     bump_recording_generation();
     graph.update += 1;
@@ -253,8 +289,9 @@ fn update_graph_from_applier_report_inner(
     // The map of the frame before keeps its storage for this one.
     let mut remaining_dirty_nodes =
         crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
-    dirty_node_updates(updates, &mut remaining_dirty_nodes);
-    let report = update_dirty_nodes(applier, graph, &mut remaining_dirty_nodes, update);
+    let merged = dirty_node_updates(updates, &mut remaining_dirty_nodes);
+    let mut report = update_dirty_nodes(applier, graph, &mut remaining_dirty_nodes, update);
+    report.layers_moved |= merged.contains(GraphChanges::Moves);
     remaining_dirty_nodes.clear();
     crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(remaining_dirty_nodes)));
     report
@@ -271,7 +308,7 @@ fn update_dirty_nodes(
     if let Some(root_id) = layer_identity(&graph.root)
         && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
     {
-        if let Some(hit_graph_dirty) = try_update_retained_layer(
+        if let Some(mut changes) = try_update_retained_layer(
             applier,
             &mut graph.root,
             remaining_dirty_nodes,
@@ -286,16 +323,14 @@ fn update_dirty_nodes(
             },
         ) {
             if remaining_dirty_nodes.is_empty() {
-                return GraphUpdateReport {
-                    update: GraphUpdate::Patched,
-                    hit_graph_dirty,
-                };
+                return GraphUpdateReport::patched(changes);
             }
             let walked = walk_dirty_layers(applier, graph, remaining_dirty_nodes, update)
                 .map(|(report, _)| report);
+            changes |= walked.map_or(GraphChanges::HitsAndMoves, |report| report.changes);
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
-                hit_graph_dirty: hit_graph_dirty || walked.is_none_or(|r| r.hit_graph_dirty),
+                ..GraphUpdateReport::patched(changes)
             };
         }
 
@@ -303,17 +338,11 @@ fn update_dirty_nodes(
             release_for_rebuild(root);
             lower_root_into(applier, root_id, root)
         }) else {
-            return GraphUpdateReport {
-                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::RootLayerUnavailable),
-                hit_graph_dirty: true,
-            };
+            return GraphUpdateReport::needs_rebuild(GraphRebuildReason::RootLayerUnavailable);
         };
         graph.root.note_content_change(update);
 
-        return GraphUpdateReport {
-            update: GraphUpdate::Patched,
-            hit_graph_dirty,
-        };
+        return GraphUpdateReport::patched(GraphChanges::hits(hit_graph_dirty));
     }
 
     // An update that does not go along the retained path may move the
@@ -331,35 +360,20 @@ fn update_dirty_nodes(
             graph.retained_path = Some(RetainedPath { update, ..path });
         }
         return match report {
-            Some(report) => GraphUpdateReport {
-                update: GraphUpdate::Patched,
-                hit_graph_dirty: report.hit_graph_dirty,
-            },
-            None => GraphUpdateReport {
-                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
-                hit_graph_dirty: true,
-            },
+            Some(report) => GraphUpdateReport::patched(report.changes),
+            None => GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable),
         };
     }
 
     let Some((report, path)) = walk_dirty_layers(applier, graph, remaining_dirty_nodes, update)
     else {
-        return GraphUpdateReport {
-            update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
-            hit_graph_dirty: true,
-        };
+        return GraphUpdateReport::needs_rebuild(GraphRebuildReason::DirtyLayerUnavailable);
     };
     graph.retained_path = path;
 
     match classify_walk(applier, true, remaining_dirty_nodes) {
-        GraphUpdate::Patched => GraphUpdateReport {
-            update: GraphUpdate::Patched,
-            hit_graph_dirty: report.hit_graph_dirty,
-        },
-        update => GraphUpdateReport {
-            update,
-            hit_graph_dirty: true,
-        },
+        GraphUpdate::Patched => GraphUpdateReport::patched(report.changes),
+        GraphUpdate::NeedsRebuild(reason) => GraphUpdateReport::needs_rebuild(reason),
     }
 }
 
@@ -461,13 +475,17 @@ fn try_update_retained_layer(
     kind: NodeUpdate,
     level: Level,
     ancestors: TranslateAncestorContext,
-) -> Option<bool> {
+) -> Option<GraphChanges> {
     match kind {
         NodeUpdate::Moved if level == Level::Child => {
             move_retained_layer(applier, layer, ancestors)
                 .or_else(|| translate_tracking_hits(applier, layer, dirty_nodes, ancestors))
         }
-        NodeUpdate::Draws if redraw_retained_layer(applier, layer, level, ancestors) => Some(false),
+        NodeUpdate::Draws if redraw_retained_layer(applier, layer, level, ancestors) => {
+            Some(GraphChanges::default())
+        }
+        // A translate keeps the layer's graphics layer: one that changed is
+        // lowered again.
         NodeUpdate::Content | NodeUpdate::Draws | NodeUpdate::Moved => {
             translate_tracking_hits(applier, layer, dirty_nodes, ancestors)
         }
@@ -535,7 +553,7 @@ fn move_retained_layer(
     applier: &MemoryApplier,
     layer: &mut LayerNode,
     ancestors: TranslateAncestorContext,
-) -> Option<bool> {
+) -> Option<GraphChanges> {
     let placed = placed_child_geometry(applier, layer_identity(layer)?)?;
     if Rect::from_size(placed.size) != layer.node_rect() {
         return None;
@@ -545,7 +563,7 @@ fn move_retained_layer(
     if layer.has_origin_sinks {
         publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
     }
-    Some(previous.dirty_against(&HitGraphState::of(layer)))
+    Some(previous.changes_against(&HitGraphState::of(layer)))
 }
 
 fn content_layer_mut(container: &mut LayerNode) -> Option<&mut LayerNode> {
@@ -582,7 +600,7 @@ fn update_layer_properties(
     level: Level,
     position: Position,
     ancestors: TranslateAncestorContext,
-) -> Option<bool> {
+) -> Option<GraphChanges> {
     let node_id = layer_identity(container)?;
     let wrapping = if container.wraps.is_some() {
         Wrapping::Wrapped
@@ -596,7 +614,7 @@ fn update_layer_properties(
         return None;
     }
     let placement = container.origin_in_parent;
-    let hit_graph_dirty = read_placed_node_data(applier, node_id, level, |data| {
+    let changes = read_placed_node_data(applier, node_id, level, |data| {
         let target = content_layer_mut(container)?;
         let slices = &data.modifier_slices;
         let state = &data.layout_state;
@@ -624,14 +642,14 @@ fn update_layer_properties(
                 }
             }
         }
-        Some(previous.dirty_against(&HitGraphState::of(target)))
+        Some(previous.changes_against(&HitGraphState::of(target)))
     })??;
     if wrapped {
         container.refresh_child_facts();
         container.has_origin_sinks = children_have_origin_sinks(&container.children);
         container.forget_own_raster_cache_hashes();
     }
-    Some(hit_graph_dirty)
+    Some(changes)
 }
 
 /// After a scene build or update that changed a layer in 3D, publishes

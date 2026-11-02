@@ -12,7 +12,7 @@ use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 
 use super::{
-    DrawTarget, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
+    DrawTarget, GraphChanges, KeptChild, LowerContext, PlacedGeometry, SnapshotNodeData,
     TranslateAncestorContext, TranslateGeometry, Wrapping, child_identity,
     children_have_origin_sinks, content_layer_mut, forget_dirty_node, hit_test_from_slices,
     layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
@@ -35,10 +35,10 @@ pub(super) fn translate_tracking_hits(
     layer: &mut LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
-) -> Option<bool> {
+) -> Option<GraphChanges> {
     let held = holds_hit_geometry(layer);
     try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors)
-        .then(|| held || holds_hit_geometry(layer))
+        .then(|| GraphChanges::hits(held || holds_hit_geometry(layer)))
 }
 
 /// Whether the hit graph reads `layer`: it is a hit target, holds one or is

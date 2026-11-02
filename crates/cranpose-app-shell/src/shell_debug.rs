@@ -56,10 +56,11 @@ where
 
     /// Monotonic revision of the accessibility-relevant state. It moves when a
     /// layout pass invalidated the cached snapshots, when semantics tracking is
-    /// toggled, and when any node marked its semantics dirty since the last
-    /// look. A bridge that stored the revision it last projected can skip the
-    /// whole snapshot-and-compare while this still reads the same — which on an
-    /// animation-only frame is every frame.
+    /// toggled, when any node marked its semantics dirty since the last look,
+    /// and when a scene update moved a layer, which moves where the nodes in it
+    /// show. A bridge that stored the revision it last projected can skip the
+    /// whole snapshot-and-compare while this still reads the same — which on a
+    /// frame that only draws is every frame.
     pub fn semantics_snapshot_revision(&mut self) -> u64 {
         if self.app.semantics_enabled
             || self
@@ -75,7 +76,11 @@ where
                     cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or(true)
                 })
             };
-            if semantics_dirty {
+            let mut layers_moved = false;
+            for surface in &mut self.surfaces {
+                layers_moved |= surface.layers_moved_since_look();
+            }
+            if semantics_dirty || layers_moved {
                 self.app.semantics_snapshot_revision =
                     self.app.semantics_snapshot_revision.wrapping_add(1);
             }

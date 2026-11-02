@@ -252,6 +252,13 @@ pub trait RenderScene {
     ) {
     }
 
+    /// A count that grows when an update moves a layer in its parent without a layout pass, as
+    /// an animated graphics layer or `offset_with` does: what read [`Self::node_window_bounds`]
+    /// reads them again when it changes.
+    fn layer_moves(&self) -> u64 {
+        0
+    }
+
     /// Replaces the set with retained visual observation owners, preserving its capacity.
     /// Returns whether the scene provides this information.
     fn collect_retained_visual_observation_nodes(

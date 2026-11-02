@@ -2348,3 +2348,123 @@ fn the_inspector_outlines_a_node_where_its_layers_draw_it() {
         }
     );
 }
+
+// How the shifted button's layer takes the shift its state holds.
+#[cfg(feature = "renderer-wgpu")]
+#[derive(Clone, Copy)]
+enum LayerShift {
+    Lazy,
+    OffsetWith,
+    Value,
+    // A lazy layer whose node also draws what the shift holds: the scene
+    // takes both changes as new content.
+    LazyAndDraws,
+}
+
+#[cfg(feature = "renderer-wgpu")]
+thread_local! {
+    static LAYER_SHIFT: Cell<LayerShift> = const { Cell::new(LayerShift::Lazy) };
+    static SHIFT: RefCell<Option<cranpose_core::MutableState<f32>>> = const { RefCell::new(None) };
+}
+
+// A button 40 by 30 at the window's corner, which its layer moves right by
+// the shift.
+#[cfg(feature = "renderer-wgpu")]
+#[cranpose_ui::composable]
+fn shifted_button() {
+    use cranpose_ui::{Box, BoxSpec, GraphicsLayer, Modifier, Point};
+    let shift = cranpose_core::rememberMutableStateOf(|| 0.0_f32);
+    SHIFT.with(|slot| *slot.borrow_mut() = Some(shift));
+    let button = Modifier::empty().size_points(40.0, 30.0);
+    let button = match LAYER_SHIFT.with(Cell::get) {
+        LayerShift::Lazy => button.graphics_layer(move || GraphicsLayer {
+            translation_x: shift.get(),
+            ..GraphicsLayer::default()
+        }),
+        LayerShift::OffsetWith => button.offset_with(move || Point::new(shift.get(), 0.0)),
+        LayerShift::Value => button.graphics_layer_value(GraphicsLayer {
+            translation_x: shift.get(),
+            ..GraphicsLayer::default()
+        }),
+        LayerShift::LazyAndDraws => button
+            .graphics_layer(move || GraphicsLayer {
+                translation_x: shift.get(),
+                ..GraphicsLayer::default()
+            })
+            .draw_behind(move |scope| {
+                let shade = shift.get() / 100.0;
+                scope.draw_rect(cranpose_ui::Brush::solid(cranpose_ui::Color(
+                    shade, 0.2, 0.4, 1.0,
+                )));
+            }),
+    };
+    Box(
+        button.clickable(|_| {}).content_description("Shifted"),
+        BoxSpec::new(),
+        || {},
+    );
+}
+
+#[cfg(feature = "renderer-wgpu")]
+fn shifted_bounds(elements: &[AccessibilityElement]) -> AccessibilityRect {
+    elements
+        .iter()
+        .find(|element| element.label == "Shifted")
+        .expect("the button is published")
+        .bounds
+}
+
+// Moves the shifted button's layer after a first snapshot, and checks the
+// reader's tree is published again with the button where it is drawn.
+#[cfg(feature = "renderer-wgpu")]
+fn assert_reader_follows(shift: LayerShift) {
+    LAYER_SHIFT.with(|kind| kind.set(shift));
+    let mut shell = AppShell::new(
+        cranpose_render_wgpu::WgpuRenderer::new(&[]),
+        cranpose_core::location_key(file!(), line!(), column!()),
+        shifted_button,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let (mut seen, mut published) = (None, AccessibilitySnapshot::default());
+    let first =
+        snapshot_if_changed(&mut shell, &mut seen, &mut published).expect("a first snapshot");
+    assert_eq!(
+        shifted_bounds(&first),
+        AccessibilityRect::new(0.0, 0.0, 40.0, 30.0)
+    );
+    SHIFT.with(|slot| slot.borrow().expect("the button is composed").set(60.0));
+    shell.update();
+    let moved = snapshot_if_changed(&mut shell, &mut seen, &mut published)
+        .expect("the layer's move publishes the tree again");
+    assert_eq!(
+        shifted_bounds(&moved),
+        AccessibilityRect::new(60.0, 0.0, 40.0, 30.0)
+    );
+}
+
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn a_reader_follows_a_lazy_layer_that_moves() {
+    assert_reader_follows(LayerShift::Lazy);
+}
+
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn a_reader_follows_an_offset_that_moves() {
+    assert_reader_follows(LayerShift::OffsetWith);
+}
+
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn a_reader_follows_a_layer_value_that_moves() {
+    assert_reader_follows(LayerShift::Value);
+}
+
+#[cfg(feature = "renderer-wgpu")]
+#[test]
+fn a_reader_follows_a_layer_that_moves_while_its_node_draws_anew() {
+    assert_reader_follows(LayerShift::LazyAndDraws);
+}
