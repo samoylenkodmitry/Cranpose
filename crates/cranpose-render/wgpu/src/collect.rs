@@ -222,8 +222,8 @@ struct WalkSettings {
     /// The window's shadow light, in the coordinates this walk collects in.
     light: ShadowLight,
     /// Whether an isolated ancestor decides its snapping by whether this
-    /// walk finds text or an image. Only then does a subtree that draws
-    /// nothing have to be searched for them.
+    /// walk finds text or an image. Only then does the walk look for them,
+    /// in what it draws and in subtrees that draw nothing.
     wants_pixel_sensitive: bool,
     /// The graph's latest scene update, which tells an isolated layer whose
     /// content changes every frame from one a raster cache can keep.
@@ -707,7 +707,7 @@ fn collect_into(
             RenderNode::Inline(inline) => collect_inline(inline, child_context, out),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
                 push_content(out, child, &content);
-                node_is_pixel_sensitive(child)
+                context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(child)
             }
         };
     });
@@ -811,7 +811,7 @@ fn collect_child(
 // Collects `inline`, a node drawn in its parent's layer, under `context`,
 // the walk of its parent's children: its content takes the place, clip and
 // snap anchor a child layer that only moves would give it. Returns whether
-// it draws pixel-sensitive content.
+// it draws pixel-sensitive content, when the walk wants to know.
 fn collect_inline(inline: &InlineNode, context: WalkContext<'_>, out: &mut LayerScene) -> bool {
     let offset = Point::new(
         context.offset.x + inline.origin.x,
@@ -847,7 +847,7 @@ fn collect_inline(inline: &InlineNode, context: WalkContext<'_>, out: &mut Layer
     let mut pixel_sensitive = false;
     for_each_in_draw_order(&inline.content, |node| {
         push_content(out, node, &content);
-        pixel_sensitive |= node_is_pixel_sensitive(node);
+        pixel_sensitive |= context.settings.wants_pixel_sensitive && node_is_pixel_sensitive(node);
     });
     pixel_sensitive
 }
