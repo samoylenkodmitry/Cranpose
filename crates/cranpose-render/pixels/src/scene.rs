@@ -328,7 +328,6 @@ impl Scene {
         if let Some(rewrite) = self.rewrite.as_mut() {
             rewrite.release_spill();
         }
-        self.push_targets = Vec::new();
         if let Some(raster) = self.raster.as_mut() {
             crate::growth_trim::trim(raster, &mut self.reach);
         }

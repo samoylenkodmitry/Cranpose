@@ -12,7 +12,7 @@ use cranpose_render_common::{
     scene_builder::{
         LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, kept_child_placement,
         lower_moved_subtree, lower_node_alone, lower_space_fragment, placed_child_position,
-        recycle_lowered, release_lowered, visit_kept_node,
+        recycle_lowered, release_lowered, visit_lowered_children,
     },
 };
 use cranpose_ui_graphics::Point;
@@ -320,48 +320,44 @@ impl<'a> LayoutWalk<'a> {
         }
     }
 
-    // Lowers `node` at `place` alone under `lower_context` into `layer`, for
+    // Lowers `node` at `place` alone under `lower_context`, for
     // `push_lowered` to push its subtree after the walk lowered every node it
     // pushes again: lowering and recording, and pushing items and comparing
     // them, then each run for all the nodes, whose code a frame would
-    // otherwise evict from the cache for every node. Returns whether the
-    // node has children. Leaves `layer` empty for a node gone, and for one
-    // whose layer holds a 3D space, which `push` lowers.
+    // otherwise evict from the cache for every node. Returns its layer and,
+    // when it has children, what they lower with. `None` for a node gone,
+    // and for one whose layer holds a 3D space, which `push` lowers.
     pub(crate) fn lower(
         &self,
         (node, place): (NodeId, NodePlace),
         lower_context: &LowerContext,
-        layer: &mut Option<RenderNode>,
-    ) -> bool {
+    ) -> Option<(RenderNode, Option<LowerContext>)> {
         lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             if holds_space(&lowered.node) || Subtree::of_child(&lowered.node).is_none() {
                 recycle_lowered(lowered.node);
-                return false;
+                return None;
             }
-            *layer = Some(lowered.node);
-            !lowered.children.is_empty()
+            let inner = (!lowered.children.is_empty()).then(|| *lowered.child_context);
+            Some((lowered.node, inner))
         })
-        .unwrap_or(false)
+        .flatten()
     }
 
-    // Pushes under `context` the subtree of `node` at `place`, lowered under
-    // `lower_context` into `layer` by `lower`, which said whether it has
-    // `children`: over its old subtree, whose children's old records are
+    // Pushes under `context` the subtree of `node`, whose `layer` `lower`
+    // gave with what its children lower with, `inner`, for a node with
+    // children: over its old subtree, whose children's old records are
     // `old`, while a rewrite pushes the subtree it is in again.
     pub(crate) fn push_lowered(
         &self,
-        ((node, place), lower_context): ((NodeId, NodePlace), &LowerContext),
-        (layer, children): (&mut Option<RenderNode>, bool),
+        node: NodeId,
+        (layer, inner): (RenderNode, Option<&LowerContext>),
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         old: Option<OldChildren>,
     ) {
-        if let Some(subtree) = layer.as_ref().and_then(Subtree::of_child) {
-            if children {
-                visit_kept_node(
-                    self.applier,
-                    (node, place),
-                    lower_context,
-                    |children, inner| {
+        if let Some(subtree) = Subtree::of_child(&layer) {
+            match inner {
+                Some(inner) => {
+                    visit_lowered_children(self.applier, node, |children| {
                         let mut slot = ChildSlot {
                             walk: self,
                             owner: node,
@@ -376,15 +372,12 @@ impl<'a> LayoutWalk<'a> {
                             &mut None,
                             Some(&mut slot),
                         );
-                    },
-                );
-            } else {
-                populate_draws_from_graph(subtree, scene, context, &mut None, None);
+                    });
+                }
+                None => populate_draws_from_graph(subtree, scene, context, &mut None, None),
             }
         }
-        if let Some(layer) = layer.take() {
-            recycle_lowered(layer);
-        }
+        recycle_lowered(layer);
     }
 
     // Pushes under `context` the subtree of `child`, which did not change,

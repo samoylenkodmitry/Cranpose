@@ -44,16 +44,22 @@ struct Repush<'a> {
 }
 
 // A node whose subtree an update pushes again: where it lies in the layout
-// tree and in the scene, what it lowers with, and its layer once the update
-// lowered it, and whether it has children.
+// tree and in the scene, and its layer.
 pub(crate) struct PushTarget {
     node: NodeId,
     place: NodePlace,
-    context: LowerContext,
     record: usize,
     parent: Option<usize>,
-    layer: Option<RenderNode>,
-    children: bool,
+    layer: TargetLayer,
+}
+
+// The layer of a push target.
+enum TargetLayer {
+    // Not lowered yet, or lowered to nothing `push_lowered` pushes, which
+    // `push` lowers again: what it lowers with.
+    Unlowered(LowerContext),
+    // Lowered, with what its children lower with when it has children.
+    Lowered(RenderNode, Option<LowerContext>),
 }
 
 // Why a walk to a layer stopped.
@@ -212,11 +218,9 @@ impl Repush<'_> {
         self.targets.push(PushTarget {
             node,
             place,
-            context: *context,
             record,
             parent,
-            layer: None,
-            children: false,
+            layer: TargetLayer::Unlowered(*context),
         });
     }
 
@@ -227,17 +231,16 @@ impl Repush<'_> {
     fn push_targets(&mut self, walk: &LayoutWalk<'_>) -> Result<(), Stop> {
         let mut targets = std::mem::take(self.targets);
         for target in &mut targets {
-            target.children = walk.lower(
-                (target.node, target.place),
-                &target.context,
-                &mut target.layer,
-            );
+            if let TargetLayer::Unlowered(context) = &target.layer
+                && let Some((layer, inner)) = walk.lower((target.node, target.place), context)
+            {
+                target.layer = TargetLayer::Lowered(layer, inner);
+            }
         }
         let pushed = targets
-            .iter_mut()
+            .drain(..)
             .rev()
             .try_for_each(|target| self.push_node_again(walk, target));
-        targets.clear();
         *self.targets = targets;
         pushed
     }
@@ -245,30 +248,26 @@ impl Repush<'_> {
     // Pushes the subtree of `target` over its old one, keeping the subtrees
     // of its children that did not change, from what its parent passed down
     // in the scene, and adds the areas it changes.
-    fn push_node_again(
-        &mut self,
-        walk: &LayoutWalk<'_>,
-        target: &mut PushTarget,
-    ) -> Result<(), Stop> {
-        let (node, place) = (target.node, target.place);
-        let old = OldChildren::of(&self.scene.subtrees, target.record, node);
-        self.rewrite_subtree((target.record, target.parent), |scene, context| {
-            if target.layer.is_some() {
-                walk.push_lowered(
-                    ((node, place), &target.context),
-                    (&mut target.layer, target.children),
-                    (scene, context),
-                    Some(old),
-                );
-            } else {
-                walk.push(
-                    (node, place),
-                    &target.context,
-                    (scene, context),
-                    &mut None,
-                    Some(old),
-                );
+    fn push_node_again(&mut self, walk: &LayoutWalk<'_>, target: PushTarget) -> Result<(), Stop> {
+        let PushTarget {
+            node,
+            place,
+            record,
+            parent,
+            layer,
+        } = target;
+        let old = OldChildren::of(&self.scene.subtrees, record, node);
+        self.rewrite_subtree((record, parent), |scene, context| match layer {
+            TargetLayer::Lowered(layer, inner) => {
+                walk.push_lowered(node, (layer, inner.as_ref()), (scene, context), Some(old));
             }
+            TargetLayer::Unlowered(lower_context) => walk.push(
+                (node, place),
+                &lower_context,
+                (scene, context),
+                &mut None,
+                Some(old),
+            ),
         })
     }
 

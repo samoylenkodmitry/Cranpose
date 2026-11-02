@@ -522,7 +522,7 @@ pub(super) fn read_node_data<R>(
 /// `None` while no `z_index` modifier exists and `parent` placed no child
 /// with a z index: then nothing moves.
 #[inline]
-fn z_ordered_children(
+pub(super) fn z_ordered_children(
     applier: &MemoryApplier,
     parent: NodeId,
     children: &[NodeId],

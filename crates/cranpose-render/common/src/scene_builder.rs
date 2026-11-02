@@ -39,6 +39,7 @@ mod lowered_node;
 pub use lowered_node::{
     ChildPlacement, LoweredNode, NodePlace, kept_child_placement, lower_node_alone,
     release_lowered, release_walk_storage, root_layer_bounds, visit_kept_node,
+    visit_lowered_children,
 };
 
 pub use crate::layer_recycling::recycle_lowered;

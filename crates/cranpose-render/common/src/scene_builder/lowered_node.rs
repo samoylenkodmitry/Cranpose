@@ -3,13 +3,17 @@
 // node's draws into its own items, then visits each child, which it lowers
 // the same way or keeps as it drew it before.
 
+use std::any::Any;
+
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_ui::{Point, Rect};
+use cranpose_ui::{LayoutNode, Point, Rect, SubcomposeLayoutNode};
 
 use super::{
-    Level, LowerContext, children_context, inline_leaf::lower_placed_child, layer_and_node_bounds,
-    node_layer::Children, placed_transform, read_placed_node_data, shaped_graphics_layer,
-    write_node_layer,
+    Level, LowerContext, children_context,
+    inline_leaf::lower_placed_child,
+    layer_and_node_bounds,
+    node_layer::{Children, z_ordered_children},
+    placed_transform, read_placed_node_data, shaped_graphics_layer, write_node_layer,
 };
 use crate::graph::{ProjectiveTransform, RenderNode};
 
@@ -95,6 +99,26 @@ pub fn visit_kept_node<R>(
         let child_context = children_context(&data.modifier_slices, &data.layout_state, context);
         visit(data.children, &child_context)
     })
+}
+
+/// Hands `visit` the children of the node `node_id`, in the order they
+/// draw, for a node [`lower_node_alone`] lowered in the same update, without
+/// reading the rest of its state again. `None` when the node is gone.
+pub fn visit_lowered_children<R>(
+    applier: &MemoryApplier,
+    node_id: NodeId,
+    visit: impl FnOnce(&[NodeId]) -> R,
+) -> Option<R> {
+    let node: &dyn Any = applier.get_ref(node_id).ok()?;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        let z_order = z_ordered_children(applier, node_id, node.children());
+        return Some(visit(z_order.as_deref().unwrap_or_else(|| node.children())));
+    }
+    let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
+    Some(node.with_active_children(|children| {
+        let z_order = z_ordered_children(applier, node_id, children);
+        visit(z_order.as_deref().unwrap_or(children))
+    }))
 }
 
 /// Where a placed child lies in its parent's layer: the identity of the
