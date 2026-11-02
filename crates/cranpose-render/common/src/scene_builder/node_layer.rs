@@ -346,7 +346,7 @@ fn lower_snapshot_child(snapshot: BuildNodeSnapshot, context: LowerContext) -> R
         context.inherited_motion_context_animated || slices.motion_context_animated();
     let draws = DrawTarget {
         size,
-        motion_context_animated: motion_context_animated,
+        motion_context_animated,
         layer: None,
         store: context.store,
     };

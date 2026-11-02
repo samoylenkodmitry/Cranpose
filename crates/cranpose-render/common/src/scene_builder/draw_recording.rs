@@ -153,7 +153,7 @@ fn acquire_redrawn(id: DrawCommandId) -> Rc<CommandRecording> {
             .and_then(|(buffers, _)| buffers.take());
         match kept {
             Some(RedrawnBuffers::Recording(recording)) => recording,
-            Some(RedrawnBuffers::Room(room)) => Rc::new(CommandRecording::with_room(room)),
+            Some(RedrawnBuffers::Room(room)) => Rc::new(room.empty_recording()),
             None => state
                 .spare_recordings
                 .borrow_mut()
@@ -188,7 +188,7 @@ pub(crate) fn give_back_redrawn(id: DrawCommandId, recording: Rc<CommandRecordin
         let (kept, spare) = if again && fits() {
             (RedrawnBuffers::Recording(recording), None)
         } else {
-            (RedrawnBuffers::Room(recording.room()), Some(recording))
+            (RedrawnBuffers::Room(RecordingRoom::of(&recording)), Some(recording))
         };
         *entry = (Some(kept), update);
         drop(recordings);

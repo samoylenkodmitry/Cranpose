@@ -118,7 +118,7 @@ impl Scene {
 
     // Builds the scene at `scale` from the next update on.
     pub(crate) fn set_scale(&mut self, scale: f32) {
-        if scale != self.scale {
+        if scale.to_bits() != self.scale.to_bits() {
             self.scale = scale;
             self.raster = None;
         }

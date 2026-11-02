@@ -28,8 +28,7 @@ pub(crate) struct RenderThreadState {
     // the recordings of those that drew in two updates in a row, the room of
     // the others', and the update each command drew in last; and the update
     // that draws now.
-    pub(crate) redrawn_recordings:
-        RefCell<HashMap<RecorderKey, (Option<RedrawnBuffers>, u64), FxBuildHasher>>,
+    pub(crate) redrawn_recordings: RefCell<NodeMap<RecorderKey, (Option<RedrawnBuffers>, u64)>>,
     pub(crate) redrawn_update: Cell<u64>,
     // The recordings the commands of the update that runs gave back, for its
     // next commands.
@@ -51,7 +50,7 @@ impl RenderThreadState {
             dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(HashMap::default()),
             recording_generation: Cell::new(0),
-            redrawn_recordings: RefCell::new(HashMap::default()),
+            redrawn_recordings: RefCell::new(NodeMap::default()),
             redrawn_update: Cell::new(0),
             spare_recordings: RefCell::new(Vec::new()),
             space_changed: Cell::new(false),

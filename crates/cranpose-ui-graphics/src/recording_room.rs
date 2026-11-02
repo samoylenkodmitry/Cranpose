@@ -20,26 +20,27 @@ pub struct RecordingRoom {
     groups: usize,
 }
 
-impl CommandRecording {
-    /// The room its buffers have.
-    pub fn room(&self) -> RecordingRoom {
-        let tables = &self.shapes.tables;
-        RecordingRoom {
+impl RecordingRoom {
+    /// The room the buffers of `recording` have.
+    pub fn of(recording: &CommandRecording) -> Self {
+        let tables = &recording.shapes.tables;
+        Self {
             shapes: tables.shapes.capacities(),
             brushes: tables.brushes.capacity(),
             stops: tables.stops.capacity(),
             explicit_stops: tables.explicit_stops.capacity(),
             segments: tables.segments.capacity(),
-            gradient_lists: self.shapes.gradient_lists.capacity(),
-            others: self.content.others.capacity(),
-            groups: self.content.groups.capacity(),
+            gradient_lists: recording.shapes.gradient_lists.capacity(),
+            others: recording.content.others.capacity(),
+            groups: recording.content.groups.capacity(),
         }
     }
 
-    /// An empty recording whose buffers have `room`. One with no room for
-    /// shapes shares the empty shape columns, as a new recording does.
-    pub fn with_room(room: RecordingRoom) -> Self {
-        let mut recording = Self::default();
+    /// An empty recording whose buffers have this room. One with no room
+    /// for shapes shares the empty shape columns, as a new recording does.
+    pub fn empty_recording(self) -> CommandRecording {
+        let room = self;
+        let mut recording = CommandRecording::default();
         recording.content.others.reserve_exact(room.others);
         recording.content.groups.reserve_exact(room.groups);
         if room.shapes == [0; 3] {
