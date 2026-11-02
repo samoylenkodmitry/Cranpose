@@ -1,6 +1,6 @@
 use std::cell::{OnceCell, RefCell};
 
-use cranpose_core::{CompositionLocal, collections::map::HashSet};
+use cranpose_core::CompositionLocal;
 
 use crate::{
     android_host_window::AndroidHostWindowRegistry,
@@ -47,7 +47,8 @@ pub(crate) struct CranposeThreadState {
             reason = "only the accessibility bridges warn about unlabeled controls"
         )
     )]
-    pub(crate) unlabeled_controls_warned: RefCell<HashSet<cranpose_core::NodeId>>,
+    pub(crate) unlabeled_controls_warned:
+        RefCell<cranpose_core::collections::map::HashSet<cranpose_core::NodeId>>,
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub(crate) android_font_scale: std::cell::Cell<cranpose_ui::FontScaleCurve>,
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
@@ -104,7 +105,9 @@ impl CranposeThreadState {
             #[cfg(feature = "renderer-wgpu")]
             gpu_context_local: OnceCell::new(),
             #[cfg(debug_assertions)]
-            unlabeled_controls_warned: RefCell::new(HashSet::default()),
+            unlabeled_controls_warned: RefCell::new(
+                cranpose_core::collections::map::HashSet::default(),
+            ),
             #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
             android_font_scale: std::cell::Cell::new(cranpose_ui::FontScaleCurve::linear(1.0)),
             #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
