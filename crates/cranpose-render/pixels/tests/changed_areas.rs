@@ -455,13 +455,6 @@ fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
         fresh
             .primary()
             .with_renderer(|renderer| renderer.draw(&mut full, WIDTH, HEIGHT));
-        // The second shell lowers the same node ids on the same thread and
-        // takes over the draw observations of the first shell's layer
-        // block, so the first change after it builds reaches only the
-        // second shell; main does the same.
-        if frame == 1 {
-            continue;
-        }
         assert_eq!(
             first_difference(&kept, &full),
             None,
