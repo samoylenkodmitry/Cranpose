@@ -1,7 +1,7 @@
 // When the shell drops the draw observations of nodes no surface's scene
 // holds any more.
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_render_common::{RenderScene, Renderer};
 
 use crate::surface::RootSurface;
@@ -10,12 +10,12 @@ use crate::surface::RootSurface;
 // at 60 Hz.
 pub(crate) const OBSERVATION_PRUNE_INTERVAL: u32 = 60;
 
-// The rebuilt frames since the last prune, and the nodes the scenes held at
-// it, sorted, kept for their storage.
+// The rebuilt frames since the last prune, and how many nodes the scenes
+// held at it, which the next prune takes room for at once.
 #[derive(Default)]
 pub(crate) struct ObservationPrune {
     pub(crate) frames: u32,
-    nodes: Vec<NodeId>,
+    held: usize,
 }
 
 impl ObservationPrune {
@@ -30,18 +30,20 @@ impl ObservationPrune {
             return;
         }
         self.frames = 0;
-        let nodes = &mut self.nodes;
-        nodes.clear();
+        let mut nodes: HashSet<NodeId> =
+            HashSet::with_capacity_and_hasher(self.held, Default::default());
         let mut any_scene = false;
         for surface in surfaces {
             any_scene |= surface
                 .renderer
                 .scene()
-                .visit_retained_visual_observation_nodes(&mut |node| nodes.push(node));
+                .visit_retained_visual_observation_nodes(&mut |node| {
+                    nodes.insert(node);
+                });
         }
+        self.held = nodes.len();
         if any_scene {
-            nodes.sort_unstable();
-            cranpose_ui::prune_draw_observations_to_nodes(nodes);
+            cranpose_ui::prune_draw_observations_to_nodes(&nodes);
         }
     }
 }
