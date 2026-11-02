@@ -73,8 +73,9 @@ pub(crate) struct InPlaceUpdate<'a> {
 
 impl InPlaceUpdate<'_> {
     // Brings the scene, the one `walk`'s window gave last at `scale`, up to
-    // the window's layout tree from its root `root`, and puts into `areas`
-    // the parts of `window` it changed. `None` as for [`Self::run`].
+    // the window's layout tree from its root `root`, and adds to `areas`
+    // the parts of `window` it changed, merged with those `areas` held.
+    // `None` when the scene must be built again.
     pub(crate) fn run_layout(
         self,
         (walk, root): (&LayoutWalk<'_>, NodeId),
@@ -88,7 +89,6 @@ impl InPlaceUpdate<'_> {
             reach,
             rewrite,
         } = self;
-        areas.clear();
         let bounds = root_layer_bounds(walk.applier(), root)?;
         let light =
             ShadowLight::for_window(bounds.width * scale, bounds.height * scale, scale, 1.0);

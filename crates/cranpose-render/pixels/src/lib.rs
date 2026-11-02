@@ -129,10 +129,7 @@ impl PixelsRenderer {
             width,
             height,
         });
-        let mut areas = Vec::new();
-        self.scene.take_changes(frame, &mut areas);
-        changed.clear();
-        changed.extend(areas.into_iter().map(pixel_rect));
+        self.scene.take_changes(frame, changed);
         // With little memory left, the spill an update took for a subtree
         // that pushed other items than before goes, and so does the room the
         // scene's lists grew past their items.

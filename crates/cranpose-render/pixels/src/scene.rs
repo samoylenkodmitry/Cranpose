@@ -19,11 +19,12 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{Rect, space::Ray};
 
 use crate::{
-    damage,
+    PixelRect, damage,
     draw::{ClipBounds, TextRaster},
     layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, names},
     moved_subtrees::MovedSubtrees,
     pipeline::{self, InPlaceUpdate, UpdatedReach},
+    pixel_rect,
     raster_scene::{RasterScene, SubtreeItems},
     rewrite::Rewrite,
 };
@@ -207,7 +208,13 @@ impl Scene {
             return false;
         };
         let walk = LayoutWalk::new(applier, &self.marks, (&self.spaces, &self.moved));
-        let mut areas = Vec::new();
+        let mut unread = Vec::new();
+        // An update that gave up after it changed part of the scene leaves
+        // the areas it changed, which the scene holds already.
+        let areas = match &mut self.changed {
+            Changed::Areas(changed) => changed,
+            Changed::Whole => &mut unread,
+        };
         let updated = InPlaceUpdate {
             scene: raster,
             reach: &mut self.reach,
@@ -218,7 +225,7 @@ impl Scene {
             &self.diagnostics,
             (self.scale, text),
             self.frame,
-            &mut areas,
+            areas,
         );
         if updated == Some(UpdatedReach::Lost) {
             raster.reach_into(self.frame, &mut self.reach);
@@ -226,9 +233,6 @@ impl Scene {
         if std::mem::take(&mut raster.hits_changed) {
             self.hits.get_mut().mark_stale();
         }
-        // An update that gave up after it changed part of the scene leaves
-        // the areas it changed, which the scene holds already.
-        self.note_changes(&mut areas);
         updated.is_some()
     }
 
@@ -300,7 +304,7 @@ impl Scene {
     // Puts into `areas` the parts of `frame` whose pixels changed since the
     // host took its picture last: the whole frame the first time and after
     // a change of size, a build with nothing to compare, or a scale.
-    pub(crate) fn take_changes(&mut self, frame: ClipBounds, areas: &mut Vec<ClipBounds>) {
+    pub(crate) fn take_changes(&mut self, frame: ClipBounds, areas: &mut Vec<PixelRect>) {
         areas.clear();
         let whole = frame != self.frame || matches!(self.changed, Changed::Whole);
         if frame != self.frame {
@@ -311,11 +315,15 @@ impl Scene {
         }
         match std::mem::replace(&mut self.changed, Changed::Areas(Vec::new())) {
             Changed::Areas(mut changed) if !whole => {
-                changed.retain_mut(|area| area.clip_to(frame));
-                areas.append(&mut changed);
+                let clipped = changed
+                    .drain(..)
+                    .filter_map(|mut area| area.clip_to(frame).then_some(area));
+                areas.extend(clipped.map(pixel_rect));
                 self.changed = Changed::Areas(changed);
             }
-            _ if self.raster.is_some() && frame.max_x > 0 && frame.max_y > 0 => areas.push(frame),
+            _ if self.raster.is_some() && frame.max_x > 0 && frame.max_y > 0 => {
+                areas.push(pixel_rect(frame));
+            }
             _ => {}
         }
     }
