@@ -1,9 +1,7 @@
 //! Which draw read which state: a draw scope's reads, observed while it
 //! records, schedule the redraw of its node when the state changes.
 
-use cranpose_core::{
-    NodeId, RuntimeHandle, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
-};
+use cranpose_core::{NodeId, RuntimeHandle, SnapshotStateObserver, current_runtime_handle};
 
 use super::{
     request_render_invalidation, require_current_app_context, schedule_draw_repass,
@@ -115,13 +113,14 @@ pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
     });
 }
 
-/// Removes draw observations whose owners are absent from the retained scene.
-pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
+/// Removes draw observations whose owners are absent from the retained scene,
+/// whose nodes `retained` holds sorted.
+pub fn prune_draw_observations_to_nodes(retained: &[NodeId]) {
     with_draw_observer(|observer| {
         observer.clear_if(|scope| {
             scope
                 .downcast_ref::<DrawObservationScope>()
-                .is_some_and(|scope| !retained.contains(&scope.node_id))
+                .is_some_and(|scope| retained.binary_search(&scope.node_id).is_err())
         });
     });
 }

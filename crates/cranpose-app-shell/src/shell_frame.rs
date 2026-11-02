@@ -574,42 +574,12 @@ where
             result.content_redrawn |= frame.rebuilt;
         }
         if result.content_redrawn {
-            self.prune_stale_draw_observations();
+            self.app.observation_prune.after_rebuild(&self.surfaces);
         }
         result.content_moved = std::mem::take(&mut self.app.content_moved);
         result
     }
-
-    /// Drops the draw observations of nodes no surface's render graph holds
-    /// any more, once every [`OBSERVATION_PRUNE_INTERVAL`] rebuilt frames:
-    /// finding them walks every node of every graph, and an observation
-    /// left behind in between costs no more than a redraw request for a
-    /// node nothing draws.
-    fn prune_stale_draw_observations(&mut self) {
-        self.app.rebuilt_frames_since_observation_prune += 1;
-        if self.app.rebuilt_frames_since_observation_prune < OBSERVATION_PRUNE_INTERVAL {
-            return;
-        }
-        self.app.rebuilt_frames_since_observation_prune = 0;
-        let mut retained_visual_nodes = HashSet::default();
-        let mut any_graph = false;
-        for surface in &self.surfaces {
-            any_graph |= surface
-                .renderer
-                .scene()
-                .visit_retained_visual_observation_nodes(&mut |node| {
-                    retained_visual_nodes.insert(node);
-                });
-        }
-        if any_graph {
-            cranpose_ui::prune_draw_observations_to_nodes(&retained_visual_nodes);
-        }
-    }
 }
-
-/// Rebuilt frames between prunes of stale draw observations: once a second
-/// at 60 Hz.
-pub(crate) const OBSERVATION_PRUNE_INTERVAL: u32 = 60;
 
 fn render_surface<R>(
     app: &mut ShellApp,

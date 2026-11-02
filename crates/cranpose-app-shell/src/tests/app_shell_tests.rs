@@ -4119,19 +4119,19 @@ fn stale_draw_observations_are_pruned_once_per_interval() {
         .copied()
         .expect("width state should be captured");
 
-    shell.app.rebuilt_frames_since_observation_prune = 0;
+    shell.app.observation_prune.frames = 0;
     width_state.set(60.0);
     shell.update();
     assert_eq!(
-        shell.app.rebuilt_frames_since_observation_prune, 1,
+        shell.app.observation_prune.frames, 1,
         "a redrawn frame before the interval does not walk the graph"
     );
 
-    shell.app.rebuilt_frames_since_observation_prune = shell_frame::OBSERVATION_PRUNE_INTERVAL - 1;
+    shell.app.observation_prune.frames = observation_prune::OBSERVATION_PRUNE_INTERVAL - 1;
     width_state.set(120.0);
     shell.update();
     assert_eq!(
-        shell.app.rebuilt_frames_since_observation_prune, 0,
+        shell.app.observation_prune.frames, 0,
         "the frame that reaches the interval walks the graph's nodes again"
     );
 }
