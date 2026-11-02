@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn a_redraw_asked_before_the_id_reaches_the_surface_once_and_waits_while_detached() {
-    let context = cranpose_ui::AppContext::new();
+    let context = AppContext::new();
     context.enter(|| {
         let mut applier = MemoryApplier::new();
         let parent = LayoutNode::new_virtual();

@@ -1,5 +1,6 @@
 // A scene a shell updates in place, step after step, draws as a shell made
-// at that step draws, for a parent whose layer block alone reads the step.
+// at that step draws, for a parent whose layer block alone reads the step,
+// also while another shell lives on the same thread.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -109,6 +110,28 @@ fn each_step_a_layer_block_reads_paints_as_a_shell_made_at_that_step() {
         assert!(
             kept == made,
             "step {step}: the picture's changed areas leave a frame unlike one made at that step"
+        );
+    }
+}
+
+// Two windows on one thread: a change the first shell's layer block reads
+// reaches it while a second shell lives.
+#[test]
+fn a_layer_block_change_reaches_its_shell_while_another_shell_lives() {
+    let (mut first, captured) = shell(0);
+    first.update();
+    let (mut second, _) = shell(0);
+    second.update();
+    for step in 1..STEPS {
+        (*captured.borrow())
+            .expect("the composition remembered the step")
+            .set(step);
+        first.update();
+        let (mut made, _) = shell(step);
+        made.update();
+        assert!(
+            draw(&mut first) == draw(&mut made),
+            "step {step}: the first shell missed a change while a second shell lives"
         );
     }
 }

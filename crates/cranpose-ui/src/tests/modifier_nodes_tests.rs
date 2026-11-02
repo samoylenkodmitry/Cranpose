@@ -614,7 +614,7 @@ fn pointer_input_coroutine_receives_events() {
 #[test]
 fn pointer_input_waker_reenters_owning_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let app_context = crate::AppContext::new_with_density(3.0);
+    let app_context = crate::AppContext::new_with_density(3.0, None);
     let recorded = Rc::new(RefCell::new(Vec::new()));
 
     let (handler, _chain) = app_context.enter(|| {

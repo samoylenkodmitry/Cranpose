@@ -123,8 +123,8 @@ fn the_font_scale_is_per_app_context() {
 
 #[test]
 fn app_contexts_keep_density_and_invalidations_isolated() {
-    let first = AppContext::new_with_density(1.0);
-    let second = AppContext::new_with_density(1.0);
+    let first = AppContext::new_with_density(1.0, None);
+    let second = AppContext::new_with_density(1.0, None);
 
     first.enter(|| {
         set_density(2.0);
@@ -160,8 +160,8 @@ fn app_contexts_keep_density_and_invalidations_isolated() {
 
 #[test]
 fn app_contexts_keep_fling_velocity_diagnostics_isolated() {
-    let first = AppContext::new_with_density(1.0);
-    let second = AppContext::new_with_density(1.0);
+    let first = AppContext::new_with_density(1.0, None);
+    let second = AppContext::new_with_density(1.0, None);
 
     first.enter(|| {
         record_last_fling_velocity(1200.0);
@@ -187,7 +187,7 @@ fn app_contexts_keep_fling_velocity_diagnostics_isolated() {
 
 #[test]
 fn app_context_new_uses_independent_density() {
-    let outer = AppContext::new_with_density(2.0);
+    let outer = AppContext::new_with_density(2.0, None);
     let context = AppContext::new();
     context.enter(|| {
         assert_eq!(current_density(), 1.0);
@@ -207,8 +207,8 @@ fn runtime_state_access_requires_explicit_app_context_even_in_tests() {
 
 #[test]
 fn app_contexts_keep_layout_frame_arenas_isolated() {
-    let first = AppContext::new_with_density(1.0);
-    let second = AppContext::new_with_density(1.0);
+    let first = AppContext::new_with_density(1.0, None);
+    let second = AppContext::new_with_density(1.0, None);
 
     first.enter(|| {
         assert_eq!(layout_frame_arena_placement_scratch_count(), 0);
@@ -230,7 +230,7 @@ fn app_contexts_keep_layout_frame_arenas_isolated() {
 #[test]
 fn current_app_context_scope_does_not_extend_context_lifetime() {
     let weak = {
-        let context = AppContext::new_with_density(1.0);
+        let context = AppContext::new_with_density(1.0, None);
         let weak = Rc::downgrade(&context);
         context.enter(|| {
             assert!(current_app_context().is_some());
@@ -247,7 +247,7 @@ fn dropped_app_context_unregisters_from_thread_lookup_registry() {
     let start_count = app_context_registry_entry_count();
 
     let id = {
-        let context = AppContext::new_with_density(1.0);
+        let context = AppContext::new_with_density(1.0, None);
         let id = context.id;
         assert!(app_context_by_id(id).is_some());
         id

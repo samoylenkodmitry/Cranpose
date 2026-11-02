@@ -48,8 +48,8 @@ fn tick_toggles_visibility() {
 
 #[test]
 fn cursor_blink_is_scoped_by_app_context() {
-    let first = crate::render_state::AppContext::new_with_density(1.0);
-    let second = crate::render_state::AppContext::new_with_density(1.0);
+    let first = crate::render_state::AppContext::new_with_density(1.0, None);
+    let second = crate::render_state::AppContext::new_with_density(1.0, None);
 
     first.enter(|| {
         stop_cursor_blink();

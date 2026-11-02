@@ -37,10 +37,10 @@ use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEv
 use cranpose_render_common::{HitTestTarget, NodeUpdate, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
-    HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, SemanticsTree, SubcomposeLayoutNode,
-    WindowRootEntry, format_layout_tree, format_render_scene, format_screen_summary,
-    process_focus_invalidations, process_pointer_repasses, process_semantics_invalidations,
-    request_render_invalidation,
+    AppContext, HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, SemanticsTree,
+    SubcomposeLayoutNode, WindowRootEntry, format_layout_tree, format_render_scene,
+    format_screen_summary, process_focus_invalidations, process_pointer_repasses,
+    process_semantics_invalidations, request_render_invalidation,
 };
 pub use cranpose_ui::{Key, KeyEvent, KeyEventType, NativeKeyEvent};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
@@ -195,7 +195,7 @@ impl FrameRatePreference {
 }
 
 pub(crate) struct ShellApp {
-    pub(crate) app_context: Rc<cranpose_ui::AppContext>,
+    pub(crate) app_context: Rc<AppContext>,
     pub(crate) runtime: StdRuntime,
     pub(crate) composition: Composition<MemoryApplier>,
     pub(crate) content: Box<dyn FnMut()>,
@@ -599,8 +599,8 @@ where
         density: f32,
     ) -> Self {
         renderer.set_root_scale(density);
-        let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
+        let app_context = AppContext::new_with_density(density, Some(runtime.runtime_handle()));
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
         composition.set_pausable_budget(Some(PAUSABLE_BUDGET));
         let app_content = Rc::new(RefCell::new(content));
@@ -678,7 +678,7 @@ where
     /// use it to register per-context services (such as the OS clipboard) that
     /// need UIKit/JNI access the shell itself does not have: enter the context
     /// and call the relevant `set_platform_*` installer.
-    pub fn app_context(&self) -> &Rc<cranpose_ui::AppContext> {
+    pub fn app_context(&self) -> &Rc<AppContext> {
         &self.app.app_context
     }
 

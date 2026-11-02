@@ -39,7 +39,8 @@ impl ComposeTestRule {
     /// Create a test rule whose layout runs at `density` device pixels per dp,
     /// as on a screen of that density.
     pub fn with_density(density: f32) -> Self {
-        let app_context = AppContext::new_with_density(density);
+        let composition = Composition::new(MemoryApplier::new());
+        let app_context = AppContext::new_with_density(density, Some(composition.runtime_handle()));
         app_context.enter(|| {
             reset_render_state_for_tests();
             set_density(density);
@@ -48,7 +49,7 @@ impl ComposeTestRule {
         Self {
             _scope: scope,
             app_context,
-            composition: Composition::new(MemoryApplier::new()),
+            composition,
             content: None,
             initial_root_key: location_key(file!(), line!(), column!()),
         }

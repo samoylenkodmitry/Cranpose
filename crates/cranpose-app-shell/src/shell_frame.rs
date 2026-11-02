@@ -868,7 +868,7 @@ pub(crate) fn build_draw_refresh_scope(
 /// keeps its storage for the next frame.
 fn collect_retained_redraw_nodes(
     applier: &mut MemoryApplier,
-    context: &cranpose_ui::AppContext,
+    context: &AppContext,
     root: NodeId,
     dirty_nodes: &mut Vec<NodeId>,
     pending: &mut Vec<NodeId>,
