@@ -29,7 +29,12 @@ workload = []
 # For the benchmarks against LVGL and Slint: in place of the demo's screen,
 # a dashboard that changes most of the display every frame.
 dashboard = []
-# For board A/Bs: the four screens above one after another, six seconds
+# For the benchmarks: in place of the demo's screen, a list that scrolls and
+# a card that fades while bars inside them change every frame, so each frame
+# changes nodes that move or fade and hold a change.
+changing-paths = []
+# For board A/Bs: the demo's four screens and the changing paths (not on the
+# E32R35T, which runs out of memory on them) one after another, six seconds
 # each, with the dashboard last when `dashboard` is on too, and frame
 # statistics every second, so one image measures them all.
 screens-in-turn = []
