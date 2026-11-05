@@ -1,7 +1,6 @@
 use crate::{
     layout_input::LayoutInput,
     paragraph_glyphs::{ParagraphGlyphs, WidthUnit},
-    shaped_glyphs::ShapedGlyph,
     shaped_item::{ShapedItem, scale},
     text_layout::font_units,
     typeface::Typeface,
@@ -79,8 +78,7 @@ impl ClusterWidths {
 
     // The width of the text from `start` to `end`.
     pub(crate) fn width(&self, start: usize, end: usize) -> f32 {
-        self.unit
-            .layout(self.kept_before(end) - self.kept_before(start))
+        self.unit.layout(self.before(end) - self.before(start))
     }
 
     // Whether `width`, a width of this text, fits `limit`.
@@ -88,8 +86,14 @@ impl ClusterWidths {
         self.unit.fits(width, limit)
     }
 
+    // How wide a text may be, in the pixels the widths are kept in, to fit
+    // `width`.
+    pub(crate) fn limit(&self, width: f32) -> f32 {
+        self.unit.limit(width)
+    }
+
     // The width of the text before `offset`, in the pixels it is kept in.
-    fn kept_before(&self, offset: usize) -> f32 {
+    pub(crate) fn before(&self, offset: usize) -> f32 {
         if self.dense
             && let Some(&(_, width)) = self.clusters.get(offset)
         {
@@ -105,7 +109,7 @@ impl ClusterWidths {
     // The last cluster boundary from `start` to `end` up to which the text
     // from `start` fits `width`; `start` when no cluster fits.
     pub(crate) fn last_fitting(&self, start: usize, end: usize, width: f32) -> usize {
-        let limit = self.kept_before(start) + self.unit.limit(width);
+        let limit = self.before(start) + self.unit.limit(width);
         let last = held(end);
         let fits = self
             .clusters
@@ -118,7 +122,7 @@ impl ClusterWidths {
     // The first cluster boundary from `start` to `end` from which the text up
     // to `end` fits `width`; `end` when no cluster fits.
     pub(crate) fn first_fitting(&self, start: usize, end: usize, width: f32) -> usize {
-        let limit = self.kept_before(end) - self.unit.limit(width);
+        let limit = self.before(end) - self.unit.limit(width);
         let first_start = held(start);
         let first = self
             .clusters
@@ -158,27 +162,28 @@ fn each_cluster_glyph(
 ) {
     for item in items {
         let own = &glyphs[item.glyphs.clone()];
-        let pixels = glyphs.pixels(item.glyphs.clone());
         let spacing = unit.pixels(item.spacing);
-        if pixels.is_empty() {
-            let scale = scale(&input.spans[item.span], &faces[item.face]);
-            let mut add_glyph = |glyph: &ShapedGlyph| {
-                add(glyph.cluster, font_units(glyph.advance) * scale, spacing);
-            };
-            if item.level.is_rtl() {
-                own.iter().rev().for_each(&mut add_glyph);
-            } else {
-                own.iter().for_each(&mut add_glyph);
+        let rtl = item.level.is_rtl();
+        match glyphs.pixels(item.glyphs.clone()) {
+            None => {
+                let scale = scale(&input.spans[item.span], &faces[item.face]);
+                in_text_order(own.iter(), rtl, |glyph| {
+                    add(glyph.cluster, font_units(glyph.advance) * scale, spacing);
+                });
             }
-        } else {
-            let mut add_glyph = |(glyph, pixels): (&ShapedGlyph, &f32)| {
+            Some(pixels) => in_text_order(own.iter().zip(pixels), rtl, |(glyph, pixels)| {
                 add(glyph.cluster, *pixels, spacing);
-            };
-            if item.level.is_rtl() {
-                own.iter().zip(pixels).rev().for_each(&mut add_glyph);
-            } else {
-                own.iter().zip(pixels).for_each(&mut add_glyph);
-            }
+            }),
         }
+    }
+}
+
+// Calls `each` with the items of `items` in text order, the last first in a
+// run from right to left.
+fn in_text_order<I: DoubleEndedIterator>(items: I, rtl: bool, each: impl FnMut(I::Item)) {
+    if rtl {
+        items.rev().for_each(each);
+    } else {
+        items.for_each(each);
     }
 }

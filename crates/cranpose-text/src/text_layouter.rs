@@ -188,7 +188,7 @@ impl TextLayouter {
             |width| width.max(0.0) + lengths.first_line_indent,
         );
         let unit = self.glyphs.width_unit();
-        layout.content_width = unit.ceil(widest, lengths.grid);
+        layout.content_width = unit.ceil(widest);
         layout.follows_max = options.soft_wrap || options.overflow.is_ellipsis();
         let width = layout.wrap_width(input.min_width, input.max_width);
         let wrap = if options.soft_wrap {
@@ -384,7 +384,7 @@ impl TextLayouter {
         } else {
             bottom.layout
         };
-        layout.line_width = unit.ceil(layout.widest, grid);
+        layout.line_width = unit.ceil(layout.widest);
         // New lines start at their indents, unstretched.
         let align = input.paragraph.text_align;
         if !layout.keeps_lines_at_indent(align) {

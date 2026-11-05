@@ -13,12 +13,8 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LaidGlyphs {
     glyphs: Glyphs,
-    // Behind one pointer, as most layouts keep none.
-    offsets: Option<Arc<GlyphOffsets>>,
+    offsets: Option<Arc<[GlyphOffset]>>,
 }
-
-#[derive(Debug, PartialEq)]
-struct GlyphOffsets(Box<[GlyphOffset]>);
 
 // A layout's glyphs: in eight bytes each when every one fits them, as the
 // glyphs of all but the widest fonts do, and four more for the advance
@@ -59,8 +55,7 @@ pub(crate) struct RoundedGlyph {
 #[derive(Debug, PartialEq)]
 struct FullGlyphs {
     glyphs: Box<[ShapedGlyph]>,
-    // Empty where advances keep the font's fractions.
-    advances: Box<[f32]>,
+    advances: Option<Box<[f32]>>,
 }
 
 impl PackedGlyph {
@@ -108,8 +103,8 @@ impl PackedGlyph {
 pub(crate) enum RunGlyphs<'a> {
     Packed(&'a [PackedGlyph]),
     Rounded(&'a [RoundedGlyph]),
-    // Glyphs that do not pack, and their rounded advances or none.
-    Full(&'a [ShapedGlyph], &'a [f32]),
+    // Glyphs that do not pack, and their rounded advances.
+    Full(&'a [ShapedGlyph], Option<&'a [f32]>),
 }
 
 impl<'a> RunGlyphs<'a> {
@@ -133,12 +128,14 @@ impl<'a> RunGlyphs<'a> {
     // its advance from the font at `scale` where advances keep the font's
     // fractions.
     pub(crate) fn advance(self, index: usize, glyph: &ShapedGlyph, scale: f32) -> f32 {
-        let rounded = match self {
-            Self::Packed(_) => None,
-            Self::Rounded(glyphs) => glyphs.get(index).map(|glyph| glyph.advance),
-            Self::Full(_, advances) => advances.get(index).copied(),
-        };
-        rounded.unwrap_or_else(|| font_units(glyph.advance) * scale)
+        let own = || font_units(glyph.advance) * scale;
+        match self {
+            Self::Packed(_) => own(),
+            Self::Rounded(glyphs) => glyphs.get(index).map_or_else(own, |glyph| glyph.advance),
+            Self::Full(_, advances) => advances
+                .and_then(|advances| advances.get(index))
+                .map_or_else(own, |advance| *advance),
+        }
     }
 
     pub(crate) fn iter(self) -> impl Iterator<Item = ShapedGlyph> + 'a {
@@ -190,7 +187,7 @@ impl<'a> RunGlyphs<'a> {
             Self::Rounded(glyphs) => Self::Rounded(&glyphs[range]),
             Self::Full(glyphs, advances) => Self::Full(
                 &glyphs[range.clone()],
-                advances.get(range).unwrap_or_default(),
+                advances.map(|advances| &advances[range]),
             ),
         }
     }
@@ -213,12 +210,19 @@ impl LaidGlyphs {
         }
         let pixels = paragraph.pixels(0..paragraph.len());
         let grid = paragraph.grid();
-        match &self.glyphs {
-            Glyphs::Packed(_) => pixels.is_empty(),
-            Glyphs::Rounded(glyphs) => {
+        match (&self.glyphs, pixels) {
+            (Glyphs::Packed(_), None) => true,
+            (Glyphs::Rounded(glyphs), Some(pixels)) => {
                 same_advances(glyphs.iter().map(|glyph| glyph.advance), pixels, grid)
             }
-            Glyphs::Full(full) => same_advances(full.advances.iter().copied(), pixels, grid),
+            (Glyphs::Full(full), pixels) => match (&full.advances, pixels) {
+                (None, None) => true,
+                (Some(advances), Some(pixels)) => {
+                    same_advances(advances.iter().copied(), pixels, grid)
+                }
+                (None, Some(_)) | (Some(_), None) => false,
+            },
+            (Glyphs::Packed(_), Some(_)) | (Glyphs::Rounded(_), None) => false,
         }
     }
 
@@ -233,10 +237,9 @@ impl LaidGlyphs {
             fits &= fit;
             packed
         };
-        let packed = if pixels.is_empty() {
-            Glyphs::Packed(paragraph.iter().map(&mut pack).collect())
-        } else {
-            Glyphs::Rounded(
+        let packed = match pixels {
+            None => Glyphs::Packed(paragraph.iter().map(&mut pack).collect()),
+            Some(pixels) => Glyphs::Rounded(
                 paragraph
                     .iter()
                     .zip(pixels)
@@ -245,14 +248,14 @@ impl LaidGlyphs {
                         advance: pixels / grid,
                     })
                     .collect(),
-            )
+            ),
         };
         let glyphs = if fits {
             packed
         } else {
             Glyphs::Full(Arc::new(FullGlyphs {
                 glyphs: Box::from(&paragraph[..]),
-                advances: pixels.iter().map(|pixels| pixels / grid).collect(),
+                advances: pixels.map(|pixels| pixels.iter().map(|pixels| pixels / grid).collect()),
             }))
         };
         let offsets = paragraph.offsets();
@@ -261,7 +264,7 @@ impl LaidGlyphs {
             offsets: offsets
                 .iter()
                 .any(|offset| *offset != GlyphOffset::default())
-                .then(|| Arc::new(GlyphOffsets(Box::from(offsets)))),
+                .then(|| Arc::from(offsets)),
         }
     }
 
@@ -278,7 +281,7 @@ impl LaidGlyphs {
         match &self.glyphs {
             Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
             Glyphs::Rounded(glyphs) => RunGlyphs::Rounded(glyphs),
-            Glyphs::Full(full) => RunGlyphs::Full(&full.glyphs, &full.advances),
+            Glyphs::Full(full) => RunGlyphs::Full(&full.glyphs, full.advances.as_deref()),
         }
     }
 
@@ -290,7 +293,7 @@ impl LaidGlyphs {
     // Where the first glyphs of `range` draw from the pen, when any glyph
     // draws off it; the glyphs past them draw at the pen.
     pub(crate) fn offsets(&self, range: Range<usize>) -> Option<&[GlyphOffset]> {
-        self.offsets.as_deref().map(|GlyphOffsets(offsets)| {
+        self.offsets.as_deref().map(|offsets| {
             let len = offsets.len();
             &offsets[range.start.min(len)..range.end.min(len)]
         })
