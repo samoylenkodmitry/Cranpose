@@ -406,6 +406,46 @@ fn a_surface_its_parent_holds_narrower_shows_all_of_its_content() {
     );
 }
 
+// A blue wall, turned so its left edge comes toward the eye, and on it,
+// one unit nearer the eye, a translucent red panel inside its outline.
+const DECAL_WALL: Vec3 = Vec3::new(0.0, 0.0, 300.0);
+
+fn turned_panel(side: (f32, f32), at: Vec3) -> Mat4 {
+    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+        .then(&Mat4::scaling(Vec3::new(side.0, side.1, 1.0)))
+        .then(&Mat4::rotation_y(0.5))
+        .then(&Mat4::translation(at))
+}
+
+#[composable]
+fn DecalScene() {
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        Surface(
+            Arc::clone(&plane),
+            turned_panel((400.0, 300.0), DECAL_WALL),
+            (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
+        );
+        Surface(
+            Arc::clone(&plane),
+            turned_panel((320.0, 220.0), DECAL_WALL - Vec3::new(0.0, 0.0, 1.0)),
+            (Material::Unlit, false, Color(1.0, 0.0, 0.0, 0.5)),
+        );
+    });
+}
+
+#[test]
+fn a_translucent_surface_on_another_shows_it_through_from_any_side() {
+    let Some(frame) = capture(DecalScene) else {
+        return;
+    };
+    let middle = pixel_at(&frame, DECAL_WALL - Vec3::new(0.0, 0.0, 1.0));
+    assert!(
+        middle[0] > 100 && middle[2] > 100,
+        "the red panel shows the blue wall through it, not the black behind the wall: {middle:?}"
+    );
+}
+
 #[test]
 fn a_light_of_some_size_softens_the_edge_of_a_shadow() {
     let Some(hard) = capture(MeshScene) else {

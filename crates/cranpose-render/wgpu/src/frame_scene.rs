@@ -140,7 +140,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         };
         pass.meshes.push(PendingMesh {
             z: child.z_index,
-            depth: view_depth(&mesh.scene, &mesh.surface.transform),
+            depth: view_depth(&mesh.scene, &mesh.surface),
             mesh: Arc::clone(mesh),
             surface,
             alpha: child.alpha,

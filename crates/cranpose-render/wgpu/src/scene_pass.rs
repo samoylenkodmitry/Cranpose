@@ -13,7 +13,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Light, Mat4, Material, Mesh, Shaded, Vec3, Volume},
+    space::{Light, Mat4, Material, Mesh, MeshSurface, Shaded, Vec3, Volume},
 };
 
 use crate::{
@@ -1124,13 +1124,12 @@ pub(crate) fn surface_page_bounds(
     Some(bounds)
 }
 
-/// How far from the eye a surface placed by `transform` is, along the
-/// camera's view, for drawing the scene's surfaces far to near.
-pub(crate) fn view_depth(scene: &SceneDraw, transform: &Mat4) -> f32 {
-    transform
-        .then(&scene.camera.view)
-        .transform_point(Vec3::ZERO)
-        .z
+// How far along the camera's view `surface` reaches, at the farthest corner
+// of its mesh's bounds: the scene draws far to near, so writing on a wall,
+// which reaches less far, draws after the wall and blends over it.
+pub(crate) fn view_depth(scene: &SceneDraw, surface: &MeshSurface) -> f32 {
+    let to_view = surface.transform.then(&scene.camera.view);
+    surface.mesh.bounds_in(&to_view).1.z
 }
 
 /// The pixels of `page` the scene and the clip above a surface leave, as a
