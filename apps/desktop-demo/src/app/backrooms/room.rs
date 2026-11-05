@@ -3,26 +3,30 @@
 // sees, the rooms behind its own room's doorways and the rooms behind
 // theirs. The walls, floors and ceilings show their finish alone; the
 // entity's writing, a lever and the things in a room show live content.
+// Every room reads the level and the window's eye from the composition
+// locals the tab provides, so the rooms behind doorways take only where
+// they lie.
 
 use std::sync::Arc;
 
 use cranpose_core::{key, rememberMutableStateOf, LaunchedEffect};
 use cranpose_ui::{
-    composable,
-    space::{Camera, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    composable, local_eye,
+    space::{Camera, Light, Mat4, Material, MeshSurface, Scene3d, Vec3},
     text::{FontWeight, TextAlign, TextUnit},
-    Alignment, Box, BoxSpec, Color, Eye, Modifier, Rect, Size, Text, TextStyle,
+    Alignment, Box, BoxSpec, Color, Modifier, Rect, Size, Text, TextStyle,
 };
 
 use super::{
     anomaly::Anomaly,
     figure::Figure,
     finish::{Finish, Lamps, Sight},
-    journey::Journey,
+    level::local_level,
     notes,
     place::{spot, Place},
     plan::{Plan, Slot, Visit, Writing, DOOR_HEIGHT, DOOR_WIDTH, HEIGHT},
     printout::Printout,
+    stalker::Haunting,
 };
 use crate::app::controls_ui::{
     rememberControl, ControlKind, ControlModel, STAGE_HEIGHT, WALL_CARD_WIDTH,
@@ -63,51 +67,17 @@ pub(super) const LIGHT: Light = Light {
     size: 0.0,
 };
 
-// The meshes every room's surfaces are drawn on, made once.
-#[derive(Clone)]
-pub(super) struct Meshes {
-    pub(super) plane: Arc<Mesh>,
-    pub(super) sphere: Arc<Mesh>,
-    pub(super) cuboid: Arc<Mesh>,
-}
-
-impl Meshes {
-    pub(super) fn new() -> Self {
-        Self {
-            plane: Arc::new(Mesh::plane()),
-            sphere: Arc::new(Mesh::sphere(32, 16)),
-            cuboid: Arc::new(Mesh::cuboid()),
-        }
-    }
-}
-
-// What every room shares: its meshes, the window's eye and the journey.
-#[derive(Clone)]
-pub(super) struct Level {
-    pub(super) meshes: Meshes,
-    pub(super) eye: Eye,
-    pub(super) journey: Journey,
-}
-
-impl Level {
-    fn sight(&self, place: Place) -> Sight {
-        Sight {
-            eye: self.eye.clone(),
-            journey: self.journey,
-            from_root: place.from_root,
-        }
-    }
-}
-
 // The room of `visit` at `place`, and the rooms behind its doorways. A room
 // behind a doorway has no doorway at the door the eye would come in by: the
 // room before it lies there.
 #[composable(no_skip)]
-pub(super) fn Room(level: Level, visit: Visit, place: Place) {
+pub(super) fn Room(visit: Visit, place: Place) {
+    let (Some(level), Some(eye)) = (local_level().current(), local_eye().current()) else {
+        return;
+    };
     let plan = Plan::of(visit.room);
     let size = plan.size();
-    let lamps = Lamps::of(&plan);
-    let sight = level.sight(place);
+    let sight = Sight::of(level, eye, place, Lamps::of(&plan));
     let walls = plan
         .panels()
         .into_iter()
@@ -123,9 +93,9 @@ pub(super) fn Room(level: Level, visit: Visit, place: Place) {
         ])
         .chain(pillars);
     for (index, (finish, transform, solid)) in faces.enumerate() {
-        let (sight, plane) = (sight.clone(), Arc::clone(&level.meshes.plane));
+        let sight = sight.clone();
         key(("face", index), move || {
-            Face(sight, plane, (finish, lamps), transform, solid);
+            Face(sight, finish, transform, solid);
         });
     }
     let entry = visit.back.filter(|_| place.depth > 0).map(|back| back.door);
@@ -133,43 +103,36 @@ pub(super) fn Room(level: Level, visit: Visit, place: Place) {
         let Some(frame) = plan.door_frame(door) else {
             continue;
         };
-        let level = level.clone();
         let sight = sight.clone();
         key(("door", door), move || {
             if place.depth < MAX_DEPTH {
-                Doorway(level, visit.through(door), frame, place);
+                Doorway(visit.through(door), frame, place);
             } else {
                 let opening = Mat4::scaling(Vec3::new(DOOR_WIDTH, DOOR_HEIGHT, 1.0)).then(&frame);
-                let plane = level.meshes.plane;
-                Face(sight, plane, (Finish::Void, lamps), opening, false);
+                Face(sight, Finish::Void, opening, false);
             }
         });
     }
     for (index, &writing) in plan.writings.iter().enumerate() {
-        let (sight, plane) = (sight.clone(), Arc::clone(&level.meshes.plane));
-        key(("writing", index), move || {
-            Scrawl(sight, plane, lamps, writing, size);
-        });
+        let sight = sight.clone();
+        key(("writing", index), move || Scrawl(sight, writing, size));
     }
     if let Some(thing) = plan.thing {
-        Anomaly(level.clone(), sight.clone(), lamps, thing, plan.middle());
+        Anomaly(sight.clone(), thing, plan.middle());
     }
     if let Some(slot) = plan.lever {
-        Lever(level.clone(), slot, size);
+        Lever(sight.clone(), slot, size);
     }
     if let Some(printout) = plan.printout {
-        let (sight, plane) = (sight.clone(), Arc::clone(&level.meshes.plane));
-        key("printout", move || {
-            Printout(sight, plane, lamps, printout, size);
-        });
+        let sight = sight.clone();
+        key("printout", move || Printout(sight, printout, size));
     }
     if plan.figure && place.depth > 0 {
-        Figure(
-            sight,
-            Arc::clone(&level.meshes.plane),
-            lamps,
-            plan.far_spot(),
-        );
+        Figure(sight.clone(), plan.far_spot());
+    }
+    // The entity haunts the eye in the room it stands in.
+    if place.depth == 0 {
+        Haunting(sight, size);
     }
 }
 
@@ -196,19 +159,14 @@ fn ceiling((width, depth): (f32, f32)) -> Mat4 {
 // A flat part of a room that shows its finish alone: the unit plane placed
 // by `transform`.
 #[composable(no_skip)]
-fn Face(
-    sight: Sight,
-    plane: Arc<Mesh>,
-    (finish, lamps): (Finish, Lamps),
-    transform: Mat4,
-    solid: bool,
-) {
+fn Face(sight: Sight, finish: Finish, transform: Mat4, solid: bool) {
+    let plane = Arc::clone(&sight.level.meshes.plane);
     Box(
         spot(BARE)
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&plane),
                 transform,
-                material: sight.material(finish, &transform, lamps),
+                material: sight.material(finish, &transform),
                 casts_shadow: false,
                 solid,
             })
@@ -221,7 +179,7 @@ fn Face(
 // A doorway on `frame` into the room of `inner`, which lies behind it: a
 // scene whose camera stands in the doorway the room behind is entered by.
 #[composable(no_skip)]
-fn Doorway(level: Level, inner: Visit, frame: Mat4, place: Place) {
+fn Doorway(inner: Visit, frame: Mat4, place: Place) {
     let plan = Plan::of(inner.room);
     let entry = inner.back.map_or(0, |back| back.door);
     let (Some(middle), Some(slot)) = (plan.door_middle(entry), plan.doors.get(entry)) else {
@@ -244,7 +202,6 @@ fn Doorway(level: Level, inner: Visit, frame: Mat4, place: Place) {
         Modifier::empty().transform3d(move || frame),
         BoxSpec::default(),
         move || {
-            let level = level.clone();
             // A screen reader reads the room the eye stands in, not the
             // rooms it sees through doorways, which are endless.
             Box(
@@ -256,7 +213,7 @@ fn Doorway(level: Level, inner: Visit, frame: Mat4, place: Place) {
                         eye: None,
                     }),
                 BoxSpec::default(),
-                move || Room(level.clone(), inner, behind),
+                move || Room(inner, behind),
             );
         },
     );
@@ -264,7 +221,7 @@ fn Doorway(level: Level, inner: Visit, frame: Mat4, place: Place) {
 
 // What the entity wrote on a wall, a little askew, in the room's light.
 #[composable(no_skip)]
-fn Scrawl(sight: Sight, plane: Arc<Mesh>, lamps: Lamps, writing: Writing, size: (f32, f32)) {
+fn Scrawl(sight: Sight, writing: Writing, size: (f32, f32)) {
     let frame = writing
         .slot
         .frame((SCRAWL.width, SCRAWL_TOP), SCRAWL_OUT, size);
@@ -275,13 +232,14 @@ fn Scrawl(sight: Sight, plane: Arc<Mesh>, lamps: Lamps, writing: Writing, size: 
         .then(&Mat4::rotation_z(slant))
         .then(&Mat4::translation(half))
         .then(&frame);
-    let journey = sight.journey;
+    let journey = sight.level.journey;
     let words = writing.words;
+    let plane = Arc::clone(&sight.level.meshes.plane);
     Box(
         spot(SCRAWL).mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&plane),
             transform,
-            material: sight.material(Finish::Content, &transform, lamps),
+            material: sight.material(Finish::Content, &transform),
             casts_shadow: false,
             solid: false,
         }),
@@ -311,11 +269,11 @@ fn scrawl_style() -> TextStyle {
 // A lever on a wall that puts out the lights of every room, or brings them
 // back.
 #[composable(no_skip)]
-fn Lever(level: Level, slot: Slot, size: (f32, f32)) {
+fn Lever(sight: Sight, slot: Slot, size: (f32, f32)) {
     let control = rememberControl(ControlKind::LeverSwitch);
     let on = control.is_on();
     let last = rememberMutableStateOf(move || on);
-    let journey = level.journey;
+    let journey = sight.level.journey;
     LaunchedEffect(on, move |_| {
         if last.get_non_reactive() != on {
             last.set(on);
@@ -331,7 +289,7 @@ fn Lever(level: Level, slot: Slot, size: (f32, f32)) {
         1.0,
         size,
     ));
-    let plane = Arc::clone(&level.meshes.plane);
+    let plane = Arc::clone(&sight.level.meshes.plane);
     Box(
         spot(card).mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&plane),

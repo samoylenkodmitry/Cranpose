@@ -1,16 +1,17 @@
 // A tall dark figure that stands in a room behind a doorway and turns to
-// face the eye. It is gone by the time the eye walks into its room.
+// face the eye. It is gone by the time the eye walks into its room. The
+// entity that haunts the eye takes the same shape.
 
 use std::sync::Arc;
 
 use cranpose_ui::{
     composable,
-    space::{Mesh, MeshSurface, Vec3},
-    Box, BoxSpec, Brush, Color, CornerRadii, DrawScope, Point, Rect, Size,
+    space::{MeshSurface, Vec3},
+    Box, BoxSpec, Brush, Color, CornerRadii, DrawScope, Modifier, Point, Rect, Size,
 };
 
 use super::{
-    finish::{Finish, Lamps, Sight},
+    finish::{Finish, Sight},
     place::{spot, upright},
 };
 
@@ -21,23 +22,26 @@ const FIGURE: Size = Size {
 const SHADOW: Color = Color(0.015, 0.012, 0.01, 1.0);
 
 #[composable(no_skip)]
-pub(super) fn Figure(sight: Sight, plane: Arc<Mesh>, lamps: Lamps, foot: Vec3) {
-    Box(
-        spot(FIGURE)
-            .mesh_surface(move || {
-                let transform = upright(foot, sight.eye_in_room(), FIGURE);
-                MeshSurface {
-                    mesh: Arc::clone(&plane),
-                    transform,
-                    material: sight.material(Finish::Content, &transform, lamps),
-                    casts_shadow: false,
-                    solid: false,
-                }
-            })
-            .draw_behind(silhouette),
-        BoxSpec::default(),
-        || {},
-    );
+pub(super) fn Figure(sight: Sight, foot: Vec3) {
+    Box(figure(sight, move || foot), BoxSpec::default(), || {});
+}
+
+// The figure standing where `foot` says, which a draw closure reads: a foot
+// that follows a state moves the figure and composes nothing.
+pub(super) fn figure(sight: Sight, foot: impl Fn() -> Vec3 + 'static) -> Modifier {
+    let plane = Arc::clone(&sight.level.meshes.plane);
+    spot(FIGURE)
+        .mesh_surface(move || {
+            let transform = upright(foot(), sight.eye_in_room(), FIGURE);
+            MeshSurface {
+                mesh: Arc::clone(&plane),
+                transform,
+                material: sight.material(Finish::Content, &transform),
+                casts_shadow: false,
+                solid: false,
+            }
+        })
+        .draw_behind(silhouette)
 }
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {

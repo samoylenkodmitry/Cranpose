@@ -57,7 +57,7 @@ impl Stick {
 #[derive(Clone)]
 pub(super) struct Walker {
     pub(super) eye: Eye,
-    journey: Journey,
+    pub(super) journey: Journey,
     keys: MutableState<WalkKeys>,
     stick: MutableState<Option<Stick>>,
     // How far the eye has walked, which its steps bob by.

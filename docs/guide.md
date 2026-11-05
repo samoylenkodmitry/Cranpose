@@ -1826,9 +1826,21 @@ scene's room once the eye walks through that doorway. `eye.place` then puts the
 eye at the same pose with no doorways: the room's coordinates stay the same. The
 tab keys the scene by its room, so the eye walks on only after the renderer has
 placed the new scene. One `Shaded` shader colours the walls, floors and ceilings
-of every room. The entity's writing, a lever and the things in the rooms carry
-live content. Some walls print the tab's own source files in a `LazyColumn`,
-which lays out only the lines on the wall.
+of every room; it reads the eye from `ShadedSurface`, so a surface's closure
+need not follow the eye. The entity's writing, a lever and the things in the
+rooms carry live content. Some walls print the tab's own source files in a
+`LazyColumn`, which lays out only the lines on the wall. The tab fetches each
+file the first time a wall shows it.
+
+The tab provides the window's eye through `local_eye()` and what all rooms
+share through a `staticCompositionLocalOf`: the meshes, the journey, the
+camcorder's film and the fetched files. A room behind a doorway takes only its
+place. Motion comes from `rememberInfiniteTransition`: the film's frame, a
+floating eye's bob and a panel's sway. Draw closures read these values, so the
+motion draws each frame and composes nothing. `derivedStateOf` turns the film's
+value, which changes every display frame, into a frame count that changes 24
+times a second. Timed events, such as the television's typing and the
+captions, run in `LaunchedEffect`s with `delay`.
 
 #### Point with a ray
 

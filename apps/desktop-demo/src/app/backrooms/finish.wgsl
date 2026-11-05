@@ -7,17 +7,18 @@
 //
 // A surface's values:
 //   0      what it shows: 0 wallpaper, 1 carpet, 2 ceiling tiles, 3 its
-//          content, 4 the dark behind a doorway too deep to open
+//          content, 4 the far rooms behind a doorway too deep to open
 //   1-3    where the mesh's (0, 0, 0) lies in the room
 //   4-6    the mesh's x in the room
 //   7-9    its y
-//   10-12  the eye, in the room
+//   10-12  its z
 //   13     the camcorder's frame
 //   14, 15 the room's width and depth
 //   16     a number the room's lamps flicker by
 //   17     how its lamps burn: 0 lit, 1 dim, 2 dark
 //   18     how far its lamps are on, from 0 to 1
-//   19-21  the mesh's z in the room
+//
+// The eye comes from the surface, in the mesh's coordinates.
 
 const WALLPAPER: u32 = 0u;
 const CARPET: u32 = 1u;
@@ -34,6 +35,9 @@ const LAMP_REACH: f32 = 230.0;
 // the lamps' power goes.
 const FILL: vec3<f32> = vec3<f32>(0.05, 0.047, 0.04);
 const EMERGENCY: vec3<f32> = vec3<f32>(0.26, 0.04, 0.025);
+// What the far rooms behind a doorway too deep to open show at full power:
+// yellow, dimmed by the rooms between.
+const DEEP: vec3<f32> = vec3<f32>(0.30, 0.26, 0.12);
 // How far a lamp's light reaches along the floor: it fades to nothing there,
 // so the lamps of the 3 by 3 units around a point are all that light it.
 const LAMP_WINDOW: f32 = UNIT * 1.5;
@@ -229,15 +233,16 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
     let kind = u32(shaded_param(0u));
     let x = param3(4u);
     let y = param3(7u);
-    let z = param3(19u);
-    let eye = param3(10u);
+    let z = param3(10u);
+    let origin = param3(1u);
+    let eye = origin + x * surface.eye.x + y * surface.eye.y + z * surface.eye.z;
     let frame = i32(shaded_param(13u));
     let size = vec2<f32>(shaded_param(14u), shaded_param(15u));
     let seed = u32(shaded_param(16u));
     let mood = u32(shaded_param(17u));
     let power = shaded_param(18u);
     let at = surface.position;
-    let p = param3(1u) + x * at.x + y * at.y + z * at.z;
+    let p = origin + x * at.x + y * at.y + z * at.z;
     // The side of the surface the eye sees: the normal turns the way the
     // inverse of the map's transpose turns it, which for square axes scales
     // each by one over its length squared.
@@ -262,7 +267,9 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
             let light = lighting(p, n, size, seed, mood, frame) * power * shadow;
             colour = ceiling.rgb * (vec3<f32>(light) + fill);
         }
-    } else if (kind != VOID) {
+    } else if (kind == VOID) {
+        colour = DEEP * power + fill;
+    } else {
         var paint = vec3<f32>(0.0);
         if (kind == CONTENT) {
             alpha = surface.color.a;

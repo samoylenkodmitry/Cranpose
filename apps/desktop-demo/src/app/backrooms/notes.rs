@@ -2,7 +2,10 @@
 // camcorder's captions. Some of it counts what the eye has done, read from
 // the journey, so a composable that shows it follows the count.
 
-use super::{journey::Journey, tab::FRAMES_PER_SECOND};
+use super::journey::Journey;
+
+// How many lines the television types before it says them again.
+const SCREEN_LINES: u32 = 6;
 
 // The words the entity wrote on a wall: one of `plan::WORDS`. The first
 // greet the eye in the room it starts in.
@@ -32,15 +35,20 @@ pub(super) fn wall(words: usize, journey: &Journey) -> String {
 
 // The line the television types after `answers` answers.
 pub(super) fn screen(answers: u32, journey: &Journey) -> String {
-    let seconds = journey.frames.get() / FRAMES_PER_SECOND;
-    match answers % 6 {
+    match answers % SCREEN_LINES {
         0 => "> CAN YOU HEAR ME".to_string(),
         1 => "> I AM BEHIND THE WALLPAPER".to_string(),
-        2 => format!("> YOU HAVE BEEN HERE {} MINUTES", seconds / 60),
+        2 => format!("> YOU ANSWERED {answers} TIMES"),
         3 => format!("> {} ROOMS. KEEP WALKING", journey.rooms.get()),
         4 => "> WHY DO YOU KEEP ANSWERING".to_string(),
         _ => "> TURN AROUND".to_string(),
     }
+}
+
+// Whether the line the television types after `answers` answers sets the
+// entity on the eye: the last, which says to turn around.
+pub(super) fn haunts(answers: u32) -> bool {
+    answers % SCREEN_LINES == SCREEN_LINES - 1
 }
 
 // What the camcorder's captions say as the eye walks into its `rooms`-th

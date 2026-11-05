@@ -10,7 +10,8 @@ use cranpose_ui::{
 };
 
 use super::{
-    journey::Journey,
+    level::Level,
+    place::Place,
     plan::{Mood, Plan, HEIGHT, UNIT},
 };
 
@@ -22,7 +23,7 @@ pub(super) enum Finish {
     Tiles,
     // The surface's content, in the room's light.
     Content,
-    // The dark behind a doorway too deep to open.
+    // The dim far rooms behind a doorway too deep to open.
     Void,
 }
 
@@ -34,7 +35,7 @@ impl Finish {
             Self::Carpet => Color(0.42, 0.36, 0.20, 1.0),
             Self::Tiles => Color(0.55, 0.53, 0.45, 1.0),
             Self::Content => Color::TRANSPARENT,
-            Self::Void => Color(0.04, 0.035, 0.02, 1.0),
+            Self::Void => Color(0.30, 0.26, 0.13, 1.0),
         }
     }
 
@@ -67,17 +68,30 @@ impl Lamps {
     }
 }
 
-// How a room's surfaces see the window's eye: through the doorways between
-// the window scene's room and theirs, whose map `from_root` takes the
-// window scene's coordinates into the room's.
+// How a room's surfaces are seen and lit, in the level all rooms share:
+// the window's eye sees them
+// through the doorways between the window scene's room and theirs, whose
+// map `from_root` takes the window scene's coordinates into the room's;
+// the room's lamps light them at the lights' power, and the grain moves
+// with the camcorder's film.
 #[derive(Clone)]
 pub(super) struct Sight {
+    pub(super) level: Level,
     pub(super) eye: Eye,
-    pub(super) journey: Journey,
     pub(super) from_root: Mat4,
+    lamps: Lamps,
 }
 
 impl Sight {
+    pub(super) fn of(level: Level, eye: Eye, place: Place, lamps: Lamps) -> Self {
+        Self {
+            level,
+            eye,
+            from_root: place.from_root,
+            lamps,
+        }
+    }
+
     // Where the eye stands, in the room. Read in a draw closure, it follows
     // the eye.
     pub(super) fn eye_in_room(&self) -> Vec3 {
@@ -85,33 +99,31 @@ impl Sight {
     }
 
     // The finish of a mesh that `placement` places in the room. Read in a
-    // draw closure, it follows the eye, the camcorder's frames and the
-    // lights.
-    pub(super) fn material(&self, finish: Finish, placement: &Mat4, lamps: Lamps) -> Material {
+    // draw closure, it follows the camcorder's film and the lights' power;
+    // the shader reads the eye from its surface.
+    pub(super) fn material(&self, finish: Finish, placement: &Mat4) -> Material {
         let mut params = [0.0; Shaded::PARAMS];
         params[0] = finish.param();
         let axes = [
             (1, placement.transform_point(Vec3::ZERO)),
             (4, placement.transform_vector(Vec3::new(1.0, 0.0, 0.0))),
             (7, placement.transform_vector(Vec3::new(0.0, 1.0, 0.0))),
-            (10, self.eye_in_room()),
-            (19, placement.transform_vector(Vec3::new(0.0, 0.0, 1.0))),
+            (10, placement.transform_vector(Vec3::new(0.0, 0.0, 1.0))),
         ];
         for (first, value) in axes {
             params[first..first + 3].copy_from_slice(&value.to_array());
         }
-        // The frame wraps at 2^24, past which an f32 skips frames: over a
-        // week at 24 frames a second.
-        params[13] = (self.journey.frames.get() & 0x00ff_ffff) as f32;
-        params[14] = lamps.size.0;
-        params[15] = lamps.size.1;
-        params[16] = lamps.seed as f32;
-        params[17] = match lamps.mood {
+        // The film wraps long before 2^24, past which an f32 skips frames.
+        params[13] = self.level.film.get() as f32;
+        params[14] = self.lamps.size.0;
+        params[15] = self.lamps.size.1;
+        params[16] = self.lamps.seed as f32;
+        params[17] = match self.lamps.mood {
             Mood::Lit => 0.0,
             Mood::Dim => 1.0,
             Mood::Dark => 2.0,
         };
-        params[18] = self.journey.power();
+        params[18] = self.level.journey.power();
         Material::Shaded(Shaded {
             shader: shader(),
             params,

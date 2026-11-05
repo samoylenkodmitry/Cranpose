@@ -2,17 +2,23 @@
 // room it is in, the time it has run, a clock nobody set, the corners of
 // its frame and the dark rim of its lens. For the first seconds a line at
 // the bottom tells how to walk; for a few seconds after each doorway, a
-// caption tells what it heard.
+// caption tells what it heard. Each part reads only the state it shows, so
+// a new second composes the timer alone and the blink composes nothing.
 
-use cranpose_core::derivedStateOf;
+use std::time::Duration;
+
+use cranpose_animation::{
+    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
+};
+use cranpose_core::{delay, derivedStateOf, rememberMutableStateOf, LaunchedEffectAsync, State};
 use cranpose_ui::{
     composable,
     text::{FontFamily, TextUnit},
-    Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec, DrawScope, Modifier, Point, Rect,
-    Row, RowSpec, Size, Text, TextStyle, TileMode, VerticalAlignment,
+    Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec, DrawScope, GraphicsLayer, Modifier,
+    Point, Rect, Row, RowSpec, Size, Text, TextStyle, TileMode, VerticalAlignment,
 };
 
-use super::{journey::Journey, notes, tab::FRAMES_PER_SECOND};
+use super::{journey::Journey, notes};
 
 const INK: Color = Color(0.93, 0.93, 0.88, 0.9);
 const RED: Color = Color(0.9, 0.1, 0.08, 1.0);
@@ -21,8 +27,11 @@ const MARGIN: f32 = 26.0;
 const INSET: f32 = MARGIN + 14.0;
 const CORNER: f32 = 34.0;
 const LINE: f32 = 2.0;
-const HINT_SECONDS: u32 = 12;
-const CAPTION_SECONDS: u32 = 5;
+// A blink: shown for half of it, hidden for the other half.
+const BLINK_MILLIS: u64 = 1000;
+const SECOND: Duration = Duration::from_secs(1);
+const HINT: Duration = Duration::from_secs(12);
+const CAPTION: Duration = Duration::from_secs(5);
 
 fn camcorder(size: f32) -> TextStyle {
     let mut style = TextStyle::default();
@@ -34,19 +43,22 @@ fn camcorder(size: f32) -> TextStyle {
 
 #[composable]
 pub(super) fn Hud(journey: Journey) {
-    let frames = journey.frames;
-    let whole = derivedStateOf(move || frames.get() / FRAMES_PER_SECOND);
-    let blink = derivedStateOf(move || (frames.get() / (FRAMES_PER_SECOND / 2)).is_multiple_of(2));
-    let hint = derivedStateOf(move || frames.get() < HINT_SECONDS * FRAMES_PER_SECOND);
-    let heard = derivedStateOf(move || {
-        let since = frames.get().saturating_sub(journey.entered.get());
-        journey.rooms.get() > 1 && since < CAPTION_SECONDS * FRAMES_PER_SECOND
-    });
+    let phase = rememberInfiniteTransition("camcorder_blink").animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::linear(BLINK_MILLIS),
+            RepeatMode::Restart,
+            StartOffset::default(),
+        ),
+        "camcorder_blink",
+    );
+    // The phase changes each frame; the blink, twice a second.
+    let on = derivedStateOf(move || phase.value() < 0.5);
     Box(
         Modifier::empty().fill_max_size().draw_behind(lens),
         BoxSpec::default(),
         move || {
-            let on = blink.get();
             Row(
                 Modifier::empty().align(Alignment::TOP_START).padding(INSET),
                 RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
@@ -54,43 +66,17 @@ pub(super) fn Hud(journey: Journey) {
                     Box(
                         Modifier::empty()
                             .size(Size::new(14.0, 14.0))
+                            .graphics_layer(move || blinking(on))
                             .rounded_corners(7.0)
-                            .background(if on { RED } else { Color::TRANSPARENT }),
+                            .background(RED),
                         BoxSpec::default(),
                         || {},
                     );
                     Text("REC", Modifier::empty().padding(10.0), camcorder(22.0));
                 },
             );
-            Column(
-                Modifier::empty().align(Alignment::TOP_END).padding(INSET),
-                ColumnSpec::default(),
-                move || {
-                    Text(
-                        format!("ROOM {}", journey.rooms.get()),
-                        Modifier::empty(),
-                        camcorder(22.0),
-                    );
-                    if journey.lights_out.get() {
-                        let mut warning = camcorder(15.0);
-                        warning.span_style.color = Some(RED);
-                        Text("EMERGENCY POWER", Modifier::empty(), warning);
-                    }
-                },
-            );
-            let elapsed = whole.get();
-            Text(
-                format!(
-                    "{}:{:02}:{:02}",
-                    elapsed / 3600,
-                    elapsed / 60 % 60,
-                    elapsed % 60
-                ),
-                Modifier::empty()
-                    .align(Alignment::BOTTOM_START)
-                    .padding(INSET),
-                camcorder(22.0),
-            );
+            Where(journey);
+            Elapsed();
             Column(
                 Modifier::empty()
                     .align(Alignment::BOTTOM_END)
@@ -98,32 +84,111 @@ pub(super) fn Hud(journey: Journey) {
                 ColumnSpec::default(),
                 move || {
                     Text("JAN. 1 1970", Modifier::empty(), camcorder(18.0));
-                    Text(
-                        if on { "12:00 AM" } else { "  :   AM" },
-                        Modifier::empty(),
-                        camcorder(18.0),
-                    );
+                    Row(Modifier::empty(), RowSpec::default(), move || {
+                        Text(
+                            "12:00",
+                            Modifier::empty().graphics_layer(move || blinking(on)),
+                            camcorder(18.0),
+                        );
+                        Text(" AM", Modifier::empty(), camcorder(18.0));
+                    });
                 },
             );
-            if heard.get() {
-                Text(
-                    notes::caption(journey.rooms.get()),
-                    Modifier::empty()
-                        .align(Alignment::BOTTOM_CENTER)
-                        .padding(MARGIN + 60.0),
-                    camcorder(17.0),
-                );
-            } else if hint.get() {
-                Text(
-                    "W A S D or a finger on the left half walks. A drag looks around.",
-                    Modifier::empty()
-                        .align(Alignment::BOTTOM_CENTER)
-                        .padding(MARGIN + 60.0),
-                    camcorder(15.0),
-                );
+            Caption(journey);
+        },
+    );
+}
+
+// A layer shown while `on` holds. The layer reads `on` as it draws.
+fn blinking(on: State<bool>) -> GraphicsLayer {
+    GraphicsLayer {
+        alpha: if on.get() { 1.0 } else { 0.0 },
+        ..GraphicsLayer::DEFAULT
+    }
+}
+
+// The room the camcorder is in, and the warning while the lights are out.
+#[composable]
+fn Where(journey: Journey) {
+    Column(
+        Modifier::empty().align(Alignment::TOP_END).padding(INSET),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("ROOM {}", journey.rooms.get()),
+                Modifier::empty(),
+                camcorder(22.0),
+            );
+            if journey.lights_out.get() {
+                let mut warning = camcorder(15.0);
+                warning.span_style.color = Some(RED);
+                Text("EMERGENCY POWER", Modifier::empty(), warning);
             }
         },
     );
+}
+
+// The time the camcorder has run, a second at a time.
+#[composable]
+fn Elapsed() {
+    let seconds = rememberMutableStateOf(|| 0_u32);
+    LaunchedEffectAsync((), move |scope| {
+        Box::pin(async move {
+            while scope.is_active() {
+                delay(SECOND).await;
+                seconds.update(|seconds| *seconds += 1);
+            }
+        })
+    });
+    let elapsed = seconds.get();
+    Text(
+        format!(
+            "{}:{:02}:{:02}",
+            elapsed / 3600,
+            elapsed / 60 % 60,
+            elapsed % 60
+        ),
+        Modifier::empty()
+            .align(Alignment::BOTTOM_START)
+            .padding(INSET),
+        camcorder(22.0),
+    );
+}
+
+// What the camcorder heard after the last doorway, for a few seconds; and
+// before any doorway, for the first seconds, how to walk.
+#[composable]
+fn Caption(journey: Journey) {
+    let rooms = journey.rooms.get();
+    let heard = rememberMutableStateOf(|| false);
+    LaunchedEffectAsync(rooms, move |_| {
+        Box::pin(async move {
+            if rooms > 1 {
+                heard.set(true);
+                delay(CAPTION).await;
+                heard.set(false);
+            }
+        })
+    });
+    let hint = rememberMutableStateOf(|| true);
+    LaunchedEffectAsync((), move |_| {
+        Box::pin(async move {
+            delay(HINT).await;
+            hint.set(false);
+        })
+    });
+    let line = Modifier::empty()
+        .align(Alignment::BOTTOM_CENTER)
+        .padding(MARGIN + 60.0);
+    if heard.get() {
+        Text(notes::caption(rooms), line, camcorder(17.0));
+    } else if hint.get() {
+        Text(
+            "W A S D or a finger on the left half walks. A drag looks around.",
+            line,
+            camcorder(15.0),
+        );
+    }
 }
 
 // The dark rim of the lens and the corners of the frame.

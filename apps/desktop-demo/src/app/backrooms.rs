@@ -6,11 +6,14 @@ mod figure;
 mod finish;
 mod hud;
 mod journey;
+mod level;
 mod notes;
 mod place;
 mod plan;
 mod printout;
 mod room;
+mod shelf;
+mod stalker;
 mod tab;
 mod walker;
 

@@ -3,19 +3,24 @@
 // behind its doorways, and behind theirs, are scenes behind doorways, and
 // the walk through a doorway makes the room behind it the window's.
 
-use std::time::Duration;
-
-use cranpose_core::{delay, key, remember, LaunchedEffect, LaunchedEffectAsync};
+use cranpose_animation::{
+    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
+};
+use cranpose_core::{
+    derivedStateOf, key, remember, CompositionLocalProvider, LaunchedEffect, State,
+};
 use cranpose_ui::{
-    composable, space::Camera, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Color,
-    Modifier,
+    composable, local_eye, space::Camera, Box, BoxSpec, BoxWithConstraints,
+    BoxWithConstraintsScope, Color, Modifier,
 };
 
 use super::{
     hud::Hud,
-    journey::{rememberJourney, Journey},
+    journey::rememberJourney,
+    level::{local_level, Level, Meshes},
     place::Place,
-    room::{Level, Meshes, Room, LIGHT},
+    room::{Room, LIGHT},
+    shelf::{rememberShelf, Printer},
     walker::{rememberWalker, Walker},
 };
 use crate::app::ticking::Ticking;
@@ -23,16 +28,22 @@ use crate::app::ticking::Ticking;
 // The camera's vertical field of view, in radians: a camcorder's wide end.
 const FIELD_OF_VIEW: f32 = 1.2;
 // The camcorder's frames a second, at which the lamps flicker and the grain
-// moves.
-pub(super) const FRAMES_PER_SECOND: u32 = 24;
-const CAMCORDER_FRAME: Duration = Duration::from_micros(41_667);
+// moves, and how many it runs before its film starts over: ten minutes.
+const FRAMES_PER_SECOND: u32 = 24;
+const REEL_FRAMES: u32 = FRAMES_PER_SECOND * 600;
 
 #[composable]
 pub(crate) fn BackroomsTab() {
     let journey = rememberJourney();
     let walker = rememberWalker(journey);
-    let meshes = remember(Meshes::new).with(Clone::clone);
-    Camcorder(journey);
+    let shelf = rememberShelf();
+    let level = Level {
+        meshes: remember(Meshes::new).with(Clone::clone),
+        journey,
+        film: rememberFilm(),
+        shelf,
+    };
+    Printer(shelf);
     Walking(walker.clone());
     let focus = walker.focus.clone();
     LaunchedEffect((), move |_| {
@@ -57,29 +68,37 @@ pub(crate) fn BackroomsTab() {
             let height = scope.constraints().max_height;
             let height = if height.is_finite() { height } else { 1.0 };
             let focal_length = Camera::focal_length_for(height.max(1.0), FIELD_OF_VIEW);
-            let level = Level {
-                meshes: meshes.clone(),
-                eye: walker.eye.clone(),
-                journey,
-            };
-            Rooms(level, walker.clone(), focal_length);
+            // Every room reads the level and the window's eye from here.
+            let (level, walker) = (level.clone(), walker.clone());
+            let eye = walker.eye.clone();
+            CompositionLocalProvider(
+                vec![
+                    local_level().provides(Some(level)),
+                    local_eye().provides(Some(eye)),
+                ],
+                move || Rooms(walker.clone(), focal_length),
+            );
             Hud(journey);
         },
     );
 }
 
-// The camcorder's clock, which counts its frames.
+// The camcorder's frame, counted from the frame clock by an infinite
+// transition. The transition's value changes each display frame; the frame
+// it derives changes 24 times a second, and only then are its readers told.
 #[composable]
-fn Camcorder(journey: Journey) {
-    let frames = journey.frames;
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            while scope.is_active() {
-                delay(CAMCORDER_FRAME).await;
-                frames.update(|count| *count = count.wrapping_add(1));
-            }
-        })
-    });
+fn rememberFilm() -> State<u32> {
+    let reel = rememberInfiniteTransition("camcorder_film").animateFloat(
+        0.0,
+        REEL_FRAMES as f32,
+        infiniteRepeatable(
+            AnimationSpec::linear(u64::from(REEL_FRAMES) * 1000 / u64::from(FRAMES_PER_SECOND)),
+            RepeatMode::Restart,
+            StartOffset::default(),
+        ),
+        "camcorder_film",
+    );
+    derivedStateOf(move || reel.value() as u32)
 }
 
 // Walks the eye each frame while a key or a finger walks it.
@@ -92,8 +111,8 @@ fn Walking(walker: Walker) {
 // The window's scene through the eye, which holds the eye's room. A new
 // room is a new scene, so the eye knows when the renderer has placed it.
 #[composable(no_skip)]
-fn Rooms(level: Level, walker: Walker, focal_length: f32) {
-    let visit = level.journey.visit.get();
+fn Rooms(walker: Walker, focal_length: f32) {
+    let visit = walker.journey.visit.get();
     key(visit, move || {
         let sees = walker.clone();
         let scene = Box(
@@ -101,7 +120,7 @@ fn Rooms(level: Level, walker: Walker, focal_length: f32) {
                 .fill_max_size()
                 .scene3d(move || sees.scene(focal_length, Some(LIGHT))),
             BoxSpec::default(),
-            move || Room(level.clone(), visit, Place::ROOT),
+            move || Room(visit, Place::ROOT),
         );
         walker.scene.set(Some(scene));
     });

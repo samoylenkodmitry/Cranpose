@@ -8,40 +8,26 @@ use cranpose::{
     widgets::{LazyColumn, LazyColumnSpec},
     LazyItems,
 };
-use cranpose_core::remember;
-use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
+use cranpose_core::LaunchedEffect;
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_ui::{
     composable,
-    space::{Mat4, Mesh, MeshSurface},
+    space::{Mat4, MeshSurface},
     text::{FontFamily, FontWeight, TextUnit},
-    Box, BoxSpec, Color, Modifier, Size, Text, TextStyle,
+    Box, BoxSpec, Color, Column, ColumnSpec, Modifier, SharedText, Size, Text, TextStyle,
 };
 
 use super::{
-    finish::{Finish, Lamps, Sight},
+    finish::{Finish, Sight},
+    level::local_level,
     place::spot,
-    plan::{self, PRINTS},
+    plan,
+    shelf::{Page, FILES},
 };
 
 // How far the print stands off the wall.
 const OUT: f32 = 0.6;
 const INK: Color = Color(0.16, 0.12, 0.08, 0.88);
-
-const FILES: [(&str, &str); PRINTS as usize] = [
-    ("anomaly.rs", include_str!("anomaly.rs")),
-    ("figure.rs", include_str!("figure.rs")),
-    ("finish.rs", include_str!("finish.rs")),
-    ("finish.wgsl", include_str!("finish.wgsl")),
-    ("hud.rs", include_str!("hud.rs")),
-    ("journey.rs", include_str!("journey.rs")),
-    ("notes.rs", include_str!("notes.rs")),
-    ("place.rs", include_str!("place.rs")),
-    ("plan.rs", include_str!("plan.rs")),
-    ("printout.rs", include_str!("printout.rs")),
-    ("room.rs", include_str!("room.rs")),
-    ("tab.rs", include_str!("tab.rs")),
-    ("walker.rs", include_str!("walker.rs")),
-];
 
 fn print(weight: FontWeight) -> TextStyle {
     let mut style = TextStyle::default();
@@ -53,13 +39,10 @@ fn print(weight: FontWeight) -> TextStyle {
 }
 
 #[composable(no_skip)]
-pub(super) fn Printout(
-    sight: Sight,
-    plane: Arc<Mesh>,
-    lamps: Lamps,
-    printout: plan::Printout,
-    size: (f32, f32),
-) {
+pub(super) fn Printout(sight: Sight, printout: plan::Printout, size: (f32, f32)) {
+    let Some(level) = local_level().current() else {
+        return;
+    };
     let panel = printout.panel;
     let transform = panel
         .transform(size)
@@ -68,45 +51,70 @@ pub(super) fn Printout(
         width: panel.to - panel.from,
         height: panel.top - panel.bottom,
     };
-    let (name, source) = FILES[printout.file.min(FILES.len() - 1)];
-    let lines = remember(move || source.lines().collect::<Rc<[&'static str]>>()).with(Rc::clone);
+    let name = FILES[printout.file.min(FILES.len() - 1)];
+    let page = level.shelf.page(printout.file);
+    // The wall wants its page once it shows: an effect, as composing only
+    // describes what shows.
+    LaunchedEffect(printout.file, move |_| {
+        if page.get_non_reactive() == Page::Blank {
+            page.set(Page::Wanted);
+        }
+    });
     let state = rememberLazyListState();
+    let plane = level.meshes.plane;
     Box(
         spot(content).mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&plane),
             transform,
-            material: sight.material(Finish::Content, &transform, lamps),
+            material: sight.material(Finish::Content, &transform),
             casts_shadow: false,
             solid: false,
         }),
         BoxSpec::default(),
         move || {
-            let lines = Rc::clone(&lines);
-            LazyColumn(
+            Column(
                 Modifier::empty().fill_max_size().padding(10.0),
-                state,
-                LazyColumnSpec::new(),
-                move |scope| {
-                    let lines = Rc::clone(&lines);
-                    scope.items(
-                        LazyItems::new(lines.len() + 1).key(|index: usize| index as u64),
-                        move |index| match index.checked_sub(1) {
-                            None => {
-                                Text(
-                                    format!("// {name}"),
-                                    Modifier::empty(),
-                                    print(FontWeight::BOLD),
-                                );
-                            }
-                            Some(line) => {
-                                Text(
-                                    lines.get(line).copied().unwrap_or_default(),
-                                    Modifier::empty(),
-                                    print(FontWeight::NORMAL),
-                                );
-                            }
-                        },
+                ColumnSpec::default(),
+                move || {
+                    Text(
+                        format!("// {name}"),
+                        Modifier::empty(),
+                        print(FontWeight::BOLD),
                     );
+                    match page.get() {
+                        Page::Blank | Page::Wanted => {
+                            Text(
+                                "// printing...",
+                                Modifier::empty(),
+                                print(FontWeight::NORMAL),
+                            );
+                        }
+                        Page::Torn(reason) => {
+                            Text(reason, Modifier::empty(), print(FontWeight::NORMAL));
+                        }
+                        Page::Printed(lines) => Lines(state, lines),
+                    }
+                },
+            );
+        },
+    );
+}
+
+// The printed lines, as many as the wall shows laid out.
+#[composable]
+fn Lines(state: LazyListState, lines: Rc<[SharedText]>) {
+    LazyColumn(
+        Modifier::empty().weight(1.0),
+        state,
+        LazyColumnSpec::new(),
+        move |scope| {
+            let lines = Rc::clone(&lines);
+            scope.items(
+                LazyItems::new(lines.len()).key(|index: usize| index as u64),
+                move |index| {
+                    if let Some(line) = lines.get(index) {
+                        Text(line.clone(), Modifier::empty(), print(FontWeight::NORMAL));
+                    }
                 },
             );
         },

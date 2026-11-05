@@ -45,8 +45,14 @@ fn short_ref() -> &'static str {
     }
 }
 
+// The raw text of the file at `path` in the repository, at the commit the
+// app was built from.
+pub(crate) fn repository_file_url(path: &str) -> String {
+    format!("{REPOSITORY}/{}/{path}", source_ref())
+}
+
 fn source_url(tab: DemoTab) -> String {
-    format!("{REPOSITORY}/{}/{}", source_ref(), source_path(tab))
+    repository_file_url(source_path(tab))
 }
 
 #[derive(Clone, PartialEq)]

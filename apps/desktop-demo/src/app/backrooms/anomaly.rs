@@ -1,28 +1,30 @@
 // The things that should not be in a room, each a mesh whose content is
 // live UI: an eye that turns to watch the eye, a television the entity
-// types through, and switches that flip by themselves.
+// types through, and switches that flip by themselves. Their motion comes
+// from infinite transitions that their draw closures read, so it draws
+// each frame and composes nothing.
 
 use std::{sync::Arc, time::Duration};
 
 use cranpose::liquid::prelude::{LiquidTheme, LiquidThemeSpec, LiquidToggle, SchemeMode};
-use cranpose_core::{
-    delay, derivedStateOf, rememberMutableStateOf, LaunchedEffectAsync, MutableState,
+use cranpose_animation::{
+    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
+use cranpose_core::{delay, rememberMutableStateOf, LaunchedEffectAsync, MutableState, State};
 use cranpose_ui::{
     composable,
-    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
+    space::{Mat4, Material, MeshSurface, Vec3},
     text::{FontFamily, TextUnit},
     Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, DrawScope,
     Modifier, Point, Rect, Row, RowSpec, Size, Text, TextStyle, TileMode,
 };
 
 use super::{
-    finish::{Finish, Lamps, Sight},
+    finish::{Finish, Sight},
     journey::Journey,
     notes,
     place::{facing, spot},
     plan::Thing,
-    room::Level,
 };
 
 const DOWN: Vec3 = Vec3::new(0.0, 1.0, 0.0);
@@ -34,6 +36,9 @@ const EYEBALL: Size = Size {
 };
 const EYEBALL_RADIUS: f32 = 45.0;
 const WATCHER_HEIGHT: f32 = 150.0;
+// How far the watcher bobs up and down, and how long it takes one way.
+const BOB: f32 = 8.0;
+const BOB_MILLIS: u64 = 1300;
 const BLINK: Duration = Duration::from_millis(1400);
 // The television: its body, how high its middle floats, and its screen's
 // content, shown at half its size.
@@ -44,8 +49,8 @@ const SCREEN: Size = Size {
     height: 180.0,
 };
 const SCREEN_SCALE: f32 = 0.5;
-// The camcorder's frames a letter takes to type.
-const FRAMES_PER_LETTER: u32 = 2;
+// How long a letter takes to type.
+const LETTER: Duration = Duration::from_millis(83);
 // The poltergeist's panel, shown at a little over half its size, how high
 // its foot floats and how often a switch flips.
 const PANEL: Size = Size {
@@ -56,6 +61,10 @@ const PANEL_SCALE: f32 = 0.6;
 const PANEL_FOOT: f32 = 45.0;
 const FLIP: Duration = Duration::from_millis(320);
 const SWITCHES: u32 = 10;
+// How far the poltergeist's panel sways each way, in radians, and how long
+// it takes one way.
+const SWAY: f32 = 0.35;
+const SWAY_MILLIS: u64 = 2100;
 
 fn mono(size: f32, color: Color) -> TextStyle {
     let mut style = TextStyle::default();
@@ -70,19 +79,35 @@ fn noise(a: u32, b: u32) -> u32 {
     (a.wrapping_mul(0x9e37_79b9) ^ b.wrapping_mul(0x85eb_ca6b)).wrapping_mul(0xc2b2_ae35) >> 24
 }
 
+// A float that runs from `from` to `to` and back over and over, `millis`
+// each way, easing at both ends.
+#[composable]
+fn rememberSwing(label: &str, (from, to): (f32, f32), millis: u64) -> State<f32> {
+    rememberInfiniteTransition(label).animateFloat(
+        from,
+        to,
+        infiniteRepeatable(
+            AnimationSpec::tween(millis, Easing::EaseInOut),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        label,
+    )
+}
+
 // The thing standing in the middle of a room, its floor point `middle`.
 #[composable(no_skip)]
-pub(super) fn Anomaly(level: Level, sight: Sight, lamps: Lamps, thing: Thing, middle: Vec3) {
+pub(super) fn Anomaly(sight: Sight, thing: Thing, middle: Vec3) {
     match thing {
-        Thing::Watcher => Watcher(Arc::clone(&level.meshes.sphere), sight, lamps, middle),
-        Thing::Television => Television(level, sight, lamps, middle),
-        Thing::Poltergeist => Poltergeist(Arc::clone(&level.meshes.plane), sight, lamps, middle),
+        Thing::Watcher => Watcher(sight, middle),
+        Thing::Television => Television(sight, middle),
+        Thing::Poltergeist => Poltergeist(sight, middle),
     }
 }
 
 // An eye that floats over the floor and turns to watch the eye.
 #[composable(no_skip)]
-fn Watcher(sphere: Arc<Mesh>, sight: Sight, lamps: Lamps, middle: Vec3) {
+fn Watcher(sight: Sight, middle: Vec3) {
     let shut = rememberMutableStateOf(|| false);
     LaunchedEffectAsync(shut.get(), move |scope| {
         Box::pin(async move {
@@ -94,11 +119,11 @@ fn Watcher(sphere: Arc<Mesh>, sight: Sight, lamps: Lamps, middle: Vec3) {
             }
         })
     });
-    let frames = sight.journey.frames;
+    let bob = rememberSwing("watcher_bob", (-BOB, BOB), BOB_MILLIS);
+    let sphere = Arc::clone(&sight.level.meshes.sphere);
     Box(
         spot(EYEBALL).mesh_surface(move || {
-            let bob = (frames.get() as f32 * 0.08).sin() * 8.0;
-            let center = middle - DOWN * (WATCHER_HEIGHT + bob);
+            let center = middle - DOWN * (WATCHER_HEIGHT + bob.value());
             let transform = facing(
                 center,
                 sight.eye_in_room(),
@@ -107,7 +132,7 @@ fn Watcher(sphere: Arc<Mesh>, sight: Sight, lamps: Lamps, middle: Vec3) {
             MeshSurface {
                 mesh: Arc::clone(&sphere),
                 transform,
-                material: sight.material(Finish::Content, &transform, lamps),
+                material: sight.material(Finish::Content, &transform),
                 casts_shadow: false,
                 solid: true,
             }
@@ -211,11 +236,11 @@ fn eyeball(scope: &mut dyn DrawScope, shut: bool) {
 // A television that floats over the floor, facing the door the eye came
 // in by, and types what the entity says; ANSWER makes it say more.
 #[composable(no_skip)]
-fn Television(level: Level, sight: Sight, lamps: Lamps, middle: Vec3) {
+fn Television(sight: Sight, middle: Vec3) {
     let center = middle - DOWN * TELEVISION_HEIGHT;
     let body = Mat4::scaling(TELEVISION).then(&Mat4::translation(center));
     let lit = sight.clone();
-    let cuboid = Arc::clone(&level.meshes.cuboid);
+    let cuboid = Arc::clone(&sight.level.meshes.cuboid);
     Box(
         spot(Size {
             width: 4.0,
@@ -224,7 +249,7 @@ fn Television(level: Level, sight: Sight, lamps: Lamps, middle: Vec3) {
         .mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&cuboid),
             transform: body,
-            material: lit.material(Finish::Content, &body, lamps),
+            material: lit.material(Finish::Content, &body),
             casts_shadow: false,
             solid: true,
         })
@@ -239,8 +264,8 @@ fn Television(level: Level, sight: Sight, lamps: Lamps, middle: Vec3) {
         Vec3::new(0.0, 0.0, 1.0),
         center + Vec3::new(-width * 0.5, -height * 0.5, -TELEVISION.z * 0.5 - 0.6),
     );
-    let plane = Arc::clone(&level.meshes.plane);
-    let journey = sight.journey;
+    let plane = Arc::clone(&sight.level.meshes.plane);
+    let (journey, film) = (sight.level.journey, sight.level.film);
     Box(
         spot(SCREEN).mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&plane),
@@ -250,35 +275,49 @@ fn Television(level: Level, sight: Sight, lamps: Lamps, middle: Vec3) {
             solid: false,
         }),
         BoxSpec::default(),
-        move || Broadcast(journey),
+        move || Broadcast(journey, film),
     );
 }
 
-// The television's screen: static, and the entity's words typed over it.
+// The television's screen: static, and the entity's words typed over it,
+// a letter at a time; ANSWER starts the next line. The last line, typed in
+// full, sets the entity on the eye.
 #[composable]
-fn Broadcast(journey: Journey) {
-    let frames = journey.frames;
+fn Broadcast(journey: Journey, film: State<u32>) {
     let line = rememberMutableStateOf(|| 0_u32);
-    let started = rememberMutableStateOf(move || frames.get_non_reactive());
-    let typed = derivedStateOf(move || {
-        let words = notes::screen(line.get(), &journey);
-        let letters = frames.get().saturating_sub(started.get()) / FRAMES_PER_LETTER;
-        let shown = usize::try_from(letters).unwrap_or(usize::MAX);
-        words.chars().take(shown).collect::<String>()
+    let letters = rememberMutableStateOf(|| 0_usize);
+    let words = notes::screen(line.get(), &journey);
+    let length = words.chars().count();
+    let haunts = notes::haunts(line.get());
+    LaunchedEffectAsync(line.get(), move |scope| {
+        Box::pin(async move {
+            letters.set(0);
+            for typed in 1..=length {
+                delay(LETTER).await;
+                if !scope.is_active() {
+                    return;
+                }
+                letters.set(typed);
+            }
+            if haunts {
+                journey.haunt();
+            }
+        })
     });
     Box(
         Modifier::empty()
             .fill_max_size()
             .background(Color(0.05, 0.06, 0.07, 1.0))
-            .draw_behind(move |scope| static_noise(scope, frames.get())),
+            .draw_behind(move |scope| static_noise(scope, film.get())),
         BoxSpec::default(),
         move || {
+            let words = words.clone();
             Column(
                 Modifier::empty().fill_max_size().padding(14.0),
                 ColumnSpec::default(),
                 move || {
                     Text(
-                        typed.get(),
+                        words.chars().take(letters.get()).collect::<String>(),
                         Modifier::empty().weight(1.0),
                         mono(17.0, Color(0.85, 0.95, 0.88, 1.0)),
                     );
@@ -288,10 +327,7 @@ fn Broadcast(journey: Journey) {
                             .background(Color(0.85, 0.95, 0.88, 0.9))
                             .padding(8.0),
                         ButtonSpec::default(),
-                        move || {
-                            line.update(|line| *line += 1);
-                            started.set(frames.get_non_reactive());
-                        },
+                        move || line.update(|line| *line += 1),
                         || {
                             Text("ANSWER", Modifier::empty(), mono(14.0, Color::BLACK));
                         },
@@ -338,7 +374,7 @@ fn static_noise(scope: &mut dyn DrawScope, frame: u32) {
 // A panel that floats over the floor, swaying, with switches on it that
 // flip by themselves.
 #[composable(no_skip)]
-fn Poltergeist(plane: Arc<Mesh>, sight: Sight, lamps: Lamps, middle: Vec3) {
+fn Poltergeist(sight: Sight, middle: Vec3) {
     let on = rememberMutableStateOf(|| 0b01_0110_1001_u32);
     LaunchedEffectAsync((), move |scope| {
         Box::pin(async move {
@@ -351,20 +387,20 @@ fn Poltergeist(plane: Arc<Mesh>, sight: Sight, lamps: Lamps, middle: Vec3) {
             }
         })
     });
-    let frames = sight.journey.frames;
+    let sway = rememberSwing("poltergeist_sway", (-SWAY, SWAY), SWAY_MILLIS);
+    let plane = Arc::clone(&sight.level.meshes.plane);
     Box(
         spot(PANEL).mesh_surface(move || {
-            let sway = (frames.get() as f32 * 0.05).sin() * 0.35;
             let foot = middle - DOWN * PANEL_FOOT;
             let (width, height) = (PANEL.width * PANEL_SCALE, PANEL.height * PANEL_SCALE);
             let transform = Mat4::scaling(Vec3::new(width, height, 1.0))
                 .then(&Mat4::translation(Vec3::new(-width * 0.5, -height, 0.0)))
-                .then(&Mat4::rotation_y(sway))
+                .then(&Mat4::rotation_y(sway.value()))
                 .then(&Mat4::translation(foot));
             MeshSurface {
                 mesh: Arc::clone(&plane),
                 transform,
-                material: sight.material(Finish::Content, &transform, lamps),
+                material: sight.material(Finish::Content, &transform),
                 casts_shadow: false,
                 solid: true,
             }
