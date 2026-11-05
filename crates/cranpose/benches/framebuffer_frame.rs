@@ -22,9 +22,20 @@
 //!
 //! `SCREEN=dashboard` shows the dashboard of the ESP32 benchmarks, 320 by
 //! 480, in place of that screen: most of it changes every frame.
+//! `SCREEN=paths` shows, 320 by 480, rows that scroll and a card that fades
+//! while bars inside them change every frame: each frame changes nodes that
+//! move or fade and hold a change.
 //!
 //! `PIXELS=rgb565` draws 16-bit pixels, high byte first, as the ESP32
 //! boards' displays take them, in place of RGBA bytes.
+//!
+//! `MEMORY=tight` reports a heap almost full before the first frame, as a
+//! board with little heap left does: lazy lists keep only the items they
+//! show, and the renderer keeps less between frames.
+//!
+//! `PICTURE=file.ppm` with `REDRAW=all` saves the last frame's RGBA picture,
+//! to look at what a screen shows: without it each area lands at the start of
+//! the pixels, as a board's strip buffer takes it.
 
 #![allow(
     clippy::print_stderr,
@@ -43,16 +54,23 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 
+#[path = "../tests/support/changing_paths.rs"]
+mod changing_paths;
 #[path = "../tests/support/dashboard.rs"]
 mod dashboard;
+#[path = "../tests/support/frame_time.rs"]
+mod frame_time;
 #[path = "../tests/support/reading.rs"]
 mod reading;
+#[path = "../tests/support/text_style.rs"]
+mod text_style;
 
 use reading::{ComposedReading, DrawnReading};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
-const DASHBOARD_HEIGHT: u32 = 480;
+// The height of the screens the ESP32 boards show.
+const TALL_HEIGHT: u32 = 480;
 const FRAME_NANOS: u64 = 16_666_667;
 const WARMUP_FRAMES: u64 = 60;
 
@@ -90,9 +108,29 @@ fn bar_reads_in_draw() -> bool {
     std::env::var("BAR").is_ok_and(|bar| bar == "draw")
 }
 
-// Whether the frames show the dashboard: `SCREEN=dashboard`.
-fn shows_dashboard() -> bool {
-    std::env::var("SCREEN").is_ok_and(|screen| screen == "dashboard")
+// What the frames show: `SCREEN=dashboard`, `SCREEN=paths` or the bar.
+#[derive(Clone, Copy)]
+enum Shown {
+    Bar,
+    Dashboard,
+    Paths,
+}
+
+impl Shown {
+    fn from_env() -> Self {
+        match std::env::var("SCREEN").as_deref() {
+            Ok("dashboard") => Self::Dashboard,
+            Ok("paths") => Self::Paths,
+            _ => Self::Bar,
+        }
+    }
+
+    fn height(self) -> u32 {
+        match self {
+            Self::Bar => HEIGHT,
+            Self::Dashboard | Self::Paths => TALL_HEIGHT,
+        }
+    }
 }
 
 // How each frame's pixels are drawn: `STRIP_ROWS` and `REDRAW`, on a
@@ -166,6 +204,23 @@ impl Pixels {
         } else {
             Self::Rgba(vec![0; len * 4])
         }
+    }
+
+    // Saves an RGBA picture `width` pixels wide to `path` as a binary PPM.
+    fn save(&self, width: usize, path: &str) -> std::io::Result<()> {
+        let Self::Rgba(bytes) = self else {
+            return Err(std::io::Error::other("PICTURE saves RGBA pixels only"));
+        };
+        let height = bytes.len() / 4 / width;
+        let mut file = format!("P6\n{width} {height}\n255\n").into_bytes();
+        file.extend(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|pixel| &pixel[..3]),
+        );
+        std::fs::write(path, file)
     }
 
     fn checksum(&self) -> u64 {
@@ -263,10 +318,10 @@ fn Nested(depth: usize) {
 
 #[composable]
 fn Screen() {
-    if shows_dashboard() {
-        dashboard::Dashboard("Cranpose");
-    } else {
-        BarScreen();
+    match Shown::from_env() {
+        Shown::Bar => BarScreen(),
+        Shown::Dashboard => dashboard::Dashboard("Cranpose"),
+        Shown::Paths => changing_paths::ChangingPaths("Cranpose"),
     }
 }
 
@@ -341,17 +396,16 @@ fn main() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(600);
-    let height = if shows_dashboard() {
-        DASHBOARD_HEIGHT
-    } else {
-        HEIGHT
-    };
+    let height = Shown::from_env().height();
     let Ok(mut framebuffer) = Framebuffer::new(WIDTH, height, 1.0, SystemTheme::Dark, &[], Screen)
     else {
         eprintln!("the framebuffer could not be created");
         return;
     };
     framebuffer.set_active(true);
+    if std::env::var("MEMORY").is_ok_and(|memory| memory == "tight") {
+        framebuffer.report_memory(0, 1);
+    }
     let drawing = Drawing::from_env(height);
     let mut areas = Vec::new();
     let mut pixels = Pixels::from_env(WIDTH as usize * height as usize);
@@ -364,4 +418,9 @@ fn main() {
     );
     steady_frames(&mut framebuffer, (&mut areas, &mut pixels), drawing, frames);
     println!("frames {frames} checksum {}", black_box(pixels.checksum()));
+    if let Ok(path) = std::env::var("PICTURE")
+        && let Err(error) = pixels.save(WIDTH as usize, &path)
+    {
+        eprintln!("the picture could not be saved: {error}");
+    }
 }

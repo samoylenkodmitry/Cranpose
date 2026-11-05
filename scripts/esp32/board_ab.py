@@ -41,8 +41,9 @@ ROOT = board_run.ROOT
 # Each screen shows for 6 s; the boot takes about 1.5 s more.
 SCREEN_SECONDS = 6
 BOOT_SECONDS = 2
-# The classic ESP32 runs out of memory on the dashboard.
-DASHBOARD = {"es3c35p": True, "e32r35t": False}
+# The classic ESP32 runs out of memory on the dashboard and on the changing
+# paths, so it shows the demo's four screens only.
+LARGE_SCREENS = {"es3c35p": True, "e32r35t": False}
 GAPS = 6
 # Below this many bytes; a cache way is 4 KB on the ES3C35P. The E32R35T
 # maps 3,342,304 bytes of flash code, of which the demo leaves about 15 KB,
@@ -101,7 +102,7 @@ def build(tree, board, commit, placements):
     perfstats = tree / "benchmarks/esp32/perfstats"
     window = out / "sdkconfig.window"
     window.write_text("CONFIG_PERFSTATS_WINDOW_MS=1000\n")
-    features = [board, "screens-in-turn", *(["dashboard"] if DASHBOARD[board] else [])]
+    features = [board, "screens-in-turn", *(["dashboard"] if LARGE_SCREENS[board] else [])]
     triple = f"xtensa-{mcu}-espidf".upper().replace("-", "_")
     environment = {f"CARGO_TARGET_{triple}_LINKER": str(pathlib.Path(__file__).with_name("keep_link.py")),
                    "KEEP_LINK_DIR": str(out / "link")}
@@ -190,7 +191,7 @@ def main():
     commits = [git("rev-parse", revision) for revision in args.revisions]
     tree = worktree(args.board)
     builds = {commit: build(tree, args.board, commit, args.placements) for commit in dict.fromkeys(commits)}
-    screens = 4 + DASHBOARD[args.board]
+    screens = 4 + 2 * LARGE_SCREENS[args.board]
     seconds = screens * SCREEN_SECONDS + BOOT_SECONDS
     names = list(dict.fromkeys(args.revisions))
     if len(names) != len(args.revisions):

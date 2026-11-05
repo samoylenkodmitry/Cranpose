@@ -11,9 +11,14 @@
 
 use std::f32::consts::TAU;
 
-use cranpose::{prelude::*, text::TextUnit};
+use cranpose::prelude::*;
 use cranpose_animation::{Easing, animateFloatAsState, tween};
-use cranpose_core::{LaunchedEffectAsync, MutableState, derivedStateOf, rememberMutableStateOf};
+use cranpose_core::derivedStateOf;
+
+use super::{
+    frame_time::{Time, frame_time},
+    text_style::text_style as style,
+};
 
 // The values the screen shows at `t` milliseconds after its first frame.
 pub(crate) mod timeline {
@@ -115,17 +120,6 @@ const RED: Color = Color::from_rgb_u8(255, 107, 107);
 const TEAL: Color = Color::from_rgb_u8(78, 205, 196);
 const AVATARS: [Color; 5] = [BLUE, PINK, TEAL, ORANGE, VIOLET];
 
-fn style(color: Color, size: f32) -> TextStyle {
-    TextStyle {
-        span_style: SpanStyle {
-            color: Some(color),
-            font_size: TextUnit::Sp(size),
-            ..SpanStyle::default()
-        },
-        ..TextStyle::default()
-    }
-}
-
 fn card() -> Modifier {
     Modifier::empty().background(CARD).rounded_corners(12.0)
 }
@@ -133,9 +127,6 @@ fn card() -> Modifier {
 fn centered_row() -> RowSpec {
     RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically)
 }
-
-// The milliseconds since the first frame, read where a value changes.
-type Time = MutableState<u64>;
 
 #[composable]
 fn Header(title: &'static str, time: Time) {
@@ -507,23 +498,13 @@ fn SensorList(state: LazyListState) {
 // The dashboard, titled `title`.
 #[composable]
 pub fn Dashboard(title: &'static str) {
-    let time = rememberMutableStateOf(|| 0u64);
     let list = rememberLazyListState();
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let start = clock.next_frame().await;
-            loop {
-                let now = clock.next_frame().await;
-                let t = now.saturating_sub(start) / 1_000_000;
-                time.set(t);
-                let scroll = timeline::scroll(t);
-                list.scroll_to_item(
-                    (scroll / timeline::ROW_HEIGHT) as usize,
-                    (scroll % timeline::ROW_HEIGHT) as f32,
-                );
-            }
-        })
+    let time = frame_time(move |t| {
+        let scroll = timeline::scroll(t);
+        list.scroll_to_item(
+            (scroll / timeline::ROW_HEIGHT) as usize,
+            (scroll % timeline::ROW_HEIGHT) as f32,
+        );
     });
     Column(
         Modifier::empty()

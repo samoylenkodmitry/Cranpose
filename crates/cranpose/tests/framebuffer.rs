@@ -18,6 +18,10 @@ use cranpose_animation::{
 
 #[path = "support/dashboard.rs"]
 mod dashboard;
+#[path = "support/frame_time.rs"]
+mod frame_time;
+#[path = "support/text_style.rs"]
+mod text_style;
 
 const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
 const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);

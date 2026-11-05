@@ -1,13 +1,36 @@
 #![deny(unsafe_code)]
 
 mod board;
+#[cfg(any(
+    feature = "changing-paths",
+    all(feature = "screens-in-turn", not(feature = "e32r35t"))
+))]
+#[path = "../../../crates/cranpose/tests/support/changing_paths.rs"]
+mod changing_paths;
 #[cfg(feature = "dashboard")]
 #[path = "../../../crates/cranpose/tests/support/dashboard.rs"]
 mod dashboard;
-#[cfg(any(not(feature = "dashboard"), feature = "screens-in-turn"))]
+#[cfg(any(
+    not(any(feature = "dashboard", feature = "changing-paths")),
+    feature = "screens-in-turn"
+))]
 mod demo;
+#[cfg(any(
+    feature = "dashboard",
+    feature = "changing-paths",
+    all(feature = "screens-in-turn", not(feature = "e32r35t"))
+))]
+#[path = "../../../crates/cranpose/tests/support/frame_time.rs"]
+mod frame_time;
 #[cfg(feature = "screens-in-turn")]
 mod in_turn;
+#[cfg(any(
+    feature = "dashboard",
+    feature = "changing-paths",
+    all(feature = "screens-in-turn", not(feature = "e32r35t"))
+))]
+#[path = "../../../crates/cranpose/tests/support/text_style.rs"]
+mod text_style;
 
 use cranpose::prelude::*;
 use cranpose_platform_esp_idf::{DisplayConfig, RunError, run};
@@ -15,14 +38,23 @@ use cranpose_platform_esp_idf::{DisplayConfig, RunError, run};
 static FONTS: &[&[u8]] = &[include_bytes!("../assets/NotoSans-Latin.ttf")];
 
 #[cfg(all(
-    feature = "dashboard",
+    any(feature = "dashboard", feature = "changing-paths"),
     any(
         feature = "text-drawn",
         feature = "text-composed",
         feature = "workload"
     )
 ))]
-compile_error!("dashboard replaces the demo's screen, which the other benchmark features change");
+compile_error!(
+    "dashboard and changing-paths replace the demo's screen, which the other benchmark features change"
+);
+
+#[cfg(all(
+    feature = "dashboard",
+    feature = "changing-paths",
+    not(feature = "screens-in-turn")
+))]
+compile_error!("dashboard and changing-paths each replace the demo's screen: pick one");
 
 #[cfg(all(
     feature = "screens-in-turn",
@@ -36,15 +68,22 @@ compile_error!(
     "screens-in-turn shows every line in turn: drop text-drawn, text-composed and workload"
 );
 
-// The screen: the demo's own, with the `dashboard` feature the dashboard of
-// the benchmarks, or with `screens-in-turn` each of them in turn.
+// The screen: the demo's own, with the `dashboard` or `changing-paths`
+// feature that screen of the benchmarks, or with `screens-in-turn` each of
+// them in turn.
 #[composable]
 fn Screen() {
     #[cfg(feature = "screens-in-turn")]
     in_turn::Screens();
     #[cfg(all(feature = "dashboard", not(feature = "screens-in-turn")))]
     dashboard::Dashboard(board::TITLE);
-    #[cfg(not(any(feature = "dashboard", feature = "screens-in-turn")))]
+    #[cfg(all(feature = "changing-paths", not(feature = "screens-in-turn")))]
+    changing_paths::ChangingPaths(board::TITLE);
+    #[cfg(not(any(
+        feature = "dashboard",
+        feature = "changing-paths",
+        feature = "screens-in-turn"
+    )))]
     demo::Screen(demo::LINE);
 }
 
