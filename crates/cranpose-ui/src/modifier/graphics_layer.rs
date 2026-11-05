@@ -99,7 +99,10 @@ impl Modifier {
     /// children's flat draws stay flat: those that come before the first
     /// child in 3D are drawn under the scene, the rest over it.
     ///
-    /// A `scene3d` inside the scene is a doorway: its node's rect, in its
+    /// The scene covers what the modifiers after this one lay out, as a
+    /// Compose graphics layer does: a padding before `scene3d` insets it.
+    ///
+    /// A `scene3d` inside the scene is a doorway: the rect it covers, in its
     /// frame, opens onto a space of its own, which lies behind it, placed so
     /// the inner scene's camera stands in the doorway's middle (see
     /// [`Camera::doorway`](cranpose_ui_graphics::space::Camera::doorway)).
@@ -148,9 +151,12 @@ impl Modifier {
     /// Draws this node's content on a mesh in its scene, placed in the
     /// node's 3D frame (see [`scene3d`](Self::scene3d)).
     ///
-    /// The node's size is the size of the content laid on the mesh: content
-    /// point `(x, y)` shows where the mesh's texture coordinate is
-    /// `(x / width, y / height)`. The surface's transform places the mesh in
+    /// The content laid on the mesh is what the modifiers after this one lay
+    /// out, as a Compose graphics layer covers the coordinator after it:
+    /// the node's own size, unless a modifier before this one, as a padding
+    /// or a size the parent does not hold, moves or sizes it. Content point
+    /// `(x, y)` from that content's corner shows where the mesh's texture
+    /// coordinate is `(x / width, y / height)`. The surface's transform places the mesh in
     /// the node's frame, which starts where layout placed the node. The
     /// content stays live and takes pointer input where it shows on the
     /// mesh. The frames of the node's children lie in its content: x and y

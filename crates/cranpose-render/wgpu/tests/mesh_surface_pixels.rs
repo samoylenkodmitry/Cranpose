@@ -6,7 +6,7 @@ use std::{
 use cranpose_core::{MutableState, remember, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Color, Modifier, Size,
+    Alignment, Color, Modifier, Size,
     space::{
         Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Shaded, Vec3,
         Volume,
@@ -204,21 +204,65 @@ fn red_blue_wall(plane: &Arc<Mesh>, transform: Mat4) {
     Row(
         surface(plane, transform, (Material::Unlit, false)),
         RowSpec::default(),
-        || {
-            for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
-                Box(
+        red_blue_halves,
+    );
+}
+
+// A red square on the left, a blue one on the right.
+fn red_blue_halves() {
+    for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
+        Box(
+            Modifier::empty()
+                .size(Size {
+                    width: 128.0,
+                    height: 128.0,
+                })
+                .background(color),
+            BoxSpec::default(),
+            || {},
+        );
+    }
+}
+
+// The wall of `HeldWallScene`.
+const HELD_WALL: Vec3 = Vec3::new(0.0, 0.0, 300.0);
+const HELD_WALL_SIDE: (f32, f32) = (400.0, 200.0);
+
+// A red and blue wall whose node a parent narrower than its content holds:
+// it lays out its content at its own size, past the parent's width.
+#[composable]
+fn HeldWallScene() {
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        let plane = Arc::clone(&plane);
+        Box(
+            Modifier::empty().size(Size {
+                width: 64.0,
+                height: 64.0,
+            }),
+            BoxSpec::default(),
+            move || {
+                let plane = Arc::clone(&plane);
+                Row(
                     Modifier::empty()
+                        .wrap_content_size(Alignment::TOP_START, true)
                         .size(Size {
-                            width: 128.0,
+                            width: 256.0,
                             height: 128.0,
                         })
-                        .background(color),
-                    BoxSpec::default(),
-                    || {},
+                        .mesh_surface(move || MeshSurface {
+                            mesh: Arc::clone(&plane),
+                            transform: panel(HELD_WALL_SIDE, HELD_WALL),
+                            material: Material::Unlit,
+                            casts_shadow: false,
+                            solid: true,
+                        }),
+                    RowSpec::default(),
+                    red_blue_halves,
                 );
-            }
-        },
-    );
+            },
+        );
+    });
 }
 
 #[test]
@@ -341,6 +385,24 @@ fn a_mesh_surface_past_the_surface_budget_draws_its_content_at_a_lower_scale() {
     assert!(
         wall[1] > 240 && wall[0] < 16 && wall[2] < 16,
         "the wall shows its green content: {wall:?}"
+    );
+}
+
+#[test]
+fn a_surface_its_parent_holds_narrower_shows_all_of_its_content() {
+    let Some(frame) = capture(HeldWallScene) else {
+        return;
+    };
+    let quarter = Vec3::new(HELD_WALL_SIDE.0 * 0.25, 0.0, 0.0);
+    let left = pixel_at(&frame, HELD_WALL - quarter);
+    let right = pixel_at(&frame, HELD_WALL + quarter);
+    assert!(
+        left[0] > 240 && left[2] < 16,
+        "the wall's left half shows its red content: {left:?}"
+    );
+    assert!(
+        right[2] > 240 && right[0] < 16,
+        "the wall's right half shows its blue content, past the parent's width: {right:?}"
     );
 }
 

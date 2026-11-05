@@ -16,6 +16,7 @@ mod recording_reuse;
 mod scaling_list_scene;
 mod size_updates;
 mod space_frames;
+mod surface_layer_bounds;
 mod teardown_survivors;
 mod text_decorations;
 mod text_glyph_fallback;

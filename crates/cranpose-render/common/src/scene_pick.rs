@@ -2,13 +2,13 @@ use std::cell::Cell;
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
-    Point, Size,
+    Point, Rect, Size,
     space::{Camera, Mat4, MeshSurface, Ray, SurfaceHit, Vec3},
 };
 
 use crate::{
     graph::{LayerNode, ProjectiveTransform},
-    space::{EyeView, SpaceTree, node_size},
+    space::{EyeView, SpaceTree},
 };
 
 /// How much past a doorway a ray that goes through it looks for what lies
@@ -65,7 +65,9 @@ type LastPick = (Point, Option<(usize, SurfaceHit)>);
 struct PickSurface {
     node_id: Option<NodeId>,
     surface: MeshSurface,
-    size: Size,
+    // The rect of its content in its layer, which the mesh's texture
+    // spans. The pick's content points lie in the layer.
+    content: Rect,
     /// The seen space the surface lies in.
     seen: usize,
     /// The triangle the last ray that met this surface met, on whose plane
@@ -73,14 +75,32 @@ struct PickSurface {
     held: Cell<Option<u32>>,
 }
 
+impl PickSurface {
+    // The content point `point`, from the corner of the texture, in the
+    // surface's layer.
+    fn in_layer(&self, point: Point) -> Point {
+        Point::new(point.x + self.content.x, point.y + self.content.y)
+    }
+
+    // Where `ray` meets the surface, its content point in the layer.
+    fn cast(&self, ray: Ray) -> Option<SurfaceHit> {
+        let mut hit = self.surface.cast(ray, self.content.size())?;
+        hit.point = self.in_layer(hit.point);
+        Some(hit)
+    }
+}
+
 impl ScenePick {
     /// The pick of the scene that `layer` shows, with `to_window` mapping
     /// the layer to the window; `None` when the layer shows no scene. Its
     /// surfaces are those the window's eye sees.
     pub fn of(layer: &LayerNode, to_window: ProjectiveTransform) -> Option<Self> {
+        // The scene fills its layer's bounds.
+        let bounds = layer.local_bounds;
+        let to_window = ProjectiveTransform::translation(bounds.x, bounds.y).then(to_window);
         let window_to_scene = to_window.inverse()?;
         let tree = SpaceTree::of(layer)?;
-        let view = EyeView::of(&tree, node_size(layer));
+        let view = EyeView::of(&tree, bounds.size());
         let seen_scenes = view
             .seen
             .iter()
@@ -103,7 +123,7 @@ impl ScenePick {
             .map(|seen| PickSurface {
                 node_id: seen.layer.node_id,
                 surface: seen.surface,
-                size: seen.size,
+                content: seen.content,
                 seen: seen.seen,
                 held: Cell::new(None),
             })
@@ -179,13 +199,14 @@ impl ScenePick {
     /// in.
     pub fn drag_point_along(&self, ray: Ray, index: usize) -> Option<Point> {
         let target = self.surfaces.get(index)?;
-        if let Some(hit) = target.surface.cast(ray, target.size) {
+        if let Some(hit) = target.cast(ray) {
             target.held.set(Some(hit.triangle));
             return Some(hit.point);
         }
         target
             .surface
-            .cast_plane(ray, target.held.get()?, target.size)
+            .cast_plane(ray, target.held.get()?, target.content.size())
+            .map(|point| target.in_layer(point))
     }
 
     /// Where the content point `content` of surface `index` shows in the
@@ -193,7 +214,10 @@ impl ScenePick {
     /// nearer than the camera's near plane or behind the eye.
     pub fn window_point(&self, index: usize, content: Point) -> Option<Point> {
         let target = self.surfaces.get(index)?;
-        let at = target.surface.point_at(content, target.size)?;
+        let from_corner = Point::new(content.x - target.content.x, content.y - target.content.y);
+        let at = target
+            .surface
+            .point_at(from_corner, target.content.size())?;
         let shown = self.camera.project(at, self.size)?;
         Some(self.scene_to_window.map_point(shown))
     }
@@ -236,8 +260,7 @@ impl ScenePick {
             .filter(|(_, target)| target.seen == seen)
             .filter_map(|(index, target)| {
                 target
-                    .surface
-                    .cast(ray, target.size)
+                    .cast(ray)
                     .filter(|hit| hit.distance > beyond)
                     .map(|hit| (index, hit))
             })
