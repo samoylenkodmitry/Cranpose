@@ -36,10 +36,7 @@ struct Repush<'a> {
     rewrite: &'a mut Option<Box<Rewrite>>,
     window: ClipBounds,
     areas: &'a mut Vec<ClipBounds>,
-    // Where the update's own areas start in `areas`. Each rewrite puts its
-    // areas there, before those of the rewrites that ran before it and lie
-    // after it in the scene: the areas follow the scene's order, in which a
-    // host sends them.
+    // Where the update's own areas start in `areas`.
     first_area: usize,
     diagnostics: &'a RenderDiagnostics,
     light: ShadowLight,
@@ -141,6 +138,10 @@ impl InPlaceUpdate<'_> {
         let walked = repush
             .visit_node(walk, (root, NodePlace::Root), &context, (0, None))
             .and_then(|()| repush.push_targets(walk));
+        // The rewrites ran last first, and each put its areas in reverse
+        // after those before: in reverse once more, the update's areas
+        // follow the scene's order, in which a host sends them.
+        repush.areas[repush.first_area..].reverse();
         repush.targets.clear();
         walk.release();
         let held = repush.held;
@@ -336,7 +337,7 @@ impl Repush<'_> {
             .expect("the rewrite started above");
         rewrite.finish(self.scene, record);
         self.scene.hits_changed |= rewrite.replaced_hits();
-        (*self.reach, self.held) = rewrite.results((self.areas, self.first_area));
+        (*self.reach, self.held) = rewrite.results(self.areas);
         *self.rewrite = Some(rewrite);
         Ok(())
     }

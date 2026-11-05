@@ -285,7 +285,9 @@ impl<'a> LayoutWalk<'a> {
     // subtree under `context`: over its old subtree, whose children's old
     // records are `old`, while a rewrite pushes the subtree it is in again.
     // A node whose layer holds a 3D space lowers whole, and the scene keeps
-    // its subtree.
+    // its subtree. Out of line: the update and the children of a layer each
+    // call it, and a copy in each would take room in the instruction cache.
+    #[inline(never)]
     pub(crate) fn push(
         &self,
         (node, place): (NodeId, NodePlace),
@@ -507,6 +509,9 @@ impl ChildSlot<'_> {
 
     // Pushes the children's subtrees under `context`, copying from `reuse`'s
     // scene those whose nodes did not change and that lie where they did.
+    // Out of line: a layer calls it once, from the code that pushes each of
+    // its own draws.
+    #[inline(never)]
     pub(crate) fn push_children(
         &mut self,
         scene: &mut RasterScene,

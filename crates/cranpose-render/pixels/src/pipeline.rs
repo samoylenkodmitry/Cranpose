@@ -554,9 +554,6 @@ fn push_layer_shadow_of(
     parent_visual_clip: Option<Rect>,
     light: ShadowLight,
 ) {
-    if layer.graphics_layer.shadow_elevation <= 0.0 {
-        return;
-    }
     let shadow_clip = resolve_clip(
         parent_visual_clip,
         layer
@@ -740,15 +737,19 @@ fn push_layer_items(
     }
 
     // A surface's layer casts its shadow where its parent draws the surface.
+    // The test of the elevation stays here: most layers cast none, and the
+    // call would cost each of them.
     if !context.surface_root {
-        push_layer_shadow_of(
-            scene,
-            layer,
-            &mapping,
-            &transform,
-            context.parent_visual_clip,
-            context.light,
-        );
+        if layer.graphics_layer.shadow_elevation > 0.0 {
+            push_layer_shadow_of(
+                scene,
+                layer,
+                &mapping,
+                &transform,
+                context.parent_visual_clip,
+                context.light,
+            );
+        }
         if layer.isolation.explicit_offscreen || !scales_and_moves(&transform) {
             push_layer_surface(layer, scene, context, &transform, slot);
             return;

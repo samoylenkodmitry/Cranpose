@@ -326,6 +326,16 @@ impl Rewrite {
             None if self.next == self.stop => return,
             None => self.next,
         };
+        self.replace_from(scene, record, from);
+    }
+
+    // What `finish` does for a subtree that pushed other items than before,
+    // from `from` on. Out of line: most rewrites push the items they pushed
+    // before, and the splices would take room in the instruction cache from
+    // the code those run.
+    #[cold]
+    #[inline(never)]
+    fn replace_from(&mut self, scene: &mut RasterScene, record: usize, from: Places) {
         let stop = self.stop;
         let order = from.items.order..stop.items.order;
         let reach = (self.reach.get(order.clone())).filter(|_| self.held == UpdatedReach::Held);
@@ -377,15 +387,18 @@ impl Rewrite {
 
     // Hands back the reach list the rewrite took and whether it still holds
     // where each item of the scene reaches, and puts the areas it changed,
-    // merged, into `areas` at `at`. The room a rewrite of many items took for
-    // their areas goes, and `areas` takes no more than the merged ones: a
-    // canvas drawn again each frame holds what one drawn once does.
+    // merged and in reverse order, after those `areas` holds. The room a
+    // rewrite of many items took for their areas goes, and `areas` takes no
+    // more than the merged ones: a canvas drawn again each frame holds what
+    // one drawn once does.
     pub(crate) fn results(
         &mut self,
-        (areas, at): (&mut Vec<ClipBounds>, usize),
+        areas: &mut Vec<ClipBounds>,
     ) -> (Vec<Option<ClipBounds>>, UpdatedReach) {
         merge_areas(&mut self.areas);
-        areas.splice(at..at, self.areas.drain(..));
+        let from = areas.len();
+        areas.append(&mut self.areas);
+        areas[from..].reverse();
         if self.areas.capacity() > KEPT_AREAS {
             self.areas = Vec::new();
         }
