@@ -15,7 +15,10 @@ use cranpose_render_common::{
     graph::{ProjectiveTransform, RenderNode},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
-    scene_builder::{LowerContext, NodePlace, RecordingStore, root_layer_bounds, visit_kept_node},
+    scene_builder::{
+        LowerContext, NodePlace, RecordingStore, release_lowered, root_layer_bounds,
+        visit_kept_node,
+    },
 };
 
 use super::{ContentStyle, RasterTraversalContext};
@@ -181,7 +184,7 @@ impl InPlaceUpdate<'_> {
             walked.clear();
         }
         scene.walked = walked;
-        walk.release();
+        release_lowered();
         merge_areas(areas);
         pushed.ok()?;
         Some(held)

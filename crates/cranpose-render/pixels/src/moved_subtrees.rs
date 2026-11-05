@@ -7,8 +7,8 @@ use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::scene_builder::MovedSubtree;
 use cranpose_ui_graphics::MemoryHeadroom;
 
-// Each subtree by its child, with the number of updates that ended since one
-// pushed it. A walk takes a subtree for each child that moved, and a list
+// Each subtree by its child, with the number of updates that started since
+// one pushed it. A walk takes a subtree for each child that moved, and a list
 // that scrolls moves many: they are found by the child.
 #[derive(Default)]
 pub(crate) struct MovedSubtrees {
@@ -39,10 +39,15 @@ impl MovedSubtrees {
         }
     }
 
-    // Lets go the subtrees no update pushed for longer than
-    // `UNPUSHED_UPDATES`, or `TIGHT_UNPUSHED_UPDATES` at `headroom` Tight,
-    // as an update ends.
-    pub(crate) fn end_update(&mut self, headroom: MemoryHeadroom) {
+    // Lets go, as an update starts, in one pass, the subtrees no update
+    // pushed in the last `UNPUSHED_UPDATES`, or `TIGHT_UNPUSHED_UPDATES` at
+    // `headroom` Tight, and those whose nodes are not `clean`: the node or a
+    // node beneath it changed, so what the subtree draws may be old.
+    pub(crate) fn begin_update(
+        &mut self,
+        clean: impl Fn(NodeId) -> bool,
+        headroom: MemoryHeadroom,
+    ) {
         if self.kept.is_empty() {
             return;
         }
@@ -50,23 +55,11 @@ impl MovedSubtrees {
             MemoryHeadroom::Tight => TIGHT_UNPUSHED_UPDATES,
             MemoryHeadroom::Ample => UNPUSHED_UPDATES,
         };
-        let stale = self.kept.extract_if(|_, (_, ended)| {
-            *ended += 1;
-            *ended > unpushed + 1
+        let stale = self.kept.extract_if(|node, (_, waited)| {
+            *waited += 1;
+            *waited > unpushed + 1 || !clean(*node)
         });
         for (_, (subtree, _)) in stale {
-            subtree.recycle();
-        }
-    }
-
-    // Lets go the subtrees whose nodes are not `clean` as an update starts:
-    // the node or a node beneath it changed, so what the subtree draws may
-    // be old.
-    pub(crate) fn drop_changed(&mut self, clean: impl Fn(NodeId) -> bool) {
-        if self.kept.is_empty() {
-            return;
-        }
-        for (_, (subtree, _)) in self.kept.extract_if(|node, _| !clean(*node)) {
             subtree.recycle();
         }
     }

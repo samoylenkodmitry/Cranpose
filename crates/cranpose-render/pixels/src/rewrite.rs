@@ -137,14 +137,17 @@ impl Rewrite {
         self.here().items
     }
 
-    // How many records the scene would hold up to where the subtree opens
-    // its next one, were the spill in place.
-    pub(crate) fn record_count(&self) -> usize {
-        self.here().records
+    // How many records and items of each kind the scene would hold up to
+    // where the subtree opens its next record, were the spill in place: the
+    // end of a record that closes there.
+    pub(crate) fn record_end(&self) -> (usize, ItemCounts) {
+        let here = self.here();
+        (here.records, here.items)
     }
 
     // Where the subtree pushes its next item, opens its next record and
     // notes its next passed-down entry, were the spill in place.
+    #[inline]
     fn here(&self) -> Places {
         match self.spilled_at {
             Some(at) => Places {
