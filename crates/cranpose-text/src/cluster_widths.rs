@@ -1,6 +1,5 @@
 use crate::{
     layout_input::LayoutInput,
-    least_leaving::least_leaving,
     shaped_glyphs::ShapedGlyph,
     shaped_item::{ShapedItem, scale},
     text_layout::font_units,
@@ -86,22 +85,17 @@ impl ClusterWidths {
     }
 
     // The last cluster boundary from `start` to `end` up to which the text
-    // from `start` fits `width`; `start` when no cluster fits.
-    pub(crate) fn last_fitting(&self, start: usize, end: usize, width: f32) -> usize {
-        let limit = self.before(start) + width;
+    // from `start` plus `edge` fits `width`, summed as a line fits its wrap
+    // width; `start` when no cluster fits.
+    pub(crate) fn last_fitting(&self, start: usize, end: usize, edge: f32, width: f32) -> usize {
+        let before_start = self.before(start);
         let last = held(end);
-        let fits = self
-            .clusters
-            .partition_point(|&(cluster, before)| cluster <= last && before <= limit);
+        let fits = self.clusters.partition_point(|&(cluster, before)| {
+            cluster <= last && before - before_start + edge <= width
+        });
         self.clusters[..fits]
             .last()
             .map_or(start, |&(cluster, _)| offset(cluster).max(start))
-    }
-
-    // The least room in which `last_fitting` from `start` takes the text up
-    // to `end`, in the sum it compares.
-    pub(crate) fn least_room(&self, start: usize, end: usize) -> f32 {
-        least_leaving(self.before(end), -self.before(start))
     }
 
     // The first cluster boundary from `start` to `end` from which the text up
