@@ -10,7 +10,7 @@ use cranpose_ui_graphics::{
 };
 
 use super::RasterLayerBounds;
-use crate::{raster_scene::RasterScene, style::scale_corner_radii};
+use crate::{scene::RasterScene, style::scale_corner_radii};
 
 pub(super) fn push_layer_shadow(
     scene: &mut RasterScene,
@@ -82,7 +82,7 @@ pub(super) fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
     samples
 }
 
-pub(super) fn expanded_shape_rect(shape: &crate::raster_scene::DrawShape, expansion: f32) -> Rect {
+pub(super) fn expanded_shape_rect(shape: &crate::scene::DrawShape, expansion: f32) -> Rect {
     Rect {
         x: shape.rect.x - expansion,
         y: shape.rect.y - expansion,
@@ -93,7 +93,7 @@ pub(super) fn expanded_shape_rect(shape: &crate::raster_scene::DrawShape, expans
 
 pub(super) fn push_blurred_shape_samples(
     scene: &mut RasterScene,
-    shape: &crate::raster_scene::DrawShape,
+    shape: &crate::scene::DrawShape,
     blend_mode: BlendMode,
     clip: Option<Rect>,
     blur_radius: f32,

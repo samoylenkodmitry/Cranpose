@@ -7,7 +7,7 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
-use cranpose_render_pixels::PixelsRenderer;
+use cranpose_render_pixels::{Picture, PixelsRenderer};
 use cranpose_ui::{Box, BoxSpec, Modifier};
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 
@@ -65,19 +65,19 @@ fn draw(shell: &mut AppShell<PixelsRenderer>) -> Vec<u8> {
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     shell
         .primary()
-        .with_renderer(|renderer| renderer.draw(&mut pixels, WIDTH, HEIGHT));
+        .with_renderer(|renderer| renderer.draw_scaled(&mut pixels, WIDTH, HEIGHT, 1.0));
     pixels
 }
 
 // Draws the areas the shell's picture changed in into `kept`.
-fn redraw_changed(shell: &mut AppShell<PixelsRenderer>, kept: &mut [u8]) {
+fn redraw_changed(shell: &mut AppShell<PixelsRenderer>, picture: &mut Picture, kept: &mut [u8]) {
     let mut areas = Vec::new();
     let mut area_pixels = Vec::new();
     shell.primary().with_renderer(|renderer| {
-        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
+        renderer.update_picture(picture, WIDTH, HEIGHT, 1.0, &mut areas);
         for area in &areas {
             area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
-            renderer.draw_picture_area(*area, &mut area_pixels);
+            renderer.draw_picture_area(picture, *area, &mut area_pixels);
             let row_bytes = area.width as usize * 4;
             for (row, source) in area_pixels.chunks_exact(row_bytes).enumerate() {
                 let start = ((area.y as usize + row) * WIDTH as usize + area.x as usize) * 4;
@@ -90,15 +90,16 @@ fn redraw_changed(shell: &mut AppShell<PixelsRenderer>, kept: &mut [u8]) {
 #[test]
 fn each_step_a_layer_block_reads_paints_as_a_shell_made_at_that_step() {
     let (mut kept_shell, captured) = shell(0);
+    let mut picture = Picture::default();
     let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     kept_shell.update();
-    redraw_changed(&mut kept_shell, &mut kept);
+    redraw_changed(&mut kept_shell, &mut picture, &mut kept);
     for step in 1..STEPS {
         (*captured.borrow())
             .expect("the composition remembered the step")
             .set(step);
         kept_shell.update();
-        redraw_changed(&mut kept_shell, &mut kept);
+        redraw_changed(&mut kept_shell, &mut picture, &mut kept);
         let (mut made, _) = shell(step);
         made.update();
         let made = draw(&mut made);

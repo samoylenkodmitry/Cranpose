@@ -329,7 +329,7 @@ fn build_layer_node_for_test(
         let mut layer = LayerNode::default();
         write_snapshot_layer(
             snapshot,
-            &LowerContext {
+            LowerContext {
                 inherited_motion_context_animated,
                 ..LowerContext::ROOT
             },
@@ -2463,7 +2463,6 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
                 size: Size::default(),
                 motion_context_animated: false,
                 layer: None,
-                store: RecordingStore::Command,
             },
             phase,
         );

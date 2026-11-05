@@ -101,7 +101,7 @@ pub(super) fn translate_leaf_text(
         layout_state,
         &container.graphics_layer,
         container.local_bounds,
-        &ancestors.parent_abs,
+        ancestors.parent_abs,
     );
     let offset = ancestors.parent_content_offset;
     apply_translated_container_state(container, slices, layout_state, offset, geometry);

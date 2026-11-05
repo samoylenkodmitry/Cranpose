@@ -18,7 +18,7 @@ use cranpose_ui_graphics::{
 use cranpose_ui_graphics::{CornerRadii, Rect};
 
 #[cfg(test)]
-use crate::raster_scene::{ImageDraw, RasterScene};
+use crate::scene::{ImageDraw, RasterScene};
 
 #[cfg(test)]
 pub(crate) fn apply_draw_commands(

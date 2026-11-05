@@ -18,7 +18,7 @@ use super::{
     },
     push_text_style_draws,
 };
-use crate::raster_scene::{ImageDraw, RasterScene, TextDraw};
+use crate::scene::{ImageDraw, RasterScene, TextDraw};
 
 /// Pushes the items of `child`, a primitive or draw run of a layer.
 pub(super) fn render_draw_child(
@@ -279,13 +279,10 @@ fn shape_pair_for_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     blend_mode: BlendMode,
-) -> Option<(crate::raster_scene::DrawShape, BlendMode)> {
+) -> Option<(crate::scene::DrawShape, BlendMode)> {
     let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
     let blend_mode = params.blend_mode;
-    Some((
-        crate::raster_scene::DrawShape::of_params(params),
-        blend_mode,
-    ))
+    Some((crate::scene::DrawShape::of_params(params), blend_mode))
 }
 
 // Pushes `shape` and then `cutout`, which cuts it, under `clip`: widened and
@@ -294,8 +291,8 @@ fn shape_pair_for_primitive(
 fn push_cut_shape_samples(
     scene: &mut RasterScene,
     (shape, cutout): (
-        (crate::raster_scene::DrawShape, BlendMode),
-        (crate::raster_scene::DrawShape, BlendMode),
+        (crate::scene::DrawShape, BlendMode),
+        (crate::scene::DrawShape, BlendMode),
     ),
     clip: Option<Rect>,
     blur_radius: f32,

@@ -9,21 +9,18 @@
 //! layers reads one record a layer and pushes nothing for the layers above
 //! them.
 
-use cranpose_core::NodeId;
 use cranpose_render_common::{
-    graph::{ProjectiveTransform, RenderNode},
+    graph::{ProjectiveTransform, RenderGraph, for_each_in_draw_order},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
-    scene_builder::{LowerContext, NodePlace, RecordingStore, root_layer_bounds, visit_kept_node},
 };
 
-use super::{ContentStyle, RasterTraversalContext};
+use super::{ContentStyle, RasterTraversalContext, populate_draws_from_graph, scene_light};
 use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
-    layout_walk::{LayoutWalk, OldChildren, child_record_from, names},
-    raster_scene::{PassedDown, RasterScene},
     rewrite::Rewrite,
+    scene::{RasterScene, Subtree},
 };
 
 // What a walk that pushes changed layers again shares.
@@ -36,28 +33,10 @@ struct Repush<'a> {
     rewrite: &'a mut Option<Box<Rewrite>>,
     window: ClipBounds,
     areas: &'a mut Vec<ClipBounds>,
-    // Where the update's own areas start in `areas`.
-    first_area: usize,
     diagnostics: &'a RenderDiagnostics,
     light: ShadowLight,
     scale: f32,
     text: &'a TextRaster,
-    targets: &'a mut Vec<PushTarget>,
-}
-
-// A node whose subtree an update pushes again: where it lies in the layout
-// tree and in the scene, what it lowers with, whether it lowers as a leaf,
-// and once the update lowered it, its layer and what its children lower
-// with when it has children.
-pub(crate) struct PushTarget {
-    node: NodeId,
-    place: NodePlace,
-    context: LowerContext,
-    record: usize,
-    parent: Option<usize>,
-    leaf: bool,
-    layer: Option<RenderNode>,
-    inner: Option<LowerContext>,
 }
 
 // Why a walk to a layer stopped.
@@ -87,19 +66,20 @@ pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
     pub reach: &'a mut Vec<Option<ClipBounds>>,
     pub rewrite: &'a mut Option<Box<Rewrite>>,
-    pub targets: &'a mut Vec<PushTarget>,
 }
 
 impl InPlaceUpdate<'_> {
-    // Brings the scene, the one `walk`'s window gave last at `scale`, up to
-    // the window's layout tree from its root `root`, and adds to `areas`
-    // the parts of `window` it changed, merged with those `areas` held.
-    // `None` when the scene must be built again.
-    pub(crate) fn run_layout(
+    /// Brings the scene, the one `graph` gave last at `scale`, up to `graph`
+    /// and puts into `areas` the parts of `window` it changed. `None` when
+    /// the scale, the light or the root layer changed, with the scene as it
+    /// was, or when a subtree's records lie apart, with the areas the layers
+    /// it updated before changed: the caller builds the scene again.
+    pub(crate) fn run(
         self,
-        (walk, root): (&LayoutWalk<'_>, NodeId),
+        graph: &RenderGraph,
         diagnostics: &RenderDiagnostics,
-        (scale, text): (f32, &TextRaster),
+        scale: f32,
+        text: &TextRaster,
         window: ClipBounds,
         areas: &mut Vec<ClipBounds>,
     ) -> Option<UpdatedReach> {
@@ -107,11 +87,9 @@ impl InPlaceUpdate<'_> {
             scene,
             reach,
             rewrite,
-            targets,
         } = self;
-        let bounds = root_layer_bounds(walk.applier(), root)?;
-        let light =
-            ShadowLight::for_window(bounds.width * scale, bounds.height * scale, scale, 1.0);
+        areas.clear();
+        let light = scene_light(graph, scale);
         if scene.start != Some((scale, light)) {
             return None;
         }
@@ -126,24 +104,13 @@ impl InPlaceUpdate<'_> {
             held,
             rewrite,
             window,
-            first_area: areas.len(),
             areas,
             diagnostics,
             light,
             scale,
             text,
-            targets,
         };
-        let context = LowerContext::root(RecordingStore::Redrawn);
-        let walked = repush
-            .visit_node(walk, (root, NodePlace::Root), &context, (0, None))
-            .and_then(|()| repush.push_targets(walk));
-        // The rewrites run last first. Each puts its areas in reverse after
-        // those before. One more reverse puts the update's areas in the
-        // scene's order, in which a host sends them.
-        repush.areas[repush.first_area..].reverse();
-        repush.targets.clear();
-        walk.release();
+        let walked = repush.visit(Subtree::Layer(&graph.root), 0, None);
         let held = repush.held;
         merge_areas(areas);
         walked.ok()?;
@@ -152,186 +119,86 @@ impl InPlaceUpdate<'_> {
 }
 
 impl Repush<'_> {
-    // Walks the layout node `node` at `place`, lowered under `context`,
-    // whose old record is `record` and whose parent passed down what the
-    // scene holds at `parent`, the root's start for `None`: to the nodes
-    // the update changed, which push their subtrees again.
-    fn visit_node(
+    /// Walks `subtree`, whose old record is `record` and whose parent passed
+    /// down what the scene holds at `parent`, the root's start for `None`.
+    fn visit(
         &mut self,
-        walk: &LayoutWalk<'_>,
-        (node, place): (NodeId, NodePlace),
-        context: &LowerContext,
-        (record, parent): (usize, Option<usize>),
+        subtree: Subtree<'_>,
+        record: usize,
+        parent: Option<usize>,
     ) -> Result<(), Stop> {
         let old = self.scene.subtrees.get(record).ok_or(Stop::OtherLayer)?;
-        if !names(old.identity, node) {
+        if old.identity != subtree.identity() {
             return Err(Stop::OtherLayer);
         }
-        // A subtree the scene keeps whole for its 3D space lowers whole.
-        if walk.changed(node) || walk.holds_space(node) {
-            self.defer(walk, (node, place), context, (record, parent));
+        let placed_as_before = old.transform == subtree.transform_to_parent();
+        if old.change == subtree.change() && placed_as_before {
             return Ok(());
         }
-        // A node that wraps its outer draws holds its children in its own
-        // layer inside the wrapper.
-        let own = OldChildren::own_record(&self.scene.subtrees, record, node);
-        let Some(passed) = self.scene.subtrees[own].passed_down else {
-            self.defer(walk, (node, place), context, (record, parent));
-            return Ok(());
+        // A node drawn inline has no records beneath its own.
+        let Subtree::Layer(layer) = subtree else {
+            return self.push_again(subtree, record, parent);
         };
-        let deferred = self.targets.len();
-        let walked = visit_kept_node(walk.applier(), (node, place), context, |children, inner| {
-            let end = self.scene.subtrees[own].end;
-            let mut cursor = child_record_from(&self.scene.subtrees, own + 1, end);
-            for &child in children {
-                let at = OldChildren::find(&self.scene.subtrees, (cursor, end), child)
-                    .ok_or(Stop::OtherLayer)?;
-                if !walk.is_clean(child) {
-                    self.visit_node(walk, (child, NodePlace::Child), inner, (at, Some(passed)))?;
-                }
-                cursor = self.scene.subtrees[at].end;
-            }
-            // Past the last child only the node's own draws may follow.
-            if child_record_from(&self.scene.subtrees, cursor, end) == end {
-                Ok(())
-            } else {
-                Err(Stop::OtherLayer)
-            }
-        })
-        .unwrap_or(Err(Stop::OtherLayer));
-        if let Err(Stop::OtherLayer) = walked {
-            // The node's subtree is pushed again whole, its children's with
-            // it.
-            self.targets.truncate(deferred);
-            self.defer(walk, (node, place), context, (record, parent));
-            return Ok(());
+        // A layer that changed itself, moved, or drew its subtree without
+        // records of its children, as a surface or nothing, pushes it all.
+        if old.own_change != layer.own_change || !placed_as_before || old.end == record + 1 {
+            return self.push_again(subtree, record, parent);
         }
-        walked
-    }
-
-    // Notes that the subtree of `node`, whose old record is `record`, is
-    // pushed again, as `visit_node` says.
-    fn defer(
-        &mut self,
-        walk: &LayoutWalk<'_>,
-        (node, place): (NodeId, NodePlace),
-        context: &LowerContext,
-        (record, parent): (usize, Option<usize>),
-    ) {
-        self.targets.push(PushTarget {
-            node,
-            place,
-            context: *context,
-            record,
-            parent,
-            leaf: walk.lowers_as_leaf((node, place)),
-            layer: None,
-            inner: None,
+        let Some(passed) = old.passed_down else {
+            return self.push_again(subtree, record, parent);
+        };
+        let mut next = record + 1;
+        let mut walked = Ok(());
+        for_each_in_draw_order(&layer.children, |child| {
+            if walked.is_ok()
+                && let Some(child) = Subtree::of_child(child)
+            {
+                walked = self.visit(child, next, Some(passed));
+                next = self
+                    .scene
+                    .subtrees
+                    .get(next)
+                    .map_or(usize::MAX, |at| at.end);
+            }
         });
-    }
-
-    // Lowers every node the visit found changed, then pushes their subtrees
-    // again, the last first: a rewrite moves only the records and entries
-    // after its subtree's, so the targets before it lie where the visit
-    // found them.
-    fn push_targets(&mut self, walk: &LayoutWalk<'_>) -> Result<(), Stop> {
-        let mut targets = std::mem::take(self.targets);
-        // The nodes with children lower before the leaves: the two kinds run
-        // different lowering code, and each would evict the other's from a
-        // small instruction cache between targets.
-        for leaves in [false, true] {
-            for target in targets.iter_mut().filter(|target| target.leaf == leaves) {
-                let lowered = (&mut target.layer, &mut target.inner);
-                walk.lower((target.node, target.place), &target.context, lowered);
-            }
+        match walked {
+            Err(Stop::Rebuild) => Err(Stop::Rebuild),
+            // A child pushed again with more or fewer records moved where
+            // the layer ends.
+            Ok(()) if next == self.scene.subtrees[record].end => Ok(()),
+            // The child layers no longer match the records: the layer pushes
+            // its whole subtree again in place of what they pushed.
+            Ok(()) | Err(Stop::OtherLayer) => self.push_again(subtree, record, parent),
         }
-        let pushed = targets
-            .iter_mut()
-            .rev()
-            .try_for_each(|target| self.push_node_again(walk, target));
-        *self.targets = targets;
-        pushed
     }
 
-    // Pushes the subtree of `target` over its old one, keeping the subtrees
-    // of its children that did not change, from what its parent passed down
-    // in the scene, and adds the areas it changes.
-    fn push_node_again(
+    /// Pushes `subtree` again over its old subtree, whose record is
+    /// `record`, as the full walk would, from what its parent passed down in
+    /// the scene, and adds the areas it changes.
+    fn push_again(
         &mut self,
-        walk: &LayoutWalk<'_>,
-        target: &mut PushTarget,
+        subtree: Subtree<'_>,
+        record: usize,
+        parent: Option<usize>,
     ) -> Result<(), Stop> {
-        let (node, place) = (target.node, target.place);
-        let old = OldChildren::of(&self.scene.subtrees, target.record, node);
-        self.rewrite_subtree(
-            (target.record, target.parent),
-            |scene, context| match target.layer.take() {
-                Some(layer) => {
-                    let lowered = (layer, target.inner.as_ref());
-                    walk.push_lowered(node, lowered, (scene, context), Some(old));
-                }
-                None => walk.push(
-                    (node, place),
-                    &target.context,
-                    (scene, context),
-                    &mut None,
-                    Some(old),
-                ),
-            },
-        )
-    }
-
-    // Pushes a subtree with `push` over its old subtree, whose record is
-    // `record`, from what its parent passed down in the scene, the root's
-    // start for `None`, under a walk above that passed down what it did
-    // before, as the nodes the walk came through kept it, and adds the areas
-    // it changes. Out of line: the classic ESP32's 64 KB list of hot code
-    // takes a function whole. The update with this rewrite inline would be
-    // one function of 9 KB.
-    #[inline(never)]
-    fn rewrite_subtree(
-        &mut self,
-        (record, parent): (usize, Option<usize>),
-        push: impl FnOnce(&mut RasterScene, &RasterTraversalContext<'_>),
-    ) -> Result<(), Stop> {
-        let passed = parent
-            .and_then(|at| self.scene.passed_down.get(at))
-            .cloned();
-        let (transform, style, clip, snap_anchor, translated) = match passed {
-            Some(PassedDown {
-                transform,
-                alpha,
-                color_filter,
-                clip,
-                snap_anchor,
-                translated,
-            }) => (
-                transform,
-                ContentStyle {
-                    alpha,
-                    color_filter,
-                },
-                clip,
-                snap_anchor,
-                translated,
-            ),
-            None => (
-                ProjectiveTransform::uniform_scale(self.scale),
-                ContentStyle::PLAIN,
-                None,
-                None,
-                false,
-            ),
-        };
+        let passed = parent.and_then(|at| self.scene.passed_down.get(at));
+        let transform = passed.map_or_else(
+            || ProjectiveTransform::uniform_scale(self.scale),
+            |passed| passed.transform,
+        );
+        let style = passed.map_or(ContentStyle::PLAIN, |passed| ContentStyle {
+            alpha: passed.alpha,
+            color_filter: passed.color_filter.clone(),
+        });
         let context = RasterTraversalContext {
             parent_transform: &transform,
             parent_content_style: &style,
-            parent_visual_clip: clip,
-            inherited_translated_snap_anchor: snap_anchor,
-            inherited_translated_content_context: translated,
+            parent_visual_clip: passed.and_then(|passed| passed.clip),
+            inherited_translated_snap_anchor: passed.and_then(|passed| passed.snap_anchor),
+            inherited_translated_content_context: passed.is_some_and(|passed| passed.translated),
             diagnostics: self.diagnostics,
             light: self.light,
-            same_as_before: true,
+            same_as_before: false,
             text: self.text,
             surface_root: false,
             // A scene draws its surfaces out of the graph's order, so the
@@ -345,15 +212,16 @@ impl Repush<'_> {
             return Err(Stop::Rebuild);
         }
         self.scene.rewrite = Some(rewrite);
-        push(self.scene, &context);
+        populate_draws_from_graph(subtree, self.scene, &context, &mut None);
         let mut rewrite = self
             .scene
             .rewrite
             .take()
             .expect("the rewrite started above");
         rewrite.finish(self.scene, record);
-        self.scene.hits_changed |= rewrite.replaced_hits();
-        (*self.reach, self.held) = rewrite.results(self.areas);
+        let (reach, held, areas) = rewrite.results();
+        (*self.reach, self.held) = (reach, held);
+        self.areas.append(areas);
         *self.rewrite = Some(rewrite);
         Ok(())
     }

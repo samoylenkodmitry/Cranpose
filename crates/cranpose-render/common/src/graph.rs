@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
     GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, TextOverflow, TextStyle,
     text::{AnnotatedString, RenderString},
@@ -810,28 +810,30 @@ impl RenderGraph {
         layer_heap_bytes(&self.root)
     }
 
-    /// Visits the graph's visual observation owners: its layers' and inline
-    /// nodes' nodes and the nodes of its draw runs' commands.
-    pub fn visit_retained_visual_observation_nodes(&self, visit: &mut dyn FnMut(NodeId)) {
-        fn walk(layer: &LayerNode, visit: &mut dyn FnMut(NodeId)) {
+    /// Replaces the set with the graph's visual observation owners, retaining its capacity.
+    pub fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) {
+        fn collect(layer: &LayerNode, nodes: &mut HashSet<NodeId>) {
             if let Some(node_id) = layer.node_id {
-                visit(node_id);
+                nodes.insert(node_id);
             }
             for child in &layer.children {
                 match child {
                     RenderNode::DrawRun(run) => {
                         if let Some(command) = run.command {
-                            visit(command.node_id);
+                            nodes.insert(command.node_id);
                         }
                     }
-                    RenderNode::Layer(child) => walk(child, visit),
-                    RenderNode::Inline(inline) => visit(inline.node_id),
+                    RenderNode::Layer(child) => collect(child, nodes),
+                    RenderNode::Inline(inline) => {
+                        nodes.insert(inline.node_id);
+                    }
                     RenderNode::Primitive(_) => {}
                 }
             }
         }
 
-        walk(&self.root, visit);
+        nodes.clear();
+        collect(&self.root, nodes);
     }
 }
 

@@ -4,7 +4,7 @@ use cranpose_core::collections::map::HashSet;
 use cranpose_ui::text::{AnnotatedString, TextStyle, font::FontWeight};
 
 use super::*;
-use crate::raster_scene::{ShadowDraw, TextDraw};
+use crate::scene::{ShadowDraw, TextDraw};
 
 fn text_draw() -> TextDraw {
     TextDraw {
