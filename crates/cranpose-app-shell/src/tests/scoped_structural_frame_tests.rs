@@ -19,6 +19,9 @@ mod liquid_lens_frame_tests;
 #[path = "draw_observation_identity_tests.rs"]
 mod draw_observation_identity_tests;
 
+#[path = "root_render_frame_tests.rs"]
+mod root_render_frame_tests;
+
 const FIRST_TRADE: u64 = 100;
 const TAPE_ROWS: u64 = 4;
 const ROW_HEIGHT: f32 = 18.0;
