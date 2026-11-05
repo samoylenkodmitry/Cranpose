@@ -23,7 +23,7 @@ pub(crate) struct LaidGlyphs {
 enum Glyphs {
     Packed(Arc<[PackedGlyph]>),
     Rounded(Arc<[RoundedGlyph]>),
-    Full(Arc<FullGlyphs>),
+    Full(Arc<[FullGlyph]>),
 }
 
 impl Default for Glyphs {
@@ -50,12 +50,12 @@ pub(crate) struct RoundedGlyph {
     advance: f32,
 }
 
-// Glyphs that do not pack, with the advance of each in pixels of the layout
+// A glyph that does not pack, with its advance in pixels of the layout
 // where advances round to whole device pixels.
-#[derive(Debug, PartialEq)]
-struct FullGlyphs {
-    glyphs: Box<[ShapedGlyph]>,
-    advances: Option<Box<[f32]>>,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FullGlyph {
+    glyph: ShapedGlyph,
+    advance: Option<f32>,
 }
 
 impl PackedGlyph {
@@ -103,8 +103,7 @@ impl PackedGlyph {
 pub(crate) enum RunGlyphs<'a> {
     Packed(&'a [PackedGlyph]),
     Rounded(&'a [RoundedGlyph]),
-    // Glyphs that do not pack, and their rounded advances.
-    Full(&'a [ShapedGlyph], Option<&'a [f32]>),
+    Full(&'a [FullGlyph]),
 }
 
 impl<'a> RunGlyphs<'a> {
@@ -112,7 +111,7 @@ impl<'a> RunGlyphs<'a> {
         match self {
             Self::Packed(glyphs) => glyphs.len(),
             Self::Rounded(glyphs) => glyphs.len(),
-            Self::Full(glyphs, _) => glyphs.len(),
+            Self::Full(glyphs) => glyphs.len(),
         }
     }
 
@@ -120,7 +119,7 @@ impl<'a> RunGlyphs<'a> {
         match self {
             Self::Packed(glyphs) => glyphs.get(index).map(|glyph| glyph.unpack()),
             Self::Rounded(glyphs) => glyphs.get(index).map(|glyph| glyph.glyph.unpack()),
-            Self::Full(glyphs, _) => glyphs.get(index).copied(),
+            Self::Full(glyphs) => glyphs.get(index).map(|glyph| glyph.glyph),
         }
     }
 
@@ -132,9 +131,10 @@ impl<'a> RunGlyphs<'a> {
         match self {
             Self::Packed(_) => own(),
             Self::Rounded(glyphs) => glyphs.get(index).map_or_else(own, |glyph| glyph.advance),
-            Self::Full(_, advances) => advances
-                .and_then(|advances| advances.get(index))
-                .map_or_else(own, |advance| *advance),
+            Self::Full(glyphs) => glyphs
+                .get(index)
+                .and_then(|glyph| glyph.advance)
+                .unwrap_or_else(own),
         }
     }
 
@@ -147,7 +147,7 @@ impl<'a> RunGlyphs<'a> {
         match self {
             Self::Packed(glyphs) => glyphs.iter().any(|glyph| found(glyph.id())),
             Self::Rounded(glyphs) => glyphs.iter().any(|glyph| found(glyph.glyph.id())),
-            Self::Full(glyphs, _) => glyphs.iter().any(|glyph| found(glyph.id())),
+            Self::Full(glyphs) => glyphs.iter().any(|glyph| found(glyph.glyph.id())),
         }
     }
 
@@ -162,9 +162,9 @@ impl<'a> RunGlyphs<'a> {
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.glyph.text_offset()))
                 .count(),
-            Self::Full(glyphs, _) => glyphs
+            Self::Full(glyphs) => glyphs
                 .iter()
-                .take_while(|glyph| text.contains(&glyph.text_offset()))
+                .take_while(|glyph| text.contains(&glyph.glyph.text_offset()))
                 .count(),
         }
     }
@@ -177,7 +177,7 @@ impl<'a> RunGlyphs<'a> {
             Self::Rounded(glyphs) => {
                 out.extend(glyphs.iter().map(|glyph| glyph.glyph.unpack()), offsets);
             }
-            Self::Full(glyphs, _) => out.extend_from_slice(glyphs, offsets),
+            Self::Full(glyphs) => out.extend(glyphs.iter().map(|glyph| glyph.glyph), offsets),
         }
     }
 
@@ -185,10 +185,7 @@ impl<'a> RunGlyphs<'a> {
         match self {
             Self::Packed(glyphs) => Self::Packed(&glyphs[range]),
             Self::Rounded(glyphs) => Self::Rounded(&glyphs[range]),
-            Self::Full(glyphs, advances) => Self::Full(
-                &glyphs[range.clone()],
-                advances.map(|advances| &advances[range]),
-            ),
+            Self::Full(glyphs) => Self::Full(&glyphs[range]),
         }
     }
 }
@@ -196,6 +193,7 @@ impl<'a> RunGlyphs<'a> {
 impl LaidGlyphs {
     // Keeps the glyphs of `paragraph`. A relayout that shaped no glyph holds
     // them already, and they stay when they advance as far.
+    #[inline]
     pub(crate) fn keep(&mut self, paragraph: &ParagraphGlyphs) {
         if !self.advances_as(paragraph) {
             *self = Self::new(paragraph);
@@ -204,30 +202,27 @@ impl LaidGlyphs {
 
     // Whether the glyphs held are as many as those of `paragraph` and
     // advance as far.
+    #[inline]
     fn advances_as(&self, paragraph: &ParagraphGlyphs) -> bool {
         if self.len() != paragraph.len() {
             return false;
         }
         let pixels = paragraph.pixels(0..paragraph.len());
         let grid = paragraph.grid();
-        match (&self.glyphs, pixels) {
-            (Glyphs::Packed(_), None) => true,
-            (Glyphs::Rounded(glyphs), Some(pixels)) => {
+        match &self.glyphs {
+            Glyphs::Packed(_) => pixels.is_none(),
+            Glyphs::Rounded(glyphs) => {
+                same_advances(glyphs.iter().map(|glyph| Some(glyph.advance)), pixels, grid)
+            }
+            Glyphs::Full(glyphs) => {
                 same_advances(glyphs.iter().map(|glyph| glyph.advance), pixels, grid)
             }
-            (Glyphs::Full(full), pixels) => match (&full.advances, pixels) {
-                (None, None) => true,
-                (Some(advances), Some(pixels)) => {
-                    same_advances(advances.iter().copied(), pixels, grid)
-                }
-                (None, Some(_)) | (Some(_), None) => false,
-            },
-            (Glyphs::Packed(_), Some(_)) | (Glyphs::Rounded(_), None) => false,
         }
     }
 
     // Keeps the glyphs of `paragraph`, each array collected from an
     // iterator of known length in one allocation.
+    #[inline(never)]
     fn new(paragraph: &ParagraphGlyphs) -> Self {
         let pixels = paragraph.pixels(0..paragraph.len());
         let grid = paragraph.grid();
@@ -253,10 +248,16 @@ impl LaidGlyphs {
         let glyphs = if fits {
             packed
         } else {
-            Glyphs::Full(Arc::new(FullGlyphs {
-                glyphs: Box::from(&paragraph[..]),
-                advances: pixels.map(|pixels| pixels.iter().map(|pixels| pixels / grid).collect()),
-            }))
+            Glyphs::Full(
+                paragraph
+                    .iter()
+                    .enumerate()
+                    .map(|(index, glyph)| FullGlyph {
+                        glyph: *glyph,
+                        advance: pixels.map(|pixels| pixels[index] / grid),
+                    })
+                    .collect(),
+            )
         };
         let offsets = paragraph.offsets();
         Self {
@@ -281,7 +282,7 @@ impl LaidGlyphs {
         match &self.glyphs {
             Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
             Glyphs::Rounded(glyphs) => RunGlyphs::Rounded(glyphs),
-            Glyphs::Full(full) => RunGlyphs::Full(&full.glyphs, full.advances.as_deref()),
+            Glyphs::Full(glyphs) => RunGlyphs::Full(glyphs),
         }
     }
 
@@ -315,11 +316,21 @@ impl LaidGlyphs {
     }
 }
 
-// Whether `held`, advances in pixels of the layout, are `pixels`, device
-// pixel advances at `grid` of them to a pixel of the layout.
-fn same_advances(held: impl ExactSizeIterator<Item = f32>, pixels: &[f32], grid: f32) -> bool {
-    held.len() == pixels.len()
-        && held
-            .zip(pixels)
-            .all(|(held, pixels)| held.to_bits() == (pixels / grid).to_bits())
+// Whether `held`, rounded advances in pixels of the layout, are `pixels`,
+// device pixel advances at `grid` of them to a pixel of the layout, or none
+// where advances keep the font's fractions.
+fn same_advances(
+    mut held: impl ExactSizeIterator<Item = Option<f32>>,
+    pixels: Option<&[f32]>,
+    grid: f32,
+) -> bool {
+    match pixels {
+        None => held.all(|held| held.is_none()),
+        Some(pixels) => {
+            held.len() == pixels.len()
+                && held
+                    .zip(pixels)
+                    .all(|(held, pixels)| held.map(f32::to_bits) == Some((pixels / grid).to_bits()))
+        }
+    }
 }

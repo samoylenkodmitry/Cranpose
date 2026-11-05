@@ -134,13 +134,6 @@ impl ShapedGlyphs {
 
     // Adds `glyphs`, the first drawn at `offsets` from the pen and the rest
     // at the pen.
-    pub(crate) fn extend_from_slice(&mut self, glyphs: &[ShapedGlyph], offsets: &[GlyphOffset]) {
-        self.add_offsets(offsets);
-        self.glyphs.extend_from_slice(glyphs);
-    }
-
-    // Adds `glyphs`, the first drawn at `offsets` from the pen and the rest
-    // at the pen.
     pub(crate) fn extend(
         &mut self,
         glyphs: impl Iterator<Item = ShapedGlyph>,
@@ -151,7 +144,7 @@ impl ShapedGlyphs {
     }
 
     // Adds the `glyphs` of a word that starts at `start`, whose clusters
-    // count from the word's start, drawn at `offsets` as `extend_from_slice`
+    // count from the word's start, drawn at `offsets` as `extend`
     // draws them.
     pub(crate) fn extend_from_word(
         &mut self,
