@@ -87,12 +87,14 @@ impl Rewrite {
         };
         let head = &scene.subtrees[record];
         // A subtree with no entries of its own takes its new ones after the
-        // entries of the records before it, which the walk pushed first.
+        // entries of the records before it, which the walk pushed first: the
+        // records and their entries lie in the order of the walk, so the
+        // last record before it with an entry holds the last of them.
         let first = if extent.passed_down == 0 {
             scene.subtrees[..record]
                 .iter()
-                .filter_map(|before| before.passed_down)
-                .max()
+                .rev()
+                .find_map(|before| before.passed_down)
                 .map_or(0, |last| last + 1)
         } else {
             first
