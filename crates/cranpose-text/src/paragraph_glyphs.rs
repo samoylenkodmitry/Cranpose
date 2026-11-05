@@ -86,15 +86,22 @@ impl ParagraphGlyphs {
         let device = em / f32::from(face.units_per_em());
         let added = &glyphs[start..];
         if let Some((advances, bytes)) = face.h_advances() {
+            // An advance that shaping left the font's own rounds whole, as
+            // a zeroed one does to nothing: one pass with no branch, which
+            // a vector unit takes several glyphs at a time.
+            pixels.resize(glyphs.len(), 0.0);
+            let pixels = &mut pixels[start..];
+            for (pixel, glyph) in pixels.iter_mut().zip(added) {
+                *pixel = whole::floor(font_units(glyph.advance) * device + 0.5);
+            }
+            // The few that shaping moved read their own advances.
             let metrics = advances.metrics(bytes);
-            pixels.extend(added.iter().map(|glyph| {
-                // An advance that shaping left the font's own rounds whole.
-                if !glyph.is_adjusted() {
-                    return whole::floor(font_units(glyph.advance) * device + 0.5);
+            for (glyph, pixel) in added.iter().zip(pixels) {
+                if glyph.is_adjusted() {
+                    let own = advances.advance(metrics, glyph.id().0);
+                    *pixel = whole_pixels(glyph, f32::from(own), device);
                 }
-                let own = advances.advance(metrics, glyph.id().0);
-                whole_pixels(glyph, f32::from(own), device)
-            }));
+            }
             return;
         }
         pixels.resize(glyphs.len(), 0.0);
