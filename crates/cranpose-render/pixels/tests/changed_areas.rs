@@ -537,6 +537,54 @@ fn a_child_that_changes_between_moves_draws_what_it_holds_now() {
     kept_frames_match_full_redraws(1.0, MovedBoxChangingText);
 }
 
+// A parent its layer turns a little each step, which draws through a
+// surface of its own, over a child that never changes and a child whose
+// colour changes every third step.
+#[composable]
+fn SpinningParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(70.0, 40.0)
+            .width(100.0)
+            .height(80.0)
+            .graphics_layer(move || GraphicsLayer {
+                rotation_z: 10.0 + step.value() as f32 * 7.0,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .offset(8.0, 8.0)
+                    .width(40.0)
+                    .height(20.0)
+                    .background(color(2, 5)),
+                BoxSpec::default(),
+                || {
+                    Text("still", Modifier::empty(), TextStyle::default());
+                },
+            );
+            Box(
+                Modifier::empty()
+                    .offset(8.0, 44.0)
+                    .width(60.0)
+                    .height(20.0)
+                    .background(color(step.value() / 3, 6)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn children_under_a_turning_parent_draw_what_they_hold_now() {
+    kept_frames_match_full_redraws(1.0, SpinningParent);
+}
+
 #[composable]
 fn Counter(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);

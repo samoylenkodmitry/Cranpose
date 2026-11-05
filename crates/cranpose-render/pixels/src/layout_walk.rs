@@ -33,6 +33,9 @@ const UPDATE_SHIFT: u8 = 1;
 #[derive(Default)]
 pub(crate) struct DirtyMarks {
     marks: NodeMarks,
+    // Whether the marks name what an update changed. After `clear` every
+    // node reads as clean, though any may have changed.
+    from_update: bool,
 }
 
 impl DirtyMarks {
@@ -41,6 +44,7 @@ impl DirtyMarks {
     // update may move a layer with no layout pass.
     pub(crate) fn mark(&mut self, applier: &MemoryApplier, updates: SceneUpdates<'_>) -> bool {
         self.marks.reset(applier);
+        self.from_update = true;
         let mut moves = false;
         for &(node, update) in updates {
             moves |= !matches!(update, NodeUpdate::Content | NodeUpdate::Draws);
@@ -57,6 +61,7 @@ impl DirtyMarks {
     // Unmarks every node: a build with no marks lowers every node.
     pub(crate) fn clear(&mut self, applier: &MemoryApplier) {
         self.marks.reset(applier);
+        self.from_update = false;
     }
 
     // Whether neither `node` nor a node beneath it changed.
@@ -266,7 +271,7 @@ impl<'a> LayoutWalk<'a> {
                         owner: root,
                         children,
                         context: child_context,
-                        old: None,
+                        pushes: ChildPushes::Anew,
                     };
                     push(&node, (!children.is_empty()).then_some(&mut slot));
                 }
@@ -313,7 +318,7 @@ impl<'a> LayoutWalk<'a> {
                     owner: node,
                     children,
                     context: child_context,
-                    old,
+                    pushes: ChildPushes::of(old),
                 };
                 let slot = (!children.is_empty()).then_some(&mut slot);
                 populate_draws_from_graph(subtree, scene, context, reuse, slot);
@@ -399,7 +404,7 @@ impl<'a> LayoutWalk<'a> {
                 owner: node,
                 children,
                 context: inner,
-                old,
+                pushes: ChildPushes::of(old),
             };
             populate_draws_from_graph(subtree, scene, context, &mut None, Some(&mut slot));
         });
@@ -423,9 +428,41 @@ impl<'a> LayoutWalk<'a> {
         if self.keeps_space(&scene.subtrees, at) {
             return false;
         }
+        self.push_kept_subtree((child, position), lower_context, (scene, context));
+        true
+    }
+
+    // Pushes under `context`, into the scene of its parent's own surface, the
+    // subtree of `child`, which did not change since the update before, as
+    // `push_moved` pushes one: the surface's scene holds none of its old
+    // records. False when the child may have changed or the scene keeps a 3D
+    // space, whose subtrees the walk lowers as any other.
+    pub(crate) fn push_clean_into_surface(
+        &self,
+        child: NodeId,
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) -> bool {
+        if !self.marks.from_update || !self.is_clean(child) || !self.spaces.borrow().is_empty() {
+            return false;
+        }
+        self.push_kept_subtree((child, None), lower_context, (scene, context));
+        true
+    }
+
+    // Pushes the subtree of `child`, which did not change, from the subtree
+    // the walk kept for it, placed where it now lies, else lowered whole now,
+    // and keeps it for the next updates. `position` is where the child lies
+    // in its parent's content, when the walk read it.
+    fn push_kept_subtree(
+        &self,
+        (child, position): (NodeId, Option<Point>),
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) {
         // A child no longer placed pushes nothing.
         let Some(position) = position.or_else(|| placed_child_position(self.applier, child)) else {
-            return true;
+            return;
         };
         let mut kept = self.moved.borrow_mut().take(child);
         if let Some(stale) =
@@ -436,13 +473,12 @@ impl<'a> LayoutWalk<'a> {
         let Some(subtree) =
             kept.or_else(|| lower_moved_subtree(self.applier, child, lower_context))
         else {
-            return true;
+            return;
         };
         if let Some(node) = Subtree::of_child(subtree.root()) {
             populate_draws_from_graph(node, scene, context, &mut None, None);
         }
         self.moved.borrow_mut().keep(subtree);
-        true
     }
 
     // Whether the old subtree at the record `at` holds a subtree the scene
@@ -496,9 +532,26 @@ pub(crate) struct ChildSlot<'w> {
     owner: NodeId,
     children: &'w [NodeId],
     context: &'w LowerContext,
-    // While a rewrite pushes the owner over its old subtree, where the
-    // children's old records lie.
-    old: Option<OldChildren>,
+    pushes: ChildPushes,
+}
+
+// How a slot pushes its children.
+#[derive(Clone, Copy)]
+enum ChildPushes {
+    // Over their old records, at `OldChildren`, while a rewrite pushes the
+    // owner over its old subtree.
+    OverOld(OldChildren),
+    // Anew, into a scene that holds none of their old records.
+    Anew,
+    // Anew, into the scene of the owner's own surface: a child that did not
+    // change pushes the subtree the walk keeps for it, lowered once.
+    IntoSurface,
+}
+
+impl ChildPushes {
+    fn of(old: Option<OldChildren>) -> Self {
+        old.map_or(Self::Anew, Self::OverOld)
+    }
 }
 
 impl ChildSlot<'_> {
@@ -510,7 +563,7 @@ impl ChildSlot<'_> {
     // Pushes the children anew, into the scene of the owner's own surface,
     // which holds none of their old records.
     pub(crate) fn for_surface(&mut self) -> &mut Self {
-        self.old = None;
+        self.pushes = ChildPushes::IntoSurface;
         self
     }
 
@@ -532,15 +585,20 @@ impl ChildSlot<'_> {
         reuse: &mut Option<Reuse<'_>>,
     ) {
         let walk = self.walk;
-        if let Some(old) = self.old {
-            return self.push_over_old(old, scene, context);
-        }
+        let into_surface = match self.pushes {
+            ChildPushes::OverOld(old) => return self.push_over_old(old, scene, context),
+            ChildPushes::Anew => false,
+            ChildPushes::IntoSurface => true,
+        };
         for &child in self.children {
             if let Some(kept) = reuse.as_mut()
                 && walk.is_clean(child)
                 && let Some(placement) = kept_child_placement(walk.applier, child, self.context)
                 && kept.keep(scene, &placement, context)
             {
+                continue;
+            }
+            if into_surface && walk.push_clean_into_surface(child, self.context, (scene, context)) {
                 continue;
             }
             walk.push(
