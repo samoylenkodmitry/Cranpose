@@ -53,7 +53,7 @@ struct SceneVertex {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(crate) struct SceneSurfaceUniforms {
-    clip_from_model: [[f32; 4]; 4],
+    pub(crate) clip_from_model: [[f32; 4]; 4],
     scene_from_model: [[f32; 4]; 4],
     light_clip_from_model: [[f32; 4]; 4],
     clip_from_scene: [[f32; 4]; 4],

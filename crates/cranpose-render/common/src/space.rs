@@ -34,6 +34,12 @@ const BACK_THROUGH_DOORWAY: f32 = 1.0e-4;
 /// takes for the eye to see through it.
 const SMALLEST_OPENING: f32 = 0.25;
 
+/// How near the eye a doorway still opens, as a fraction of the distance of
+/// the camera's near plane: a renderer shows the part of a doorway between
+/// this depth and the near plane on the near plane, so an eye that steps
+/// into a doorway keeps seeing through it.
+pub const DOORWAY_NEAR: f32 = 1.0 / 1024.0;
+
 /// A space a scene opens.
 pub struct Cell<'a> {
     /// The scene's layer.
@@ -438,13 +444,13 @@ impl<'a> EyeView<'a> {
     }
 
     /// The bounds on screen of the unit square `quad` places in the eye's
-    /// space, of its part in front of the camera's near plane; `None` when
-    /// it lies wholly behind.
+    /// space, of its part deeper than [`DOORWAY_NEAR`] of the camera's near
+    /// plane; `None` when it lies wholly nearer.
     fn opening(&self, quad: &Mat4) -> Option<Rect> {
         let to_camera = quad.then(&self.camera.view);
         let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
             .map(|(u, v)| to_camera.transform_point(Vec3::new(u, v, 0.0)));
-        let near = self.camera.near();
+        let near = self.camera.near() * DOORWAY_NEAR;
         let (mut low, mut high) = (
             (f32::INFINITY, f32::INFINITY),
             (f32::NEG_INFINITY, f32::NEG_INFINITY),

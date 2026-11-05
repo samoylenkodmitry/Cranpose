@@ -8,8 +8,8 @@ use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, Color, Modifier, Size,
     space::{
-        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Shaded, Vec3,
-        Volume,
+        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, NEAR_PLANE, Scene3d,
+        Shaded, Vec3, Volume,
     },
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
@@ -1153,6 +1153,36 @@ fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_the_room_bac
     assert!(
         beside[2] < 40,
         "beside the doorway the wall of the room the eye left does not show: {beside:?}"
+    );
+}
+
+#[test]
+fn an_eye_nearer_to_a_doorway_than_the_near_plane_sees_through_it() {
+    let Some((_lock, mut shell)) = support::app_shell_for(
+        WalkScene,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    ) else {
+        return;
+    };
+    support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let eye = WALKER.with(|slot| slot.borrow().clone().expect("the scene composed"));
+    // The eye stops in the doorway's middle, closer to the wall at 600 than
+    // the camera's near plane, a sixty-fourth of its focal length, lies.
+    let close = Vec3::new(0.0, 0.0, 600.0 - FOCAL_LENGTH * NEAR_PLANE * 0.5);
+    eye.walk(close - WALK_START);
+    support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let front = pixel_seen(
+        &frame,
+        walker(close, Vec3::new(0.0, 0.0, 1.0)),
+        Vec3::new(0.0, 0.0, 1720.0),
+    );
+    assert!(
+        front[0] > 200 && front[1] < 40,
+        "the doorway nearer than the near plane shows the red ball behind it: {front:?}"
     );
 }
 

@@ -8,17 +8,20 @@
 //! scene draws after sees the doorway as the surface it lies on. Glow in a
 //! space draws over the doorways seen from it. Glass draws in the pass
 //! after the copy it reads, over the depth of each space drawn again inside
-//! its doorway.
+//! its doorway. A doorway nearer than the camera's near plane draws its
+//! near part once more, flat on that plane, in front of all the scene holds.
 
-use cranpose_ui_graphics::space::{Mat4, Material, Vec3};
+use cranpose_render_common::space::DOORWAY_NEAR;
+use cranpose_ui_graphics::space::{Camera, Mat4, Material, Vec3};
 
 use super::{FrameExecutor, PreparedSurface, ScenePhase};
 use crate::{
     frame_graph::{FrameCommandRecorder, UniformUpload, UploadAllocatorId},
     render::GpuRenderer,
     scene_pass::{
-        SceneMeshBuffers, ScenePage, ScenePipeline, ShadedVariant, SpaceShading, SurfaceShading,
-        VolumeVariant, scene_scissor, scene_surface_uniform_spec, surface_uniforms,
+        SceneMeshBuffers, ScenePage, ScenePipeline, SceneSurfaceUniforms, ShadedVariant,
+        SpaceShading, SurfaceShading, VolumeVariant, scene_scissor, scene_surface_uniform_spec,
+        surface_uniforms,
     },
 };
 
@@ -27,6 +30,10 @@ use crate::{
 /// not hide it.
 const WINDOW_LIFT: f32 = 0.5;
 
+// How far past the camera's near plane, against its distance, a doorway's
+// near part reaches, so it overlaps the part beyond with no gap between.
+const NEAR_OVERLAP: f32 = 1.0 / 64.0;
+
 /// The doorways of a scene, ready to draw, and the buffers of the unit
 /// square they draw on.
 pub(super) struct PreparedWindows {
@@ -34,12 +41,13 @@ pub(super) struct PreparedWindows {
     windows: Vec<PreparedWindow>,
 }
 
-/// A doorway, ready to draw: the seen space behind it and the one it opens
-/// from, its uniforms and its opening's scissor.
+/// A doorway, ready to draw: the seen spaces behind it and before it, its
+/// uniforms, those of its part nearer than the near plane, and its scissor.
 struct PreparedWindow {
     seen: usize,
     through: usize,
     uniform: UniformUpload,
+    near: Option<UniformUpload>,
     scissor: (u32, u32, u32, u32),
 }
 
@@ -99,22 +107,55 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             ) else {
                 continue;
             };
-            let uniform = self.recorder.upload_uniform(
-                UploadAllocatorId::SceneSurface,
-                scene_surface_uniform_spec(),
-                &self.renderer.device,
-                self.renderer.scene_uniform_layout(),
-                bytemuck::bytes_of(&uniforms),
-            );
+            let mut upload = |uniforms: &SceneSurfaceUniforms| {
+                self.recorder.upload_uniform(
+                    UploadAllocatorId::SceneSurface,
+                    scene_surface_uniform_spec(),
+                    &self.renderer.device,
+                    self.renderer.scene_uniform_layout(),
+                    bytemuck::bytes_of(uniforms),
+                )
+            };
+            let near = reaches_near(&lifted, &scene.camera).then(|| upload(&near_part(uniforms)));
             windows.push(PreparedWindow {
                 seen: index,
                 through,
-                uniform,
+                uniform: upload(&uniforms),
+                near,
                 scissor,
             });
         }
         Some(PreparedWindows { buffers, windows })
     }
+}
+
+// Whether part of the unit square `quad` places in the scene lies nearer
+// than `camera`'s near plane, deeper than `DOORWAY_NEAR` of it.
+fn reaches_near(quad: &Mat4, camera: &Camera) -> bool {
+    let to_camera = quad.then(&camera.view);
+    let (low, high) = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        .map(|(u, v)| to_camera.transform_point(Vec3::new(u, v, 0.0)).z)
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), &z| {
+            (low.min(z), high.max(z))
+        });
+    let near = camera.near();
+    low < near * (1.0 + NEAR_OVERLAP) && high > near * DOORWAY_NEAR
+}
+
+// The uniforms that draw the part of a doorway, which `uniforms` draw,
+// nearer than the near plane: its clip depth is `DOORWAY_NEAR` times the
+// distance by which it lies nearer than the near plane, which
+// `NEAR_OVERLAP` stretches, so the part beyond clips away and the part
+// nearer draws in front of all the scene holds, down to `DOORWAY_NEAR`
+// of the near plane.
+fn near_part(mut uniforms: SceneSurfaceUniforms) -> SceneSurfaceUniforms {
+    // A clip depth z = eye depth - near and a clip w = eye depth give
+    // (1 + overlap) * near - eye depth = overlap * w - (1 + overlap) * z.
+    for column in &mut uniforms.clip_from_model {
+        column[2] = DOORWAY_NEAR * (NEAR_OVERLAP * column[3] - (1.0 + NEAR_OVERLAP) * column[2]);
+    }
+    uniforms
 }
 
 /// Which surfaces of the spaces seen through doorways a walk through the
@@ -283,9 +324,11 @@ impl PreparedWindow {
         pass.set_scissor_rect(x, y, width, height);
         pass.set_bind_group(0, texture, &[]);
         pass.set_bind_group(3, texture, &[]);
-        pass.set_bind_group(1, &self.uniform.bind_group, &[self.uniform.offset]);
         pass.set_vertex_buffer(0, buffers.vertices.slice(..));
         pass.set_index_buffer(buffers.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..buffers.index_count, 0, 0..1);
+        for uniform in std::iter::once(&self.uniform).chain(&self.near) {
+            pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
+            pass.draw_indexed(0..buffers.index_count, 0, 0..1);
+        }
     }
 }
