@@ -283,7 +283,7 @@ fn Television(sight: Sight, middle: Vec3) {
 // a letter at a time; ANSWER starts the next line. The last line, typed in
 // full, sets the entity on the eye.
 #[composable]
-fn Broadcast(journey: Journey, film: State<u32>) {
+fn Broadcast(journey: Journey, film: State<f32>) {
     let line = rememberMutableStateOf(|| 0_u32);
     let letters = rememberMutableStateOf(|| 0_usize);
     let words = notes::screen(line.get(), &journey);
@@ -308,7 +308,7 @@ fn Broadcast(journey: Journey, film: State<u32>) {
         Modifier::empty()
             .fill_max_size()
             .background(Color(0.05, 0.06, 0.07, 1.0))
-            .draw_behind(move |scope| static_noise(scope, film.get())),
+            .draw_behind(move |scope| static_noise(scope, film.get().to_bits())),
         BoxSpec::default(),
         move || {
             let words = words.clone();

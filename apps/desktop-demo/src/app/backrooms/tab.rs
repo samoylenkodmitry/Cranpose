@@ -87,7 +87,7 @@ pub(crate) fn BackroomsTab() {
 // transition. The transition's value changes each display frame; the frame
 // it derives changes 24 times a second, and only then are its readers told.
 #[composable]
-fn rememberFilm() -> State<u32> {
+fn rememberFilm() -> State<f32> {
     let reel = rememberInfiniteTransition("camcorder_film").animateFloat(
         0.0,
         REEL_FRAMES as f32,
@@ -98,7 +98,7 @@ fn rememberFilm() -> State<u32> {
         ),
         "camcorder_film",
     );
-    derivedStateOf(move || reel.value() as u32)
+    derivedStateOf(move || reel.value().floor())
 }
 
 // Walks the eye each frame while a key or a finger walks it.

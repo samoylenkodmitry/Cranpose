@@ -113,8 +113,7 @@ impl Sight {
         for (first, value) in axes {
             params[first..first + 3].copy_from_slice(&value.to_array());
         }
-        // The film wraps long before 2^24, past which an f32 skips frames.
-        params[13] = self.level.film.get() as f32;
+        params[13] = self.level.film.get();
         params[14] = self.lamps.size.0;
         params[15] = self.lamps.size.1;
         params[16] = self.lamps.seed as f32;

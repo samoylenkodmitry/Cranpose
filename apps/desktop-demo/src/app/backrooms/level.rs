@@ -40,10 +40,10 @@ impl PartialEq for Meshes {
 pub(super) struct Level {
     pub(super) meshes: Meshes,
     pub(super) journey: Journey,
-    // The camcorder's frame, 24 a second, by which the grain moves and the
-    // lamps flicker. Draw closures read it: a new frame draws the rooms
-    // again and composes nothing.
-    pub(super) film: State<u32>,
+    // The camcorder's frame, a whole number 24 times a second, by which the
+    // grain moves and the lamps flicker. Draw closures read it: a new frame
+    // draws the rooms again and composes nothing.
+    pub(super) film: State<f32>,
     pub(super) shelf: Shelf,
 }
 
