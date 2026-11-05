@@ -18,7 +18,7 @@ pub fn visit_text_backgrounds(
     layout: &TextLayout,
     text: StyledTextRef<'_>,
     style: &TextStyle,
-    mut visit: impl FnMut(Rect, &Brush),
+    visit: impl FnMut(Rect, &Brush),
 ) {
     if text.is_empty()
         || !(style.span_style.background.is_some()
@@ -29,6 +29,19 @@ pub fn visit_text_backgrounds(
     {
         return;
     }
+    visit_backgrounds(layout, text, style, visit);
+}
+
+// The walk of `visit_text_backgrounds` for a text with a background. Out of
+// line: most texts have none, and the walk would take room in the code that
+// draws them.
+#[inline(never)]
+fn visit_backgrounds(
+    layout: &TextLayout,
+    text: StyledTextRef<'_>,
+    style: &TextStyle,
+    mut visit: impl FnMut(Rect, &Brush),
+) {
     let mut rects = Vec::new();
     visit_span_styles(text, style, |range, merged| {
         if let Some(background) = merged.background {
@@ -52,7 +65,7 @@ pub fn visit_text_lines(
     text: StyledTextRef<'_>,
     style: &TextStyle,
     fallback: Color,
-    mut visit: impl FnMut(Rect, &Brush),
+    visit: impl FnMut(Rect, &Brush),
 ) {
     let decorated = |span: &cranpose_ui::text::SpanStyle| {
         span.text_decoration
@@ -64,6 +77,19 @@ pub fn visit_text_lines(
     {
         return;
     }
+    visit_lines(layout, text, style, fallback, visit);
+}
+
+// The walk of `visit_text_lines` for a decorated text. Out of line, as
+// `visit_backgrounds` is.
+#[inline(never)]
+fn visit_lines(
+    layout: &TextLayout,
+    text: StyledTextRef<'_>,
+    style: &TextStyle,
+    fallback: Color,
+    mut visit: impl FnMut(Rect, &Brush),
+) {
     let mut rects = Vec::new();
     visit_span_styles(text, style, |range, merged| {
         let Some(decoration) = merged

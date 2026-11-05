@@ -186,6 +186,56 @@ struct TextPlacement<'a> {
     clip: Option<Rect>,
 }
 
+// The style the glyphs of a text with a shadow or a brush draw with:
+// without the shadow, with the brush the layer tints. Out of line, as most
+// texts have neither.
+#[cold]
+#[inline(never)]
+fn glyph_style(text_style: &TextStyle, node_layer: &GraphicsLayer) -> Arc<TextStyle> {
+    let mut style = TextStyle::clone(text_style);
+    style.span_style.shadow = None;
+    style.span_style.brush = text_style
+        .span_style
+        .brush
+        .clone()
+        .map(|brush| apply_layer_to_brush(brush, node_layer));
+    Arc::new(style)
+}
+
+// Queues the shadow of a text's glyphs, which draw with `glyph_style`. Out
+// of line, as most texts cast none.
+#[cold]
+#[inline(never)]
+fn push_text_shadow(
+    scene: &mut RasterScene,
+    node: &TextPrimitiveNode,
+    (shadow, glyph_style): (cranpose_ui::text::Shadow, &TextStyle),
+    placement: TextPlacement<'_>,
+) {
+    let (rect, node_layer) = (placement.bounds, placement.layer);
+    let shadow_rect = placement
+        .text_rect
+        .translate(shadow.offset.x, shadow.offset.y);
+    let mut shadow_text_style = TextStyle::clone(glyph_style);
+    shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
+        color: apply_layer_to_color(shadow.color, node_layer),
+        offset: Point::new(0.0, 0.0),
+        blur_radius: shadow.blur_radius,
+    });
+    scene.push_text(TextDraw {
+        rect: apply_layer_to_rect(shadow_rect, rect, node_layer),
+        snap_anchor: None,
+        text: Rc::clone(&node.text),
+        layout: node.layout.clone(),
+        color: Color::TRANSPARENT,
+        text_style: Arc::new(shadow_text_style),
+        font_size: node.font_size,
+        scale: layer_uniform_scale(node_layer),
+        ink: GlyphInk::Hidden,
+        clip: placement.clip,
+    });
+}
+
 fn push_text_style_draws(
     scene: &mut RasterScene,
     node: &TextPrimitiveNode,
@@ -219,36 +269,11 @@ fn push_text_style_draws(
         if text_style.span_style.shadow.is_none() && text_style.span_style.brush.is_none() {
             Arc::clone(text_style)
         } else {
-            let mut style = TextStyle::clone(text_style);
-            style.span_style.shadow = None;
-            style.span_style.brush = text_style
-                .span_style
-                .brush
-                .clone()
-                .map(|brush| apply_layer_to_brush(brush, node_layer));
-            Arc::new(style)
+            glyph_style(text_style, node_layer)
         };
 
     if let Some(shadow) = text_style.span_style.shadow {
-        let shadow_rect = text_rect.translate(shadow.offset.x, shadow.offset.y);
-        let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
-        shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
-            color: apply_layer_to_color(shadow.color, node_layer),
-            offset: Point::new(0.0, 0.0),
-            blur_radius: shadow.blur_radius,
-        });
-        scene.push_text(TextDraw {
-            rect: apply_layer_to_rect(shadow_rect, rect, node_layer),
-            snap_anchor: None,
-            text: Rc::clone(text),
-            layout: layout.clone(),
-            color: Color::TRANSPARENT,
-            text_style: Arc::new(shadow_text_style),
-            font_size: node.font_size,
-            scale: layer_uniform_scale(node_layer),
-            ink: GlyphInk::Hidden,
-            clip: text_clip,
-        });
+        push_text_shadow(scene, node, (shadow, &transformed_text_style), placement);
     }
 
     scene.push_text(TextDraw {
