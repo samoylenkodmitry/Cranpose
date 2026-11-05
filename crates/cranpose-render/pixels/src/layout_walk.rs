@@ -10,9 +10,9 @@ use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, kept_child_placement,
-        lower_moved_subtree, lower_node_alone, lower_space_fragment, placed_child_position,
-        recycle_lowered, release_lowered, visit_lowered_children,
+        LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, has_children,
+        kept_child_placement, lower_moved_subtree, lower_node_alone, lower_space_fragment,
+        placed_child_position, recycle_lowered, release_lowered, visit_lowered_children,
     },
 };
 use cranpose_ui_graphics::Point;
@@ -222,6 +222,11 @@ impl<'a> LayoutWalk<'a> {
     // Whether `node` itself changed.
     pub(crate) fn changed(&self, node: NodeId) -> bool {
         self.marks.changed(self.applier, node)
+    }
+
+    // Whether `node` at `place` lowers as a leaf: a child without children.
+    pub(crate) fn lowers_as_leaf(&self, (node, place): (NodeId, NodePlace)) -> bool {
+        place == NodePlace::Child && !has_children(self.applier, node)
     }
 
     // Whether the scene keeps `node`'s subtree whole, as its layer holds a

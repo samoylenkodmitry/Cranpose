@@ -44,14 +44,16 @@ struct Repush<'a> {
 }
 
 // A node whose subtree an update pushes again: where it lies in the layout
-// tree and in the scene, what it lowers with, and once the update lowered
-// it, its layer and what its children lower with when it has children.
+// tree and in the scene, what it lowers with, whether it lowers as a leaf,
+// and once the update lowered it, its layer and what its children lower
+// with when it has children.
 pub(crate) struct PushTarget {
     node: NodeId,
     place: NodePlace,
     context: LowerContext,
     record: usize,
     parent: Option<usize>,
+    leaf: bool,
     layer: Option<RenderNode>,
     inner: Option<LowerContext>,
 }
@@ -160,13 +162,13 @@ impl Repush<'_> {
         }
         // A subtree the scene keeps whole for its 3D space lowers whole.
         if walk.changed(node) || walk.holds_space(node) {
-            return Ok(self.defer((node, place), context, (record, parent)));
+            return Ok(self.defer(walk, (node, place), context, (record, parent)));
         }
         // A node that wraps its outer draws holds its children in its own
         // layer inside the wrapper.
         let own = OldChildren::own_record(&self.scene.subtrees, record, node);
         let Some(passed) = self.scene.subtrees[own].passed_down else {
-            return Ok(self.defer((node, place), context, (record, parent)));
+            return Ok(self.defer(walk, (node, place), context, (record, parent)));
         };
         let deferred = self.targets.len();
         let walked = visit_kept_node(walk.applier(), (node, place), context, |children, inner| {
@@ -196,7 +198,7 @@ impl Repush<'_> {
                 // The node's subtree is pushed again whole, its children's
                 // with it.
                 self.targets.truncate(deferred);
-                Ok(self.defer((node, place), context, (record, parent)))
+                Ok(self.defer(walk, (node, place), context, (record, parent)))
             }
         }
     }
@@ -205,6 +207,7 @@ impl Repush<'_> {
     // pushed again, as `visit_node` says.
     fn defer(
         &mut self,
+        walk: &LayoutWalk<'_>,
         (node, place): (NodeId, NodePlace),
         context: &LowerContext,
         (record, parent): (usize, Option<usize>),
@@ -215,6 +218,7 @@ impl Repush<'_> {
             context: *context,
             record,
             parent,
+            leaf: walk.lowers_as_leaf((node, place)),
             layer: None,
             inner: None,
         });
@@ -226,9 +230,14 @@ impl Repush<'_> {
     // found them.
     fn push_targets(&mut self, walk: &LayoutWalk<'_>) -> Result<(), Stop> {
         let mut targets = std::mem::take(self.targets);
-        for target in &mut targets {
-            let lowered = (&mut target.layer, &mut target.inner);
-            walk.lower((target.node, target.place), &target.context, lowered);
+        // The nodes with children lower before the leaves: the two kinds run
+        // different lowering code, and each would evict the other's from a
+        // small instruction cache between targets.
+        for leaves in [false, true] {
+            for target in targets.iter_mut().filter(|target| target.leaf == leaves) {
+                let lowered = (&mut target.layer, &mut target.inner);
+                walk.lower((target.node, target.place), &target.context, lowered);
+            }
         }
         let pushed = targets
             .iter_mut()

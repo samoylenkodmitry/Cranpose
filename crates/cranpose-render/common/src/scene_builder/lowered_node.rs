@@ -101,6 +101,20 @@ pub fn visit_kept_node<R>(
     })
 }
 
+/// Whether the node `node_id` has children: [`lower_node_alone`] lowers a
+/// child without them as a leaf. False when the node is gone.
+pub fn has_children(applier: &MemoryApplier, node_id: NodeId) -> bool {
+    let Ok(node) = applier.get_ref(node_id) else {
+        return false;
+    };
+    let node: &dyn Any = node;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        return !node.children().is_empty();
+    }
+    node.downcast_ref::<SubcomposeLayoutNode>()
+        .is_some_and(|node| node.with_active_children(|children| !children.is_empty()))
+}
+
 /// Hands `visit` the children of the node `node_id`, in the order they
 /// draw, for a node [`lower_node_alone`] lowered in the same update, without
 /// reading the rest of its state again. `None` when the node is gone.
