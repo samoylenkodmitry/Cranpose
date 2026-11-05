@@ -376,16 +376,16 @@ impl Rewrite {
     }
 
     // Hands back the reach list the rewrite took and whether it still holds
-    // where each item of the scene reaches, and adds the areas it changed,
-    // merged, to `areas`. The room a rewrite of many items took for their
-    // areas goes, and `areas` takes no more than the merged ones: a canvas
-    // drawn again each frame holds what one drawn once does.
+    // where each item of the scene reaches, and puts the areas it changed,
+    // merged, into `areas` at `at`. The room a rewrite of many items took for
+    // their areas goes, and `areas` takes no more than the merged ones: a
+    // canvas drawn again each frame holds what one drawn once does.
     pub(crate) fn results(
         &mut self,
-        areas: &mut Vec<ClipBounds>,
+        (areas, at): (&mut Vec<ClipBounds>, usize),
     ) -> (Vec<Option<ClipBounds>>, UpdatedReach) {
         merge_areas(&mut self.areas);
-        areas.append(&mut self.areas);
+        areas.splice(at..at, self.areas.drain(..));
         if self.areas.capacity() > KEPT_AREAS {
             self.areas = Vec::new();
         }

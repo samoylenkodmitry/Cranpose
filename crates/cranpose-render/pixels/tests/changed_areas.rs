@@ -579,6 +579,61 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
 }
 
 #[composable]
+fn TwoCounts(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("{} above", step.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Box(
+                Modifier::empty()
+                    .width(200.0)
+                    .height(60.0)
+                    .background(Color::WHITE),
+                BoxSpec::default(),
+                || {},
+            );
+            Text(
+                format!("{} below", step.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+// A host sends the areas in their order, and a panel takes them best in the
+// order the scene draws them, which the walk to the changed nodes found.
+#[test]
+fn the_areas_of_nodes_that_change_together_follow_the_scene_order() {
+    let (mut shell, captured) = shell(1.0, TwoCounts);
+    let mut areas = Vec::new();
+    for _ in 0..2 {
+        shell.update();
+        shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(WIDTH, HEIGHT, &mut areas);
+        });
+    }
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(7);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(WIDTH, HEIGHT, &mut areas);
+    });
+    assert_eq!(areas.len(), 2, "one area for each count: {areas:?}");
+    assert!(
+        areas[0].y < 60 && areas[1].y >= 60,
+        "the count above the box comes first: {areas:?}"
+    );
+}
+
+#[composable]
 fn ProgressBar(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);
     *captured.borrow_mut() = Some(step);
