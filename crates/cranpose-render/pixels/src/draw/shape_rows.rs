@@ -13,7 +13,7 @@ use super::{
 // rows, where the compiler would otherwise hoist it for every shape.
 pub(super) struct ShapeRows<'a, 'p, P> {
     pub(super) target: &'a mut Target<'p, P>,
-    pub(super) draw: &'a crate::raster_scene::DrawShape,
+    pub(super) draw: &'a crate::scene::DrawShape,
     pub(super) rect: Rect,
     pub(super) clip_bounds: ClipBounds,
     pub(super) dither_origin: Point,

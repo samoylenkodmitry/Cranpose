@@ -11,7 +11,7 @@ use cranpose_ui_graphics::Color;
 
 use super::*;
 use crate::{
-    raster_scene::{ImageDraw, TextDraw},
+    scene::{ImageDraw, TextDraw},
     style::point_in_resolved_rounded_rect,
     text_draws::text_draw,
 };
@@ -85,7 +85,7 @@ fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: 
 
 #[test]
 fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
-    let draw = crate::raster_scene::DrawShape {
+    let draw = crate::scene::DrawShape {
         rect: Rect {
             x: 0.0,
             y: 0.0,
@@ -284,8 +284,9 @@ fn multiline_text_renders_second_line_pixels() {
 }
 
 #[test]
-fn draw_graph_renders_a_graph_without_flat_primitives() {
-    let graph = RenderGraph::new(LayerNode {
+fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
+    let mut scene = Scene::new();
+    scene.graph = Some(RenderGraph::new(LayerNode {
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -309,12 +310,12 @@ fn draw_graph_renders_a_graph_without_flat_primitives() {
             })),
         })],
         ..Default::default()
-    });
+    }));
 
     let width = 20;
     let height = 20;
     let mut frame = vec![0u8; (width * height * 4) as usize];
-    draw_graph(&mut frame, width, height, &graph);
+    draw_scene(&mut frame, width, height, &scene);
 
     assert!(
         count_non_background_pixels(&frame, width, height) > 0,
@@ -487,7 +488,7 @@ fn is_inked(frame: &[u8], x: u32, y: u32) -> bool {
     !is_background(frame, x, y)
 }
 
-fn render_shape(shape: crate::raster_scene::DrawShape) -> Vec<u8> {
+fn render_shape(shape: crate::scene::DrawShape) -> Vec<u8> {
     let mut scene = RasterScene::new();
     scene.push_draw_shape(shape);
     let mut frame = blank_frame();
@@ -495,8 +496,8 @@ fn render_shape(shape: crate::raster_scene::DrawShape) -> Vec<u8> {
     frame
 }
 
-fn shape_template(rect: Rect) -> crate::raster_scene::DrawShape {
-    crate::raster_scene::DrawShape {
+fn shape_template(rect: Rect) -> crate::scene::DrawShape {
+    crate::scene::DrawShape {
         rect,
         snap_anchor: None,
         snap_to_pixel_grid: false,

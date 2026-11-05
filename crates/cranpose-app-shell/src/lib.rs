@@ -8,7 +8,6 @@ mod frame_scheduler;
 mod hit_path_tracker;
 pub mod inspector;
 mod modal_focus;
-mod observation_prune;
 mod requested_mouse_moves;
 #[cfg(debug_assertions)]
 mod semantics_check;
@@ -218,7 +217,8 @@ pub(crate) struct ShellApp {
     pub(crate) text_input_routes: Rc<RefCell<TextInputRoutes>>,
     pub(crate) text_input_router_installed: bool,
     pub(crate) window_roots_seen: Option<u64>,
-    pub(crate) observation_prune: observation_prune::ObservationPrune,
+    /// Frames with a rebuilt scene since draw observations were last pruned.
+    pub(crate) rebuilt_frames_since_observation_prune: u32,
     /// The installed-font generation the renderers last took in.
     #[cfg(feature = "installed-fonts")]
     pub(crate) installed_fonts: usize,
@@ -653,7 +653,7 @@ where
             text_input_routes: Rc::new(RefCell::new(TextInputRoutes::default())),
             text_input_router_installed: false,
             window_roots_seen: None,
-            observation_prune: observation_prune::ObservationPrune::default(),
+            rebuilt_frames_since_observation_prune: 0,
             #[cfg(feature = "installed-fonts")]
             installed_fonts: 0,
         };

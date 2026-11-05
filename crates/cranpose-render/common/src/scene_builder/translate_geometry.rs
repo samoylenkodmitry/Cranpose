@@ -3,7 +3,7 @@ use cranpose_ui::{Point, Rect};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, LowerContext, NodeLayout, TranslateAncestorContext, inline_leaf::retext_kept_inline,
+    AbsOrigin, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
     placed_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
 };
 use crate::{
@@ -22,10 +22,10 @@ pub(super) struct TranslateGeometry {
 
 impl TranslateGeometry {
     pub(super) fn new(
-        layout_state: &NodeLayout,
+        layout_state: &cranpose_ui::widgets::LayoutState,
         graphics_layer: &GraphicsLayer,
         local_bounds: Rect,
-        parent_abs: &AbsOrigin,
+        parent_abs: AbsOrigin,
     ) -> Self {
         let content_offset = layout_state.content_offset();
         let top_left = Point {
@@ -66,7 +66,7 @@ impl TranslateGeometry {
         }
     }
 
-    pub(super) fn child_abs(&self) -> AbsOrigin {
+    pub(super) fn child_abs(self) -> AbsOrigin {
         AbsOrigin {
             content_origin: self.child_origin,
             window_transform: self.window_transform,
@@ -121,7 +121,7 @@ pub(super) fn move_kept_child(
         (KeptChild::Moved, RenderNode::Layer(layer)) => {
             translate_retained_child(layer, position, children.parent_content_offset);
             if layer.has_origin_sinks {
-                publish_retained_window_geometry(applier, layer, &children.parent_abs);
+                publish_retained_window_geometry(applier, layer, children.parent_abs);
             }
         }
         (KeptChild::Moved, RenderNode::Inline(inline)) => {
@@ -149,7 +149,7 @@ fn write_kept_label(
             text_node::retext_kept_leaf(applier, layer, children) == Some(true)
         }
         RenderNode::Inline(inline) => {
-            retext_kept_inline(applier, inline, &LowerContext::beneath(children))
+            retext_kept_inline(applier, inline, LowerContext::beneath(children))
         }
         RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
     };

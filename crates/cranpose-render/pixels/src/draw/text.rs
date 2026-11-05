@@ -10,7 +10,7 @@ use super::{
     Target, TextRaster, blit_image_between_pixels, clip_rect_to_bounds, on_pixel_grid,
     snap_delta_for_anchor,
 };
-use crate::{pixel::Pixel, raster_scene::TextDraw};
+use crate::{pixel::Pixel, scene::TextDraw};
 
 pub(super) fn draw_text<P: Pixel>(
     target: &mut Target<'_, P>,

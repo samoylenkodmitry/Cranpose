@@ -12,7 +12,7 @@ use cranpose_ui_graphics::{
 };
 
 use super::{draw_child::push_shadow_primitive, *};
-use crate::{draw::RenderItem, raster_scene::RasterScene, text_draws::laid_out};
+use crate::{draw::RenderItem, scene::RasterScene, text_draws::laid_out};
 
 fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
     let app_context = cranpose_ui::AppContext::new();

@@ -3,8 +3,7 @@
 
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
-use cranpose_render_common::Renderer;
-use cranpose_render_pixels::PixelsRenderer;
+use cranpose_render_pixels::{Scene, draw_scene};
 use cranpose_ui::{
     Color, LayoutEngine, Modifier, Size,
     space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
@@ -94,24 +93,19 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
             },
         )
         .expect("layout");
-    let viewport = Size {
-        width: WIDTH as f32,
-        height: HEIGHT as f32,
-    };
-    let mut renderer = PixelsRenderer::new();
-    let Ok(()) = renderer.rebuild_scene_from_applier(&mut applier, root, viewport);
+    let mut scene = Scene::default();
+    scene.rebuild_from_applier(&applier, root);
     // Each move changes the panel's layer alone, so the updates after the
     // first may take a shorter way to it.
     let red_at_middle = [-100.0f32, 0.0, 100.0].map(|x| {
         center_x.set(x);
-        let Ok(()) = renderer.update_scene_from_applier(
-            &mut applier,
+        scene.update_from_applier(
+            &applier,
             root,
-            viewport,
             &[(panel, cranpose_render_common::NodeUpdate::Layer)],
         );
         let mut frame = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-        renderer.draw(&mut frame, WIDTH, HEIGHT);
+        draw_scene(&mut frame, WIDTH, HEIGHT, &scene);
         let (column, row) = ((WIDTH as f32 * 0.5 + x) as usize, HEIGHT as usize / 2);
         let index = (row * WIDTH as usize + column) * 4;
         frame[index] > 200 && frame[index + 1] < 40
