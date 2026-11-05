@@ -170,13 +170,23 @@ impl<'a> RunGlyphs<'a> {
     }
 
     // Appends the glyphs to `out`, the first drawn at `offsets` from the
-    // pen, each unpacked only to be appended.
+    // pen, each unpacked only to be appended. A packed glyph keeps no note
+    // of whether shaping moved its advance, so it goes back as moved, and a
+    // whole pixel layout reads its own advance from the font.
     fn append_to(self, offsets: &[GlyphOffset], out: &mut ShapedGlyphs) {
         match self {
-            Self::Packed(glyphs) => out.extend(glyphs.iter().map(|glyph| glyph.unpack()), offsets),
-            Self::Rounded(glyphs) => {
-                out.extend(glyphs.iter().map(|glyph| glyph.glyph.unpack()), offsets);
-            }
+            Self::Packed(glyphs) => out.extend(
+                glyphs
+                    .iter()
+                    .map(|glyph| glyph.unpack().with_adjusted(true)),
+                offsets,
+            ),
+            Self::Rounded(glyphs) => out.extend(
+                glyphs
+                    .iter()
+                    .map(|glyph| glyph.glyph.unpack().with_adjusted(true)),
+                offsets,
+            ),
             Self::Full(glyphs) => out.extend(glyphs.iter().map(|glyph| glyph.glyph), offsets),
         }
     }

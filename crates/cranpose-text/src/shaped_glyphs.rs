@@ -6,10 +6,10 @@ use crate::glyph_id::GlyphId;
 // changes the shapes on either side of it. No font format numbers glyphs
 // past 24 bits.
 const UNSAFE_TO_BREAK: u32 = 1 << 31;
-// The bit below it: whether the advance is the font's own advance of the
-// glyph at its default location, which no kerning or other adjustment
-// moved. A glyph without it may have been adjusted.
-const OWN_ADVANCE: u32 = 1 << 30;
+// The bit below it: whether shaping moved the advance off the font's own
+// advance of the glyph, as a kern does. Shaping notes it where the font
+// states its advances at its default location.
+const ADJUSTED: u32 = 1 << 30;
 
 /// A glyph shaping placed: its id, the text offset of its cluster and how
 /// far it moves the pen. Where it draws from the pen stands apart, in
@@ -69,29 +69,29 @@ impl ShapedGlyph {
         Self { cluster, ..self }
     }
 
-    // The glyph, its advance marked as the font's own when `own`.
-    pub(crate) fn with_own_advance(self, own: bool) -> Self {
+    // The glyph, its advance marked as moved off the font's own when
+    // `adjusted`.
+    pub(crate) fn with_adjusted(self, adjusted: bool) -> Self {
         Self {
-            id: self.id | if own { OWN_ADVANCE } else { 0 },
+            id: self.id | if adjusted { ADJUSTED } else { 0 },
             ..self
         }
     }
 
-    // Whether the advance is the font's own advance of the glyph at its
-    // default location.
-    pub(crate) fn has_own_advance(&self) -> bool {
-        self.id & OWN_ADVANCE != 0
+    // Whether shaping moved the advance off the font's own.
+    pub(crate) fn is_adjusted(&self) -> bool {
+        self.id & ADJUSTED != 0
     }
 
-    // Moves the advance by `kern`, which leaves it no longer the font's own.
+    // Moves the advance by `kern`.
     pub(crate) fn kern(&mut self, kern: i32) {
         self.advance += kern;
-        self.id &= !OWN_ADVANCE;
+        self.id |= ADJUSTED;
     }
 
     /// The glyph.
     pub fn id(&self) -> GlyphId {
-        GlyphId(self.id & !(UNSAFE_TO_BREAK | OWN_ADVANCE))
+        GlyphId(self.id & !(UNSAFE_TO_BREAK | ADJUSTED))
     }
 
     /// Whether a line break before this glyph's cluster changes the shapes

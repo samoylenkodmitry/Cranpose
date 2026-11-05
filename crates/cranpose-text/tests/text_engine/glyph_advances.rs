@@ -163,39 +163,34 @@ fn a_relayout_at_another_size_rounds_at_that_size() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let family = FontFamily::Default;
     let paragraph = ParagraphStyle::default();
-    let at = |size: f32| {
-        [ShapingSpan {
-            size,
-            ..span(0..FITS_ON_ANDROID.len(), &family, 400)
-        }]
-    };
-    let (large, small) = (at(SIZE), at(5.0));
     let rounded = GlyphAdvances::WholePixels;
-    let mut layouter = TextLayouter::default();
-    let first = layouter.layout(
-        &input(FITS_ON_ANDROID, &large, &paragraph, rounded, 400.0),
-        &resolver,
-    );
-    let again = layouter.relayout(
-        &input(FITS_ON_ANDROID, &small, &paragraph, rounded, 400.0),
-        &resolver,
-        &first,
-    );
-    let fresh = TextLayouter::default().layout(
-        &input(FITS_ON_ANDROID, &small, &paragraph, rounded, 400.0),
-        &resolver,
-    );
-    assert_pixels(
-        line_pixels(&again),
-        line_pixels(&fresh),
-        "relayout at 15 px",
-    );
     let glyphs = |laid: &TextLayout| -> Vec<f32> {
         laid.glyph_runs(0)
             .flat_map(|run| run.positions().map(|glyph| glyph.x).collect::<Vec<_>>())
             .collect()
     };
-    assert_eq!(glyphs(&again), glyphs(&fresh));
+    // The second text kerns its pairs, whose advances the relayout reads
+    // again from the font.
+    for text in [FITS_ON_ANDROID, "Te AV To. Wave"] {
+        let at = |size: f32| {
+            [ShapingSpan {
+                size,
+                ..span(0..text.len(), &family, 400)
+            }]
+        };
+        let (large, small) = (at(SIZE), at(5.0));
+        let mut layouter = TextLayouter::default();
+        let first = layouter.layout(&input(text, &large, &paragraph, rounded, 400.0), &resolver);
+        let again = layouter.relayout(
+            &input(text, &small, &paragraph, rounded, 400.0),
+            &resolver,
+            &first,
+        );
+        let fresh = TextLayouter::default()
+            .layout(&input(text, &small, &paragraph, rounded, 400.0), &resolver);
+        assert_pixels(line_pixels(&again), line_pixels(&fresh), text);
+        assert_eq!(glyphs(&again), glyphs(&fresh), "{text}");
+    }
 }
 
 // A text sized to its own width, as a chip sizes a label, keeps one line

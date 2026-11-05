@@ -232,9 +232,6 @@ impl PlainGlyphs {
         let chars = chars.get_or_insert_with(PlainChars::default);
         // What a run given up on before left.
         chars.take_inked();
-        // A plain glyph advances by the font's own advance, unless a pair
-        // kerns it; whole pixel layouts read that where the font states it.
-        let own = typeface.h_advances().is_some();
         // Made once, so a character the slots hold passes one reference.
         let read = |ch| {
             let (glyph, advance) = plain_glyph(font, (busy, substitutes), ch)?;
@@ -297,8 +294,7 @@ impl PlainGlyphs {
                     } else {
                         BreakBefore::Unsafe
                     },
-                )
-                .with_own_advance(own),
+                ),
                 GlyphOffset::default(),
             );
         }

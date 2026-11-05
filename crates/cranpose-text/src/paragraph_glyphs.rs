@@ -89,7 +89,7 @@ impl ParagraphGlyphs {
             let metrics = advances.metrics(bytes);
             pixels.extend(added.iter().map(|glyph| {
                 // An advance that shaping left the font's own rounds whole.
-                if glyph.has_own_advance() {
+                if !glyph.is_adjusted() {
                     return whole::floor(font_units(glyph.advance) * device + 0.5);
                 }
                 let own = advances.advance(metrics, glyph.id().0);
