@@ -31,6 +31,7 @@ const NAMES: [&str; 8] = [
 const INITIALS: [&str; 8] = ["P", "A", "N", "M", "I", "B", "V", "D"];
 
 const BACKGROUND: Color = Color::from_rgb_u8(15, 18, 32);
+const CARD: Color = Color::from_rgb_u8(27, 31, 51);
 const TRACK: Color = Color::from_rgb_u8(42, 48, 80);
 const LINE: Color = Color::from_rgb_u8(60, 68, 110);
 const MUTED: Color = Color::from_rgb_u8(140, 147, 176);
@@ -74,10 +75,10 @@ fn live_bar(index: usize, time: Time) -> Modifier {
         })
 }
 
-// An avatar, a name and a live bar inside two outlines, on an outlined
-// card: the containers nest as cards and fields do, and each draws. They
-// draw outlines, not fills, so that a frame's pixels cost little beside
-// the work on the nodes.
+// An avatar, a name and a live bar in a well inside a frame, on a card: the
+// containers nest as cards and fields do, and each draws. They draw fills,
+// whose rows cost little beside the work on the nodes: a rounded stroke
+// costs the ESP32-S3 more per pixel than the rest of the frame.
 #[composable]
 fn PathRow(index: usize, time: Time) {
     let kind = index % NAMES.len();
@@ -86,18 +87,18 @@ fn PathRow(index: usize, time: Time) {
             .fill_max_width()
             .height(ROW_HEIGHT)
             .padding_vertical(1.0)
-            .border(1.0, LINE, RoundedCornerShape::uniform(6.0))
+            .background(CARD)
+            .rounded_corners(6.0)
             .padding_horizontal(6.0),
         RowSpec::default()
             .vertical_alignment(VerticalAlignment::CenterVertically)
             .horizontal_arrangement(LinearArrangement::spaced_by(6.0)),
         move || {
             Box(
-                Modifier::empty().size(Size::new(16.0, 16.0)).border(
-                    1.0,
-                    FILLS[index % FILLS.len()],
-                    RoundedCornerShape::uniform(8.0),
-                ),
+                Modifier::empty()
+                    .size(Size::new(16.0, 16.0))
+                    .background(FILLS[index % FILLS.len()])
+                    .rounded_corners(8.0),
                 BoxSpec::default().content_alignment(Alignment::CENTER),
                 move || {
                     Text(INITIALS[kind], Modifier::empty(), style(Color::WHITE, 9.0));
@@ -111,14 +112,16 @@ fn PathRow(index: usize, time: Time) {
                     Box(
                         Modifier::empty()
                             .fill_max_width()
-                            .border(1.0, LINE, RoundedCornerShape::uniform(4.0))
+                            .background(LINE)
+                            .rounded_corners(4.0)
                             .padding(1.0),
                         BoxSpec::default(),
                         move || {
                             Box(
                                 Modifier::empty()
                                     .fill_max_width()
-                                    .border(1.0, TRACK, RoundedCornerShape::uniform(3.0))
+                                    .background(BACKGROUND)
+                                    .rounded_corners(3.0)
                                     .padding(2.0),
                                 BoxSpec::default(),
                                 move || {
@@ -157,7 +160,8 @@ pub fn ChangingPaths(title: &'static str) {
                     .graphics_layer_block(move |layer| {
                         layer.alpha = 0.4 + 0.6 * level(time.get(), 2_000, 0);
                     })
-                    .border(1.0, MUTED, RoundedCornerShape::uniform(8.0))
+                    .background(LINE)
+                    .rounded_corners(8.0)
                     .padding(4.0),
                 ColumnSpec::default(),
                 move || {
