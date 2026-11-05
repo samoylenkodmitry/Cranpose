@@ -40,13 +40,10 @@ POLL=/data/local/tmp/perf_window_poll.$$
 COUNTS=/data/local/tmp/perf_window_counts.$$
 
 snap() {
-  first=1
   for pid in $PIDS; do
-    stat=$(cat /proc/$pid/stat 2>/dev/null)
-    # A helper process that ended is left out; the first, the app itself,
-    # shows as an empty STAT line, which the host reads as the app's end.
-    if [ -n "$stat" ] || [ $first = 1 ]; then echo "STAT $stat"; fi
-    first=0
+    # A process that ended shows as an empty STAT line. The host checks after
+    # the run that the app's own process still runs.
+    echo "STAT $(cat /proc/$pid/stat 2>/dev/null)"
     for task in /proc/$pid/task/*; do
       echo "TASK $(cat $task/stat 2>/dev/null)"
     done
