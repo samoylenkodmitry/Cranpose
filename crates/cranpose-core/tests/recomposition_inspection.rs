@@ -174,3 +174,32 @@ fn recomposition_inspection_is_disabled_by_default() {
     assert!(recomposition_snapshot().is_empty());
     TRACES.with(|traces| traces.borrow_mut().clear());
 }
+
+#[composable(no_skip)]
+fn InlineLeaf(id: u32) {
+    TRACES.with(|traces| traces.borrow_mut().insert(id, current_source_trace()));
+}
+
+#[composable]
+fn WithInlineLeaves(state: MutableState<u32>) {
+    let _ = state.get();
+    InlineLeaf(5);
+    InlineLeaf(6);
+}
+
+#[test]
+fn recomposition_inspection_counts_no_inline_composable_against_its_caller() {
+    let _tracking = Tracking::enable();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let state = MutableState::with_runtime(0, composition.runtime_handle());
+    composition
+        .render(Key(104), || WithInlineLeaves(state))
+        .expect("initial composition");
+    assert_eq!(counts(&trace(6)), expected(&[Some(0), None]));
+    state.set(1);
+    composition
+        .process_invalid_scopes()
+        .expect("caller updates");
+    assert_eq!(counts(&trace(5)), expected(&[Some(1), None]));
+    assert_eq!(counts(&trace(6)), expected(&[Some(1), None]));
+}

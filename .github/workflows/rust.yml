@@ -239,6 +239,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-features
 
+      - name: Test the inspection and preview features the IDE uses
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-ide
+
       - name: Run the deterministic slot-table model check
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-property

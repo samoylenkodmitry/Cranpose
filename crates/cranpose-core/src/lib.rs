@@ -144,7 +144,7 @@ pub mod source_trace;
 mod stable_index;
 mod state;
 #[doc(hidden)]
-pub use source_trace::__source_scope;
+pub use source_trace::{__inline_source_scope, __source_scope};
 #[doc(hidden)]
 pub use thread_state::with_or_fresh;
 mod stage_times;
