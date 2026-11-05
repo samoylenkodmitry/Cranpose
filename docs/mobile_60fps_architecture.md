@@ -40,5 +40,5 @@ Megaboss, Showcase full scroll and CranScan Settings on Huawei and Pixel Watch.
 
 Prepare shared immutable data once, record changed data, and preserve draw
 order. A cache or thread change requires measured frame savings and a pixel
-guard. Follow the [performance guide](performance_coding_guide.md) and
+guard. Follow the [performance guide](../AGENTS.md#performance-coding-guide) and
 [device protocol](device_measurement.md).

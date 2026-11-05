@@ -1,8 +1,8 @@
 # Contribute to Cranpose
 
 Cranpose is pre-alpha. Public APIs can change between releases. Read
-[AGENTS.md](AGENTS.md) for the repository rules and
-[agent workflows](docs/agent-workflows.md) for task-specific checks.
+[AGENTS.md](AGENTS.md) for the repository rules and its
+[workflows](AGENTS.md#workflows) for task-specific checks.
 
 ## Setup
 

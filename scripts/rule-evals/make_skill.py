@@ -9,7 +9,7 @@ import pathlib
 here = pathlib.Path(__file__).resolve().parent
 agents = (here.parent.parent / "AGENTS.md").read_text()
 start = agents.index("Code rules (")
-end = agents.index("Read the matching workflow")
+end = agents.index("\n## Workflows")
 skill = here / "skills" / "cranpose-rules" / "SKILL.md"
 skill.parent.mkdir(parents=True, exist_ok=True)
 skill.write_text(
