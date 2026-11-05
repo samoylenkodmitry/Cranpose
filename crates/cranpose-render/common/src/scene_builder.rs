@@ -43,7 +43,10 @@ pub use lowered_node::{
 };
 
 pub use crate::layer_recycling::recycle_lowered;
+mod kept_head;
+pub use kept_head::KeptHead;
 mod moved_subtree;
+use moved_subtree::Inherited;
 pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};
 mod lower_context;
 pub use lower_context::LowerContext;
@@ -741,12 +744,9 @@ fn publish_retained_window_geometry(
     let child_abs = parent_abs.children_of(layer);
     if let Some(node_id) = layer.node_id {
         read_node_data(applier, node_id, |data| {
-            data.modifier_slices.publish_window_geometry(
-                Point {
-                    x: parent_abs.content_origin.x + layer.origin_in_parent.x,
-                    y: parent_abs.content_origin.y + layer.origin_in_parent.y,
-                },
-                child_abs.window_transform,
+            publish_layer_window_geometry(
+                &data.modifier_slices,
+                (layer, parent_abs, &child_abs),
                 data.layout_state.size(),
             );
         });
@@ -756,6 +756,23 @@ fn publish_retained_window_geometry(
             publish_retained_window_geometry(applier, child, &child_abs);
         }
     }
+}
+
+// Publishes where `layer`, of the node of `slices`, `size` big, lies in its
+// window: under `parent_abs`, with its children under `child_abs`.
+fn publish_layer_window_geometry(
+    slices: &ModifierNodeSlices,
+    (layer, parent_abs, child_abs): (&LayerNode, &AbsOrigin, &AbsOrigin),
+    size: Size,
+) {
+    slices.publish_window_geometry(
+        Point {
+            x: parent_abs.content_origin.x + layer.origin_in_parent.x,
+            y: parent_abs.content_origin.y + layer.origin_in_parent.y,
+        },
+        child_abs.window_transform,
+        size,
+    );
 }
 
 /// Notes that the scene update changes a layer that is a scene, a surface or

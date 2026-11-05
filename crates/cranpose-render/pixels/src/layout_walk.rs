@@ -10,10 +10,10 @@ use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, has_children,
-        kept_child_placement, lower_moved_subtree, lower_node_alone, lower_space_fragment,
-        placed_child_position, recycle_lowered, release_lowered, visit_kept_node,
-        visit_lowered_children,
+        KeptHead, LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment,
+        has_children, kept_child_placement, lower_moved_subtree, lower_node_alone,
+        lower_space_fragment, placed_child_position, recycle_lowered, release_lowered,
+        visit_kept_node, visit_lowered_children,
     },
 };
 use cranpose_ui_graphics::Point;
@@ -321,7 +321,9 @@ impl<'a> LayoutWalk<'a> {
     // Lowers `node` at `place` alone under `lower_context` and pushes its
     // subtree under `context`: over its old subtree, whose children's old
     // records are `old`, while a rewrite pushes the subtree it is in again.
-    // A node whose layer holds a 3D space lowers whole, and the scene keeps
+    // A child with children that an update pushes keeps its layer for the
+    // next updates, which push it again while the child's own draws stay. A
+    // node whose layer holds a 3D space lowers whole, and the scene keeps
     // its subtree. Out of line: the update and the children of a layer each
     // call it. A copy in each caller would take room in the instruction cache.
     #[inline(never)]
@@ -333,6 +335,13 @@ impl<'a> LayoutWalk<'a> {
         reuse: &mut Option<Reuse<'_>>,
         old: Option<OldChildren>,
     ) {
+        let keeps_heads = place == NodePlace::Child && self.marks.from_update;
+        if keeps_heads
+            && !self.changed(node)
+            && self.push_kept_head(node, lower_context, (scene, context), (reuse, old))
+        {
+            return;
+        }
         let lowered = lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             let LoweredNode {
                 node: lowered,
@@ -351,7 +360,12 @@ impl<'a> LayoutWalk<'a> {
                 let slot = (!children.is_empty()).then_some(&mut slot);
                 populate_draws_from_graph(subtree, scene, context, reuse, slot);
             }
-            recycle_lowered(lowered);
+            if keeps_heads && !space && !children.is_empty() {
+                let head = KeptHead::new(node, lowered, lower_context);
+                self.moved.borrow_mut().keep_head(head);
+            } else {
+                recycle_lowered(lowered);
+            }
             space
         });
         if lowered == Some(true)
@@ -436,6 +450,43 @@ impl<'a> LayoutWalk<'a> {
             };
             populate_draws_from_graph(subtree, scene, context, &mut None, Some(&mut slot));
         });
+    }
+
+    // Pushes under `context` the subtree of `node`, a child that did not
+    // change itself, from the layer the walk kept for it, placed where the
+    // child now lies, with its children pushed again: over its old subtree,
+    // whose children's old records are `old`. Keeps the layer for the next
+    // updates. False, with nothing pushed, when the walk kept no layer the
+    // child can take.
+    fn push_kept_head(
+        &self,
+        node: NodeId,
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+        (reuse, old): (&mut Option<Reuse<'_>>, Option<OldChildren>),
+    ) -> bool {
+        let Some(mut head) = self.moved.borrow_mut().take_head(node) else {
+            return false;
+        };
+        let pushed = head.follow(self.applier, lower_context, |layer, children, inner| {
+            if let Some(subtree) = Subtree::of_child(layer) {
+                let mut slot = ChildSlot {
+                    walk: self,
+                    owner: node,
+                    children,
+                    context: inner,
+                    pushes: ChildPushes::of(old),
+                };
+                let slot = (!children.is_empty()).then_some(&mut slot);
+                populate_draws_from_graph(subtree, scene, context, reuse, slot);
+            }
+        });
+        if pushed.is_none() {
+            head.recycle();
+            return false;
+        }
+        self.moved.borrow_mut().keep_head(head);
+        true
     }
 
     // Pushes under `context` the subtree of `child`, which did not change,

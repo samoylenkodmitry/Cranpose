@@ -143,10 +143,9 @@ impl Scene {
             self.layer_moves += 1;
         }
         let marks = &self.marks;
-        self.moved.get_mut().begin_update(
-            |node| marks.is_clean(applier, node),
-            cranpose_ui::current_memory_headroom(),
-        );
+        self.moved
+            .get_mut()
+            .begin_update((applier, marks), cranpose_ui::current_memory_headroom());
         if !self.update_in_place((applier, root), updates, text) {
             let previous = self.raster.take();
             self.build(applier, root, previous, text);

@@ -23,14 +23,14 @@ pub struct MovedSubtree {
 
 // What a subtree lowers with from above it that a move leaves as it was.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct Inherited {
+pub(super) struct Inherited {
     motion_context_animated: bool,
     translated_content_context: bool,
     store: RecordingStore,
 }
 
 impl Inherited {
-    fn of(context: &LowerContext) -> Self {
+    pub(super) fn of(context: &LowerContext) -> Self {
         Self {
             motion_context_animated: context.inherited_motion_context_animated,
             translated_content_context: context.inherited_translated_content_context,
