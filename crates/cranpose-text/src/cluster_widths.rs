@@ -104,6 +104,7 @@ impl ClusterWidths {
 
     // The last cluster boundary from `start` to `end` up to which the text
     // from `start` fits `width`; `start` when no cluster fits.
+    #[inline]
     pub(crate) fn last_fitting(&self, start: usize, end: usize, width: f32) -> usize {
         let limit = self.before(start) + self.unit.limit(width);
         let last = held(end);

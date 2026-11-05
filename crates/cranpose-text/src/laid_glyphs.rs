@@ -26,6 +26,67 @@ enum Glyphs {
     Full(Arc<[FullGlyph]>),
 }
 
+impl Glyphs {
+    // `shaped`, each array collected from an iterator of known length in
+    // one allocation.
+    fn of(shaped: &ShapedGlyphs) -> Self {
+        let mut fits = true;
+        let packed: Arc<[PackedGlyph]> = shaped
+            .iter()
+            .map(|glyph| {
+                let (packed, fit) = PackedGlyph::pack(glyph);
+                fits &= fit;
+                packed
+            })
+            .collect();
+        if fits {
+            return Self::Packed(packed);
+        }
+        Self::Full(
+            shaped
+                .iter()
+                .map(|&glyph| FullGlyph {
+                    glyph,
+                    advance: None,
+                })
+                .collect(),
+        )
+    }
+
+    // `shaped` with `pixels`, their advances rounded to whole device pixels
+    // at `grid` of them to a pixel of the layout. Out of line, so `of`
+    // stays in its caller.
+    #[inline(never)]
+    fn rounded(shaped: &ShapedGlyphs, pixels: &[f32], grid: f32) -> Self {
+        let mut fits = true;
+        let rounded: Arc<[RoundedGlyph]> = shaped
+            .iter()
+            .zip(pixels)
+            .map(|(glyph, pixels)| {
+                let (packed, fit) = PackedGlyph::pack(glyph);
+                fits &= fit;
+                RoundedGlyph {
+                    glyph: packed,
+                    advance: pixels / grid,
+                }
+            })
+            .collect();
+        if fits {
+            return Self::Rounded(rounded);
+        }
+        Self::Full(
+            shaped
+                .iter()
+                .zip(pixels)
+                .map(|(&glyph, pixels)| FullGlyph {
+                    glyph,
+                    advance: Some(pixels / grid),
+                })
+                .collect(),
+        )
+    }
+}
+
 impl Default for Glyphs {
     fn default() -> Self {
         Self::Packed(Arc::default())
@@ -230,44 +291,11 @@ impl LaidGlyphs {
         }
     }
 
-    // Keeps the glyphs of `paragraph`, each array collected from an
-    // iterator of known length in one allocation.
-    #[inline(never)]
+    // Keeps the glyphs of `paragraph`.
     fn new(paragraph: &ParagraphGlyphs) -> Self {
-        let pixels = paragraph.pixels(0..paragraph.len());
-        let grid = paragraph.grid();
-        let mut fits = true;
-        let mut pack = |glyph: &ShapedGlyph| {
-            let (packed, fit) = PackedGlyph::pack(glyph);
-            fits &= fit;
-            packed
-        };
-        let packed = match pixels {
-            None => Glyphs::Packed(paragraph.iter().map(&mut pack).collect()),
-            Some(pixels) => Glyphs::Rounded(
-                paragraph
-                    .iter()
-                    .zip(pixels)
-                    .map(|(glyph, pixels)| RoundedGlyph {
-                        glyph: pack(glyph),
-                        advance: pixels / grid,
-                    })
-                    .collect(),
-            ),
-        };
-        let glyphs = if fits {
-            packed
-        } else {
-            Glyphs::Full(
-                paragraph
-                    .iter()
-                    .enumerate()
-                    .map(|(index, glyph)| FullGlyph {
-                        glyph: *glyph,
-                        advance: pixels.map(|pixels| pixels[index] / grid),
-                    })
-                    .collect(),
-            )
+        let glyphs = match paragraph.pixels(0..paragraph.len()) {
+            None => Glyphs::of(paragraph),
+            Some(pixels) => Glyphs::rounded(paragraph, pixels, paragraph.grid()),
         };
         let offsets = paragraph.offsets();
         Self {
