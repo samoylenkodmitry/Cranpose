@@ -72,19 +72,19 @@ impl NodeMarks {
         mark: u8,
         ancestor_mark: u8,
     ) {
-        self.update_with_ancestors(applier, id, |had| had | mark, ancestor_mark);
+        self.update_with_ancestors(applier, id, |had| had | mark, (ancestor_mark, |_| {}));
     }
 
     /// Sets `id`'s mark to what `update` makes of the mark it had, and adds
     /// the bits of `ancestor_mark` to the mark of each node above it, from
-    /// its parent up to the first that had them. Each node's storage is
-    /// found once.
+    /// its parent up to the first that had them, passing each node that
+    /// lacked them to `marked`. Each node's storage is found once.
     pub fn update_with_ancestors(
         &mut self,
         applier: &MemoryApplier,
         id: NodeId,
         update: impl FnOnce(u8) -> u8,
-        ancestor_mark: u8,
+        (ancestor_mark, mut marked): (u8, impl FnMut(NodeId)),
     ) {
         let mut place = MarkPlace::of(applier, id);
         let entry = self.entry_at(place);
@@ -97,6 +97,7 @@ impl NodeMarks {
             if had & ancestor_mark == ancestor_mark {
                 break;
             }
+            marked(parent);
         }
     }
 

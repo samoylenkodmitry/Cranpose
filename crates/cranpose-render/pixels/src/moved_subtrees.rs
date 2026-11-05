@@ -6,11 +6,9 @@
 // each of its rows once, and a row that holds a changing bar lowers its
 // containers once.
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::scene_builder::{KeptHead, MovedSubtree};
 use cranpose_ui_graphics::MemoryHeadroom;
-
-use crate::layout_walk::DirtyMarks;
 
 // What the walk keeps of a node.
 enum Kept {
@@ -140,16 +138,42 @@ impl MovedSubtrees {
         self.slot_of.insert(node, at);
     }
 
+    // Lets go what the walk keeps of `node`, which an update changed: its
+    // subtree or its layer.
+    pub(crate) fn let_go_of_changed(&mut self, node: NodeId) {
+        if let Some(at) = self.slot_index(node) {
+            self.free_slot(at);
+        }
+    }
+
+    // Lets go the subtree the walk keeps of `node`, above a node an update
+    // changed. A layer kept of it stays: the node itself did not change.
+    pub(crate) fn let_go_of_subtree(&mut self, node: NodeId) {
+        if let Some(at) = self.slot_index(node)
+            && let Some(Slot {
+                kept: Some(Kept::Subtree(_)),
+                ..
+            }) = self.slots[at as usize]
+        {
+            self.free_slot(at);
+        }
+    }
+
+    fn free_slot(&mut self, at: u32) {
+        if let Some(slot) = self.slots[at as usize].take() {
+            self.slot_of.remove(&slot.node);
+            self.free.push(at);
+            if let Some(kept) = slot.kept {
+                kept.recycle();
+            }
+        }
+    }
+
     // Lets go, as an update starts, in one pass over the slots, what no
     // update pushed in the last `UNPUSHED_UPDATES`, or
-    // `TIGHT_UNPUSHED_UPDATES` at `headroom` Tight, and what the update's
-    // `marks` make old: a subtree whose node or a node beneath it changed,
-    // and a layer whose node changed.
-    pub(crate) fn begin_update(
-        &mut self,
-        (applier, marks): (&MemoryApplier, &DirtyMarks),
-        headroom: MemoryHeadroom,
-    ) {
+    // `TIGHT_UNPUSHED_UPDATES` at `headroom` Tight. The marks of the update
+    // let go before what it made old.
+    pub(crate) fn begin_update(&mut self, headroom: MemoryHeadroom) {
         if self.slot_of.is_empty() {
             return;
         }
@@ -157,23 +181,13 @@ impl MovedSubtrees {
             MemoryHeadroom::Tight => TIGHT_UNPUSHED_UPDATES,
             MemoryHeadroom::Ample => UNPUSHED_UPDATES,
         };
-        for (at, place) in self.slots.iter_mut().enumerate() {
-            let Some(slot) = place else {
+        for at in 0..self.slots.len() {
+            let Some(slot) = &mut self.slots[at] else {
                 continue;
             };
             slot.waited += 1;
-            let stale = slot.waited > unpushed + 1
-                || match &slot.kept {
-                    Some(Kept::Subtree(_)) => !marks.is_clean(applier, slot.node),
-                    Some(Kept::Head(_)) => marks.changed(applier, slot.node),
-                    None => true,
-                };
-            if stale && let Some(slot) = place.take() {
-                self.slot_of.remove(&slot.node);
-                self.free.push(at as u32);
-                if let Some(kept) = slot.kept {
-                    kept.recycle();
-                }
+            if slot.waited > unpushed + 1 || slot.kept.is_none() {
+                self.free_slot(at as u32);
             }
         }
     }

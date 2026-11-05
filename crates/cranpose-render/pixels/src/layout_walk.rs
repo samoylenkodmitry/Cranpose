@@ -41,20 +41,29 @@ pub(crate) struct DirtyMarks {
 
 impl DirtyMarks {
     // Marks the nodes of `updates` with their updates, merged for a node
-    // named more than once, and the nodes above them. Returns whether an
-    // update may move a layer with no layout pass.
-    pub(crate) fn mark(&mut self, applier: &MemoryApplier, updates: SceneUpdates<'_>) -> bool {
+    // named more than once, and the nodes above them. Lets go what `moved`
+    // keeps of each node an update names and the subtrees it keeps of the
+    // nodes above them. Returns whether an update may move a layer with no
+    // layout pass.
+    pub(crate) fn mark(
+        &mut self,
+        applier: &MemoryApplier,
+        updates: SceneUpdates<'_>,
+        moved: &mut MovedSubtrees,
+    ) -> bool {
         self.marks.reset(applier);
         self.from_update = true;
         let mut moves = false;
         for &(node, update) in updates {
             moves |= !matches!(update, NodeUpdate::Content | NodeUpdate::Draws);
+            moved.let_go_of_changed(node);
             let merge = |mark| {
                 let merged = decode(mark).map_or(update, |before| before.merge(update));
                 (mark & ABOVE_DIRTY) | (encode(merged) << UPDATE_SHIFT)
             };
+            let above = |node| moved.let_go_of_subtree(node);
             self.marks
-                .update_with_ancestors(applier, node, merge, ABOVE_DIRTY);
+                .update_with_ancestors(applier, node, merge, (ABOVE_DIRTY, above));
         }
         moves
     }

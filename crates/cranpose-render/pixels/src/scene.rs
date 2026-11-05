@@ -139,13 +139,11 @@ impl Scene {
         if updates.is_empty() {
             return self.rebuild(applier, root, text);
         }
-        if self.marks.mark(applier, updates) {
+        let moved = self.moved.get_mut();
+        if self.marks.mark(applier, updates, moved) {
             self.layer_moves += 1;
         }
-        let marks = &self.marks;
-        self.moved
-            .get_mut()
-            .begin_update((applier, marks), cranpose_ui::current_memory_headroom());
+        moved.begin_update(cranpose_ui::current_memory_headroom());
         if !self.update_in_place((applier, root), updates, text) {
             let previous = self.raster.take();
             self.build(applier, root, previous, text);

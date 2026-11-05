@@ -230,6 +230,48 @@ fn a_still_box_between_changing_nodes_keeps_its_draws() {
     kept_frames_match_full_redraws(1.0, KeptBetween);
 }
 
+// A box that moves on odd steps with the column that holds it, and rests
+// on even steps while the colour of the box it holds changes. A move pushes
+// the box whole, and the next update keeps its record while its child
+// changes: the move after that lowers it again rather than push what it held
+// before.
+#[composable]
+fn MovesThenChangesAtRest(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let shift = step.value().div_ceil(2) as f32 * 3.0;
+    Column(
+        Modifier::empty().offset(4.0, 4.0 + shift),
+        ColumnSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(40.0)
+                    .height(24.0)
+                    .background(color(3, 13))
+                    .padding(4.0),
+                BoxSpec::default(),
+                move || {
+                    let n = step.value();
+                    Box(
+                        Modifier::empty()
+                            .width(20.0)
+                            .height(12.0)
+                            .background(color(n / 2, 14)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn a_box_whose_child_changed_at_rest_draws_it_after_its_next_move() {
+    kept_frames_match_full_redraws(1.0, MovesThenChangesAtRest);
+}
+
 #[test]
 fn rows_that_rest_between_moves_draw_right_with_ample_memory() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, RestingRows);
