@@ -8,6 +8,11 @@ extern "C" {
 bool CPResize(uint32_t width, uint32_t height, float density);
 /// Advances the frame clock; whether the picture changed.
 bool CPTick(uint64_t elapsed);
+/// When the next `CPTick` is due, in nanoseconds from now: 0 at the next
+/// frame, UINT64_MAX only once the `CPOnWake` function runs or input arrives.
+uint64_t CPNextTick(void);
+/// The function the main queue runs when work arrives for the composition.
+void CPOnWake(void (* _Nonnull wake)(void));
 /// The picture as sprites: `*count` floats, `SPRITE_FLOATS` per sprite.
 const float * _Nullable CPSprites(size_t * _Nonnull count);
 /// The textures the last `CPSprites` first used: premultiplied RGBA8, top row first.

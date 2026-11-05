@@ -1,6 +1,18 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-use cranpose::{prelude::*, watchos::Application};
+use cranpose::{
+    prelude::*,
+    watchos::{Application, NextTick},
+};
+use web_time::Instant;
 
 #[test]
 fn text_rasterization_uses_the_app_render_context() {
@@ -414,4 +426,104 @@ fn sprites_are_cut_to_their_clip() {
             "a sprite reaches past its 40-pixel clip: {frame:?}"
         );
     }
+}
+
+// A host stops its frame loop on whatever `next_tick` gives besides the next
+// frame, so these follow a resting host through its wakes.
+
+fn sweeping() {
+    let transition = cranpose_animation::rememberInfiniteTransition("sweep");
+    let spec = cranpose_animation::infiniteRepeatable(
+        cranpose_animation::AnimationSpec::linear(100),
+        cranpose_animation::RepeatMode::Restart,
+        cranpose_animation::StartOffset::default(),
+    );
+    let fraction = transition.animateFloat(0.0, 1.0, spec, "fraction").value();
+    Spacer(
+        Modifier::empty()
+            .fill_max_width_fraction(fraction)
+            .fill_max_height()
+            .background(Color(1.0, 0.0, 0.0, 1.0)),
+    );
+}
+
+#[test]
+fn a_still_screen_needs_no_tick_until_woken() {
+    let mut app = Application::new(80, 60, 1.0, || {
+        Spacer(
+            Modifier::empty()
+                .fill_max_size()
+                .background(Color(1.0, 0.0, 0.0, 1.0)),
+        );
+    })
+    .expect("valid surface");
+    app.set_active(true);
+    assert!(app.tick(1));
+    assert_eq!(app.next_tick(), NextTick::OnWake);
+}
+
+#[test]
+fn an_animation_needs_every_frame() {
+    let mut app = Application::new(80, 60, 1.0, sweeping).expect("valid surface");
+    app.set_active(true);
+    app.tick(1);
+    assert_eq!(app.next_tick(), NextTick::NextFrame);
+}
+
+#[test]
+fn an_inactive_app_needs_no_tick_while_it_animates() {
+    let mut app = Application::new(80, 60, 1.0, sweeping).expect("valid surface");
+    app.set_active(true);
+    app.tick(1);
+    app.set_active(false);
+    assert_eq!(app.next_tick(), NextTick::OnWake);
+}
+
+#[test]
+fn a_delay_wakes_a_resting_host_and_its_change_shows() {
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    let mut app = Application::new(40, 30, 1.0, || {
+        let done = rememberMutableStateOf(|| false);
+        LaunchedEffectAsync((), move |_| {
+            Box::pin(async move {
+                delay(Duration::from_millis(20)).await;
+                done.set(true);
+            })
+        });
+        let color = if done.get() {
+            Color(0.0, 1.0, 0.0, 1.0)
+        } else {
+            Color(1.0, 0.0, 0.0, 1.0)
+        };
+        Spacer(Modifier::empty().fill_max_size().background(color));
+    })
+    .expect("valid surface");
+    let woken = Arc::new(AtomicBool::new(false));
+    let sink = Arc::clone(&woken);
+    app.set_frame_waker(move || sink.store(true, Ordering::Release));
+    app.set_active(true);
+    app.tick(1);
+    assert_ne!(app.next_tick(), NextTick::NextFrame);
+
+    let center = |app: &mut Application| -> [u8; 4] {
+        let at = 4 * (15 * 40 + 20);
+        app.pixels()[at..at + 4].try_into().expect("four bytes")
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut frame_time = 1;
+    while center(&mut app) != GREEN {
+        assert!(Instant::now() < deadline, "the delay never woke the host");
+        let due = match app.next_tick() {
+            NextTick::NextFrame => true,
+            NextTick::At(at) => Instant::now() >= at,
+            NextTick::OnWake => woken.swap(false, Ordering::AcqRel),
+        };
+        if due {
+            frame_time += 16_000_000;
+            app.tick(frame_time);
+        } else {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    assert_eq!(app.next_tick(), NextTick::OnWake);
 }

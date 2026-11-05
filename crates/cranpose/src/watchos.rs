@@ -18,8 +18,8 @@ pub use cranpose_render_pixels::sprites::{SPRITE_FLOATS, SpriteFrame, TextureUpl
 use cranpose_services::SystemTheme;
 use cranpose_ui::EdgeInsets;
 
-pub use crate::framebuffer::SurfaceError;
 use crate::framebuffer::{Framebuffer, PixelRect, TouchPhase, frame_bytes};
+pub use crate::framebuffer::{NextTick, SurfaceError};
 
 /// One watch UI composition, drawn as sprites or into a retained RGBA
 /// framebuffer on request.
@@ -98,6 +98,20 @@ impl Application {
     /// so a new frame should be presented.
     pub fn tick(&mut self, elapsed_nanos: u64) -> bool {
         self.framebuffer.tick(elapsed_nanos)
+    }
+
+    /// Runs the tasks woken since they last ran and says when the host must
+    /// call [`Self::tick`] next. Until then the host stops its frame loop, so
+    /// a still screen wakes the watch for no frames.
+    pub fn next_tick(&mut self) -> NextTick {
+        self.framebuffer.next_tick()
+    }
+
+    /// Calls `waker` from any thread when work arrives for the main thread,
+    /// such as a coroutine's continuation, so a host resting on
+    /// [`NextTick::OnWake`] ticks again.
+    pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
+        self.framebuffer.set_frame_waker(waker);
     }
 
     /// The current picture as a row-major, straight-alpha RGBA8 image,

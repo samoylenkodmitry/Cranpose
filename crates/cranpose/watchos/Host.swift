@@ -193,6 +193,10 @@ final class CranposeScene: SKScene {
     private var shown: [Float] = []
     private var textures: [UInt32: SKTexture] = [:]
     private var live = false
+    /// Called after a tick that leaves nothing to draw at the next frame,
+    /// with the nanoseconds until the next tick is due (`UInt64.max`: until
+    /// a wake).
+    var rest: ((UInt64) -> Void)?
 
     var elapsed: UInt64 {
         UInt64(max(0, ProcessInfo.processInfo.systemUptime - epoch) * 1_000_000_000)
@@ -214,8 +218,10 @@ final class CranposeScene: SKScene {
     }
 
     override func update(_ currentTime: TimeInterval) {
-        guard live, CPTick(elapsed) else { return }
-        present()
+        guard live else { return }
+        if CPTick(elapsed) { present() }
+        let next = CPNextTick()
+        if next != 0 { rest?(next) }
     }
 
     /// Applies the sprites of the current picture.
@@ -353,9 +359,21 @@ final class CrownReading {
 @MainActor
 final class CranposeModel: ObservableObject {
     @Published var error: String?
+    /// Whether SpriteKit's frame loop stops: the composition needs no tick
+    /// before a wake, input or its alarm.
+    @Published private(set) var resting = false
     let crown = CrownReading()
     private(set) var scene = CranposeScene(size: CGSize(width: 1, height: 1))
     private var ready = false
+    private var alarm: Task<Void, Never>?
+    /// The model a wake from the composition reaches.
+    private static weak var awake: CranposeModel?
+
+    init() {
+        CranposeModel.awake = self
+        CPOnWake { MainActor.assumeIsolated { CranposeModel.awake?.wake() } }
+        scene.rest = { [weak self] nanos in self?.rest(for: nanos) }
+    }
 
     var elapsed: UInt64 { scene.elapsed }
 
@@ -376,11 +394,33 @@ final class CranposeModel: ObservableObject {
             _ = CPTick(elapsed)
             scene.present()
         }
+        wake()
     }
 
     func activate(_ active: Bool) {
         CPActive(active)
         scene.isPaused = !active
+        if active { wake() }
+    }
+
+    /// Stops the frame loop for `nanos`, or until a wake when it is `UInt64.max`.
+    func rest(for nanos: UInt64) {
+        alarm?.cancel()
+        alarm = nil
+        if !resting { resting = true }
+        guard nanos != UInt64.max else { return }
+        alarm = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: nanos)
+            guard !Task.isCancelled else { return }
+            self?.wake()
+        }
+    }
+
+    /// Starts the frame loop again.
+    func wake() {
+        alarm?.cancel()
+        alarm = nil
+        if resting { resting = false }
     }
 }
 
@@ -394,7 +434,7 @@ struct CranposeView: View {
         // as the clock's; the inner one draws on the whole screen.
         GeometryReader { safe in GeometryReader { geometry in
             ZStack {
-                SpriteView(scene: model.scene, preferredFramesPerSecond: 60)
+                SpriteView(scene: model.scene, isPaused: model.resting, preferredFramesPerSecond: 60)
                     .allowsHitTesting(false)
                 if let error = model.error { Text(error).foregroundStyle(.red) }
             }
@@ -407,11 +447,13 @@ struct CranposeView: View {
                 onChange: { event in
                     if let delta = model.crown.change(event) {
                         CPCrown(Float(delta), model.elapsed / 1_000_000)
+                        model.wake()
                     }
                 },
                 onIdle: {
                     if let rest = model.crown.idle() {
                         CPCrown(Float(rest), model.elapsed / 1_000_000)
+                        model.wake()
                     }
                 })
             .gesture(DragGesture(minimumDistance: 0)
@@ -421,10 +463,12 @@ struct CranposeView: View {
                         touching = true
                     }
                     CPTouch(1, Float(event.location.x), Float(event.location.y))
+                    model.wake()
                 }
                 .onEnded { event in
                     CPTouch(2, Float(event.location.x), Float(event.location.y))
                     touching = false
+                    model.wake()
                 })
             .onAppear { model.resize(geometry.size, safeArea: safe.safeAreaInsets); model.activate(phase == .active) }
             .onChange(of: geometry.size) { _, size in model.resize(size, safeArea: safe.safeAreaInsets) }

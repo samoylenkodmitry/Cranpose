@@ -20,6 +20,7 @@ use cranpose_services::{
     host::{LifecycleState, dispatch_lifecycle_state},
 };
 use cranpose_ui::{EdgeInsets, current_memory_headroom, set_memory_headroom};
+use web_time::Instant;
 
 use crate::platform_env::PlatformEnvironment;
 
@@ -41,6 +42,19 @@ pub enum TouchPhase {
     Up,
     /// The system took the touch away.
     Cancel,
+}
+
+/// When a host must call [`Framebuffer::tick`] next. Until then it may stop
+/// its frame loop, and a still screen costs it no frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NextTick {
+    /// At the next display frame: something animates or work is waiting.
+    NextFrame,
+    /// At this time, when a timed event such as a cursor blink is due.
+    At(Instant),
+    /// Only after input or a call of the waker given to
+    /// [`Framebuffer::set_frame_waker`].
+    OnWake,
 }
 
 /// One composition that the CPU draws, area by area, for a display the host
@@ -181,6 +195,23 @@ impl Framebuffer {
     /// event. A host sleeps until then when it needs neither.
     pub fn frame_schedule(&self) -> FrameSchedule {
         self.shell.frame_schedule()
+    }
+
+    /// Runs the tasks woken since they last ran and says when the host must
+    /// tick next. An inactive composition needs no tick.
+    pub fn next_tick(&mut self) -> NextTick {
+        if !self.active {
+            return NextTick::OnWake;
+        }
+        self.run_pending_tasks();
+        let schedule = self.frame_schedule();
+        if schedule.needs_update || schedule.needs_frame {
+            NextTick::NextFrame
+        } else {
+            schedule
+                .next_deadline
+                .map_or(NextTick::OnWake, NextTick::At)
+        }
     }
 
     /// Calls `waker` from any thread when work arrives for the UI thread,
