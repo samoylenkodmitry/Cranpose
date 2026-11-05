@@ -1124,12 +1124,12 @@ pub(crate) fn surface_page_bounds(
     Some(bounds)
 }
 
-// How far along the camera's view `surface` reaches, at the farthest corner
-// of its mesh's bounds: the scene draws far to near, so writing on a wall,
-// which reaches less far, draws after the wall and blends over it.
+// How far `surface`'s bounds reach along the view: drawn far to near, writing follows its wall.
 pub(crate) fn view_depth(scene: &SceneDraw, surface: &MeshSurface) -> f32 {
-    let to_view = surface.transform.then(&scene.camera.view);
-    surface.mesh.bounds_in(&to_view).1.z
+    let (low, high) = surface.mesh.bounds();
+    let row = surface.transform.then(&scene.camera.view).rows()[2];
+    let far = |at: f32, low: f32, high: f32| (at * low).max(at * high);
+    row[3] + far(row[0], low.x, high.x) + far(row[1], low.y, high.y) + far(row[2], low.z, high.z)
 }
 
 /// The pixels of `page` the scene and the clip above a surface leave, as a

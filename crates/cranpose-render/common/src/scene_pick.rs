@@ -95,11 +95,13 @@ impl ScenePick {
     /// the layer to the window; `None` when the layer shows no scene. Its
     /// surfaces are those the window's eye sees.
     pub fn of(layer: &LayerNode, to_window: ProjectiveTransform) -> Option<Self> {
+        // A hit walk asks every layer: one that opens no scene stops here,
+        // before any transform work.
+        let tree = SpaceTree::of(layer)?;
         // The scene fills its layer's bounds.
         let bounds = layer.local_bounds;
         let to_window = ProjectiveTransform::translation(bounds.x, bounds.y).then(to_window);
         let window_to_scene = to_window.inverse()?;
-        let tree = SpaceTree::of(layer)?;
         let view = EyeView::of(&tree, bounds.size());
         let seen_scenes = view
             .seen

@@ -12,7 +12,7 @@
 //! near part once more, flat on that plane, in front of all the scene holds.
 
 use cranpose_render_common::space::DOORWAY_NEAR;
-use cranpose_ui_graphics::space::{Camera, Mat4, Material, Vec3};
+use cranpose_ui_graphics::space::{Mat4, Material, Vec3};
 
 use super::{FrameExecutor, PreparedSurface, ScenePhase};
 use crate::{
@@ -107,39 +107,41 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             ) else {
                 continue;
             };
-            let mut upload = |uniforms: &SceneSurfaceUniforms| {
-                self.recorder.upload_uniform(
-                    UploadAllocatorId::SceneSurface,
-                    scene_surface_uniform_spec(),
-                    &self.renderer.device,
-                    self.renderer.scene_uniform_layout(),
-                    bytemuck::bytes_of(uniforms),
-                )
-            };
-            let near = reaches_near(&lifted, &scene.camera).then(|| upload(&near_part(uniforms)));
+            let near = reaches_near(&uniforms).then(|| self.upload_window(&near_part(uniforms)));
             windows.push(PreparedWindow {
                 seen: index,
                 through,
-                uniform: upload(&uniforms),
+                uniform: self.upload_window(&uniforms),
                 near,
                 scissor,
             });
         }
         Some(PreparedWindows { buffers, windows })
     }
+
+    // Uploads the uniforms of a doorway's square. Out of line: a doorway
+    // nearer than the near plane uploads twice, and one copy serves both.
+    #[inline(never)]
+    fn upload_window(&mut self, uniforms: &SceneSurfaceUniforms) -> UniformUpload {
+        self.recorder.upload_uniform(
+            UploadAllocatorId::SceneSurface,
+            scene_surface_uniform_spec(),
+            &self.renderer.device,
+            self.renderer.scene_uniform_layout(),
+            bytemuck::bytes_of(uniforms),
+        )
+    }
 }
 
-// Whether part of the unit square `quad` places in the scene lies nearer
-// than `camera`'s near plane, deeper than `DOORWAY_NEAR` of it.
-fn reaches_near(quad: &Mat4, camera: &Camera) -> bool {
-    let to_camera = quad.then(&camera.view);
-    let (low, high) = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-        .map(|(u, v)| to_camera.transform_point(Vec3::new(u, v, 0.0)).z)
-        .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), &z| {
-            (low.min(z), high.max(z))
-        });
-    let near = camera.near();
+// Whether part of the unit square that `uniforms` draw lies nearer than
+// the near plane, deeper than `DOORWAY_NEAR` of it. A corner's clip w is
+// its depth, and clip w less clip z is the near plane's.
+fn reaches_near(uniforms: &SceneSurfaceUniforms) -> bool {
+    let [across, down, _, origin] = uniforms.clip_from_model;
+    let near = origin[3] - origin[2];
+    let corners = [0.0, across[3], across[3] + down[3], down[3]].map(|depth| origin[3] + depth);
+    let low = corners.iter().copied().fold(f32::INFINITY, f32::min);
+    let high = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     low < near * (1.0 + NEAR_OVERLAP) && high > near * DOORWAY_NEAR
 }
 
