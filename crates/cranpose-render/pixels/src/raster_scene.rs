@@ -556,27 +556,7 @@ impl RasterScene {
             return;
         };
         let to = self.counts();
-        let run = |start: usize, stop: usize| start..stop.max(start);
-        self.shapes.extend_from_slice(
-            old.shapes
-                .get(run(from.shapes, stop.shapes))
-                .unwrap_or_default(),
-        );
-        self.images.extend_from_slice(
-            old.images
-                .get(run(from.images, stop.images))
-                .unwrap_or_default(),
-        );
-        self.texts.extend_from_slice(
-            old.texts
-                .get(run(from.texts, stop.texts))
-                .unwrap_or_default(),
-        );
-        self.shadows.extend_from_slice(
-            old.shadows
-                .get(run(from.shadows, stop.shadows))
-                .unwrap_or_default(),
-        );
+        self.extend_items(old, (from, stop));
         let moved = |index: usize, from: usize, to: usize| to + index.saturating_sub(from);
         // A run that lands where it was in the old scene, as every run
         // before the first change does, keeps its indices.
@@ -585,7 +565,7 @@ impl RasterScene {
         let in_place = from == to && first == base;
         let order = old
             .order
-            .get(run(from.order, stop.order))
+            .get(from.order..stop.order.max(from.order))
             .unwrap_or_default();
         if in_place {
             let kept = self.order.len()..self.order.len() + order.len();
@@ -596,14 +576,8 @@ impl RasterScene {
             }
             self.order.extend_from_slice(order);
         } else {
-            self.order.extend(order.iter().map(|item| match *item {
-                RenderItem::Shape(index) => RenderItem::Shape(moved(index, from.shapes, to.shapes)),
-                RenderItem::Image(index) => RenderItem::Image(moved(index, from.images, to.images)),
-                RenderItem::Text(index) => RenderItem::Text(moved(index, from.texts, to.texts)),
-                RenderItem::Shadow(index) => {
-                    RenderItem::Shadow(moved(index, from.shadows, to.shadows))
-                }
-            }));
+            self.order
+                .extend(order.iter().map(|item| item.moved(from, to)));
         }
         self.subtrees
             .extend_from_slice(old.subtrees.get(records).unwrap_or_default());
@@ -639,40 +613,15 @@ impl RasterScene {
             return;
         };
         let (to_items, to_records, to_entries) = to;
-        let base = ItemCounts {
-            order: self.order.len(),
-            shapes: self.shapes.len(),
-            images: self.images.len(),
-            texts: self.texts.len(),
-            shadows: self.shadows.len(),
-        };
-        self.shapes
-            .extend_from_slice(&old.shapes[from.shapes..stop.shapes]);
-        self.images
-            .extend_from_slice(&old.images[from.images..stop.images]);
-        self.texts
-            .extend_from_slice(&old.texts[from.texts..stop.texts]);
-        self.shadows
-            .extend_from_slice(&old.shadows[from.shadows..stop.shadows]);
-        let moved = |index: usize, from: usize, to: usize| to + (index - from);
+        // A spill takes no rewrite: its counts are its lists' lengths.
+        let base = self.counts();
+        self.extend_items(old, (from, stop));
         self.order.extend(
             old.order[from.order..stop.order]
                 .iter()
-                .map(|item| match *item {
-                    RenderItem::Shape(index) => {
-                        RenderItem::Shape(moved(index, from.shapes, base.shapes))
-                    }
-                    RenderItem::Image(index) => {
-                        RenderItem::Image(moved(index, from.images, base.images))
-                    }
-                    RenderItem::Text(index) => {
-                        RenderItem::Text(moved(index, from.texts, base.texts))
-                    }
-                    RenderItem::Shadow(index) => {
-                        RenderItem::Shadow(moved(index, from.shadows, base.shadows))
-                    }
-                }),
+                .map(|item| item.moved(from, base)),
         );
+        let moved = |index: usize, from: usize, to: usize| to + (index - from);
         let first = records.start;
         let mut entries = 0;
         for record in &old.subtrees[records] {
@@ -691,16 +640,44 @@ impl RasterScene {
             .extend_from_slice(&old.passed_down[first_entry..first_entry + entries]);
     }
 
+    // Appends the shapes, images, texts and shadows of `old` from `from` up
+    // to `stop`, each list's own run.
+    fn extend_items(&mut self, old: &Self, (from, stop): (ItemCounts, ItemCounts)) {
+        let run = |start: usize, stop: usize| start..stop.max(start);
+        self.shapes.extend_from_slice(
+            old.shapes
+                .get(run(from.shapes, stop.shapes))
+                .unwrap_or_default(),
+        );
+        self.images.extend_from_slice(
+            old.images
+                .get(run(from.images, stop.images))
+                .unwrap_or_default(),
+        );
+        self.texts.extend_from_slice(
+            old.texts
+                .get(run(from.texts, stop.texts))
+                .unwrap_or_default(),
+        );
+        self.shadows.extend_from_slice(
+            old.shadows
+                .get(run(from.shadows, stop.shadows))
+                .unwrap_or_default(),
+        );
+    }
+
     /// The extent of the subtree whose record is `record`, and the index of
     /// its first entry of what its layers passed down; `None` when its
     /// layers' entries of what they passed down do not lie in one run.
     pub(crate) fn subtree_span(&self, record: usize) -> Option<(SubtreeExtent, usize)> {
         let head = self.subtrees.get(record)?;
         let records = self.subtrees.get(record..head.end)?;
-        let mut passed_down = records.iter().filter_map(|record| record.passed_down);
-        let first = passed_down.next();
-        let count = usize::from(first.is_some()) + passed_down.count();
-        let last = records.iter().rev().find_map(|record| record.passed_down);
+        let (mut first, mut last, mut count) = (None, None, 0);
+        for at in records.iter().filter_map(|record| record.passed_down) {
+            first.get_or_insert(at);
+            last = Some(at);
+            count += 1;
+        }
         if let (Some(first), Some(last)) = (first, last)
             && last + 1 != first + count
         {

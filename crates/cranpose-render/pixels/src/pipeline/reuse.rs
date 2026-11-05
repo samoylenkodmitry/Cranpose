@@ -57,7 +57,7 @@ impl Reuse<'_> {
     pub(crate) fn keep(
         &mut self,
         scene: &mut RasterScene,
-        placement: ChildPlacement,
+        placement: &ChildPlacement,
         context: &RasterTraversalContext<'_>,
     ) -> bool {
         let Some(index) = self

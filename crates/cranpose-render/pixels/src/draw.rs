@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{
 use crate::{
     pipeline,
     pixel::{GradientColors, Pixel},
-    raster_scene::{Outline, RasterScene},
+    raster_scene::{ItemCounts, Outline, RasterScene},
 };
 
 mod image;
@@ -346,6 +346,19 @@ pub(crate) enum RenderItem {
     Image(usize),
     Text(usize),
     Shadow(usize),
+}
+
+impl RenderItem {
+    // The item of a run whose items of each kind began at `from` in its
+    // lists, where that run begins at `to`.
+    pub(crate) fn moved(self, from: ItemCounts, to: ItemCounts) -> Self {
+        match self {
+            Self::Shape(index) => Self::Shape(to.shapes + (index - from.shapes)),
+            Self::Image(index) => Self::Image(to.images + (index - from.images)),
+            Self::Text(index) => Self::Text(to.texts + (index - from.texts)),
+            Self::Shadow(index) => Self::Shadow(to.shadows + (index - from.shadows)),
+        }
+    }
 }
 
 /// Draws one pass of an elevation shadow: its color at the shadow's

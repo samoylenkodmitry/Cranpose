@@ -27,7 +27,7 @@ pub enum NodePlace {
 }
 
 impl NodePlace {
-    fn level(self) -> Level {
+    pub(super) fn level(self) -> Level {
         match self {
             Self::Root => Level::Root,
             Self::Child => Level::Child,

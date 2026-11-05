@@ -105,6 +105,31 @@ pub(crate) struct RasterTraversalContext<'a> {
     in_space: bool,
 }
 
+impl<'a> RasterTraversalContext<'a> {
+    // What a window's root layer pushes under: `transform` maps the window
+    // to device pixels, with no style, clip or snap anchor above it.
+    fn root(
+        transform: &'a ProjectiveTransform,
+        (diagnostics, text): (&'a RenderDiagnostics, &'a TextRaster),
+        light: ShadowLight,
+        same_as_before: bool,
+    ) -> Self {
+        Self {
+            parent_transform: transform,
+            parent_content_style: &ContentStyle::PLAIN,
+            parent_visual_clip: None,
+            inherited_translated_snap_anchor: None,
+            inherited_translated_content_context: false,
+            diagnostics,
+            light,
+            same_as_before,
+            text,
+            surface_root: false,
+            in_space: false,
+        }
+    }
+}
+
 fn contains_text_primitives(nodes: &[RenderNode]) -> bool {
     nodes.iter().any(|child| {
         matches!(
@@ -367,19 +392,12 @@ pub(crate) fn fill_raster_scene(
     populate_draws_from_graph(
         Subtree::Layer(&graph.root),
         scene,
-        &RasterTraversalContext {
-            parent_transform: &ProjectiveTransform::uniform_scale(scale),
-            parent_content_style: &ContentStyle::PLAIN,
-            parent_visual_clip: None,
-            inherited_translated_snap_anchor: None,
-            inherited_translated_content_context: false,
-            diagnostics,
+        &RasterTraversalContext::root(
+            &ProjectiveTransform::uniform_scale(scale),
+            (diagnostics, text),
             light,
-            same_as_before: previous.is_some_and(|old| old.start == scene.start),
-            text,
-            surface_root: false,
-            in_space: false,
-        },
+            previous.is_some_and(|old| old.start == scene.start),
+        ),
         &mut reuse,
         None,
     );
@@ -418,19 +436,12 @@ pub(crate) fn fill_raster_scene_from_layout(
         populate_draws_from_graph(
             Subtree::Layer(root),
             scene,
-            &RasterTraversalContext {
-                parent_transform: &ProjectiveTransform::uniform_scale(scale),
-                parent_content_style: &ContentStyle::PLAIN,
-                parent_visual_clip: None,
-                inherited_translated_snap_anchor: None,
-                inherited_translated_content_context: false,
-                diagnostics,
+            &RasterTraversalContext::root(
+                &ProjectiveTransform::uniform_scale(scale),
+                (diagnostics, text),
                 light,
-                same_as_before: previous.is_some_and(|old| old.start == scene.start),
-                text,
-                surface_root: false,
-                in_space: false,
-            },
+                previous.is_some_and(|old| old.start == scene.start),
+            ),
             &mut reuse,
             slot,
         );

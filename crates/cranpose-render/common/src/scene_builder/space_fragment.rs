@@ -7,7 +7,7 @@ use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::Rect;
 
 use super::{
-    Level, LowerContext, NodePlace, inline_leaf::lower_placed_child, node_layer::Children,
+    LowerContext, NodePlace, inline_leaf::lower_placed_child, node_layer::Children,
     publish_content_geometry, read_placed_node_data, write_node_layer,
 };
 use crate::graph::{LayerNode, ProjectiveTransform, RenderNode};
@@ -111,11 +111,7 @@ pub fn lower_space_fragment(
     (node_id, place): (NodeId, NodePlace),
     context: &LowerContext,
 ) -> Option<SpaceFragment> {
-    let level = match place {
-        NodePlace::Root => Level::Root,
-        NodePlace::Child => Level::Child,
-    };
-    let root = read_placed_node_data(applier, node_id, level, |data| {
+    let root = read_placed_node_data(applier, node_id, place.level(), |data| {
         if place == NodePlace::Child {
             return lower_placed_child(applier, node_id, data, context);
         }

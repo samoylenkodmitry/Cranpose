@@ -14,7 +14,8 @@ use cranpose_render_common::graph::LayerNode;
 
 use crate::{
     damage::{ItemReach, add_changed_pair, add_changed_runs, merge_areas},
-    draw::{ClipBounds, RenderItem},
+    draw::ClipBounds,
+    layout_walk::child_record_from,
     pipeline::UpdatedReach,
     raster_scene::{HitLayer, ItemCounts, PassedDown, RasterScene, Subtree, SubtreeItems},
     scene_item::SceneItem,
@@ -125,18 +126,25 @@ impl Rewrite {
     // How many items of each kind the scene would hold up to where the
     // subtree pushes next, were the spill in place.
     pub(crate) fn counts(&self) -> ItemCounts {
-        match self.spilled_at {
-            Some(at) => self.spill.counts().moved(ItemCounts::default(), at.items),
-            None => self.next.items,
-        }
+        self.here().items
     }
 
     // How many records the scene would hold up to where the subtree opens
     // its next one, were the spill in place.
     pub(crate) fn record_count(&self) -> usize {
+        self.here().records
+    }
+
+    // Where the subtree pushes its next item, opens its next record and
+    // notes its next passed-down entry, were the spill in place.
+    fn here(&self) -> Places {
         match self.spilled_at {
-            Some(at) => at.records + self.spill.subtrees.len(),
-            None => self.next.records,
+            Some(at) => Places {
+                items: self.spill.counts().moved(ItemCounts::default(), at.items),
+                records: at.records + self.spill.subtrees.len(),
+                passed_down: at.passed_down + self.spill.passed_down.len(),
+            },
+            None => self.next,
         }
     }
 
@@ -149,18 +157,18 @@ impl Rewrite {
             let slot = *T::count(&mut self.next.items);
             let (list, order) = T::lists(scene);
             if at < self.own_items_end && T::index_of(order[at]) == Some(slot) {
-                let old = std::mem::replace(&mut list[slot], item);
                 let reach = match self.reach.get_mut(at) {
                     Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
                     _ => ItemReach::Unknown,
                 };
                 add_changed_pair(
-                    old.as_ref(),
                     list[slot].as_ref(),
+                    item.as_ref(),
                     reach,
                     self.window,
                     &mut self.areas,
                 );
+                list[slot] = item;
                 self.next.items.order += 1;
                 *T::count(&mut self.next.items) += 1;
                 return;
@@ -206,12 +214,11 @@ impl Rewrite {
             }
             self.spilled_at = Some(self.next);
         }
-        let index = self.record_count();
-        let counts = self.counts();
+        let here = self.here();
         self.spill
             .subtrees
-            .push(subtree.record(index + 1, counts, hits));
-        index
+            .push(subtree.record(here.records + 1, here.items, hits));
+        here.records
     }
 
     // The record that lies at `index` were the spill in place.
@@ -246,7 +253,7 @@ impl Rewrite {
             }
             self.spilled_at = Some(self.next);
         }
-        let index = self.passed_down_count();
+        let index = self.here().passed_down;
         self.spill.passed_down.push(entry);
         (index, false)
     }
@@ -289,7 +296,8 @@ impl Rewrite {
         if self.spilled_at.is_none() {
             self.spilled_at = Some(self.next);
         }
-        let to = (self.counts(), self.record_count(), self.passed_down_count());
+        let here = self.here();
+        let to = (here.items, here.records, here.passed_down);
         self.spill
             .copy_subtrees_to(scene, old..head.end, (head.stop, first_entry), to);
     }
@@ -306,15 +314,6 @@ impl Rewrite {
             Some(next) if next.identity != (None, None) => next.start.order,
             _ => open.stop.order,
         };
-    }
-
-    // How many passed-down entries the scene would hold up to where the
-    // subtree notes its next one, were the spill in place.
-    fn passed_down_count(&self) -> usize {
-        match self.spilled_at {
-            Some(at) => at.passed_down + self.spill.passed_down.len(),
-            None => self.next.passed_down,
-        }
     }
 
     // Ends the rewrite of the subtree whose record in `scene` is `record`.
@@ -445,15 +444,10 @@ fn boxed_hits(kept: Option<Box<HitLayer>>, layer: Option<&LayerNode>) -> Option<
 // first child subtree, or at `stop` when it has none. A draw group of the
 // node's own draws is no child subtree.
 fn own_items_end(records: &[SubtreeItems], index: usize, end: usize, stop: ItemCounts) -> usize {
-    let mut child = index + 1;
-    while child < end {
-        let record = &records[child];
-        if record.identity != (None, None) {
-            return record.start.order;
-        }
-        child = record.end;
-    }
-    stop.order
+    let child = child_record_from(records, index + 1, end);
+    records[..end]
+        .get(child)
+        .map_or(stop.order, |record| record.start.order)
 }
 
 // The items of the run `to..old_stop` of `scene` give way to all of
@@ -477,30 +471,14 @@ fn splice_items(
     scene
         .shadows
         .splice(to.shadows..old_stop.shadows, from.shadows.drain(..));
-    let placed = |item: RenderItem, base: ItemCounts| match item {
-        RenderItem::Shape(index) => RenderItem::Shape(base.shapes + index),
-        RenderItem::Image(index) => RenderItem::Image(base.images + index),
-        RenderItem::Text(index) => RenderItem::Text(base.texts + index),
-        RenderItem::Shadow(index) => RenderItem::Shadow(base.shadows + index),
-    };
     scene.order.splice(
         to.order..old_stop.order,
-        from.order.drain(..).map(|item| placed(item, to)),
+        from.order
+            .drain(..)
+            .map(|item| item.moved(ItemCounts::default(), to)),
     );
     // The items after the run lie after its items in each list.
-    let shift = |index: usize, removed: usize, added: usize| index - removed + added;
     for item in &mut scene.order[to.order + added.order..] {
-        *item = match *item {
-            RenderItem::Shape(index) => {
-                RenderItem::Shape(shift(index, removed.shapes, added.shapes))
-            }
-            RenderItem::Image(index) => {
-                RenderItem::Image(shift(index, removed.images, added.images))
-            }
-            RenderItem::Text(index) => RenderItem::Text(shift(index, removed.texts, added.texts)),
-            RenderItem::Shadow(index) => {
-                RenderItem::Shadow(shift(index, removed.shadows, added.shadows))
-            }
-        };
+        *item = item.moved(removed, added);
     }
 }

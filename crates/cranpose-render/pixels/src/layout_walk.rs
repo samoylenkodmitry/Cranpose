@@ -102,6 +102,16 @@ pub(crate) fn names(identity: (Option<NodeId>, Option<NodeId>), node: NodeId) ->
     identity == (Some(node), None) || identity == (None, Some(node))
 }
 
+// The 3D subtree of `spaces` whose node the record `identity` names.
+pub(crate) fn kept_space(
+    spaces: &[KeptSpace],
+    identity: (Option<NodeId>, Option<NodeId>),
+) -> Option<&KeptSpace> {
+    spaces
+        .iter()
+        .find(|kept| names(identity, kept.space.node()))
+}
+
 // The first record from `from` on, before `end`, of a child subtree: past
 // the records of the draw groups of a node's own draws, which have no node.
 pub(crate) fn child_record_from(records: &[SubtreeItems], mut from: usize, end: usize) -> usize {
@@ -109,12 +119,6 @@ pub(crate) fn child_record_from(records: &[SubtreeItems], mut from: usize, end: 
         from = records[from].end;
     }
     from
-}
-
-// The first record of a child subtree of the record `own`, whose subtree's
-// records end at `end`.
-pub(crate) fn first_child_record(records: &[SubtreeItems], own: usize, end: usize) -> usize {
-    child_record_from(records, own + 1, end)
 }
 
 // Where the old records of a node's child subtrees lie in the scene a
@@ -132,7 +136,7 @@ impl OldChildren {
         let own = Self::own_record(records, record, node);
         let end = records[own].end;
         Self {
-            cursor: first_child_record(records, own, end),
+            cursor: child_record_from(records, own + 1, end),
             end,
         }
     }
@@ -437,11 +441,9 @@ impl<'a> LayoutWalk<'a> {
     fn keeps_space(&self, records: &[SubtreeItems], at: usize) -> bool {
         let spaces = self.spaces.borrow();
         !spaces.is_empty()
-            && records[at..records[at].end].iter().any(|record| {
-                spaces
-                    .iter()
-                    .any(|kept| names(record.identity, kept.space.node()))
-            })
+            && records[at..records[at].end]
+                .iter()
+                .any(|record| kept_space(&spaces, record.identity).is_some())
     }
 
     // Keeps `space` in place of the subtree the scene kept for its node.
@@ -528,7 +530,7 @@ impl ChildSlot<'_> {
             if let Some(kept) = reuse.as_mut()
                 && walk.is_clean(child)
                 && let Some(placement) = kept_child_placement(walk.applier, child, self.context)
-                && kept.keep(scene, placement, context)
+                && kept.keep(scene, &placement, context)
             {
                 continue;
             }

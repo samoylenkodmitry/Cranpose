@@ -21,8 +21,8 @@ use super::{ContentStyle, RasterTraversalContext};
 use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
-    layout_walk::{LayoutWalk, OldChildren, child_record_from, first_child_record, names},
-    raster_scene::RasterScene,
+    layout_walk::{LayoutWalk, OldChildren, child_record_from, names},
+    raster_scene::{PassedDown, RasterScene},
     rewrite::Rewrite,
 };
 
@@ -181,9 +181,8 @@ impl Repush<'_> {
         };
         let deferred = self.targets.len();
         let walked = visit_kept_node(walk.applier(), (node, place), context, |children, inner| {
-            let mut cursor =
-                first_child_record(&self.scene.subtrees, own, self.scene.subtrees[own].end);
             let end = self.scene.subtrees[own].end;
+            let mut cursor = child_record_from(&self.scene.subtrees, own + 1, end);
             for &child in children {
                 let at = OldChildren::find(&self.scene.subtrees, (cursor, end), child)
                     .ok_or(Stop::OtherLayer)?;
@@ -200,17 +199,14 @@ impl Repush<'_> {
             }
         })
         .unwrap_or(Err(Stop::OtherLayer));
-        match walked {
-            Err(Stop::Rebuild) => Err(Stop::Rebuild),
-            Ok(()) => Ok(()),
-            Err(Stop::OtherLayer) => {
-                // The node's subtree is pushed again whole, its children's
-                // with it.
-                self.targets.truncate(deferred);
-                self.defer(walk, (node, place), context, (record, parent));
-                Ok(())
-            }
+        if let Err(Stop::OtherLayer) = walked {
+            // The node's subtree is pushed again whole, its children's with
+            // it.
+            self.targets.truncate(deferred);
+            self.defer(walk, (node, place), context, (record, parent));
+            return Ok(());
         }
+        walked
     }
 
     // Notes that the subtree of `node`, whose old record is `record`, is
@@ -301,24 +297,38 @@ impl Repush<'_> {
         let passed = parent
             .and_then(|at| self.scene.passed_down.get(at))
             .cloned();
-        let transform = passed.as_ref().map_or_else(
-            || ProjectiveTransform::uniform_scale(self.scale),
-            |passed| passed.transform,
-        );
-        let style = passed
-            .as_ref()
-            .map_or(ContentStyle::PLAIN, |passed| ContentStyle {
-                alpha: passed.alpha,
-                color_filter: passed.color_filter.clone(),
-            });
+        let (transform, style, clip, snap_anchor, translated) = match passed {
+            Some(PassedDown {
+                transform,
+                alpha,
+                color_filter,
+                clip,
+                snap_anchor,
+                translated,
+            }) => (
+                transform,
+                ContentStyle {
+                    alpha,
+                    color_filter,
+                },
+                clip,
+                snap_anchor,
+                translated,
+            ),
+            None => (
+                ProjectiveTransform::uniform_scale(self.scale),
+                ContentStyle::PLAIN,
+                None,
+                None,
+                false,
+            ),
+        };
         let context = RasterTraversalContext {
             parent_transform: &transform,
             parent_content_style: &style,
-            parent_visual_clip: passed.as_ref().and_then(|passed| passed.clip),
-            inherited_translated_snap_anchor: passed.as_ref().and_then(|passed| passed.snap_anchor),
-            inherited_translated_content_context: passed
-                .as_ref()
-                .is_some_and(|passed| passed.translated),
+            parent_visual_clip: clip,
+            inherited_translated_snap_anchor: snap_anchor,
+            inherited_translated_content_context: translated,
             diagnostics: self.diagnostics,
             light: self.light,
             same_as_before: true,

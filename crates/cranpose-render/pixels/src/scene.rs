@@ -21,7 +21,7 @@ use cranpose_ui_graphics::Rect;
 use crate::{
     PixelRect, damage,
     draw::{ClipBounds, TextRaster},
-    layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, names},
+    layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, kept_space, names},
     moved_subtrees::MovedSubtrees,
     pipeline::{self, InPlaceUpdate, PushTarget, UpdatedReach},
     pixel_rect,
@@ -380,10 +380,7 @@ fn hit_skeleton(
     let record = &records[index];
     // A 3D subtree takes input through its scene's eye, which its layers
     // tell.
-    if let Some(kept) = spaces
-        .iter()
-        .find(|kept| names(record.identity, kept.space.node()))
-    {
+    if let Some(kept) = kept_space(spaces, record.identity) {
         return kept.space.layer().map(|layer| Box::new(layer.clone()));
     }
     let mut children = Vec::new();
@@ -426,10 +423,7 @@ fn visit_node_bounds(
 ) {
     while index < end {
         let record = &records[index];
-        if let Some(kept) = spaces
-            .iter()
-            .find(|kept| names(record.identity, kept.space.node()))
-        {
+        if let Some(kept) = kept_space(spaces, record.identity) {
             kept.space.node_window_bounds(to_window, surfaces, visit);
             index = record.end;
             continue;
