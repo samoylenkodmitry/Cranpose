@@ -13,10 +13,9 @@ use crate::{
     glyph_id::GlyphId,
     glyph_ink::{InkReach, find_ink_past_lines, may_ink_past_lines},
     index_range::{IndexRange, widen},
-    laid_glyphs::RunGlyphs,
+    laid_glyphs::{RunExtras, RunGlyphs},
     layout_body::LayoutBody,
     paragraph::TextAlign,
-    shaped_glyphs::GlyphOffset,
     synthesized_style::SynthesizedStyle,
     typeface::Typeface,
 };
@@ -171,7 +170,7 @@ impl LineRun {
     // `face`.
     fn clusters<'a>(
         &'a self,
-        glyphs: RunGlyphs<'a>,
+        (glyphs, extras): (RunGlyphs<'a>, RunExtras<'a>),
         face: &Typeface,
     ) -> impl Iterator<Item = Cluster> + 'a {
         let scale = self.scale(face);
@@ -185,7 +184,7 @@ impl LineRun {
                 .get(at)
                 .filter(|glyph| glyph.cluster == first.cluster)
             {
-                width += glyphs.advance(at, &glyph, scale);
+                width += extras.advance(at, &glyph, scale);
                 if space == Some(glyph.id()) {
                     width += self.word_spacing;
                 }
@@ -204,7 +203,7 @@ impl LineRun {
     // cluster in text order starts.
     fn cluster_spans<'a>(
         &'a self,
-        (glyphs, face): (RunGlyphs<'a>, &Typeface),
+        (glyphs, face): ((RunGlyphs<'a>, RunExtras<'a>), &Typeface),
     ) -> impl Iterator<Item = (f32, Cluster, usize)> + 'a {
         let mut clusters = self.clusters(glyphs, face).peekable();
         let mut left = 0.0;
@@ -272,7 +271,7 @@ pub struct GlyphRun<'a> {
     /// The font size in pixels.
     pub size: f32,
     pub(crate) glyphs: RunGlyphs<'a>,
-    pub(crate) offsets: Option<&'a [GlyphOffset]>,
+    pub(crate) extras: RunExtras<'a>,
     pub(crate) run: &'a LineRun,
     pub(crate) pen: f32,
     pub(crate) baseline: f32,
@@ -300,19 +299,15 @@ impl GlyphRun<'_> {
         let baseline = self.baseline - run.baseline_shift;
         let scale = run.scale(self.typeface);
         let mut pen = self.pen;
-        run.clusters(self.glyphs, self.typeface)
+        run.clusters((self.glyphs, self.extras), self.typeface)
             .flat_map(move |cluster| {
                 let mut x = pen + run.spacing / 2.0;
                 pen += cluster.width;
                 cluster.glyphs.filter_map(move |index| {
                     let glyph = self.glyphs.get(index)?;
-                    let drawn = self
-                        .offsets
-                        .and_then(|offsets| offsets.get(index))
-                        .copied()
-                        .unwrap_or_default();
+                    let drawn = self.extras.offset(index);
                     let at = x + font_units(drawn.x) * scale;
-                    x += self.glyphs.advance(index, &glyph, scale);
+                    x += self.extras.advance(index, &glyph, scale);
                     Some(PositionedGlyph {
                         id: glyph.id(),
                         x: at,

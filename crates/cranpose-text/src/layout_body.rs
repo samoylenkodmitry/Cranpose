@@ -4,7 +4,7 @@ use crate::{
     bidi_level::BidiLevel,
     glyph_ink::InkReach,
     index_range::widen,
-    laid_glyphs::{LaidGlyphs, RunGlyphs},
+    laid_glyphs::{LaidGlyphs, RunExtras, RunGlyphs},
     paragraph::TextAlign,
     synthesized_style::SynthesizedStyle,
     text_layout::{GlyphRun, LayoutLine, LineRun, WidthRange},
@@ -65,7 +65,7 @@ impl LayoutBody {
                 typeface: &self.faces[widen(run.face)],
                 size: run.size,
                 glyphs: self.glyphs.run(run.glyphs.range()),
-                offsets: self.glyphs.offsets(run.glyphs.range()),
+                extras: self.glyphs.extras(run.glyphs.range().start),
                 run,
                 pen: line.left + run.left(),
                 baseline: line.baseline,
@@ -111,10 +111,14 @@ impl LayoutBody {
         (self.glyphs.len() == self.shaped).then_some(&self.glyphs)
     }
 
-    // The glyphs of `run` and their typeface.
-    pub(crate) fn run_glyphs(&self, run: &LineRun) -> (RunGlyphs<'_>, &Typeface) {
+    // The glyphs of `run`, what they keep beside them and their typeface.
+    pub(crate) fn run_glyphs(&self, run: &LineRun) -> ((RunGlyphs<'_>, RunExtras<'_>), &Typeface) {
+        let range = run.glyphs.range();
         (
-            self.glyphs.run(run.glyphs.range()),
+            (
+                self.glyphs.run(range.clone()),
+                self.glyphs.extras(range.start),
+            ),
             &self.faces[widen(run.face)],
         )
     }

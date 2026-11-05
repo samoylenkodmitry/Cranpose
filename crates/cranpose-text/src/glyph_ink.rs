@@ -6,7 +6,7 @@ use read_fonts::model::metrics::GlyphExtents;
 use crate::{
     glyph_id::GlyphId,
     index_range::widen,
-    laid_glyphs::{GlyphSlice, RunGlyphs},
+    laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
     line_box::FontExtent,
     shaped_item::Piece,
@@ -309,11 +309,11 @@ fn any_traced(
     (face, inks): (&Typeface, &GlyphInks),
     traced: impl Fn(u8) -> bool,
 ) -> bool {
-    match glyphs.glyphs {
-        GlyphSlice::Packed(glyphs) => glyphs
+    match glyphs {
+        RunGlyphs::Packed(glyphs) => glyphs
             .iter()
             .any(|glyph| traced(inks.state(face, glyph.id()))),
-        GlyphSlice::Full(glyphs) => glyphs
+        RunGlyphs::Full(glyphs) => glyphs
             .iter()
             .any(|glyph| traced(inks.state(face, glyph.id()))),
     }

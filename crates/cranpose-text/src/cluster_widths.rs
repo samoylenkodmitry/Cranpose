@@ -79,7 +79,8 @@ impl ClusterWidths {
 
     // The width of the text from `start` to `end`.
     pub(crate) fn width(&self, start: usize, end: usize) -> f32 {
-        (self.kept_before(end) - self.kept_before(start)) / self.unit.per_pixel
+        self.unit
+            .layout(self.kept_before(end) - self.kept_before(start))
     }
 
     // Whether `width`, a width of this text, fits `limit`.
@@ -158,7 +159,7 @@ fn each_cluster_glyph(
     for item in items {
         let own = &glyphs[item.glyphs.clone()];
         let pixels = glyphs.pixels(item.glyphs.clone());
-        let spacing = item.spacing * unit.per_pixel;
+        let spacing = unit.pixels(item.spacing);
         if pixels.is_empty() {
             let scale = scale(&input.spans[item.span], &faces[item.face]);
             let mut add_glyph = |glyph: &ShapedGlyph| {

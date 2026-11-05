@@ -7,17 +7,23 @@ use crate::{
     text_layout::font_units,
 };
 
-// The glyphs of a layout, with where the first draw from the pen when any
-// draws off it, as `ShapedGlyphs` holds them; the copies of a layout and a
-// relayout that adds no glyphs share them.
+// The glyphs of a layout, with what few layouts keep beside them; the copies
+// of a layout and a relayout that adds no glyphs share them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LaidGlyphs {
     glyphs: Glyphs,
-    offsets: Option<Arc<[GlyphOffset]>>,
-    // Each glyph's advance in device pixels where advances round to whole
-    // device pixels, as `ParagraphGlyphs` measures it, and the device pixels
-    // per pixel of the layout.
-    pixels: Option<(Arc<[f32]>, f32)>,
+    // Behind one pointer, as most layouts keep none of it.
+    extras: Option<Arc<GlyphExtras>>,
+}
+
+// What a layout keeps beside its glyphs: where the first glyphs draw from
+// the pen when any draws off it, as `ShapedGlyphs` holds them, and where
+// advances round to whole device pixels, each glyph's advance in pixels of
+// the layout.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct GlyphExtras {
+    offsets: Box<[GlyphOffset]>,
+    advances: Box<[f32]>,
 }
 
 // A layout's glyphs: in eight bytes each when every one fits them, as the
@@ -86,42 +92,23 @@ impl PackedGlyph {
 
 // Some of a layout's glyphs, as it keeps them.
 #[derive(Clone, Copy)]
-pub(crate) enum GlyphSlice<'a> {
+pub(crate) enum RunGlyphs<'a> {
     Packed(&'a [PackedGlyph]),
     Full(&'a [ShapedGlyph]),
 }
 
-// Some of a layout's glyphs, with their advances in device pixels where
-// advances round to whole device pixels: none where they keep the font's
-// fractions.
-#[derive(Clone, Copy)]
-pub(crate) struct RunGlyphs<'a> {
-    pub(crate) glyphs: GlyphSlice<'a>,
-    pixels: &'a [f32],
-    grid: f32,
-}
-
 impl<'a> RunGlyphs<'a> {
     pub(crate) fn len(self) -> usize {
-        match self.glyphs {
-            GlyphSlice::Packed(glyphs) => glyphs.len(),
-            GlyphSlice::Full(glyphs) => glyphs.len(),
+        match self {
+            Self::Packed(glyphs) => glyphs.len(),
+            Self::Full(glyphs) => glyphs.len(),
         }
     }
 
     pub(crate) fn get(self, index: usize) -> Option<ShapedGlyph> {
-        match self.glyphs {
-            GlyphSlice::Packed(glyphs) => glyphs.get(index).map(|glyph| glyph.unpack()),
-            GlyphSlice::Full(glyphs) => glyphs.get(index).copied(),
-        }
-    }
-
-    // The advance of `glyph`, at `index`, in pixels of the layout: the font's
-    // at `scale` where advances keep its fractions.
-    pub(crate) fn advance(self, index: usize, glyph: &ShapedGlyph, scale: f32) -> f32 {
-        match self.pixels.get(index) {
-            Some(pixels) => pixels / self.grid,
-            None => font_units(glyph.advance) * scale,
+        match self {
+            Self::Packed(glyphs) => glyphs.get(index).map(|glyph| glyph.unpack()),
+            Self::Full(glyphs) => glyphs.get(index).copied(),
         }
     }
 
@@ -130,34 +117,88 @@ impl<'a> RunGlyphs<'a> {
     }
 
     fn slice(self, range: Range<usize>) -> Self {
-        let glyphs = match self.glyphs {
-            GlyphSlice::Packed(glyphs) => GlyphSlice::Packed(&glyphs[range.clone()]),
-            GlyphSlice::Full(glyphs) => GlyphSlice::Full(&glyphs[range.clone()]),
-        };
-        Self {
-            glyphs,
-            pixels: self.pixels.get(range).unwrap_or_default(),
-            grid: self.grid,
+        match self {
+            Self::Packed(glyphs) => Self::Packed(&glyphs[range]),
+            Self::Full(glyphs) => Self::Full(&glyphs[range]),
+        }
+    }
+}
+
+// What the glyphs of a run keep beside them in their layout: where each
+// draws from its pen, and how far it advances where advances round to whole
+// device pixels.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RunExtras<'a> {
+    extras: Option<&'a GlyphExtras>,
+    // The run's first glyph among the layout's.
+    start: usize,
+}
+
+impl RunExtras<'_> {
+    // Where glyph `index` of the run draws from its pen.
+    pub(crate) fn offset(self, index: usize) -> GlyphOffset {
+        self.extras
+            .and_then(|extras| extras.offsets.get(self.start + index))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    // How far glyph `index` of the run, `glyph`, advances, in pixels of the
+    // layout: its advance from the font at `scale` where advances keep the
+    // font's fractions.
+    pub(crate) fn advance(self, index: usize, glyph: &ShapedGlyph, scale: f32) -> f32 {
+        match self
+            .extras
+            .and_then(|extras| extras.advances.get(self.start + index))
+        {
+            Some(advance) => *advance,
+            None => font_units(glyph.advance) * scale,
         }
     }
 }
 
 impl LaidGlyphs {
-    // Keeps the glyphs of `paragraph` with their device pixel advances:
-    // those held already when they are as many, as a relayout that shaped
-    // no glyph takes them.
+    // Keeps the glyphs of `paragraph` with their rounded advances: those held
+    // already when they are as many, as a relayout that shaped no glyph
+    // takes them.
     pub(crate) fn keep(&mut self, paragraph: &ParagraphGlyphs) {
         if self.len() != paragraph.len() {
             *self = Self::new(paragraph);
         }
         let pixels = paragraph.pixels(0..paragraph.len());
+        let held = self
+            .extras
+            .as_deref()
+            .map_or(&[][..], |extras| &extras.advances[..]);
+        // Most layouts keep the font's fractions, before and after.
+        if pixels.is_empty() && held.is_empty() {
+            return;
+        }
         let grid = paragraph.grid();
-        let kept = self
-            .pixels
-            .as_ref()
-            .is_some_and(|(held, at)| **held == *pixels && *at == grid);
-        if !kept {
-            self.pixels = (!pixels.is_empty()).then(|| (Arc::from(pixels), grid));
+        let same = held.len() == pixels.len()
+            && held
+                .iter()
+                .zip(pixels)
+                .all(|(held, pixels)| held.to_bits() == (pixels / grid).to_bits());
+        if same {
+            return;
+        }
+        let advances: Box<[f32]> = pixels.iter().map(|pixels| pixels / grid).collect();
+        match &mut self.extras {
+            Some(extras) => Arc::make_mut(extras).advances = advances,
+            None => {
+                self.extras = Some(Arc::new(GlyphExtras {
+                    offsets: Box::default(),
+                    advances,
+                }));
+            }
+        }
+        if self
+            .extras
+            .as_deref()
+            .is_some_and(|extras| extras.offsets.is_empty() && extras.advances.is_empty())
+        {
+            self.extras = None;
         }
     }
 
@@ -179,13 +220,17 @@ impl LaidGlyphs {
         } else {
             Glyphs::Full(Arc::from(&shaped[..]))
         };
+        let drawn_off = offsets
+            .iter()
+            .any(|offset| *offset != GlyphOffset::default());
         Self {
             glyphs,
-            offsets: offsets
-                .iter()
-                .any(|offset| *offset != GlyphOffset::default())
-                .then(|| Arc::from(offsets)),
-            pixels: None,
+            extras: drawn_off.then(|| {
+                Arc::new(GlyphExtras {
+                    offsets: Box::from(offsets),
+                    advances: Box::default(),
+                })
+            }),
         }
     }
 
@@ -198,34 +243,38 @@ impl LaidGlyphs {
         self.all().slice(range)
     }
 
+    // What the glyphs from `start` keep beside them.
+    pub(crate) fn extras(&self, start: usize) -> RunExtras<'_> {
+        RunExtras {
+            extras: self.extras.as_deref(),
+            start,
+        }
+    }
+
     fn all(&self) -> RunGlyphs<'_> {
-        let glyphs = match &self.glyphs {
-            Glyphs::Packed(glyphs) => GlyphSlice::Packed(glyphs),
-            Glyphs::Full(glyphs) => GlyphSlice::Full(glyphs),
-        };
-        let (pixels, grid) = self
-            .pixels
-            .as_ref()
-            .map_or((&[][..], 1.0), |(pixels, grid)| (&pixels[..], *grid));
-        RunGlyphs {
-            glyphs,
-            pixels,
-            grid,
+        match &self.glyphs {
+            Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
+            Glyphs::Full(glyphs) => RunGlyphs::Full(glyphs),
         }
     }
 
     // Whether a glyph draws off its pen.
     pub(crate) fn has_offsets(&self) -> bool {
-        self.offsets.is_some()
+        self.extras
+            .as_deref()
+            .is_some_and(|extras| !extras.offsets.is_empty())
     }
 
     // Where the first glyphs of `range` draw from the pen, when any glyph
     // draws off it; the glyphs past them draw at the pen.
     pub(crate) fn offsets(&self, range: Range<usize>) -> Option<&[GlyphOffset]> {
-        self.offsets.as_deref().map(|offsets| {
-            let len = offsets.len();
-            &offsets[range.start.min(len)..range.end.min(len)]
-        })
+        self.extras
+            .as_deref()
+            .filter(|extras| !extras.offsets.is_empty())
+            .map(|extras| {
+                let len = extras.offsets.len();
+                &extras.offsets[range.start.min(len)..range.end.min(len)]
+            })
     }
 
     // Appends to `out` those of the glyphs of `range`, from its start,
@@ -238,23 +287,23 @@ impl LaidGlyphs {
     ) -> usize {
         let start = range.start;
         // Read in place, so each glyph is unpacked only to be appended.
-        let taken = match self.run(range).glyphs {
-            GlyphSlice::Packed(glyphs) => glyphs
+        let taken = match self.run(range) {
+            RunGlyphs::Packed(glyphs) => glyphs
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.text_offset()))
                 .count(),
-            GlyphSlice::Full(glyphs) => glyphs
+            RunGlyphs::Full(glyphs) => glyphs
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.text_offset()))
                 .count(),
         };
         let end = start + taken;
         let offsets = self.offsets(start..end).unwrap_or_default();
-        match self.run(start..end).glyphs {
-            GlyphSlice::Packed(glyphs) => {
+        match self.run(start..end) {
+            RunGlyphs::Packed(glyphs) => {
                 out.extend(glyphs.iter().map(|glyph| glyph.unpack()), offsets);
             }
-            GlyphSlice::Full(glyphs) => out.extend_from_slice(glyphs, offsets),
+            RunGlyphs::Full(glyphs) => out.extend_from_slice(glyphs, offsets),
         }
         end
     }
