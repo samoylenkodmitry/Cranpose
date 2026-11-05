@@ -25,8 +25,8 @@ pub(crate) struct Pool {
     /// takes one replaces.
     texts: Vec<Box<TextPrimitiveNode>>,
     lists: Vec<Vec<RenderNode>>,
-    // How many layer boxes, inline boxes and child lists were asked for
-    // since the pool was last released or trimmed.
+    // How many boxes and child lists of each kind were asked for since the
+    // pool was last released or trimmed.
     asked: Asked,
 }
 
@@ -34,6 +34,7 @@ pub(crate) struct Pool {
 struct Asked {
     layers: usize,
     inlines: usize,
+    texts: usize,
     lists: usize,
 }
 
@@ -211,7 +212,12 @@ pub(crate) fn inline_box() -> Option<Box<InlineNode>> {
 
 /// `text` in a recycled box when the pool has one.
 pub(crate) fn boxed_text(text: TextPrimitiveNode) -> Box<TextPrimitiveNode> {
-    match crate::thread_state::with(|state| state.layer_pool.borrow_mut().texts.pop()) {
+    let recycled = crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
+        pool.asked.texts += 1;
+        pool.texts.pop()
+    });
+    match recycled {
         Some(mut recycled) => {
             *recycled = text;
             recycled
@@ -232,16 +238,16 @@ pub(crate) fn release() {
     });
 }
 
-/// Keeps as many layer boxes, inline boxes and child lists as the walk that
-/// ends asked for, for the next walk, which asks for about as many, and
-/// frees the rest and the text boxes, which hold the text they drew.
+/// Keeps as many boxes and child lists of each kind as the walk that ends
+/// asked for, for the next walk, which asks for about as many, and frees the
+/// rest. A kept text box holds the text it drew until a text takes the box.
 pub(crate) fn keep_for_next_walk() {
     crate::thread_state::with(|state| {
         let mut pool = state.layer_pool.borrow_mut();
         let asked = std::mem::take(&mut pool.asked);
         pool.layers.truncate(asked.layers);
         pool.inlines.truncate(asked.inlines);
+        pool.texts.truncate(asked.texts);
         pool.lists.truncate(asked.lists);
-        pool.texts.clear();
     });
 }
