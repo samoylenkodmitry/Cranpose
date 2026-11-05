@@ -10,7 +10,7 @@ use crate::{
     layout_input::{GlyphAdvances, ParagraphLengths},
     shaped_glyphs::{ShapedGlyph, ShapedGlyphs},
     shaped_item::{cluster_spacing, spaced_width},
-    text_layout::font_units,
+    text_layout::{HOLD_MARGIN, font_units},
     typeface::Typeface,
 };
 
@@ -145,11 +145,13 @@ impl Default for WidthUnit {
     }
 }
 
-// How far a device pixel width may reach past a width of the layout and
-// still fit it: a width on the device pixel grid scales to a hair off a
-// whole pixel, and padding added and taken off moves it by a hair. Kerning
-// a font states lies far over this.
-const GRID_SLACK: f32 = 1.0 / 1024.0;
+// How far, in pixels of the layout, a device pixel width may reach past a
+// width of the layout and still fit it: a width on the device pixel grid
+// scales to a hair off a whole pixel, and padding added and taken off moves
+// it by a hair. Twice the margin a hold keeps, so a layout whose widest line
+// lands on the grid holds at its own width. Kerning a font states lies far
+// over this.
+const WIDTH_SLACK: f32 = 2.0 * HOLD_MARGIN;
 
 impl WidthUnit {
     // The pixels of a paragraph of `lengths`.
@@ -181,8 +183,14 @@ impl WidthUnit {
     pub(crate) fn layout(self, pixels: f32) -> f32 {
         match self {
             Self::Layout { .. } => pixels,
-            Self::Device { grid } if pixels > GRID_SLACK => (pixels - GRID_SLACK) / grid,
-            Self::Device { grid } => pixels / grid,
+            Self::Device { grid } => {
+                let width = pixels / grid;
+                if width > WIDTH_SLACK {
+                    width - WIDTH_SLACK
+                } else {
+                    width
+                }
+            }
         }
     }
 
@@ -191,7 +199,7 @@ impl WidthUnit {
     pub(crate) fn limit(self, width: f32) -> f32 {
         match self {
             Self::Layout { .. } => width,
-            Self::Device { grid } => width * grid + GRID_SLACK,
+            Self::Device { grid } => (width + WIDTH_SLACK) * grid,
         }
     }
 

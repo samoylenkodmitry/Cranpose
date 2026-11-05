@@ -118,7 +118,7 @@ impl WidthRange {
 
 // How far inside a hold's ends a width must be for the layout to stand for
 // it, so that the order a sum is taken in cannot decide.
-const HOLD_MARGIN: f32 = 1e-3;
+pub(crate) const HOLD_MARGIN: f32 = 1e-3;
 
 // A run of one typeface, size and bidi level inside a line, in visual order.
 #[derive(Clone, Debug, PartialEq)]

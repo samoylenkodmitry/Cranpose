@@ -63,9 +63,11 @@ fn line_pixels(laid: &TextLayout) -> f32 {
     (laid.line_right(0) - laid.line_left(0)) * GRID
 }
 
+// A width sits a hundredth of a device pixel at most inside the pixels
+// Android lays out, so a text fits a box of the width Android gives it.
 fn assert_pixels(actual: f32, expected: f32, case: &str) {
     assert!(
-        (actual - expected).abs() < 2e-3,
+        (actual - expected).abs() < 1e-2,
         "{case}: {actual} device pixels, Android lays out {expected}"
     );
 }
@@ -245,4 +247,33 @@ fn a_text_keeps_one_line_at_its_own_width_at_any_density() {
         wrapped.is_empty(),
         "wrapped, ellipsized or overflowed at their own width: {wrapped:?}"
     );
+}
+
+// A wrapped text laid out again at its own width breaks into the same lines,
+// so its layout stands for that width, as a width that animates asks of it
+// each frame. Widths of whole pixel advances land on the device pixel grid,
+// where the own width of a layout is its widest line.
+#[test]
+fn a_wrapped_text_of_whole_pixels_holds_at_its_own_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let family = FontFamily::Default;
+    let paragraph = ParagraphStyle::default();
+    let text = "Ea elit veniam et laboris enim ut ipsum";
+    let mut missed = Vec::new();
+    for hundredth in (200..=400).step_by(5) {
+        let size = hundredth as f32 / 100.0;
+        let spans = [ShapingSpan {
+            size,
+            ..span(0..text.len(), &family, 400)
+        }];
+        for third in 45..=90 {
+            let width = third as f32 / 3.0;
+            let input = input(text, &spans, &paragraph, GlyphAdvances::WholePixels, width);
+            let laid = TextLayouter::default().layout(&input, &resolver);
+            if laid.line_count() > 1 && !laid.holds(0.0, laid.width()) {
+                missed.push((size, width, laid.width()));
+            }
+        }
+    }
+    assert!(missed.is_empty(), "no hold at their own width: {missed:?}");
 }
