@@ -703,7 +703,16 @@ fn shape_range(
     );
     if shaped.is_ok() {
         glyphs.reserve(buffer.len());
+        // Where the font states its advances, a glyph that shaping left at
+        // its own advance says so, for whole pixel layouts.
+        let own = setting
+            .typeface
+            .h_advances()
+            .map(|(advances, bytes)| (advances, advances.metrics(bytes)));
         for (info, position) in buffer.glyph_infos().iter().zip(buffer.glyph_positions()) {
+            let unadjusted = own.is_some_and(|(advances, metrics)| {
+                i32::from(advances.advance(metrics, info.glyph_id)) == position.x_advance
+            });
             glyphs.push(
                 ShapedGlyph::new(
                     GlyphId(info.glyph_id),
@@ -714,7 +723,8 @@ fn shape_range(
                     } else {
                         BreakBefore::Safe
                     },
-                ),
+                )
+                .with_own_advance(unadjusted),
                 GlyphOffset {
                     x: position.x_offset,
                     y: position.y_offset,

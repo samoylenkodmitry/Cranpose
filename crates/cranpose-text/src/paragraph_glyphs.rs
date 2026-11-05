@@ -88,6 +88,10 @@ impl ParagraphGlyphs {
         if let Some((advances, bytes)) = face.h_advances() {
             let metrics = advances.metrics(bytes);
             pixels.extend(added.iter().map(|glyph| {
+                // An advance that shaping left the font's own rounds whole.
+                if glyph.has_own_advance() {
+                    return whole::floor(font_units(glyph.advance) * device + 0.5);
+                }
                 let own = advances.advance(metrics, glyph.id().0);
                 whole_pixels(glyph, f32::from(own), device)
             }));
