@@ -5,6 +5,7 @@ run waiting on a page what that page said when it failed or stayed silent."""
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -47,6 +48,17 @@ class BrowserServerTest(unittest.TestCase):
         script, _ = fetch(self.server, '/__perf.js')
         self.assertIn('sendBeacon', script)
 
+    def test_a_line_is_heard_with_the_time_it_arrived(self):
+        since = self.server.mark()
+        self.assertIsNone(self.server.heard_at('PERF first_frame', since))
+        before = time.monotonic()
+        post(self.server, 'PERF first_frame')
+        post(self.server, 'PERF first_frame again')
+        arrived = self.server.heard_at('PERF first_frame', since)
+        self.assertLessEqual(before, arrived)
+        self.assertLessEqual(arrived, time.monotonic())
+        self.assertEqual(arrived, self.server.heard[since][0])
+
     def test_a_posted_line_ends_the_wait_that_names_it(self):
         since = self.server.mark()
         threading.Timer(0.1, post, (self.server, 'PERF ready tier=8')).start()
@@ -74,3 +86,22 @@ class BrowserServerTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NativePageServerTest(unittest.TestCase):
+    """The page a native web view loads: no isolation headers, and a path
+    prefix served from another folder."""
+
+    def test_a_native_page_gets_the_script_its_aliases_and_no_isolation(self):
+        page, fonts = tempfile.TemporaryDirectory(), tempfile.TemporaryDirectory()
+        self.addCleanup(page.cleanup)
+        self.addCleanup(fonts.cleanup)
+        (Path(page.name) / 'index.html').write_text(PAGE)
+        (Path(fonts.name) / 'Roboto.ttf').write_text('font')
+        server = BrowserServer(Path(page.name), isolate=False, aliases={'/fonts/': fonts.name})
+        self.addCleanup(server.server.server_close)
+        self.addCleanup(server.server.shutdown)
+        body, headers = fetch(server, '/index.html')
+        self.assertIn('/__perf.js', body)
+        self.assertIsNone(headers['Cross-Origin-Opener-Policy'])
+        self.assertEqual(fetch(server, '/fonts/Roboto.ttf')[0], 'font')

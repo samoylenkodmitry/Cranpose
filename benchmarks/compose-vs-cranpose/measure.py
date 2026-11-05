@@ -794,7 +794,7 @@ class PageTarget:
         return total
 
     def log(self, device):
-        return '\n'.join(self.server.heard)
+        return '\n'.join(line for _, line in self.server.heard)
 
     def reset(self, device):
         """Leaves Chrome as its install did, for the page's first visit."""
