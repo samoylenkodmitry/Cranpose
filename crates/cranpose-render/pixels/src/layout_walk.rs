@@ -61,7 +61,7 @@ impl DirtyMarks {
                 let merged = decode(mark).map_or(update, |before| before.merge(update));
                 (mark & ABOVE_DIRTY) | (encode(merged) << UPDATE_SHIFT)
             };
-            let above = |node| moved.let_go_of_subtree(node);
+            let above = |node| moved.note_changed_beneath(node);
             self.marks
                 .update_with_ancestors(applier, node, merge, (ABOVE_DIRTY, above));
         }
@@ -225,6 +225,13 @@ impl OldChildren {
 pub(crate) struct KeptSpace {
     pub space: SpaceFragment,
     pub published: bool,
+}
+
+// What changed beneath a child that did not change itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Beneath {
+    Nothing,
+    Changed,
 }
 
 // A walk of one window's layout tree, with the marks of the update it
@@ -596,7 +603,12 @@ impl<'a> LayoutWalk<'a> {
         let Some(position) = position.or_else(|| placed_child_position(self.applier, child)) else {
             return;
         };
-        let (at, mut kept) = self.moved.borrow_mut().take(child).unzip();
+        let (at, mut kept) = self
+            .moved
+            .borrow_mut()
+            .take(child)
+            .map(|(at, subtree, _)| (at, subtree))
+            .unzip();
         if let Some(stale) =
             kept.take_if(|subtree| !subtree.follow(self.applier, position, lower_context))
         {
@@ -611,6 +623,84 @@ impl<'a> LayoutWalk<'a> {
             populate_draws_from_graph(node, scene, context, &mut None, None);
         }
         self.moved.borrow_mut().keep(at, subtree);
+    }
+
+    // Pushes over its old record `at` the subtree of `child`, a node that did
+    // not change itself, where it lies now, at `position` when the walk read
+    // it: from what the walk kept of it, or through it where it
+    // `lies_as_before`. False, with nothing pushed, when neither fits.
+    fn push_unchanged(
+        &self,
+        (child, at, position): (NodeId, usize, Option<Point>),
+        (beneath, lies_as_before): (Beneath, bool),
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) -> bool {
+        let kept = match beneath {
+            Beneath::Nothing => {
+                self.push_moved((child, position), lower_context, (scene, context), at)
+            }
+            Beneath::Changed => {
+                !self.keeps_space(&scene.subtrees, at)
+                    && self.push_patched(
+                        (child, position, !lies_as_before),
+                        lower_context,
+                        (scene, context),
+                    )
+            }
+        };
+        kept || (lies_as_before && self.push_through((child, at), lower_context, (scene, context)))
+    }
+
+    // Pushes under `context` the subtree of `child`, which did not change
+    // itself though nodes beneath it did, from the subtree the walk kept of
+    // it: placed where the child now lies, at `position` when the walk read
+    // it, and brought up to the nodes that changed. A child that `moved`
+    // with no subtree kept is lowered whole and kept. False, with nothing
+    // pushed, when there is neither or the kept subtree no longer fits.
+    fn push_patched(
+        &self,
+        (child, position, moved): (NodeId, Option<Point>, bool),
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) -> bool {
+        let taken = self.moved.borrow_mut().take(child);
+        if taken.is_none() && !moved {
+            return false;
+        }
+        let position = position.or_else(|| placed_child_position(self.applier, child));
+        let kept = match (taken, position) {
+            (Some((at, mut subtree, changed_beneath)), Some(position)) => {
+                let fits = subtree.follow(self.applier, position, lower_context)
+                    && (!changed_beneath
+                        || self.moved.borrow_mut().patch(
+                            self.applier,
+                            &mut subtree,
+                            lower_context,
+                        ));
+                if !fits {
+                    subtree.recycle();
+                    return false;
+                }
+                (Some(at), subtree)
+            }
+            (None, Some(_)) => match lower_moved_subtree(self.applier, child, lower_context) {
+                Some(subtree) => (None, subtree),
+                None => return false,
+            },
+            (taken, None) => {
+                if let Some((_, subtree, _)) = taken {
+                    subtree.recycle();
+                }
+                return false;
+            }
+        };
+        let (at, subtree) = kept;
+        if let Some(node) = Subtree::of_child(subtree.root()) {
+            populate_draws_from_graph(node, scene, context, &mut None, None);
+        }
+        self.moved.borrow_mut().keep(at, subtree);
+        true
     }
 
     // Whether the old subtree at the record `at` holds a subtree the scene
@@ -769,10 +859,14 @@ impl ChildSlot<'_> {
             let end = scene.subtrees[at].end;
             let record = &scene.subtrees[at];
             let mark = walk.marks.marks.get(walk.applier, child);
-            let clean = mark == 0;
-            let kept = clean || decode(mark).is_none();
+            // What changed beneath a child that did not change itself.
+            let beneath = match mark {
+                0 => Some(Beneath::Nothing),
+                _ if decode(mark).is_none() => Some(Beneath::Changed),
+                _ => None,
+            };
             // A child whose owner placed it as before lies where it did.
-            let placement = (kept && context.same_as_before && !placed_as_before)
+            let placement = (beneath.is_some() && context.same_as_before && !placed_as_before)
                 .then(|| kept_child_placement(walk.applier, child, self.context))
                 .flatten();
             let lies_as_before = context.same_as_before
@@ -781,23 +875,21 @@ impl ChildSlot<'_> {
                         (placement.identity, placement.transform)
                             == (record.identity, record.transform)
                     }));
-            if clean
+            let position = placement.map(|placement| placement.position);
+            if beneath == Some(Beneath::Nothing)
                 && lies_as_before
                 && let Some(mut rewrite) = scene.rewrite.take()
             {
                 rewrite.keep(scene, at);
                 scene.rewrite = Some(rewrite);
-            } else if !(clean
-                && walk.push_moved(
-                    (child, placement.map(|placement| placement.position)),
+            } else if !beneath.is_some_and(|beneath| {
+                walk.push_unchanged(
+                    (child, at, position),
+                    (beneath, lies_as_before),
                     self.context,
                     (scene, context),
-                    at,
-                ))
-                && !(kept
-                    && lies_as_before
-                    && walk.push_through((child, at), self.context, (scene, context)))
-            {
+                )
+            }) {
                 let children = OldChildren::of(&scene.subtrees, at, child);
                 walk.push(
                     (child, NodePlace::Child),

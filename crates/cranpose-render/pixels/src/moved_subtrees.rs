@@ -6,8 +6,11 @@
 // each of its rows once, and a row that holds a changing bar lowers its
 // containers once.
 
-use cranpose_core::{NodeId, collections::map::HashMap};
-use cranpose_render_common::scene_builder::{KeptHead, MovedSubtree};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_render_common::{
+    SceneUpdates,
+    scene_builder::{ChangedNodes, KeptHead, LowerContext, MovedSubtree},
+};
 use cranpose_ui_graphics::MemoryHeadroom;
 
 // What the walk keeps of a node.
@@ -36,6 +39,9 @@ struct Slot {
     kept: Option<Kept>,
     // The updates that started since one pushed it.
     waited: u8,
+    // Whether nodes beneath a kept subtree's node changed in the update
+    // that runs: the walk patches it before it pushes it.
+    changed_beneath: bool,
 }
 
 // The slot a walk took a kept entry out of, which the entry goes back into.
@@ -54,6 +60,8 @@ pub(crate) struct MovedSubtrees {
     // The slots, each free or in use.
     slots: Vec<Option<Slot>>,
     free: Vec<u32>,
+    // The nodes the update that runs changed, for the patches.
+    changed: ChangedNodes,
 }
 
 // The updates in a row that may end without pushing what the walk keeps of
@@ -73,12 +81,13 @@ impl MovedSubtrees {
         self.slot_of.get(&node).copied()
     }
 
-    // Takes the subtree of `node` out, when it is kept whole, with its slot.
-    pub(crate) fn take(&mut self, node: NodeId) -> Option<(SlotIndex, MovedSubtree)> {
+    // Takes the subtree of `node` out, when it is kept whole, with its slot
+    // and whether nodes beneath `node` changed in the update that runs.
+    pub(crate) fn take(&mut self, node: NodeId) -> Option<(SlotIndex, MovedSubtree, bool)> {
         let at = self.slot_index(node)?;
         let slot = self.slots[at as usize].as_mut()?;
         match slot.kept.take()? {
-            Kept::Subtree(subtree) => Some((SlotIndex(at), subtree)),
+            Kept::Subtree(subtree) => Some((SlotIndex(at), subtree, slot.changed_beneath)),
             head @ Kept::Head(_) => {
                 slot.kept = Some(head);
                 None
@@ -118,12 +127,14 @@ impl MovedSubtrees {
                 replaced.recycle();
             }
             slot.waited = 0;
+            slot.changed_beneath = false;
             return;
         }
         let slot = Slot {
             node,
             kept: Some(kept),
             waited: 0,
+            changed_beneath: false,
         };
         let at = match self.free.pop() {
             Some(at) => {
@@ -146,17 +157,34 @@ impl MovedSubtrees {
         }
     }
 
-    // Lets go the subtree the walk keeps of `node`, above a node an update
-    // changed. A layer kept of it stays: the node itself did not change.
-    pub(crate) fn let_go_of_subtree(&mut self, node: NodeId) {
+    // Notes that a node beneath `node` changed: a subtree kept of it takes
+    // a patch before the walk pushes it.
+    pub(crate) fn note_changed_beneath(&mut self, node: NodeId) {
         if let Some(at) = self.slot_index(node)
-            && let Some(Slot {
-                kept: Some(Kept::Subtree(_)),
-                ..
-            }) = self.slots[at as usize]
+            && let Some(slot) = &mut self.slots[at as usize]
+            && let Some(Kept::Subtree(_)) = slot.kept
         {
-            self.free_slot(at);
+            slot.changed_beneath = true;
         }
+    }
+
+    // Takes the nodes `updates` changed, for the patches, when the walk
+    // keeps a subtree.
+    pub(crate) fn mark_changed(&mut self, applier: &MemoryApplier, updates: SceneUpdates<'_>) {
+        if !self.slot_of.is_empty() {
+            self.changed.mark(applier, updates);
+        }
+    }
+
+    // Brings `subtree`, placed under `context`, up to the nodes the update
+    // changed beneath its node.
+    pub(crate) fn patch(
+        &mut self,
+        applier: &MemoryApplier,
+        subtree: &mut MovedSubtree,
+        context: &LowerContext,
+    ) -> bool {
+        subtree.patch(applier, &mut self.changed, context)
     }
 
     fn free_slot(&mut self, at: u32) {
@@ -186,7 +214,7 @@ impl MovedSubtrees {
                 continue;
             };
             slot.waited += 1;
-            if slot.waited > unpushed + 1 || slot.kept.is_none() {
+            if slot.waited > unpushed + 1 || slot.kept.is_none() || slot.changed_beneath {
                 self.free_slot(at as u32);
             }
         }

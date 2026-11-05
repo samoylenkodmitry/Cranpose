@@ -100,6 +100,57 @@ pub(super) fn walk_dirty_layers(
     walked.map(|report| (report, path))
 }
 
+/// The nodes a scene update changed, with the nodes above them marked, for
+/// a renderer with no render graph to bring the subtrees it keeps lowered
+/// up to them: [`super::MovedSubtree::patch`].
+#[derive(Default)]
+pub struct ChangedNodes {
+    nodes: HashMap<NodeId, NodeUpdate>,
+    ancestry: DirtyAncestry,
+    update: u64,
+}
+
+impl ChangedNodes {
+    /// Takes the nodes `updates` names, each with its updates merged, and
+    /// marks the nodes above them.
+    pub fn mark(&mut self, applier: &MemoryApplier, updates: crate::SceneUpdates<'_>) {
+        self.nodes.clear();
+        for &(node, update) in updates {
+            self.nodes
+                .entry(node)
+                .and_modify(|before| *before = before.merge(update))
+                .or_insert(update);
+        }
+        self.update += 1;
+        self.ancestry.mark(applier, &self.nodes, self.update);
+    }
+}
+
+// Brings `layer`, whose node did not change and whose children sit at
+// `children`, up to the changed nodes beneath it, as the render graph's
+// walk brings its layers. False when a node's data is gone.
+pub(super) fn patch_layer(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    (children, inherited_translated_content_context): (AbsOrigin, bool),
+    changed: &mut ChangedNodes,
+) -> bool {
+    let walk = DirtyWalk {
+        nodes: &mut changed.nodes,
+        ancestry: &changed.ancestry.marks,
+        applier,
+    };
+    replace_dirty_layers_from_applier(
+        applier,
+        layer,
+        children,
+        walk,
+        inherited_translated_content_context,
+        changed.update,
+    )
+    .is_some()
+}
+
 // The marks a walk set on its dirty nodes and the nodes above them, kept
 // for the next update of the graph when it changes the same nodes: as a
 // node that moves to another parent makes both parents dirty, the nodes

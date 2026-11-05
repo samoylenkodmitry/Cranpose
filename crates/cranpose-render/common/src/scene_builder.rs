@@ -11,6 +11,7 @@ use crate::{
 };
 
 mod dirty_walk;
+pub use dirty_walk::ChangedNodes;
 pub(crate) use dirty_walk::{DirtyAncestry, RetainedPath};
 use dirty_walk::{update_along_retained_path, walk_dirty_layers};
 mod draw_recording;

@@ -7,9 +7,9 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::Point;
 
 use super::{
-    Level, LowerContext, RecordingStore, inline_leaf::lower_placed_child,
-    publish_retained_window_geometry, read_placed_node_data, recycle_lowered,
-    translate_retained_child,
+    ChangedNodes, Level, LowerContext, RecordingStore, dirty_walk::patch_layer,
+    inline_leaf::lower_placed_child, publish_retained_window_geometry, read_placed_node_data,
+    recycle_lowered, translate_retained_child,
 };
 use crate::graph::RenderNode;
 
@@ -78,6 +78,27 @@ impl MovedSubtree {
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => return false,
         }
         true
+    }
+
+    /// Brings the subtree, placed under `context` since its child did not
+    /// change, up to the nodes beneath the child that `changed` names, as a
+    /// render graph brings its layers. False when it cannot: the subtree is
+    /// then of no use.
+    pub fn patch(
+        &mut self,
+        applier: &MemoryApplier,
+        changed: &mut ChangedNodes,
+        context: &LowerContext,
+    ) -> bool {
+        let RenderNode::Layer(layer) = &mut self.root else {
+            return false;
+        };
+        let Some(parent_abs) = &context.parent_abs else {
+            return false;
+        };
+        let children = parent_abs.children_of(layer);
+        let inherited = context.inherited_translated_content_context;
+        patch_layer(applier, layer, (children, inherited), changed)
     }
 
     /// Lets the subtree go, as [`recycle_lowered`] lets a lowered node go.
