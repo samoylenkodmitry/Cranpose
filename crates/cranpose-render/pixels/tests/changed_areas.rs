@@ -498,6 +498,45 @@ fn a_child_that_changes_under_a_turned_parent_redraws_in_its_surface() {
     kept_frames_match_full_redraws(1.0, TurnedParent);
 }
 
+// A box that moves each step, as the box above it grows, whose text changes
+// every third step: it moves unchanged, then changes, then moves unchanged
+// again.
+#[composable]
+fn MovedBoxChangingText(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().offset(4.0, 8.0),
+        ColumnSpec::default(),
+        move || {
+            let n = step.value();
+            Box(
+                Modifier::empty()
+                    .width(20.0)
+                    .height(4.0 + (n % 7) as f32 * 3.0),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .width(60.0)
+                    .height(16.0)
+                    .background(color(3, 8)),
+                BoxSpec::default(),
+                move || {
+                    let label = (step.value() + 2) / 3;
+                    Text(format!("v{label}"), Modifier::empty(), TextStyle::default());
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn a_child_that_changes_between_moves_draws_what_it_holds_now() {
+    kept_frames_match_full_redraws(1.0, MovedBoxChangingText);
+}
+
 #[composable]
 fn Counter(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);

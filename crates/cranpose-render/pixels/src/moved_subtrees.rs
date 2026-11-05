@@ -44,6 +44,18 @@ impl MovedSubtrees {
         }
     }
 
+    // Lets go the subtrees whose nodes are not `clean` as an update starts:
+    // the node or a node beneath it changed, so what the subtree draws may
+    // be old.
+    pub(crate) fn drop_changed(&mut self, clean: impl Fn(NodeId) -> bool) {
+        for (subtree, _) in self
+            .kept
+            .extract_if(.., |(subtree, _)| !clean(subtree.node()))
+        {
+            subtree.recycle();
+        }
+    }
+
     // Lets every subtree go.
     pub(crate) fn clear(&mut self) {
         for (subtree, _) in self.kept.drain(..) {

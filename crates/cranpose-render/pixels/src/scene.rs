@@ -121,6 +121,9 @@ impl Scene {
     // Builds the scene of the window `applier` holds below `root` anew.
     pub(crate) fn rebuild(&mut self, applier: &MemoryApplier, root: NodeId, text: &TextRaster) {
         self.marks.clear(applier);
+        // A build with no marks names no node that changed: a subtree kept
+        // for a node may hold draws the node no longer has.
+        self.moved.get_mut().clear();
         self.build(applier, root, None, text);
         self.layer_moves += 1;
         self.finish_spaces(applier);
@@ -141,6 +144,10 @@ impl Scene {
         if self.marks.mark(applier, updates) {
             self.layer_moves += 1;
         }
+        let marks = &self.marks;
+        self.moved
+            .get_mut()
+            .drop_changed(|node| marks.is_clean(applier, node));
         if !self.update_in_place(applier, root, text) {
             let previous = self.raster.take();
             self.build(applier, root, previous, text);
