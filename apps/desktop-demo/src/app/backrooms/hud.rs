@@ -62,10 +62,21 @@ pub(super) fn Hud(journey: Journey) {
                     Text("REC", Modifier::empty().padding(10.0), camcorder(22.0));
                 },
             );
-            Text(
-                format!("ROOM {}", journey.rooms.get()),
+            Column(
                 Modifier::empty().align(Alignment::TOP_END).padding(INSET),
-                camcorder(22.0),
+                ColumnSpec::default(),
+                move || {
+                    Text(
+                        format!("ROOM {}", journey.rooms.get()),
+                        Modifier::empty(),
+                        camcorder(22.0),
+                    );
+                    if journey.lights_out.get() {
+                        let mut warning = camcorder(15.0);
+                        warning.span_style.color = Some(RED);
+                        Text("EMERGENCY POWER", Modifier::empty(), warning);
+                    }
+                },
             );
             let elapsed = whole.get();
             Text(

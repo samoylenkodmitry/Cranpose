@@ -29,6 +29,11 @@ const DARK: u32 = 2u;
 // The distance at which the haze hides a third of what lies behind it.
 const HAZE: f32 = 1500.0;
 const LAMP_REACH: f32 = 230.0;
+// The light every point takes, so no room is black: a little that bounces
+// in from the rooms around, and the red emergency light that comes on as
+// the lamps' power goes.
+const FILL: vec3<f32> = vec3<f32>(0.05, 0.047, 0.04);
+const EMERGENCY: vec3<f32> = vec3<f32>(0.26, 0.04, 0.025);
 // How far a lamp's light reaches along the floor: it fades to nothing there,
 // so the lamps of the 3 by 3 units around a point are all that light it.
 const LAMP_WINDOW: f32 = UNIT * 1.5;
@@ -64,9 +69,10 @@ fn value_noise(p: vec2<f32>, salt: u32) -> f32 {
     return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
 }
 
-// How bright the lamp over unit `cell` shines now, from 0 for a dead one
-// to 1.
-fn lamp_level(cell: vec2<i32>, seed: u32, mood: u32, frame: i32) -> f32 {
+// How bright the lamp over unit `cell` of a room of `size` shines now,
+// from 0 for a dead one to 1. The lamp over the room's middle unit never
+// dies, so every room has some light.
+fn lamp_level(cell: vec2<i32>, size: vec2<f32>, seed: u32, mood: u32, frame: i32) -> f32 {
     let pick = unit_of(hash3(cell.x, cell.y, seed));
     var dead = 0.08;
     var flickering = 0.15;
@@ -76,10 +82,11 @@ fn lamp_level(cell: vec2<i32>, seed: u32, mood: u32, frame: i32) -> f32 {
         flickering = 0.6;
         level = 0.6;
     } else if (mood == DARK) {
-        dead = 0.85;
+        dead = 0.6;
         flickering = 1.0;
     }
-    if (pick < dead) {
+    let kept = all(cell == vec2<i32>(floor(size / (2.0 * UNIT))));
+    if (pick < dead && !kept) {
         return 0.0;
     }
     if (pick >= flickering) {
@@ -122,7 +129,7 @@ fn lighting(p: vec3<f32>, n: vec3<f32>, size: vec2<f32>, seed: u32, mood: u32, f
             let fade = max(1.0 - dot(across, across) / (LAMP_WINDOW * LAMP_WINDOW), 0.0);
             // The hashes only for a lamp of the room whose light reaches.
             if (inside && fade > 0.0) {
-                let reach = fade * fade * lamp_level(cell, seed, mood, frame);
+                let reach = fade * fade * lamp_level(cell, size, seed, mood, frame);
                 if (reach > 0.0) {
                     lamps += lamp_light(p, n, middle, reach);
                 }
@@ -184,7 +191,7 @@ fn tiles(at: vec2<f32>, size: vec2<f32>, pixel: f32, seed: u32, mood: u32, frame
     let cell = vec2<i32>(floor(at / UNIT));
     let from_middle = at - (vec2<f32>(cell) + 0.5) * UNIT;
     let to_panel = abs(from_middle) - vec2<f32>(25.0, 75.0);
-    let level = lamp_level(cell, seed, mood, frame) * power;
+    let level = lamp_level(cell, size, seed, mood, frame) * power;
     if (max(to_panel.x, to_panel.y) < 0.0) {
         if (max(to_panel.x, to_panel.y) > -3.0) {
             return vec4<f32>(0.62, 0.61, 0.56, 0.0);
@@ -241,16 +248,19 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
     // about 700 pixels.
     let pixel = distance * 0.0017;
     let shadow = mix(0.6, 1.0, surface.lit);
+    let fill = FILL + EMERGENCY * (1.0 - power);
     var colour = vec3<f32>(0.0);
     var alpha = 1.0;
     if (kind == CARPET) {
-        colour = carpet(p.xz, pixel) * lighting(p, n, size, seed, mood, frame) * power * shadow;
+        let light = lighting(p, n, size, seed, mood, frame) * power * shadow;
+        colour = carpet(p.xz, pixel) * (vec3<f32>(light) + fill);
     } else if (kind == TILES) {
         let ceiling = tiles(p.xz, size, pixel, seed, mood, frame, power);
         if (ceiling.a > 0.5) {
             colour = ceiling.rgb;
         } else {
-            colour = ceiling.rgb * lighting(p, n, size, seed, mood, frame) * power * shadow;
+            let light = lighting(p, n, size, seed, mood, frame) * power * shadow;
+            colour = ceiling.rgb * (vec3<f32>(light) + fill);
         }
     } else if (kind != VOID) {
         var paint = vec3<f32>(0.0);
@@ -261,9 +271,9 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
             let along = select(p.z, p.x, abs(x.x) > abs(x.z));
             paint = wallpaper(along, -p.y, pixel);
         }
-        colour = paint * lighting(p, n, size, seed, mood, frame) * power * shadow;
+        let light = lighting(p, n, size, seed, mood, frame) * power * shadow;
+        colour = paint * (vec3<f32>(light) + fill);
     }
-    colour += vec3<f32>(0.025);
     let haze = 1.0 - exp(-distance / HAZE);
     colour = mix(colour, vec3<f32>(0.06, 0.05, 0.025), haze);
     colour = (1.0 - exp(-colour * 1.6)) * 1.1;

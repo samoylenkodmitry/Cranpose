@@ -22,6 +22,7 @@ use super::{
     notes,
     place::{spot, Place},
     plan::{Plan, Slot, Visit, Writing, DOOR_HEIGHT, DOOR_WIDTH, HEIGHT},
+    printout::Printout,
 };
 use crate::app::controls_ui::{
     rememberControl, ControlKind, ControlModel, STAGE_HEIGHT, WALL_CARD_WIDTH,
@@ -156,6 +157,12 @@ pub(super) fn Room(level: Level, visit: Visit, place: Place) {
     if let Some(slot) = plan.lever {
         Lever(level.clone(), slot, size);
     }
+    if let Some(printout) = plan.printout {
+        let (sight, plane) = (sight.clone(), Arc::clone(&level.meshes.plane));
+        key("printout", move || {
+            Printout(sight, plane, lamps, printout, size);
+        });
+    }
     if plan.figure && place.depth > 0 {
         Figure(
             sight,
@@ -238,12 +245,16 @@ fn Doorway(level: Level, inner: Visit, frame: Mat4, place: Place) {
         BoxSpec::default(),
         move || {
             let level = level.clone();
+            // A screen reader reads the room the eye stands in, not the
+            // rooms it sees through doorways, which are endless.
             Box(
-                spot(DOOR).scene3d(move || Scene3d {
-                    camera,
-                    light: Some(LIGHT),
-                    eye: None,
-                }),
+                spot(DOOR)
+                    .hide_from_accessibility()
+                    .scene3d(move || Scene3d {
+                        camera,
+                        light: Some(LIGHT),
+                        eye: None,
+                    }),
                 BoxSpec::default(),
                 move || Room(level.clone(), inner, behind),
             );

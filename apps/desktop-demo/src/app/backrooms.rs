@@ -9,6 +9,7 @@ mod journey;
 mod notes;
 mod place;
 mod plan;
+mod printout;
 mod room;
 mod tab;
 mod walker;

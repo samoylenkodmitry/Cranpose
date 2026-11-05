@@ -79,6 +79,31 @@ impl Dice {
             .collect()
     }
 
+    // A printout on one of `panels`, a whole stretch of wall a unit long or
+    // more; the slots on it are no longer `free`.
+    fn printout(&mut self, panels: &[Panel], free: &mut Vec<Slot>) -> Option<Printout> {
+        const MARGIN: f32 = 30.0;
+        let long: Vec<&Panel> = panels
+            .iter()
+            .filter(|panel| panel.bottom == 0.0 && panel.to - panel.from >= UNIT)
+            .collect();
+        let count = u32::try_from(long.len()).unwrap_or(u32::MAX);
+        let wall = **long.get(usize::try_from(self.below(count)).ok()?)?;
+        free.retain(|slot| {
+            !(slot.side == wall.side && (wall.from..=wall.to).contains(&slot.along()))
+        });
+        Some(Printout {
+            panel: Panel {
+                from: wall.from + MARGIN,
+                to: wall.to - MARGIN,
+                top: HEIGHT - 2.0 * MARGIN,
+                bottom: MARGIN,
+                ..wall
+            },
+            file: usize::try_from(self.below(PRINTS)).unwrap_or(0),
+        })
+    }
+
     fn thing(&mut self) -> Option<Thing> {
         self.chance(40).then(|| match self.below(3) {
             0 => Thing::Watcher,
@@ -297,6 +322,14 @@ pub(super) struct Writing {
     pub(super) words: usize,
 }
 
+// A stretch of wall the entity printed one of the backrooms' own source
+// files on: `file` below `PRINTS`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Printout {
+    pub(super) panel: Panel,
+    pub(super) file: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Plan {
     pub(super) id: RoomId,
@@ -311,6 +344,7 @@ pub(super) struct Plan {
     pub(super) lever: Option<Slot>,
     // Whether a figure stands in the room while the eye has not reached it.
     pub(super) figure: bool,
+    pub(super) printout: Option<Printout>,
 }
 
 impl Plan {
@@ -322,6 +356,11 @@ impl Plan {
         let (units, hall) = dice.units();
         let mut free = Self::slots(units);
         let doors = dice.doors(units, &mut free);
+        let printout = if dice.chance(35) {
+            dice.printout(&panels_of(units, &doors), &mut free)
+        } else {
+            None
+        };
         let mood = dice.mood();
         let pillars = if hall {
             dice.pillars(units)
@@ -352,6 +391,7 @@ impl Plan {
             thing,
             lever,
             figure: roomy && dice.chance(25),
+            printout,
         }
     }
 
@@ -376,6 +416,7 @@ impl Plan {
             thing: None,
             lever: None,
             figure: false,
+            printout: None,
         }
     }
 
@@ -450,40 +491,7 @@ impl Plan {
     // The stretches of wall around the doorways: a panel from each door to
     // the next along each side, and one over each door.
     pub(super) fn panels(&self) -> Vec<Panel> {
-        let mut panels = Vec::new();
-        for side in Side::ALL {
-            let length = if side.along_x() {
-                self.size().0
-            } else {
-                self.size().1
-            };
-            let mut doors: Vec<f32> = self
-                .doors
-                .iter()
-                .filter(|slot| slot.side == side)
-                .map(|slot| slot.along())
-                .collect();
-            doors.sort_by(f32::total_cmp);
-            let full = |from, to| Panel {
-                side,
-                from,
-                to,
-                top: HEIGHT,
-                bottom: 0.0,
-            };
-            let mut from = 0.0;
-            for middle in doors {
-                let (left, right) = (middle - DOOR_WIDTH * 0.5, middle + DOOR_WIDTH * 0.5);
-                panels.push(full(from, left));
-                panels.push(Panel {
-                    bottom: DOOR_HEIGHT,
-                    ..full(left, right)
-                });
-                from = right;
-            }
-            panels.push(full(from, length));
-        }
-        panels
+        panels_of(self.units, &self.doors)
     }
 
     // The pillars' faces.
@@ -510,8 +518,44 @@ impl Plan {
     }
 }
 
+// The stretches of wall around `doors` in a room of `units`: a panel from
+// each door to the next along each side, and one over each door.
+fn panels_of(units: (u32, u32), doors: &[Slot]) -> Vec<Panel> {
+    let mut panels = Vec::new();
+    for side in Side::ALL {
+        let length = if side.along_x() { units.0 } else { units.1 } as f32 * UNIT;
+        let mut middles: Vec<f32> = doors
+            .iter()
+            .filter(|slot| slot.side == side)
+            .map(|slot| slot.along())
+            .collect();
+        middles.sort_by(f32::total_cmp);
+        let full = |from, to| Panel {
+            side,
+            from,
+            to,
+            top: HEIGHT,
+            bottom: 0.0,
+        };
+        let mut from = 0.0;
+        for middle in middles {
+            let (left, right) = (middle - DOOR_WIDTH * 0.5, middle + DOOR_WIDTH * 0.5);
+            panels.push(full(from, left));
+            panels.push(Panel {
+                bottom: DOOR_HEIGHT,
+                ..full(left, right)
+            });
+            from = right;
+        }
+        panels.push(full(from, length));
+    }
+    panels
+}
+
 // How many things the entity can write.
 pub(super) const WORDS: u32 = 16;
+// How many source files it can print.
+pub(super) const PRINTS: u32 = 13;
 
 // A slot of `free` that `fits`, taken out of it.
 fn take(free: &mut Vec<Slot>, fits: impl Fn(&Slot) -> bool, dice: &mut Dice) -> Option<Slot> {

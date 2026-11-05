@@ -1827,7 +1827,8 @@ eye at the same pose with no doorways: the room's coordinates stay the same. The
 tab keys the scene by its room, so the eye walks on only after the renderer has
 placed the new scene. One `Shaded` shader colours the walls, floors and ceilings
 of every room. The entity's writing, a lever and the things in the rooms carry
-live content.
+live content. Some walls print the tab's own source files in a `LazyColumn`,
+which lays out only the lines on the wall.
 
 #### Point with a ray
 
