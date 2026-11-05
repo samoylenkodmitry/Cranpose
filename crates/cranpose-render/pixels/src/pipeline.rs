@@ -82,54 +82,6 @@ impl ContentStyle {
     }
 }
 
-pub(crate) struct RasterTraversalContext<'a> {
-    parent_transform: &'a ProjectiveTransform,
-    parent_content_style: &'a ContentStyle,
-    parent_visual_clip: Option<Rect>,
-    inherited_translated_snap_anchor: Option<Point>,
-    inherited_translated_content_context: bool,
-    diagnostics: &'a RenderDiagnostics,
-    /// The window's shadow light in device pixels, the space the raster
-    /// scene is drawn in.
-    light: ShadowLight,
-    /// Whether everything above is what the walk passed down to the layer's
-    /// old record in the frame before's scene.
-    pub(crate) same_as_before: bool,
-    /// The fonts and glyphs a surface's text is drawn with.
-    text: &'a TextRaster,
-    /// Whether the layer is the one whose surface the walk draws: it draws
-    /// its items straight into the surface, and its parent drew its shadow.
-    surface_root: bool,
-    /// Whether the walk lies in a scene's space, whose scene draws the
-    /// mesh surfaces and 3D transforms there, as its eye sees them.
-    in_space: bool,
-}
-
-impl<'a> RasterTraversalContext<'a> {
-    // What a window's root layer pushes under: `transform` maps the window
-    // to device pixels, with no style, clip or snap anchor above it.
-    fn root(
-        transform: &'a ProjectiveTransform,
-        (diagnostics, text): (&'a RenderDiagnostics, &'a TextRaster),
-        light: ShadowLight,
-        same_as_before: bool,
-    ) -> Self {
-        Self {
-            parent_transform: transform,
-            parent_content_style: &ContentStyle::PLAIN,
-            parent_visual_clip: None,
-            inherited_translated_snap_anchor: None,
-            inherited_translated_content_context: false,
-            diagnostics,
-            light,
-            same_as_before,
-            text,
-            surface_root: false,
-            in_space: false,
-        }
-    }
-}
-
 fn contains_text_primitives(nodes: &[RenderNode]) -> bool {
     nodes.iter().any(|child| {
         matches!(
@@ -350,6 +302,7 @@ mod draw_child;
 mod in_place;
 mod layer_children;
 mod layer_shadow;
+mod raster_traversal_context;
 mod reuse;
 mod space;
 
@@ -359,6 +312,7 @@ use draw_child::render_draw_child;
 pub(crate) use in_place::{InPlaceUpdate, UpdatedReach, WalkedTargets};
 use layer_children::{LayerChildren, Next, for_each_around_children};
 use layer_shadow::push_layer_shadow;
+pub(crate) use raster_traversal_context::RasterTraversalContext;
 pub(crate) use reuse::Reuse;
 use reuse::flush_copies;
 use space::seen_surfaces;
@@ -392,16 +346,31 @@ pub(crate) fn fill_raster_scene(
     populate_draws_from_graph(
         Subtree::Layer(&graph.root),
         scene,
-        &RasterTraversalContext::root(
+        &root_context(
             &ProjectiveTransform::uniform_scale(scale),
             (diagnostics, text),
             light,
-            previous.is_some_and(|old| old.start == scene.start),
+            (scene, previous),
         ),
         &mut reuse,
         None,
     );
     flush_copies(&mut reuse, scene);
+}
+
+// What the root layer of a window pushes under in `scene`, whose window
+// `transform` maps to device pixels: the same as before when `previous`,
+// the scene before, started from the same scale and light.
+fn root_context<'a>(
+    transform: &'a ProjectiveTransform,
+    (diagnostics, text): (&'a RenderDiagnostics, &'a TextRaster),
+    light: ShadowLight,
+    (scene, previous): (&RasterScene, Option<&RasterScene>),
+) -> RasterTraversalContext<'a> {
+    RasterTraversalContext {
+        same_as_before: previous.is_some_and(|old| old.start == scene.start),
+        ..RasterTraversalContext::root(transform, (diagnostics, text), light)
+    }
 }
 
 // Replaces what `scene` holds with the window `walk` walks, from its root
@@ -436,11 +405,11 @@ pub(crate) fn fill_raster_scene_from_layout(
         populate_draws_from_graph(
             Subtree::Layer(root),
             scene,
-            &RasterTraversalContext::root(
+            &root_context(
                 &ProjectiveTransform::uniform_scale(scale),
                 (diagnostics, text),
                 light,
-                previous.is_some_and(|old| old.start == scene.start),
+                (scene, previous),
             ),
             &mut reuse,
             slot,
