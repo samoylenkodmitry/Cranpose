@@ -239,3 +239,107 @@ fn rows_that_rest_between_moves_draw_right_with_ample_memory() {
 fn rows_that_rest_between_moves_draw_right_with_little_memory() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Tight, RestingRows);
 }
+
+// Rows of nested boxes below a box that grows two steps in three, as the
+// rows of a list move while it scrolls, each row ending in a box whose
+// colour changes each step, and the first row's own colour changing every
+// fourth step. The rows and the boxes on the way to each changing box did
+// not change themselves: their moves push the layers kept for them while
+// they last, and lower them again when their own colour changed.
+#[composable]
+fn LiveRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().offset(4.0, 4.0),
+        ColumnSpec::default(),
+        move || {
+            let n = step.value();
+            Box(
+                Modifier::empty().width(20.0).height((n - n / 3) as f32),
+                BoxSpec::default(),
+                || {},
+            );
+            for row in 0..3 {
+                LiveRow(row, step);
+            }
+        },
+    );
+}
+
+#[composable]
+fn LiveRow(row: u32, step: cranpose_core::MutableState<u32>) {
+    let own = if row == 0 { step.value() / 4 } else { 0 };
+    Box(
+        Modifier::empty()
+            .width(120.0)
+            .height(24.0)
+            .background(color(own + row, 13))
+            .padding(3.0),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(100.0)
+                    .height(18.0)
+                    .background(color(row, 14))
+                    .padding(2.0),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .width(10.0 + (step.value() * 7 + row * 11) as f32 % 80.0)
+                            .height(14.0)
+                            .background(color(step.value() + row, 15)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+}
+
+// A box whose alpha changes each step over rows like `LiveRows`'s, which
+// stay where they are: the rows pass the new alpha down from the layers
+// kept for them.
+#[composable]
+fn FadingLiveRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty()
+            .offset(6.0, 6.0)
+            .graphics_layer(move || GraphicsLayer {
+                alpha: 0.3 + (step.value() % 7) as f32 * 0.1,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        ColumnSpec::default(),
+        move || {
+            for row in 0..3 {
+                LiveRow(row, step);
+            }
+        },
+    );
+}
+
+#[test]
+fn rows_that_move_and_hold_changing_boxes_draw_right_with_ample_memory() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, LiveRows);
+}
+
+#[test]
+fn rows_that_move_and_hold_changing_boxes_draw_right_with_little_memory() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Tight, LiveRows);
+}
+
+#[test]
+fn rows_under_a_changing_alpha_draw_right_with_ample_memory() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, FadingLiveRows);
+}
+
+#[test]
+fn rows_under_a_changing_alpha_draw_right_with_little_memory() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Tight, FadingLiveRows);
+}
