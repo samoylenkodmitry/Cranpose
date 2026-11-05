@@ -89,20 +89,36 @@ pub(crate) fn lay_out(
 pub(crate) fn lay_out_with(
     resolver: &FontFamilyResolver,
     text: &str,
-    (paragraph, lengths): (&ParagraphStyle, ParagraphLengths),
+    style: (&ParagraphStyle, ParagraphLengths),
     width: f32,
     options: TextLayoutOptions,
 ) -> TextLayout {
+    let min_width = if width.is_finite() { width } else { 0.0 };
+    lay_out_between(resolver, (text, 16.0), style, (min_width, width), options)
+}
+
+// Lays `text` out in one span of the default family at 400 and `size`, with
+// `paragraph`, `lengths` and `options`, from `min_width` up to `max_width`.
+pub(crate) fn lay_out_between(
+    resolver: &FontFamilyResolver,
+    (text, size): (&str, f32),
+    (paragraph, lengths): (&ParagraphStyle, ParagraphLengths),
+    (min_width, max_width): (f32, f32),
+    options: TextLayoutOptions,
+) -> TextLayout {
     let family = FontFamily::Default;
-    let spans = [span(0..text.len(), &family, 400)];
+    let spans = [ShapingSpan {
+        size,
+        ..span(0..text.len(), &family, 400)
+    }];
     TextLayouter::default().layout(
         &LayoutInput {
             text,
             spans: &spans,
             paragraph,
             lengths,
-            min_width: if width.is_finite() { width } else { 0.0 },
-            max_width: width,
+            min_width,
+            max_width,
             options,
         },
         resolver,

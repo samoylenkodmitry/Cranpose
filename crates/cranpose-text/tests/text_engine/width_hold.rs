@@ -3,7 +3,7 @@ use cranpose_text::{
     TextLayoutOptions, TextOverflow,
 };
 
-use crate::fonts::{ROBOTO, lay_out_with, typeface};
+use crate::fonts::{ROBOTO, lay_out_between, lay_out_with, typeface};
 
 const TEXT: &str = "The quick brown fox jumps over the lazy dog and runs into the woods";
 
@@ -322,5 +322,105 @@ fn lines_past_the_max_lines_hold_no_width() {
                 "from {from}: no shown line moves at {first_not}"
             );
         }
+    }
+}
+
+const CARD: &str = "Ea elit veniam et laboris enim ut ipsum";
+
+// Lays `CARD` out at `size` from no min width up to `width`, as a parent
+// that lets text take its own width does.
+fn lay_out_card(
+    resolver: &FontFamilyResolver,
+    size: f32,
+    lengths: ParagraphLengths,
+    width: f32,
+    options: TextLayoutOptions,
+) -> TextLayout {
+    let style = paragraph(TextAlign::Start, LineBreak::Simple);
+    lay_out_between(
+        resolver,
+        (CARD, size),
+        (&style, lengths),
+        (0.0, width),
+        options,
+    )
+}
+
+// Calls `each` with every size from 2 px up to 4 px in steps of `step`
+// hundredths of a pixel and every width from 15 px up to 30 px past the
+// first indent in steps of a third of a pixel, without and with indents, at
+// density 3.
+fn for_card_layouts(step: usize, mut each: impl FnMut(f32, ParagraphLengths, f32)) {
+    for lengths in [ParagraphLengths::default(), lengths(12.5, 4.0)] {
+        let lengths = ParagraphLengths {
+            grid: 3.0,
+            ..lengths
+        };
+        for hundredth in (200..=400).step_by(step) {
+            for third in 45..=90 {
+                let width = third as f32 / 3.0 + lengths.first_line_indent;
+                each(hundredth as f32 / 100.0, lengths, width);
+            }
+        }
+    }
+}
+
+// A wrapped text laid out again at its own width breaks into the same lines,
+// so its layout stands for that width, as a parent that measures it there
+// asks of it, at any density. The widest line of a layout can end a hair
+// under its own width, closer than any margin taken around the ends of its
+// hold.
+#[test]
+fn a_wrapped_text_holds_at_its_own_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let options = TextLayoutOptions::default();
+    let mut missed = Vec::new();
+    for_card_layouts(5, |size, lengths, width| {
+        let mut laid = lay_out_card(&resolver, size, lengths, width, options);
+        let own = laid.width();
+        if laid.line_count() < 2 {
+            return;
+        }
+        if !laid.holds(0.0, own) {
+            missed.push((size, width, own));
+            return;
+        }
+        laid.align(0.0, own, TextAlign::Start);
+        let fresh = lay_out_card(&resolver, size, lengths, own, options);
+        assert_eq!(picture(&laid), picture(&fresh), "{size} at {own}");
+    });
+    assert!(missed.is_empty(), "no hold at their own width: {missed:?}");
+}
+
+// The max widths a layout keeps end exactly where a fresh layout changes: a
+// fresh layout at either end shows what it shows, and one a float past
+// either end does not. A margin around them would lay the text out again at
+// widths where nothing changes.
+#[test]
+fn the_max_widths_a_layout_keeps_end_where_a_fresh_layout_changes() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    for options in [
+        TextLayoutOptions::default(),
+        TextLayoutOptions {
+            overflow: TextOverflow::Ellipsis,
+            max_lines: 2,
+            ..TextLayoutOptions::default()
+        },
+    ] {
+        for_card_layouts(20, |size, lengths, width| {
+            let laid = lay_out_card(&resolver, size, lengths, width, options);
+            let (low, high) = laid.max_widths_kept(0.0);
+            // A layout that keeps no width but its own has no ends to test.
+            if laid.line_count() < 2 || high <= low {
+                return;
+            }
+            let shown = picture(&laid);
+            let at = |width: f32| picture(&lay_out_card(&resolver, size, lengths, width, options));
+            let case = || format!("{size} px at {width} with {options:?}: {low}..{high}");
+            assert_eq!(at(low), shown, "{}", case());
+            assert_eq!(at(high), shown, "{}", case());
+            assert_ne!(at(low.next_down()), shown, "{}", case());
+            assert_ne!(at(high.next_up()), shown, "{}", case());
+        });
     }
 }

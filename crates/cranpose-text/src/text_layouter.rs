@@ -14,12 +14,13 @@ use crate::{
     layout_body::LayoutBody,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
+    least_leaving::least_leaving,
     line_box::{LastLineBox, LineBoxInputs},
     line_breaker::{
         BreakKind, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
         break_lines, hard_break, has_hard_break, starts_paragraph, visible_end,
     },
-    line_hold::{fitting_hold, wrapped_hold},
+    line_hold::{end_ellipsis_hold, fitting_hold, wrapped_hold},
     line_runs::{line_extent, place_runs},
     line_text::{LineDepth, LineEdges, LineText, before_hard_break, indent},
     paragraph::{LineBreak, ResolvedTextDirection},
@@ -209,10 +210,10 @@ impl TextLayouter {
         if let Some(piece) =
             lone.take_if(|piece| fits.is_some() && piece.width <= width - lengths.first_line_indent)
         {
-            let line = piece.width + lengths.first_line_indent;
-            let mut hold = fitting_hold(&options, line);
+            let least = least_leaving(piece.width, lengths.first_line_indent);
+            let mut hold = fitting_hold(&options, least);
             if ellipsis_at(&options).is_some() {
-                hold.narrow(line, f32::INFINITY);
+                hold.narrow(least, f32::INFINITY);
             }
             layout.hold = Some(hold);
             self.lay_out_one_line(input, &options, resolver, piece, width, layout);
@@ -240,10 +241,8 @@ impl TextLayouter {
     ) {
         let text = input.text;
         if let Some(line) = fits {
-            layout.hold = Some(fitting_hold(
-                options,
-                line + input.lengths.first_line_indent,
-            ));
+            let least = least_leaving(line, input.lengths.first_line_indent);
+            layout.hold = Some(fitting_hold(options, least));
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
         } else {
@@ -746,12 +745,13 @@ impl TextLayouter {
         let overflows = visible_width > line.room;
         let ellipsis = ellipsis_at(options).filter(|_| last);
         let shown = ellipsis.filter(|_| overflows || (last && layout.did_overflow_height));
-        if let Some(hold) = &mut layout.hold {
-            if ellipsis.is_some() && shown.is_none() {
-                hold.narrow(visible_width + line.indent, f32::INFINITY);
-            }
-            if shown.is_some() && overflows {
-                hold.narrow(f32::NEG_INFINITY, visible_width + line.indent);
+        if let Some(hold) = layout.hold.as_mut().filter(|_| ellipsis.is_some()) {
+            // The line keeps or loses its ellipsis where its text fits.
+            let fitting = least_leaving(visible_width, line.indent);
+            if shown.is_none() {
+                hold.narrow(fitting, f32::INFINITY);
+            } else if overflows {
+                hold.narrow(f32::NEG_INFINITY, fitting);
             }
         }
         let ellipsized = match shown {
@@ -798,21 +798,9 @@ impl TextLayouter {
                     .widths
                     .last_fitting(range.start, visible, room);
                 if let Some(hold) = &mut layout.hold {
-                    // The cut stays while its text fits and one more cluster
-                    // does not.
-                    let edge = line.indent + ellipsis.width;
-                    let min = if cut > range.start {
-                        self.measures.widths.width(range.start, cut) + edge
-                    } else {
-                        f32::NEG_INFINITY
-                    };
-                    let max = match self.measures.widths.next_boundary(cut) {
-                        Some(next) if cut < visible => {
-                            self.measures.widths.width(range.start, next) + edge
-                        }
-                        _ => f32::INFINITY,
-                    };
-                    hold.narrow(min, max);
+                    let kept =
+                        end_ellipsis_hold(&self.measures.widths, text, line, cut, ellipsis.width);
+                    hold.narrow(kept.min, kept.max);
                 }
                 (visible_end(text, range.start, cut), range.end)
             }

@@ -247,7 +247,8 @@ impl Wrapping<'_> {
 
     // The limits from `.0` up to but not including `.1` at which greedy
     // breaking through `breaks` ends `line` where it does: it still fits,
-    // and no later place the breaking would end it at fits.
+    // and no later place the breaking would end it at fits. A line that does
+    // not fit is the one cluster the breaking takes at any narrower limit.
     pub(crate) fn greedy_limits(
         &self,
         line: &BrokenLine,
@@ -260,7 +261,7 @@ impl Wrapping<'_> {
             .filter(|opportunity| opportunity.offset == end)
             .map(|opportunity| opportunity.kind);
         let later = breaks.get(at + 1..).unwrap_or_default();
-        match (line.end, ended_at) {
+        let (fits, next) = match (line.end, ended_at) {
             (LineEnd::Hyphen, Some(BreakKind::Hyphen { width, .. })) => (
                 self.widths.width(start, end) + width,
                 self.next_word_fits(start, later),
@@ -277,29 +278,31 @@ impl Wrapping<'_> {
             (LineEnd::Plain, Some(BreakKind::Hard)) => (self.line_width(start, end), f32::INFINITY),
             _ if end == self.text.len() => (self.line_width(start, end), f32::INFINITY),
             _ => self.cut_limits(line.text.clone(), breaks),
-        }
+        };
+        let fits = if fits <= self.limit(start) {
+            fits
+        } else {
+            f32::NEG_INFINITY
+        };
+        (fits, next)
     }
 
     // The limits of a line that cuts a word between clusters: the cut moves
     // once one more cluster fits, or a hyphenation point of the word does.
+    // A cluster fits a limit as `ClusterWidths::last_fitting` compares them.
     fn cut_limits(
         &self,
         Range { start, end }: Range<usize>,
         breaks: &[BreakOpportunity],
     ) -> (f32, f32) {
-        let width = self.widths.width(start, end);
-        let fits = if width <= self.limit(start) {
-            width
-        } else {
-            f32::NEG_INFINITY
-        };
+        let fitting = |offset| self.widths.least_room(start, offset);
         let first = breaks.partition_point(|opportunity| opportunity.offset <= start);
         let cluster = self
             .widths
             .next_boundary(end)
-            .map_or(f32::INFINITY, |next| self.widths.width(start, next));
+            .map_or(f32::INFINITY, fitting);
         (
-            fits,
+            fitting(end),
             cluster.min(self.next_word_fits(start, &breaks[first..])),
         )
     }
