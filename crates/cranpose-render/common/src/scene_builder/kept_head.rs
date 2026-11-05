@@ -6,8 +6,8 @@
 use cranpose_core::{MemoryApplier, NodeId};
 
 use super::{
-    Inherited, Level, LowerContext, children_context, publish_layer_window_geometry,
-    read_placed_node_data, recycle_lowered, translate_retained_child,
+    Inherited, Level, LowerContext, publish_layer_window_geometry, read_placed_node_data,
+    recycle_lowered, translate_retained_child,
 };
 use crate::graph::RenderNode;
 
@@ -70,7 +70,7 @@ impl KeptHead {
                     data.layout_state.size(),
                 );
             }
-            let inner = children_context(&data.modifier_slices, &data.layout_state, context);
+            let inner = context.beneath_layer(layer);
             Some(visit(layer_node, data.children, &inner))
         })?
     }

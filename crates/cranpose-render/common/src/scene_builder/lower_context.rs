@@ -3,6 +3,7 @@
 use cranpose_ui::{ModifierNodeSlices, Point};
 
 use super::{AbsOrigin, RecordingStore, TranslateAncestorContext, TranslateGeometry};
+use crate::graph::LayerNode;
 
 /// What a layout node lowers with from the nodes above it: where its
 /// parent lies in the window and places its content, the motion and
@@ -39,6 +40,23 @@ impl LowerContext {
             parent_abs: Some(ancestors.parent_abs),
             parent_content_offset: ancestors.parent_content_offset,
             store: RecordingStore::Command,
+        }
+    }
+
+    // What the children of `layer`, the layer a node lowered under this
+    // context and placed since where it now lies, lower with: what
+    // `for_children` gives for the node, read from its layer.
+    pub(super) fn beneath_layer(&self, layer: &LayerNode) -> Self {
+        Self {
+            inherited_motion_context_animated: layer.motion_context_animated,
+            inherited_translated_content_context: self.inherited_translated_content_context
+                || layer.translated_content_context,
+            parent_abs: self
+                .parent_abs
+                .as_ref()
+                .map(|parent_abs| parent_abs.children_of(layer)),
+            parent_content_offset: layer.content_offset,
+            store: self.store,
         }
     }
 
