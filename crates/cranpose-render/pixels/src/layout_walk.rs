@@ -324,23 +324,26 @@ impl<'a> LayoutWalk<'a> {
     // `push_lowered` to push its subtree after the walk lowered every node it
     // pushes again: lowering and recording, and pushing items and comparing
     // them, then each run for all the nodes, whose code a frame would
-    // otherwise evict from the cache for every node. Returns its layer and,
-    // when it has children, what they lower with. `None` for a node gone,
-    // and for one whose layer holds a 3D space, which `push` lowers.
+    // otherwise evict from the cache for every node. Puts its layer into
+    // `layer` and, when it has children, what they lower with into `inner`.
+    // Leaves both empty for a node gone, and for one whose layer holds a 3D
+    // space, which `push` lowers.
     pub(crate) fn lower(
         &self,
         (node, place): (NodeId, NodePlace),
         lower_context: &LowerContext,
-    ) -> Option<(RenderNode, Option<LowerContext>)> {
+        (layer, inner): (&mut Option<RenderNode>, &mut Option<LowerContext>),
+    ) {
         lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             if holds_space(&lowered.node) || Subtree::of_child(&lowered.node).is_none() {
                 recycle_lowered(lowered.node);
-                return None;
+                return;
             }
-            let inner = (!lowered.children.is_empty()).then(|| *lowered.child_context);
-            Some((lowered.node, inner))
-        })
-        .flatten()
+            if !lowered.children.is_empty() {
+                *inner = Some(*lowered.child_context);
+            }
+            *layer = Some(lowered.node);
+        });
     }
 
     // Pushes under `context` the subtree of `node`, whose `layer` `lower`

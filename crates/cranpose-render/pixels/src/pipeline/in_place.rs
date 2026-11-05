@@ -44,22 +44,16 @@ struct Repush<'a> {
 }
 
 // A node whose subtree an update pushes again: where it lies in the layout
-// tree and in the scene, and its layer.
+// tree and in the scene, what it lowers with, and once the update lowered
+// it, its layer and what its children lower with when it has children.
 pub(crate) struct PushTarget {
     node: NodeId,
     place: NodePlace,
+    context: LowerContext,
     record: usize,
     parent: Option<usize>,
-    layer: TargetLayer,
-}
-
-// The layer of a push target.
-enum TargetLayer {
-    // Not lowered yet, or lowered to nothing `push_lowered` pushes, which
-    // `push` lowers again: what it lowers with.
-    Unlowered(LowerContext),
-    // Lowered, with what its children lower with when it has children.
-    Lowered(RenderNode, Option<LowerContext>),
+    layer: Option<RenderNode>,
+    inner: Option<LowerContext>,
 }
 
 // Why a walk to a layer stopped.
@@ -218,9 +212,11 @@ impl Repush<'_> {
         self.targets.push(PushTarget {
             node,
             place,
+            context: *context,
             record,
             parent,
-            layer: TargetLayer::Unlowered(*context),
+            layer: None,
+            inner: None,
         });
     }
 
@@ -231,14 +227,11 @@ impl Repush<'_> {
     fn push_targets(&mut self, walk: &LayoutWalk<'_>) -> Result<(), Stop> {
         let mut targets = std::mem::take(self.targets);
         for target in &mut targets {
-            if let TargetLayer::Unlowered(context) = &target.layer
-                && let Some((layer, inner)) = walk.lower((target.node, target.place), context)
-            {
-                target.layer = TargetLayer::Lowered(layer, inner);
-            }
+            let lowered = (&mut target.layer, &mut target.inner);
+            walk.lower((target.node, target.place), &target.context, lowered);
         }
         let pushed = targets
-            .drain(..)
+            .iter_mut()
             .rev()
             .try_for_each(|target| self.push_node_again(walk, target));
         *self.targets = targets;
@@ -248,27 +241,29 @@ impl Repush<'_> {
     // Pushes the subtree of `target` over its old one, keeping the subtrees
     // of its children that did not change, from what its parent passed down
     // in the scene, and adds the areas it changes.
-    fn push_node_again(&mut self, walk: &LayoutWalk<'_>, target: PushTarget) -> Result<(), Stop> {
-        let PushTarget {
-            node,
-            place,
-            record,
-            parent,
-            layer,
-        } = target;
-        let old = OldChildren::of(&self.scene.subtrees, record, node);
-        self.rewrite_subtree((record, parent), |scene, context| match layer {
-            TargetLayer::Lowered(layer, inner) => {
-                walk.push_lowered(node, (layer, inner.as_ref()), (scene, context), Some(old));
-            }
-            TargetLayer::Unlowered(lower_context) => walk.push(
-                (node, place),
-                &lower_context,
-                (scene, context),
-                &mut None,
-                Some(old),
-            ),
-        })
+    fn push_node_again(
+        &mut self,
+        walk: &LayoutWalk<'_>,
+        target: &mut PushTarget,
+    ) -> Result<(), Stop> {
+        let (node, place) = (target.node, target.place);
+        let old = OldChildren::of(&self.scene.subtrees, target.record, node);
+        self.rewrite_subtree(
+            (target.record, target.parent),
+            |scene, context| match target.layer.take() {
+                Some(layer) => {
+                    let lowered = (layer, target.inner.as_ref());
+                    walk.push_lowered(node, lowered, (scene, context), Some(old));
+                }
+                None => walk.push(
+                    (node, place),
+                    &target.context,
+                    (scene, context),
+                    &mut None,
+                    Some(old),
+                ),
+            },
+        )
     }
 
     // Pushes a subtree with `push` over its old subtree, whose record is
