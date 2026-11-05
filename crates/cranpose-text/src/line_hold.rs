@@ -6,19 +6,18 @@ use crate::{
     ellipsis_at::ellipsis_at,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
-    least_leaving::least_leaving,
     line_breaker::{BreakOpportunity, BrokenLine, Wrapping, visible_end},
-    line_text::{LineText, indent},
+    line_text::LineText,
     paragraph::LineBreak,
     text_layout::WidthRange,
 };
 
-// The hold of a text that fits on one line from the `least` width up: any
-// width that keeps it on one line, when it wraps.
-pub(crate) fn fitting_hold(options: &TextLayoutOptions, least: f32) -> WidthRange {
+// The hold of a text that fits on one line `line` wide with its indent:
+// any width that keeps it on one line, when it wraps.
+pub(crate) fn fitting_hold(options: &TextLayoutOptions, line: f32) -> WidthRange {
     WidthRange {
         min: if options.soft_wrap {
-            least
+            line
         } else {
             f32::NEG_INFINITY
         },
@@ -27,8 +26,8 @@ pub(crate) fn fitting_hold(options: &TextLayoutOptions, least: f32) -> WidthRang
 }
 
 // The hold of a text broken into `lines` at `breaks`: every width when
-// lines do not wrap, for greedy breaking the limits each line that shows
-// keeps its end over moved by its indent, and none for even breaking, whose
+// lines do not wrap, for greedy breaking the wrap widths at which each line
+// that shows keeps its end, and none for even breaking, whose
 // lines can move with any width. No line past `max_lines` shows, and with
 // an ellipsis the last that shows takes the rest of its paragraph and holds
 // by its ellipsis.
@@ -58,34 +57,25 @@ pub(crate) fn wrapped_hold(
     let mut hold = WidthRange::ALL;
     for line in &lines[..shown] {
         let (min, max) = wrapping.greedy_limits(line, breaks);
-        let indent = indent(input, line.text.start);
-        hold.narrow(least_leaving(min, indent), least_leaving(max, indent));
+        hold.narrow(min, max);
     }
     Some(hold)
 }
 
-// The widths at which an end ellipsis `ellipsis` wide follows the same text
-// of `line`, cut at `cut`: from the width at which the text it shows fits,
-// up to the width at which one more cluster that shows fits, since the
-// spaces the cut passes before it show nothing. The room the line leaves
-// next to the ellipsis is none at least, and a cluster fits that room as
-// `ClusterWidths::last_fitting` compares them.
+// The widths at which an end ellipsis follows the same text of `line`, cut
+// at `cut`: from the width at which the text it shows fits with `edge`, the
+// ellipsis and the line's indent, up to the width at which one more cluster
+// that shows fits, since the spaces the cut passes show nothing. A line that
+// shows no text before its ellipsis shows none at any narrower width.
 pub(crate) fn end_ellipsis_hold(
     widths: &ClusterWidths,
     text: &str,
     line: &LineText,
     cut: usize,
-    ellipsis: f32,
+    edge: f32,
 ) -> WidthRange {
     let start = line.range.start;
-    let fitting = |offset| {
-        let room = widths.least_room(start, offset);
-        if room > 0.0 {
-            least_leaving(least_leaving(room, ellipsis), line.indent)
-        } else {
-            f32::NEG_INFINITY
-        }
-    };
+    let fitting = |offset| widths.width(start, offset) + edge;
     let shown = visible_end(text, start, cut);
     let mut passed = cut;
     let max = loop {
@@ -99,7 +89,11 @@ pub(crate) fn end_ellipsis_hold(
         }
     };
     WidthRange {
-        min: fitting(shown),
+        min: if shown > start {
+            fitting(shown)
+        } else {
+            f32::NEG_INFINITY
+        },
         max,
     }
 }

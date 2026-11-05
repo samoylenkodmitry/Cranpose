@@ -7,7 +7,7 @@ use icu_segmenter::{
 
 use crate::{
     ascii_breaks::ascii_breaks, break_leads::find_break_lead, cluster_widths::ClusterWidths,
-    paragraph::LineBreak,
+    line_text::paragraph_indent, paragraph::LineBreak,
 };
 
 // A place a line may end: the byte offset where the next line starts, and
@@ -129,12 +129,14 @@ impl LineBreaker {
     }
 }
 
-// The widths lines of a paragraph wrap at: the first line's, and the
-// others', which indents make narrower.
+// The width the lines of a paragraph wrap at, and the indents of its first
+// line and of the others. A line fits when its width plus its indent is at
+// most the width, so a hold ends exactly at that sum.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WrapWidths {
-    pub(crate) first: f32,
-    pub(crate) rest: f32,
+    pub(crate) width: f32,
+    pub(crate) first_indent: f32,
+    pub(crate) rest_indent: f32,
 }
 
 // A text to break into lines: its text, the widths of its clusters, and the
@@ -147,19 +149,25 @@ pub(crate) struct Wrapping<'a> {
 }
 
 impl Wrapping<'_> {
-    // The width a line starting at `start` wraps at.
-    fn limit(&self, start: usize) -> f32 {
-        if starts_paragraph(self.text, start) {
-            self.wrap.first
-        } else {
-            self.wrap.rest
-        }
+    // The indent of a line starting at `start`.
+    fn indent(&self, start: usize) -> f32 {
+        paragraph_indent(
+            self.text,
+            start,
+            self.wrap.first_indent,
+            self.wrap.rest_indent,
+        )
     }
 
-    // The width a line starting at `start` wraps at, and the width of the
-    // text before it.
+    // The width a line starting at `start` takes past its indent.
+    fn limit(&self, start: usize) -> f32 {
+        self.wrap.width - self.indent(start)
+    }
+
+    // The indent of a line starting at `start`, and the width of the text
+    // before it.
     fn line_start(&self, start: usize) -> (f32, f32) {
-        (self.limit(start), self.widths.before(start))
+        (self.indent(start), self.widths.before(start))
     }
 
     // The width of the line from `start` to `end` without its trailing
@@ -181,16 +189,16 @@ impl Wrapping<'_> {
     ) -> usize {
         let mut fit = None;
         let mut index = 0;
-        // The width the line wraps at and the width of the text before it.
-        let (mut limit, mut before) = self.line_start(start);
+        // The line's indent and the width of the text before it.
+        let (mut indent, mut before) = self.line_start(start);
         while let Some(&opportunity) = breaks.get(index) {
             let visible = visible_end(self.text, start, opportunity.offset);
-            if self.widths.before(visible) - before <= limit {
+            if self.widths.before(visible) - before + indent <= self.wrap.width {
                 match opportunity.kind {
                     BreakKind::Hard => {
                         lines.push(BrokenLine::plain(start..opportunity.offset));
                         start = opportunity.offset;
-                        (limit, before) = self.line_start(start);
+                        (indent, before) = self.line_start(start);
                         fit = None;
                     }
                     BreakKind::Soft => fit = Some(opportunity.offset),
@@ -200,25 +208,26 @@ impl Wrapping<'_> {
             } else {
                 let ended = match fit.take() {
                     Some(end) => BrokenLine::plain(start..end),
-                    None => self.cut_word(start, &breaks[..index], opportunity.offset, limit),
+                    None => self.cut_word(start, &breaks[..index], opportunity.offset, indent),
                 };
                 start = ended.text.end;
-                (limit, before) = self.line_start(start);
+                (indent, before) = self.line_start(start);
                 lines.push(ended);
             }
         }
         start
     }
 
-    // The line from `start`, inside a word that does not fit `width` before
-    // `end`: up to the last hyphenation point in `passed` that fits with its
-    // hyphen, else up to the last cluster that fits, one cluster at least.
+    // The line from `start`, `indent` in, inside a word that does not fit
+    // before `end`: up to the last hyphenation point in `passed` that fits
+    // with its hyphen, else up to the last cluster that fits, one cluster at
+    // least.
     fn cut_word(
         &self,
         start: usize,
         passed: &[BreakOpportunity],
         end: usize,
-        width: f32,
+        indent: f32,
     ) -> BrokenLine {
         let hyphen = passed
             .iter()
@@ -226,7 +235,8 @@ impl Wrapping<'_> {
             .take_while(|opportunity| opportunity.offset > start)
             .find(|opportunity| match opportunity.kind {
                 BreakKind::Hyphen { width: hyphen, .. } => {
-                    self.widths.width(start, opportunity.offset) + hyphen <= width
+                    self.widths.width(start, opportunity.offset) + hyphen + indent
+                        <= self.wrap.width
                 }
                 BreakKind::Soft | BreakKind::Hard => false,
             });
@@ -236,7 +246,9 @@ impl Wrapping<'_> {
                 end: LineEnd::Hyphen,
             };
         }
-        let cut = self.widths.last_fitting(start, end, width);
+        let cut = self
+            .widths
+            .last_fitting(start, end, indent, self.wrap.width);
         let cut = if cut > start {
             cut
         } else {
@@ -245,10 +257,11 @@ impl Wrapping<'_> {
         BrokenLine::plain(start..cut)
     }
 
-    // The limits from `.0` up to but not including `.1` at which greedy
+    // The wrap widths from `.0` up to but not including `.1` at which greedy
     // breaking through `breaks` ends `line` where it does: it still fits,
-    // and no later place the breaking would end it at fits. A line that does
-    // not fit is the one cluster the breaking takes at any narrower limit.
+    // and no later place the breaking would end it at fits. Each is the sum
+    // a fit compares with the width. A line that does not fit is the one
+    // cluster the breaking takes at any narrower width.
     pub(crate) fn greedy_limits(
         &self,
         line: &BrokenLine,
@@ -279,23 +292,24 @@ impl Wrapping<'_> {
             _ if end == self.text.len() => (self.line_width(start, end), f32::INFINITY),
             _ => self.cut_limits(line.text.clone(), breaks),
         };
-        let fits = if fits <= self.limit(start) {
+        let indent = self.indent(start);
+        let fits = fits + indent;
+        let fits = if fits <= self.wrap.width {
             fits
         } else {
             f32::NEG_INFINITY
         };
-        (fits, next)
+        (fits, next + indent)
     }
 
     // The limits of a line that cuts a word between clusters: the cut moves
     // once one more cluster fits, or a hyphenation point of the word does.
-    // A cluster fits a limit as `ClusterWidths::last_fitting` compares them.
     fn cut_limits(
         &self,
         Range { start, end }: Range<usize>,
         breaks: &[BreakOpportunity],
     ) -> (f32, f32) {
-        let fitting = |offset| self.widths.least_room(start, offset);
+        let fitting = |offset| self.widths.width(start, offset);
         let first = breaks.partition_point(|opportunity| opportunity.offset <= start);
         let cluster = self
             .widths

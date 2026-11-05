@@ -14,7 +14,6 @@ use crate::{
     layout_body::LayoutBody,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
-    least_leaving::least_leaving,
     line_box::{LastLineBox, LineBoxInputs},
     line_breaker::{
         BreakKind, BrokenLine, LineBalancer, LineBreaker, LineEnd, WrapWidths, Wrapping,
@@ -192,28 +191,28 @@ impl TextLayouter {
         layout.content_width = whole::ceil(widest * lengths.grid) / lengths.grid;
         layout.follows_max = options.soft_wrap || options.overflow.is_ellipsis();
         let width = layout.wrap_width(input.min_width, input.max_width);
-        let wrap = if options.soft_wrap {
-            WrapWidths {
-                first: width - lengths.first_line_indent,
-                rest: width - lengths.rest_line_indent,
-            }
-        } else {
-            WrapWidths {
-                first: f32::INFINITY,
-                rest: f32::INFINITY,
-            }
+        let wrap = WrapWidths {
+            width: if options.soft_wrap {
+                width
+            } else {
+                f32::INFINITY
+            },
+            first_indent: lengths.first_line_indent,
+            rest_indent: lengths.rest_line_indent,
         };
-        // Most text is one line that fits; it needs no break opportunities.
-        let fits = unbroken.filter(|&line| line <= wrap.first);
+        // Most text is one line that fits, its width with its indent; it
+        // needs no break opportunities.
+        let fits = unbroken
+            .map(|line| line + wrap.first_indent)
+            .filter(|&line| line <= wrap.width);
         // A lone item that fits with no ellipsis is the line, and needs no
         // cluster widths.
-        if let Some(piece) =
-            lone.take_if(|piece| fits.is_some() && piece.width <= width - lengths.first_line_indent)
+        if let Some(line) = fits.filter(|&line| line <= width)
+            && let Some(piece) = lone.take()
         {
-            let least = least_leaving(piece.width, lengths.first_line_indent);
-            let mut hold = fitting_hold(&options, least);
+            let mut hold = fitting_hold(&options, line);
             if ellipsis_at(&options).is_some() {
-                hold.narrow(least, f32::INFINITY);
+                hold.narrow(line, f32::INFINITY);
             }
             layout.hold = Some(hold);
             self.lay_out_one_line(input, &options, resolver, piece, width, layout);
@@ -227,7 +226,8 @@ impl TextLayouter {
     }
 
     // Breaks the text `fill` measured into lines of `width`, the one line it
-    // `fits` on when it does, and lays them out. Out of line: most text is
+    // `fits` on, that wide with its indent, when it does, and lays them out.
+    // Out of line: most text is
     // one line that `fill` lays out itself, and a frame that lays out only
     // such text runs none of this.
     #[inline(never)]
@@ -241,8 +241,7 @@ impl TextLayouter {
     ) {
         let text = input.text;
         if let Some(line) = fits {
-            let least = least_leaving(line, input.lengths.first_line_indent);
-            layout.hold = Some(fitting_hold(options, least));
+            layout.hold = Some(fitting_hold(options, line));
             self.lines.clear();
             self.lines.push(BrokenLine::plain(0..text.len()));
         } else {
@@ -440,12 +439,13 @@ impl TextLayouter {
         wrap: WrapWidths,
         layout: &mut LayoutBody,
     ) -> bool {
-        if !wrap.first.is_finite() {
+        if !wrap.width.is_finite() {
             return false;
         }
+        let first = wrap.width - wrap.first_indent;
         let wider_than = match input.paragraph.line_break {
             LineBreak::Paragraph | LineBreak::Heading => f32::NEG_INFINITY,
-            LineBreak::Simple | LineBreak::Unspecified => wrap.first.min(wrap.rest),
+            LineBreak::Simple | LineBreak::Unspecified => first.min(wrap.width - wrap.rest_indent),
         };
         // Android's penalty for a hyphen in even breaking: half the font size
         // times the line width, a quarter of it in justified text.
@@ -454,7 +454,7 @@ impl TextLayouter {
         } else {
             1.0
         };
-        let penalty_per_size = 0.5 * wrap.first * justified;
+        let penalty_per_size = 0.5 * first * justified;
         self.hyphenated.clear();
         let mut word_start = 0;
         for index in 0..self.measures.breaks.len() {
@@ -602,7 +602,7 @@ impl TextLayouter {
                 visible: visible_end(input.text, range.start, range.end),
                 drawn: before_hard_break(input.text, range.start, range.end),
                 indent,
-                room: width - indent,
+                width,
                 range,
             };
             let ellipsized = self.collect_line(input, options, resolver, (index, &line), layout);
@@ -662,7 +662,7 @@ impl TextLayouter {
             visible: end,
             drawn: end,
             indent,
-            room: width - indent,
+            width,
         };
         let edges = LineEdges {
             top: LineDepth::default(),
@@ -741,13 +741,13 @@ impl TextLayouter {
     ) -> bool {
         self.pieces.clear();
         let last = index + 1 == self.lines.len();
-        let visible_width = self.measures.widths.width(line.range.start, line.visible);
-        let overflows = visible_width > line.room;
+        // The line's text fits from the width that is its width plus its
+        // indent up.
+        let fitting = self.measures.widths.width(line.range.start, line.visible) + line.indent;
+        let overflows = fitting > line.width;
         let ellipsis = ellipsis_at(options).filter(|_| last);
         let shown = ellipsis.filter(|_| overflows || (last && layout.did_overflow_height));
         if let Some(hold) = layout.hold.as_mut().filter(|_| ellipsis.is_some()) {
-            // The line keeps or loses its ellipsis where its text fits.
-            let fitting = least_leaving(visible_width, line.indent);
             if shown.is_none() {
                 hold.narrow(fitting, f32::INFINITY);
             } else if overflows {
@@ -789,17 +789,17 @@ impl TextLayouter {
         let Some(mut ellipsis) = self.ellipsis_piece(input, resolver, span, level, layout) else {
             return false;
         };
-        let room = (line.room - ellipsis.width).max(0.0);
+        let room = (line.width - line.indent - ellipsis.width).max(0.0);
         let text = input.text;
         let (head, tail) = match at {
             EllipsisAt::End => {
+                let edge = ellipsis.width + line.indent;
                 let cut = self
                     .measures
                     .widths
-                    .last_fitting(range.start, visible, room);
+                    .last_fitting(range.start, visible, edge, line.width);
                 if let Some(hold) = &mut layout.hold {
-                    let kept =
-                        end_ellipsis_hold(&self.measures.widths, text, line, cut, ellipsis.width);
+                    let kept = end_ellipsis_hold(&self.measures.widths, text, line, cut, edge);
                     hold.narrow(kept.min, kept.max);
                 }
                 (visible_end(text, range.start, cut), range.end)
@@ -825,7 +825,7 @@ impl TextLayouter {
                 (
                     self.measures
                         .widths
-                        .last_fitting(range.start, tail, room - used),
+                        .last_fitting(range.start, tail, 0.0, room - used),
                     tail,
                 )
             }

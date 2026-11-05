@@ -404,11 +404,10 @@ impl TextLayout {
     // the comparisons of a fresh layout change, and a layout without one
     // stands only for the width it wraps at.
     fn holds_wrap(&self, wrap: f32) -> bool {
-        let hold = self.body.hold.unwrap_or_else(|| WidthRange {
-            min: self.wrap,
-            max: self.wrap.next_up(),
-        });
-        hold.min <= wrap && wrap < hold.max
+        match self.body.hold {
+            Some(hold) => hold.min <= wrap && wrap < hold.max,
+            None => wrap.to_bits() == self.wrap.to_bits(),
+        }
     }
 
     /// The width the paragraph takes laid out between `min_width` and
