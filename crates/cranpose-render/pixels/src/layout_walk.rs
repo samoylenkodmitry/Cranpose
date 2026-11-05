@@ -335,11 +335,10 @@ impl<'a> LayoutWalk<'a> {
         reuse: &mut Option<Reuse<'_>>,
         old: Option<OldChildren>,
     ) {
+        // The sweep that starts each update let go of the layers of nodes
+        // that changed, so a layer kept for `node` is up to date.
         let keeps_heads = place == NodePlace::Child && self.marks.from_update;
-        if keeps_heads
-            && !self.changed(node)
-            && self.push_kept_head(node, lower_context, (scene, context), (reuse, old))
-        {
+        if keeps_heads && self.push_kept_head(node, lower_context, (scene, context), (reuse, old)) {
             return;
         }
         let lowered = lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
@@ -760,8 +759,9 @@ impl ChildSlot<'_> {
             };
             let end = scene.subtrees[at].end;
             let record = &scene.subtrees[at];
-            let clean = walk.is_clean(child);
-            let kept = clean || !walk.changed(child);
+            let mark = walk.marks.marks.get(walk.applier, child);
+            let clean = mark == 0;
+            let kept = clean || decode(mark).is_none();
             // A child whose owner placed it as before lies where it did.
             let placement = (kept && context.same_as_before && !placed_as_before)
                 .then(|| kept_child_placement(walk.applier, child, self.context))
