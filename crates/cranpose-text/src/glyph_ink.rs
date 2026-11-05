@@ -6,7 +6,6 @@ use read_fonts::model::metrics::GlyphExtents;
 use crate::{
     glyph_id::GlyphId,
     index_range::widen,
-    laid_glyphs::RunGlyphs,
     layout_body::LayoutBody,
     line_box::FontExtent,
     shaped_item::Piece,
@@ -257,7 +256,10 @@ impl PastInk {
         let traced = |state: u8| moved || state == OUT || (short && state == LOOSE);
         if moved
             || (self.glyphs_leave
-                && any_traced(body.glyphs.run(run.glyphs.range()), (face, inks), traced))
+                && body
+                    .glyphs
+                    .run(run.glyphs.range())
+                    .any_id(|glyph| traced(inks.state(face, glyph))))
         {
             self.add_outlines(glyph_run, (inks, scale), traced);
         }
@@ -301,22 +303,6 @@ fn moves_glyphs(body: &LayoutBody, run: &LineRun) -> bool {
             .glyphs
             .offsets(run.glyphs.range())
             .is_some_and(|offsets| offsets.iter().any(|offset| offset.x != 0 || offset.y != 0))
-}
-
-// Whether `traced` takes the state of a glyph of `glyphs`, of `face`.
-fn any_traced(
-    glyphs: RunGlyphs<'_>,
-    (face, inks): (&Typeface, &GlyphInks),
-    traced: impl Fn(u8) -> bool,
-) -> bool {
-    match glyphs {
-        RunGlyphs::Packed(glyphs) => glyphs
-            .iter()
-            .any(|glyph| traced(inks.state(face, glyph.id()))),
-        RunGlyphs::Full(glyphs) => glyphs
-            .iter()
-            .any(|glyph| traced(inks.state(face, glyph.id()))),
-    }
 }
 
 // Whether a glyph of `body` may put ink past the visible text of its line or

@@ -8,7 +8,7 @@ use cranpose_text::{
     ShapingSpan, TextLayout, TextLayoutOptions, TextLayouter,
 };
 
-use crate::fonts::{ROBOTO, span, typeface};
+use crate::fonts::{DEJAVU_MONO, ROBOTO, span, typeface};
 
 // The Mate 20 X's density: 6 px of layout is 18 device pixels.
 const GRID: f32 = 3.0;
@@ -39,9 +39,15 @@ fn input<'a>(
     }
 }
 
-// `text` in Roboto at `size`, `max_width` device pixels wide.
-fn layout(text: &str, size: f32, advances: GlyphAdvances, max_width: f32) -> TextLayout {
-    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+// `text` in the font at `path` at `size`, `max_width` device pixels wide.
+fn layout(
+    path: &str,
+    text: &str,
+    size: f32,
+    advances: GlyphAdvances,
+    max_width: f32,
+) -> TextLayout {
+    let resolver = FontFamilyResolver::new([typeface(path)]);
     let family = FontFamily::Default;
     let spans = [ShapingSpan {
         size,
@@ -65,12 +71,24 @@ fn assert_pixels(actual: f32, expected: f32, case: &str) {
 }
 
 #[test]
-fn a_line_android_fits_by_whole_pixel_advances_fits() {
-    let rounded = layout(FITS_ON_ANDROID, SIZE, GlyphAdvances::WholePixels, 314.0);
+fn a_line_fits_by_whole_pixel_advances_as_on_android() {
+    let rounded = layout(
+        ROBOTO,
+        FITS_ON_ANDROID,
+        SIZE,
+        GlyphAdvances::WholePixels,
+        314.0,
+    );
     assert_eq!(rounded.line_count(), 1, "whole-pixel advances fit 314 px");
     assert_pixels(line_pixels(&rounded), 308.0, "whole-pixel advances");
 
-    let fractional = layout(FITS_ON_ANDROID, SIZE, GlyphAdvances::Fractional, 314.0);
+    let fractional = layout(
+        ROBOTO,
+        FITS_ON_ANDROID,
+        SIZE,
+        GlyphAdvances::Fractional,
+        314.0,
+    );
     assert_eq!(
         fractional.line_count(),
         2,
@@ -80,9 +98,10 @@ fn a_line_android_fits_by_whole_pixel_advances_fits() {
 
 #[test]
 fn kerning_stays_fractional_between_whole_pixel_advances() {
-    let laid = layout("Te AV To.", SIZE, GlyphAdvances::WholePixels, 400.0);
+    let laid = layout(ROBOTO, "Te AV To.", SIZE, GlyphAdvances::WholePixels, 400.0);
     assert_pixels(line_pixels(&laid), 75.1436, "kerned pairs");
     let laid = layout(
+        ROBOTO,
         "Pariatur aute ut veniam cillum irure",
         SIZE,
         GlyphAdvances::WholePixels,
@@ -93,7 +112,7 @@ fn kerning_stays_fractional_between_whole_pixel_advances() {
 
 #[test]
 fn unkerned_glyphs_sit_on_whole_device_pixels() {
-    let laid = layout("hello", SIZE, GlyphAdvances::WholePixels, 400.0);
+    let laid = layout(ROBOTO, "hello", SIZE, GlyphAdvances::WholePixels, 400.0);
     let lefts: Vec<f32> = laid
         .glyph_runs(0)
         .flat_map(|run| {
@@ -109,6 +128,28 @@ fn unkerned_glyphs_sit_on_whole_device_pixels() {
     );
     let caret = laid.horizontal_position(5, cranpose_text::CaretDirection::Primary) * GRID;
     assert_pixels(caret, 38.0, "the caret after the text");
+}
+
+// HarfBuzz sets a combining mark's advance to zero after it reads the
+// mark's rounded advance from the font, so the mark adds no pixel. DejaVu
+// Sans Mono gives its marks the advance of a whole cell.
+#[test]
+fn a_zeroed_mark_adds_no_pixels() {
+    let rounded = GlyphAdvances::WholePixels;
+    let marked = layout(
+        DEJAVU_MONO,
+        "q\u{301}q\u{301}q\u{301}",
+        SIZE,
+        rounded,
+        400.0,
+    );
+    let plain = layout(DEJAVU_MONO, "qqq", SIZE, rounded, 400.0);
+    assert_pixels(
+        line_pixels(&marked),
+        line_pixels(&plain),
+        "three marked letters",
+    );
+    assert_pixels(line_pixels(&plain), 33.0, "three letters");
 }
 
 // Auto-sized text lays the same glyphs out again at smaller sizes: the

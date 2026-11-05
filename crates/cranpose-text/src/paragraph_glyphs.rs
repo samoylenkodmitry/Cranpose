@@ -77,7 +77,9 @@ impl ParagraphGlyphs {
     // Measures the device pixel advances of the glyphs from `start` on: the
     // font's own advance of each, at the location its typeface draws,
     // rounded half up as FreeType rounds a hinted advance, and the rest of
-    // the advance shaping gave it, its kerning.
+    // the advance from shaping, its kerning. HarfBuzz sets the advance of a
+    // mark to zero after it reads the rounded advance, so a glyph with no
+    // shaped advance advances by nothing.
     #[inline(never)]
     fn round_advances(&mut self, start: usize, face: &Typeface, size: f32) {
         let Self {
@@ -89,16 +91,23 @@ impl ParagraphGlyphs {
         let device = size * *grid / f32::from(face.units_per_em());
         pixels.resize(glyphs.len(), 0.0);
         let added = &glyphs[start..];
+        let pixels = &mut pixels[start..];
+        // What rounding adds to each glyph's own advance. The difference
+        // between a float and its nearest whole number is exact, so an
+        // unkerned advance with it added lands on its whole pixel.
         face.font().glyph_metrics().h_advance_batched(
-            |own| own.to_f32(),
+            |own| {
+                let own = own.to_f32() * device;
+                whole::floor(own + 0.5) - own
+            },
             added
                 .iter()
-                .zip(&mut pixels[start..])
-                .map(|(glyph, own)| (FontGlyphId::new(glyph.id().0), own)),
+                .zip(pixels.iter_mut())
+                .map(|(glyph, rounding)| (FontGlyphId::new(glyph.id().0), rounding)),
         );
-        for (glyph, pixel) in added.iter().zip(&mut pixels[start..]) {
-            let own = *pixel;
-            *pixel = whole::floor(own * device + 0.5) + (font_units(glyph.advance) - own) * device;
+        for (glyph, pixel) in added.iter().zip(pixels) {
+            let shaped = font_units(glyph.advance) * device + *pixel;
+            *pixel = if glyph.advance == 0 { 0.0 } else { shaped };
         }
     }
 
