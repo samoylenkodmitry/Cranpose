@@ -373,27 +373,36 @@ impl<'a> LayoutWalk<'a> {
         if let Some(subtree) = Subtree::of_child(&layer) {
             match inner {
                 Some(inner) => {
-                    visit_lowered_children(self.applier, node, |children| {
-                        let mut slot = ChildSlot {
-                            walk: self,
-                            owner: node,
-                            children,
-                            context: inner,
-                            old,
-                        };
-                        populate_draws_from_graph(
-                            subtree,
-                            scene,
-                            context,
-                            &mut None,
-                            Some(&mut slot),
-                        );
-                    });
+                    self.push_lowered_children((node, subtree), inner, (scene, context), old);
                 }
                 None => populate_draws_from_graph(subtree, scene, context, &mut None, None),
             }
         }
         recycle_lowered(layer);
+    }
+
+    // Pushes `subtree`, the layer of `node`, with the children `inner` lowers
+    // with, for `push_lowered`. Out of line: most nodes an update pushes
+    // again are leaves, and the visit of the children inline would grow the
+    // rewrite that runs for each of them.
+    #[inline(never)]
+    fn push_lowered_children(
+        &self,
+        (node, subtree): (NodeId, Subtree<'_>),
+        inner: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+        old: Option<OldChildren>,
+    ) {
+        visit_lowered_children(self.applier, node, |children| {
+            let mut slot = ChildSlot {
+                walk: self,
+                owner: node,
+                children,
+                context: inner,
+                old,
+            };
+            populate_draws_from_graph(subtree, scene, context, &mut None, Some(&mut slot));
+        });
     }
 
     // Pushes under `context` the subtree of `child`, which did not change,

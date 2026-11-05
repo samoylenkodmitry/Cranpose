@@ -83,7 +83,19 @@ pub(super) fn lower_placed_child(
     if draws_inline(&inline) {
         return RenderNode::Inline(inline);
     }
-    let layer = layer_from_content(&mut inline, node_id, &data, context);
+    inline_as_layer(inline, node_id, &data, context)
+}
+
+// The layer of the node of `data` around the content written into `inline`,
+// which goes back to the pool. Out of line: most leaves draw inline.
+#[inline(never)]
+fn inline_as_layer(
+    mut inline: Box<InlineNode>,
+    node_id: NodeId,
+    data: &SnapshotNodeData<'_>,
+    context: &LowerContext,
+) -> RenderNode {
+    let layer = layer_from_content(&mut inline, node_id, data, context);
     crate::layer_recycling::recycle_node(RenderNode::Inline(inline));
     RenderNode::Layer(layer)
 }

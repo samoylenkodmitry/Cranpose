@@ -57,6 +57,9 @@ fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
 }
 
+// Out of line, as `on_pixel_grid` is: few draws snap, and the rounding
+// inline would grow each placement.
+#[inline(never)]
 fn snapped_anchor_origin(anchor: Point) -> Point {
     Point::new(whole::round(anchor.x), whole::round(anchor.y))
 }
@@ -444,6 +447,7 @@ fn mirror_line(rect: Rect) -> Option<i32> {
     (twice.fract() == 0.0 && twice.abs() < LIMIT).then(|| floor_pixel(twice))
 }
 
+#[inline(never)]
 fn on_pixel_grid(rect: Rect) -> Rect {
     Rect {
         x: whole::round(rect.x),
@@ -463,15 +467,14 @@ fn on_pixel_grid(rect: Rect) -> Rect {
 
 /// `draw` where its snap puts it; `None` when it covers nothing.
 pub(crate) fn place_shape(draw: &crate::raster_scene::DrawShape) -> Option<PlacedShape> {
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
+    let (snap_delta, dither_origin) = match draw.snap_anchor {
+        Some(anchor) => {
+            let origin = snapped_anchor_origin(anchor);
+            (Point::new(origin.x - anchor.x, origin.y - anchor.y), origin)
+        }
+        None => (Point::default(), Point::default()),
+    };
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let dither_origin = draw
-        .snap_anchor
-        .map(snapped_anchor_origin)
-        .unwrap_or_default();
     let rect = if draw.snap_to_pixel_grid {
         on_pixel_grid(rect)
     } else {

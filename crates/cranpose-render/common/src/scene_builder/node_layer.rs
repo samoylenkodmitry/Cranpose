@@ -503,9 +503,22 @@ pub(super) fn read_node_data<R>(
         }));
     }
     let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
+    Some(read_subcompose_data(applier, node_id, node, read))
+}
+
+// Hands `read` the data of the subcompose node `node`. Out of line: `read`
+// inlines into each kind's arm of `read_node_data`, and few nodes are
+// subcompose nodes.
+#[inline(never)]
+fn read_subcompose_data<R>(
+    applier: &MemoryApplier,
+    node_id: NodeId,
+    node: &SubcomposeLayoutNode,
+    read: impl FnOnce(SnapshotNodeData<'_>) -> R,
+) -> R {
     let layout_state = NodeLayout::of(&node.layout_state());
     let modifier_slices = node.modifier_slices_snapshot();
-    Some(node.with_active_children(|children| {
+    node.with_active_children(|children| {
         let z_order = z_ordered_children(applier, node_id, children);
         read(SnapshotNodeData {
             layout_state,
@@ -513,7 +526,7 @@ pub(super) fn read_node_data<R>(
             children: z_order.as_deref().unwrap_or(children),
             window_root: false,
         })
-    }))
+    })
 }
 
 /// `children` in the order they draw and take taps when a z index moves one

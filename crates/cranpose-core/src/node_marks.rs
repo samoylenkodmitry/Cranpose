@@ -110,8 +110,16 @@ impl NodeMarks {
     pub(crate) fn mark_at(&self, place: MarkPlace) -> u8 {
         match place {
             MarkPlace::Dense(slot) => self.dense.get(slot).copied().unwrap_or(0),
-            MarkPlace::Elsewhere(id) => self.elsewhere.get(&id).copied().unwrap_or(0),
+            MarkPlace::Elsewhere(id) => self.elsewhere_mark(id),
         }
+    }
+
+    // The mark of a node kept apart: ids past the dense range are rare, and
+    // the map lookup inline would grow every caller of `mark_at`.
+    #[cold]
+    #[inline(never)]
+    fn elsewhere_mark(&self, id: NodeId) -> u8 {
+        self.elsewhere.get(&id).copied().unwrap_or(0)
     }
 
     #[inline]
