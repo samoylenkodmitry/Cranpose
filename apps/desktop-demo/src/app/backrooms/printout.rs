@@ -19,7 +19,6 @@ use cranpose_ui::{
 
 use super::{
     finish::{Finish, Sight},
-    level::local_level,
     place::spot,
     plan,
     shelf::{Page, FILES},
@@ -38,11 +37,8 @@ fn print(weight: FontWeight) -> TextStyle {
     style
 }
 
-#[composable(no_skip)]
+#[composable]
 pub(super) fn Printout(sight: Sight, printout: plan::Printout, size: (f32, f32)) {
-    let Some(level) = local_level().current() else {
-        return;
-    };
     let panel = printout.panel;
     let transform = panel
         .transform(size)
@@ -52,7 +48,7 @@ pub(super) fn Printout(sight: Sight, printout: plan::Printout, size: (f32, f32))
         height: panel.top - panel.bottom,
     };
     let name = FILES[printout.file.min(FILES.len() - 1)];
-    let page = level.shelf.page(printout.file);
+    let page = sight.level.shelf.page(printout.file);
     // The wall wants its page once it shows: an effect, as composing only
     // describes what shows.
     LaunchedEffect(printout.file, move |_| {
@@ -61,7 +57,7 @@ pub(super) fn Printout(sight: Sight, printout: plan::Printout, size: (f32, f32))
         }
     });
     let state = rememberLazyListState();
-    let plane = level.meshes.plane;
+    let plane = Arc::clone(&sight.level.meshes.plane);
     Box(
         spot(content).mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&plane),

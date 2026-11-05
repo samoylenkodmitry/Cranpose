@@ -7,7 +7,7 @@ use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
 };
 use cranpose_core::{
-    derivedStateOf, key, remember, CompositionLocalProvider, LaunchedEffect, State,
+    derivedStateOf, key, remember, CompositionLocalProvider, LaunchedEffect, SideEffect, State,
 };
 use cranpose_ui::{
     composable, local_eye, space::Camera, Box, BoxSpec, BoxWithConstraints,
@@ -102,7 +102,7 @@ fn rememberFilm() -> State<u32> {
 }
 
 // Walks the eye each frame while a key or a finger walks it.
-#[composable(no_skip)]
+#[composable]
 fn Walking(walker: Walker) {
     let stepper = walker.clone();
     Ticking(walker.is_moving(), move |seconds| stepper.step(seconds));
@@ -110,9 +110,9 @@ fn Walking(walker: Walker) {
 
 // The window's scene through the eye, which holds the eye's room. A new
 // room is a new scene, so the eye knows when the renderer has placed it.
-#[composable(no_skip)]
+#[composable]
 fn Rooms(walker: Walker, focal_length: f32) {
-    let visit = walker.journey.visit.get();
+    let visit = walker.journey.visit();
     key(visit, move || {
         let sees = walker.clone();
         let scene = Box(
@@ -122,6 +122,7 @@ fn Rooms(walker: Walker, focal_length: f32) {
             BoxSpec::default(),
             move || Room(visit, Place::ROOT),
         );
-        walker.scene.set(Some(scene));
+        // The walker learns the scene's node once the composition applies.
+        SideEffect(move || walker.scene.set(Some(scene)));
     });
 }

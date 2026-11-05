@@ -64,12 +64,13 @@ pub(super) fn Printer(shelf: Shelf) {
         if page.get() != Page::Wanted {
             continue;
         }
-        key(file, move || Fetch(page, FILES[file]));
+        key(file, move || PageFetch(page, FILES[file]));
     }
 }
 
+// The fetch of one wanted page, which sets the page to what it got.
 #[composable]
-fn Fetch(page: MutableState<Page>, name: &'static str) {
+fn PageFetch(page: MutableState<Page>, name: &'static str) {
     let client = local_http_client().current();
     LaunchedEffect((), move |scope| {
         let url = repository_file_url(&format!("{DIRECTORY}/{name}"));

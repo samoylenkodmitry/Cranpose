@@ -24,15 +24,15 @@ const EDGE: f32 = 50.0;
 const SEEN: f32 = 1.1;
 
 // The entity in the eye's room while it haunts the eye. Only this reads
-// how long it haunts, so the room around it does not compose again.
-#[composable(no_skip)]
+// whether it haunts, so the room around it does not compose again.
+#[composable]
 pub(super) fn Haunting(sight: Sight, size: (f32, f32)) {
-    if sight.level.journey.haunted.get() > 0 {
+    if sight.level.journey.haunted() {
         Stalker(sight, size);
     }
 }
 
-#[composable(no_skip)]
+#[composable]
 fn Stalker(sight: Sight, size: (f32, f32)) {
     // Where the entity stands; `None` until the room has space behind the
     // eye, and after the eye comes close.

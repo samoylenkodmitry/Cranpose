@@ -5,7 +5,10 @@
 // entity's writing, a lever and the things in a room show live content.
 // Every room reads the level and the window's eye from the composition
 // locals the tab provides, so the rooms behind doorways take only where
-// they lie.
+// they lie. A composable here that reads a state skips while its arguments
+// stay the same, so a change composes it alone; one that reads none is
+// `no_skip` and composes in its caller's group, as Compose's inline
+// composables do, with no arguments stored.
 
 use std::sync::Arc;
 
@@ -70,7 +73,7 @@ pub(super) const LIGHT: Light = Light {
 // The room of `visit` at `place`, and the rooms behind its doorways. A room
 // behind a doorway has no doorway at the door the eye would come in by: the
 // room before it lies there.
-#[composable(no_skip)]
+#[composable]
 pub(super) fn Room(visit: Visit, place: Place) {
     let (Some(level), Some(eye)) = (local_level().current(), local_eye().current()) else {
         return;
@@ -220,7 +223,7 @@ fn Doorway(inner: Visit, frame: Mat4, place: Place) {
 }
 
 // What the entity wrote on a wall, a little askew, in the room's light.
-#[composable(no_skip)]
+#[composable]
 fn Scrawl(sight: Sight, writing: Writing, size: (f32, f32)) {
     let frame = writing
         .slot
@@ -268,7 +271,7 @@ fn scrawl_style() -> TextStyle {
 
 // A lever on a wall that puts out the lights of every room, or brings them
 // back.
-#[composable(no_skip)]
+#[composable]
 fn Lever(sight: Sight, slot: Slot, size: (f32, f32)) {
     let control = rememberControl(ControlKind::LeverSwitch);
     let on = control.is_on();

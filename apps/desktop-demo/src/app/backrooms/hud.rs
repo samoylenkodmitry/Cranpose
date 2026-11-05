@@ -75,7 +75,7 @@ pub(super) fn Hud(journey: Journey) {
                     Text("REC", Modifier::empty().padding(10.0), camcorder(22.0));
                 },
             );
-            Where(journey);
+            RoomLabel(journey);
             Elapsed();
             Column(
                 Modifier::empty()
@@ -109,17 +109,17 @@ fn blinking(on: State<bool>) -> GraphicsLayer {
 
 // The room the camcorder is in, and the warning while the lights are out.
 #[composable]
-fn Where(journey: Journey) {
+fn RoomLabel(journey: Journey) {
     Column(
         Modifier::empty().align(Alignment::TOP_END).padding(INSET),
         ColumnSpec::default(),
         move || {
             Text(
-                format!("ROOM {}", journey.rooms.get()),
+                format!("ROOM {}", journey.rooms()),
                 Modifier::empty(),
                 camcorder(22.0),
             );
-            if journey.lights_out.get() {
+            if journey.lights_out() {
                 let mut warning = camcorder(15.0);
                 warning.span_style.color = Some(RED);
                 Text("EMERGENCY POWER", Modifier::empty(), warning);
@@ -159,7 +159,7 @@ fn Elapsed() {
 // before any doorway, for the first seconds, how to walk.
 #[composable]
 fn Caption(journey: Journey) {
-    let rooms = journey.rooms.get();
+    let rooms = journey.rooms();
     let heard = rememberMutableStateOf(|| false);
     LaunchedEffectAsync(rooms, move |_| {
         Box::pin(async move {

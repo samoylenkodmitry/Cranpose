@@ -74,7 +74,7 @@ impl Lamps {
 // map `from_root` takes the window scene's coordinates into the room's;
 // the room's lamps light them at the lights' power, and the grain moves
 // with the camcorder's film.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct Sight {
     pub(super) level: Level,
     pub(super) eye: Eye,

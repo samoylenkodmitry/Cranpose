@@ -54,6 +54,7 @@ impl Stick {
     }
 }
 
+// A state holder, remembered once by the tab.
 #[derive(Clone)]
 pub(super) struct Walker {
     pub(super) eye: Eye,
@@ -67,6 +68,13 @@ pub(super) struct Walker {
     // behind it the window scene's with a new node, and the eye waits for
     // the renderer to place that scene before it walks on among its walls.
     pub(super) scene: Rc<Cell<Option<NodeId>>>,
+}
+
+// One walker equals another when both are the one the tab remembered.
+impl PartialEq for Walker {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.scene, &other.scene)
+    }
 }
 
 // The eye, standing first in the first room, in front of the door behind
@@ -111,7 +119,7 @@ impl Walker {
             return false;
         };
         if keys.ahead() > before.ahead() {
-            self.journey.presses.update(|presses| *presses += 1);
+            self.journey.press();
         }
         self.keys.set(keys);
         true

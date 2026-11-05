@@ -20,19 +20,21 @@ const EMERGENCY_POWER: f32 = 0.06;
 // How many rooms the entity haunts the eye in after it says to turn around.
 const HAUNTED_ROOMS: u32 = 5;
 
+// A state holder: composables read its values through its methods, which
+// subscribe the reader, and change them only through its events.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct Journey {
-    pub(super) visit: MutableState<Visit>,
+    visit: MutableState<Visit>,
     // The rooms the eye has walked into, counting the first.
-    pub(super) rooms: MutableState<u32>,
+    rooms: MutableState<u32>,
     // How many times W was pressed.
-    pub(super) presses: MutableState<u32>,
+    presses: MutableState<u32>,
     // How many times a lever was pulled.
-    pub(super) pulls: MutableState<u32>,
+    pulls: MutableState<u32>,
     // Whether a lever put the lights out, in every room.
-    pub(super) lights_out: MutableState<bool>,
+    lights_out: MutableState<bool>,
     // How many more rooms the entity haunts the eye in, behind its back.
-    pub(super) haunted: MutableState<u32>,
+    haunted: MutableState<u32>,
 }
 
 #[composable]
@@ -49,6 +51,30 @@ pub(super) fn rememberJourney() -> Journey {
 }
 
 impl Journey {
+    pub(super) fn visit(&self) -> Visit {
+        self.visit.get()
+    }
+
+    pub(super) fn rooms(&self) -> u32 {
+        self.rooms.get()
+    }
+
+    pub(super) fn presses(&self) -> u32 {
+        self.presses.get()
+    }
+
+    pub(super) fn pulls(&self) -> u32 {
+        self.pulls.get()
+    }
+
+    pub(super) fn lights_out(&self) -> bool {
+        self.lights_out.get()
+    }
+
+    pub(super) fn haunted(&self) -> bool {
+        self.haunted.get() > 0
+    }
+
     // How far the lamps burn, from 0 to 1.
     pub(super) fn power(&self) -> f32 {
         if self.lights_out.get() {
@@ -56,6 +82,11 @@ impl Journey {
         } else {
             1.0
         }
+    }
+
+    // W was pressed.
+    pub(super) fn press(&self) {
+        self.presses.update(|presses| *presses += 1);
     }
 
     // A lever was pulled: the lights go out, or come back.

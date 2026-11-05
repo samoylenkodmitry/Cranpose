@@ -106,7 +106,7 @@ pub(super) fn Anomaly(sight: Sight, thing: Thing, middle: Vec3) {
 }
 
 // An eye that floats over the floor and turns to watch the eye.
-#[composable(no_skip)]
+#[composable]
 fn Watcher(sight: Sight, middle: Vec3) {
     let shut = rememberMutableStateOf(|| false);
     LaunchedEffectAsync(shut.get(), move |scope| {
