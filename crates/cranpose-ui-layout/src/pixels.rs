@@ -17,10 +17,8 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
 
 /// [`round_to_px`] at a density known to be finite and positive.
 pub fn round_to_grid(value: f32, density: f32) -> f32 {
-    if !value.is_finite() {
-        return value;
-    }
-    // At density 1 the scale and the division change no bit; a chip with no
+    // An infinite or NaN length comes out as it went in, with no test of
+    // its own. At density 1 the scale and the division change no bit; a chip with no
     // float divider skips them.
     if density == 1.0 {
         return whole::floor(value + 0.5);
@@ -39,13 +37,24 @@ pub fn ceil_to_px(value: f32, density: f32) -> f32 {
 
 /// [`ceil_to_px`] at a density known to be finite and positive.
 pub fn ceil_to_grid(value: f32, density: f32) -> f32 {
-    if !value.is_finite() {
-        return value;
-    }
     if density == 1.0 {
         return whole::ceil(value);
     }
-    whole::ceil(value * density) / density
+    let scaled = value * density;
+    let pixels = whole::ceil(scaled);
+    // A length the ceiling leaves where it was is on the grid already, as an
+    // infinite one is; a NaN stays NaN below.
+    if scaled >= pixels {
+        return value;
+    }
+    // A length on the grid, `n / density`, scales back to a hair over `n` at
+    // most fractional densities; the pixel below still covers it.
+    let below = (pixels - 1.0) / density;
+    if below >= value {
+        below
+    } else {
+        pixels / density
+    }
 }
 
 #[cfg(test)]

@@ -147,20 +147,9 @@ fn the_font_metrics_are_rounded_the_way_the_platform_rounds_them() {
         (38.0, 35.0, 9.0),
     ] {
         let extent = FontExtent::new(size_px * 1900.0 / 2048.0, size_px * 500.0 / 2048.0, 0.0);
-        let tight = line_box(
-            &styled(
-                0.0,
-                Some(LineHeightStyle {
-                    mode: LineHeightMode::Tight,
-                    ..wear()
-                }),
-            ),
-            extent,
-            0.0,
-            1.0,
-        );
+        let own = line_box(&TextStyle::default(), extent, f32::NAN, 1.0);
         assert_eq!(
-            (tight.baseline, tight.height - tight.baseline),
+            (own.baseline, own.height - own.baseline),
             (ascent_px, descent_px),
             "{size_px}px",
         );
@@ -252,38 +241,22 @@ fn proportional_alignment_splits_the_leading_the_way_the_font_is_split() {
 }
 
 #[test]
-fn a_fixed_line_height_lets_the_font_overflow_and_tight_ignores_the_ask() {
+fn a_fixed_or_tight_line_height_is_the_ask_whatever_the_font_needs() {
     let extent = roboto_16sp();
-    let fixed = line_box(
-        &styled(
-            36.0,
-            Some(LineHeightStyle {
-                mode: LineHeightMode::Fixed,
-                ..wear()
-            }),
-        ),
-        extent,
-        36.0,
-        1.0,
-    );
-    assert_eq!(
-        fixed.height, 36.0,
-        "the ask wins even though the font needs 38"
-    );
-    let tight = line_box(
-        &styled(
-            80.0,
-            Some(LineHeightStyle {
-                mode: LineHeightMode::Tight,
-                ..wear()
-            }),
-        ),
-        extent,
-        80.0,
-        1.0,
-    );
-    assert_eq!(tight.height, 38.0);
-    assert_eq!(tight.baseline, 30.0);
+    for mode in [LineHeightMode::Fixed, LineHeightMode::Tight] {
+        for asked in [36.0, 80.0] {
+            let resolved = line_box(
+                &styled(asked, Some(LineHeightStyle { mode, ..wear() })),
+                extent,
+                asked,
+                1.0,
+            );
+            assert_eq!(
+                resolved.height, asked,
+                "{mode:?}: the ask wins whether the font needs more or less than {asked}"
+            );
+        }
+    }
 }
 
 #[test]

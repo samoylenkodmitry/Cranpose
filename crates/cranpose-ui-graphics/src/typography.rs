@@ -139,7 +139,9 @@ pub enum LineHeightMode {
     Fixed,
     /// The font's own extent is a floor. This is what Android does.
     Minimum,
-    /// The font's extent, whatever was requested.
+    /// The request on every line, as [`Fixed`](Self::Fixed) asks, but a trimmed
+    /// paragraph edge gets no room back where the font needs more, so its
+    /// glyphs may clip there.
     Tight,
 }
 

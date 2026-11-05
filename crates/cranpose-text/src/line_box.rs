@@ -9,8 +9,11 @@
 //!   pair rather than from the float metrics;
 //! - the line advance is a **whole pixel**, `ceil`ed, not a float;
 //! - the leading, the line height past the font's own ascent + descent, is
-//!   placed by the style's [`LineHeightAlignment`], with the odd pixel of a
-//!   centred split below the baseline;
+//!   split by the style's [`LineHeightAlignment`] into **whole pixels**: the
+//!   share below the baseline is `ceil`ed, so the odd pixel of a centred split
+//!   sits below it;
+//! - a [`LineHeightMode::Tight`] line shorter than its font adds no leading back
+//!   at a trimmed edge, and takes the font's whole extent at an untrimmed one;
 //! - [`LineHeightTrim`] gives the leading back **only at the paragraph's edges**:
 //!   above its first line and below its last. Every line keeps the full advance
 //!   between baselines, so a paragraph of `n` lines is
@@ -25,6 +28,8 @@
 //! Compose's does, so a single line of it is exactly as tall as its font.
 
 use std::cell::Cell;
+
+use cranpose_ui_graphics::whole;
 
 use crate::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle, TextStyle,
@@ -126,7 +131,38 @@ pub fn paragraph_line_box(
     asked: f32,
     grid: f32,
 ) -> LineBox {
-    LineBoxInputs::of(style, extent, asked, grid).line_box()
+    let inputs = LineBoxInputs::of(style, extent, asked, pixel_grid(grid));
+    inputs.pixels().in_units(inputs.grid)
+}
+
+// A line box in whole device pixels, as AOSP lays a line out: a paragraph
+// stacked from these stays on the pixel grid however many lines it has.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LinePixels {
+    pub(crate) height: f32,
+    pub(crate) baseline: f32,
+    pub(crate) trim_top: f32,
+    pub(crate) trim_bottom: f32,
+}
+
+impl LinePixels {
+    fn in_units(self, grid: f32) -> LineBox {
+        LineBox {
+            height: self.height / grid,
+            baseline: self.baseline / grid,
+            trim_top: self.trim_top / grid,
+            trim_bottom: self.trim_bottom / grid,
+        }
+    }
+}
+
+// Device pixels per layout pixel, `1.0` for a grid that names none.
+fn pixel_grid(grid: f32) -> f32 {
+    if grid.is_finite() && grid > 0.0 {
+        grid
+    } else {
+        1.0
+    }
 }
 
 // What a line box follows from: the line height rules a paragraph's style
@@ -142,12 +178,8 @@ pub(crate) struct LineBoxInputs {
 }
 
 impl LineBoxInputs {
+    // `grid` is finite and positive.
     pub(crate) fn of(style: &ParagraphStyle, extent: FontExtent, asked: f32, grid: f32) -> Self {
-        let grid = if grid.is_finite() && grid > 0.0 {
-            grid
-        } else {
-            1.0
-        };
         let asked = if style.line_height.is_unspecified() {
             f32::NAN
         } else {
@@ -174,8 +206,8 @@ impl LineBoxInputs {
 
     // Out of line: the layouter takes most line boxes from `LastLineBox`.
     #[inline(never)]
-    fn line_box(self) -> LineBox {
-        aosp_line_box(self.style, self.extent, self.asked, self.padding, self.grid)
+    fn pixels(self) -> LinePixels {
+        aosp_line_pixels(self.style, self.extent, self.asked, self.padding, self.grid)
     }
 
     // Whether these are `other` bit for bit, a NaN asked height equal to
@@ -200,18 +232,18 @@ impl LineBoxInputs {
 // style: most lines of a paragraph, and the line of a text laid out again
 // each frame, as a number that changes, need no rounding of their own.
 #[derive(Default)]
-pub(crate) struct LastLineBox(Cell<Option<(LineBoxInputs, LineBox)>>);
+pub(crate) struct LastLineBox(Cell<Option<(LineBoxInputs, LinePixels)>>);
 
 impl LastLineBox {
-    pub(crate) fn of(&self, inputs: LineBoxInputs) -> LineBox {
-        if let Some((kept, line_box)) = self.0.get()
+    pub(crate) fn of(&self, inputs: LineBoxInputs) -> LinePixels {
+        if let Some((kept, pixels)) = self.0.get()
             && kept.same(&inputs)
         {
-            return line_box;
+            return pixels;
         }
-        let line_box = inputs.line_box();
-        self.0.set(Some((inputs, line_box)));
-        line_box
+        let pixels = inputs.pixels();
+        self.0.set(Some((inputs, pixels)));
+        pixels
     }
 }
 
@@ -230,53 +262,54 @@ fn font_padding(style: &ParagraphStyle, extent: FontExtent) -> f32 {
     }
 }
 
-fn aosp_line_box(
+// AOSP's rule, in device pixels: `Paint.getFontMetricsInt()` rounds the
+// ascent, a negative number there, and the descent; `LineHeightStyleSpan`
+// `ceil`s the line height and the leading's share below the baseline.
+fn aosp_line_pixels(
     style: LineHeightStyle,
     extent: FontExtent,
     asked: f32,
     padding: f32,
     grid: f32,
-) -> LineBox {
-    let up = |value: f32| (value * grid).ceil() / grid;
-    let down = |value: f32| (value * grid).floor() / grid;
-    let round = |value: f32| ((value * grid) + 0.5).floor() / grid;
-    let ascent = -round(-extent.ascent.max(0.0));
-    let descent = round(extent.descent.max(0.0));
-    let above_padding = down(padding * 0.5);
-    let below_padding = padding - above_padding;
-    let natural = up(ascent + descent + padding);
+) -> LinePixels {
+    let ascent = -whole::floor(0.5 - extent.ascent.max(0.0) * grid);
+    let descent = whole::floor(extent.descent.max(0.0) * grid + 0.5);
+    let padding = whole::ceil(padding * grid);
+    let above_padding = whole::floor(padding * 0.5);
+    let font = ascent + descent;
+    let natural = font + padding;
+    let asked = asked * grid;
     let asked = if asked.is_finite() {
-        up(asked)
+        whole::ceil(asked)
     } else {
         natural
     };
 
     let height = match style.mode {
-        LineHeightMode::Fixed => asked.max(1.0),
-        LineHeightMode::Minimum => asked.max(natural).max(1.0),
-        LineHeightMode::Tight => natural.max(1.0),
-    };
+        LineHeightMode::Fixed | LineHeightMode::Tight => asked,
+        LineHeightMode::Minimum => asked.max(natural),
+    }
+    .max(1.0);
 
-    let leading = height - (ascent + descent + padding);
-    let (mut above, mut below) = match style.alignment {
-        LineHeightAlignment::Top => (0.0, leading),
-        LineHeightAlignment::Bottom => (leading, 0.0),
-        LineHeightAlignment::Center => {
-            let below = up(leading * 0.5);
-            (leading - below, below)
-        }
-        LineHeightAlignment::Proportional => {
-            let total = ascent + descent;
-            if total > 0.0 {
-                let above = leading * (ascent / total);
-                (above, leading - above)
-            } else {
-                (leading * 0.5, leading * 0.5)
-            }
-        }
+    let leading = height - natural;
+    // AOSP's `topRatio`: the share of the leading above the glyphs.
+    let top_ratio = match style.alignment {
+        LineHeightAlignment::Top => 0.0,
+        LineHeightAlignment::Center => 0.5,
+        LineHeightAlignment::Bottom => 1.0,
+        LineHeightAlignment::Proportional if font > 0.0 => ascent / font,
+        LineHeightAlignment::Proportional => 0.5,
     };
-    above += above_padding;
-    below += below_padding;
+    // A line shorter than its font gives up below the baseline the share the
+    // ratio names, not the rest: AOSP's rule, kept as it is.
+    let below_share = if leading > 0.0 {
+        1.0 - top_ratio
+    } else {
+        top_ratio
+    };
+    let below = whole::ceil(leading * below_share);
+    let above = leading - below + above_padding;
+    let below = below + padding - above_padding;
 
     let (trim_above, trim_below) = match style.trim {
         LineHeightTrim::None => (false, false),
@@ -284,12 +317,16 @@ fn aosp_line_box(
         LineHeightTrim::LastLineBottom => (false, true),
         LineHeightTrim::Both => (true, true),
     };
+    // A tight line shorter than its font keeps that height at a trimmed edge
+    // and takes the font's whole extent at an untrimmed one.
+    let tight = style.mode == LineHeightMode::Tight && leading < 0.0;
+    let given_back = |trimmed: bool, share: f32| if trimmed != tight { share } else { 0.0 };
 
-    LineBox {
-        height: height.max(1.0),
+    LinePixels {
+        height,
         baseline: above + ascent,
-        trim_top: if trim_above { above } else { 0.0 },
-        trim_bottom: if trim_below { below } else { 0.0 },
+        trim_top: given_back(trim_above, above),
+        trim_bottom: given_back(trim_below, below),
     }
 }
 

@@ -35,3 +35,23 @@ fn ceiling_a_length_to_a_pixel_takes_the_next_whole_pixel_up() {
     assert_eq!(ceil_to_px(0.3, 0.0), 0.3);
     assert_eq!(ceil_to_px(f32::INFINITY, 2.0), f32::INFINITY);
 }
+
+#[test]
+fn ceiling_a_length_already_on_the_grid_keeps_it_at_any_density() {
+    for density in [1.5f32, 1.75, 2.625, 2.75, 3.0, 3.5] {
+        for pixels in 1..20_000u16 {
+            let on_grid = f32::from(pixels) / density;
+            assert_eq!(
+                ceil_to_px(on_grid, density),
+                on_grid,
+                "{pixels} px at density {density}"
+            );
+            let past = (f32::from(pixels) + 0.25) / density;
+            assert_eq!(
+                ceil_to_px(past, density),
+                (f32::from(pixels) + 1.0) / density,
+                "{pixels} px and a quarter at density {density}"
+            );
+        }
+    }
+}

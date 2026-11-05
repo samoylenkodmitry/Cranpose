@@ -21,7 +21,7 @@ use crate::{
     },
     line_hold::{fitting_hold, wrapped_hold},
     line_runs::{line_extent, place_runs},
-    line_text::{LineEdges, LineText, before_hard_break, indent},
+    line_text::{LineDepth, LineEdges, LineText, before_hard_break, indent},
     paragraph::{LineBreak, ResolvedTextDirection},
     paragraph_intrinsics::ParagraphIntrinsics,
     paragraph_measures::ParagraphMeasures,
@@ -368,7 +368,7 @@ impl TextLayouter {
         &mut self,
         input: &LayoutInput<'_>,
         options: &TextLayoutOptions,
-        mut top: f32,
+        bottom: LineDepth,
         layout: &mut LayoutBody,
     ) {
         // A relayout that added no glyphs keeps those it took.
@@ -376,14 +376,15 @@ impl TextLayouter {
             layout.glyphs = LaidGlyphs::new(&self.glyphs);
         }
         self.keep_glyph_room();
-        // Each missing line adds a line's advance, as Compose's
+        // Each missing line adds a line's advance, whole pixels, as Compose's
         // `heightInLines` adds the distance between two lines' baselines.
-        if layout.lines.len() < options.min_lines {
-            let missing = options.min_lines - layout.lines.len();
-            top += layout.advance * lines_f32(missing);
-        }
-        layout.height = top;
         let grid = input.lengths.grid;
+        layout.height = if layout.lines.len() < options.min_lines {
+            let missing = options.min_lines - layout.lines.len();
+            (bottom.pixels + whole::round(layout.advance * grid) * lines_f32(missing)) / grid
+        } else {
+            bottom.layout
+        };
         layout.line_width = whole::ceil(layout.widest * grid) / grid;
         // New lines start at their indents, unstretched.
         let align = input.paragraph.text_align;
@@ -590,7 +591,7 @@ impl TextLayouter {
         width: f32,
         layout: &mut LayoutBody,
     ) {
-        let mut top = 0.0;
+        let mut top = LineDepth::default();
         let last = self.lines.len() - 1;
         // Most lines are one run.
         layout.lines.reserve_exact(self.lines.len());
@@ -665,18 +666,18 @@ impl TextLayouter {
             room: width - indent,
         };
         let edges = LineEdges {
-            top: 0.0,
+            top: LineDepth::default(),
             first: true,
             last: true,
             ellipsized: false,
         };
-        let (top, reach) = self.push_line(input, resolver, line, edges, layout);
+        let (bottom, reach) = self.push_line(input, resolver, line, edges, layout);
         self.shaper.note_ink_reach(reach);
-        self.finish_lines(input, options, top, layout);
+        self.finish_lines(input, options, bottom, layout);
     }
 
-    // Places the pieces just collected for `line` as its runs, adds the
-    // line below `edges.top` and returns its bottom and how its ink reaches.
+    // Places the pieces just collected for `line` as its runs, adds the line
+    // below `edges.top` and returns its bottom and how its ink reaches.
     fn push_line(
         &self,
         input: &LayoutInput<'_>,
@@ -684,16 +685,13 @@ impl TextLayouter {
         line: LineText,
         edges: LineEdges,
         layout: &mut LayoutBody,
-    ) -> (f32, InkReach) {
+    ) -> (LineDepth, InkReach) {
         let (runs, width) = place_runs(&self.pieces, line.visible, layout);
         let extent = line_extent(&self.pieces, input, resolver, layout, line.range.start);
         let asked = input.lengths.line_height.unwrap_or(f32::NAN);
-        let line_box = self.line_box.of(LineBoxInputs::of(
-            input.paragraph,
-            extent,
-            asked,
-            input.lengths.grid,
-        ));
+        let (top, grid) = (edges.top, input.lengths.grid);
+        let inputs = LineBoxInputs::of(input.paragraph, extent, asked, grid);
+        let line_box = self.line_box.of(inputs);
         let trim_top = if edges.first { line_box.trim_top } else { 0.0 };
         let trim_bottom = if edges.last {
             line_box.trim_bottom
@@ -701,10 +699,11 @@ impl TextLayouter {
             0.0
         };
         if edges.first {
-            layout.advance = line_box.height;
+            layout.advance = line_box.height / grid;
         }
-        let top = edges.top;
-        let bottom = top + line_box.height - trim_top - trim_bottom;
+        // Whole device pixels add up exactly; each edge is divided once.
+        let baseline = (top.pixels + line_box.baseline - trim_top) / grid;
+        let bottom = LineDepth::at(top.pixels + line_box.height - trim_top - trim_bottom, grid);
         let level = self.paragraph_level(input, line.range.start);
         layout.rtl |= level.is_rtl();
         layout.lines.push(LayoutLine {
@@ -712,9 +711,9 @@ impl TextLayouter {
             text: line.range.into(),
             visible_end: narrow(line.visible),
             runs: runs.into(),
-            top,
-            baseline: top + line_box.baseline - trim_top,
-            bottom,
+            top: top.layout,
+            baseline,
+            bottom: bottom.layout,
             left: line.indent,
             indent: line.indent,
             width,
@@ -724,7 +723,8 @@ impl TextLayouter {
         });
         layout.widest = layout.widest.max(width + line.indent);
         let band = || line_band(&self.pieces, &layout.faces);
-        let reach = InkReach::of_line(line_box.baseline - trim_top, bottom - top, (extent, band));
+        let height = bottom.layout - top.layout;
+        let reach = InkReach::of_line(baseline - top.layout, height, (extent, band));
         (bottom, reach)
     }
 
