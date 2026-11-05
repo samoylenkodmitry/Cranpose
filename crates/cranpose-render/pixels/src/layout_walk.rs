@@ -215,7 +215,9 @@ impl<'a> LayoutWalk<'a> {
 
     // Lets go what the walk lowered and did not keep, as it ends.
     pub(crate) fn release(&self) {
-        self.moved.borrow_mut().end_update();
+        self.moved
+            .borrow_mut()
+            .end_update(cranpose_ui::current_memory_headroom());
         release_lowered();
     }
 

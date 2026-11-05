@@ -5,6 +5,7 @@
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::scene_builder::MovedSubtree;
+use cranpose_ui_graphics::MemoryHeadroom;
 
 // Each subtree by its child, with the number of updates that ended since one
 // pushed it. A walk takes a subtree for each child that moved, and a list
@@ -14,10 +15,13 @@ pub(crate) struct MovedSubtrees {
     kept: HashMap<NodeId, (MovedSubtree, u8)>,
 }
 
-// The updates in a row that may end without pushing a subtree it keeps: a
-// list that scrolls by less than a pixel a frame moves its rows in most
-// updates, not in each.
-const UNPUSHED_UPDATES: u8 = 1;
+// The updates in a row that may end without pushing a subtree it keeps. A
+// list that a fling slows, or that scrolls by less than a pixel a frame,
+// moves its rows in some updates and not in others: half a second at 60
+// frames a second keeps its rows lowered across its pauses. With little
+// memory left, one update.
+const UNPUSHED_UPDATES: u8 = 30;
+const TIGHT_UNPUSHED_UPDATES: u8 = 1;
 
 impl MovedSubtrees {
     // Takes the subtree of `node` out, when it is kept.
@@ -36,14 +40,19 @@ impl MovedSubtrees {
     }
 
     // Lets go the subtrees no update pushed for longer than
-    // `UNPUSHED_UPDATES`, as an update ends.
-    pub(crate) fn end_update(&mut self) {
+    // `UNPUSHED_UPDATES`, or `TIGHT_UNPUSHED_UPDATES` at `headroom` Tight,
+    // as an update ends.
+    pub(crate) fn end_update(&mut self, headroom: MemoryHeadroom) {
         if self.kept.is_empty() {
             return;
         }
+        let unpushed = match headroom {
+            MemoryHeadroom::Tight => TIGHT_UNPUSHED_UPDATES,
+            MemoryHeadroom::Ample => UNPUSHED_UPDATES,
+        };
         let stale = self.kept.extract_if(|_, (_, ended)| {
             *ended += 1;
-            *ended > UNPUSHED_UPDATES + 1
+            *ended > unpushed + 1
         });
         for (_, (subtree, _)) in stale {
             subtree.recycle();

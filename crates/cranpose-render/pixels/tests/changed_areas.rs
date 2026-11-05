@@ -11,7 +11,10 @@ use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_render_pixels::{PixelRect, PixelsRenderer};
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
+use cranpose_ui::{
+    Box, BoxSpec, Column, ColumnSpec, MemoryHeadroom, Modifier, Text, TextStyle,
+    set_memory_headroom,
+};
 use cranpose_ui_graphics::{
     Brush, Color, ColorFilter, DrawScope, GraphicsLayer, Point, Stroke, StrokeCap, TAU,
 };
@@ -423,8 +426,17 @@ fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
 // frame; a second shell of the same scenes, whose scene goes before each
 // update that renders its root again, builds it anew and draws it whole.
 fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
+    kept_frames_match_full_redraws_with(scale, MemoryHeadroom::Ample, scenes);
+}
+
+// As `kept_frames_match_full_redraws`, with `headroom` the memory both
+// shells' host reports left.
+fn kept_frames_match_full_redraws_with(scale: f32, headroom: MemoryHeadroom, scenes: fn(Step)) {
     let (mut shell, captured) = shell(scale, scenes);
     let (mut fresh, fresh_captured) = self::shell(scale, scenes);
+    for host in [&shell, &fresh] {
+        host.app_context().enter(|| set_memory_headroom(headroom));
+    }
     let mut areas = Vec::new();
     let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut full = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
@@ -626,6 +638,50 @@ fn ShadowAboveColour(captured: Step) {
 #[test]
 fn nodes_that_change_each_step_draw_right_across_a_splice_before_one() {
     kept_frames_match_full_redraws(1.0, ShadowAboveColour);
+}
+
+// Rows that move every third step and rest between, under a count that
+// changes each step: their moves after a rest push what was kept of them
+// while memory is ample, and lower them again once little is left.
+#[composable]
+fn RestingRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().offset(4.0, 4.0),
+        ColumnSpec::default(),
+        move || {
+            let n = step.value();
+            Text(
+                format!("Count {n}"),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Column(
+                Modifier::empty().offset((n / 3 * 5) as f32, 0.0),
+                ColumnSpec::default(),
+                || {
+                    for row in 0..4 {
+                        Text(
+                            format!("Row {row}"),
+                            Modifier::empty().background(color(row, 9)),
+                            TextStyle::default(),
+                        );
+                    }
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn rows_that_rest_between_moves_draw_right_with_ample_memory() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, RestingRows);
+}
+
+#[test]
+fn rows_that_rest_between_moves_draw_right_with_little_memory() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Tight, RestingRows);
 }
 
 #[composable]
