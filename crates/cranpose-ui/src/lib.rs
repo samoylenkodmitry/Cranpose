@@ -209,7 +209,8 @@ pub use layout_direction::{
 pub use lazy_item::{ProvideLazyItemKey, lazy_item_key, local_lazy_item_key};
 pub use lazy_prefetch::{
     drain_lazy_prefetch_requests, has_lazy_prefetch_requests, lazy_prefetch_pass_cost,
-    set_idle_prefetch_passes, warm_prefetched_slices, with_lazy_prefetch_pass,
+    lazy_prefetch_pass_due, set_idle_prefetch_passes, warm_prefetched_slices,
+    with_lazy_prefetch_pass,
 };
 pub use memory_headroom::{current_memory_headroom, set_memory_headroom};
 pub use modal::{

@@ -312,3 +312,47 @@ fn a_fast_scroll_composes_the_rows_it_reaches_in_its_frame() {
     assert_eq!(composed_rows(&compositions), [0, 1, 2, 3, 4]);
     assert!(shell.has_idle_prefetch_work());
 }
+
+// Rows composed more than once.
+fn composed_again(compositions: &Compositions) -> Vec<usize> {
+    let mut rows: Vec<_> = compositions
+        .0
+        .borrow()
+        .iter()
+        .filter(|(_, entered)| **entered > 1)
+        .map(|(row, _)| *row)
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
+// A drag delivers its moves between frames, and a loop that waits for the
+// next frame runs idle passes after each of them, as Android's and the
+// desktop's do.
+#[test]
+fn idle_passes_wait_for_the_frame_that_applies_a_scroll() {
+    cranpose_ui::set_idle_prefetch_passes(true);
+    let compositions = Compositions::default();
+    let list = Rc::default();
+    // Rows 40 high in a viewport 100 high, scrolled 75 a frame in five
+    // moves: fast enough that the frames leave the rows ahead to the passes.
+    let mut shell = list_shell(&compositions, 100, &list);
+    shell.update();
+    let list = list.get().expect("the list is composed");
+    for _ in 0..10 {
+        for _ in 0..5 {
+            list.dispatch_scroll_delta(-15.0);
+            assert!(
+                !shell.run_idle_prefetch(None, |_| false),
+                "no pass runs while a scroll waits for its frame"
+            );
+        }
+        shell.update();
+        shell.run_idle_prefetch(None, |_| false);
+    }
+    assert_eq!(
+        composed_again(&compositions),
+        [0_usize; 0],
+        "the frames keep the rows the passes composed ahead"
+    );
+}
