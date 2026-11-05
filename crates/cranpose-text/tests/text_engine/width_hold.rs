@@ -281,3 +281,46 @@ fn a_layout_aligned_without_moving_a_glyph_keeps_its_id() {
     assert_ne!(laid.id(), centred, "the start takes the line back");
     assert_eq!(picture(&laid), at_start);
 }
+
+// A text cut to its max lines shows no line past them, so the lines past
+// them hold no width: a layout keeps the widths at which what it shows
+// stays, as an animated width asks of a card body each frame. A clipped
+// layout stops holding only where a shown line breaks elsewhere.
+#[test]
+fn lines_past_the_max_lines_hold_no_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let style = paragraph(TextAlign::Start, LineBreak::Simple);
+    let lengths = ParagraphLengths::default();
+    for overflow in [TextOverflow::Clip, TextOverflow::Ellipsis] {
+        let options = TextLayoutOptions {
+            overflow,
+            max_lines: 2,
+            ..TextLayoutOptions::default()
+        };
+        let shown = |width| {
+            let laid = lay_out_with(&resolver, TEXT, (&style, lengths), width, options);
+            (0..laid.line_count())
+                .map(|line| laid.line_start(line)..laid.line_end(line))
+                .collect::<Vec<_>>()
+        };
+        for step in 0..40 {
+            let from = 40.0 + 2.5 * step as f32;
+            // Each width held lays out as a fresh layout there.
+            let (_, first_not) = held_widths(
+                &resolver,
+                TEXT,
+                (&style, lengths),
+                (from, from + 30.0),
+                options,
+            );
+            let Some(first_not) = first_not.filter(|_| overflow == TextOverflow::Clip) else {
+                continue;
+            };
+            assert_ne!(
+                shown(first_not - 0.25),
+                shown(first_not),
+                "from {from}: no shown line moves at {first_not}"
+            );
+        }
+    }
+}
