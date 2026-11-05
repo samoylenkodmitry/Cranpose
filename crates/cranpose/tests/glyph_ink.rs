@@ -248,10 +248,11 @@ fn stacked_marks_draw_above_the_box() {
     );
 }
 
-// A line half as tall as its font, untrimmed, leaves the top of an H above
-// the label's box, and the top draws there.
+// A line half as tall as its font, untrimmed, takes most of what it lacks
+// from below the baseline, as Android's line height span does, so an H
+// reaches past the bottom of the label's box, rows 30 to 50, and draws whole.
 #[test]
-fn a_line_shorter_than_its_font_draws_above_the_box() {
+fn a_line_shorter_than_its_font_draws_below_the_box() {
     let short = ParagraphStyle {
         line_height: text::TextUnit::Sp(20.0),
         line_height_style: Some(text::LineHeightStyle {
@@ -263,8 +264,8 @@ fn a_line_shorter_than_its_font_draws_above_the_box() {
     let tall = ink("H", SpanStyle::default(), ParagraphStyle::default());
     let squeezed = ink("H", SpanStyle::default(), short);
     assert!(
-        squeezed.top < 30 && squeezed.bottom - squeezed.top == tall.bottom - tall.top,
-        "the H spans rows {}..={} on a short line from row 30, {}..={} on its own",
+        squeezed.bottom > 50 && squeezed.bottom - squeezed.top == tall.bottom - tall.top,
+        "the H spans rows {}..={} on a short line at rows 30..50, {}..={} on its own",
         squeezed.top,
         squeezed.bottom,
         tall.top,
@@ -272,12 +273,12 @@ fn a_line_shorter_than_its_font_draws_above_the_box() {
     );
 }
 
-// A line a little shorter than its font holds the ink of an E, and leaves
-// the accent of an É above the label's box, where it draws.
+// A line well shorter than its font holds the top of an E, and leaves the
+// accent of an É above the label's box, where it draws.
 #[test]
 fn an_accent_above_a_short_line_draws_above_the_box() {
     let short = ParagraphStyle {
-        line_height: text::TextUnit::Sp(45.0),
+        line_height: text::TextUnit::Sp(25.0),
         line_height_style: Some(text::LineHeightStyle {
             trim: text::LineHeightTrim::None,
             ..text::LineHeightStyle::default()
