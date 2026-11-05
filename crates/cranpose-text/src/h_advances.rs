@@ -39,7 +39,7 @@ impl HAdvances {
     // The advance of `glyph` in font units, from `metrics`: the last pair's
     // past the pairs, as `hmtx` repeats it, and none past the font's glyphs,
     // as the general reader gives.
-    #[inline(always)]
+    #[inline]
     pub(crate) fn advance(&self, metrics: &[u8], glyph: u32) -> u16 {
         if glyph >= self.num_glyphs {
             return 0;

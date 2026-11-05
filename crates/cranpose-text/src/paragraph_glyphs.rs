@@ -82,21 +82,21 @@ impl ParagraphGlyphs {
     fn round_advances(&mut self, start: usize, face: &Typeface, em: f32) {
         let Self { glyphs, pixels, .. } = self;
         // Only `add` appends glyphs, and it measures each one it adds.
-        debug_assert_eq!(pixels.len(), start);
+        debug_assert_eq!(pixels.len(), start, "the pixels follow the glyphs");
         let device = em / f32::from(face.units_per_em());
         let added = &glyphs[start..];
         if let Some((advances, bytes)) = face.h_advances() {
             // An advance that shaping left the font's own rounds whole, as
             // a zeroed one does to nothing: one pass with no branch, which
             // a vector unit takes several glyphs at a time.
-            pixels.resize(glyphs.len(), 0.0);
-            let pixels = &mut pixels[start..];
-            for (pixel, glyph) in pixels.iter_mut().zip(added) {
-                *pixel = whole::floor(font_units(glyph.advance) * device + 0.5);
-            }
+            pixels.extend(
+                added
+                    .iter()
+                    .map(|glyph| whole::floor(font_units(glyph.advance) * device + 0.5)),
+            );
             // The few that shaping moved read their own advances.
             let metrics = advances.metrics(bytes);
-            for (glyph, pixel) in added.iter().zip(pixels) {
+            for (glyph, pixel) in added.iter().zip(&mut pixels[start..]) {
                 if glyph.is_adjusted() {
                     let own = advances.advance(metrics, glyph.id().0);
                     *pixel = whole_pixels(glyph, f32::from(own), device);
@@ -162,7 +162,7 @@ impl ParagraphGlyphs {
 // with `own` units its own advance. HarfBuzz sets the advance of a mark to
 // zero after it reads the rounded advance, so a glyph with no shaped
 // advance advances by nothing.
-#[inline(always)]
+#[inline]
 fn whole_pixels(glyph: &ShapedGlyph, own: f32, device: f32) -> f32 {
     if glyph.advance == 0 {
         return 0.0;
