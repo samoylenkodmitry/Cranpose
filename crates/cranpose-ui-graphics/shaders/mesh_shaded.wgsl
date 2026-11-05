@@ -24,6 +24,8 @@ struct ShadedSurface {
     // The content's colour there, premultiplied.
     color: vec4<f32>,
     position: vec3<f32>,
+    // The eye.
+    eye: vec3<f32>,
     // Of length one, on the side the eye sees.
     normal: vec3<f32>,
     // Toward the eye, of length one.
@@ -68,6 +70,7 @@ fn shaded_surface(input: ShadedVaryings, color: vec4<f32>, visibility: f32) -> S
     var surface: ShadedSurface;
     surface.color = color;
     surface.position = input.position;
+    surface.eye = shaded.eye.xyz;
     surface.to_eye = normalize(shaded.eye.xyz - input.position);
     let normal = normalize(input.normal);
     surface.normal = select(-normal, normal, dot(normal, surface.to_eye) >= 0.0);

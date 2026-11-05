@@ -1719,7 +1719,7 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
 ```
 
 `ShadedSurface` holds, in the mesh's own coordinates: `color`, the content
-there, premultiplied; `position`; `normal`, on the side the eye sees;
+there, premultiplied; `position`; `eye`; `normal`, on the side the eye sees;
 `to_eye` and `to_light`, of length one, `to_light` zero without a light;
 `lit`, from 0 in full shadow to 1; and `ambient`. `shaded_param(i)` reads
 `params[i]`. The room's controls use it to mirror the controls tab's studio
@@ -1821,6 +1821,29 @@ leaves its own camera standing in the doorway. In the demo's room, open the
 Room tab on the right wall, turn to it with E and walk in with W. The second
 room's Step into the room button opens its walls, and its own right wall holds
 the demo again.
+
+The desktop demo's Backrooms tab walks through rooms that never end. Each room
+is a composable. It composes a doorway at each of its doors with the next room
+behind it, two doorways deep. The tab makes the room behind a doorway the window
+scene's room once the eye walks through that doorway. `eye.place` then puts the
+eye at the same pose with no doorways: the room's coordinates stay the same. The
+tab keys the scene by its room, so the eye walks on only after the renderer has
+placed the new scene. One `Shaded` shader colours the walls, floors and ceilings
+of every room; it reads the eye from `ShadedSurface`, so a surface's closure
+need not follow the eye. The entity's writing, a lever and the things in the
+rooms carry live content. Some walls print the tab's own source files in a
+`LazyColumn`, which lays out only the lines on the wall. The tab fetches each
+file the first time a wall shows it.
+
+The tab provides the window's eye through `local_eye()` and what all rooms
+share through a `staticCompositionLocalOf`: the meshes, the journey, the
+camcorder's film and the fetched files. A room behind a doorway takes only its
+place. Motion comes from `rememberInfiniteTransition`: the film's frame, a
+floating eye's bob and a panel's sway. Draw closures read these values, so the
+motion draws each frame and composes nothing. `derivedStateOf` turns the film's
+value, which changes every display frame, into a frame count that changes 24
+times a second. Timed events, such as the television's typing and the
+captions, run in `LaunchedEffect`s with `delay`.
 
 #### Point with a ray
 

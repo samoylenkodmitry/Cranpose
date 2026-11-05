@@ -13,11 +13,8 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{RenderEffect, RuntimeShader, TileMode, RUNTIME_SHADER_PRELUDE_WGSL};
 
-use super::{
-    space::{RoomShape, RoomState},
-    Ticking,
-};
-use crate::app::shader_rect::WGSL_HELPERS;
+use super::space::{RoomShape, RoomState};
+use crate::app::{shader_rect::WGSL_HELPERS, ticking::Ticking};
 
 const GLASS_CONTENT: Size = Size {
     width: 512.0,

@@ -649,6 +649,46 @@ fn a_shaded_surface_takes_its_colour_from_its_shader() {
     );
 }
 
+// Green where the eye the surface holds lies within a unit of the point
+// its values 1 to 3 give, red elsewhere.
+const EYE_WGSL: &str = r"
+fn shade(surface: ShadedSurface) -> vec4<f32> {
+    let expected = vec3<f32>(shaded_param(1u), shaded_param(2u), shaded_param(3u));
+    let near = length(surface.eye - expected) < 1.0;
+    return select(vec4<f32>(1.0, 0.0, 0.0, 1.0), vec4<f32>(0.0, 1.0, 0.0, 1.0), near);
+}
+";
+
+// The wall of `ShadedScene`, whose shader expects the camera's eye in the
+// wall's mesh.
+#[composable]
+fn EyeScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let wall = panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0));
+    let eye = wall
+        .inverse()
+        .expect("the wall spans space")
+        .transform_point(camera().eye());
+    let mut params = [0.0; Shaded::PARAMS];
+    params[1..4].copy_from_slice(&eye.to_array());
+    ShadedScene(Material::Shaded(Shaded {
+        shader: Arc::clone(SHADER.get_or_init(|| Arc::from(EYE_WGSL))),
+        params,
+    }));
+}
+
+#[test]
+fn a_shaded_surface_knows_where_the_eye_stands_in_its_mesh() {
+    let Some(frame) = capture(EyeScene) else {
+        return;
+    };
+    let wall = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+    assert!(
+        wall[1] > 200 && wall[0] < 40,
+        "the wall's shader reads the camera's eye in the wall's mesh: {wall:?}"
+    );
+}
+
 #[test]
 fn a_shaded_surface_whose_shader_does_not_build_draws_lit() {
     let Some(frame) = capture(BrokenShadedScene) else {

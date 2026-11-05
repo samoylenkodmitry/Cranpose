@@ -23,6 +23,7 @@ use cranpose_ui::{
 };
 
 mod animations;
+mod backrooms;
 pub mod chrome_tabs;
 pub(crate) mod controls_ui;
 mod demo_tab;
@@ -60,9 +61,11 @@ mod shaders;
 mod source_view;
 mod tab_content;
 mod text_showcase;
+mod ticking;
 pub mod tool_windows;
 mod tv;
 mod url_resolve;
+mod walk_keys;
 pub mod wear;
 mod web_fetch;
 mod webview;
@@ -136,11 +139,7 @@ impl StartupSelection {
                 initial_tab: Some(DemoTab::Shaders),
                 initial_shader_section,
             },
-            (Some(tab), Some(_)) => Self {
-                initial_tab: Some(tab),
-                initial_shader_section: None,
-            },
-            (Some(tab), None) => Self {
+            (Some(tab), _) => Self {
                 initial_tab: Some(tab),
                 initial_shader_section: None,
             },
