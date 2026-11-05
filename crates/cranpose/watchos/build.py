@@ -39,6 +39,18 @@ impl Application {
         self.0.resize(width, height, density)
     }
     pub fn tick(&mut self, elapsed: u64) -> bool { self.0.tick(elapsed) }
+    // When the host ticks next, in nanoseconds from now: 0 at the next frame,
+    // u64::MAX only once woken.
+    pub fn next_tick_nanos(&mut self) -> u64 {
+        match self.0.next_tick() {
+            cranpose::watchos::NextTick::NextFrame => 0,
+            cranpose::watchos::NextTick::At(at) => {
+                let wait = at.saturating_duration_since(std::time::Instant::now()).as_nanos();
+                u64::try_from(wait).unwrap_or(u64::MAX - 1).clamp(1, u64::MAX - 1)
+            }
+            cranpose::watchos::NextTick::OnWake => u64::MAX,
+        }
+    }
     pub fn pixels(&mut self) -> &[u8] { self.0.pixels() }
     pub fn sprites(&mut self) -> &[f32] { self.0.sprites().sprites() }
     pub fn upload_count(&self) -> usize { self.0.last_sprites().uploads().len() }
@@ -65,6 +77,7 @@ mod ffi {
         fn create_application(width: u32, height: u32, density: f32) -> Result<Box<Application>>;
         fn resize(self: &mut Application, width: u32, height: u32, density: f32) -> Result<()>;
         fn tick(self: &mut Application, elapsed_nanos: u64) -> bool;
+        fn next_tick_nanos(self: &mut Application) -> u64;
         fn pixels(self: &mut Application) -> &[u8];
         fn sprites(self: &mut Application) -> &[f32];
         fn upload_count(self: &Application) -> usize;
@@ -82,9 +95,17 @@ mod ffi {
     }
 }
 
+unsafe extern "C" {
+    // Host.mm: asks the main thread for a tick, from any thread.
+    fn CPWakeHost();
+}
+
 pub fn create_application(width: u32, height: u32, density: f32) -> Result<Box<Application>, Box<dyn std::error::Error>> {
     cranpose::host::set_application_id(''' + json.dumps(application_id) + ''')?;
-    Ok(Box::new(Application(cranpose::watchos::Application::new(width, height, density, application::''' + entry + ''')?)))
+    let mut application = cranpose::watchos::Application::new(width, height, density, application::''' + entry + ''')?;
+    // SAFETY: CPWakeHost takes no arguments and only posts to the main queue.
+    application.set_frame_waker(|| unsafe { CPWakeHost() });
+    Ok(Box::new(Application(application)))
 }
 '''
 

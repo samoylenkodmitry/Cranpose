@@ -8,6 +8,7 @@
 static std::unique_ptr<rust::Box<cranpose_watchos::Application>> app;
 static std::string error;
 static bool active = true;
+static void (*wake_host)(void);
 
 bool CPResize(uint32_t width, uint32_t height, float density) {
     try {
@@ -26,6 +27,17 @@ bool CPResize(uint32_t width, uint32_t height, float density) {
 }
 
 bool CPTick(uint64_t elapsed) { return app && (*app)->tick(elapsed); }
+
+uint64_t CPNextTick(void) { return app ? (*app)->next_tick_nanos() : UINT64_MAX; }
+
+void CPOnWake(void (*wake)(void)) { wake_host = wake; }
+
+// The composition's waker, called from any thread.
+extern "C" void CPWakeHost(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (wake_host) wake_host();
+    });
+}
 
 const float *CPSprites(size_t *count) {
     *count = 0;
