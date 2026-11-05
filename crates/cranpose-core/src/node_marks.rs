@@ -72,8 +72,23 @@ impl NodeMarks {
         mark: u8,
         ancestor_mark: u8,
     ) {
+        self.update_with_ancestors(applier, id, |had| had | mark, ancestor_mark);
+    }
+
+    /// Sets `id`'s mark to what `update` makes of the mark it had, and adds
+    /// the bits of `ancestor_mark` to the mark of each node above it, from
+    /// its parent up to the first that had them. Each node's storage is
+    /// found once.
+    pub fn update_with_ancestors(
+        &mut self,
+        applier: &MemoryApplier,
+        id: NodeId,
+        update: impl FnOnce(u8) -> u8,
+        ancestor_mark: u8,
+    ) {
         let mut place = MarkPlace::of(applier, id);
-        *self.entry_at(place) |= mark;
+        let entry = self.entry_at(place);
+        *entry = update(*entry);
         while let Some(parent) = applier.parent_at(place) {
             place = MarkPlace::of(applier, parent);
             let entry = self.entry_at(place);
@@ -95,8 +110,16 @@ impl NodeMarks {
     pub(crate) fn mark_at(&self, place: MarkPlace) -> u8 {
         match place {
             MarkPlace::Dense(slot) => self.dense.get(slot).copied().unwrap_or(0),
-            MarkPlace::Elsewhere(id) => self.elsewhere.get(&id).copied().unwrap_or(0),
+            MarkPlace::Elsewhere(id) => self.elsewhere_mark(id),
         }
+    }
+
+    // The mark of a node kept apart: ids past the dense range are rare, and
+    // the map lookup inline would grow every caller of `mark_at`.
+    #[cold]
+    #[inline(never)]
+    fn elsewhere_mark(&self, id: NodeId) -> u8 {
+        self.elsewhere.get(&id).copied().unwrap_or(0)
     }
 
     #[inline]

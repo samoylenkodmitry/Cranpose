@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{ArcGeometry, Brush, CornerRadii, Rect, TAU};
 
 use crate::{
     draw::{ClipBounds, RenderItem, ShapeCoverage, clip_rect_to_window, place_shape},
-    scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
+    raster_scene::{DrawShape, ImageDraw, Outline, RasterScene, ShadowDraw, TextDraw},
     scene_item::ItemRef,
 };
 
@@ -163,7 +163,9 @@ fn swept_sweeps(old: &DrawShape, new: &DrawShape) -> Option<(f32, f32)> {
 // one arc that differs only in its sweep: around the part between their
 // ends, caps included. Away from it a point lies inside or outside both
 // sweeps alike, and its coverage reads only the end it lies near. Returns
-// false and adds nothing for any other pair.
+// false and adds nothing for any other pair. Out of line: few shapes are
+// arcs, and inline it would double the size of `add_changed_pair`.
+#[inline(never)]
 fn add_swept_arc_areas(
     old: &DrawShape,
     new: &DrawShape,
@@ -448,21 +450,34 @@ pub(crate) fn add_changed_runs(
     }
 }
 
-fn pixels(area: ClipBounds) -> i64 {
-    i64::from(area.max_x - area.min_x) * i64::from(area.max_y - area.min_y)
+// The pixels `area` covers. An area lies in the window, whose pixels a u32
+// counts, and a 64-bit product takes several instructions on the 32-bit
+// cores that merge areas most.
+fn pixels(area: ClipBounds) -> u32 {
+    (area.max_x - area.min_x).unsigned_abs() * (area.max_y - area.min_y).unsigned_abs()
 }
 
 // Joins `areas` while they are too many to draw one by one, each time the
 // two whose join takes in the fewest pixels that neither covers, so that
-// changes far apart do not draw the still pixels between them again. Out
-// of line: it runs once an update.
-#[inline(never)]
+// changes far apart do not draw the still pixels between them again. The
+// count is read in line: an update's few areas need no join.
+#[inline]
 pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
+    if areas.len() > MAX_AREAS {
+        join_areas(areas);
+    }
+}
+
+#[inline(never)]
+fn join_areas(areas: &mut Vec<ClipBounds>) {
     while areas.len() > MAX_AREAS {
-        let mut cheapest = (0, 1, i64::MAX);
+        let mut cheapest = (0, 1, u32::MAX);
         for (first, &a) in areas.iter().enumerate() {
+            let own = pixels(a);
             for (second, &b) in areas.iter().enumerate().skip(first + 1) {
-                let extra = pixels(union(a, b)) - pixels(a) - pixels(b);
+                // Areas in the list do not touch, so their join covers at
+                // least both.
+                let extra = pixels(union(a, b)).saturating_sub(own + pixels(b));
                 if extra < cheapest.2 {
                     cheapest = (first, second, extra);
                 }

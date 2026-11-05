@@ -7,7 +7,7 @@ use cranpose_ui_graphics::{ImageBitmap, Rect, whole};
 
 use crate::{
     draw::{Target, TextRaster, draw_item},
-    scene::RasterScene,
+    raster_scene::RasterScene,
 };
 
 /// The widest and tallest surface, in pixels; a larger layer is cut.

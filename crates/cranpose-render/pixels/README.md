@@ -5,18 +5,22 @@ buffer. Renderer and host authors use `PixelsRenderer` when a software frame
 fits the target surface. App authors can select the `renderer-pixels` feature
 on [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-`PixelsRenderer::draw_scaled` writes the current scene into a host-owned RGBA
-buffer at the requested device scale:
+`PixelsRenderer::draw` writes the current scene into a host-owned RGBA buffer
+at the device scale `AppShell` sets:
 
 ```rust
 use cranpose_render_pixels::PixelsRenderer;
 
 let renderer = PixelsRenderer::new();
 let mut rgba = vec![0; 64 * 64 * 4];
-renderer.draw_scaled(&mut rgba, 64, 64, 2.0);
+renderer.draw(&mut rgba, 64, 64);
 ```
 
-`AppShell` supplies the scene before each frame. The host presents the image.
+`AppShell` brings the scene up to the layout tree before each frame: the
+renderer keeps no render graph, and builds its items straight from the layout
+nodes that changed. `PixelsRenderer::update_picture` names the areas whose
+pixels changed, and `PixelsRenderer::draw_picture_area` draws them. The host
+presents the image.
 The [watchOS host](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/watchos.rs)
 shows the complete integration.
 

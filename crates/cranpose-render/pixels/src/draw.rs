@@ -1,6 +1,7 @@
 use cranpose_render_common::{
     brush_sampling::{DitherAxis, DitheredLine, color_to_rgba, sample_brush_rgba},
     glyph_mask::GlyphMaskCache,
+    graph::RenderGraph,
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
@@ -14,7 +15,7 @@ use cranpose_ui_graphics::{
 use crate::{
     pipeline,
     pixel::{GradientColors, Pixel},
-    scene::{Outline, RasterScene, Scene},
+    raster_scene::{ItemCounts, Outline, RasterScene},
 };
 
 mod image;
@@ -25,9 +26,7 @@ mod text;
 
 use image::{blit_image_between_pixels, draw_image, image_rect};
 use reach::text_bounds;
-use row_runs::{
-    INK_REACH, NO_RUN, RoundedFill, RowRuns, arc_row_runs, line_row_runs, stroke_row_runs,
-};
+use row_runs::{INK_REACH, LineRows, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
 use shape_rows::{Coverage, ShapeRows};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
@@ -58,6 +57,9 @@ fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
 }
 
+// Out of line, as `on_pixel_grid` is: few draws snap, and the rounding
+// inline would grow each placement.
+#[inline(never)]
 fn snapped_anchor_origin(anchor: Point) -> Point {
     Point::new(whole::round(anchor.x), whole::round(anchor.y))
 }
@@ -133,6 +135,15 @@ impl ClipBounds {
             && other.min_x < self.max_x
             && self.min_y < other.max_y
             && other.min_y < self.max_y
+    }
+
+    // Cuts `self` to `frame`; false when nothing of it is left.
+    pub(crate) fn clip_to(&mut self, frame: Self) -> bool {
+        self.min_x = self.min_x.max(frame.min_x);
+        self.min_y = self.min_y.max(frame.min_y);
+        self.max_x = self.max_x.min(frame.max_x);
+        self.max_y = self.max_y.min(frame.max_y);
+        self.min_x < self.max_x && self.min_y < self.max_y
     }
 
     pub(crate) fn holds(self, other: Self) -> bool {
@@ -213,33 +224,28 @@ pub(crate) fn clip_rect_to_window(
     })
 }
 
-/// Draws `scene` into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device pixel
-/// per logical pixel. Its texts draw the glyphs of the typefaces they were laid out in.
-pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
+/// Draws `graph`, a render graph built by hand, into `frame`, an RGBA8
+/// buffer of `width` by `height` pixels, at one device pixel per logical
+/// pixel. Its texts draw the glyphs of the typefaces they were laid out in.
+pub fn draw_graph(frame: &mut [u8], width: u32, height: u32, graph: &RenderGraph) {
     let text = TextRaster::new(TextFonts::default());
-    draw_scene_scaled(frame, width, height, scene, &text, 1.0);
+    let diagnostics = RenderDiagnostics::new();
+    let scene = pipeline::build_raster_scene(graph, &diagnostics, 1.0, &text);
+    draw_raster_frame(frame, (width, height), Some(&scene), &diagnostics, &text);
 }
 
-pub(crate) fn draw_scene_scaled(
+// Draws `scene` into `frame`, an RGBA8 buffer of `width` by `height`
+// pixels, or the background colour without one.
+pub(crate) fn draw_raster_frame(
     frame: &mut [u8],
-    width: u32,
-    height: u32,
-    scene: &Scene,
+    (width, height): (u32, u32),
+    scene: Option<&RasterScene>,
+    diagnostics: &RenderDiagnostics,
     text: &TextRaster,
-    scale: f32,
 ) {
-    if let Some(graph) = scene.graph.as_ref() {
-        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics(), scale, text);
-        draw_raster_scene(
-            frame,
-            width,
-            height,
-            &raster_scene,
-            scene.diagnostics(),
-            text,
-        );
-    } else {
-        clear_frame(frame.as_chunks_mut::<4>().0);
+    match scene {
+        Some(scene) => draw_raster_scene(frame, width, height, scene, diagnostics, text),
+        None => clear_frame(frame.as_chunks_mut::<4>().0),
     }
 }
 
@@ -345,6 +351,19 @@ pub(crate) enum RenderItem {
     Shadow(usize),
 }
 
+impl RenderItem {
+    // The item of a run whose items of each kind began at `from` in its
+    // lists, where that run begins at `to`.
+    pub(crate) fn moved(self, from: ItemCounts, to: ItemCounts) -> Self {
+        match self {
+            Self::Shape(index) => Self::Shape(to.shapes + (index - from.shapes)),
+            Self::Image(index) => Self::Image(to.images + (index - from.images)),
+            Self::Text(index) => Self::Text(to.texts + (index - from.texts)),
+            Self::Shadow(index) => Self::Shadow(to.shadows + (index - from.shadows)),
+        }
+    }
+}
+
 /// Draws one pass of an elevation shadow: its color at the shadow's
 /// coverage of each pixel's centre. Out of line, as are images and the
 /// shapes a fill does not paint: the item loop keeps the solid fills and
@@ -352,7 +371,7 @@ pub(crate) enum RenderItem {
 #[inline(never)]
 fn draw_shadow<P: Pixel>(
     target: &mut Target<'_, P>,
-    draw: &crate::scene::ShadowDraw,
+    draw: &crate::raster_scene::ShadowDraw,
     diagnostics: &RenderDiagnostics,
 ) {
     let (shadow, clip) = placed_shadow(draw);
@@ -428,6 +447,7 @@ fn mirror_line(rect: Rect) -> Option<i32> {
     (twice.fract() == 0.0 && twice.abs() < LIMIT).then(|| floor_pixel(twice))
 }
 
+#[inline(never)]
 fn on_pixel_grid(rect: Rect) -> Rect {
     Rect {
         x: whole::round(rect.x),
@@ -446,16 +466,15 @@ fn on_pixel_grid(rect: Rect) -> Rect {
 }
 
 /// `draw` where its snap puts it; `None` when it covers nothing.
-pub(crate) fn place_shape(draw: &crate::scene::DrawShape) -> Option<PlacedShape> {
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
+pub(crate) fn place_shape(draw: &crate::raster_scene::DrawShape) -> Option<PlacedShape> {
+    let (snap_delta, dither_origin) = match draw.snap_anchor {
+        Some(anchor) => {
+            let origin = snapped_anchor_origin(anchor);
+            (Point::new(origin.x - anchor.x, origin.y - anchor.y), origin)
+        }
+        None => (Point::default(), Point::default()),
+    };
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let dither_origin = draw
-        .snap_anchor
-        .map(snapped_anchor_origin)
-        .unwrap_or_default();
     let rect = if draw.snap_to_pixel_grid {
         on_pixel_grid(rect)
     } else {
@@ -471,7 +490,7 @@ pub(crate) fn place_shape(draw: &crate::scene::DrawShape) -> Option<PlacedShape>
 
 fn draw_shape<P: Pixel>(
     target: &mut Target<'_, P>,
-    draw: &crate::scene::DrawShape,
+    draw: &crate::raster_scene::DrawShape,
     diagnostics: &RenderDiagnostics,
 ) {
     let Some(PlacedShape {
@@ -499,8 +518,9 @@ fn draw_shape<P: Pixel>(
     match &coverage {
         ShapeCoverage::Line(line) => {
             let frame = line.frame();
+            let rows = LineRows::new(line, &frame);
             paint.paint(
-                |y, min_x, max_x| line_row_runs(line, &frame, y, min_x, max_x),
+                |y, min_x, max_x| rows.runs(y, min_x, max_x),
                 |point| Coverage::of(line.coverage_in(&frame, point)),
             );
         }
@@ -585,7 +605,7 @@ pub(crate) enum ShapeCoverage {
 impl ShapeCoverage {
     /// The coverage of `draw` laid at `rect`, its line or arc moved by
     /// `snap_delta` as the rect was; `None` when it covers nothing.
-    fn of(draw: &crate::scene::DrawShape, rect: Rect, snap_delta: Point) -> Option<Self> {
+    fn of(draw: &crate::raster_scene::DrawShape, rect: Rect, snap_delta: Point) -> Option<Self> {
         let shift = |point: Point| Point::new(point.x + snap_delta.x, point.y + snap_delta.y);
         let (shape, stroke) = match draw.outline {
             Outline::Line(line) => {
@@ -639,7 +659,7 @@ impl ShapeCoverage {
     }
 }
 
-fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {
+fn placed_shadow(draw: &crate::raster_scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
