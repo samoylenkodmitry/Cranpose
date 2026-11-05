@@ -536,7 +536,7 @@ fn MovedBoxChangingText(captured: Step) {
                     .background(color(3, 8)),
                 BoxSpec::default(),
                 move || {
-                    let label = (step.value() + 2) / 3;
+                    let label = step.value().div_ceil(3);
                     Text(format!("v{label}"), Modifier::empty(), TextStyle::default());
                 },
             );
@@ -672,6 +672,56 @@ fn RestingRows(captured: Step) {
             );
         },
     );
+}
+
+// A column whose colour changes each step, over a box that does not change
+// and holds a box whose colour changes each step and whose shadow shows
+// every fourth step, and a count after them. The column pushes again; the
+// box between keeps its record and its draws while its child pushes again.
+#[composable]
+fn KeptBetween(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Column(
+        Modifier::empty().offset(4.0, 4.0).background(color(n, 10)),
+        ColumnSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(60.0)
+                    .height(40.0)
+                    .background(color(2, 11))
+                    .padding(6.0),
+                BoxSpec::default(),
+                move || {
+                    let n = step.value();
+                    Box(
+                        Modifier::empty()
+                            .width(30.0)
+                            .height(20.0)
+                            .graphics_layer(move || GraphicsLayer {
+                                shadow_elevation: if n % 4 == 0 { 5.0 } else { 0.0 },
+                                ..GraphicsLayer::default()
+                            })
+                            .background(color(n, 12)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+            Text(
+                format!("Count {}", step.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[test]
+fn a_still_box_between_changing_nodes_keeps_its_draws() {
+    kept_frames_match_full_redraws(1.0, KeptBetween);
 }
 
 #[test]

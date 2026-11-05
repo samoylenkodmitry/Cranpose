@@ -273,6 +273,21 @@ pub(crate) struct PassedDown {
     pub translated: bool,
 }
 
+impl PassedDown {
+    // What a window's root passes down at `scale`: its map to device pixels,
+    // and no style, clip or snap anchor.
+    pub(crate) fn root(scale: f32) -> Self {
+        Self {
+            transform: ProjectiveTransform::uniform_scale(scale),
+            alpha: 1.0,
+            color_filter: None,
+            clip: None,
+            snap_anchor: None,
+            translated: false,
+        }
+    }
+}
+
 // A node of the graph a scene keeps a record of: a layer with its subtree,
 // or a node drawn in its parent's layer.
 #[derive(Clone, Copy)]

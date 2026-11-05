@@ -7,7 +7,7 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::ContentStyle;
-use crate::draw::TextRaster;
+use crate::{draw::TextRaster, raster_scene::PassedDown};
 
 pub(crate) struct RasterTraversalContext<'a> {
     pub(super) parent_transform: &'a ProjectiveTransform,
@@ -53,6 +53,49 @@ impl<'a> RasterTraversalContext<'a> {
             text,
             surface_root: false,
             in_space: false,
+        }
+    }
+
+    // What the child layers of a layer push under as they did before, from
+    // `passed`, what the layer's old record passed down, and `style`, its
+    // content style, in the window of `diagnostics`, `light` and `text`,
+    // outside every scene's space.
+    pub(crate) fn beneath(
+        (passed, style): (&'a PassedDown, &'a ContentStyle),
+        (diagnostics, text): (&'a RenderDiagnostics, &'a TextRaster),
+        light: ShadowLight,
+    ) -> Self {
+        Self {
+            parent_transform: &passed.transform,
+            parent_content_style: style,
+            parent_visual_clip: passed.clip,
+            inherited_translated_snap_anchor: passed.snap_anchor,
+            inherited_translated_content_context: passed.translated,
+            diagnostics,
+            light,
+            same_as_before: true,
+            text,
+            surface_root: false,
+            in_space: false,
+        }
+    }
+
+    // As `beneath`, for a layer of the walk of `self`, which keeps what its
+    // old record passed down, in the space `self` lies in.
+    pub(crate) fn kept_beneath<'b>(
+        &self,
+        (passed, style): (&'b PassedDown, &'b ContentStyle),
+    ) -> RasterTraversalContext<'b>
+    where
+        'a: 'b,
+    {
+        RasterTraversalContext {
+            in_space: self.in_space,
+            ..RasterTraversalContext::beneath(
+                (passed, style),
+                (self.diagnostics, self.text),
+                self.light,
+            )
         }
     }
 }

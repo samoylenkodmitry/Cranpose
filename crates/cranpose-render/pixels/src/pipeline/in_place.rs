@@ -12,7 +12,7 @@
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
-    graph::{ProjectiveTransform, RenderNode},
+    graph::RenderNode,
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
     scene_builder::{
@@ -349,49 +349,17 @@ impl Repush<'_> {
     ) -> Result<(), Stop> {
         let passed = parent
             .and_then(|at| self.scene.passed_down.get(at))
-            .cloned();
-        let (transform, style, clip, snap_anchor, translated) = match passed {
-            Some(PassedDown {
-                transform,
-                alpha,
-                color_filter,
-                clip,
-                snap_anchor,
-                translated,
-            }) => (
-                transform,
-                ContentStyle {
-                    alpha,
-                    color_filter,
-                },
-                clip,
-                snap_anchor,
-                translated,
-            ),
-            None => (
-                ProjectiveTransform::uniform_scale(self.scale),
-                ContentStyle::PLAIN,
-                None,
-                None,
-                false,
-            ),
-        };
-        let context = RasterTraversalContext {
-            parent_transform: &transform,
-            parent_content_style: &style,
-            parent_visual_clip: clip,
-            inherited_translated_snap_anchor: snap_anchor,
-            inherited_translated_content_context: translated,
-            diagnostics: self.diagnostics,
-            light: self.light,
-            same_as_before: true,
-            text: self.text,
-            surface_root: false,
-            // A scene draws its surfaces out of the graph's order, so the
-            // walk to a changed layer stops at a scene's first child in
-            // 3D: the layers it pushes again lie outside every space.
-            in_space: false,
-        };
+            .cloned()
+            .unwrap_or_else(|| PassedDown::root(self.scale));
+        let style = ContentStyle::of(&passed);
+        // A scene draws its surfaces out of the graph's order, so the walk to
+        // a changed layer stops at a scene's first child in 3D: the layers it
+        // pushes again lie outside every space.
+        let context = RasterTraversalContext::beneath(
+            (&passed, &style),
+            (self.diagnostics, self.text),
+            self.light,
+        );
         let mut rewrite = self.rewrite.take().unwrap_or_default();
         if !rewrite.start(self.scene, record, self.window, self.reach, self.held) {
             *self.rewrite = Some(rewrite);

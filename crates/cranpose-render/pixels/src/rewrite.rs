@@ -281,6 +281,41 @@ impl Rewrite {
         }
     }
 
+    // Opens again, in place, the old record `at` of a node whose record, own
+    // items and passed-down entry stay as they were, and keeps its own items
+    // up to `first_child`, the record of its first child subtree. Returns
+    // the entry. `None`, with nothing changed, when the record does not lie
+    // where the subtree pushes next or its entry does not come next.
+    pub(crate) fn reopen(
+        &mut self,
+        records: &[SubtreeItems],
+        at: usize,
+        first_child: usize,
+    ) -> Option<usize> {
+        let old = records[..self.stop.records].get(at)?;
+        let entry = old.passed_down?;
+        let child = records[..old.end].get(first_child)?;
+        if self.spilled_at.is_some()
+            || self.next.records != at
+            || self.next.items != old.start
+            || self.next.passed_down != entry
+        {
+            return None;
+        }
+        self.opened.push(Opened {
+            end: old.end,
+            stop: old.stop,
+            passed_down: old.passed_down,
+        });
+        self.next = Places {
+            items: child.start,
+            records: first_child,
+            passed_down: entry + 1,
+        };
+        self.own_items_end = child.start.order;
+        Some(entry)
+    }
+
     // Keeps the old subtree of the record `old`, a child of the open
     // record: in its place when it lies where the subtree pushes next,
     // else as a copy in the spill.

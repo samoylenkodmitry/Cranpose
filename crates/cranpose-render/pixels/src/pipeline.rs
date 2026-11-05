@@ -70,6 +70,14 @@ impl ContentStyle {
         color_filter: None,
     };
 
+    // The style a layer passed down in `passed`.
+    pub(crate) fn of(passed: &PassedDown) -> Self {
+        Self {
+            alpha: passed.alpha,
+            color_filter: passed.color_filter.clone(),
+        }
+    }
+
     /// The style of `layer`'s content beneath content drawn in `self`.
     fn under(&self, layer: &GraphicsLayer) -> Self {
         Self {

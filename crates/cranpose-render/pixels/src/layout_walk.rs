@@ -12,14 +12,15 @@ use cranpose_render_common::{
     scene_builder::{
         LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment, has_children,
         kept_child_placement, lower_moved_subtree, lower_node_alone, lower_space_fragment,
-        placed_child_position, recycle_lowered, release_lowered, visit_lowered_children,
+        placed_child_position, recycle_lowered, release_lowered, visit_kept_node,
+        visit_lowered_children,
     },
 };
 use cranpose_ui_graphics::Point;
 
 use crate::{
     moved_subtrees::MovedSubtrees,
-    pipeline::{RasterTraversalContext, Reuse, populate_draws_from_graph},
+    pipeline::{ContentStyle, RasterTraversalContext, Reuse, populate_draws_from_graph},
     raster_scene::{RasterScene, Subtree, SubtreeItems},
 };
 
@@ -124,6 +125,34 @@ pub(crate) fn child_record_from(records: &[SubtreeItems], mut from: usize, end: 
         from = records[from].end;
     }
     from
+}
+
+// The record of the first child subtree of `node`, whose old subtree's
+// record is `at`, when that record is the node's own layer, the draw groups
+// before its first child note nothing passed down, and nothing of the
+// node's own follows its last child: the shape a walk keeps around the
+// children it pushes again.
+fn first_child_of_kept(records: &[SubtreeItems], at: usize, node: NodeId) -> Option<usize> {
+    let record = &records[at];
+    if record.identity != (Some(node), None) {
+        return None;
+    }
+    let first = child_record_from(records, at + 1, record.end);
+    if records[at + 1..first]
+        .iter()
+        .any(|group| group.passed_down.is_some())
+    {
+        return None;
+    }
+    let (mut last, mut next) = (None, first);
+    while next < record.end {
+        if records[next].identity == (None, None) {
+            return None;
+        }
+        last = Some(next);
+        next = records[next].end;
+    }
+    (records[last?].stop == record.stop).then_some(first)
 }
 
 // Where the old records of a node's child subtrees lie in the scene a
@@ -431,6 +460,51 @@ impl<'a> LayoutWalk<'a> {
         true
     }
 
+    // Pushes again, over its old subtree at the record `at`, the subtree of
+    // `child`, a node that did not change, lies where it did and holds nodes
+    // that did: its record, its own items before its children and its
+    // passed-down entry stay as they were, and its children push over their
+    // old subtrees under `lower_context`, what the child lowers with. False,
+    // with nothing pushed, when its old subtree does not take that shape or
+    // the rewrite does not stand at it.
+    pub(crate) fn push_through(
+        &self,
+        (child, at): (NodeId, usize),
+        lower_context: &LowerContext,
+        (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
+    ) -> bool {
+        let Some(first) = first_child_of_kept(&scene.subtrees, at, child) else {
+            return false;
+        };
+        let pushed = visit_kept_node(
+            self.applier,
+            (child, NodePlace::Child),
+            lower_context,
+            |children, inner| {
+                let Some(entry) = scene
+                    .rewrite
+                    .as_deref_mut()
+                    .and_then(|rewrite| rewrite.reopen(&scene.subtrees, at, first))
+                else {
+                    return false;
+                };
+                let passed = scene.passed_down[entry].clone();
+                let style = ContentStyle::of(&passed);
+                let mut slot = ChildSlot {
+                    walk: self,
+                    owner: child,
+                    children,
+                    context: inner,
+                    pushes: ChildPushes::OverOld(OldChildren::of(&scene.subtrees, at, child)),
+                };
+                slot.push_children(scene, &context.kept_beneath((&passed, &style)), &mut None);
+                scene.close_subtree(at);
+                true
+            },
+        );
+        pushed == Some(true)
+    }
+
     // Pushes under `context`, into the scene of its parent's own surface, the
     // subtree of `child`, which did not change since the update before, as
     // `push_moved` pushes one: the surface's scene holds none of its old
@@ -636,8 +710,9 @@ impl ChildSlot<'_> {
             let end = scene.subtrees[at].end;
             let record = &scene.subtrees[at];
             let clean = walk.is_clean(child);
+            let kept = clean || !walk.changed(child);
             // A child whose owner placed it as before lies where it did.
-            let placement = (clean && context.same_as_before && !placed_as_before)
+            let placement = (kept && context.same_as_before && !placed_as_before)
                 .then(|| kept_child_placement(walk.applier, child, self.context))
                 .flatten();
             let lies_as_before = context.same_as_before
@@ -659,6 +734,9 @@ impl ChildSlot<'_> {
                     (scene, context),
                     at,
                 ))
+                && !(kept
+                    && lies_as_before
+                    && walk.push_through((child, at), self.context, (scene, context)))
             {
                 let children = OldChildren::of(&scene.subtrees, at, child);
                 walk.push(
