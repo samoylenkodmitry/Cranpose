@@ -13,7 +13,7 @@ use std::rc::Rc;
 pub use cranpose_app_shell::FrameSchedule;
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_foundation::PointerSource;
-use cranpose_render_pixels::{Picture, PixelsRenderer};
+use cranpose_render_pixels::PixelsRenderer;
 pub use cranpose_render_pixels::{PixelRect, Rgb565Order};
 use cranpose_services::{
     SystemTheme,
@@ -63,7 +63,6 @@ pub enum NextTick {
 /// Create and use it on one thread, which becomes the UI thread.
 pub struct Framebuffer {
     shell: AppShell<PixelsRenderer>,
-    drawing: Picture,
     width: u32,
     height: u32,
     density: f32,
@@ -128,7 +127,6 @@ impl Framebuffer {
         shell.set_cursor(width as f32 / density / 2.0, height as f32 / density / 2.0);
         Ok(Self {
             shell,
-            drawing: Picture::default(),
             width,
             height,
             density,
@@ -236,10 +234,9 @@ impl Framebuffer {
             areas.clear();
             return;
         }
-        let (width, height, density) = (self.width, self.height, self.density);
-        let drawing = &mut self.drawing;
+        let (width, height) = (self.width, self.height);
         self.shell.primary().with_renderer(|renderer| {
-            renderer.update_picture(drawing, width, height, density, areas);
+            renderer.update_picture(width, height, areas);
         });
         self.drawn_picture = Some(self.picture);
     }
@@ -249,9 +246,8 @@ impl Framebuffer {
     /// them from the glyph cache. A host calls it while it waits anyway, such
     /// as for a display that is still starting up.
     pub fn prepare_area(&mut self, area: PixelRect) {
-        let drawing = &self.drawing;
         self.shell.primary().with_renderer(|renderer| {
-            renderer.prepare_picture_area(drawing, area);
+            renderer.prepare_picture_area(area);
         });
     }
 
@@ -259,9 +255,8 @@ impl Framebuffer {
     /// `pixels`, as row-major, straight-alpha RGBA8 rows of `area.width`
     /// pixels, `area.height` of them.
     pub fn draw_area(&mut self, area: PixelRect, pixels: &mut [u8]) {
-        let drawing = &self.drawing;
         self.shell.primary().with_renderer(|renderer| {
-            renderer.draw_picture_area(drawing, area, pixels);
+            renderer.draw_picture_area(area, pixels);
         });
     }
 
@@ -271,9 +266,8 @@ impl Framebuffer {
     /// `area.height` of them. It draws them straight, without the bytes
     /// [`Self::draw_area`] draws and a second pass over them.
     pub fn draw_area_rgb565(&mut self, area: PixelRect, pixels: &mut [u16], order: Rgb565Order) {
-        let drawing = &self.drawing;
         self.shell.primary().with_renderer(|renderer| {
-            renderer.draw_picture_area_rgb565(drawing, area, pixels, order);
+            renderer.draw_picture_area_rgb565(area, pixels, order);
         });
     }
 
@@ -342,11 +336,11 @@ impl Framebuffer {
     #[cfg(feature = "watchos")]
     pub(crate) fn with_renderer<T>(
         &mut self,
-        draw: impl FnOnce(&PixelsRenderer, u32, u32, f32) -> T,
+        draw: impl FnOnce(&PixelsRenderer, u32, u32) -> T,
     ) -> T {
-        let (width, height, density) = (self.width, self.height, self.density);
+        let (width, height) = (self.width, self.height);
         self.shell
             .primary()
-            .with_renderer(|renderer| draw(renderer, width, height, density))
+            .with_renderer(|renderer| draw(renderer, width, height))
     }
 }

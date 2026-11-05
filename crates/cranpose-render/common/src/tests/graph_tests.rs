@@ -80,7 +80,7 @@ fn axis_aligned_rect_to_quad_keeps_exact_axis_aligned_scale() {
 }
 
 #[test]
-fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
+fn retained_visual_observation_nodes_visit_layers_and_command_owners() {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -117,18 +117,19 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
     root.node_id = Some(NodeId(5));
 
     let mut graph = RenderGraph::new(root);
-    let mut nodes = HashSet::from_iter([NodeId(999)]);
-    graph.collect_retained_visual_observation_nodes(&mut nodes);
+    let visited = |graph: &RenderGraph| {
+        let mut nodes = Vec::new();
+        graph.visit_retained_visual_observation_nodes(&mut |node| nodes.push(node));
+        nodes.sort();
+        nodes
+    };
     assert_eq!(
-        nodes,
-        HashSet::from_iter([NodeId(5), NodeId(9), NodeId(13), NodeId(17)])
+        visited(&graph),
+        [NodeId(5), NodeId(9), NodeId(13), NodeId(17)]
     );
-    let capacity = nodes.capacity();
     graph.root.children.clear();
     graph.root.node_id = Some(NodeId(23));
-    graph.collect_retained_visual_observation_nodes(&mut nodes);
-    assert_eq!(nodes, HashSet::from_iter([NodeId(23)]));
-    assert_eq!(nodes.capacity(), capacity);
+    assert_eq!(visited(&graph), [NodeId(23)]);
 }
 
 #[test]

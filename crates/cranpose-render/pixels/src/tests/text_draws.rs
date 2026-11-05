@@ -4,7 +4,7 @@ use cranpose_render_common::{text_fonts::TextFonts, text_raster::GlyphInk};
 use cranpose_ui::{PreparedTextLayout, TextStyle};
 use cranpose_ui_graphics::{Color, Rect};
 
-use crate::scene::TextDraw;
+use crate::raster_scene::TextDraw;
 
 // `text` in `style` laid out with the fonts a renderer without app fonts
 // hands its app, up to `width`.

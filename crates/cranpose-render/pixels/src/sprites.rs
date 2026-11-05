@@ -29,7 +29,7 @@ use crate::{
         ClipBounds, RenderItem, ShapeCoverage, Target, TextRaster, clip_rect_to_window, draw_item,
         place_shape, snap_delta_for_anchor,
     },
-    scene::{DrawShape, RasterScene, ShadowDraw, TextDraw},
+    raster_scene::{DrawShape, RasterScene, ShadowDraw, TextDraw},
 };
 
 /// How many numbers make one sprite.
@@ -101,8 +101,6 @@ pub struct TextureUpload {
 /// from frame to frame: compose into the same one every frame.
 #[derive(Default)]
 pub struct SpriteFrame {
-    /// The scene the last frame composed, whose storage the next one reuses.
-    pub(crate) scene: RasterScene,
     sprites: Vec<f32>,
     uploads: Vec<TextureUpload>,
     releases: Vec<u32>,

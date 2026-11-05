@@ -36,54 +36,83 @@ fn runs_around(run: (i32, i32), from: f32, to: f32) -> RowRuns {
     [(run.0, run.1.min(first)), (run.0.max(last + 1), run.1)]
 }
 
-// The row of a stroked segment that can take ink: the pixels whose centres
+// The rows of a stroked segment that can take ink: the pixels whose centres
 // lie within the half width of the segment's line, and within its half
-// length and cap of its midpoint along it, each grown by `INK_REACH`.
-pub(super) fn line_row_runs(
-    line: &LineGeometry,
-    frame: &LineFrame,
-    y: f32,
-    min_x: i32,
-    max_x: i32,
-) -> RowRuns {
-    let dy = y - frame.center.y;
-    let Point {
-        x: along_x,
-        y: along_y,
-    } = frame.direction;
-    // A pixel centre `dx` right of the midpoint lies `dx * along_y - dy *
-    // along_x` across the line and `dx * along_x + dy * along_y` along it.
-    let across = offsets_within(along_y, -dy * along_x, line.half_width + INK_REACH);
-    let along = offsets_within(
-        along_x,
-        dy * along_y,
-        frame.half_length + line.cap_reach() + INK_REACH,
-    );
-    let (Some(across), Some(along)) = (across, along) else {
-        return [NO_RUN, NO_RUN];
-    };
-    let (low, high) = (across.0.max(along.0), across.1.min(along.1));
-    if low.is_nan() || high.is_nan() || low > high {
-        return [NO_RUN, NO_RUN];
-    }
-    let run = run_within(
-        frame.center.x + (low + high) * 0.5,
-        (high - low) * 0.5,
-        min_x,
-        max_x,
-    );
-    [run, NO_RUN]
+// length and cap of its midpoint along it, each grown by `INK_REACH`. The
+// reciprocals of the direction are worked out once for the segment, so a
+// row multiplies where it would divide.
+pub(super) struct LineRows {
+    center: Point,
+    direction: Point,
+    across: Band,
+    along: Band,
 }
 
-// The offsets `dx` for which `|dx * slope + offset|` is at most `reach`:
-// every one when the slope is zero and the offset within reach, none when
-// it is not.
-fn offsets_within(slope: f32, offset: f32, reach: f32) -> Option<(f32, f32)> {
-    if slope == 0.0 {
-        return (offset.abs() <= reach).then_some((f32::NEG_INFINITY, f32::INFINITY));
+// The offsets `dx` for which `|dx * slope + offset|` is at most `reach`, with
+// the reciprocal of the slope: `None` for a zero slope.
+struct Band {
+    inverse: Option<f32>,
+    reach: f32,
+}
+
+impl Band {
+    fn new(slope: f32, reach: f32) -> Self {
+        Self {
+            inverse: (slope != 0.0).then(|| 1.0 / slope),
+            reach,
+        }
     }
-    let (first, second) = ((-reach - offset) / slope, (reach - offset) / slope);
-    Some((first.min(second), first.max(second)))
+
+    // Every offset when the slope is zero and the offset within reach, none
+    // when it is not.
+    fn offsets(&self, offset: f32) -> Option<(f32, f32)> {
+        let Some(inverse) = self.inverse else {
+            return (offset.abs() <= self.reach).then_some((f32::NEG_INFINITY, f32::INFINITY));
+        };
+        let (first, second) = (
+            (-self.reach - offset) * inverse,
+            (self.reach - offset) * inverse,
+        );
+        Some((first.min(second), first.max(second)))
+    }
+}
+
+impl LineRows {
+    pub(super) fn new(line: &LineGeometry, frame: &LineFrame) -> Self {
+        let direction = frame.direction;
+        Self {
+            center: frame.center,
+            direction,
+            across: Band::new(direction.y, line.half_width + INK_REACH),
+            along: Band::new(
+                direction.x,
+                frame.half_length + line.cap_reach() + INK_REACH,
+            ),
+        }
+    }
+
+    pub(super) fn runs(&self, y: f32, min_x: i32, max_x: i32) -> RowRuns {
+        let dy = y - self.center.y;
+        // A pixel centre `dx` right of the midpoint lies `dx * direction.y -
+        // dy * direction.x` across the line and `dx * direction.x + dy *
+        // direction.y` along it.
+        let across = self.across.offsets(-dy * self.direction.x);
+        let along = self.along.offsets(dy * self.direction.y);
+        let (Some(across), Some(along)) = (across, along) else {
+            return [NO_RUN, NO_RUN];
+        };
+        let (low, high) = (across.0.max(along.0), across.1.min(along.1));
+        if low.is_nan() || high.is_nan() || low > high {
+            return [NO_RUN, NO_RUN];
+        }
+        let run = run_within(
+            self.center.x + (low + high) * 0.5,
+            (high - low) * 0.5,
+            min_x,
+            max_x,
+        );
+        [run, NO_RUN]
+    }
 }
 
 /// The row of an arc that can take ink. Every point of the band, caps

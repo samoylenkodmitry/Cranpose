@@ -160,10 +160,9 @@ impl Application {
         let picture = self.framebuffer.picture();
         if self.sprites_picture != Some(picture) {
             let sprites = &mut self.sprites;
-            self.framebuffer
-                .with_renderer(|renderer, width, height, density| {
-                    renderer.compose_sprites(sprites, width, height, density);
-                });
+            self.framebuffer.with_renderer(|renderer, width, height| {
+                renderer.compose_sprites(sprites, width, height);
+            });
             self.sprites_picture = Some(picture);
         }
         &self.sprites

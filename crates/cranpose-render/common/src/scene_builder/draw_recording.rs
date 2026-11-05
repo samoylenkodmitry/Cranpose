@@ -104,6 +104,22 @@ pub(super) fn publish_recording(
     })
 }
 
+/// Where the recordings of a node's draw commands keep their buffers for
+/// the next time they record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordingStore {
+    /// Each command's own recordings, which a render graph holds between
+    /// frames: a command records again into the buffers it filled before.
+    Command,
+    /// Each command's recording of the update before only, for a renderer
+    /// that turns a recording into its own items at once and holds none
+    /// after: it hands the nodes that hold them to `recycle_lowered`. A
+    /// command that draws again each update records into the buffers it
+    /// filled, with little memory left only one of a few shapes; one an
+    /// update does not draw keeps none.
+    Redrawn,
+}
+
 pub(super) enum DrawPass<'a> {
     Record(DrawPlacement),
     OverlayFrom(std::slice::Iter<'a, RenderNode>),
@@ -157,6 +173,7 @@ pub(super) struct DrawTarget<'a> {
     pub(super) size: Size,
     pub(super) motion_context_animated: bool,
     pub(super) layer: Option<&'a GraphicsLayer>,
+    pub(super) store: RecordingStore,
 }
 
 /// Writes the part of one draw command's recording that a draw pass draws,
@@ -367,12 +384,21 @@ pub(super) fn append_draw_nodes(
             let segments = shared.content_split(DrawPlacement::Overlay);
             (shared, segments)
         } else {
+            let store = draws.store;
             let Some((recording, segments)) =
-                recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
+                recording_for_placement_reusing(command, placement, size, || match store {
+                    RecordingStore::Command => acquire_storage(id),
+                    RecordingStore::Redrawn => {
+                        crate::thread_state::with(|state| state.redrawn.borrow_mut().acquire(id))
+                    }
+                })
             else {
                 continue;
             };
-            (publish_recording(id, recording), segments)
+            match store {
+                RecordingStore::Command => (publish_recording(id, recording), segments),
+                RecordingStore::Redrawn => (recording, segments),
+            }
         };
         let grouped = shared.summary().has_groups
             && shared
@@ -404,6 +430,7 @@ pub fn draw_command_nodes_for_tests(
         size,
         motion_context_animated: false,
         layer: None,
+        store: RecordingStore::Command,
     };
     draw_nodes(node_id, commands, 0, placement, draws, phase)
 }
