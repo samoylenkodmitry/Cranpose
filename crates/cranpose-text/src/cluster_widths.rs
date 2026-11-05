@@ -1,5 +1,6 @@
 use crate::{
     layout_input::LayoutInput,
+    least_leaving::least_leaving,
     shaped_glyphs::ShapedGlyph,
     shaped_item::{ShapedItem, scale},
     text_layout::font_units,
@@ -95,6 +96,12 @@ impl ClusterWidths {
         self.clusters[..fits]
             .last()
             .map_or(start, |&(cluster, _)| offset(cluster).max(start))
+    }
+
+    // The least room in which `last_fitting` from `start` takes the text up
+    // to `end`, in the sum it compares.
+    pub(crate) fn least_room(&self, start: usize, end: usize) -> f32 {
+        least_leaving(self.before(end), -self.before(start))
     }
 
     // The first cluster boundary from `start` to `end` from which the text up

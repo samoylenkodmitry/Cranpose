@@ -116,10 +116,6 @@ impl WidthRange {
     }
 }
 
-// How far inside a hold's ends a width must be for the layout to stand for
-// it, so that the order a sum is taken in cannot decide.
-const HOLD_MARGIN: f32 = 1e-3;
-
 // A run of one typeface, size and bidi level inside a line, in visual order.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LineRun {
@@ -404,13 +400,15 @@ impl TextLayout {
         self.holds_wrap(self.body.wrap_width(min_width, max_width))
     }
 
-    // Whether lines that wrap at `wrap` are this layout's.
+    // Whether lines that wrap at `wrap` are this layout's: a hold ends where
+    // the comparisons of a fresh layout change, and a layout without one
+    // stands only for the width it wraps at.
     fn holds_wrap(&self, wrap: f32) -> bool {
-        (wrap - self.wrap).abs() < HOLD_MARGIN
-            || self
-                .body
-                .hold
-                .is_some_and(|hold| hold.min + HOLD_MARGIN <= wrap && wrap + HOLD_MARGIN < hold.max)
+        let hold = self.body.hold.unwrap_or_else(|| WidthRange {
+            min: self.wrap,
+            max: self.wrap.next_up(),
+        });
+        hold.min <= wrap && wrap < hold.max
     }
 
     /// The width the paragraph takes laid out between `min_width` and
@@ -438,8 +436,8 @@ impl TextLayout {
             .hold
             .filter(|_| body.line_width.max(min_width) <= self.wrap)
         {
-            let low = (hold.min + HOLD_MARGIN).max(self.width);
-            let high = (hold.max - HOLD_MARGIN).min(body.content_width).next_down();
+            let low = hold.min.max(self.width);
+            let high = hold.max.min(body.content_width).next_down();
             if low <= high {
                 (low, high)
             } else {
