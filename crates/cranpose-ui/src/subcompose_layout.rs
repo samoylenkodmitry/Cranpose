@@ -22,10 +22,12 @@ use crate::{
     widgets::nodes::{ChildPlacement, LayoutNode, LayoutParts, LayoutState, NodeCache},
 };
 
+mod active_children;
 mod measure_scratch;
 mod retained_measure_scope;
 mod subcompose_child;
 
+pub use active_children::ActiveChildren;
 pub(crate) use measure_scratch::MeasureScratch;
 pub(crate) use retained_measure_scope::RetainedMeasureScope;
 pub(crate) use subcompose_child::SubcomposeChild;
@@ -991,13 +993,9 @@ impl SubcomposeLayoutNode {
         }
     }
 
-    /// Calls `f` with the children this node placed in its last layout, in
-    /// placement order, without copying them.
-    /// Changes through a node handle during `f` become visible to the next
-    /// read; this read keeps its original children.
-    pub fn with_active_children<R>(&self, f: impl FnOnce(&[NodeId]) -> R) -> R {
-        let children = Rc::clone(&self.inner.borrow().last_placements);
-        f(&children)
+    /// The children this node placed in its last layout, without copying them.
+    pub fn active_children(&self) -> ActiveChildren {
+        ActiveChildren::new(Rc::clone(&self.inner.borrow().last_placements))
     }
 
     /// Mark this node as needing measure. Also marks it as needing layout.
@@ -1250,7 +1248,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
-        self.with_active_children(|children| out.extend_from_slice(children));
+        out.extend_from_slice(&self.active_children());
     }
 
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {

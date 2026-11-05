@@ -438,7 +438,7 @@ fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
         }
         let parent_node: &dyn Any = parent_node;
         if let Some(subcompose) = parent_node.downcast_ref::<SubcomposeLayoutNode>()
-            && !subcompose.with_active_children(|children| children.contains(&child))
+            && !subcompose.active_children().contains(&child)
         {
             return false;
         }

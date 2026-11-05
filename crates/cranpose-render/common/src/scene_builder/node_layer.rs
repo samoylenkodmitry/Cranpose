@@ -6,7 +6,7 @@ use std::{any::Any, borrow::Cow, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size,
+    ActiveChildren, DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, Size,
     SubcomposeLayoutNode, widgets::LayoutState,
 };
 use cranpose_ui_graphics::{CompositingStrategy, DrawPlacement, GraphicsLayer, LayerShape};
@@ -493,40 +493,42 @@ pub(super) fn read_node_data<R>(
     read: impl FnOnce(SnapshotNodeData<'_>) -> R,
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
-    if let Some(node) = node.downcast_ref::<LayoutNode>() {
-        let z_order = z_ordered_children(applier, node_id, node.children());
-        return Some(read(SnapshotNodeData {
-            layout_state: node.with_layout_state(NodeLayout::of),
-            modifier_slices: node.modifier_slices_snapshot(),
-            children: z_order.as_deref().unwrap_or_else(|| node.children()),
-            window_root: node.is_window_root(),
-        }));
-    }
-    let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
-    Some(read_subcompose_data(applier, node_id, node, read))
+    let active;
+    let (layout_state, modifier_slices, children, window_root) =
+        match node.downcast_ref::<LayoutNode>() {
+            Some(node) => (
+                node.with_layout_state(NodeLayout::of),
+                node.modifier_slices_snapshot(),
+                node.children(),
+                node.is_window_root(),
+            ),
+            None => {
+                let (layout_state, modifier_slices, children) =
+                    subcompose_parts(node.downcast_ref::<SubcomposeLayoutNode>()?);
+                active = children;
+                (layout_state, modifier_slices, &*active, false)
+            }
+        };
+    let z_order = z_ordered_children(applier, node_id, children);
+    Some(read(SnapshotNodeData {
+        layout_state,
+        modifier_slices,
+        children: z_order.as_deref().unwrap_or(children),
+        window_root,
+    }))
 }
 
-// Hands `read` the data of the subcompose node `node`. Out of line: `read`
-// inlines into each kind's arm of `read_node_data`, and few nodes are
-// subcompose nodes.
+// The parts of a subcompose node `read_node_data` hands on. Out of line:
+// few nodes are subcompose nodes.
 #[inline(never)]
-fn read_subcompose_data<R>(
-    applier: &MemoryApplier,
-    node_id: NodeId,
+fn subcompose_parts(
     node: &SubcomposeLayoutNode,
-    read: impl FnOnce(SnapshotNodeData<'_>) -> R,
-) -> R {
-    let layout_state = NodeLayout::of(&node.layout_state());
-    let modifier_slices = node.modifier_slices_snapshot();
-    node.with_active_children(|children| {
-        let z_order = z_ordered_children(applier, node_id, children);
-        read(SnapshotNodeData {
-            layout_state,
-            modifier_slices,
-            children: z_order.as_deref().unwrap_or(children),
-            window_root: false,
-        })
-    })
+) -> (NodeLayout, Rc<ModifierNodeSlices>, ActiveChildren) {
+    (
+        NodeLayout::of(&node.layout_state()),
+        node.modifier_slices_snapshot(),
+        node.active_children(),
+    )
 }
 
 /// `children` in the order they draw and take taps when a z index moves one

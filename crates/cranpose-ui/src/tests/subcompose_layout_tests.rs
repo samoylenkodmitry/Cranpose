@@ -433,13 +433,13 @@ fn active_children_follow_last_rendered_placements() {
     }
 
     let expected: Vec<_> = (33..45).map(NodeId).collect();
-    node.with_active_children(|active| assert_eq!(active, expected.as_slice()));
+    assert_eq!(&*node.active_children(), expected.as_slice());
     let mut active = SmallVec::<[NodeId; 8]>::from_slice(&[NodeId(99)]);
     Node::collect_children_into(&node, &mut active);
     assert_eq!(active.as_slice(), expected.as_slice());
 
     node.handle().set_active_children(Vec::<NodeId>::new());
-    node.with_active_children(|active| assert!(active.is_empty()));
+    assert!(node.active_children().is_empty());
     Node::collect_children_into(&node, &mut active);
     assert!(active.is_empty());
 
@@ -475,31 +475,29 @@ fn subcompose_reuses_measured_children_scratch_map() {
 }
 
 #[test]
-fn active_child_storage_is_shared_only_until_the_reader_returns() {
+fn active_child_storage_is_shared_only_while_a_reader_holds_it() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let node = SubcomposeLayoutNode::new(Modifier::empty(), policy);
     let handle = node.handle();
     handle.set_active_children((1..13).map(NodeId));
-    let original = node.with_active_children(<[NodeId]>::as_ptr);
-    node.with_active_children(|children| {
-        handle.set_active_children(children.iter().copied());
-        node.with_active_children(|unchanged| assert_eq!(unchanged.as_ptr(), original));
-        handle.set_active_children([NodeId(7), NodeId(8), NodeId(9)]);
-        assert_eq!(children, &(1..13).map(NodeId).collect::<Vec<_>>());
-        node.with_active_children(|changed| {
-            assert_eq!(changed, &[NodeId(7), NodeId(8), NodeId(9)]);
-            assert_ne!(changed.as_ptr(), original);
-        });
-    });
+    let original = node.active_children().as_ptr();
+    let children = node.active_children();
+    handle.set_active_children(children.iter().copied());
+    assert_eq!(node.active_children().as_ptr(), original);
+    handle.set_active_children([NodeId(7), NodeId(8), NodeId(9)]);
+    assert_eq!(&*children, &(1..13).map(NodeId).collect::<Vec<_>>());
+    let changed = node.active_children();
+    assert_eq!(&*changed, &[NodeId(7), NodeId(8), NodeId(9)]);
+    assert_ne!(changed.as_ptr(), original);
+    drop((children, changed));
     assert_eq!(Rc::strong_count(&node.inner.borrow().last_placements), 1);
-    let exclusive = node.with_active_children(<[NodeId]>::as_ptr);
+    let exclusive = node.active_children().as_ptr();
     handle.set_active_children([NodeId(9), NodeId(8), NodeId(7)]);
-    node.with_active_children(|children| {
-        assert_eq!(children, &[NodeId(9), NodeId(8), NodeId(7)]);
-        assert_eq!(children.as_ptr(), exclusive);
-    });
+    let children = node.active_children();
+    assert_eq!(&*children, &[NodeId(9), NodeId(8), NodeId(7)]);
+    assert_eq!(children.as_ptr(), exclusive);
 }
 
 #[test]

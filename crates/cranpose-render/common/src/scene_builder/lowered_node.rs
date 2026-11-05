@@ -112,7 +112,7 @@ pub fn has_children(applier: &MemoryApplier, node_id: NodeId) -> bool {
         return !node.children().is_empty();
     }
     node.downcast_ref::<SubcomposeLayoutNode>()
-        .is_some_and(|node| node.with_active_children(|children| !children.is_empty()))
+        .is_some_and(|node| !node.active_children().is_empty())
 }
 
 /// Hands `visit` the children of the node `node_id`, in the order they
@@ -124,15 +124,18 @@ pub fn visit_lowered_children<R>(
     visit: impl FnOnce(&[NodeId]) -> R,
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
-    if let Some(node) = node.downcast_ref::<LayoutNode>() {
-        let z_order = z_ordered_children(applier, node_id, node.children());
-        return Some(visit(z_order.as_deref().unwrap_or_else(|| node.children())));
-    }
-    let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
-    Some(node.with_active_children(|children| {
-        let z_order = z_ordered_children(applier, node_id, children);
-        visit(z_order.as_deref().unwrap_or(children))
-    }))
+    let active;
+    let children = match node.downcast_ref::<LayoutNode>() {
+        Some(node) => node.children(),
+        None => {
+            active = node
+                .downcast_ref::<SubcomposeLayoutNode>()?
+                .active_children();
+            &active
+        }
+    };
+    let z_order = z_ordered_children(applier, node_id, children);
+    Some(visit(z_order.as_deref().unwrap_or(children)))
 }
 
 /// Where a placed child lies in its parent's layer: the identity of the

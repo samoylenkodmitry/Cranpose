@@ -301,9 +301,9 @@ pub use semantics_dispatch::{
     process_semantics_invalidations, schedule_semantics_invalidation,
 };
 pub use subcompose_layout::{
-    Constraints, MeasureResult, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope,
-    SubcomposeMeasureScope, SubcomposeMeasureScopeImpl, clean_slot_skip_count,
-    retained_measure_count,
+    ActiveChildren, Constraints, MeasureResult, Placement, SubcomposeLayoutNode,
+    SubcomposeLayoutScope, SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
+    clean_slot_skip_count, retained_measure_count,
 };
 pub use text::{
     LinkAnnotation, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
