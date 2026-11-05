@@ -60,10 +60,14 @@ def with_script(page):
 
 
 class BrowserServer:
-    """Serves `root` on a free local port and hears the pages' `PERF` lines."""
+    """Serves `root` on a free local port and hears the pages' `PERF` lines,
+    each with the `time.monotonic()` it arrived at. `isolate` sends the
+    headers a browser app needs; `aliases` serves a path prefix from another
+    folder."""
 
-    def __init__(self, root, inject=True):
+    def __init__(self, root, inject=True, isolate=True, aliases=None):
         self.root = root
+        # (time.monotonic() on arrival, line)
         self.heard = []
         self.condition = threading.Condition()
         owner = self
@@ -75,6 +79,12 @@ class BrowserServer:
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(root), **kwargs)
 
+            def translate_path(self, path):
+                for prefix, folder in (aliases or {}).items():
+                    if path.startswith(prefix):
+                        return str(Path(folder) / Path(path.split('?')[0]).name)
+                return super().translate_path(path)
+
             def end_headers(self):
                 # Cross-origin isolation, which Flutter's and Kotlin's
                 # multi-threaded WebAssembly builds ask for. A page's second
@@ -82,9 +92,10 @@ class BrowserServer:
                 # from them, from the browser's cache, as a site's second
                 # visit does: each first start begins in a browser whose data
                 # was cleared, so no earlier run's build is in that cache.
-                self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
-                self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
-                self.send_header('Cache-Control', 'max-age=3600')
+                if isolate:
+                    self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+                    self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+                    self.send_header('Cache-Control', 'max-age=3600')
                 super().end_headers()
 
             def do_GET(self):
@@ -134,8 +145,14 @@ class BrowserServer:
 
     def hear(self, text):
         with self.condition:
-            self.heard.append(text)
+            self.heard.append((time.monotonic(), text))
             self.condition.notify_all()
+
+    def heard_at(self, text, since=0):
+        """When the first line holding `text` since `since` arrived, on
+        `time.monotonic()`; None while none has."""
+        with self.condition:
+            return next((at for at, line in self.heard[since:] if text in line), None)
 
     def mark(self):
         """A place in what was heard, for `wait_for` to count from."""
@@ -147,14 +164,14 @@ class BrowserServer:
         deadline = time.monotonic() + timeout
         with self.condition:
             while True:
-                for line in self.heard[since:]:
+                for _, line in self.heard[since:]:
                     if text in line:
                         return line
                     if line.startswith('PERF error'):
-                        said = ' | '.join(heard[:300] for heard in self.heard[since:] if 'console.error' in heard)
+                        said = ' | '.join(heard[:300] for _, heard in self.heard[since:] if 'console.error' in heard)
                         raise RuntimeError(f'the page failed: {line}' + (f' ({said})' if said else ''))
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    said = ' | '.join(line[:200] for line in self.heard[max(since, len(self.heard) - 3):])
+                    said = ' | '.join(line[:200] for _, line in self.heard[max(since, len(self.heard) - 3):])
                     raise RuntimeError(f'no "{text}" within {timeout} s' + (f'; the page said: {said}' if said else ''))
                 self.condition.wait(remaining)

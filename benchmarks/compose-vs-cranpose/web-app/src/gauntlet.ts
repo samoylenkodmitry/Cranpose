@@ -58,7 +58,9 @@ declare global {
 
 /** What the app around the page asked, and where its `PERF` lines go: the
  * Android app's plugin, the Tauri app's commands, or in a desktop browser the
- * page's address and the console `desktop.py` reads. */
+ * page's address and the console `desktop.py` reads. In Tauri the console
+ * also gets them: `desktop.py`'s server hears them from there as they
+ * happen. */
 function host(): { launch: Promise<Launch>; log(message: string): void } {
   const plugin = window.Capacitor?.Plugins.Launch;
   if (plugin) {
@@ -66,7 +68,13 @@ function host(): { launch: Promise<Launch>; log(message: string): void } {
   }
   const tauri = window.__TAURI__?.core;
   if (tauri) {
-    return { launch: tauri.invoke<Launch>('launch'), log: (message) => void tauri.invoke('log', { message }) };
+    return {
+      launch: tauri.invoke<Launch>('launch'),
+      log: (message) => {
+        console.log(message);
+        void tauri.invoke('log', { message });
+      },
+    };
   }
   const query = new URLSearchParams(location.search);
   return {
