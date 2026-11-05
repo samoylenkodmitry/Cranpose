@@ -10,7 +10,6 @@ use crate::{
     glyph_ink::{InkReach, line_band},
     index_range::narrow,
     itemizer::{Itemizer, TextItem},
-    laid_glyphs::LaidGlyphs,
     layout_body::LayoutBody,
     layout_input::LayoutInput,
     layout_options::TextLayoutOptions,
@@ -23,13 +22,13 @@ use crate::{
     line_runs::{line_extent, place_runs},
     line_text::{LineDepth, LineEdges, LineText, before_hard_break, indent},
     paragraph::{LineBreak, ResolvedTextDirection},
+    paragraph_glyphs::ParagraphGlyphs,
     paragraph_intrinsics::ParagraphIntrinsics,
     paragraph_measures::ParagraphMeasures,
     script::Script,
-    shaped_glyphs::ShapedGlyphs,
     shaped_item::{
         Piece, ShapedItem, face_index, hyphen, item_at, part_glyphs, scale, set_cluster,
-        shape_inserted, spaced_width,
+        shape_inserted,
     },
     shaper::Shaper,
     text_layout::{LayoutLine, TextLayout},
@@ -58,7 +57,7 @@ pub struct TextLayouter {
     pieces: Vec<Piece>,
     // The glyphs of the text being laid out, which keep their storage from
     // one text to the next; a layout takes them once they are all placed.
-    glyphs: ShapedGlyphs,
+    glyphs: ParagraphGlyphs,
     // The faces intrinsic widths are measured in, which keep their storage
     // from one text to the next.
     faces: SmallVec<[Typeface; 1]>,
@@ -356,7 +355,7 @@ impl TextLayouter {
     // a paragraph needs.
     fn keep_glyph_room(&mut self) {
         if self.glyphs.capacity() > SCRATCH_GLYPHS {
-            self.glyphs = ShapedGlyphs::default();
+            self.glyphs = ParagraphGlyphs::default();
         }
     }
 
@@ -372,9 +371,7 @@ impl TextLayouter {
         layout: &mut LayoutBody,
     ) {
         // A relayout that added no glyphs keeps those it took.
-        if layout.glyphs.len() != self.glyphs.len() {
-            layout.glyphs = LaidGlyphs::new(&self.glyphs);
-        }
+        layout.glyphs.keep(&self.glyphs);
         self.keep_glyph_room();
         // Each missing line adds a line's advance, whole pixels, as Compose's
         // `heightInLines` adds the distance between two lines' baselines.
@@ -539,7 +536,7 @@ impl TextLayouter {
         faces: &mut SmallVec<[Typeface; 1]>,
     ) {
         self.items.clear();
-        self.glyphs.clear();
+        self.glyphs.clear(&input.lengths);
         self.shaper.take_ink_reach();
         // A glyph takes at least a byte of text, so the glyphs grow once.
         self.glyphs.reserve(input.text.len());
@@ -549,20 +546,18 @@ impl TextLayouter {
         let mut taken = shaped.map(|shaped| (shaped.body(), 0));
         self.itemizer
             .itemize(text, direction, input.spans, resolver, |item| {
-                let start = glyphs.len();
-                match &mut taken {
+                let span = &input.spans[item.span];
+                let added = glyphs.add((item.typeface, span.size), |glyphs| match &mut taken {
                     Some((body, from)) => {
                         *from = body.glyphs.take(*from..body.shaped, &item.range, glyphs);
                         shaper.note_ink_reach(body.ink_reach);
-                        shaper.note_synthesis(&item, &input.spans[item.span]);
+                        shaper.note_synthesis(&item, span);
                     }
-                    None => {
-                        shaper.shape(text, &item, &input.spans[item.span], 0..text.len(), glyphs);
-                    }
-                }
+                    None => shaper.shape(text, &item, span, 0..text.len(), glyphs),
+                });
                 items.push(ShapedItem {
                     text: item.range,
-                    glyphs: start..glyphs.len(),
+                    glyphs: added,
                     face: face_index(faces, item.typeface),
                     span: item.span,
                     level: item.level,
@@ -631,7 +626,7 @@ impl TextLayouter {
         let span = &input.spans[item.span];
         let scale = scale(span, &layout.faces[item.face]);
         Piece {
-            width: spaced_width(&self.glyphs[item.glyphs.clone()], scale, item.spacing),
+            width: self.glyphs.width(item.glyphs.clone(), scale, item.spacing),
             text: item.text.clone(),
             glyphs: item.glyphs.clone(),
             face: item.face,
@@ -964,7 +959,7 @@ impl TextLayouter {
                 );
                 let scale = scale(&input.spans[item.span], &layout.faces[item.face]);
                 pieces.push(Piece {
-                    width: spaced_width(&all[glyphs.clone()], scale, item.spacing),
+                    width: all.width(glyphs.clone(), scale, item.spacing),
                     text: sub,
                     glyphs,
                     face: item.face,

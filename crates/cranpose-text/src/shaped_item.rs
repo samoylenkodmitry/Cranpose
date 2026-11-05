@@ -3,15 +3,9 @@ use std::ops::Range;
 use smallvec::SmallVec;
 
 use crate::{
-    bidi_level::BidiLevel,
-    itemizer::TextItem,
-    layout_input::LayoutInput,
-    script::Script,
-    shaped_glyphs::{ShapedGlyph, ShapedGlyphs},
-    shaper::Shaper,
-    shaping_span::ShapingSpan,
-    text_layout::font_units,
-    typeface::Typeface,
+    bidi_level::BidiLevel, itemizer::TextItem, layout_input::LayoutInput,
+    paragraph_glyphs::ParagraphGlyphs, script::Script, shaped_glyphs::ShapedGlyph, shaper::Shaper,
+    shaping_span::ShapingSpan, text_layout::font_units, typeface::Typeface,
 };
 
 // An item of a paragraph shaped once for the paragraph, and the pieces its
@@ -81,12 +75,13 @@ pub(crate) fn shape_inserted(
     input: &LayoutInput<'_>,
     item: &TextItem<'_>,
     inserted: &str,
-    glyphs: &mut ShapedGlyphs,
+    glyphs: &mut ParagraphGlyphs,
 ) -> f32 {
-    let start = glyphs.len();
     let span = &input.spans[item.span];
-    shaper.shape(inserted, item, span, 0..inserted.len(), glyphs);
-    spaced_width(&glyphs[start..], scale(span, item.typeface), 0.0)
+    let added = glyphs.add((item.typeface, span.size), |glyphs| {
+        shaper.shape(inserted, item, span, 0..inserted.len(), glyphs);
+    });
+    glyphs.width(added, scale(span, item.typeface), 0.0)
 }
 
 // Gives the glyphs of an ellipsis or a hyphen the text offset it stands at.
@@ -108,7 +103,7 @@ pub(crate) fn part_glyphs(
     sub: Range<usize>,
     part: Range<usize>,
     faces: &[Typeface],
-    glyphs: &mut ShapedGlyphs,
+    glyphs: &mut ParagraphGlyphs,
 ) -> Range<usize> {
     let own = &glyphs[item.glyphs.clone()];
     let cut_unsafe = |cut: usize| {
@@ -133,7 +128,6 @@ pub(crate) fn part_glyphs(
         };
         return item.glyphs.start + low..item.glyphs.start + high;
     }
-    let start = glyphs.len();
     let reshaped = TextItem {
         range: sub,
         level: item.level,
@@ -142,8 +136,10 @@ pub(crate) fn part_glyphs(
         typeface: &faces[item.face],
         span: item.span,
     };
-    shaper.shape(input.text, &reshaped, &input.spans[item.span], part, glyphs);
-    start..glyphs.len()
+    let span = &input.spans[item.span];
+    glyphs.add((reshaped.typeface, span.size), |glyphs| {
+        shaper.shape(input.text, &reshaped, span, part, glyphs);
+    })
 }
 
 // The index of `face` in `faces`, added when missing.

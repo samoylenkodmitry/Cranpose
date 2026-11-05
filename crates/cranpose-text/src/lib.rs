@@ -42,6 +42,7 @@ mod line_runs;
 mod line_text;
 /// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
+mod paragraph_glyphs;
 mod paragraph_intrinsics;
 mod paragraph_measures;
 mod plain_chars;
@@ -91,7 +92,7 @@ pub use glyph_outline::{GlyphOutline, OutlineSegment, OutlineTransform};
 #[cfg(feature = "hyphenation")]
 pub use hyphenator::{HyphenationError, Hyphenator};
 pub use itemizer::{Itemizer, TextItem};
-pub use layout_input::{LayoutInput, ParagraphLengths};
+pub use layout_input::{GlyphAdvances, LayoutInput, ParagraphLengths};
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use line_box::{FontExtent, LineBox, line_box, paragraph_line_box};
 pub use paragraph::{

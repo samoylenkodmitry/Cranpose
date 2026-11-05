@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use cranpose_text::{
     FontFamily, FontFamilyResolver, FontFeatureSettings, FontRequest, FontStyle, FontWeight,
-    ParagraphLengths, ShapingSpan,
+    GlyphAdvances, ParagraphLengths, ParagraphStyle, ShapingSpan, TextMotion,
 };
 use smallvec::SmallVec;
 
@@ -123,6 +123,7 @@ impl<'a> ParagraphSpans<'a> {
             first_line_indent: length(indent.first_line).unwrap_or(0.0),
             rest_line_indent: length(indent.rest_line).unwrap_or(0.0),
             grid: units.density.density(),
+            advances: glyph_advances(paragraph),
         };
         Self {
             stretches,
@@ -225,4 +226,15 @@ fn spanned_stretches<'a>(
         stretches.push(stretch(0..0, base));
     }
     stretches
+}
+
+// How the glyph advances of `paragraph` meet the device pixel grid. On
+// Android, Compose's `TextMotion.Static`, the default, turns hinting on and
+// subpixel positioning off, which rounds each advance to a whole pixel;
+// desktop, iOS and the web keep subpixel positions.
+fn glyph_advances(paragraph: &ParagraphStyle) -> GlyphAdvances {
+    match paragraph.text_motion.unwrap_or_default() {
+        TextMotion::Static if cfg!(target_os = "android") => GlyphAdvances::WholePixels,
+        TextMotion::Static | TextMotion::Animated => GlyphAdvances::Fractional,
+    }
 }

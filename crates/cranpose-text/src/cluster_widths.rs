@@ -1,5 +1,6 @@
 use crate::{
     layout_input::LayoutInput,
+    paragraph_glyphs::ParagraphGlyphs,
     shaped_glyphs::ShapedGlyph,
     shaped_item::{ShapedItem, scale},
     text_layout::font_units,
@@ -48,7 +49,7 @@ impl ClusterWidths {
         items: &[ShapedItem],
         input: &LayoutInput<'_>,
         faces: &[Typeface],
-        glyphs: &[ShapedGlyph],
+        glyphs: &ParagraphGlyphs,
     ) {
         self.clusters.clear();
         self.total = ClusterTotal::default();
@@ -135,23 +136,26 @@ fn each_cluster_glyph(
     items: &[ShapedItem],
     input: &LayoutInput<'_>,
     faces: &[Typeface],
-    glyphs: &[ShapedGlyph],
+    glyphs: &ParagraphGlyphs,
     mut add: impl FnMut(u32, f32, f32),
 ) {
     for item in items {
         let scale = scale(&input.spans[item.span], &faces[item.face]);
-        let glyphs = &glyphs[item.glyphs.clone()];
-        let mut add_glyph = |glyph: &ShapedGlyph| {
+        let shifts = glyphs.shifts(item.glyphs.clone());
+        let own = &glyphs[item.glyphs.clone()];
+        let mut add_glyph = |glyph: &ShapedGlyph, shift: f32| {
             add(
                 glyph.cluster,
-                font_units(glyph.advance) * scale,
+                font_units(glyph.advance) * scale + shift,
                 item.spacing,
             );
         };
-        if item.level.is_rtl() {
-            glyphs.iter().rev().for_each(&mut add_glyph);
-        } else {
-            glyphs.iter().for_each(&mut add_glyph);
+        // Advances that keep the font's fractions shift by nothing.
+        match (item.level.is_rtl(), shifts.is_empty()) {
+            (false, true) => own.iter().for_each(|glyph| add_glyph(glyph, 0.0)),
+            (true, true) => own.iter().rev().for_each(|glyph| add_glyph(glyph, 0.0)),
+            (false, false) => (own.iter().zip(shifts)).for_each(|(g, s)| add_glyph(g, *s)),
+            (true, false) => (own.iter().zip(shifts).rev()).for_each(|(g, s)| add_glyph(g, *s)),
         }
     }
 }

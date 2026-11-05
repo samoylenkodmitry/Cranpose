@@ -2,6 +2,7 @@ use std::{ops::Range, sync::Arc};
 
 use crate::{
     glyph_id::GlyphId,
+    paragraph_glyphs::ParagraphGlyphs,
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
 };
 
@@ -12,6 +13,9 @@ use crate::{
 pub(crate) struct LaidGlyphs {
     glyphs: Glyphs,
     offsets: Option<Arc<[GlyphOffset]>>,
+    // What each glyph's advance gains where advances round to whole device
+    // pixels, as `ParagraphGlyphs` measures it.
+    shifts: Option<Arc<[f32]>>,
 }
 
 // A layout's glyphs: in eight bytes each when every one fits them, as the
@@ -80,24 +84,37 @@ impl PackedGlyph {
 
 // Some of a layout's glyphs, as it keeps them.
 #[derive(Clone, Copy)]
-pub(crate) enum RunGlyphs<'a> {
+pub(crate) enum GlyphSlice<'a> {
     Packed(&'a [PackedGlyph]),
     Full(&'a [ShapedGlyph]),
 }
 
+// Some of a layout's glyphs, with what their advances gain where advances
+// round to whole device pixels: none where they keep the font's fractions.
+#[derive(Clone, Copy)]
+pub(crate) struct RunGlyphs<'a> {
+    pub(crate) glyphs: GlyphSlice<'a>,
+    shifts: &'a [f32],
+}
+
 impl<'a> RunGlyphs<'a> {
     pub(crate) fn len(self) -> usize {
-        match self {
-            Self::Packed(glyphs) => glyphs.len(),
-            Self::Full(glyphs) => glyphs.len(),
+        match self.glyphs {
+            GlyphSlice::Packed(glyphs) => glyphs.len(),
+            GlyphSlice::Full(glyphs) => glyphs.len(),
         }
     }
 
     pub(crate) fn get(self, index: usize) -> Option<ShapedGlyph> {
-        match self {
-            Self::Packed(glyphs) => glyphs.get(index).map(|glyph| glyph.unpack()),
-            Self::Full(glyphs) => glyphs.get(index).copied(),
+        match self.glyphs {
+            GlyphSlice::Packed(glyphs) => glyphs.get(index).map(|glyph| glyph.unpack()),
+            GlyphSlice::Full(glyphs) => glyphs.get(index).copied(),
         }
+    }
+
+    // What the advance of glyph `index` gains.
+    pub(crate) fn shift(self, index: usize) -> f32 {
+        self.shifts.get(index).copied().unwrap_or(0.0)
     }
 
     pub(crate) fn iter(self) -> impl Iterator<Item = ShapedGlyph> + 'a {
@@ -105,16 +122,33 @@ impl<'a> RunGlyphs<'a> {
     }
 
     fn slice(self, range: Range<usize>) -> Self {
-        match self {
-            Self::Packed(glyphs) => Self::Packed(&glyphs[range]),
-            Self::Full(glyphs) => Self::Full(&glyphs[range]),
+        let glyphs = match self.glyphs {
+            GlyphSlice::Packed(glyphs) => GlyphSlice::Packed(&glyphs[range.clone()]),
+            GlyphSlice::Full(glyphs) => GlyphSlice::Full(&glyphs[range.clone()]),
+        };
+        Self {
+            glyphs,
+            shifts: self.shifts.get(range).unwrap_or_default(),
         }
     }
 }
 
 impl LaidGlyphs {
+    // Keeps the glyphs of `paragraph` with what their advances gain: those
+    // held already when they are as many, as a relayout that shaped no
+    // glyph takes them.
+    pub(crate) fn keep(&mut self, paragraph: &ParagraphGlyphs) {
+        if self.len() != paragraph.len() {
+            *self = Self::new(paragraph);
+        }
+        let shifts = paragraph.shifts(0..paragraph.len());
+        if self.shifts.as_deref().unwrap_or_default() != shifts {
+            self.shifts = (!shifts.is_empty()).then(|| Arc::from(shifts));
+        }
+    }
+
     // Keeps `shaped`.
-    pub(crate) fn new(shaped: &ShapedGlyphs) -> Self {
+    fn new(shaped: &ShapedGlyphs) -> Self {
         let offsets = shaped.offsets();
         let mut fits = true;
         // Collected from an iterator of known length, in one allocation.
@@ -137,6 +171,7 @@ impl LaidGlyphs {
                 .iter()
                 .any(|offset| *offset != GlyphOffset::default())
                 .then(|| Arc::from(offsets)),
+            shifts: None,
         }
     }
 
@@ -150,9 +185,13 @@ impl LaidGlyphs {
     }
 
     fn all(&self) -> RunGlyphs<'_> {
-        match &self.glyphs {
-            Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
-            Glyphs::Full(glyphs) => RunGlyphs::Full(glyphs),
+        let glyphs = match &self.glyphs {
+            Glyphs::Packed(glyphs) => GlyphSlice::Packed(glyphs),
+            Glyphs::Full(glyphs) => GlyphSlice::Full(glyphs),
+        };
+        RunGlyphs {
+            glyphs,
+            shifts: self.shifts.as_deref().unwrap_or_default(),
         }
     }
 
@@ -180,23 +219,23 @@ impl LaidGlyphs {
     ) -> usize {
         let start = range.start;
         // Read in place, so each glyph is unpacked only to be appended.
-        let taken = match self.run(range) {
-            RunGlyphs::Packed(glyphs) => glyphs
+        let taken = match self.run(range).glyphs {
+            GlyphSlice::Packed(glyphs) => glyphs
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.text_offset()))
                 .count(),
-            RunGlyphs::Full(glyphs) => glyphs
+            GlyphSlice::Full(glyphs) => glyphs
                 .iter()
                 .take_while(|glyph| text.contains(&glyph.text_offset()))
                 .count(),
         };
         let end = start + taken;
         let offsets = self.offsets(start..end).unwrap_or_default();
-        match self.run(start..end) {
-            RunGlyphs::Packed(glyphs) => {
+        match self.run(start..end).glyphs {
+            GlyphSlice::Packed(glyphs) => {
                 out.extend(glyphs.iter().map(|glyph| glyph.unpack()), offsets);
             }
-            RunGlyphs::Full(glyphs) => out.extend_from_slice(glyphs, offsets),
+            GlyphSlice::Full(glyphs) => out.extend_from_slice(glyphs, offsets),
         }
         end
     }

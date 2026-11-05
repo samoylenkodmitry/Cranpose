@@ -35,6 +35,22 @@ pub struct ParagraphLengths {
     /// Device pixels per pixel of the layout, finite and positive: line boxes
     /// round to whole device pixels, as Android's do.
     pub grid: f32,
+    /// Whether glyph advances round to that grid.
+    pub advances: GlyphAdvances,
+}
+
+/// How a glyph's advance meets the device pixel grid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlyphAdvances {
+    /// The font's advance at the text size: glyphs keep subpixel positions,
+    /// as Compose places them on desktop, iOS and the web, and on Android
+    /// for `TextMotion.Animated`.
+    #[default]
+    Fractional,
+    /// The font's advance rounded to a whole device pixel, with the kerning
+    /// shaping adds to it left whole: Android's `TextMotion.Static`, which
+    /// turns hinting on and subpixel positioning off.
+    WholePixels,
 }
 
 impl Default for ParagraphLengths {
@@ -44,6 +60,7 @@ impl Default for ParagraphLengths {
             first_line_indent: 0.0,
             rest_line_indent: 0.0,
             grid: 1.0,
+            advances: GlyphAdvances::Fractional,
         }
     }
 }

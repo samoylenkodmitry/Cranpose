@@ -185,7 +185,7 @@ impl LineRun {
                 .get(at)
                 .filter(|glyph| glyph.cluster == first.cluster)
             {
-                width += font_units(glyph.advance) * scale;
+                width += font_units(glyph.advance) * scale + glyphs.shift(at);
                 if space == Some(glyph.id()) {
                     width += self.word_spacing;
                 }
@@ -312,7 +312,7 @@ impl GlyphRun<'_> {
                         .copied()
                         .unwrap_or_default();
                     let at = x + font_units(drawn.x) * scale;
-                    x += font_units(glyph.advance) * scale;
+                    x += font_units(glyph.advance) * scale + self.glyphs.shift(index);
                     Some(PositionedGlyph {
                         id: glyph.id(),
                         x: at,
