@@ -1716,7 +1716,7 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
 ```
 
 `ShadedSurface` holds, in the mesh's own coordinates: `color`, the content
-there, premultiplied; `position`; `normal`, on the side the eye sees;
+there, premultiplied; `position`; `eye`; `normal`, on the side the eye sees;
 `to_eye` and `to_light`, of length one, `to_light` zero without a light;
 `lit`, from 0 in full shadow to 1; and `ambient`. `shaded_param(i)` reads
 `params[i]`. The room's controls use it to mirror the controls tab's studio
