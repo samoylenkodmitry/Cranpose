@@ -1,9 +1,15 @@
-// The Backrooms tab: a camcorder's view of an endless maze of yellow rooms.
+// The Backrooms tab: a camcorder's view of yellow rooms that never end,
+// each room a scene behind a doorway of the room before.
 
+mod anomaly;
 mod figure;
+mod finish;
 mod hud;
-mod level;
-mod maze;
+mod journey;
+mod notes;
+mod place;
+mod plan;
+mod room;
 mod tab;
 mod walker;
 

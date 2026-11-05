@@ -1697,13 +1697,6 @@ bounds and leaves the mesh, `footprint` is a pixel's width in radians,
 content. A shader that does not build logs a warning, and its volumes are left
 out.
 
-A volume can hold a whole world. The desktop demo's Backrooms tab draws an
-endless maze with one volume: a box around the eye, placed at the corner of the
-maze cell the eye stands in, whose shader finds the maze's walls by hashing the
-cells a ray crosses. The app moves the box from cell to cell as the eye walks
-and passes the cell in `params`, so the shader's coordinates stay small however
-far the eye goes.
-
 `Material::Shaded(Shaded { shader, params })` colours each point of the
 surface with the app's WGSL `shade` function, from the content there, the
 light and the eye: a reflection, a sheen, a normal of its own. The surface
@@ -1825,6 +1818,16 @@ leaves its own camera standing in the doorway. In the demo's room, open the
 Room tab on the right wall, turn to it with E and walk in with W. The second
 room's Step into the room button opens its walls, and its own right wall holds
 the demo again.
+
+The desktop demo's Backrooms tab walks through rooms that never end. Each room
+is a composable. It composes a doorway at each of its doors with the next room
+behind it, two doorways deep. The tab makes the room behind a doorway the window
+scene's room once the eye walks through that doorway. `eye.place` then puts the
+eye at the same pose with no doorways: the room's coordinates stay the same. The
+tab keys the scene by its room, so the eye walks on only after the renderer has
+placed the new scene. One `Shaded` shader colours the walls, floors and ceilings
+of every room. The entity's writing, a lever and the things in the rooms carry
+live content.
 
 #### Point with a ray
 

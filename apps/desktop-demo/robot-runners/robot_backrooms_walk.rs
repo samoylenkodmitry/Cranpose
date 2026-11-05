@@ -1,10 +1,12 @@
-// The Backrooms tab: the maze shows in its yellow under the camcorder's
-// REC, holding W walks the eye down it and a drag turns the eye.
+// The Backrooms tab: the first room shows in its yellow under the
+// camcorder's REC with the entity's welcome on its wall, holding W walks
+// the eye through the doorway ahead into the second room, and a drag turns
+// the eye.
 
 use std::time::Duration;
 
 use cranpose::{PointerButton, Robot, RobotScreenshot};
-use cranpose_testing::find_text_in_semantics;
+use cranpose_testing::{find_text_in_semantics, find_text_in_semantics_exact};
 
 use crate::{output_paths, pointer_drag, robot_exit, robot_launch, robot_shot};
 
@@ -15,13 +17,13 @@ const TAB_BAR_BOTTOM: f32 = 120.0;
 // The side of the squares whose mean colours the pictures are compared by,
 // in logical pixels: wide enough that the grain averages out.
 const BLOCK: f32 = 20.0;
-// How much more than two still pictures a walk or a turn changes the
-// picture, at least.
+// How much more than two still pictures a turn changes the picture, at
+// least.
 const MOVED_OVER_STILL: f32 = 3.0;
-// How many tenths of a second W may be held for the eye to walk: a busy
-// host draws fewer, longer frames, and the eye walks a tenth of a second a
-// frame at most.
-const LONGEST_HOLD_TENTHS: u32 = 80;
+// How many tenths of a second W may be held for the eye to walk into the
+// next room, 750 units ahead at 260 a second: a busy host draws fewer,
+// longer frames, and the eye walks a tenth of a second a frame at most.
+const LONGEST_HOLD_TENTHS: u32 = 150;
 
 pub(crate) fn main() {
     let _ = env_logger::try_init();
@@ -37,21 +39,26 @@ pub(crate) fn main() {
         .with_test_driver(move |robot| {
             robot_launch::switch_tab(&robot, "backrooms");
             pause(&robot, 1500);
-            if find_text_in_semantics(&robot, "REC").is_none() {
-                robot_exit::fail(&robot, "the camcorder shows no REC");
+            for text in ["REC", "ROOM 1"] {
+                if find_text_in_semantics_exact(&robot, text).is_none() {
+                    robot_exit::fail(&robot, &format!("the camcorder shows no {text}"));
+                }
+            }
+            if find_text_in_semantics(&robot, "WELCOME HOME").is_none() {
+                robot_exit::fail(&robot, "the entity wrote no welcome on the wall");
             }
             let start = shot(&robot, &shots, "start.png");
             let (red, green, blue) = mean_colour(&start);
             println!("  mean colour {red:.0} {green:.0} {blue:.0}");
             if red < blue + 25.0 || green < blue + 15.0 {
-                robot_exit::fail(&robot, "the maze does not show in its yellow");
+                robot_exit::fail(&robot, "the room does not show in its yellow");
             }
             pause(&robot, 500);
             let still = difference(&start, &shot(&robot, &shots, "still.png"));
-
             let moved = still * MOVED_OVER_STILL + 2.0;
-            let walked = hold_until_moved(&robot, "w", &start, moved);
-            robot_shot::save(&walked, &shots, "walked.png");
+
+            hold_until_next_room(&robot, "w");
+            let walked = shot(&robot, &shots, "walked.png");
 
             pointer_drag::drag(&robot, PointerButton::Primary, (500.0, 450.0), (800.0, 450.0));
             pause(&robot, 300);
@@ -76,33 +83,23 @@ fn pause(robot: &Robot, millis: u64) {
     }
 }
 
-// Holds `key` until the picture differs from `before` by `moved`, and
-// returns the picture then.
-fn hold_until_moved(robot: &Robot, key: &str, before: &RobotScreenshot, moved: f32) -> RobotScreenshot {
+// Holds `key` until the camcorder shows the eye in its second room.
+fn hold_until_next_room(robot: &Robot, key: &str) {
     if let Err(err) = robot.send_key(key) {
         robot_exit::fail(robot, &format!("key {key}: {err}"));
     }
     let mut tenths = 0;
-    let after = loop {
+    while find_text_in_semantics_exact(robot, "ROOM 2").is_none() {
         pause(robot, 100);
         tenths += 1;
-        let now = match robot.screenshot() {
-            Ok(shot) => shot,
-            Err(err) => robot_exit::fail(robot, &format!("screenshot: {err}")),
-        };
-        let change = difference(before, &now);
-        if change >= moved {
-            println!("  holding {key} changed the picture by {change:.2}");
-            break now;
-        }
         if tenths >= LONGEST_HOLD_TENTHS {
-            robot_exit::fail(robot, &format!("holding {key} changed the picture by {change:.2} only"));
+            robot_exit::fail(robot, &format!("holding {key} did not walk into the next room"));
         }
-    };
+    }
+    println!("  holding {key} walked into the next room in {tenths} tenths");
     if let Err(err) = robot.release_key(key) {
         robot_exit::fail(robot, &format!("releasing {key}: {err}"));
     }
-    after
 }
 
 fn shot(robot: &Robot, directory: &std::path::Path, name: &str) -> RobotScreenshot {

@@ -1,21 +1,21 @@
-// The Backrooms tab: a camcorder's view of an endless maze of yellow rooms
-// under humming lamps, walked the way the Room tab walks.
+// The Backrooms tab: a camcorder's view of yellow rooms under humming
+// lamps that never end. The eye's room is the window's scene; the rooms
+// behind its doorways, and behind theirs, are scenes behind doorways, and
+// the walk through a doorway makes the room behind it the window's.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
-use cranpose_core::{
-    delay, remember, rememberMutableStateOf, LaunchedEffect, LaunchedEffectAsync, MutableState,
-};
+use cranpose_core::{delay, key, remember, LaunchedEffect, LaunchedEffectAsync};
 use cranpose_ui::{
-    composable,
-    space::{Camera, Scene3d},
-    Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Color, Modifier, Size,
+    composable, space::Camera, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Color,
+    Modifier,
 };
 
 use super::{
-    figure::Figure,
     hud::Hud,
-    level::{self, Frame},
+    journey::{rememberJourney, Journey},
+    place::Place,
+    room::{Level, Meshes, Room, LIGHT},
     walker::{rememberWalker, Walker},
 };
 use crate::app::ticking::Ticking;
@@ -26,19 +26,13 @@ const FIELD_OF_VIEW: f32 = 1.2;
 // moves.
 pub(super) const FRAMES_PER_SECOND: u32 = 24;
 const CAMCORDER_FRAME: Duration = Duration::from_micros(41_667);
-// The level draws nothing from its surface's content, so the content is
-// as small as content gets.
-const CONTENT: Size = Size {
-    width: 4.0,
-    height: 4.0,
-};
 
 #[composable]
 pub(crate) fn BackroomsTab() {
-    let walker = rememberWalker();
-    let frames = rememberMutableStateOf(|| 0_u32);
-    let figure = rememberMutableStateOf(Figure::default);
-    Camcorder(walker.clone(), frames, figure);
+    let journey = rememberJourney();
+    let walker = rememberWalker(journey);
+    let meshes = remember(Meshes::new).with(Clone::clone);
+    Camcorder(journey);
     Walking(walker.clone());
     let focus = walker.focus.clone();
     LaunchedEffect((), move |_| {
@@ -63,24 +57,26 @@ pub(crate) fn BackroomsTab() {
             let height = scope.constraints().max_height;
             let height = if height.is_finite() { height } else { 1.0 };
             let focal_length = Camera::focal_length_for(height.max(1.0), FIELD_OF_VIEW);
-            Level(walker.clone(), focal_length, (frames, figure));
-            Hud(frames);
+            let level = Level {
+                meshes: meshes.clone(),
+                eye: walker.eye.clone(),
+                journey,
+            };
+            Rooms(level, walker.clone(), focal_length);
+            Hud(journey);
         },
     );
 }
 
-// The camcorder's clock, which counts its frames, and the figure, which it
-// moves along.
-#[composable(no_skip)]
-fn Camcorder(walker: Walker, frames: MutableState<u32>, figure: MutableState<Figure>) {
+// The camcorder's clock, which counts its frames.
+#[composable]
+fn Camcorder(journey: Journey) {
+    let frames = journey.frames;
     LaunchedEffectAsync((), move |scope| {
         Box::pin(async move {
-            let step = CAMCORDER_FRAME.as_secs_f32();
             while scope.is_active() {
                 delay(CAMCORDER_FRAME).await;
                 frames.update(|count| *count = count.wrapping_add(1));
-                let (eye, cell) = (walker.pose(), walker.cell());
-                figure.update(|figure| figure.tick(step, &eye, cell));
             }
         })
     });
@@ -93,43 +89,20 @@ fn Walking(walker: Walker) {
     Ticking(walker.is_moving(), move |seconds| stepper.step(seconds));
 }
 
-// The scene through the eye, and the level in it.
+// The window's scene through the eye, which holds the eye's room. A new
+// room is a new scene, so the eye knows when the renderer has placed it.
 #[composable(no_skip)]
-fn Level(
-    walker: Walker,
-    focal_length: f32,
-    (frames, figure): (MutableState<u32>, MutableState<Figure>),
-) {
-    let view_box = remember(|| level::view_box().map(Arc::new)).with(Clone::clone);
-    let sees = walker.clone();
-    Box(
-        Modifier::empty().fill_max_size().scene3d(move || Scene3d {
-            camera: sees.camera(focal_length),
-            light: None,
-            eye: None,
-        }),
-        BoxSpec::default(),
-        move || {
-            let Some(view_box) = view_box.clone() else {
-                return;
-            };
-            let shows = walker.clone();
-            Box(
-                Modifier::empty()
-                    .required_size(CONTENT)
-                    .mesh_surface(move || {
-                        let (figure, cell) = (figure.get(), shows.cell());
-                        Frame {
-                            frame: frames.get(),
-                            cell,
-                            dim: figure.dim(),
-                            figure: figure.at(cell),
-                        }
-                        .surface(&view_box)
-                    }),
-                BoxSpec::default(),
-                || {},
-            );
-        },
-    );
+fn Rooms(level: Level, walker: Walker, focal_length: f32) {
+    let visit = level.journey.visit.get();
+    key(visit, move || {
+        let sees = walker.clone();
+        let scene = Box(
+            Modifier::empty()
+                .fill_max_size()
+                .scene3d(move || sees.scene(focal_length, Some(LIGHT))),
+            BoxSpec::default(),
+            move || Room(level.clone(), visit, Place::ROOT),
+        );
+        walker.scene.set(Some(scene));
+    });
 }

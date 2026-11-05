@@ -747,6 +747,12 @@ impl ControlHandle {
         self.0.with(|parts| parts.state)
     }
 
+    // Whether a switch stands on; read in composition or a draw closure, it
+    // follows the switch.
+    pub(crate) fn is_on(&self) -> bool {
+        self.state().get().on
+    }
+
     fn hovered(&self) -> MutableState<bool> {
         self.0.with(|parts| parts.hovered)
     }
