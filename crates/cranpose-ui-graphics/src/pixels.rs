@@ -1,5 +1,5 @@
 //! Snapping lengths to the device pixel grid the way Compose does.
-use cranpose_ui_graphics::whole;
+use crate::whole;
 
 /// A length moved onto the whole device pixel Compose would give it.
 ///
