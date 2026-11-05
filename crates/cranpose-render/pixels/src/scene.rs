@@ -23,7 +23,7 @@ use crate::{
     draw::{ClipBounds, TextRaster},
     layout_walk::{DirtyMarks, KeptSpace, LayoutWalk, kept_space, names},
     moved_subtrees::MovedSubtrees,
-    pipeline::{self, InPlaceUpdate, PushTarget, UpdatedReach},
+    pipeline::{self, InPlaceUpdate, UpdatedReach},
     pixel_rect,
     raster_scene::{RasterScene, SubtreeItems},
     rewrite::Rewrite,
@@ -39,7 +39,6 @@ pub struct Scene {
     // What an update in place pushes each changed subtree again with, and
     // the room for the nodes whose subtrees it pushes again.
     rewrite: Option<Box<Rewrite>>,
-    push_targets: Vec<PushTarget>,
     marks: DirtyMarks,
     scale: f32,
     // The frame the host took the picture in last, which the changes and
@@ -83,7 +82,6 @@ impl Scene {
             raster: None,
             reach: Vec::new(),
             rewrite: None,
-            push_targets: Vec::new(),
             marks: DirtyMarks::default(),
             scale: 1.0,
             frame: OPEN_FRAME,
@@ -148,7 +146,7 @@ impl Scene {
         self.moved
             .get_mut()
             .drop_changed(|node| marks.is_clean(applier, node));
-        if !self.update_in_place(applier, root, text) {
+        if !self.update_in_place((applier, root), updates, text) {
             let previous = self.raster.take();
             self.build(applier, root, previous, text);
         }
@@ -200,8 +198,8 @@ impl Scene {
     // Updates the scene in place; false when it must be built again.
     fn update_in_place(
         &mut self,
-        applier: &MemoryApplier,
-        root: NodeId,
+        (applier, root): (&MemoryApplier, NodeId),
+        updates: SceneUpdates<'_>,
         text: &TextRaster,
     ) -> bool {
         let Some(raster) = self.raster.as_mut() else {
@@ -219,7 +217,7 @@ impl Scene {
             scene: raster,
             reach: &mut self.reach,
             rewrite: &mut self.rewrite,
-            targets: &mut self.push_targets,
+            updates,
         }
         .run_layout(
             (&walk, root),

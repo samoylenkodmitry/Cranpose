@@ -30,6 +30,14 @@ struct Places {
     passed_down: usize,
 }
 
+// Whether a finished rewrite spliced a run of the scene's lists: the records
+// and entries after it may then lie at other indices.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Replaced {
+    Nothing,
+    Run,
+}
+
 // The room for changed areas a rewrite keeps from one to the next.
 const KEPT_AREAS: usize = 32;
 
@@ -320,14 +328,15 @@ impl Rewrite {
     // When its pushes went on in the spill, or stopped before the old
     // items' end, what it pushed from there takes the place of the old
     // items, records and entries left, and the records that hold the
-    // subtree or follow it move by the difference.
-    pub(crate) fn finish(&mut self, scene: &mut RasterScene, record: usize) {
+    // subtree or follow it move by the difference. Says whether it did.
+    pub(crate) fn finish(&mut self, scene: &mut RasterScene, record: usize) -> Replaced {
         let from = match self.spilled_at {
             Some(at) => at,
-            None if self.next == self.stop => return,
+            None if self.next == self.stop => return Replaced::Nothing,
             None => self.next,
         };
         self.replace_from(scene, record, from);
+        Replaced::Run
     }
 
     // What `finish` does for a subtree that pushed other items than before,

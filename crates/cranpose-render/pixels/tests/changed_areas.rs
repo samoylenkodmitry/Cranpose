@@ -585,6 +585,49 @@ fn children_under_a_turning_parent_draw_what_they_hold_now() {
     kept_frames_match_full_redraws(1.0, SpinningParent);
 }
 
+// A box whose shadow shows every fourth step, above a box whose colour
+// changes each step. Each step changes the same two boxes: the steps between
+// push them again with no walk to them, and a step that adds or drops the
+// shadow splices the items after the first box.
+#[composable]
+fn ShadowAboveColour(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().offset(6.0, 6.0),
+        ColumnSpec::default(),
+        move || {
+            let n = step.value();
+            Box(
+                Modifier::empty()
+                    .width(40.0)
+                    .height(20.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        alpha: 0.9,
+                        shadow_elevation: if n % 4 == 0 { 6.0 } else { 0.0 },
+                        ..GraphicsLayer::default()
+                    })
+                    .background(color(1, 5)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .width(40.0)
+                    .height(20.0)
+                    .background(color(n, 6)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn nodes_that_change_each_step_draw_right_across_a_splice_before_one() {
+    kept_frames_match_full_redraws(1.0, ShadowAboveColour);
+}
+
 #[composable]
 fn Counter(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);

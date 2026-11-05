@@ -240,6 +240,11 @@ impl<'a> LayoutWalk<'a> {
 
     // Whether the scene keeps `node`'s subtree whole, as its layer holds a
     // 3D space.
+    // Whether no subtree the scene keeps whole holds a 3D space.
+    pub(crate) fn holds_no_space(&self) -> bool {
+        self.spaces.borrow().is_empty()
+    }
+
     pub(crate) fn holds_space(&self, node: NodeId) -> bool {
         self.spaces
             .borrow()
@@ -443,7 +448,7 @@ impl<'a> LayoutWalk<'a> {
         lower_context: &LowerContext,
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
     ) -> bool {
-        if !self.marks.from_update || !self.is_clean(child) || !self.spaces.borrow().is_empty() {
+        if !self.marks.from_update || !self.is_clean(child) || !self.holds_no_space() {
             return false;
         }
         self.push_kept_subtree((child, None), lower_context, (scene, context));

@@ -15,6 +15,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     draw::RenderItem,
+    pipeline::WalkedTargets,
     rewrite::Rewrite,
     scene_item::{ItemRef, SceneItem},
 };
@@ -428,6 +429,8 @@ pub(crate) struct RasterScene {
     // Whether a record that hit targets read was pushed, replaced or let go
     // since the scene's hit targets were collected.
     pub(crate) hits_changed: bool,
+    // The nodes the last update in place pushed again, at these records.
+    pub(crate) walked: WalkedTargets,
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "item reach in draw/reach")]
@@ -446,6 +449,7 @@ impl RasterScene {
             snap_anchor: None,
             rewrite: None,
             hits_changed: false,
+            walked: WalkedTargets::default(),
         }
     }
 
@@ -460,6 +464,7 @@ impl RasterScene {
         self.passed_down.clear();
         self.start = None;
         self.kept.clear();
+        self.walked.clear();
     }
 
     pub(crate) fn counts(&self) -> ItemCounts {

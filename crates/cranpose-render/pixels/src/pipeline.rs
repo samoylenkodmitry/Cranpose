@@ -356,7 +356,7 @@ mod space;
 #[cfg(test)]
 pub(crate) use draw_child::push_draw_primitive;
 use draw_child::render_draw_child;
-pub(crate) use in_place::{InPlaceUpdate, PushTarget, UpdatedReach};
+pub(crate) use in_place::{InPlaceUpdate, UpdatedReach, WalkedTargets};
 use layer_children::{LayerChildren, Next, for_each_around_children};
 use layer_shadow::push_layer_shadow;
 pub(crate) use reuse::Reuse;

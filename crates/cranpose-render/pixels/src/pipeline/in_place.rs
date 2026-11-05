@@ -11,6 +11,7 @@
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
+    NodeUpdate, SceneUpdates,
     graph::{ProjectiveTransform, RenderNode},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowLight,
@@ -23,7 +24,7 @@ use crate::{
     draw::{ClipBounds, TextRaster},
     layout_walk::{LayoutWalk, OldChildren, child_record_from, names},
     raster_scene::{PassedDown, RasterScene},
-    rewrite::Rewrite,
+    rewrite::{Replaced, Rewrite},
 };
 
 // What a walk that pushes changed layers again shares.
@@ -43,6 +44,27 @@ struct Repush<'a> {
     scale: f32,
     text: &'a TextRaster,
     targets: &'a mut Vec<PushTarget>,
+    // Whether a rewrite spliced a run of the scene's lists.
+    replaced: Replaced,
+}
+
+// The nodes the last update in place pushed again, and the updates its walk
+// found them for: empty when no walk's nodes hold. An update with the same
+// updates finds the same nodes at the same records, with what they lower
+// with, while no rewrite spliced the scene since and no subtree holds a 3D
+// space: it pushes them again with no walk. An animation changes the same
+// nodes each frame.
+#[derive(Default)]
+pub(crate) struct WalkedTargets {
+    updates: Vec<(NodeId, NodeUpdate)>,
+    targets: Vec<PushTarget>,
+}
+
+impl WalkedTargets {
+    pub(crate) fn clear(&mut self) {
+        self.updates.clear();
+        self.targets.clear();
+    }
 }
 
 // A node whose subtree an update pushes again: where it lies in the layout
@@ -80,14 +102,14 @@ pub(crate) enum UpdatedReach {
     Lost,
 }
 
-// A scene to bring up to its graph in place, where each of its items
-// reaches, and the storage the update borrows: the rewrite that pushes a
-// changed subtree again.
+// A scene to bring up to its layout tree in place by `updates`, where each
+// of its items reaches, and the storage the update borrows: the rewrite that
+// pushes a changed subtree again.
 pub(crate) struct InPlaceUpdate<'a> {
     pub scene: &'a mut RasterScene,
     pub reach: &'a mut Vec<Option<ClipBounds>>,
     pub rewrite: &'a mut Option<Box<Rewrite>>,
-    pub targets: &'a mut Vec<PushTarget>,
+    pub updates: SceneUpdates<'a>,
 }
 
 impl InPlaceUpdate<'_> {
@@ -107,7 +129,7 @@ impl InPlaceUpdate<'_> {
             scene,
             reach,
             rewrite,
-            targets,
+            updates,
         } = self;
         let bounds = root_layer_bounds(walk.applier(), root)?;
         let light =
@@ -120,6 +142,8 @@ impl InPlaceUpdate<'_> {
         } else {
             UpdatedReach::Lost
         };
+        let mut walked = std::mem::take(&mut scene.walked);
+        let found_before = walked.updates == updates && walk.holds_no_space();
         let mut repush = Repush {
             scene,
             reach,
@@ -132,21 +156,34 @@ impl InPlaceUpdate<'_> {
             light,
             scale,
             text,
-            targets,
+            targets: &mut walked.targets,
+            replaced: Replaced::Nothing,
         };
-        let context = LowerContext::root(RecordingStore::Redrawn);
-        let walked = repush
-            .visit_node(walk, (root, NodePlace::Root), &context, (0, None))
-            .and_then(|()| repush.push_targets(walk));
+        let found = if found_before && repush.targets_hold(walk) {
+            Ok(())
+        } else {
+            repush.targets.clear();
+            let context = LowerContext::root(RecordingStore::Redrawn);
+            repush.visit_node(walk, (root, NodePlace::Root), &context, (0, None))
+        };
+        let pushed = found.and_then(|()| repush.push_targets(walk));
         // The rewrites run last first. Each puts its areas in reverse after
         // those before. One more reverse puts the update's areas in the
         // scene's order, in which a host sends them.
         repush.areas[repush.first_area..].reverse();
-        repush.targets.clear();
+        let (held, replaced) = (repush.held, repush.replaced);
+        if pushed.is_ok() && replaced == Replaced::Nothing && walk.holds_no_space() {
+            if !found_before {
+                walked.updates.clear();
+                walked.updates.extend_from_slice(updates);
+            }
+        } else {
+            walked.clear();
+        }
+        scene.walked = walked;
         walk.release();
-        let held = repush.held;
         merge_areas(areas);
-        walked.ok()?;
+        pushed.ok()?;
         Some(held)
     }
 }
@@ -207,6 +244,19 @@ impl Repush<'_> {
             return Ok(());
         }
         walked
+    }
+
+    // Whether the nodes the walk found for the same updates before still
+    // lie at their records, readied to lower again.
+    fn targets_hold(&mut self, walk: &LayoutWalk<'_>) -> bool {
+        self.targets.iter_mut().all(|target| {
+            target.leaf = walk.lowers_as_leaf((target.node, target.place));
+            target.inner = None;
+            self.scene
+                .subtrees
+                .get(target.record)
+                .is_some_and(|old| names(old.identity, target.node))
+        })
     }
 
     // Notes that the subtree of `node`, whose old record is `record`, is
@@ -351,7 +401,9 @@ impl Repush<'_> {
             .rewrite
             .take()
             .expect("the rewrite started above");
-        rewrite.finish(self.scene, record);
+        if rewrite.finish(self.scene, record) == Replaced::Run {
+            self.replaced = Replaced::Run;
+        }
         self.scene.hits_changed |= rewrite.replaced_hits();
         (*self.reach, self.held) = rewrite.results(self.areas);
         *self.rewrite = Some(rewrite);
