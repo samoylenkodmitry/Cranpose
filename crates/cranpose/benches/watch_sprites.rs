@@ -24,6 +24,10 @@ use cranpose_animation::{
 
 #[path = "../tests/support/changing_paths.rs"]
 mod changing_paths;
+#[path = "../tests/support/frame_time.rs"]
+mod frame_time;
+#[path = "../tests/support/text_style.rs"]
+mod text_style;
 
 const WIDTH: u32 = 198;
 const HEIGHT: u32 = 242;

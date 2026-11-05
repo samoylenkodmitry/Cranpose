@@ -58,8 +58,12 @@ use cranpose_animation::{
 mod changing_paths;
 #[path = "../tests/support/dashboard.rs"]
 mod dashboard;
+#[path = "../tests/support/frame_time.rs"]
+mod frame_time;
 #[path = "../tests/support/reading.rs"]
 mod reading;
+#[path = "../tests/support/text_style.rs"]
+mod text_style;
 
 use reading::{ComposedReading, DrawnReading};
 
@@ -209,7 +213,13 @@ impl Pixels {
         };
         let height = bytes.len() / 4 / width;
         let mut file = format!("P6\n{width} {height}\n255\n").into_bytes();
-        file.extend(bytes.chunks_exact(4).flat_map(|pixel| &pixel[..3]));
+        file.extend(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|pixel| &pixel[..3]),
+        );
         std::fs::write(path, file)
     }
 
