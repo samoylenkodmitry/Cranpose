@@ -1,6 +1,6 @@
 use cranpose_text::{
-    FontFamilyResolver, LineBreak, ParagraphLengths, ParagraphStyle, TextAlign, TextLayout,
-    TextLayoutOptions, TextOverflow,
+    FontFamilyResolver, GlyphAdvances, LineBreak, ParagraphLengths, ParagraphStyle, TextAlign,
+    TextLayout, TextLayoutOptions, TextOverflow,
 };
 
 use crate::fonts::{ROBOTO, lay_out_with, typeface};
@@ -280,4 +280,47 @@ fn a_layout_aligned_without_moving_a_glyph_keeps_its_id() {
     laid.align(250.0, 250.0, TextAlign::Start);
     assert_ne!(laid.id(), centred, "the start takes the line back");
     assert_eq!(picture(&laid), at_start);
+}
+
+// A text cut to its max lines shows no line past them, so the lines past
+// them hold no width: a clipped layout keeps every width at which its shown
+// lines break the same, as an animated width asks of a card body each frame.
+#[test]
+fn lines_past_the_max_lines_hold_no_width() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let style = paragraph(TextAlign::Start, LineBreak::Simple);
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        max_lines: 2,
+        ..TextLayoutOptions::default()
+    };
+    for advances in [GlyphAdvances::Fractional, GlyphAdvances::WholePixels] {
+        let lengths = ParagraphLengths {
+            grid: 3.0,
+            advances,
+            ..ParagraphLengths::default()
+        };
+        let shown = |width| {
+            let laid = lay_out_with(&resolver, TEXT, (&style, lengths), width, options);
+            (0..laid.line_count())
+                .map(|line| laid.line_start(line)..laid.line_end(line))
+                .collect::<Vec<_>>()
+        };
+        for from in (0..40).map(|step| 40.0 + 2.5 * step as f32) {
+            let (_, first_not) = held_widths(
+                &resolver,
+                TEXT,
+                (&style, lengths),
+                (from, from + 30.0),
+                options,
+            );
+            if let Some(first_not) = first_not {
+                assert_ne!(
+                    shown(first_not - 0.25),
+                    shown(first_not),
+                    "{advances:?} from {from}: no shown line moves at {first_not}"
+                );
+            }
+        }
+    }
 }
