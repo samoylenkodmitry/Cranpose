@@ -138,9 +138,9 @@ impl InPlaceUpdate<'_> {
         let walked = repush
             .visit_node(walk, (root, NodePlace::Root), &context, (0, None))
             .and_then(|()| repush.push_targets(walk));
-        // The rewrites ran last first, and each put its areas in reverse
-        // after those before: in reverse once more, the update's areas
-        // follow the scene's order, in which a host sends them.
+        // The rewrites run last first. Each puts its areas in reverse after
+        // those before. One more reverse puts the update's areas in the
+        // scene's order, in which a host sends them.
         repush.areas[repush.first_area..].reverse();
         repush.targets.clear();
         walk.release();
@@ -289,8 +289,9 @@ impl Repush<'_> {
     // `record`, from what its parent passed down in the scene, the root's
     // start for `None`, under a walk above that passed down what it did
     // before, as the nodes the walk came through kept it, and adds the areas
-    // it changes. Out of line: inlined into the update, it made one function
-    // of 9 KB that the classic ESP32's 64 KB list of hot code took whole.
+    // it changes. Out of line: the classic ESP32's 64 KB list of hot code
+    // takes a function whole. The update with this rewrite inline would be
+    // one function of 9 KB.
     #[inline(never)]
     fn rewrite_subtree(
         &mut self,

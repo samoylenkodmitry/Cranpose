@@ -333,8 +333,8 @@ impl Rewrite {
 
     // What `finish` does for a subtree that pushed other items than before,
     // from `from` on. Out of line: most rewrites push the items they pushed
-    // before, and the splices would take room in the instruction cache from
-    // the code those run.
+    // before. The splices would take room in the instruction cache from the
+    // code of those rewrites.
     #[cold]
     #[inline(never)]
     fn replace_from(&mut self, scene: &mut RasterScene, record: usize, from: Places) {
@@ -388,9 +388,9 @@ impl Rewrite {
     }
 
     // Hands back the reach list the rewrite took and whether it still holds
-    // where each item of the scene reaches, and puts the areas it changed,
-    // merged and in reverse order, after those `areas` holds. The room a
-    // rewrite of many items took for their areas goes, and `areas` takes no
+    // where each item of the scene reaches. Puts the areas it changed,
+    // merged and in reverse order, after those `areas` holds. The room that
+    // a rewrite of many items took for their areas goes. `areas` takes no
     // more than the merged ones: a canvas drawn again each frame holds what
     // one drawn once does.
     pub(crate) fn results(

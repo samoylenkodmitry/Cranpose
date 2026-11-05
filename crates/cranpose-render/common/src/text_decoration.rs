@@ -33,7 +33,7 @@ pub fn visit_text_backgrounds(
 }
 
 // The walk of `visit_text_backgrounds` for a text with a background. Out of
-// line: most texts have none, and the walk would take room in the code that
+// line: most texts have none. The walk would take room in the code that
 // draws them.
 #[inline(never)]
 fn visit_backgrounds(

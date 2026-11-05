@@ -762,8 +762,8 @@ fn push_layer_items(
     }
 
     // A surface's layer casts its shadow where its parent draws the surface.
-    // The test of the elevation stays here: most layers cast none, and the
-    // call would cost each of them.
+    // The test of the elevation stays here: most layers cast none. The call
+    // would cost each of them.
     if !context.surface_root {
         if layer.graphics_layer.shadow_elevation > 0.0 {
             push_layer_shadow_of(

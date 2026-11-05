@@ -286,7 +286,7 @@ impl<'a> LayoutWalk<'a> {
     // records are `old`, while a rewrite pushes the subtree it is in again.
     // A node whose layer holds a 3D space lowers whole, and the scene keeps
     // its subtree. Out of line: the update and the children of a layer each
-    // call it, and a copy in each would take room in the instruction cache.
+    // call it. A copy in each caller would take room in the instruction cache.
     #[inline(never)]
     pub(crate) fn push(
         &self,

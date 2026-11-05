@@ -239,8 +239,8 @@ pub(crate) fn release() {
 }
 
 /// Keeps as many boxes and child lists of each kind as the walk that ends
-/// asked for, for the next walk, which asks for about as many, and frees the
-/// rest. A kept text box holds the text it drew until a text takes the box.
+/// asked for. The next walk asks for about as many. The rest goes. A kept
+/// text box holds the text it drew until a text takes the box.
 pub(crate) fn keep_for_next_walk() {
     crate::thread_state::with(|state| {
         let mut pool = state.layer_pool.borrow_mut();
