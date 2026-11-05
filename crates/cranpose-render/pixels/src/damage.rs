@@ -448,8 +448,11 @@ pub(crate) fn add_changed_runs(
     }
 }
 
-fn pixels(area: ClipBounds) -> i64 {
-    i64::from(area.max_x - area.min_x) * i64::from(area.max_y - area.min_y)
+// The pixels `area` covers. An area lies in the window, whose pixels a u32
+// counts, and a 64-bit product takes several instructions on the 32-bit
+// cores that merge areas most.
+fn pixels(area: ClipBounds) -> u32 {
+    (area.max_x - area.min_x).unsigned_abs() * (area.max_y - area.min_y).unsigned_abs()
 }
 
 // Joins `areas` while they are too many to draw one by one, each time the
@@ -466,10 +469,13 @@ pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
 #[inline(never)]
 fn join_areas(areas: &mut Vec<ClipBounds>) {
     while areas.len() > MAX_AREAS {
-        let mut cheapest = (0, 1, i64::MAX);
+        let mut cheapest = (0, 1, u32::MAX);
         for (first, &a) in areas.iter().enumerate() {
+            let own = pixels(a);
             for (second, &b) in areas.iter().enumerate().skip(first + 1) {
-                let extra = pixels(union(a, b)) - pixels(a) - pixels(b);
+                // Areas in the list do not touch, so their join covers at
+                // least both.
+                let extra = pixels(union(a, b)).saturating_sub(own + pixels(b));
                 if extra < cheapest.2 {
                     cheapest = (first, second, extra);
                 }
