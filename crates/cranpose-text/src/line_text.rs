@@ -16,11 +16,29 @@ pub(crate) struct LineText {
     pub(crate) room: f32,
 }
 
+// How far down a layout's lines reach, in layout pixels and, exactly, in
+// whole device pixels.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct LineDepth {
+    pub(crate) layout: f32,
+    pub(crate) pixels: f32,
+}
+
+impl LineDepth {
+    // `pixels` whole device pixels down a layout on `grid`.
+    pub(crate) fn at(pixels: f32, grid: f32) -> Self {
+        Self {
+            layout: pixels / grid,
+            pixels,
+        }
+    }
+}
+
 // Where a line stands among a layout's lines: the bottom of the line above,
 // whether it is the first and the last, and whether it shows an ellipsis.
 #[derive(Clone, Copy)]
 pub(crate) struct LineEdges {
-    pub(crate) top: f32,
+    pub(crate) top: LineDepth,
     pub(crate) first: bool,
     pub(crate) last: bool,
     pub(crate) ellipsized: bool,

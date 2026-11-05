@@ -10,6 +10,7 @@ mod harfrust_oracle;
 mod hyphenation;
 mod intrinsics;
 mod itemizer;
+mod line_box_pixels;
 mod line_break;
 mod paragraph_lengths;
 mod paragraph_width;

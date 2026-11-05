@@ -32,8 +32,8 @@ pub struct ParagraphLengths {
     pub first_line_indent: f32,
     /// The indent of the other lines.
     pub rest_line_indent: f32,
-    /// Device pixels per pixel of the layout: line boxes round to whole
-    /// device pixels, as Android's do.
+    /// Device pixels per pixel of the layout, finite and positive: line boxes
+    /// round to whole device pixels, as Android's do.
     pub grid: f32,
 }
 

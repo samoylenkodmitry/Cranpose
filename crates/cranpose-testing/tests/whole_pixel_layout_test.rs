@@ -4,7 +4,10 @@
 //! up. The same screen then wraps and stacks to the same pixels as in Compose.
 
 use cranpose_testing::{ComposeTestRule, PlacedSemanticsNode};
-use cranpose_ui::{Box, BoxSpec, LinearArrangement, Modifier, Row, RowSpec, Size, Text, TextStyle};
+use cranpose_ui::{
+    Box, BoxSpec, LinearArrangement, Modifier, ParagraphStyle, Row, RowSpec, Size, SpanStyle, Text,
+    TextStyle, text::TextUnit,
+};
 
 fn tagged(modifier: Modifier, label: &'static str) -> Modifier {
     modifier.semantics(move |config| {
@@ -106,6 +109,53 @@ fn a_text_block_height_rounds_up_to_a_whole_pixel() {
         assert!(
             (height - height.round()).abs() < 0.01,
             "at density {density} the text is {height} px tall, not a whole pixel"
+        );
+    }
+}
+
+// A text block is exactly as tall as Android lays its lines out: whole-pixel
+// line boxes stacked without the float error of adding them in `dp`, which
+// made the Gauntlet's card bodies a pixel taller on a Mate 20 X (#2052).
+// Each expected height is AOSP's for Cranpose Test Mono at that density.
+#[test]
+fn a_text_block_is_as_tall_as_android_lays_its_lines_out() {
+    // (density, font size in sp, line height in em, lines, height in pixels)
+    for (density, size, em, lines, expected) in [
+        (2.625_f32, 10.5_f32, 1.5_f32, 1_usize, 28.0_f32),
+        (3.0, 10.5, 1.25, 1, 31.0),
+        (3.0, 10.0, 1.25, 3, 106.0),
+        (1.5, 12.0, 1.4, 2, 44.0),
+        (2.75, 11.5, 1.25, 2, 71.0),
+        // Heights a `dp` round trip at these densities lands a hair above.
+        (2.625, 8.5, 1.4, 1, 22.0),
+        (2.75, 10.5, 1.25, 1, 29.0),
+        (1.75, 8.5, 1.4, 3, 57.0),
+    ] {
+        let root = placed(density, Size::new(400.0, 400.0), move || {
+            Text(
+                vec!["a"; lines].join("\n"),
+                tagged(Modifier::empty(), "text"),
+                TextStyle {
+                    span_style: SpanStyle {
+                        font_size: TextUnit::Sp(size),
+                        ..SpanStyle::default()
+                    },
+                    paragraph_style: ParagraphStyle {
+                        line_height: TextUnit::Em(em),
+                        ..ParagraphStyle::default()
+                    },
+                },
+            );
+        });
+        let node = root
+            .flatten()
+            .into_iter()
+            .find(|node| node.label.as_deref() == Some("text"))
+            .expect("the text is placed");
+        let height = node.layout_bounds.height * density;
+        assert!(
+            (height - expected).abs() < 0.01,
+            "{lines} lines of {size} sp at {em} em on {density}: {height} px, Android lays them out {expected} px tall"
         );
     }
 }
