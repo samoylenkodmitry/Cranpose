@@ -1595,7 +1595,10 @@ state it remembers starts afresh during the flight.
 looks through the middle of the node's bounds. Each child with
 `Modifier::mesh_surface` has its content drawn on a `Mesh` in that scene:
 content point `(x, y)` shows where the mesh's texture coordinate is
-`(x / width, y / height)`. The content stays live: it recomposes, animates and
+`(x / width, y / height)`. As a Compose graphics layer, each covers what the
+modifiers after it lay out: a padding before `scene3d` or `mesh_surface` insets
+the scene or the content, and a `size` that the parent cannot hold still gives
+the mesh all of its content. The content stays live: it recomposes, animates and
 takes pointer input where it shows on the mesh, and nearer surfaces hide
 farther ones. Both closures run when the scene is drawn, so a camera or a
 surface that follows a state read in them moves without recomposition.
@@ -1756,7 +1759,7 @@ place.
 
 #### Look through doorways
 
-A `scene3d` inside a scene's space is a doorway: the rect its node takes in its
+A `scene3d` inside a scene's space is a doorway: the rect it covers in its
 frame opens into its own space, and cuts a hole in the surface whose content
 holds it. Its camera stands in the doorway's middle looking in, a unit of its
 space to a pixel of the rect (`Camera::doorway`), so a doorway seen straight on

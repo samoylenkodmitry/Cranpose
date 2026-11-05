@@ -187,8 +187,8 @@ pub(crate) struct MeshChild {
     pub(crate) scene: Arc<SceneDraw>,
     /// The surface, its mesh placed in the space the eye stands in.
     pub(crate) surface: MeshSurface,
-    /// The surface node's own rect, which the mesh's texture coordinates
-    /// span.
+    /// The rect of the surface's content in its layer: the layer's bounds,
+    /// which the mesh's texture coordinates span.
     pub(crate) content: Rect,
     /// The seen space the surface lies in, by its number in the scene's.
     pub(crate) seen: usize,

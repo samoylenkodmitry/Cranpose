@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use cranpose_render_common::{
     graph::{LayerNode, RenderNode, for_each_in_draw_order},
-    space::{EyeView, SpaceTree, node_size},
+    space::{EyeView, SpaceTree},
 };
 
 use super::{
@@ -22,13 +22,13 @@ fn window_scene<'a>(
     context: &WalkContext<'_>,
 ) -> Option<(Arc<SceneDraw>, EyeView<'a>)> {
     let tree = SpaceTree::of(layer)?;
-    let view = EyeView::of(&tree, node_size(layer));
+    // The scene fills its layer's bounds.
+    let bounds = layer.local_bounds;
+    let view = EyeView::of(&tree, bounds.size());
     let scene = SceneDraw {
         camera: view.camera,
         light: view.seen[0].light,
-        rect: layer
-            .node_rect()
-            .translate(context.offset.x, context.offset.y),
+        rect: bounds.translate(context.offset.x, context.offset.y),
         clip: context.visual_clip,
         seen: view
             .seen
@@ -105,7 +105,7 @@ fn collect_seen_surfaces(
         let mesh = MeshChild {
             scene: Arc::clone(draw),
             surface: seen.surface,
-            content: seen.layer.node_rect(),
+            content: seen.content,
             seen: seen.seen,
         };
         collect_isolated_child(

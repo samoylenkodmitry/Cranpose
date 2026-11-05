@@ -201,7 +201,7 @@ impl Light {
 /// children's mesh surfaces through.
 ///
 /// A scene inside another scene's space is a doorway into a space of its
-/// own: the rect its node takes in its frame opens onto that space, which
+/// own: the rect its layer covers in its frame opens onto that space, which
 /// lies behind it, placed so the doorway stands where the inner scene's
 /// camera stands (see [`Camera::doorway`]). The window's eye sees through
 /// doorways from the space it stands in, as deep as they show on screen,
