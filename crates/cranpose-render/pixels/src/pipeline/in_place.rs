@@ -169,13 +169,15 @@ impl Repush<'_> {
         }
         // A subtree the scene keeps whole for its 3D space lowers whole.
         if walk.changed(node) || walk.holds_space(node) {
-            return Ok(self.defer(walk, (node, place), context, (record, parent)));
+            self.defer(walk, (node, place), context, (record, parent));
+            return Ok(());
         }
         // A node that wraps its outer draws holds its children in its own
         // layer inside the wrapper.
         let own = OldChildren::own_record(&self.scene.subtrees, record, node);
         let Some(passed) = self.scene.subtrees[own].passed_down else {
-            return Ok(self.defer(walk, (node, place), context, (record, parent)));
+            self.defer(walk, (node, place), context, (record, parent));
+            return Ok(());
         };
         let deferred = self.targets.len();
         let walked = visit_kept_node(walk.applier(), (node, place), context, |children, inner| {
@@ -205,7 +207,8 @@ impl Repush<'_> {
                 // The node's subtree is pushed again whole, its children's
                 // with it.
                 self.targets.truncate(deferred);
-                Ok(self.defer(walk, (node, place), context, (record, parent)))
+                self.defer(walk, (node, place), context, (record, parent));
+                Ok(())
             }
         }
     }
