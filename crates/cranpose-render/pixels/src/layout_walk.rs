@@ -334,7 +334,9 @@ impl<'a> LayoutWalk<'a> {
     // otherwise evict from the cache for every node. Puts its layer into
     // `layer` and, when it has children, what they lower with into `inner`.
     // Leaves both empty for a node gone, and for one whose layer holds a 3D
-    // space, which `push` lowers.
+    // space, which `push` lowers. Out of line, as `Repush::rewrite_subtree`
+    // is.
+    #[inline(never)]
     pub(crate) fn lower(
         &self,
         (node, place): (NodeId, NodePlace),

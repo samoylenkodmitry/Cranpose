@@ -289,7 +289,9 @@ impl Repush<'_> {
     // `record`, from what its parent passed down in the scene, the root's
     // start for `None`, under a walk above that passed down what it did
     // before, as the nodes the walk came through kept it, and adds the areas
-    // it changes.
+    // it changes. Out of line: inlined into the update, it made one function
+    // of 9 KB that the classic ESP32's 64 KB list of hot code took whole.
+    #[inline(never)]
     fn rewrite_subtree(
         &mut self,
         (record, parent): (usize, Option<usize>),
