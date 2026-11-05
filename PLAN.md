@@ -43,5 +43,5 @@ holds completed plans. Each downstream project owns its application issues.
   with frame presentation. The [robot guide](docs/ROBOT_TESTING.md) lists
   requirements. Review capability skips in each result.
 - Host locks coordinate commands through the shared lock protocol. Other jobs
-  can affect measurements. Follow the [host workflow](docs/agent-workflows.md#builds-and-shell)
+  can affect measurements. Follow the [host workflow](AGENTS.md#builds-and-shell)
   and retain load and temperature evidence for each comparison.

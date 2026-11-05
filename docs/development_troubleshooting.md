@@ -2,15 +2,7 @@
 
 ## Hosts and processes
 
-- samarch-1 provides Linux/X11 and Android SDK `/home/s/develop/sdk`; macm3 provides Apple toolchains and SDK `~/Library/Android/sdk`.
-- Add `~/.cargo/bin` to noninteractive SSH PATH; inspect remote checkouts because a copied `.git` may point to another host.
-- Write `scp` targets as `host:relative/path`: a `~` in a local variable expands to the local home, and the copy lands on a path the other host does not have; assert `git status` on the host shows the files you changed before a run.
-- Linux runners are `samarch-1-cranpose` and `samarch-1-cranpose-2`; macm3 runners are `dmitriis-mac-Cranpose` and `macm3-cranpose-2`.
-- `mac-idle-Cranpose` is the user's signing Mac: its gatekeeper (`~/actions-runner/gatekeeper.sh`) lets it listen only while the Mac sits idle on power, and it then takes `cranpose-mac` jobs; do not force it online with `run-now.sh` for extra CI capacity.
-- `samarch-cranpose` runs on samarch, the user's desktop, as the overflow of `cranpose-linux` jobs (no GPU, no Emscripten): the user timer `cranpose-runner-gate.timer` starts `cranpose-runner.service` once such a job has waited 3 minutes and stops it after 10 idle minutes; jobs run at `Nice=10`, a fifth of the desktop's CPU weight and at most 16 of its 32 threads, as its CPU sits near 90 C at rest.
-- Keep CI from push to green under 20 minutes: when a pool's queue grows, add capacity to it from these hosts before waiting on it.
-- Diagnose queued CI from runner `_diag/Runner_*.log` JobDispatcher entries; the jobs API can lag actual execution.
-- Host capacity locking uses native `flock(1)` when available and Python `fcntl.flock` otherwise, on the same host-wide lock files. Only updated scripts that take these locks participate; coordinate old checkouts and direct commands separately.
+- Host roles, runners, CI capacity and host locks are in [Hosts](../AGENTS.md#hosts).
 - APFS snapshots or shared blocks can retain space after GC; trust `df` and use another build host when space remains low.
 - Copied Git indexes can retain invalid fsmonitor state; use `git -c core.fsmonitor=false status` to check a copied checkout.
 - Pattern-based process searches can include their caller or zombies; use the repository waiter and verify exact PIDs independently.
