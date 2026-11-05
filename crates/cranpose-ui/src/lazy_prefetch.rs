@@ -117,6 +117,19 @@ pub fn has_lazy_prefetch_requests() -> bool {
     with_state(|state| !state.requests.borrow().is_empty())
 }
 
+/// Whether an idle prefetch pass may run now: a lazy list waits for one and
+/// the next frame owes no measure or layout. A scroll leaves its list a
+/// measure for the frame to apply; a pass that took it would scroll the list
+/// outside the frame, and the frame, finding the list at rest, would release
+/// the items the pass composed ahead.
+pub fn lazy_prefetch_pass_due() -> bool {
+    let context = require_current_app_context("lazy prefetch access");
+    !context.lazy_prefetch().requests.borrow().is_empty()
+        && !context.has_pending_measure_repasses()
+        && !context.has_pending_layout_repasses()
+        && !crate::peek_layout_invalidation()
+}
+
 /// Estimates the time needed for the next complete lazy prefetch pass.
 ///
 /// After a pass has run, this uses its full measured duration as a floor and

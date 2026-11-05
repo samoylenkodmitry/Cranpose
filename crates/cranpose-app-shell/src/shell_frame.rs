@@ -371,7 +371,8 @@ where
     /// later, in layout passes, at most four of them. A pass runs while
     /// `deadline`, if any, still leaves room for the recent cost of one full pass
     /// and `frame_can_start`, asked before each pass, says the next frame
-    /// cannot start yet.
+    /// cannot start yet. None runs while the next frame owes a measure or a
+    /// layout, as a scroll leaves one ([`cranpose_ui::lazy_prefetch_pass_due`]).
     /// Call it while waiting for the next frame. Returns whether a pass ran.
     pub fn run_idle_prefetch(
         &mut self,
@@ -381,7 +382,7 @@ where
         let _app_context = self.app.app_context.enter_scope();
         let mut passes = 0;
         while passes < IDLE_PREFETCH_MAX_PASSES
-            && cranpose_ui::has_lazy_prefetch_requests()
+            && cranpose_ui::lazy_prefetch_pass_due()
             && deadline.is_none_or(|deadline| {
                 Instant::now() + cranpose_ui::lazy_prefetch_pass_cost() <= deadline
             })
