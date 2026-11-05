@@ -348,8 +348,8 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 #[doc(hidden)]
 pub use cranpose_core::{
     __branch_group_scope_advance, __branch_group_scope_deferred, __constant, __current_composer,
-    __source_scope, CallbackHolder, ComposableGroup, Composer, Key, ParamReturnState, ParamState,
-    RecomposeScope, ReturnSlot, ValueSlotHandle, branch_location_key,
+    __inline_source_scope, __source_scope, CallbackHolder, ComposableGroup, Composer, Key,
+    ParamReturnState, ParamState, RecomposeScope, ReturnSlot, ValueSlotHandle, branch_location_key,
     cached_composable_definition_key, caller_location_key, composable_definition_key,
     composable_identity_key, const_location_key, constant_value_key, debug_label_current_scope,
     hot_branch_key, hot_definition_key, hot_origin, location_key, noted_location_key,

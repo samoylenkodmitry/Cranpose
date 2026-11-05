@@ -734,7 +734,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let wrapped = quote!({
             #core_path::with_current_composer(|#composer_ident: &#core_path::Composer| {
                 #(#rebinds_for_no_skip)*
-                let _cranpose_source_scope = #core_path::__source_scope(
+                let _cranpose_source_scope = #core_path::__inline_source_scope(
                     stringify!(#scope_label_ident), file!(), line!(), env!("CARGO_MANIFEST_DIR"),
                 );
                 #original_block

@@ -583,11 +583,7 @@ test-ide:
     cargo test --profile ci -p cranpose-core --features inspection
     cargo test --release -p cranpose-core --features inspection --test integration recomposition_inspection
     cargo test --profile ci -p cranpose-macros preview_tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview embed::tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview inspection::tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview --test integration recomposition_inspection
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview preview::tests::
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview desktop_launcher_uses_embed_endpoint_before_event_loop
+    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview -- embed::tests:: inspection::tests:: recomposition_inspection preview::tests:: desktop_launcher_uses_embed_endpoint_before_event_loop
 
 test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features std-hash
@@ -1292,7 +1288,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout platform-contracts test-robot-suite-partition test-android-accessibility-contract test-ide
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
