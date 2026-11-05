@@ -121,9 +121,9 @@ impl ParagraphGlyphs {
         let glyphs = &self.glyphs[range.clone()];
         match self.unit {
             WidthUnit::Layout { .. } => spaced_width(glyphs, scale, spacing),
-            WidthUnit::Device { grid } => {
-                self.pixels[range].iter().sum::<f32>() / grid + cluster_spacing(glyphs, spacing)
-            }
+            WidthUnit::Device { grid } => self.unit.layout(
+                self.pixels[range].iter().sum::<f32>() + cluster_spacing(glyphs, spacing * grid),
+            ),
         }
     }
 }
@@ -145,9 +145,10 @@ impl Default for WidthUnit {
     }
 }
 
-// How far past a layout width a device pixel width may reach and still fit
-// it: a layout width on the device pixel grid scales back to a hair off a
-// whole pixel, and kerning a font states lies far over this.
+// How far a device pixel width may reach past a width of the layout and
+// still fit it: a width on the device pixel grid scales to a hair off a
+// whole pixel, and padding added and taken off moves it by a hair. Kerning
+// a font states lies far over this.
 const GRID_SLACK: f32 = 1.0 / 1024.0;
 
 impl WidthUnit {
@@ -174,16 +175,19 @@ impl WidthUnit {
         }
     }
 
-    // `pixels` of these, in pixels of the layout.
+    // `pixels` of these, in pixels of the layout. A device pixel width sits
+    // the slack inside its layout width, so a plain comparison lets it fit
+    // any width up to the slack short of it.
     pub(crate) fn layout(self, pixels: f32) -> f32 {
         match self {
             Self::Layout { .. } => pixels,
+            Self::Device { grid } if pixels > GRID_SLACK => (pixels - GRID_SLACK) / grid,
             Self::Device { grid } => pixels / grid,
         }
     }
 
     // How wide a text may be, in these pixels, to fit `width`, a width of
-    // the layout.
+    // the layout: as `layout` takes the pixels, up to the slack past it.
     pub(crate) fn limit(self, width: f32) -> f32 {
         match self {
             Self::Layout { .. } => width,
@@ -191,19 +195,12 @@ impl WidthUnit {
         }
     }
 
-    // Whether `width`, a width of the layout's text, fits `limit`, a width
-    // of the layout.
-    pub(crate) fn fits(self, width: f32, limit: f32) -> bool {
-        self.pixels(width) <= self.limit(limit)
-    }
-
     // `width`, a width of the layout's text, rounded up to whole device
-    // pixels. A device pixel width within the slack past a pixel stays on
-    // it.
+    // pixels.
     pub(crate) fn ceil(self, width: f32) -> f32 {
         match self {
             Self::Layout { grid } => whole::ceil(width * grid) / grid,
-            Self::Device { grid } => ceil_to_grid(width - GRID_SLACK / grid, grid),
+            Self::Device { grid } => ceil_to_grid(width, grid),
         }
     }
 }

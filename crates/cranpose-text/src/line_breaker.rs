@@ -235,8 +235,7 @@ impl Wrapping<'_> {
             .take_while(|opportunity| opportunity.offset > start)
             .find(|opportunity| match opportunity.kind {
                 BreakKind::Hyphen { width: hyphen, .. } => {
-                    let line = self.widths.width(start, opportunity.offset) + hyphen;
-                    self.widths.fits(line, width)
+                    self.widths.width(start, opportunity.offset) + hyphen <= width
                 }
                 BreakKind::Soft | BreakKind::Hard => false,
             });
@@ -298,7 +297,7 @@ impl Wrapping<'_> {
         breaks: &[BreakOpportunity],
     ) -> (f32, f32) {
         let width = self.widths.width(start, end);
-        let fits = if self.widths.fits(width, self.limit(start)) {
+        let fits = if width <= self.limit(start) {
             width
         } else {
             f32::NEG_INFINITY
@@ -433,7 +432,7 @@ impl LineBalancer {
                     BreakKind::Soft | BreakKind::Hard => (0.0, 0.0),
                 };
                 let width = wrapping.line_width(line_start, end.offset) + hyphen;
-                if !wrapping.widths.fits(width, limit) {
+                if width > limit {
                     // A hyphen can tip a line over that the rest of its word
                     // keeps within; past a word, every later line is wider.
                     if let BreakKind::Hyphen { .. } = end.kind {

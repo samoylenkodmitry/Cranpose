@@ -81,11 +81,6 @@ impl ClusterWidths {
         self.unit.layout(self.before(end) - self.before(start))
     }
 
-    // Whether `width`, a width of this text, fits `limit`.
-    pub(crate) fn fits(&self, width: f32, limit: f32) -> bool {
-        self.unit.fits(width, limit)
-    }
-
     // How wide a text may be, in the pixels the widths are kept in, to fit
     // `width`.
     pub(crate) fn limit(&self, width: f32) -> f32 {

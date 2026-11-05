@@ -203,12 +203,12 @@ impl TextLayouter {
             }
         };
         // Most text is one line that fits; it needs no break opportunities.
-        let fits = unbroken.filter(|&line| unit.fits(line, wrap.first));
+        let fits = unbroken.filter(|&line| line <= wrap.first);
         // A lone item that fits with no ellipsis is the line, and needs no
         // cluster widths.
-        if let Some(piece) = lone.take_if(|piece| {
-            fits.is_some() && unit.fits(piece.width, width - lengths.first_line_indent)
-        }) {
+        if let Some(piece) =
+            lone.take_if(|piece| fits.is_some() && piece.width <= width - lengths.first_line_indent)
+        {
             let line = piece.width + lengths.first_line_indent;
             let mut hold = fitting_hold(&options, line);
             if ellipsis_at(&options).is_some() {

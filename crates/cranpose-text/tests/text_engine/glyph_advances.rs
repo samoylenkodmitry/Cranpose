@@ -5,7 +5,7 @@
 
 use cranpose_text::{
     FontFamily, FontFamilyResolver, GlyphAdvances, LayoutInput, ParagraphLengths, ParagraphStyle,
-    ShapingSpan, TextLayout, TextLayoutOptions, TextLayouter,
+    ShapingSpan, TextLayout, TextLayoutOptions, TextLayouter, TextOverflow,
 };
 
 use crate::fonts::{DEJAVU_MONO, ROBOTO, span, typeface};
@@ -194,19 +194,27 @@ fn a_relayout_at_another_size_rounds_at_that_size() {
     assert_eq!(glyphs(&again), glyphs(&fresh));
 }
 
-// A text sized to its own width, as a chip sizes a label, keeps one line:
-// widths of whole pixel advances land on the device pixel grid, where a sum
-// a hair off a pixel must not tip the line over.
+// A text sized to its own width, as a chip sizes a label, keeps one line
+// with no ellipsis and no overflow: widths of whole pixel advances land on
+// the device pixel grid, where a sum a hair off a pixel must not tip the
+// line over. The chip adds its padding to the label's width and takes it
+// off again for the label, which moves the width by a hair.
 #[test]
 fn a_text_keeps_one_line_at_its_own_width_at_any_density() {
     let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
     let family = FontFamily::Default;
     let paragraph = ParagraphStyle::default();
+    let labels = [
+        "-1.24%", "QNWZ", "674.57", "+0.27%", "+17.61%", "AVATAR", "Toyota",
+    ];
     let mut wrapped = Vec::new();
     for advances in [GlyphAdvances::WholePixels, GlyphAdvances::Fractional] {
         for grid in [1.75_f32, 2.0, 2.625, 3.0] {
             for size in [4.0_f32, 4.5, 5.0, 5.5, 6.0, 7.0, 10.0, 14.0] {
-                for text in ["-1.24%", "QNWZ", "674.57", "+0.27%", "+17.61%", "MPNX"] {
+                for (text, padding) in labels
+                    .iter()
+                    .flat_map(|text| [0.0_f32, 8.0, 12.5, 24.0].map(|padding| (*text, padding)))
+                {
                     let spans = [ShapingSpan {
                         size,
                         ..span(0..text.len(), &family, 400)
@@ -215,10 +223,19 @@ fn a_text_keeps_one_line_at_its_own_width_at_any_density() {
                     input.lengths.grid = grid;
                     let mut layouter = TextLayouter::default();
                     let own = layouter.layout(&input, &resolver);
-                    input.max_width = own.width();
+                    input.max_width = (own.width() + padding) - padding;
+                    input.options = TextLayoutOptions {
+                        overflow: TextOverflow::Ellipsis,
+                        max_lines: 1,
+                        ..TextLayoutOptions::default()
+                    };
                     let again = layouter.layout(&input, &resolver);
-                    if own.line_count() != 1 || again.line_count() != 1 {
-                        wrapped.push((advances, grid, size, text));
+                    if own.line_count() != 1
+                        || again.line_count() != 1
+                        || again.is_line_ellipsized(0)
+                        || again.did_overflow_width()
+                    {
+                        wrapped.push((advances, grid, size, text, padding));
                     }
                 }
             }
@@ -226,6 +243,6 @@ fn a_text_keeps_one_line_at_its_own_width_at_any_density() {
     }
     assert!(
         wrapped.is_empty(),
-        "wrapped at their own width: {wrapped:?}"
+        "wrapped, ellipsized or overflowed at their own width: {wrapped:?}"
     );
 }
