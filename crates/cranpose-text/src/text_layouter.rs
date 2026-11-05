@@ -187,7 +187,8 @@ impl TextLayouter {
             || self.widest_paragraph(input),
             |width| width.max(0.0) + lengths.first_line_indent,
         );
-        layout.content_width = whole::ceil(widest * lengths.grid) / lengths.grid;
+        let unit = self.glyphs.width_unit();
+        layout.content_width = unit.ceil(widest, lengths.grid);
         layout.follows_max = options.soft_wrap || options.overflow.is_ellipsis();
         let width = layout.wrap_width(input.min_width, input.max_width);
         let wrap = if options.soft_wrap {
@@ -202,12 +203,12 @@ impl TextLayouter {
             }
         };
         // Most text is one line that fits; it needs no break opportunities.
-        let fits = unbroken.filter(|&line| line <= wrap.first);
+        let fits = unbroken.filter(|&line| unit.fits(line, wrap.first));
         // A lone item that fits with no ellipsis is the line, and needs no
         // cluster widths.
-        if let Some(piece) =
-            lone.take_if(|piece| fits.is_some() && piece.width <= width - lengths.first_line_indent)
-        {
+        if let Some(piece) = lone.take_if(|piece| {
+            fits.is_some() && unit.fits(piece.width, width - lengths.first_line_indent)
+        }) {
             let line = piece.width + lengths.first_line_indent;
             let mut hold = fitting_hold(&options, line);
             if ellipsis_at(&options).is_some() {
@@ -372,6 +373,7 @@ impl TextLayouter {
     ) {
         // A relayout that added no glyphs keeps those it took.
         layout.glyphs.keep(&self.glyphs);
+        let unit = self.glyphs.width_unit();
         self.keep_glyph_room();
         // Each missing line adds a line's advance, whole pixels, as Compose's
         // `heightInLines` adds the distance between two lines' baselines.
@@ -382,7 +384,7 @@ impl TextLayouter {
         } else {
             bottom.layout
         };
-        layout.line_width = whole::ceil(layout.widest * grid) / grid;
+        layout.line_width = unit.ceil(layout.widest, grid);
         // New lines start at their indents, unstretched.
         let align = input.paragraph.text_align;
         if !layout.keeps_lines_at_indent(align) {

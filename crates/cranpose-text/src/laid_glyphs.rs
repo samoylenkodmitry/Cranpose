@@ -4,6 +4,7 @@ use crate::{
     glyph_id::GlyphId,
     paragraph_glyphs::ParagraphGlyphs,
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
+    text_layout::font_units,
 };
 
 // The glyphs of a layout, with where the first draw from the pen when any
@@ -13,9 +14,10 @@ use crate::{
 pub(crate) struct LaidGlyphs {
     glyphs: Glyphs,
     offsets: Option<Arc<[GlyphOffset]>>,
-    // What each glyph's advance gains where advances round to whole device
-    // pixels, as `ParagraphGlyphs` measures it.
-    shifts: Option<Arc<[f32]>>,
+    // Each glyph's advance in device pixels where advances round to whole
+    // device pixels, as `ParagraphGlyphs` measures it, and the device pixels
+    // per pixel of the layout.
+    pixels: Option<(Arc<[f32]>, f32)>,
 }
 
 // A layout's glyphs: in eight bytes each when every one fits them, as the
@@ -89,12 +91,14 @@ pub(crate) enum GlyphSlice<'a> {
     Full(&'a [ShapedGlyph]),
 }
 
-// Some of a layout's glyphs, with what their advances gain where advances
-// round to whole device pixels: none where they keep the font's fractions.
+// Some of a layout's glyphs, with their advances in device pixels where
+// advances round to whole device pixels: none where they keep the font's
+// fractions.
 #[derive(Clone, Copy)]
 pub(crate) struct RunGlyphs<'a> {
     pub(crate) glyphs: GlyphSlice<'a>,
-    shifts: &'a [f32],
+    pixels: &'a [f32],
+    grid: f32,
 }
 
 impl<'a> RunGlyphs<'a> {
@@ -112,9 +116,13 @@ impl<'a> RunGlyphs<'a> {
         }
     }
 
-    // What the advance of glyph `index` gains.
-    pub(crate) fn shift(self, index: usize) -> f32 {
-        self.shifts.get(index).copied().unwrap_or(0.0)
+    // The advance of `glyph`, at `index`, in pixels of the layout: the font's
+    // at `scale` where advances keep its fractions.
+    pub(crate) fn advance(self, index: usize, glyph: &ShapedGlyph, scale: f32) -> f32 {
+        match self.pixels.get(index) {
+            Some(pixels) => pixels / self.grid,
+            None => font_units(glyph.advance) * scale,
+        }
     }
 
     pub(crate) fn iter(self) -> impl Iterator<Item = ShapedGlyph> + 'a {
@@ -128,22 +136,28 @@ impl<'a> RunGlyphs<'a> {
         };
         Self {
             glyphs,
-            shifts: self.shifts.get(range).unwrap_or_default(),
+            pixels: self.pixels.get(range).unwrap_or_default(),
+            grid: self.grid,
         }
     }
 }
 
 impl LaidGlyphs {
-    // Keeps the glyphs of `paragraph` with what their advances gain: those
-    // held already when they are as many, as a relayout that shaped no
-    // glyph takes them.
+    // Keeps the glyphs of `paragraph` with their device pixel advances:
+    // those held already when they are as many, as a relayout that shaped
+    // no glyph takes them.
     pub(crate) fn keep(&mut self, paragraph: &ParagraphGlyphs) {
         if self.len() != paragraph.len() {
             *self = Self::new(paragraph);
         }
-        let shifts = paragraph.shifts(0..paragraph.len());
-        if self.shifts.as_deref().unwrap_or_default() != shifts {
-            self.shifts = (!shifts.is_empty()).then(|| Arc::from(shifts));
+        let pixels = paragraph.pixels(0..paragraph.len());
+        let grid = paragraph.grid();
+        let kept = self
+            .pixels
+            .as_ref()
+            .is_some_and(|(held, at)| **held == *pixels && *at == grid);
+        if !kept {
+            self.pixels = (!pixels.is_empty()).then(|| (Arc::from(pixels), grid));
         }
     }
 
@@ -171,7 +185,7 @@ impl LaidGlyphs {
                 .iter()
                 .any(|offset| *offset != GlyphOffset::default())
                 .then(|| Arc::from(offsets)),
-            shifts: None,
+            pixels: None,
         }
     }
 
@@ -189,9 +203,14 @@ impl LaidGlyphs {
             Glyphs::Packed(glyphs) => GlyphSlice::Packed(glyphs),
             Glyphs::Full(glyphs) => GlyphSlice::Full(glyphs),
         };
+        let (pixels, grid) = self
+            .pixels
+            .as_ref()
+            .map_or((&[][..], 1.0), |(pixels, grid)| (&pixels[..], *grid));
         RunGlyphs {
             glyphs,
-            shifts: self.shifts.as_deref().unwrap_or_default(),
+            pixels,
+            grid,
         }
     }
 

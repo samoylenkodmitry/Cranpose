@@ -156,12 +156,6 @@ impl Wrapping<'_> {
         }
     }
 
-    // The width a line starting at `start` wraps at, and the width of the
-    // text before it.
-    fn line_start(&self, start: usize) -> (f32, f32) {
-        (self.limit(start), self.widths.before(start))
-    }
-
     // The width of the line from `start` to `end` without its trailing
     // whitespace, which hangs past the line's end.
     fn line_width(&self, start: usize, end: usize) -> f32 {
@@ -181,16 +175,16 @@ impl Wrapping<'_> {
     ) -> usize {
         let mut fit = None;
         let mut index = 0;
-        // The width the line wraps at and the width of the text before it.
-        let (mut limit, mut before) = self.line_start(start);
+        // The width the line wraps at.
+        let mut limit = self.limit(start);
         while let Some(&opportunity) = breaks.get(index) {
             let visible = visible_end(self.text, start, opportunity.offset);
-            if self.widths.before(visible) - before <= limit {
+            if self.widths.fits(self.widths.width(start, visible), limit) {
                 match opportunity.kind {
                     BreakKind::Hard => {
                         lines.push(BrokenLine::plain(start..opportunity.offset));
                         start = opportunity.offset;
-                        (limit, before) = self.line_start(start);
+                        limit = self.limit(start);
                         fit = None;
                     }
                     BreakKind::Soft => fit = Some(opportunity.offset),
@@ -203,7 +197,7 @@ impl Wrapping<'_> {
                     None => self.cut_word(start, &breaks[..index], opportunity.offset, limit),
                 };
                 start = ended.text.end;
-                (limit, before) = self.line_start(start);
+                limit = self.limit(start);
                 lines.push(ended);
             }
         }
@@ -226,7 +220,8 @@ impl Wrapping<'_> {
             .take_while(|opportunity| opportunity.offset > start)
             .find(|opportunity| match opportunity.kind {
                 BreakKind::Hyphen { width: hyphen, .. } => {
-                    self.widths.width(start, opportunity.offset) + hyphen <= width
+                    let line = self.widths.width(start, opportunity.offset) + hyphen;
+                    self.widths.fits(line, width)
                 }
                 BreakKind::Soft | BreakKind::Hard => false,
             });
@@ -288,7 +283,7 @@ impl Wrapping<'_> {
         breaks: &[BreakOpportunity],
     ) -> (f32, f32) {
         let width = self.widths.width(start, end);
-        let fits = if width <= self.limit(start) {
+        let fits = if self.widths.fits(width, self.limit(start)) {
             width
         } else {
             f32::NEG_INFINITY
@@ -423,7 +418,7 @@ impl LineBalancer {
                     BreakKind::Soft | BreakKind::Hard => (0.0, 0.0),
                 };
                 let width = wrapping.line_width(line_start, end.offset) + hyphen;
-                if width > limit {
+                if !wrapping.widths.fits(width, limit) {
                     // A hyphen can tip a line over that the rest of its word
                     // keeps within; past a word, every later line is wider.
                     if let BreakKind::Hyphen { .. } = end.kind {

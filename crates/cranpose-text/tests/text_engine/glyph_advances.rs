@@ -152,3 +152,39 @@ fn a_relayout_at_another_size_rounds_at_that_size() {
     };
     assert_eq!(glyphs(&again), glyphs(&fresh));
 }
+
+// A text sized to its own width, as a chip sizes a label, keeps one line:
+// widths of whole pixel advances land on the device pixel grid, where a sum
+// a hair off a pixel must not tip the line over.
+#[test]
+fn a_text_keeps_one_line_at_its_own_width_at_any_density() {
+    let resolver = FontFamilyResolver::new([typeface(ROBOTO)]);
+    let family = FontFamily::Default;
+    let paragraph = ParagraphStyle::default();
+    let mut wrapped = Vec::new();
+    for advances in [GlyphAdvances::WholePixels, GlyphAdvances::Fractional] {
+        for grid in [1.75_f32, 2.0, 2.625, 3.0] {
+            for size in [4.0_f32, 4.5, 5.0, 5.5, 6.0, 7.0, 10.0, 14.0] {
+                for text in ["-1.24%", "QNWZ", "674.57", "+0.27%", "+17.61%", "MPNX"] {
+                    let spans = [ShapingSpan {
+                        size,
+                        ..span(0..text.len(), &family, 400)
+                    }];
+                    let mut input = input(text, &spans, &paragraph, advances, f32::INFINITY);
+                    input.lengths.grid = grid;
+                    let mut layouter = TextLayouter::default();
+                    let own = layouter.layout(&input, &resolver);
+                    input.max_width = own.width();
+                    let again = layouter.layout(&input, &resolver);
+                    if own.line_count() != 1 || again.line_count() != 1 {
+                        wrapped.push((advances, grid, size, text));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wrapped.is_empty(),
+        "wrapped at their own width: {wrapped:?}"
+    );
+}

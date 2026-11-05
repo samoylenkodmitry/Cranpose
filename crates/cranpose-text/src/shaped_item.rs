@@ -162,12 +162,20 @@ pub(crate) fn spaced_width(glyphs: &[ShapedGlyph], scale: f32, spacing: f32) -> 
     if spacing == 0.0 {
         return width;
     }
+    width + cluster_spacing(glyphs, spacing)
+}
+
+// What `spacing` a cluster adds to the clusters of `glyphs`.
+pub(crate) fn cluster_spacing(glyphs: &[ShapedGlyph], spacing: f32) -> f32 {
+    if spacing == 0.0 {
+        return 0.0;
+    }
     let starts = glyphs
         .windows(2)
         .filter(|pair| pair[0].cluster != pair[1].cluster)
         .count()
         + usize::from(!glyphs.is_empty());
-    width + spacing * f32::from(u16::try_from(starts).unwrap_or(u16::MAX))
+    spacing * f32::from(u16::try_from(starts).unwrap_or(u16::MAX))
 }
 
 // Pixels per design unit of `face` at the size of `span`.
