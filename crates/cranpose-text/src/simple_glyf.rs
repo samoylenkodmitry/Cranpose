@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use read_fonts::{
     FontData, FontRead, TableProvider,
-    model::{Font, Source, glyph::outline::PathSink, metrics::GlyphExtents},
+    model::{Font, Source, Tables, glyph::outline::PathSink, metrics::GlyphExtents},
     tables::{
         glyf::{
             Glyph, PointFlags,
@@ -35,15 +35,7 @@ impl GlyfTables {
     // at a variation location, with a `VARC` table, whose composites draw in
     // place of the glyphs they cover, or without `glyf`.
     pub(crate) fn of(font: &Font) -> Option<Self> {
-        if font
-            .normalized_coords()
-            .iter()
-            .any(|coord| coord.to_bits() != 0)
-        {
-            return None;
-        }
-        let bytes = font_bytes(font)?;
-        let tables = font.tables();
+        let (bytes, tables) = default_location(font)?;
         if tables.varc().is_ok() {
             return None;
         }
@@ -212,8 +204,21 @@ fn entry<const N: usize>(table: &[u8], index: usize) -> Option<[u8; N]> {
     table.get(at..at.checked_add(N)?)?.try_into().ok()
 }
 
+// The bytes and tables of `font` where it draws at its default location;
+// `None` at a variation location or for a font read table by table.
+pub(crate) fn default_location(font: &Font) -> Option<(&[u8], &Tables)> {
+    if font
+        .normalized_coords()
+        .iter()
+        .any(|coord| coord.to_bits() != 0)
+    {
+        return None;
+    }
+    Some((font_bytes(font)?, font.tables()))
+}
+
 // The bytes a font was read from; `None` for a font read table by table.
-fn font_bytes(font: &Font) -> Option<&[u8]> {
+pub(crate) fn font_bytes(font: &Font) -> Option<&[u8]> {
     let Source::Blob(bytes) = font.source() else {
         return None;
     };
@@ -221,7 +226,7 @@ fn font_bytes(font: &Font) -> Option<&[u8]> {
 }
 
 // Where `part`, a slice of `bytes`, sits in them.
-fn range_in<T>(bytes: &[u8], part: &[T]) -> Option<Range<usize>> {
+pub(crate) fn range_in<T>(bytes: &[u8], part: &[T]) -> Option<Range<usize>> {
     let start = part.as_ptr().addr().checked_sub(bytes.as_ptr().addr())?;
     let end = start.checked_add(size_of_val(part))?;
     bytes.get(start..end).map(|_| start..end)

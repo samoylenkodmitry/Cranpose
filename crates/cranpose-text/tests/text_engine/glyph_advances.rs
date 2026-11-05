@@ -1,14 +1,16 @@
 // Glyph advances rounded to whole device pixels, as Android lays out a
 // Compose `TextMotion.Static` text: each glyph's own advance rounded half
-// up, the kerning shaping adds to it left whole. The expected pixels are
-// HarfBuzz's shaping of the bench's Roboto with that rule applied.
+// up, with the kerning from shaping added to it unrounded. The expected
+// pixels are HarfBuzz's shaping of the bench's Roboto with that rule
+// applied.
 
 use cranpose_text::{
-    FontFamily, FontFamilyResolver, GlyphAdvances, LayoutInput, ParagraphLengths, ParagraphStyle,
-    ShapingSpan, TextLayout, TextLayoutOptions, TextLayouter, TextOverflow,
+    CaretDirection, FontFamily, FontFamilyResolver, FontStyle, FontWeight, GlyphAdvances,
+    LayoutInput, ParagraphLengths, ParagraphStyle, ShapingSpan, TextLayout, TextLayoutOptions,
+    TextLayouter, TextOverflow, Typeface,
 };
 
-use crate::fonts::{DEJAVU_MONO, ROBOTO, span, typeface};
+use crate::fonts::{DEJAVU_MONO, MONASPACE_VF, ROBOTO, bytes, span, typeface};
 
 // The Mate 20 X's density: 6 px of layout is 18 device pixels.
 const GRID: f32 = 3.0;
@@ -128,7 +130,7 @@ fn unkerned_glyphs_sit_on_whole_device_pixels() {
         lefts.iter().all(|x| (x - x.round()).abs() < 1e-3),
         "glyphs at {lefts:?} device px"
     );
-    let caret = laid.horizontal_position(5, cranpose_text::CaretDirection::Primary) * GRID;
+    let caret = laid.horizontal_position(5, CaretDirection::Primary) * GRID;
     assert_pixels(caret, 38.0, "the caret after the text");
 }
 
@@ -276,4 +278,39 @@ fn a_wrapped_text_of_whole_pixels_holds_at_its_own_width() {
         }
     }
     assert!(missed.is_empty(), "no hold at their own width: {missed:?}");
+}
+
+// Each glyph advances by its own advance at the instance its typeface draws,
+// rounded to a whole device pixel: a static font reads it from its `hmtx`
+// table, a variable font at a weight of its axis from its variations.
+#[test]
+fn whole_pixel_advances_follow_the_instance_a_typeface_draws() {
+    let text = "hello world";
+    let varied = Typeface::from_registered(
+        &FontFamily::named("Mono"),
+        FontWeight::new(700),
+        FontStyle::Normal,
+        bytes(MONASPACE_VF),
+        &[(*b"wght", 700.0)],
+    )
+    .expect("the font has a weight axis");
+    for face in [typeface(ROBOTO), typeface(DEJAVU_MONO), varied] {
+        let device = SIZE * GRID / f32::from(face.units_per_em());
+        let resolver = FontFamilyResolver::new([face.clone()]);
+        let family = FontFamily::Default;
+        let spans = [ShapingSpan {
+            size: SIZE,
+            ..span(0..text.len(), &family, 400)
+        }];
+        let paragraph = ParagraphStyle::default();
+        let input = input(text, &spans, &paragraph, GlyphAdvances::WholePixels, 400.0);
+        let laid = TextLayouter::default().layout(&input, &resolver);
+        let rounded: f32 = laid
+            .glyph_runs(0)
+            .flat_map(|run| run.positions().map(|glyph| glyph.id).collect::<Vec<_>>())
+            .map(|glyph| (face.advance(glyph) * device + 0.5).floor())
+            .sum();
+        let caret = laid.horizontal_position(text.len(), CaretDirection::Primary) * GRID;
+        assert_pixels(caret, rounded, &format!("{:?}", face.family_names()));
+    }
 }

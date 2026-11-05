@@ -4,7 +4,7 @@
 use std::ops::{Deref, Range};
 
 use cranpose_ui_graphics::{ceil_to_grid, whole};
-use read_fonts::types::GlyphId as FontGlyphId;
+use read_fonts::types::{F48Dot16, GlyphId as FontGlyphId};
 
 use crate::{
     layout_input::{GlyphAdvances, ParagraphLengths},
@@ -76,24 +76,35 @@ impl ParagraphGlyphs {
     // `em` device pixels to the em: the font's own advance of each, at the
     // location its typeface draws, rounded half up as FreeType rounds a
     // hinted advance, and the rest of the advance from shaping, its kerning.
-    // HarfBuzz sets the advance of a mark to zero after it reads the rounded
-    // advance, so a glyph with no shaped advance advances by nothing.
+    // A font at its default location gives its advances straight from its
+    // bytes, in one pass.
     #[inline(never)]
     fn round_advances(&mut self, start: usize, face: &Typeface, em: f32) {
         let Self { glyphs, pixels, .. } = self;
         // Only `add` appends glyphs, and it measures each one it adds.
         debug_assert_eq!(pixels.len(), start);
         let device = em / f32::from(face.units_per_em());
-        let metrics = face.font().glyph_metrics();
-        pixels.extend(glyphs[start..].iter().map(|glyph| {
-            if glyph.advance == 0 {
-                return 0.0;
-            }
-            let own = metrics.h_advance(FontGlyphId::new(glyph.id().0)) * device;
-            // The difference between a float and its nearest whole number
-            // is exact, so an unkerned advance lands on its whole pixel.
-            font_units(glyph.advance) * device + (whole::floor(own + 0.5) - own)
-        }));
+        let added = &glyphs[start..];
+        if let Some((advances, bytes)) = face.h_advances() {
+            let metrics = advances.metrics(bytes);
+            pixels.extend(added.iter().map(|glyph| {
+                let own = advances.advance(metrics, glyph.id().0);
+                whole_pixels(glyph, f32::from(own), device)
+            }));
+            return;
+        }
+        pixels.resize(glyphs.len(), 0.0);
+        let pixels = &mut pixels[start..];
+        face.font().glyph_metrics().h_advance_batched(
+            F48Dot16::to_f32,
+            added
+                .iter()
+                .zip(pixels.iter_mut())
+                .map(|(glyph, own)| (FontGlyphId::new(glyph.id().0), own)),
+        );
+        for (glyph, pixel) in added.iter().zip(pixels) {
+            *pixel = whole_pixels(glyph, *pixel, device);
+        }
     }
 
     // Device pixels per pixel of the layout.
@@ -117,15 +128,38 @@ impl ParagraphGlyphs {
 
     // The width of the glyphs of `range` at `scale`, each of their
     // clusters `spacing` wider.
+    #[inline]
     pub(crate) fn width(&self, range: Range<usize>, scale: f32, spacing: f32) -> f32 {
-        let glyphs = &self.glyphs[range.clone()];
         match self.unit {
-            WidthUnit::Layout { .. } => spaced_width(glyphs, scale, spacing),
-            WidthUnit::Device { grid } => self.unit.layout(
-                self.pixels[range].iter().sum::<f32>() + cluster_spacing(glyphs, spacing * grid),
-            ),
+            WidthUnit::Layout { .. } => spaced_width(&self.glyphs[range], scale, spacing),
+            WidthUnit::Device { grid } => self.device_width(range, spacing * grid),
         }
     }
+
+    // The width of the glyphs of `range` where advances round to whole
+    // device pixels, each of their clusters `spacing` device pixels wider.
+    // Out of line, so the width of fractional advances stays in its callers.
+    #[inline(never)]
+    fn device_width(&self, range: Range<usize>, spacing: f32) -> f32 {
+        let spacing = cluster_spacing(&self.glyphs[range.clone()], spacing);
+        self.unit
+            .layout(self.pixels[range].iter().sum::<f32>() + spacing)
+    }
+}
+
+// The device pixels `glyph` advances, at `device` pixels to a font unit,
+// with `own` units its own advance. HarfBuzz sets the advance of a mark to
+// zero after it reads the rounded advance, so a glyph with no shaped
+// advance advances by nothing.
+#[inline(always)]
+fn whole_pixels(glyph: &ShapedGlyph, own: f32, device: f32) -> f32 {
+    if glyph.advance == 0 {
+        return 0.0;
+    }
+    let own = own * device;
+    // The difference between a float and its nearest whole number is exact,
+    // so an unkerned advance lands on its whole pixel.
+    font_units(glyph.advance) * device + (whole::floor(own + 0.5) - own)
 }
 
 // The pixels a paragraph's widths add up in, on a device of `grid` device
@@ -180,6 +214,7 @@ impl WidthUnit {
     // `pixels` of these, in pixels of the layout. A device pixel width sits
     // the slack inside its layout width, so a plain comparison lets it fit
     // any width up to the slack short of it.
+    #[inline]
     pub(crate) fn layout(self, pixels: f32) -> f32 {
         match self {
             Self::Layout { .. } => pixels,

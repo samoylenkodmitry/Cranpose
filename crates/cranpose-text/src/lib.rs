@@ -24,6 +24,7 @@ pub mod glyph_id;
 mod glyph_ink;
 /// Glyph outlines drawn as coverage.
 pub mod glyph_outline;
+mod h_advances;
 #[cfg(feature = "hyphenation")]
 pub mod hyphenator;
 mod index_range;

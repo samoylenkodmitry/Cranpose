@@ -77,6 +77,7 @@ impl ClusterWidths {
     }
 
     // The width of the text from `start` to `end`.
+    #[inline]
     pub(crate) fn width(&self, start: usize, end: usize) -> f32 {
         self.unit.layout(self.before(end) - self.before(start))
     }

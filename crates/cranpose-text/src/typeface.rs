@@ -16,7 +16,8 @@ use crate::{
     font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
     glyph_id::GlyphId,
     glyph_ink::GlyphInks,
-    simple_glyf::{self, GlyfTables},
+    h_advances::HAdvances,
+    simple_glyf::{self, GlyfTables, font_bytes},
 };
 
 /// The bytes a typeface is read from.
@@ -132,6 +133,7 @@ struct Loaded {
 struct Found {
     coverage: OnceLock<Coverage>,
     glyf: OnceLock<Option<GlyfTables>>,
+    h_advances: OnceLock<Option<HAdvances>>,
     // Which glyphs put ink past their advance or the font's lines, read as
     // layouts meet them.
     inks: OnceLock<GlyphInks>,
@@ -455,6 +457,19 @@ impl Typeface {
             .glyf
             .get_or_init(|| GlyfTables::of(&self.0.font))
             .as_ref()
+    }
+
+    // Where the font states its advances at its default location, with the
+    // font's bytes, found on first use; `None` for a font the general reader
+    // measures.
+    pub(crate) fn h_advances(&self) -> Option<(&HAdvances, &[u8])> {
+        let advances = self
+            .0
+            .found
+            .h_advances
+            .get_or_init(|| HAdvances::of(&self.0.font))
+            .as_ref()?;
+        Some((advances, font_bytes(&self.0.font)?))
     }
 
     // The axis positions that draw the typeface at `weight` and `style`: for
