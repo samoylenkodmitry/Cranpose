@@ -1697,6 +1697,13 @@ bounds and leaves the mesh, `footprint` is a pixel's width in radians,
 content. A shader that does not build logs a warning, and its volumes are left
 out.
 
+A volume can hold a whole world. The desktop demo's Backrooms tab draws an
+endless maze with one volume: a box around the eye, placed at the corner of the
+maze cell the eye stands in, whose shader finds the maze's walls by hashing the
+cells a ray crosses. The app moves the box from cell to cell as the eye walks
+and passes the cell in `params`, so the shader's coordinates stay small however
+far the eye goes.
+
 `Material::Shaded(Shaded { shader, params })` colours each point of the
 surface with the app's WGSL `shade` function, from the content there, the
 light and the eye: a reflection, a sheen, a normal of its own. The surface
