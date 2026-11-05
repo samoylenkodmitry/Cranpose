@@ -361,7 +361,7 @@ impl<'a> LayoutWalk<'a> {
             }
             if keeps_heads && !space && !children.is_empty() {
                 let head = KeptHead::new(node, lowered, lower_context);
-                self.moved.borrow_mut().keep_head(head);
+                self.moved.borrow_mut().keep_head(None, head);
             } else {
                 recycle_lowered(lowered);
             }
@@ -464,7 +464,7 @@ impl<'a> LayoutWalk<'a> {
         (scene, context): (&mut RasterScene, &RasterTraversalContext<'_>),
         (reuse, old): (&mut Option<Reuse<'_>>, Option<OldChildren>),
     ) -> bool {
-        let Some(mut head) = self.moved.borrow_mut().take_head(node) else {
+        let Some((at, mut head)) = self.moved.borrow_mut().take_head(node) else {
             return false;
         };
         let pushed = head.follow(self.applier, lower_context, |layer, children, inner| {
@@ -484,7 +484,7 @@ impl<'a> LayoutWalk<'a> {
             head.recycle();
             return false;
         }
-        self.moved.borrow_mut().keep_head(head);
+        self.moved.borrow_mut().keep_head(Some(at), head);
         true
     }
 
@@ -587,7 +587,7 @@ impl<'a> LayoutWalk<'a> {
         let Some(position) = position.or_else(|| placed_child_position(self.applier, child)) else {
             return;
         };
-        let mut kept = self.moved.borrow_mut().take(child);
+        let (at, mut kept) = self.moved.borrow_mut().take(child).unzip();
         if let Some(stale) =
             kept.take_if(|subtree| !subtree.follow(self.applier, position, lower_context))
         {
@@ -601,7 +601,7 @@ impl<'a> LayoutWalk<'a> {
         if let Some(node) = Subtree::of_child(subtree.root()) {
             populate_draws_from_graph(node, scene, context, &mut None, None);
         }
-        self.moved.borrow_mut().keep(subtree);
+        self.moved.borrow_mut().keep(at, subtree);
     }
 
     // Whether the old subtree at the record `at` holds a subtree the scene

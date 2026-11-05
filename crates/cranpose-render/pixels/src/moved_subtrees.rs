@@ -40,10 +40,15 @@ struct Slot {
     waited: u8,
 }
 
+// The slot a walk took a kept entry out of, which the entry goes back into.
+// It stays the node's slot until the next update starts.
+#[derive(Clone, Copy)]
+pub(crate) struct SlotIndex(u32);
+
 // What the walk keeps, by node. A walk takes a subtree for each child that
 // moved, and a list that scrolls moves many: they are found by the node.
 // Each node keeps its slot across the updates that push it, so a walk lends
-// what it keeps out of the slot and back with no change to the map, and an
+// what it keeps out of the slot and back into it with no lookup, and an
 // update's sweep runs over the slots in order.
 #[derive(Default)]
 pub(crate) struct MovedSubtrees {
@@ -63,19 +68,19 @@ const TIGHT_UNPUSHED_UPDATES: u8 = 1;
 
 impl MovedSubtrees {
     // The slot of `node`, when the walk keeps something of it.
-    fn slot(&mut self, node: NodeId) -> Option<&mut Slot> {
+    fn slot_index(&self, node: NodeId) -> Option<u32> {
         if self.slot_of.is_empty() {
             return None;
         }
-        let at = *self.slot_of.get(&node)?;
-        self.slots[at as usize].as_mut()
+        self.slot_of.get(&node).copied()
     }
 
-    // Takes the subtree of `node` out, when it is kept whole.
-    pub(crate) fn take(&mut self, node: NodeId) -> Option<MovedSubtree> {
-        let slot = self.slot(node)?;
+    // Takes the subtree of `node` out, when it is kept whole, with its slot.
+    pub(crate) fn take(&mut self, node: NodeId) -> Option<(SlotIndex, MovedSubtree)> {
+        let at = self.slot_index(node)?;
+        let slot = self.slots[at as usize].as_mut()?;
         match slot.kept.take()? {
-            Kept::Subtree(subtree) => Some(subtree),
+            Kept::Subtree(subtree) => Some((SlotIndex(at), subtree)),
             head @ Kept::Head(_) => {
                 slot.kept = Some(head);
                 None
@@ -83,11 +88,12 @@ impl MovedSubtrees {
         }
     }
 
-    // Takes the layer of `node` out, when it is kept alone.
-    pub(crate) fn take_head(&mut self, node: NodeId) -> Option<KeptHead> {
-        let slot = self.slot(node)?;
+    // Takes the layer of `node` out, when it is kept alone, with its slot.
+    pub(crate) fn take_head(&mut self, node: NodeId) -> Option<(SlotIndex, KeptHead)> {
+        let at = self.slot_index(node)?;
+        let slot = self.slots[at as usize].as_mut()?;
         match slot.kept.take()? {
-            Kept::Head(head) => Some(head),
+            Kept::Head(head) => Some((SlotIndex(at), head)),
             subtree @ Kept::Subtree(_) => {
                 slot.kept = Some(subtree);
                 None
@@ -95,18 +101,21 @@ impl MovedSubtrees {
         }
     }
 
-    // Keeps `subtree`, which the update that runs pushed.
-    pub(crate) fn keep(&mut self, subtree: MovedSubtree) {
-        self.keep_as(subtree.node(), Kept::Subtree(subtree));
+    // Keeps `subtree`, which the update that runs pushed, in the slot `at`
+    // it was taken out of, if any.
+    pub(crate) fn keep(&mut self, at: Option<SlotIndex>, subtree: MovedSubtree) {
+        self.keep_as((subtree.node(), at), Kept::Subtree(subtree));
     }
 
-    // Keeps `head`, which the update that runs pushed.
-    pub(crate) fn keep_head(&mut self, head: KeptHead) {
-        self.keep_as(head.node(), Kept::Head(head));
+    // Keeps `head`, which the update that runs pushed, in the slot `at` it
+    // was taken out of, if any.
+    pub(crate) fn keep_head(&mut self, at: Option<SlotIndex>, head: KeptHead) {
+        self.keep_as((head.node(), at), Kept::Head(head));
     }
 
-    fn keep_as(&mut self, node: NodeId, kept: Kept) {
-        if let Some(slot) = self.slot(node) {
+    fn keep_as(&mut self, (node, at): (NodeId, Option<SlotIndex>), kept: Kept) {
+        let at = at.map(|SlotIndex(at)| at).or_else(|| self.slot_index(node));
+        if let Some(slot) = at.and_then(|at| self.slots[at as usize].as_mut()) {
             if let Some(replaced) = slot.kept.replace(kept) {
                 replaced.recycle();
             }
