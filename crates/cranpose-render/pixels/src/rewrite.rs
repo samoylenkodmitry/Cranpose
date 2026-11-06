@@ -42,17 +42,20 @@ pub(crate) enum Replaced {
 const KEPT_AREAS: usize = 32;
 
 // A record the rewrite put in place of the old record of its node, and
-// what the old record held: where its subtree's records and items ended,
-// and its passed-down entry.
+// what the old record held: where its subtree's records and draw order
+// ended, and its passed-down entry.
 #[derive(Clone, Copy)]
 struct Opened {
     end: usize,
-    stop: ItemCounts,
+    stop: usize,
     passed_down: Option<usize>,
 }
 
 #[derive(Default)]
 pub(crate) struct Rewrite {
+    // While the rewrite pushes in place, `next.items` holds the old scene's
+    // counts before one of its items, as each old record's start does: two
+    // such counts with the same draw order are the same.
     next: Places,
     // Where the old subtree's items, records and entries end.
     stop: Places,
@@ -203,18 +206,20 @@ impl Rewrite {
             let index = self.next.records;
             if let Some(old) = records[..self.stop.records].get(index)
                 && old.identity == subtree.identity()
-                && old.start == self.next.items
+                && old.start.order == self.next.items.order
             {
                 self.opened.push(Opened {
                     end: old.end,
-                    stop: old.stop,
+                    stop: old.stop.order,
                     passed_down: old.passed_down,
                 });
-                self.own_items_end = own_items_end(records, index, old.end, old.stop);
+                self.own_items_end = own_items_end(records, index, old.end, old.stop.order);
                 let record = &mut records[index];
-                let kept = record.hits.take();
-                self.hits_replaced |= kept.is_some();
-                record.hits = boxed_hits(kept, hits);
+                if record.hits.is_some() || hits.is_some() {
+                    let kept = record.hits.take();
+                    self.hits_replaced |= kept.is_some();
+                    record.hits = boxed_hits(kept, hits);
+                }
                 record.transform = subtree.transform_to_parent();
                 record.node_size = subtree.node_size();
                 record.passed_down = None;
@@ -297,14 +302,14 @@ impl Rewrite {
         let child = records[..old.end].get(first_child)?;
         if self.spilled_at.is_some()
             || self.next.records != at
-            || self.next.items != old.start
+            || self.next.items.order != old.start.order
             || self.next.passed_down != entry
         {
             return None;
         }
         self.opened.push(Opened {
             end: old.end,
-            stop: old.stop,
+            stop: old.stop.order,
             passed_down: old.passed_down,
         });
         self.next = Places {
@@ -328,7 +333,7 @@ impl Rewrite {
         let entries_fit = extent.passed_down == 0 || first_entry == self.next.passed_down;
         if self.spilled_at.is_none()
             && self.next.records == old
-            && self.next.items == head.start
+            && self.next.items.order == head.start.order
             && entries_fit
         {
             self.next = Places {
@@ -358,7 +363,7 @@ impl Rewrite {
         };
         self.own_items_end = match records[..open.end].get(end) {
             Some(next) if next.identity != (None, None) => next.start.order,
-            _ => open.stop.order,
+            _ => open.stop,
         };
     }
 
@@ -487,14 +492,14 @@ fn boxed_hits(kept: Option<Box<HitLayer>>, layer: Option<&LayerNode>) -> Option<
 }
 
 // Where the items that the record `index`, whose old subtree ended at the
-// record `end` and the items `stop`, may take the places of end: before its
-// first child subtree, or at `stop` when it has none. A draw group of the
+// record `end` and at `stop` in the draw order, may take the places of end:
+// before its first child subtree, or at `stop` when it has none. A draw group of the
 // node's own draws is no child subtree.
-fn own_items_end(records: &[SubtreeItems], index: usize, end: usize, stop: ItemCounts) -> usize {
+fn own_items_end(records: &[SubtreeItems], index: usize, end: usize, stop: usize) -> usize {
     let child = child_record_from(records, index + 1, end);
     records[..end]
         .get(child)
-        .map_or(stop.order, |record| record.start.order)
+        .map_or(stop, |record| record.start.order)
 }
 
 // The items of the run `to..old_stop` of `scene` give way to all of
