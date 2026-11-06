@@ -32,7 +32,10 @@ struct DitheredRow<P: Pixel> {
     paints: [P::Paint; 4],
 }
 
+// Inline in the loop of each row: a call returned the row's colors, cells
+// and paints by copy for every row of a gradient.
 impl<P: Pixel> DitheredRow<P> {
+    #[inline(always)]
     fn new(colors: [[f32; 4]; 4], blend_mode: BlendMode) -> Self {
         Self {
             colors,
@@ -46,6 +49,7 @@ impl<P: Pixel> DitheredRow<P> {
 
     // Paints `pixels`, the run of a row from column `start`. `table`, given
     // for a solid brush, keeps what its one paint left over each byte before.
+    #[inline(always)]
     fn paint(
         &self,
         pixels: &mut [P],
