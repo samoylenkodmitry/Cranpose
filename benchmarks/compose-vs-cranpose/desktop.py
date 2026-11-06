@@ -12,7 +12,8 @@ turn, round after round, as `frameworks.py` measures phones, and the run is a
 `frameworks` run `scripts/perf/publish.py` publishes. In a round each app
 starts twice: first after what the apps keep between launches is removed, as
 an install leaves them (`APP_STATE`; in the browser, a new Chrome profile),
-then a second time. A leg that fails, or in
+from an install of its program that macOS never ran (`fresh_install`), then
+a second time. A leg that fails, or in
 which other processes spent more than `--max-others` cores, is measured again,
 up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
@@ -163,16 +164,20 @@ INSTALLED_WITH_DIRECTORY = {'avalonia'}
 
 
 def fresh_install(name, stage, label):
-    """`name`'s program copied where no launch has run it, as installing the
-    app leaves it, and the path to launch. macOS checks a program file the
-    first time it runs: 190 to 320 ms before a fresh copy of the 10 MB
-    Cranpose bench reached its `main` on macm3, 12 ms after. Without a copy
-    only the apps rebuilt since an earlier run paid it, Cranpose's every
-    night. The app's bundle, or its directory where its libraries lie beside
-    it, is copied whole."""
+    """`name`'s program installed as an install of a new build leaves it, and
+    the path to launch. macOS checks a program the first time it runs: on
+    macm3 a 12 MB program reached its `main` 270 to 280 ms after its launch
+    when macOS never ran it, 97 to 100 ms after when it ran a copy of it
+    before, 2 to 9 ms after when it ran that file before (24 MB: 380, 140 and
+    9 ms; 3 MB: 214, 80 and 8 ms). The install copies the app's bundle, or its
+    directory where its libraries lie beside it, and signs its program again
+    with a code hash macOS never ran. Without the new signature only the apps
+    rebuilt since an earlier run paid the check of a new program, Cranpose's
+    every night."""
     executable = Path(str(APPS[name][0]))
     text = str(executable)
-    if '.app/Contents/MacOS/' in text:
+    bundle = '.app/Contents/MacOS/' in text
+    if bundle:
         installed = Path(text.split('.app/Contents/MacOS/')[0] + '.app')
     elif name in INSTALLED_WITH_DIRECTORY:
         installed = executable.parent
@@ -181,7 +186,22 @@ def fresh_install(name, stage, label):
     target = stage / 'installs' / label / installed.name
     target.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['ditto', str(installed), str(target)], check=True)
-    return str(target / executable.relative_to(installed)) if installed != executable else str(target)
+    program = target / executable.relative_to(installed) if installed != executable else target
+    # A bundle's signature covers its program and its resources.
+    sign_anew(target if bundle else program)
+    return str(program)
+
+
+def sign_anew(path):
+    """Signs the program or bundle at `path` again, ad hoc, with a code hash
+    no signature had before, as a new build of the app has. It keeps its name,
+    its entitlements and its runtime flags: its designated requirement, which
+    its name satisfies, also names a random code hash."""
+    details = subprocess.run(['codesign', '-dv', str(path)], capture_output=True, text=True, check=True).stderr
+    name = next(line.split('=', 1)[1] for line in details.splitlines() if line.startswith('Identifier='))
+    requirement = f'designated => identifier "{name}" or cdhash H"{os.urandom(20).hex()}"'
+    subprocess.run(['codesign', '--force', '--sign', '-', '--identifier', name, f'-r={requirement}',
+                    '--preserve-metadata=entitlements,flags,runtime', str(path)], check=True, capture_output=True)
 
 
 def serve_page():
