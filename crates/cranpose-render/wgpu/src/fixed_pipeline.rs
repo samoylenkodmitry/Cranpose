@@ -65,18 +65,20 @@ impl FixedPipeline {
             recorder.note_fixed(self.resource.label(), recorder.in_first_screen());
         }
         if let Some(pipeline) = self.resource.get() {
-            return Some(pipeline);
+            return pipeline.is_ready().then_some(pipeline);
         }
         if self.cached.get() || !compiler.is_active() {
-            return Some(self.resource.for_draw(recorder, backend, || job()()));
+            let pipeline = self.resource.for_draw(recorder, backend, || job()());
+            return pipeline.is_ready().then_some(pipeline);
         }
         self.queue(compiler, CompileLane::Demanded, backend, job());
         None
     }
 
-    /// The pipeline when it is built.
+    /// The pipeline when it is built: on WebGPU, once the browser compiled
+    /// it, which it does in the background once the page asks it to.
     pub(crate) fn built(&self) -> Option<&wgpu::RenderPipeline> {
-        self.resource.get()
+        self.resource.get().filter(|pipeline| pipeline.is_ready())
     }
 
     /// Queues the build on `lane` unless it is already built or queued.

@@ -414,16 +414,9 @@ impl RendererPipelines {
     }
 
     // The instant pipeline for a pass with a depth buffer or not, once it is
-    // built; none on the web, which builds every pipeline where it draws.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(unused_variables, reason = "no stand-ins")
-    )]
+    // built.
     pub(crate) fn instant_stand_in(&self, depth: PassDepth) -> Option<InstantStandIn<'_>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        return self.instant.stand_in(depth);
-        #[cfg(target_arch = "wasm32")]
-        None
+        self.instant.stand_in(depth)
     }
 
     // Whether a pass with a depth buffer or not draws its shadows through
@@ -576,14 +569,9 @@ impl RendererPipelines {
     }
 
     /// The fallback pipeline for a pass with a depth buffer or not, once it
-    /// is built; none on the web, which leaves every fallback out of its
-    /// build.
-    #[cfg_attr(target_arch = "wasm32", expect(unused_variables, reason = "no meshes"))]
+    /// is built.
     pub(super) fn mesh_pipeline(&self, depth: PassDepth) -> Option<&wgpu::RenderPipeline> {
-        #[cfg(not(target_arch = "wasm32"))]
-        return self.mesh_pipelines[depth.index()].built();
-        #[cfg(target_arch = "wasm32")]
-        None
+        self.mesh_pipelines[depth.index()].built()
     }
 
     /// Lays out as fallback triangles the run draws of `draws` in `range`
