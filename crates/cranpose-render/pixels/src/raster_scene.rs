@@ -679,6 +679,19 @@ impl RasterScene {
         }
     }
 
+    // Lets go every head the records keep, before a build lowers the
+    // scene's nodes again: the build's nodes take the heads' boxes, and
+    // their draws record into the heads' recordings.
+    pub(crate) fn drop_heads(&mut self) {
+        for head in self
+            .subtrees
+            .iter_mut()
+            .filter_map(|record| record.head.take())
+        {
+            head.recycle_to_redraw();
+        }
+    }
+
     // Takes the head the old record `at` keeps.
     pub(crate) fn take_head(&mut self, at: usize) -> Option<KeptHead> {
         self.subtrees.get_mut(at)?.head.take()

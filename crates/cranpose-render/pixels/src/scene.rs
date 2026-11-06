@@ -122,6 +122,12 @@ impl Scene {
         // A build with no marks names no node that changed: a subtree kept
         // for a node may hold draws the node no longer has.
         self.moved.get_mut().clear();
+        // The build reads nothing of the scene before: its lists and the
+        // heads its records keep go to the new scene.
+        if let Some(mut old) = self.raster.take() {
+            old.drop_heads();
+            self.give_back(old);
+        }
         self.build(applier, root, None, text);
         self.layer_moves += 1;
         self.finish_spaces(applier);
@@ -145,7 +151,11 @@ impl Scene {
         }
         moved.begin_update(cranpose_ui::current_memory_headroom());
         if !self.update_in_place((applier, root), updates, text) {
-            let previous = self.raster.take();
+            // The build copies records of the scene before with no head.
+            let mut previous = self.raster.take();
+            if let Some(previous) = previous.as_mut() {
+                previous.drop_heads();
+            }
             self.build(applier, root, previous, text);
         }
         self.finish_spaces(applier);
