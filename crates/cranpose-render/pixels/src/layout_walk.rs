@@ -100,14 +100,19 @@ fn encode(update: NodeUpdate) -> u8 {
 }
 
 fn decode(mark: u8) -> Option<NodeUpdate> {
-    match mark >> UPDATE_SHIFT {
-        1 => Some(NodeUpdate::Content),
-        2 => Some(NodeUpdate::Draws),
-        3 => Some(NodeUpdate::Layer),
-        4 => Some(NodeUpdate::Moved),
-        5 => Some(NodeUpdate::MovedLayer),
-        _ => None,
-    }
+    // Indexed by the bits above the first, as `encode` writes them.
+    const UPDATES: [Option<NodeUpdate>; 6] = [
+        None,
+        Some(NodeUpdate::Content),
+        Some(NodeUpdate::Draws),
+        Some(NodeUpdate::Layer),
+        Some(NodeUpdate::Moved),
+        Some(NodeUpdate::MovedLayer),
+    ];
+    UPDATES
+        .get(usize::from(mark >> UPDATE_SHIFT))
+        .copied()
+        .flatten()
 }
 
 // Whether the record `identity` is of the subtree of the layout node

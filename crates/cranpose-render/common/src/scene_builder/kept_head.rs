@@ -90,10 +90,13 @@ impl KeptHead {
         }
         // The wrapper of a node's outer draws holds the node's own layer,
         // which holds its children.
-        let wrapper = layer.wraps.is_some().then(|| context.beneath_layer(layer));
-        let (outer, own) = match wrapper {
-            Some(outer) => (outer, own_layer(layer, node_id)?),
-            None => (*context, &**layer),
+        let wrapped;
+        let (outer, own) = match layer.wraps {
+            Some(_) => {
+                wrapped = context.beneath_layer(layer);
+                (&wrapped, own_layer(layer, node_id)?)
+            }
+            None => (context, &**layer),
         };
         if own.has_origin_sinks
             && let Some(parent_abs) = &outer.parent_abs
