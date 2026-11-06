@@ -1,9 +1,9 @@
 /// Where an effect was written, carried onto the task it spawns.
 ///
-/// A leak report that can only say "one task is still queued" names nothing:
-/// every run prints the same number and no run says which effect it was. This
-/// is what turns that count into a place to look, and it stays a pair of plain
-/// fields so carrying it costs nothing until a task is actually spawned.
+/// A leak report that can only say "one task is still queued" names nothing.
+/// Every run prints the same number. No run says which effect it was. The
+/// site turns that count into a place to look. It is a pair of plain fields.
+/// Carrying it costs nothing until a task is spawned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskSite {
     /// The path of the source file, as `file!()` gives it.
@@ -38,7 +38,7 @@ impl From<&'static std::panic::Location<'static>> for TaskSite {
 }
 
 // What a spawned UI task is called in leak reports. A site is formatted only
-// when a report asks, so spawning a task allocates no name.
+// when a report asks. Spawning a task allocates no name.
 #[derive(Clone, Copy)]
 pub(crate) enum TaskLabel {
     Unnamed,

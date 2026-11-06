@@ -38,8 +38,9 @@ impl Drop for LaunchedEffectState {
 /// The scope a [`LaunchedEffect`] receives: the effect's coroutine scope.
 ///
 /// The effect is cancelled when its keys change or its call site leaves the
-/// composition. Cancelling drops the effect's future where it waits, so no
-/// line after that `.await` runs, and cancels every task the scope launched.
+/// composition. The cancellation drops the effect's future where it waits.
+/// No line after that `.await` runs. The cancellation also cancels every task
+/// the scope launched.
 #[derive(Clone)]
 pub struct LaunchedEffectScope {
     active: Arc<AtomicBool>,
@@ -77,8 +78,8 @@ impl LaunchedEffectScope {
         self.continuations.borrow_mut().retain(|entry| *entry != id);
     }
 
-    /// Returns `true` until the effect is cancelled, which happens when its keys change or its call
-    /// site leaves the composition.
+    /// Returns `true` until the effect is cancelled. The effect is cancelled
+    /// when its keys change or its call site leaves the composition.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }
@@ -97,10 +98,10 @@ impl LaunchedEffectScope {
 
     /// Runs background work and delivers results to the UI.
     ///
-    /// On native targets, `work` runs on a worker thread and its future is
-    /// driven to completion there. The `on_ui` continuation runs on the
-    /// runtime thread, so it may capture `Rc`/`RefCell` state safely, and it
-    /// does not run once the effect is cancelled.
+    /// On native targets, `work` runs on a worker thread. Its future runs to
+    /// completion there. The `on_ui` continuation runs on the runtime thread.
+    /// It may capture `Rc` and `RefCell` state. It does not run once the
+    /// effect is cancelled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
     where
@@ -142,9 +143,9 @@ impl LaunchedEffectScope {
 
     /// Runs background work and delivers results to the UI.
     ///
-    /// On the web, `work` runs as a task on the browser event loop, and under
-    /// Emscripten as a task of the runtime. The `on_ui` continuation runs on
-    /// the runtime thread, and it does not run once the effect is cancelled.
+    /// On the web, `work` runs as a child task of the effect on the runtime
+    /// thread. The `on_ui` continuation runs on the same thread. It does not
+    /// run once the effect is cancelled.
     #[cfg(target_arch = "wasm32")]
     pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
     where
@@ -192,9 +193,9 @@ impl CancelToken {
     }
 }
 
-// Cancels the effect `state` runs, if any, and opens the scope of the next.
-// The old scope is cancelled outside the slot's borrow: cancelling drops its
-// futures, and so what they hold.
+// Cancels the effect that `state` runs, if any. Opens the scope of the next.
+// The old scope is cancelled outside the slot's borrow. Its cancellation
+// drops its futures and what they hold.
 fn restart(state: Owned<LaunchedEffectState>, runtime: RuntimeHandle) -> LaunchedEffectScope {
     let scope = LaunchedEffectScope::new(runtime);
     let previous = state.update(|state| state.scope.replace(scope.clone()));
@@ -208,7 +209,8 @@ fn restart(state: Owned<LaunchedEffectState>, runtime: RuntimeHandle) -> Launche
 /// `LaunchedEffect` instead.
 ///
 /// `site` is where the effect was written. It travels onto the task the effect
-/// spawns, so a task the runtime is still holding says which effect started it.
+/// spawns. A task that the runtime still holds then names the effect that
+/// started it.
 #[doc(hidden)]
 pub fn __launched_effect_impl<K, F, Fut>(group_key: Key, site: TaskSite, keys: K, block: F)
 where
@@ -234,8 +236,8 @@ where
 }
 
 /// Runs `block` as a coroutine when this call site first enters composition,
-/// and again whenever `keys` no longer equals the value it ran with last time,
-/// as Jetpack Compose's `LaunchedEffect` does.
+/// as Jetpack Compose's `LaunchedEffect` does. It runs `block` again whenever
+/// `keys` no longer equals the value of the last run.
 ///
 /// ```ignore
 /// LaunchedEffect(line, async move |_| {
@@ -246,10 +248,10 @@ where
 /// });
 /// ```
 ///
-/// A change of `keys`, or the call site leaving the composition, cancels the
-/// running coroutine: it stops where it awaits and no line after that `.await`
-/// runs. `keys` may be a tuple to depend on more than one value, matching
-/// Compose's `LaunchedEffect(vararg keys)`.
+/// A change of `keys` cancels the running coroutine. The call site leaving the
+/// composition cancels it too. The coroutine stops where it awaits. No line
+/// after that `.await` runs. `keys` may be a tuple to depend on more than one
+/// value, as Compose's `LaunchedEffect(vararg keys)` does.
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn LaunchedEffect<K, F, Fut>(keys: K, block: F)
