@@ -42,7 +42,8 @@ ROOT = board_run.ROOT
 SCREEN_SECONDS = 6
 BOOT_SECONDS = 2
 # The classic ESP32 runs out of memory on the dashboard and on the changing
-# paths, so it shows the demo's four screens only.
+# paths, so it shows the demo's four screens only. The ES3C35P shows four
+# more: the changing paths, the deep moves, the still wall and the dashboard.
 LARGE_SCREENS = {"es3c35p": True, "e32r35t": False}
 GAPS = 6
 # Below this many bytes; a cache way is 4 KB on the ES3C35P. The E32R35T
@@ -191,7 +192,7 @@ def main():
     commits = [git("rev-parse", revision) for revision in args.revisions]
     tree = worktree(args.board)
     builds = {commit: build(tree, args.board, commit, args.placements) for commit in dict.fromkeys(commits)}
-    screens = 4 + 2 * LARGE_SCREENS[args.board]
+    screens = 4 + 4 * LARGE_SCREENS[args.board]
     seconds = screens * SCREEN_SECONDS + BOOT_SECONDS
     names = list(dict.fromkeys(args.revisions))
     if len(names) != len(args.revisions):

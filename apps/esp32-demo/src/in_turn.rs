@@ -1,9 +1,9 @@
 // The `screens-in-turn` feature: the benchmarks' screens one after another
 // from one image, each for `SHOWN` and logged as it starts, so a board A/B
-// flashes one image a side instead of one a screen. The changing paths come
-// after the demo's screens except on the E32R35T, whose classic ESP32 runs
-// out of memory on them, and with the `dashboard` feature the dashboard
-// comes last.
+// flashes one image a side instead of one a screen. The changing paths, the
+// deep moves and the still wall come after the demo's screens except on the
+// E32R35T, whose classic ESP32 runs out of memory on the paths, and with the
+// `dashboard` feature the dashboard comes last.
 
 use std::time::Duration;
 
@@ -24,6 +24,10 @@ enum Shown {
     Demo(Line),
     #[cfg(not(feature = "e32r35t"))]
     Paths,
+    #[cfg(not(feature = "e32r35t"))]
+    Moves,
+    #[cfg(not(feature = "e32r35t"))]
+    Wall,
     #[cfg(feature = "dashboard")]
     Dashboard,
 }
@@ -35,6 +39,10 @@ const SCREENS: &[(&str, Shown)] = &[
     ("workload", Shown::Demo(Line::Workload)),
     #[cfg(not(feature = "e32r35t"))]
     ("paths", Shown::Paths),
+    #[cfg(not(feature = "e32r35t"))]
+    ("moves", Shown::Moves),
+    #[cfg(not(feature = "e32r35t"))]
+    ("wall", Shown::Wall),
     #[cfg(feature = "dashboard")]
     ("dashboard", Shown::Dashboard),
 ];
@@ -55,6 +63,10 @@ pub fn Screens() {
         Shown::Demo(line) => demo::Screen(line),
         #[cfg(not(feature = "e32r35t"))]
         Shown::Paths => crate::changing_paths::ChangingPaths(crate::board::TITLE),
+        #[cfg(not(feature = "e32r35t"))]
+        Shown::Moves => crate::deep_moves::DeepMoves(crate::board::TITLE),
+        #[cfg(not(feature = "e32r35t"))]
+        Shown::Wall => crate::still_wall::StillWall(crate::board::TITLE),
         #[cfg(feature = "dashboard")]
         Shown::Dashboard => crate::dashboard::Dashboard(crate::board::TITLE),
     }
