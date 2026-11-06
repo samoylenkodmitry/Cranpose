@@ -298,7 +298,7 @@ impl BlendTable {
         diagnostics: &RenderDiagnostics,
     ) {
         let under = *pixel;
-        if let Some(over) = self.look_up::<4>(under) {
+        if let Some(over) = self.look_up(under) {
             *pixel = over;
             return;
         }
@@ -310,7 +310,7 @@ impl BlendTable {
     // the bytes its channels stand for, of which it keeps the high bits.
     fn blend_565<P: Rgb565 + GlyphPixel>(&mut self, pixel: &mut P, src: [u8; 4]) {
         let under = pixel.to_rgba();
-        if let Some(over) = self.look_up::<3>(under) {
+        if let Some(over) = self.look_up_565(under) {
             *pixel = P::from_rgb(over);
             return;
         }
@@ -318,21 +318,35 @@ impl BlendTable {
         self.keep::<3>(under, pixel.to_rgba());
     }
 
-    // What the table holds over `under` in its first `CHANNELS` channels,
-    // the rest left as `under` has them; `None` while it misses any. Every
-    // channel is tested before any is read: a loop that returns at the
-    // first miss cost the paths screen 3% more.
-    fn look_up<const CHANNELS: usize>(&self, under: [u8; 4]) -> Option<[u8; 4]> {
-        let known = (0..CHANNELS).all(|channel| {
-            let byte = usize::from(under[channel]);
-            self.known[channel][byte / 64] & (1 << (byte % 64)) != 0
-        });
-        known.then(|| {
-            [0, 1, 2, 3].map(|channel| match channel < CHANNELS {
-                true => self.bytes[channel][usize::from(under[channel])],
-                false => under[channel],
-            })
-        })
+    // Whether the table holds what the paint left over `byte` in `channel`.
+    fn knows(&self, channel: usize, byte: u8) -> bool {
+        let byte = usize::from(byte);
+        self.known[channel][byte / 64] & (1 << (byte % 64)) != 0
+    }
+
+    // What the table holds over `under`, `None` while it misses a channel.
+    // All four are tested before any is read, which the bytes' loop runs
+    // fastest with: a test that returned at the first miss cost the paths
+    // screen 3% more.
+    fn look_up(&self, under: [u8; 4]) -> Option<[u8; 4]> {
+        (0..4)
+            .all(|channel| self.knows(channel, under[channel]))
+            .then(|| [0, 1, 2, 3].map(|channel| self.bytes[channel][usize::from(under[channel])]))
+    }
+
+    // What the table holds over the three color channels of `under`, with
+    // its alpha, `None` while it misses one. The 16-bit loop runs fastest
+    // with a test that returns at the first miss: the test of all three
+    // first cost the 16-bit paths screen 44% more.
+    fn look_up_565(&self, under: [u8; 4]) -> Option<[u8; 4]> {
+        let mut over = under;
+        for channel in 0..3 {
+            if !self.knows(channel, under[channel]) {
+                return None;
+            }
+            over[channel] = self.bytes[channel][usize::from(under[channel])];
+        }
+        Some(over)
     }
 
     // Keeps that the paint left `over` over `under` in the first
