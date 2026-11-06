@@ -121,16 +121,11 @@ impl PipelineDiscovery {
                 self.target.borrow().surface_size,
             );
         } else if self.target.borrow().device.compile_pipelines_in_background() {
-            // The stand-ins compile first, then the recorded first screen's
-            // pipelines: the first frame draws once the stand-ins compiled,
-            // and each draw takes its own pipeline from the frame after it
-            // landed.
+            // The stand-ins compile alone: the first frame draws once they
+            // compiled and asks for its own pipelines, and each draw takes
+            // its own from the frame after it landed.
             renderer.compile_pipelines_in_background();
             let stand_ins = renderer.build_stand_ins();
-            renderer.build_first_screen_pipelines(
-                FIRST_SCREEN_PIPELINES,
-                self.target.borrow().surface_size,
-            );
             let Some(compiling) = stand_ins else {
                 *self.stage.borrow_mut() = Stage::Done;
                 return;
