@@ -328,6 +328,10 @@ release)
         git -C "$here" worktree prune
         git -C "$here" worktree add -q --force --detach "$tree" "$tag"
     fi
+    # The tree belongs to the checkout of the runner that made it. Another
+    # runner's checkout may not have fetched the tag yet, so the tree takes
+    # the tag from this checkout.
+    git -C "$tree" fetch -q "$(git -C "$here" rev-parse --show-toplevel)" "+refs/tags/$tag:refs/tags/$tag"
     # Forced: the last build rewrote cranpose-app/Cargo.lock in this tree, and a
     # new release that differs in it would refuse the checkout.
     git -C "$tree" checkout -q -f --detach "$tag"
