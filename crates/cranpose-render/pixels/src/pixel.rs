@@ -37,6 +37,17 @@ pub(crate) trait Pixel: GlyphPixel {
     // `paint` over the pixel, its alpha scaled by `coverage`.
     fn blend_paint(&mut self, paint: Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics);
 
+    // `paint` over every pixel of `pixels`, which it covers whole. `table`
+    // keeps what the paint left over the bytes it met before, for a format
+    // that blends in floats; every call with the same table takes the same
+    // paint.
+    fn blend_run(
+        pixels: &mut [Self],
+        paint: Self::Paint,
+        table: &mut Option<BlendTable>,
+        diagnostics: &RenderDiagnostics,
+    );
+
     // Paints every pixel of `pixels` with `value`.
     fn fill(pixels: &mut [Self], value: Self);
 
@@ -69,6 +80,18 @@ impl Pixel for [u8; 4] {
     ) {
         color[3] *= coverage;
         blend_pixel(self, color, blend_mode, diagnostics);
+    }
+
+    fn blend_run(
+        pixels: &mut [Self],
+        (color, blend_mode): Self::Paint,
+        table: &mut Option<BlendTable>,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        let table = table.get_or_insert_with(BlendTable::default);
+        for pixel in pixels {
+            table.blend(pixel, color, blend_mode, diagnostics);
+        }
     }
 
     // As whole 32-bit words where the pixels are aligned for them, a store a
@@ -202,6 +225,19 @@ impl<P: Pixel565> Pixel for P {
         blend_paint_565(self, paint, coverage, diagnostics);
     }
 
+    // A 16-bit pixel blends its bytes in whole numbers, which cost about
+    // what a look-up costs, so it keeps no table.
+    fn blend_run(
+        pixels: &mut [Self],
+        paint: Self::Paint,
+        _table: &mut Option<BlendTable>,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        for pixel in pixels {
+            blend_paint_565(pixel, paint, 1.0, diagnostics);
+        }
+    }
+
     fn fill(pixels: &mut [Self], value: Self) {
         fill_565(bytemuck::cast_slice_mut(pixels), bytemuck::cast(value));
     }
@@ -215,6 +251,52 @@ impl<P: Pixel565> Pixel for P {
 
     fn text_rows(pixels: &mut [Self]) -> TextPixelRows<'_> {
         Self::text_rows_565(pixels)
+    }
+}
+
+// What one paint leaves over each byte of each channel, kept from the first
+// pixel that shows the byte: `blend_pixel` works each channel apart, so a
+// byte under the paint gives one byte, whatever the other channels hold.
+pub(crate) struct BlendTable {
+    bytes: [[u8; 256]; 4],
+    // Bit `byte % 64` of word `byte / 64` of a channel: whether `bytes`
+    // holds what the paint leaves over that byte.
+    known: [[u64; 4]; 4],
+}
+
+impl Default for BlendTable {
+    fn default() -> Self {
+        Self {
+            bytes: [[0; 256]; 4],
+            known: [[0; 4]; 4],
+        }
+    }
+}
+
+impl BlendTable {
+    // `color` over `pixel` under `blend_mode`, as `blend_pixel` puts it.
+    fn blend(
+        &mut self,
+        pixel: &mut [u8; 4],
+        color: [f32; 4],
+        blend_mode: BlendMode,
+        diagnostics: &RenderDiagnostics,
+    ) {
+        let under = *pixel;
+        let known = (0..4).all(|channel| {
+            let byte = usize::from(under[channel]);
+            self.known[channel][byte / 64] & (1 << (byte % 64)) != 0
+        });
+        if known {
+            *pixel = [0, 1, 2, 3].map(|channel| self.bytes[channel][usize::from(under[channel])]);
+            return;
+        }
+        blend_pixel(pixel, color, blend_mode, diagnostics);
+        for channel in 0..4 {
+            let byte = usize::from(under[channel]);
+            self.bytes[channel][byte] = pixel[channel];
+            self.known[channel][byte / 64] |= 1 << (byte % 64);
+        }
     }
 }
 
