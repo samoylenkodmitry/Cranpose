@@ -86,9 +86,11 @@ final class AccessibilityRobotTests: XCTestCase {
         app.buttons["Increase"].tap()
         XCTAssertTrue(named("Action count: 1", in: app).waitForExistence(timeout: 5))
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackgroundSuspended, timeout: 10) || app.state == .runningBackground)
+        // The hosted runner's simulator took 1 to 7 seconds to suspend the app, and once 13 seconds
+        // to finish the home screen's animation, while the app's own work for it takes 0.1 seconds.
+        XCTAssertTrue(app.wait(for: .runningBackgroundSuspended, timeout: 60) || app.state == .runningBackground)
         app.activate()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 60))
         // The composition kept its state, and its input draws new frames.
         XCTAssertTrue(named("Action count: 1", in: app).waitForExistence(timeout: 5))
         let returned = content(app)
