@@ -319,17 +319,20 @@ impl BlendTable {
     }
 
     // What the table holds over `under` in its first `CHANNELS` channels,
-    // the rest left as `under` has them; `None` while it misses any.
+    // the rest left as `under` has them; `None` while it misses any. Every
+    // channel is tested before any is read: a loop that returns at the
+    // first miss cost the paths screen 3% more.
     fn look_up<const CHANNELS: usize>(&self, under: [u8; 4]) -> Option<[u8; 4]> {
-        let mut over = under;
-        for channel in 0..CHANNELS {
+        let known = (0..CHANNELS).all(|channel| {
             let byte = usize::from(under[channel]);
-            if self.known[channel][byte / 64] & (1 << (byte % 64)) == 0 {
-                return None;
-            }
-            over[channel] = self.bytes[channel][byte];
-        }
-        Some(over)
+            self.known[channel][byte / 64] & (1 << (byte % 64)) != 0
+        });
+        known.then(|| {
+            [0, 1, 2, 3].map(|channel| match channel < CHANNELS {
+                true => self.bytes[channel][usize::from(under[channel])],
+                false => under[channel],
+            })
+        })
     }
 
     // Keeps that the paint left `over` over `under` in the first
