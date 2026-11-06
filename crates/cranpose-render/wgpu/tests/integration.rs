@@ -98,6 +98,7 @@ mod shape_ablation;
 mod shape_mesh_fallback;
 mod shape_pipeline_readiness;
 mod shape_variant_parity;
+mod still_isolated_layers;
 mod substrate_reference;
 mod surface_atlas;
 mod surface_packet;

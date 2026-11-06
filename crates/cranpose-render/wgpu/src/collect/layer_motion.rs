@@ -9,10 +9,14 @@ pub(super) const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
 pub(crate) struct LayerMotion {
     previous: HashMap<NodeId, Motion>,
     current: HashMap<NodeId, Motion>,
+    // The scales recorded this frame, in order, so that a layer whose
+    // content a collect takes from an earlier frame records again what its
+    // layers recorded then.
+    log: Vec<(NodeId, Motion)>,
 }
 
 #[derive(Clone, Copy)]
-struct Motion {
+pub(super) struct Motion {
     content_hash: u64,
     raster: f32,
 }
@@ -35,7 +39,7 @@ impl LayerMotion {
         let Some(node_id) = node_id else {
             return;
         };
-        self.current.insert(
+        self.record(
             node_id,
             Motion {
                 content_hash,
@@ -44,9 +48,33 @@ impl LayerMotion {
         );
     }
 
+    fn record(&mut self, node_id: NodeId, motion: Motion) {
+        self.current.insert(node_id, motion);
+        self.log.push((node_id, motion));
+    }
+
+    // How many scales this frame recorded so far.
+    pub(super) fn recorded(&self) -> usize {
+        self.log.len()
+    }
+
+    // The scales this frame recorded since `from` of them.
+    pub(super) fn recorded_since(&self, from: usize) -> Vec<(NodeId, Motion)> {
+        self.log[from..].to_vec()
+    }
+
+    // Records again `scales`, which the layers of a content collected in
+    // an earlier frame recorded then.
+    pub(super) fn record_again(&mut self, scales: &[(NodeId, Motion)]) {
+        for &(node_id, motion) in scales {
+            self.record(node_id, motion);
+        }
+    }
+
     pub(crate) fn end_frame(&mut self) {
         std::mem::swap(&mut self.previous, &mut self.current);
         self.current.clear();
+        self.log.clear();
     }
 }
 

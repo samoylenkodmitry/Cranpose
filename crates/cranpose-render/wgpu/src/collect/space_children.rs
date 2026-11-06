@@ -9,7 +9,7 @@ use cranpose_render_common::{
 };
 
 use super::{
-    LayerMotion, LayerScene, LayerSceneRecycler, MeshChild, SceneDraw, SeenDraw, WalkContext,
+    CollectHistory, LayerScene, LayerSceneRecycler, MeshChild, SceneDraw, SeenDraw, WalkContext,
     WalkSettings, collect_child, collect_inline, collect_isolated_child, node_is_pixel_sensitive,
     push_content,
 };
@@ -52,7 +52,7 @@ fn window_scene<'a>(
 #[inline(never)]
 pub(super) fn collect_space_children(
     layer: &LayerNode,
-    motion: &mut LayerMotion,
+    history: &mut CollectHistory,
     (context, content): (WalkContext<'_>, &ContentContext<'_>),
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -76,10 +76,10 @@ pub(super) fn collect_space_children(
         has_pixel_sensitive_subtree |= match child {
             RenderNode::Layer(child_layer) => {
                 if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
-                    collect_seen_surfaces(&draw, view, motion, context, out, recycler);
+                    collect_seen_surfaces(&draw, view, history, context, out, recycler);
                 }
                 !(in_space && child_layer.graphics_layer.space.is_some())
-                    && collect_child(child_layer, motion, context, out, recycler)
+                    && collect_child(child_layer, history, context, out, recycler)
             }
             RenderNode::Inline(inline) => collect_inline(inline, context, out),
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {
@@ -96,7 +96,7 @@ pub(super) fn collect_space_children(
 fn collect_seen_surfaces(
     draw: &Arc<SceneDraw>,
     view: EyeView<'_>,
-    motion: &mut LayerMotion,
+    history: &mut CollectHistory,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -110,7 +110,7 @@ fn collect_seen_surfaces(
         };
         collect_isolated_child(
             seen.layer,
-            motion,
+            history,
             context,
             Some(Arc::new(mesh)),
             out,
