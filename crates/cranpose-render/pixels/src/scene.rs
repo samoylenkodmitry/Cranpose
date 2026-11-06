@@ -186,7 +186,8 @@ impl Scene {
             None,
             text,
         );
-        raster.reach_into(self.frame, &mut self.reach);
+        // The host that takes the whole frame measures where items reach.
+        self.reach.clear();
         self.raster = Some(raster);
         self.changed = Changed::Whole;
         self.hits.get_mut().mark_stale();
@@ -206,10 +207,15 @@ impl Scene {
         let walk = LayoutWalk::new(applier, &self.marks, (&self.spaces, &self.moved));
         let mut unread = Vec::new();
         // An update that gave up after it changed part of the scene leaves
-        // the areas it changed, which the scene holds already.
-        let areas = match &mut self.changed {
-            Changed::Areas(changed) => changed,
-            Changed::Whole => &mut unread,
+        // the areas it changed, which the scene holds already. While the
+        // whole frame waits for a host to take it, an update notes no areas
+        // and the host's take measures where items reach.
+        let (window, areas) = match &mut self.changed {
+            Changed::Areas(changed) => (Some(self.frame), changed),
+            Changed::Whole => {
+                self.reach.clear();
+                (None, &mut unread)
+            }
         };
         let updated = InPlaceUpdate {
             scene: raster,
@@ -221,10 +227,10 @@ impl Scene {
             (&walk, root),
             &self.diagnostics,
             (self.scale, text),
-            self.frame,
+            window,
             areas,
         );
-        if updated == Some(UpdatedReach::Lost) {
+        if window.is_some() && updated == Some(UpdatedReach::Lost) {
             raster.reach_into(self.frame, &mut self.reach);
         }
         if std::mem::take(&mut raster.hits_changed) {
@@ -261,14 +267,22 @@ impl Scene {
         }
         match previous.filter(|old| old.start == raster.start) {
             Some(old) => {
-                let mut areas = Vec::new();
-                damage::changed_areas(&old, &self.reach, &raster, self.frame, &mut areas);
-                self.note_changes(&mut areas);
+                if let Changed::Areas(changed) = &mut self.changed {
+                    let mut areas = Vec::new();
+                    damage::changed_areas(&old, &self.reach, &raster, self.frame, &mut areas);
+                    changed.append(&mut areas);
+                    damage::merge_areas(changed);
+                }
                 self.give_back(old);
             }
             None => self.changed = Changed::Whole,
         }
-        raster.reach_into(self.frame, &mut self.reach);
+        // While the whole frame waits for a host, the host's take measures
+        // where items reach.
+        match self.changed {
+            Changed::Areas(_) => raster.reach_into(self.frame, &mut self.reach),
+            Changed::Whole => self.reach.clear(),
+        }
         raster.hits_changed = false;
         self.raster = Some(raster);
     }
@@ -289,27 +303,20 @@ impl Scene {
             .give_storage(old);
     }
 
-    // Adds `areas` to the pixels that changed since the host took its
-    // picture.
-    fn note_changes(&mut self, areas: &mut Vec<ClipBounds>) {
-        if let Changed::Areas(changed) = &mut self.changed {
-            changed.append(areas);
-            damage::merge_areas(changed);
-        }
-    }
-
     // Puts into `areas` the parts of `frame` whose pixels changed since the
     // host took its picture last: the whole frame the first time and after
     // a change of size, a build with nothing to compare, or a scale.
     pub(crate) fn take_changes(&mut self, frame: ClipBounds, areas: &mut Vec<PixelRect>) {
         areas.clear();
         let whole = frame != self.frame || matches!(self.changed, Changed::Whole);
-        if frame != self.frame {
-            self.frame = frame;
-            if let Some(raster) = &self.raster {
-                raster.reach_into(frame, &mut self.reach);
-            }
+        // Updates leave where items reach unmeasured while no host takes
+        // their changes.
+        if let Some(raster) = &self.raster
+            && (frame != self.frame || self.reach.len() != raster.order.len())
+        {
+            raster.reach_into(frame, &mut self.reach);
         }
+        self.frame = frame;
         match std::mem::replace(&mut self.changed, Changed::Areas(Vec::new())) {
             Changed::Areas(mut changed) if !whole => {
                 let clipped = changed

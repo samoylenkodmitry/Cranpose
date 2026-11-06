@@ -81,8 +81,9 @@ pub(crate) struct Rewrite {
     records_moved: isize,
     // Whether a splice replaced a run of the scene's lists.
     replaced: Replaced,
-    // The part of the frame whose changed pixels `areas` takes.
-    window: ClipBounds,
+    // The part of the frame whose changed pixels `areas` takes, absent
+    // while no host reads them.
+    window: Option<ClipBounds>,
     // Whether `reach` holds where each item of the scene reaches.
     held: UpdatedReach,
     reach: Vec<Option<ClipBounds>>,
@@ -91,16 +92,16 @@ pub(crate) struct Rewrite {
 
 impl Rewrite {
     // Starts the rewrite of the subtree whose record in `scene` is
-    // `record`, whose changed pixels in `window` it will add to its areas,
-    // taking `reach`, which holds where each item reaches when `held` says
-    // so.
+    // `record`, whose changed pixels in `window`, if any, it will add to its
+    // areas, taking `reach`, which holds where each item reaches when `held`
+    // says so.
     // `false`, with `reach` left, when the subtree's passed-down entries do
     // not lie in one run.
     pub(crate) fn start(
         &mut self,
         scene: &RasterScene,
         record: usize,
-        window: ClipBounds,
+        window: Option<ClipBounds>,
         reach: &mut Vec<Option<ClipBounds>>,
         held: UpdatedReach,
     ) -> bool {
@@ -193,17 +194,19 @@ impl Rewrite {
             let slot = *T::count(&mut self.next.items);
             let (list, order) = T::lists(scene);
             if at < self.own_items_end && T::index_of(order[at]) == Some(slot) {
-                let reach = match self.reach.get_mut(at) {
-                    Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
-                    _ => ItemReach::Unknown,
-                };
-                add_changed_pair(
-                    list[slot].as_ref(),
-                    item.as_ref(),
-                    reach,
-                    self.window,
-                    &mut self.areas,
-                );
+                if let Some(window) = self.window {
+                    let reach = match self.reach.get_mut(at) {
+                        Some(held) if self.held == UpdatedReach::Held => ItemReach::Replaced(held),
+                        _ => ItemReach::Unknown,
+                    };
+                    add_changed_pair(
+                        list[slot].as_ref(),
+                        item.as_ref(),
+                        reach,
+                        window,
+                        &mut self.areas,
+                    );
+                }
                 list[slot] = item;
                 self.next.items.order += 1;
                 *T::count(&mut self.next.items) += 1;
@@ -464,15 +467,17 @@ impl Rewrite {
     #[cold]
     #[inline(never)]
     fn replace(&mut self, scene: &mut RasterScene, from: Places, to: Places) {
-        let order = from.items.order..to.items.order;
-        let reach = (self.reach.get(order.clone())).filter(|_| self.held == UpdatedReach::Held);
-        add_changed_runs(
-            (scene, &scene.order[order]),
-            (&self.spill, &self.spill.order),
-            reach,
-            self.window,
-            &mut self.areas,
-        );
+        if let Some(window) = self.window {
+            let order = from.items.order..to.items.order;
+            let reach = (self.reach.get(order.clone())).filter(|_| self.held == UpdatedReach::Held);
+            add_changed_runs(
+                (scene, &scene.order[order]),
+                (&self.spill, &self.spill.order),
+                reach,
+                window,
+                &mut self.areas,
+            );
+        }
         self.hits_replaced |= scene.subtrees[from.records..to.records]
             .iter()
             .any(|record| record.hits.is_some());
@@ -485,8 +490,8 @@ impl Rewrite {
         );
         // The reach list holds where each spilled item reaches in place of
         // the old run's, so it still holds after the splice.
-        if self.held == UpdatedReach::Held {
-            let (spill, window) = (&self.spill, self.window);
+        if let (UpdatedReach::Held, Some(window)) = (self.held, self.window) {
+            let spill = &self.spill;
             let spilled = spill
                 .order
                 .iter()

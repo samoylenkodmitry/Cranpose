@@ -265,9 +265,20 @@ fn draw_raster_scene(
         width,
         height,
     };
+    draw_raster_window_measured(&mut target, scene, diagnostics, text);
+}
+
+// Draws the items of `scene` into `target`'s window, measuring first where
+// each reaches in it.
+pub(crate) fn draw_raster_window_measured<P: Pixel>(
+    target: &mut Target<'_, P>,
+    scene: &RasterScene,
+    diagnostics: &RenderDiagnostics,
+    text: &TextRaster,
+) {
     let mut reach = Vec::new();
     scene.reach_into(target.window(), &mut reach);
-    draw_raster_window(&mut target, scene, &reach, diagnostics, text);
+    draw_raster_window(target, scene, &reach, diagnostics, text);
 }
 
 /// Draws the items of `scene` into `target`'s window. `reach` holds where

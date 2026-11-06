@@ -18,7 +18,10 @@ use cranpose_ui_graphics::{
 #[path = "support/kept_frames.rs"]
 mod kept_frames;
 
-use kept_frames::{FRAMES, HEIGHT, Step, WIDTH, color, kept_frames_match_full_redraws, shell};
+use kept_frames::{
+    FRAMES, HEIGHT, Step, WIDTH, color, kept_frames_match_full_redraws,
+    kept_frames_match_full_redraws_after_unread, shell,
+};
 
 #[composable]
 fn Scenes(captured: Step) {
@@ -393,6 +396,13 @@ fn kept_frames_match_full_redraws_at_fractional_density() {
 #[test]
 fn kept_frames_match_full_redraws_at_two_pixels_per_point() {
     kept_frames_match_full_redraws(2.0, Scenes);
+}
+
+// Updates that no host takes the changes of note no areas: the host's
+// first take draws the whole frame, and the takes after it the areas.
+#[test]
+fn kept_frames_match_full_redraws_after_updates_no_host_took() {
+    kept_frames_match_full_redraws_after_unread(1.5, FRAMES / 2, Scenes);
 }
 
 #[test]

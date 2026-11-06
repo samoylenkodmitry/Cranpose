@@ -17,7 +17,8 @@ use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
 mod kept_frames;
 
 use kept_frames::{
-    Step, color, kept_frames_match_full_redraws, kept_frames_match_full_redraws_with,
+    FRAMES, Step, color, kept_frames_match_full_redraws,
+    kept_frames_match_full_redraws_after_unread, kept_frames_match_full_redraws_with,
 };
 
 // A box that moves each step, as the box above it grows, whose text changes
@@ -443,6 +444,11 @@ fn rows_that_scroll_in_and_out_of_a_list_draw_right() {
 #[test]
 fn rows_that_come_and_go_before_changing_rows_draw_right() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, ComingAndGoingRows);
+}
+
+#[test]
+fn rows_that_come_and_go_while_no_host_takes_the_changes_draw_right() {
+    kept_frames_match_full_redraws_after_unread(1.0, FRAMES / 2, ComingAndGoingRows);
 }
 
 // A bar whose width and colour a draw reads from `step`: an update draws it

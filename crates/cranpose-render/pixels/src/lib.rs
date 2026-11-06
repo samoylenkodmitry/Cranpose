@@ -195,10 +195,22 @@ impl PixelsRenderer {
             width: area.width,
             height: area.height,
         };
+        let reach = self.scene.reach();
+        // Updates leave where items reach unmeasured until a host takes
+        // their changes: a host that draws an area before it does has the
+        // area measure it.
+        if reach.len() != raster.order.len() {
+            return draw::draw_raster_window_measured(
+                &mut target,
+                raster,
+                self.scene.diagnostics(),
+                &self.text,
+            );
+        }
         draw::draw_raster_window(
             &mut target,
             raster,
-            self.scene.reach(),
+            reach,
             self.scene.diagnostics(),
             &self.text,
         );

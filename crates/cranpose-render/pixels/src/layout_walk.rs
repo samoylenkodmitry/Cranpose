@@ -584,8 +584,7 @@ impl<'a> LayoutWalk<'a> {
         }
         let position = match (update, position) {
             (None, ChildPosition::AsBefore) => None,
-            (None, ChildPosition::Anew(read))
-            | (Some(NodeUpdate::Moved), ChildPosition::Anew(read)) => {
+            (None | Some(NodeUpdate::Moved), ChildPosition::Anew(read)) => {
                 let Some(position) = read.or_else(|| placed_child_position(self.applier, child))
                 else {
                     return false;

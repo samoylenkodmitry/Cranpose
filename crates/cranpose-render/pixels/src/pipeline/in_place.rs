@@ -38,7 +38,9 @@ struct Repush<'a> {
     // splice moves the items after it.
     held: UpdatedReach,
     rewrite: &'a mut Option<Box<Rewrite>>,
-    window: ClipBounds,
+    // The part of the frame whose changed pixels `areas` takes, absent
+    // while no host reads them.
+    window: Option<ClipBounds>,
     areas: &'a mut Vec<ClipBounds>,
     // Where the update's own areas start in `areas`.
     first_area: usize,
@@ -119,13 +121,15 @@ impl InPlaceUpdate<'_> {
     // Brings the scene, the one `walk`'s window gave last at `scale`, up to
     // the window's layout tree from its root `root`, and adds to `areas`
     // the parts of `window` it changed, merged with those `areas` held.
-    // `None` when the scene must be built again.
+    // With no `window`, no host reads the changes: the update notes none
+    // and leaves `reach` as it was. `None` when the scene must be built
+    // again.
     pub(crate) fn run_layout(
         self,
         (walk, root): (&LayoutWalk<'_>, NodeId),
         diagnostics: &RenderDiagnostics,
         (scale, text): (f32, &TextRaster),
-        window: ClipBounds,
+        window: Option<ClipBounds>,
         areas: &mut Vec<ClipBounds>,
     ) -> Option<UpdatedReach> {
         let InPlaceUpdate {
@@ -140,7 +144,7 @@ impl InPlaceUpdate<'_> {
         if scene.start != Some((scale, light)) {
             return None;
         }
-        let held = if reach.len() == scene.order.len() {
+        let held = if window.is_some() && reach.len() == scene.order.len() {
             UpdatedReach::Held
         } else {
             UpdatedReach::Lost

@@ -68,6 +68,21 @@ pub(crate) fn kept_frames_match_full_redraws_with(
     headroom: MemoryHeadroom,
     scenes: fn(Step),
 ) {
+    kept_frames_match(scale, (headroom, 0), scenes);
+}
+
+// As `kept_frames_match_full_redraws`, with a host that takes the changes
+// of none of the first `unread` frames: it draws each of them whole from
+// the picture the update made, and takes the changes from then on.
+pub(crate) fn kept_frames_match_full_redraws_after_unread(
+    scale: f32,
+    unread: u32,
+    scenes: fn(Step),
+) {
+    kept_frames_match(scale, (MemoryHeadroom::Ample, unread), scenes);
+}
+
+fn kept_frames_match(scale: f32, (headroom, unread): (MemoryHeadroom, u32), scenes: fn(Step)) {
     let (mut shell, captured) = shell(scale, scenes);
     let (mut fresh, fresh_captured) = self::shell(scale, scenes);
     for host in [&shell, &fresh] {
@@ -87,6 +102,16 @@ pub(crate) fn kept_frames_match_full_redraws_with(
         set_step(&captured, frame);
         shell.update();
         shell.primary().with_renderer(|renderer| {
+            if frame < unread {
+                let whole = PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: WIDTH,
+                    height: HEIGHT,
+                };
+                areas.clear();
+                return renderer.draw_picture_area(whole, &mut kept);
+            }
             renderer.update_picture(WIDTH, HEIGHT, &mut areas);
             for area in &areas {
                 area_pixels.resize(area.width as usize * area.height as usize * 4, 0);
