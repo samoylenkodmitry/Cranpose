@@ -70,7 +70,7 @@ impl Reuse<'_> {
         if record.transform != placement.transform {
             return false;
         }
-        let (end, stop) = (record.end, record.stop);
+        let (end, stop) = (record.end, record.stop.get());
         self.cursor = end;
         self.copy_later(scene, index, end, stop);
         true

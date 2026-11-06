@@ -395,10 +395,10 @@ impl<'a> LayoutWalk<'a> {
                 let slot = (!children.is_empty()).then_some(&mut slot);
                 populate_draws_from_graph(subtree, scene, context, reuse, slot);
             }
-            if keeps_head && pushed {
-                scene.keep_head(index, KeptHead::new(lowered, lower_context));
-            } else {
-                recycle_lowered(lowered);
+            match KeptHead::new(lowered, lower_context) {
+                Ok(head) if keeps_head && pushed => scene.keep_head(index, head),
+                Ok(head) => head.recycle(),
+                Err(draw) => recycle_lowered(draw),
             }
             space
         });
@@ -461,10 +461,10 @@ impl<'a> LayoutWalk<'a> {
             }
             None => populate_draws_from_graph(subtree, scene, context, &mut None, None),
         }
-        if self.keeps_head((node, place)) {
-            scene.keep_head(index, KeptHead::new(layer, lower_context));
-        } else {
-            recycle_lowered(layer);
+        match KeptHead::new(layer, lower_context) {
+            Ok(head) if self.keeps_head((node, place)) => scene.keep_head(index, head),
+            Ok(head) => head.recycle(),
+            Err(draw) => recycle_lowered(draw),
         }
     }
 
@@ -595,7 +595,8 @@ impl<'a> LayoutWalk<'a> {
         };
         let old = OldChildren::of(&scene.subtrees, at, child);
         let index = scene.next_record();
-        if let Some(subtree) = Subtree::of_child(head.node()) {
+        {
+            let subtree = Subtree::of_kept(head.node());
             let mut slot = ChildSlot {
                 walk: self,
                 owner: child,

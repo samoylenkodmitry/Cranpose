@@ -10,28 +10,52 @@ use super::{
     Inherited, Level, LowerContext, publish_layer_window_geometry, read_placed_node_data,
     recycle_lowered, translate_retained_child,
 };
-use crate::graph::{LayerNode, RenderNode};
+use crate::graph::{InlineNode, LayerNode, RenderNode};
 
 /// A placed node lowered without its children: its own layer, or the node
 /// drawn in its parent's layer, which follows the node where it moves while
 /// the node's own state stays as it was.
 pub struct KeptHead {
-    node: RenderNode,
+    node: KeptNode,
     lowered_with: Inherited,
 }
 
+// The node a head keeps, boxed: a record that keeps one holds a pointer.
+enum KeptNode {
+    Layer(Box<LayerNode>),
+    Inline(Box<InlineNode>),
+}
+
+/// The node a [`KeptHead`] keeps, as its parent's layer holds it.
+#[derive(Clone, Copy)]
+pub enum KeptNodeRef<'a> {
+    /// The node's own layer, or the wrapper of its outer draws.
+    Layer(&'a LayerNode),
+    /// The node drawn in its parent's layer.
+    Inline(&'a InlineNode),
+}
+
 impl KeptHead {
-    /// Keeps `node`, which a node lowered alone under `context`.
-    pub fn new(node: RenderNode, context: &LowerContext) -> Self {
-        Self {
+    /// Keeps `node`, which a node lowered alone under `context`. Hands back
+    /// a draw, which no node lowers to alone.
+    pub fn new(node: RenderNode, context: &LowerContext) -> Result<Self, RenderNode> {
+        let node = match node {
+            RenderNode::Layer(layer) => KeptNode::Layer(layer),
+            RenderNode::Inline(inline) => KeptNode::Inline(inline),
+            draw @ (RenderNode::Primitive(_) | RenderNode::DrawRun(_)) => return Err(draw),
+        };
+        Ok(Self {
             node,
             lowered_with: Inherited::of(context),
-        }
+        })
     }
 
     /// The node as its parent's layer holds it.
-    pub fn node(&self) -> &RenderNode {
-        &self.node
+    pub fn node(&self) -> KeptNodeRef<'_> {
+        match &self.node {
+            KeptNode::Layer(layer) => KeptNodeRef::Layer(layer),
+            KeptNode::Inline(inline) => KeptNodeRef::Inline(inline),
+        }
     }
 
     /// Places the head of `node_id`, whose own state did not change since
@@ -53,14 +77,13 @@ impl KeptHead {
         }
         let offset = context.parent_content_offset;
         let layer = match &mut self.node {
-            RenderNode::Layer(layer) => layer,
-            RenderNode::Inline(inline) => {
+            KeptNode::Layer(layer) => layer,
+            KeptNode::Inline(inline) => {
                 if let Some(position) = position {
                     inline.origin = Point::new(position.x + offset.x, position.y + offset.y);
                 }
                 return Some(*context);
             }
-            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => return None,
         };
         if let Some(position) = position {
             translate_retained_child(layer, position, offset);
@@ -89,7 +112,10 @@ impl KeptHead {
 
     /// Lets the node go, as [`recycle_lowered`] lets a lowered node go.
     pub fn recycle(self) {
-        recycle_lowered(self.node);
+        recycle_lowered(match self.node {
+            KeptNode::Layer(layer) => RenderNode::Layer(layer),
+            KeptNode::Inline(inline) => RenderNode::Inline(inline),
+        });
     }
 }
 

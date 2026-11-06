@@ -122,12 +122,12 @@ impl Rewrite {
             first
         };
         self.next = Places {
-            items: head.start,
+            items: head.start.get(),
             records: record,
             passed_down: first,
         };
         self.stop = Places {
-            items: head.stop,
+            items: head.stop.get(),
             records: record + extent.records,
             passed_down: first + extent.passed_down,
         };
@@ -219,14 +219,14 @@ impl Rewrite {
             let index = self.next.records;
             if let Some(old) = records[..self.stop.records].get(index)
                 && old.identity == subtree.identity()
-                && old.start.order == self.next.items.order
+                && old.start.get().order == self.next.items.order
             {
                 self.opened.push(Opened {
                     end: old.end,
-                    stop: old.stop.order,
+                    stop: old.stop.get().order,
                     passed_down: old.passed_down,
                 });
-                self.own_items_end = own_items_end(records, index, old.end, old.stop.order);
+                self.own_items_end = own_items_end(records, index, old.end, old.stop.get().order);
                 let record = &mut records[index];
                 if record.hits.is_some() || hits.is_some() {
                     let kept = record.hits.take();
@@ -241,7 +241,7 @@ impl Rewrite {
                 }
                 record.passed_down = None;
                 record.end = index + 1;
-                record.stop = self.next.items;
+                record.stop = self.next.items.into();
                 self.next.records += 1;
                 return index;
             }
@@ -319,22 +319,22 @@ impl Rewrite {
         let child = records[..old.end].get(first_child)?;
         if self.spilled_at.is_some()
             || self.next.records != at
-            || self.next.items.order != old.start.order
+            || self.next.items.order != old.start.get().order
             || self.next.passed_down != entry
         {
             return None;
         }
         self.opened.push(Opened {
             end: old.end,
-            stop: old.stop.order,
+            stop: old.stop.get().order,
             passed_down: old.passed_down,
         });
         self.next = Places {
-            items: child.start,
+            items: child.start.get(),
             records: first_child,
             passed_down: entry + 1,
         };
-        self.own_items_end = child.start.order;
+        self.own_items_end = child.start.get().order;
         Some(entry)
     }
 
@@ -350,11 +350,11 @@ impl Rewrite {
         let entries_fit = extent.passed_down == 0 || first_entry == self.next.passed_down;
         if self.spilled_at.is_none()
             && self.next.records == old
-            && self.next.items.order == head.start.order
+            && self.next.items.order == head.start.get().order
             && entries_fit
         {
             self.next = Places {
-                items: head.stop,
+                items: head.stop.get(),
                 records: head.end,
                 passed_down: self.next.passed_down + extent.passed_down,
             };
@@ -366,7 +366,7 @@ impl Rewrite {
         }
         let here = self.here();
         let to = (here.items, here.records, here.passed_down);
-        let (end, stop) = (head.end, head.stop);
+        let (end, stop) = (head.end, head.stop.get());
         self.spill
             .copy_subtrees_to(scene, old..end, (stop, first_entry), to);
     }
@@ -380,7 +380,7 @@ impl Rewrite {
             return;
         };
         self.own_items_end = match records[..open.end].get(end) {
-            Some(next) if next.identity != (None, None) => next.start.order,
+            Some(next) if next.identity != (None, None) => next.start.get().order,
             _ => open.stop,
         };
     }
@@ -419,7 +419,7 @@ impl Rewrite {
             .filter(|record| record.passed_down.is_some())
             .count();
         let to = Places {
-            items: scene.subtrees[at].start,
+            items: scene.subtrees[at].start.get(),
             records: at,
             passed_down: from.passed_down + entries,
         };
@@ -500,13 +500,13 @@ impl Rewrite {
         for holder in &mut scene.subtrees[..record] {
             if holder.end > record {
                 holder.end = shift(holder.end, records);
-                holder.stop = holder.stop.shifted(removed, added);
+                holder.stop = holder.stop.get().shifted(removed, added).into();
             }
         }
         for later in &mut scene.subtrees[from.records + records.1..] {
             later.end = shift(later.end, records);
-            later.start = later.start.shifted(removed, added);
-            later.stop = later.stop.shifted(removed, added);
+            later.start = later.start.get().shifted(removed, added).into();
+            later.stop = later.stop.get().shifted(removed, added).into();
             later.passed_down = later.passed_down.map(|index| shift(index, entries));
         }
         for open in &mut self.opened {
@@ -587,7 +587,7 @@ fn own_items_end(records: &[SubtreeItems], index: usize, end: usize, stop: usize
     let child = child_record_from(records, index + 1, end);
     records[..end]
         .get(child)
-        .map_or(stop, |record| record.start.order)
+        .map_or(stop, |record| record.start.get().order)
 }
 
 // The items of the run `to..old_stop` of `scene` give way to all of

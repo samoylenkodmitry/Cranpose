@@ -6,7 +6,7 @@ use cranpose_render_common::{
     graph::{HitTestNode, InlineNode, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
-    scene_builder::KeptHead,
+    scene_builder::{KeptHead, KeptNodeRef},
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -253,6 +253,40 @@ impl ItemCounts {
     }
 }
 
+// Item counts as a record keeps them: a scene holds fewer than 2^32 items,
+// so each count takes half the room of a `usize` on 64-bit targets.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PackedCounts([u32; 5]);
+
+impl PackedCounts {
+    // The counts as the scene works with them.
+    #[inline]
+    pub(crate) fn get(self) -> ItemCounts {
+        let [order, shapes, images, texts, shadows] = self.0.map(|count| count as usize);
+        ItemCounts {
+            order,
+            shapes,
+            images,
+            texts,
+            shadows,
+        }
+    }
+}
+
+impl From<ItemCounts> for PackedCounts {
+    #[inline]
+    fn from(counts: ItemCounts) -> Self {
+        let ItemCounts {
+            order,
+            shapes,
+            images,
+            texts,
+            shadows,
+        } = counts;
+        Self([order, shapes, images, texts, shadows].map(|count| count as u32))
+    }
+}
+
 /// How much of a scene a layer's subtree holds: its records, its items of
 /// each kind, and the entries of what its layers passed down. Subtrees of
 /// one extent fit each other's places wherever each lies in its scene.
@@ -307,6 +341,14 @@ impl<'a> Subtree<'a> {
         }
     }
 
+    // The node a record's head keeps.
+    pub(crate) fn of_kept(node: KeptNodeRef<'a>) -> Self {
+        match node {
+            KeptNodeRef::Layer(layer) => Self::Layer(layer),
+            KeptNodeRef::Inline(inline) => Self::Inline(inline),
+        }
+    }
+
     // The node and the node whose outer draws it wraps.
     pub(crate) fn identity(self) -> (Option<NodeId>, Option<NodeId>) {
         match self {
@@ -352,8 +394,8 @@ impl<'a> Subtree<'a> {
             hits: hits.map(|layer| Box::new(HitLayer::of(layer))),
             passed_down: None,
             end,
-            start: counts,
-            stop: counts,
+            start: counts.into(),
+            stop: counts.into(),
             head: None,
         }
     }
@@ -416,8 +458,8 @@ pub(crate) struct SubtreeItems {
     /// The index of the first record after the subtree's, its descendants'
     /// included.
     pub end: usize,
-    pub start: ItemCounts,
-    pub stop: ItemCounts,
+    pub start: PackedCounts,
+    pub stop: PackedCounts,
     // The node lowered alone, kept after an update pushed it, for the next
     // updates to push again while the node does not change.
     pub head: Option<KeptHead>,
@@ -579,7 +621,7 @@ impl RasterScene {
         };
         if let Some(record) = self.record_mut(index) {
             record.end = end;
-            record.stop = stop;
+            record.stop = stop.into();
         }
         if let Some(rewrite) = self.rewrite.as_deref_mut() {
             rewrite.close_record(&self.subtrees);
@@ -672,7 +714,11 @@ impl RasterScene {
     /// `records`, siblings one after another, which pushed their items there
     /// up to `stop`.
     pub(crate) fn copy_subtrees(&mut self, old: &Self, records: Range<usize>, stop: ItemCounts) {
-        let Some(from) = old.subtrees.get(records.start).map(|first| first.start) else {
+        let Some(from) = old
+            .subtrees
+            .get(records.start)
+            .map(|first| first.start.get())
+        else {
             return;
         };
         let to = self.counts();
@@ -710,8 +756,8 @@ impl RasterScene {
         for record in self.subtrees.get_mut(base..).unwrap_or_default() {
             if !in_place {
                 record.end = moved(record.end, first, base);
-                record.start = record.start.moved(from, to);
-                record.stop = record.stop.moved(from, to);
+                record.start = record.start.get().moved(from, to).into();
+                record.stop = record.stop.get().moved(from, to).into();
             }
             record.passed_down = record
                 .passed_down
@@ -734,7 +780,11 @@ impl RasterScene {
         (stop, first_entry): (ItemCounts, usize),
         to: (ItemCounts, usize, usize),
     ) {
-        let Some(from) = old.subtrees.get(records.start).map(|first| first.start) else {
+        let Some(from) = old
+            .subtrees
+            .get(records.start)
+            .map(|first| first.start.get())
+        else {
             return;
         };
         let (to_items, to_records, to_entries) = to;
@@ -755,8 +805,8 @@ impl RasterScene {
             entries += usize::from(record.passed_down.is_some());
             self.subtrees.push(SubtreeItems {
                 end: moved(record.end, first, to_records),
-                start: record.start.moved(from, to_items),
-                stop: record.stop.moved(from, to_items),
+                start: record.start.get().moved(from, to_items).into(),
+                stop: record.stop.get().moved(from, to_items).into(),
                 passed_down: record
                     .passed_down
                     .map(|at| moved(at, first_entry, to_entries)),
@@ -813,7 +863,7 @@ impl RasterScene {
         }
         let extent = SubtreeExtent {
             records: records.len(),
-            items: head.stop.since(head.start),
+            items: head.stop.get().since(head.start.get()),
             passed_down: count,
         };
         Some((extent, first.unwrap_or(0)))
