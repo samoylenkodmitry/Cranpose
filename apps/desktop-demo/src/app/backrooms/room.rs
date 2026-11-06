@@ -277,7 +277,7 @@ fn Lever(sight: Sight, slot: Slot, size: (f32, f32)) {
     let on = control.is_on();
     let last = rememberMutableStateOf(move || on);
     let journey = sight.level.journey;
-    LaunchedEffect(on, move |_| {
+    LaunchedEffect(on, async move |_| {
         if last.get_non_reactive() != on {
             last.set(on);
             journey.pull();

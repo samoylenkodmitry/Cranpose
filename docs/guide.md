@@ -16,7 +16,7 @@ Cranpose handles the platform window, input, graphics and device services.
 - `Column { ... }` → `Column(modifier, spec, move || { ... })`.
 - `Modifier.padding(16.dp)` → `Modifier::empty().padding(16.0)`.
 - `LazyColumn { items(...) }` → `LazyColumn(modifier, state, spec, move |scope| { ... })`.
-- `LaunchedEffect(key)` → `LaunchedEffect` or `LaunchedEffectAsync`.
+- `LaunchedEffect(key) { ... }` → `LaunchedEffect(key, async move |scope| { ... })`.
 - `DisposableEffect(key)` → `DisposableEffect` with `DisposableEffectResult`.
 - `CompositionLocalProvider` → `CompositionLocalProvider`.
 - `NavHost` → `NavHost` with `rememberNavController`.
@@ -660,8 +660,8 @@ Save persistent state in a data store or preferences.
 
 ### Load data when an input changes
 
-`LaunchedEffectAsync` starts an async task when the composable enters composition.
-A key change cancels the previous task and starts a new request:
+`LaunchedEffect` runs a coroutine when the composable enters composition.
+A key change cancels the running coroutine and starts a new request:
 
 ```rust
 use cranpose::prelude::*;
@@ -670,14 +670,12 @@ use cranpose::prelude::*;
 fn RemoteText(url: String) {
     let result = rememberMutableStateOf(|| String::from("Please wait"));
     let client = local_http_client().current();
-    LaunchedEffectAsync(url.clone(), move |_| {
-        Box::pin(async move {
-            result.set(String::from("Please wait"));
-            result.set(match client.get_text(&url).await {
-                Ok(text) => text,
-                Err(error) => format!("Request error: {error}"),
-            });
-        })
+    LaunchedEffect(url.clone(), async move |_| {
+        result.set(String::from("Please wait"));
+        result.set(match client.get_text(&url).await {
+            Ok(text) => text,
+            Err(error) => format!("Request error: {error}"),
+        });
     });
     Text(result.get(), Modifier::empty(), TextStyle::default());
 }
@@ -707,8 +705,11 @@ Use HTTPS URLs. For browser requests to another origin, configure the server's
 `Access-Control-Allow-Origin` response header for your app's origin.
 
 The URL supplies the key and request input. Each role owns a copy.
-A key change or composition exit cancels the task.
-The async body runs on the UI runtime and yields while I/O completes.
+The coroutine runs on the UI runtime and yields while I/O completes.
+A key change or composition exit cancels it. The coroutine stops at the
+`.await` it waits on. No line after that `.await` runs, so the body needs no
+check of its own. `scope.launch` starts a child coroutine. The effect's
+cancellation also cancels the child.
 
 ### Move computation to a worker
 
@@ -720,7 +721,7 @@ use cranpose::prelude::*;
 #[composable]
 fn WordCount(text: std::sync::Arc<str>) {
     let words = rememberMutableStateOf(|| 0_usize);
-    LaunchedEffect(std::sync::Arc::clone(&text), move |scope| {
+    LaunchedEffect(std::sync::Arc::clone(&text), async move |scope| {
         scope.launch_background(
             move |_| async move { text.split_whitespace().count() },
             move |count| words.set(count),
@@ -1202,11 +1203,9 @@ fn RequestPreview() {
         CompositionLocalProvider([local_http_client().provides(Arc::clone(client))], || {
             let response = rememberMutableStateOf(String::new);
             let client = local_http_client().current();
-            LaunchedEffectAsync((), move |_| {
-                Box::pin(async move {
-                    let result = client.get_text("https://example.test/message").await;
-                    response.set(result.unwrap_or_else(|error| error.to_string()));
-                })
+            LaunchedEffect((), async move |_| {
+                let result = client.get_text("https://example.test/message").await;
+                response.set(result.unwrap_or_else(|error| error.to_string()));
             });
             Text(response.get(), Modifier::empty(), TextStyle::default());
         });

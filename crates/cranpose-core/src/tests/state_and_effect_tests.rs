@@ -666,7 +666,7 @@ fn launched_effect_runs_and_cancels() {
                 let key = state.value();
                 let runs = Arc::clone(&runs);
                 let captured_scopes = Rc::clone(&scopes_for_render);
-                LaunchedEffect(key, move |scope| {
+                LaunchedEffect(key, async move |scope| {
                     runs.fetch_add(1, Ordering::SeqCst);
                     captured_scopes.borrow_mut().push(scope);
                 });
@@ -714,7 +714,7 @@ fn launched_effect_runs_side_effect_body() {
                 let key = state.value();
                 let tx = tx.clone();
                 let captured_scopes = Rc::clone(&captured_scopes);
-                LaunchedEffect(key, move |scope| {
+                LaunchedEffect(key, async move |scope| {
                     let _ = tx.send("start");
                     captured_scopes.borrow_mut().push(scope);
                 });
@@ -749,7 +749,7 @@ fn launched_effect_background_updates_ui() {
         composition
             .render(Key(0), move || {
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect((), move |scope| {
+                LaunchedEffect((), async move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
                         scope.launch_background(
                             move |_| async move { rx.recv().expect("value available") },
@@ -787,7 +787,7 @@ fn launched_effect_background_async_updates_ui() {
         composition
             .render(Key(0), move || {
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect((), move |scope| {
+                LaunchedEffect((), async move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
                         scope.launch_background(
                             move |_| async move { rx.recv().expect("value available") },
@@ -827,7 +827,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
             .render(Key(0), move || {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect(key, move |scope| {
+                LaunchedEffect(key, async move |scope| {
                     if key == 0
                         && let Some(rx) = receiver.borrow_mut().take()
                     {
@@ -849,7 +849,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
             .render(Key(0), move || {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect(key, move |scope| {
+                LaunchedEffect(key, async move |scope| {
                     if key == 0
                         && let Some(rx) = receiver.borrow_mut().take()
                     {
@@ -890,12 +890,12 @@ fn launched_effect_relaunches_on_branch_change() {
                 let runs = Arc::clone(&runs);
                 let recorded_scopes = Rc::clone(&recorded_scopes);
                 if show_first {
-                    LaunchedEffect("", move |scope| {
+                    LaunchedEffect("", async move |scope| {
                         runs.fetch_add(1, Ordering::SeqCst);
                         recorded_scopes.borrow_mut().push((true, scope));
                     });
                 } else {
-                    LaunchedEffect("", move |scope| {
+                    LaunchedEffect("", async move |scope| {
                         runs.fetch_add(1, Ordering::SeqCst);
                         recorded_scopes.borrow_mut().push((false, scope));
                     });
@@ -962,7 +962,7 @@ fn anchor_survives_conditional_removal() {
 
                 let runs_for_effect = Arc::clone(&runs);
                 let scope_slot = Rc::clone(&captured_scope);
-                LaunchedEffect((), move |scope| {
+                LaunchedEffect((), async move |scope| {
                     runs_for_effect.fetch_add(1, Ordering::SeqCst);
                     scope_slot.borrow_mut().replace(scope);
                 });
@@ -1053,18 +1053,16 @@ fn launched_effect_async_survives_conditional_cycle() {
 
             let log = Rc::clone(&log);
             let spawns = Arc::clone(&spawns);
-            LaunchedEffectAsync((), move |scope| {
+            LaunchedEffect((), async move |scope| {
                 spawns.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move {
-                    let clock = scope.runtime().frame_clock();
-                    while scope.is_active() {
-                        clock.next_frame().await;
-                        if !scope.is_active() {
-                            break;
-                        }
-                        log.borrow_mut().push(1);
+                let clock = scope.runtime().frame_clock();
+                while scope.is_active() {
+                    clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
                     }
-                })
+                    log.borrow_mut().push(1);
+                }
             });
         }
     };
@@ -1183,43 +1181,41 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
 
     let mut render = {
         move || {
-            LaunchedEffectAsync((), move |scope| {
-                Box::pin(async move {
-                    let clock = scope.runtime().frame_clock();
-                    let mut last_time: Option<u64> = None;
-                    while scope.is_active() {
-                        let nanos = clock.next_frame().await;
-                        if !scope.is_active() {
-                            break;
-                        }
-
-                        if let Some(previous) = last_time {
-                            let mut delta = nanos.saturating_sub(previous);
-                            if delta == 0 {
-                                delta = 16_666_667;
-                            }
-                            let dt_ms = delta as f32 / 1_000_000.0;
-                            stats.update(|state| {
-                                state.frames = state.frames.wrapping_add(1);
-                                state.last_frame_ms = dt_ms;
-                            });
-                            animation.update(|anim| {
-                                let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                                if next >= 1.0 {
-                                    anim.progress = 1.0;
-                                    anim.direction = -1.0;
-                                } else if next <= 0.0 {
-                                    anim.progress = 0.0;
-                                    anim.direction = 1.0;
-                                } else {
-                                    anim.progress = next;
-                                }
-                            });
-                        }
-
-                        last_time = Some(nanos);
+            LaunchedEffect((), async move |scope| {
+                let clock = scope.runtime().frame_clock();
+                let mut last_time: Option<u64> = None;
+                while scope.is_active() {
+                    let nanos = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
                     }
-                })
+
+                    if let Some(previous) = last_time {
+                        let mut delta = nanos.saturating_sub(previous);
+                        if delta == 0 {
+                            delta = 16_666_667;
+                        }
+                        let dt_ms = delta as f32 / 1_000_000.0;
+                        stats.update(|state| {
+                            state.frames = state.frames.wrapping_add(1);
+                            state.last_frame_ms = dt_ms;
+                        });
+                        animation.update(|anim| {
+                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
+                            if next >= 1.0 {
+                                anim.progress = 1.0;
+                                anim.direction = -1.0;
+                            } else if next <= 0.0 {
+                                anim.progress = 0.0;
+                                anim.direction = 1.0;
+                            } else {
+                                anim.progress = next;
+                            }
+                        });
+                    }
+
+                    last_time = Some(nanos);
+                }
             });
 
             let snapshot = animation.value();
@@ -1528,18 +1524,16 @@ fn launched_effect_async_restarts_on_key_change() {
         move || {
             let key = key_state.value();
             let log = Rc::clone(&log);
-            LaunchedEffectAsync(key, move |scope| {
+            LaunchedEffect(key, async move |scope| {
                 let log = Rc::clone(&log);
-                Box::pin(async move {
-                    let clock = scope.runtime().frame_clock();
-                    loop {
-                        clock.next_frame().await;
-                        if !scope.is_active() {
-                            return;
-                        }
-                        log.borrow_mut().push(key);
+                let clock = scope.runtime().frame_clock();
+                loop {
+                    clock.next_frame().await;
+                    if !scope.is_active() {
+                        return;
                     }
-                })
+                    log.borrow_mut().push(key);
+                }
             });
         }
     };
@@ -1807,7 +1801,7 @@ fn launched_effect_reruns_on_hash_colliding_but_unequal_keys() {
                 let runs = Arc::clone(&runs);
                 let scopes = Rc::clone(&scopes);
                 let key = HashCollidingKey { tag: tag.get() };
-                LaunchedEffect(key, move |scope| {
+                LaunchedEffect(key, async move |scope| {
                     runs.fetch_add(1, Ordering::SeqCst);
                     scopes.borrow_mut().push(scope);
                 });

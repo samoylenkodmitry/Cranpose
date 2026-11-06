@@ -89,36 +89,6 @@ pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
     })
 }
 
-/// Runs `callback` once on the next frame with the frame time in nanoseconds. Dropping the returned
-/// registration before the frame cancels the callback. Must be called during composition.
-#[cfg(feature = "internal")]
-#[expect(non_snake_case, reason = "names follow Compose's casing")]
-pub fn withFrameNanos(
-    callback: impl FnOnce(u64) + 'static,
-) -> crate::internal::FrameCallbackRegistration {
-    composer_context::with_composer(|composer| {
-        composer
-            .runtime_handle()
-            .frame_clock()
-            .with_frame_nanos(callback)
-    })
-}
-
-/// Runs `callback` once on the next frame with the frame time in milliseconds. Dropping the
-/// returned registration before the frame cancels the callback. Must be called during composition.
-#[cfg(feature = "internal")]
-#[expect(non_snake_case, reason = "names follow Compose's casing")]
-pub fn withFrameMillis(
-    callback: impl FnOnce(u64) + 'static,
-) -> crate::internal::FrameCallbackRegistration {
-    composer_context::with_composer(|composer| {
-        composer
-            .runtime_handle()
-            .frame_clock()
-            .with_frame_millis(callback)
-    })
-}
-
 /// Creates a new `MutableState` initialized with the given value.
 ///
 /// `MutableState` is a cheap copyable observable handle. Reads are tracked by the

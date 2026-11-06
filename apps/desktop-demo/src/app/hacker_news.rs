@@ -582,7 +582,7 @@ fn launch_initial_load(
     client: &HttpClientRef,
 ) {
     let client = Arc::clone(client);
-    cranpose_core::LaunchedEffect(trigger, move |scope| {
+    cranpose_core::LaunchedEffect(trigger, async move |scope| {
         state.set(NewsState::Loading);
         let client = Arc::clone(&client);
 
@@ -607,7 +607,7 @@ fn launch_load_more(
     client: &HttpClientRef,
 ) {
     let client = Arc::clone(client);
-    cranpose_core::LaunchedEffect(trigger, move |scope| {
+    cranpose_core::LaunchedEffect(trigger, async move |scope| {
         if trigger == 0 {
             return;
         }
@@ -672,7 +672,7 @@ fn launch_comment_thread(
     let client = Arc::clone(client);
     let selected_story_id = selected_story.as_ref().map(|story| story.id);
 
-    cranpose_core::LaunchedEffect((selected_story_id, refresh_trigger), move |scope| {
+    cranpose_core::LaunchedEffect((selected_story_id, refresh_trigger), async move |scope| {
         let Some(story) = selected_story.clone() else {
             state.set(ThreadState::Idle);
             return;
@@ -703,7 +703,7 @@ fn launch_load_more_comments(
     client: &HttpClientRef,
 ) {
     let client = Arc::clone(client);
-    cranpose_core::LaunchedEffect(trigger, move |scope| {
+    cranpose_core::LaunchedEffect(trigger, async move |scope| {
         if trigger == 0 {
             return;
         }
@@ -789,7 +789,7 @@ fn AutoLoadMore(
         _ => (false, 0),
     };
 
-    cranpose_core::LaunchedEffect((should_trigger, next_index), move |_scope| {
+    cranpose_core::LaunchedEffect((should_trigger, next_index), async move |_scope| {
         if should_trigger {
             auto_load_guard.set(next_index);
             load_more_trigger.update(|value| *value = value.wrapping_add(1));
@@ -817,7 +817,7 @@ fn AutoLoadMoreComments(
         && visible_end >= preload_index
         && auto_load_guard.get() != loaded_count;
 
-    cranpose_core::LaunchedEffect((should_trigger, loaded_count), move |_scope| {
+    cranpose_core::LaunchedEffect((should_trigger, loaded_count), async move |_scope| {
         if should_trigger {
             auto_load_guard.set(loaded_count);
             load_more_trigger.update(|value| *value = value.wrapping_add(1));
@@ -1808,7 +1808,7 @@ pub fn HackerNewsTab() {
             selected_story.as_ref().map(|story| story.id),
             thread_refresh_trigger.get(),
         ),
-        move |_scope| {
+        async move |_scope| {
             comment_auto_load_guard.set(0);
         },
     );

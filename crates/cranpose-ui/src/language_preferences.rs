@@ -133,7 +133,7 @@ pub fn ProvideLanguagePreferences(
         state,
     };
     let loader = controller.clone();
-    LaunchedEffect(application.clone(), move |_| {
+    LaunchedEffect(application.clone(), async move |_| {
         let application = loader.application.clone();
         if !application.is_persistent() {
             return;

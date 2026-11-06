@@ -579,36 +579,26 @@ impl InfiniteTransition {
     fn run(&self) {
         let run_key = self.inner.run_token.get();
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
-        cranpose_core::__launched_effect_async_impl(
+        cranpose_core::__launched_effect_impl(
             cranpose_core::caller_location_key().scoped(cranpose_core::location_key!()),
             std::panic::Location::caller().into(),
             run_key,
-            move |scope| {
-                Box::pin(async move {
-                    let clock = scope.runtime().frame_clock();
+            async move |scope| {
+                let clock = scope.runtime().frame_clock();
 
-                    loop {
-                        if !scope.is_active() {
-                            break;
-                        }
+                loop {
+                    let Some(inner) = weak.upgrade() else {
+                        break;
+                    };
+                    inner.restart_pending.set(false);
 
-                        let Some(inner) = weak.upgrade() else {
-                            break;
-                        };
-                        inner.restart_pending.set(false);
-
-                        if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
-                            break;
-                        }
-
-                        let now = clock.next_perpetual_frame().await;
-                        if !scope.is_active() {
-                            break;
-                        }
-
-                        inner.on_frame(inner.play_time(now));
+                    if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
+                        break;
                     }
-                })
+
+                    let now = clock.next_perpetual_frame().await;
+                    inner.on_frame(inner.play_time(now));
+                }
             },
         );
     }

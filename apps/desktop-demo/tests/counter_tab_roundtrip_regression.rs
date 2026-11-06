@@ -97,14 +97,9 @@ fn max_layer_translation_y(layer: &LayerNode) -> f32 {
 #[composable]
 fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
     let press_target = cranpose_core::rememberMutableStateOf(|| 0.0_f32);
-    cranpose_core::LaunchedEffect(press_tick.value(), {
-        let target_state = press_target;
-        let tick_state = press_tick;
-        move |_scope| {
-            if tick_state.value() == 0 {
-                return;
-            }
-            target_state.set(1.0);
+    cranpose_core::LaunchedEffect(press_tick.value(), async move |_| {
+        if press_tick.value() != 0 {
+            press_target.set(1.0);
         }
     });
 

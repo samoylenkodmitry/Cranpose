@@ -5,9 +5,7 @@ use std::{
 };
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{
-    LaunchedEffectAsync, MutableState, location_key, remember, rememberMutableStateOf,
-};
+use cranpose_core::{LaunchedEffect, MutableState, location_key, remember, rememberMutableStateOf};
 use cranpose_render_common::graph::{LayerNode, PrimitiveNode, RenderNode};
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
@@ -52,18 +50,16 @@ fn frame_counter(times: FrameTimes, input: InputState) {
     let frames = rememberMutableStateOf(|| 0u32);
     let input_value = rememberMutableStateOf(|| 0u32);
     *input.borrow_mut() = Some(input_value);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            while scope.is_active() {
-                let time = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                times.borrow_mut().push(time);
-                frames.set(frames.get() + 1);
+    LaunchedEffect((), async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        while scope.is_active() {
+            let time = clock.next_frame().await;
+            if !scope.is_active() {
+                break;
             }
-        })
+            times.borrow_mut().push(time);
+            frames.set(frames.get() + 1);
+        }
     });
     Text(
         format!("Frames {}; input {}", frames.get(), input_value.get()),

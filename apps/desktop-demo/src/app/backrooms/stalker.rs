@@ -3,7 +3,7 @@
 // it, it stands still; while the eye looks away, it glides back behind the
 // eye, slower than a quick turn. It goes when the eye comes close.
 
-use cranpose_core::{derivedStateOf, rememberMutableStateOf, LaunchedEffectAsync};
+use cranpose_core::{derivedStateOf, rememberMutableStateOf, LaunchedEffect};
 use cranpose_ui::{
     composable,
     space::{EyePose, Vec3},
@@ -41,29 +41,27 @@ fn Stalker(sight: Sight, size: (f32, f32)) {
     // behind the eye. The effect reads the eye outside composition, and
     // only the draw closure reads the foot, so the glide composes nothing.
     let eye = sight.eye.clone();
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_perpetual_frame().await;
-            while scope.is_active() {
-                let frame = clock.next_perpetual_frame().await;
-                let seconds = frame.saturating_sub(last) as f32 * 1.0e-9;
-                last = frame;
-                let pose = eye.pose();
-                let now = foot.get_non_reactive();
-                let next = match now {
-                    Some(at) if distance(&pose, at) < CLOSEST => None,
-                    Some(at) if seen(&pose, at) => Some(at),
-                    Some(at) => {
-                        Some(behind(&pose, size).map_or(at, |to| glide(at, to, GLIDE * seconds)))
-                    }
-                    None => behind(&pose, size).filter(|at| !seen(&pose, *at)),
-                };
-                if next != now {
-                    foot.set(next);
+    LaunchedEffect((), async move |scope| {
+        let clock = scope.runtime().frame_clock();
+        let mut last = clock.next_perpetual_frame().await;
+        loop {
+            let frame = clock.next_perpetual_frame().await;
+            let seconds = frame.saturating_sub(last) as f32 * 1.0e-9;
+            last = frame;
+            let pose = eye.pose();
+            let now = foot.get_non_reactive();
+            let next = match now {
+                Some(at) if distance(&pose, at) < CLOSEST => None,
+                Some(at) if seen(&pose, at) => Some(at),
+                Some(at) => {
+                    Some(behind(&pose, size).map_or(at, |to| glide(at, to, GLIDE * seconds)))
                 }
+                None => behind(&pose, size).filter(|at| !seen(&pose, *at)),
+            };
+            if next != now {
+                foot.set(next);
             }
-        })
+        }
     });
     let stands = derivedStateOf(move || foot.get().is_some());
     if stands.get() {

@@ -149,6 +149,8 @@ pub use source_trace::{__inline_source_scope, __source_scope};
 pub use thread_state::with_or_fresh;
 mod stage_times;
 pub mod subcompose;
+mod task_site;
+pub use task_site::TaskSite;
 mod thread_state;
 #[doc(hidden)]
 pub use stage_times::{StageTimes, stage_ms};
@@ -204,12 +206,8 @@ pub use hooks::{
     remember, rememberKeyed, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
     rememberUpdatedState, try_mutableStateOf,
 };
-#[cfg(feature = "internal")]
-#[doc(hidden)]
-pub use hooks::{withFrameMillis, withFrameNanos};
 pub use launched_effect::{
-    __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffect,
-    LaunchedEffectAsync, LaunchedEffectScope, TaskSite,
+    __launched_effect_impl, CancelToken, LaunchedEffect, LaunchedEffectScope,
 };
 pub use location_key::{
     __constant, HotOriginGuard, branch_location_key, cached_composable_definition_key,
@@ -224,7 +222,7 @@ pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, Ret
 #[doc(hidden)]
 pub use runtime::{
     DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle, UiDispatcher,
-    current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
+    current_runtime_handle, schedule_frame, schedule_node_update,
 };
 pub use runtime_cell::RuntimeCell;
 #[cfg(any(test, feature = "leak-debug"))]

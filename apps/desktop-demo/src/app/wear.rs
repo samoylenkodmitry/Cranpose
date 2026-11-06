@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose::LazyItems;
-use cranpose_core::{remember, LaunchedEffectAsync};
+use cranpose_core::{remember, LaunchedEffect};
 use cranpose_ui::{
     round_scaling_list::CentreAnchor,
     widgets::wear::{
@@ -152,20 +152,9 @@ pub fn wear_tab() {
     let list = rememberWearScalingListState(CentreAnchor::default());
 
     let tick_state = Rc::clone(&state);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            loop {
-                if !scope.is_active() {
-                    break;
-                }
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                tick_state.borrow_mut().advance(now, &list);
-            }
-        })
+    LaunchedEffect((), async move |scope| loop {
+        let now = scope.with_frame_nanos(|now| now).await;
+        tick_state.borrow_mut().advance(now, &list);
     });
 
     CranposeBox(

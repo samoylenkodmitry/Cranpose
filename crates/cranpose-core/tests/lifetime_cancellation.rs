@@ -199,3 +199,56 @@ fn cancelling_a_continuation_can_cancel_another_during_cleanup() {
     runtime.cancel_ui_cont(parent);
     assert_eq!(runtime.debug_stats().ui_conts_len, 0);
 }
+
+// Notes in its cell when the future that holds it is dropped.
+struct DropNote(Rc<Cell<bool>>);
+
+impl Drop for DropNote {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+#[test]
+fn a_frame_loop_leaves_with_its_call_site_and_asks_for_no_more_frames() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let dropped = Rc::new(Cell::new(false));
+    let frames = Rc::new(RefCell::new(Vec::new()));
+    let (note, seen) = (Rc::clone(&dropped), Rc::clone(&frames));
+    composition
+        .render(Key(1), move || {
+            let (note, seen) = (Rc::clone(&note), Rc::clone(&seen));
+            cranpose_core::LaunchedEffect((), async move |scope| {
+                let _note = DropNote(note);
+                loop {
+                    scope
+                        .with_frame_nanos(|nanos| seen.borrow_mut().push(nanos))
+                        .await;
+                }
+            });
+        })
+        .expect("initial composition");
+    for frame in [16, 32, 48] {
+        runtime.drain_ui();
+        runtime.drain_frame_callbacks(frame);
+    }
+    runtime.drain_ui();
+    assert_eq!(*frames.borrow(), [16, 32, 48], "the loop missed a frame");
+    assert!(runtime.has_frame_callbacks(), "the loop waits for a frame");
+
+    composition.render(Key(1), || {}).expect("effect removed");
+
+    assert!(dropped.get(), "the loop's future outlived its call site");
+    assert!(
+        !runtime.has_frame_callbacks(),
+        "the dropped loop still asks for frames"
+    );
+    runtime.drain_frame_callbacks(64);
+    runtime.drain_ui();
+    assert_eq!(
+        frames.borrow().len(),
+        3,
+        "the loop ran a frame after it left"
+    );
+}

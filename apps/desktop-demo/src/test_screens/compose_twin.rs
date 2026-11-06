@@ -352,7 +352,7 @@ pub fn text_selection_probe() {
     .with(|state| *state);
     let requester = cranpose_core::remember(FocusRequester::new).with(FocusRequester::clone);
     let focus = requester.clone();
-    cranpose_core::LaunchedEffect((), move |_| {
+    cranpose_core::LaunchedEffect((), async move |_| {
         let _ = focus.request_focus();
     });
     Column(

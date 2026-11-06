@@ -201,13 +201,11 @@ fn HeadroomFromPressure() {
         }
     });
     let reported = tight_reports.value();
-    cranpose_core::LaunchedEffectAsync(reported, move |_| {
-        Box::pin(async move {
-            if reported > 0 {
-                cranpose_core::delay(TIGHT_AFTER_PRESSURE).await;
-                cranpose_ui::set_memory_headroom(cranpose_ui::MemoryHeadroom::Ample);
-            }
-        })
+    cranpose_core::LaunchedEffect(reported, async move |_| {
+        if reported > 0 {
+            cranpose_core::delay(TIGHT_AFTER_PRESSURE).await;
+            cranpose_ui::set_memory_headroom(cranpose_ui::MemoryHeadroom::Ample);
+        }
     });
 }
 

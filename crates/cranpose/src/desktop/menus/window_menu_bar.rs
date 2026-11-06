@@ -273,7 +273,7 @@ fn Panel(
     // keys move between the lines and Return chooses one.
     let first_line = remember(FocusRequester::new).with(Clone::clone);
     let focus = first_line.clone();
-    LaunchedEffect(path.clone(), move |_| {
+    LaunchedEffect(path.clone(), async move |_| {
         let _ = focus.request_focus();
     });
     Column(

@@ -451,11 +451,9 @@ fn produced_state_starts_at_its_initial_value_and_takes_what_the_producer_publis
         composition
             .render(key, move || {
                 let sink = Rc::clone(&sink);
-                let value = cranpose_core::produceState(0u32, (), |scope| {
-                    Box::pin(async move {
-                        scope.set(1);
-                        scope.set(2);
-                    })
+                let value = cranpose_core::produceState(0u32, (), async move |scope| {
+                    scope.set(1);
+                    scope.set(2);
                 });
                 sink.borrow_mut().push(value.get());
             })

@@ -142,7 +142,7 @@ fn Player(card: (usize, usize), playing: MutableState<Option<(usize, usize)>>) {
     let position = rememberMutableStateOf(|| 0_u32);
     let requester = cranpose_core::remember(FocusRequester::new).with(Clone::clone);
     let focus = requester.clone();
-    LaunchedEffect(card, move |_| {
+    LaunchedEffect(card, async move |_| {
         if let Err(error) = focus.request_focus() {
             log::warn!("the TV player could not take focus: {error:?}");
         }

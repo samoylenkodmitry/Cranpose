@@ -1488,7 +1488,7 @@ pub(crate) fn AsyncRuntimeEngine(
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    LaunchedEffect((reset_key,), move |_scope| {
+    LaunchedEffect((reset_key,), async move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
             animation.set(AnimationState::default());
@@ -1547,7 +1547,7 @@ fn counter_app() {
     };
     let wave_state = animateFloatAsState(target_wave, AnimationType::default(), "wave");
     let fetch_key = fetch_request.get();
-    LaunchedEffect(fetch_key, move |_scope| {
+    LaunchedEffect(fetch_key, async move |_scope| {
         if fetch_key == 0 {
             return;
         }

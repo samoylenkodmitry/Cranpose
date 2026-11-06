@@ -1,8 +1,8 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{
-    LaunchedEffect, LaunchedEffectAsync, MemoryApplier, MutableState, NodeId, SideEffect, SlotId,
-    location_key, mutableStateOf, remember, rememberCoroutineScope,
+    LaunchedEffect, MemoryApplier, MutableState, NodeId, SideEffect, SlotId, location_key,
+    mutableStateOf, remember, rememberCoroutineScope,
 };
 
 use crate::{
@@ -20,7 +20,6 @@ const SETTLE_LIMIT: usize = 16;
 enum ProbeReader {
     MeasurePolicy,
     LaunchedEffect,
-    LaunchedEffectAsync,
     CoroutineScope,
     SideEffect,
 }
@@ -67,12 +66,7 @@ fn launch_probe_reader(reader: ProbeReader, probe: MutableState<i32>, reads: Rc<
     match reader {
         ProbeReader::MeasurePolicy => {}
         ProbeReader::LaunchedEffect => {
-            LaunchedEffect((), move |_| read_probe(probe, &reads));
-        }
-        ProbeReader::LaunchedEffectAsync => {
-            LaunchedEffectAsync((), move |_| {
-                Box::pin(async move { read_probe(probe, &reads) })
-            });
+            LaunchedEffect((), async move |_| read_probe(probe, &reads));
         }
         ProbeReader::CoroutineScope => {
             let coroutines = rememberCoroutineScope();
@@ -170,14 +164,6 @@ fn an_effect_launched_by_a_nested_subcomposition_does_not_subscribe_the_measurin
     assert_probe_read_leaves_layout_clean(
         ProbeSite::NestedSubcomposeLayout,
         ProbeReader::LaunchedEffect,
-    );
-}
-
-#[test]
-fn an_async_effect_launched_by_a_nested_subcomposition_does_not_subscribe_the_measuring_layout() {
-    assert_probe_read_leaves_layout_clean(
-        ProbeSite::NestedSubcomposeLayout,
-        ProbeReader::LaunchedEffectAsync,
     );
 }
 

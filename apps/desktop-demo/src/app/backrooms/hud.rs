@@ -10,7 +10,7 @@ use std::time::Duration;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
 };
-use cranpose_core::{delay, derivedStateOf, rememberMutableStateOf, LaunchedEffectAsync, State};
+use cranpose_core::{delay, derivedStateOf, rememberMutableStateOf, LaunchedEffect, State};
 use cranpose_ui::{
     composable,
     text::{FontFamily, TextUnit},
@@ -132,13 +132,9 @@ fn RoomLabel(journey: Journey) {
 #[composable]
 fn Elapsed() {
     let seconds = rememberMutableStateOf(|| 0_u32);
-    LaunchedEffectAsync((), move |scope| {
-        Box::pin(async move {
-            while scope.is_active() {
-                delay(SECOND).await;
-                seconds.update(|seconds| *seconds += 1);
-            }
-        })
+    LaunchedEffect((), async move |_| loop {
+        delay(SECOND).await;
+        seconds.update(|seconds| *seconds += 1);
     });
     let elapsed = seconds.get();
     Text(
@@ -161,21 +157,17 @@ fn Elapsed() {
 fn Caption(journey: Journey) {
     let rooms = journey.rooms();
     let heard = rememberMutableStateOf(|| false);
-    LaunchedEffectAsync(rooms, move |_| {
-        Box::pin(async move {
-            if rooms > 1 {
-                heard.set(true);
-                delay(CAPTION).await;
-                heard.set(false);
-            }
-        })
+    LaunchedEffect(rooms, async move |_| {
+        if rooms > 1 {
+            heard.set(true);
+            delay(CAPTION).await;
+            heard.set(false);
+        }
     });
     let hint = rememberMutableStateOf(|| true);
-    LaunchedEffectAsync((), move |_| {
-        Box::pin(async move {
-            delay(HINT).await;
-            hint.set(false);
-        })
+    LaunchedEffect((), async move |_| {
+        delay(HINT).await;
+        hint.set(false);
     });
     let line = Modifier::empty()
         .align(Alignment::BOTTOM_CENTER)

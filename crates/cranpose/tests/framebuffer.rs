@@ -105,11 +105,9 @@ fn an_animation_asks_for_the_next_frame() {
 fn a_delay_wakes_a_sleeping_host_and_its_change_presents() {
     let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], || {
         let done = rememberMutableStateOf(|| false);
-        LaunchedEffectAsync((), move |_| {
-            Box::pin(async move {
-                delay(Duration::from_millis(20)).await;
-                done.set(true);
-            })
+        LaunchedEffect((), async move |_| {
+            delay(Duration::from_millis(20)).await;
+            done.set(true);
         });
         let color = if done.get() { GREEN } else { RED };
         Spacer(Modifier::empty().fill_max_size().background(color));
@@ -147,18 +145,16 @@ fn a_mouse_move_from_a_frame_draws_its_hover_in_that_frame() {
     let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], move || {
         let mouse = mouse_input::local_mouse_input();
         let counted = Rc::clone(&counted);
-        LaunchedEffectAsync((), move |scope| {
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                while scope.is_active() {
-                    clock.next_frame().await;
-                    counted.set(counted.get() + 1);
-                    // Right of the box at first, then onto it.
-                    let x = if counted.get() < 3 { 39.0 } else { 20.0 };
-                    let point = Point { x, y: 15.0 };
-                    mouse.move_to(mouse_input::MouseInputTarget::Primary, point);
-                }
-            })
+        LaunchedEffect((), async move |scope| {
+            let clock = scope.runtime().frame_clock();
+            while scope.is_active() {
+                clock.next_frame().await;
+                counted.set(counted.get() + 1);
+                // Right of the box at first, then onto it.
+                let x = if counted.get() < 3 { 39.0 } else { 20.0 };
+                let point = Point { x, y: 15.0 };
+                mouse.move_to(mouse_input::MouseInputTarget::Primary, point);
+            }
         });
         let interaction = rememberMutableInteractionSource();
         let hovered = collect_is_hovered_as_state(&interaction);
@@ -278,11 +274,9 @@ fn preparing_an_area_draws_the_same_picture() {
 fn stepping_framebuffer(first: u32) -> Framebuffer {
     let mut framebuffer = Framebuffer::new(80, 40, 1.0, SystemTheme::Light, &[], move || {
         let step = rememberMutableStateOf(|| first);
-        LaunchedEffectAsync((), move |scope| {
-            Box::pin(async move {
-                scope.runtime().frame_clock().next_frame().await;
-                step.set(1);
-            })
+        LaunchedEffect((), async move |scope| {
+            scope.runtime().frame_clock().next_frame().await;
+            step.set(1);
         });
         let colored = move |width: f32| {
             Modifier::empty()

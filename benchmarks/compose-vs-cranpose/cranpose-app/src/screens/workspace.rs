@@ -675,28 +675,21 @@ fn WorkspaceScreen(mode: WorkspaceMode, still: bool) {
 
     let stream = market.clone();
     let live = streaming.get();
-    LaunchedEffectAsync((mode as u8, live), move |scope| {
-        std::boxed::Box::pin(async move {
-            if !live {
-                return;
-            }
-            let quotes = mode.quotes_per_tick();
-            while scope.is_active() {
-                delay(STREAM_EVERY).await;
-                if !scope.is_active() {
-                    break;
-                }
-                stream.tick(quotes);
-            }
-        })
+    LaunchedEffect((mode as u8, live), async move |_| {
+        if !live {
+            return;
+        }
+        let quotes = mode.quotes_per_tick();
+        loop {
+            delay(STREAM_EVERY).await;
+            stream.tick(quotes);
+        }
     });
     let ticked = market.clone();
     let hovered = hover.clone();
     let target = scroll_mode.get();
-    LaunchedEffectAsync(target as u8, move |scope| {
-        std::boxed::Box::pin(run_workspace_frames(
-            scope, ticked, hovered, target, watchlist, sidebar, fps,
-        ))
+    LaunchedEffect(target as u8, move |scope| {
+        run_workspace_frames(scope, ticked, hovered, target, watchlist, sidebar, fps)
     });
 
     Column(
@@ -762,11 +755,8 @@ async fn run_workspace_frames(
     let mut direction = 1.0f32;
     let mut window_start = clock.next_frame().await;
     let mut window_frames = 0u32;
-    while scope.is_active() {
+    loop {
         let now = clock.next_frame().await;
-        if !scope.is_active() {
-            break;
-        }
         if let Some(observe) = FRAME_OBSERVER.get() {
             observe(ticked.ticks.get() as u64);
         }
@@ -1282,7 +1272,7 @@ fn SearchBox(modifier: Modifier) {
     let focused = rememberMutableStateOf(|| false);
     let focus = remember(FocusRequester::new).with(Clone::clone);
     let request = focus.clone();
-    LaunchedEffect((), move |_| {
+    LaunchedEffect((), async move |_| {
         if let Err(error) = request.request_focus() {
             log::debug!("workspace search focus: {error}");
         }
