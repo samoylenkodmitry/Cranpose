@@ -10,6 +10,8 @@
 //! frame mostly pushes a changed subtree as it pushed it before, so the
 //! spill seldom holds anything.
 
+use std::ops::Range;
+
 use cranpose_render_common::graph::LayerNode;
 
 use crate::{
@@ -68,6 +70,10 @@ pub(crate) struct Rewrite {
     // match the old item in its place.
     spilled_at: Option<Places>,
     spill: RasterScene,
+    // The runs of the old draw order the spill holds copies of, each with
+    // where its copy starts in the spill's order. They draw as they did:
+    // the splice compares only the items between them.
+    copied: Vec<(Range<usize>, usize)>,
     // The part of the frame whose changed pixels `areas` takes.
     window: ClipBounds,
     // Whether `reach` holds where each item of the scene reaches.
@@ -122,6 +128,7 @@ impl Rewrite {
         self.opened.clear();
         self.hits_replaced = false;
         self.spilled_at = None;
+        self.copied.clear();
         debug_assert!(
             self.spill.order.is_empty() && self.spill.subtrees.is_empty(),
             "a rewrite leaves its spill empty when it finishes"
@@ -281,26 +288,31 @@ impl Rewrite {
         }
     }
 
-    // Opens again, in place, the old record `at` of a node whose record, own
-    // items and passed-down entry stay as they were, and keeps its own items
-    // up to `first_child`, the record of its first child subtree. Returns
-    // the entry. `None`, with nothing changed, when the record does not lie
-    // where the subtree pushes next or its entry does not come next.
+    // Opens again the old record `at` of a node whose record, own items and
+    // passed-down entry stay as they were, and keeps its own items up to
+    // `first_child`, the record of its first child subtree: in place when
+    // the record lies where the subtree pushes next, else as copies in the
+    // spill. Returns the old entry and the index of the record opened.
+    // `None`, with nothing changed, when the record holds no entry.
     pub(crate) fn reopen(
         &mut self,
-        records: &[SubtreeItems],
+        scene: &RasterScene,
         at: usize,
         first_child: usize,
-    ) -> Option<usize> {
+    ) -> Option<(usize, usize)> {
+        let records = &scene.subtrees;
         let old = records[..self.stop.records].get(at)?;
         let entry = old.passed_down?;
         let child = records[..old.end].get(first_child)?;
-        if self.spilled_at.is_some()
-            || self.next.records != at
-            || self.next.items != old.start
-            || self.next.passed_down != entry
-        {
-            return None;
+        let in_place = self.next.records == at
+            && self.next.items == old.start
+            && self.next.passed_down == entry;
+        if self.spilled_at.is_none() && !in_place {
+            self.spilled_at = Some(self.next);
+        }
+        if self.spilled_at.is_some() {
+            let record = self.reopen_in_spill(scene, (at, entry), child.start);
+            return Some((entry, record));
         }
         self.opened.push(Opened {
             end: old.end,
@@ -313,7 +325,53 @@ impl Rewrite {
             passed_down: entry + 1,
         };
         self.own_items_end = child.start.order;
-        Some(entry)
+        Some((entry, at))
+    }
+
+    // What `reopen` does in the spill: a copy of the record, of its entry
+    // and of its own items up to `own_stop` go into the spill. Returns where
+    // the record would lie, were the spill in place.
+    fn reopen_in_spill(
+        &mut self,
+        scene: &RasterScene,
+        (at, entry): (usize, usize),
+        own_stop: ItemCounts,
+    ) -> usize {
+        let old = &scene.subtrees[at];
+        let here = self.here();
+        self.spill.subtrees.push(SubtreeItems {
+            end: here.records + 1,
+            start: here.items,
+            stop: here.items,
+            passed_down: Some(here.passed_down),
+            ..old.clone()
+        });
+        self.spill
+            .passed_down
+            .push(scene.passed_down[entry].clone());
+        self.copy_items(scene, (old.start, own_stop));
+        here.records
+    }
+
+    // Puts copies of the old items from `from` up to `stop` into the spill.
+    fn copy_items(&mut self, scene: &RasterScene, (from, stop): (ItemCounts, ItemCounts)) {
+        let copy = self.spill.order.len();
+        self.spill.copy_items(scene, (from, stop));
+        self.note_copied(from.order..stop.order, copy);
+    }
+
+    // Notes that the spill's order holds from `copy` on a copy of the old
+    // items `run`.
+    fn note_copied(&mut self, run: Range<usize>, copy: usize) {
+        if run.is_empty() {
+            return;
+        }
+        match self.copied.last_mut() {
+            Some((last, at)) if last.end == run.start && *at + last.len() == copy => {
+                last.end = run.end;
+            }
+            _ => self.copied.push((run, copy)),
+        }
     }
 
     // Keeps the old subtree of the record `old`, a child of the open
@@ -344,8 +402,10 @@ impl Rewrite {
         }
         let here = self.here();
         let to = (here.items, here.records, here.passed_down);
+        let copy = self.spill.order.len();
         self.spill
             .copy_subtrees_to(scene, old..head.end, (head.stop, first_entry), to);
+        self.note_copied(head.start.order..head.stop.order, copy);
     }
 
     // Sets where the open record's own old items go on after the old
@@ -385,15 +445,7 @@ impl Rewrite {
     #[inline(never)]
     fn replace_from(&mut self, scene: &mut RasterScene, record: usize, from: Places) {
         let stop = self.stop;
-        let order = from.items.order..stop.items.order;
-        let reach = (self.reach.get(order.clone())).filter(|_| self.held == UpdatedReach::Held);
-        add_changed_runs(
-            (scene, &scene.order[order]),
-            (&self.spill, &self.spill.order),
-            reach,
-            self.window,
-            &mut self.areas,
-        );
+        self.add_changed_gaps(scene, from.items.order..stop.items.order);
         self.hits_replaced |= scene.subtrees[from.records..stop.records]
             .iter()
             .any(|record| record.hits.is_some());
@@ -431,6 +483,26 @@ impl Rewrite {
         self.held = UpdatedReach::Lost;
         self.spill.clear();
         self.opened.clear();
+    }
+
+    // Adds the areas where the old items `order` of `scene` and the items
+    // of the spill draw differently. The runs the spill copied draw as
+    // before: only the old and new items between them pair up.
+    fn add_changed_gaps(&mut self, scene: &RasterScene, order: Range<usize>) {
+        let held = self.held == UpdatedReach::Held;
+        let (mut old_at, mut new_at) = (order.start, 0);
+        let copied = self.copied.iter().map(|(run, copy)| (run.clone(), *copy));
+        let end = (order.end..order.end, self.spill.order.len());
+        for (run, copy) in copied.chain([end]) {
+            add_changed_runs(
+                (scene, &scene.order[old_at..run.start]),
+                (&self.spill, &self.spill.order[new_at..copy]),
+                self.reach.get(old_at..run.start).filter(|_| held),
+                self.window,
+                &mut self.areas,
+            );
+            (old_at, new_at) = (run.end, copy + run.len());
+        }
     }
 
     // Hands back the reach list the rewrite took and whether it still holds

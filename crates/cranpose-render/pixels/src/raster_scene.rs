@@ -632,14 +632,7 @@ impl RasterScene {
             return;
         };
         let (to_items, to_records, to_entries) = to;
-        // A spill takes no rewrite: its counts are its lists' lengths.
-        let base = self.counts();
-        self.extend_items(old, (from, stop));
-        self.order.extend(
-            old.order[from.order..stop.order]
-                .iter()
-                .map(|item| item.moved(from, base)),
-        );
+        self.copy_items(old, (from, stop));
         let moved = |index: usize, from: usize, to: usize| to + (index - from);
         let first = records.start;
         let mut entries = 0;
@@ -657,6 +650,19 @@ impl RasterScene {
         }
         self.passed_down
             .extend_from_slice(&old.passed_down[first_entry..first_entry + entries]);
+    }
+
+    // Pushes copies of the items `old` holds from `from` up to `stop`, in
+    // their draw order. A spill takes no rewrite: its counts are its lists'
+    // lengths.
+    pub(crate) fn copy_items(&mut self, old: &Self, (from, stop): (ItemCounts, ItemCounts)) {
+        let base = self.counts();
+        self.extend_items(old, (from, stop));
+        self.order.extend(
+            old.order[from.order..stop.order]
+                .iter()
+                .map(|item| item.moved(from, base)),
+        );
     }
 
     // Appends the shapes, images, texts and shadows of `old` from `from` up

@@ -6,7 +6,9 @@
 
 use cranpose_core::rememberMutableStateOf;
 use cranpose_macros::composable;
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, MemoryHeadroom, Modifier, Text, TextStyle};
+use cranpose_ui::{
+    Box, BoxSpec, Column, ColumnSpec, MemoryHeadroom, Modifier, Row, RowSpec, Text, TextStyle,
+};
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 
 #[path = "support/kept_frames.rs"]
@@ -265,6 +267,63 @@ fn MovesThenChangesAtRest(captured: Step) {
             );
         },
     );
+}
+
+// A row whose colour changes each step, over a box whose shadow shows every
+// third step and a box that does not change, which holds a box whose colour
+// changes each step. A step that adds or drops the shadow spills the row's
+// pushes from the first box on: the still box opens again in the spill
+// around its changing child.
+#[composable]
+fn StillBoxAfterShadow(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Row(
+        Modifier::empty()
+            .offset(5.0, 5.0)
+            .background(color(n, 16))
+            .padding(3.0),
+        RowSpec::default(),
+        move || {
+            let n = step.value();
+            Box(
+                Modifier::empty()
+                    .width(30.0)
+                    .height(30.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        shadow_elevation: if n % 3 == 0 { 4.0 } else { 0.0 },
+                        ..GraphicsLayer::default()
+                    })
+                    .background(color(1, 17)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .width(50.0)
+                    .height(30.0)
+                    .background(color(2, 18))
+                    .padding(5.0),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .width(20.0)
+                            .height(20.0)
+                            .background(color(step.value(), 19)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn a_still_box_after_a_spill_keeps_its_draws_around_its_changing_child() {
+    kept_frames_match_full_redraws(1.0, StillBoxAfterShadow);
 }
 
 #[test]

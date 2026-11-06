@@ -531,8 +531,7 @@ impl<'a> LayoutWalk<'a> {
     // that did: its record, its own items before its children and its
     // passed-down entry stay as they were, and its children push over their
     // old subtrees under `lower_context`, what the child lowers with. False,
-    // with nothing pushed, when its old subtree does not take that shape or
-    // the rewrite does not stand at it.
+    // with nothing pushed, when its old subtree does not take that shape.
     pub(crate) fn push_through(
         &self,
         (child, at): (NodeId, usize),
@@ -547,11 +546,12 @@ impl<'a> LayoutWalk<'a> {
             (child, NodePlace::Child),
             lower_context,
             |children, inner| {
-                let Some(entry) = scene
-                    .rewrite
-                    .as_deref_mut()
-                    .and_then(|rewrite| rewrite.reopen(&scene.subtrees, at, first))
-                else {
+                let Some(mut rewrite) = scene.rewrite.take() else {
+                    return false;
+                };
+                let reopened = rewrite.reopen(scene, at, first);
+                scene.rewrite = Some(rewrite);
+                let Some((entry, record)) = reopened else {
                     return false;
                 };
                 let passed = scene.passed_down[entry].clone();
@@ -564,7 +564,7 @@ impl<'a> LayoutWalk<'a> {
                     pushes: ChildPushes::OverOld(OldChildren::of(&scene.subtrees, at, child)),
                 };
                 slot.push_children(scene, &context.kept_beneath((&passed, &style)), &mut None);
-                scene.close_subtree(at);
+                scene.close_subtree(record);
                 true
             },
         );
