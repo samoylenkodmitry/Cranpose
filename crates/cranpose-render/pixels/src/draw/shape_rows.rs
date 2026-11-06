@@ -38,7 +38,10 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             }
             None => {
                 let brush = BrushSampler::new(&self.draw.brush, self.rect);
-                if brush.has_uniform_rows() {
+                if brush.is_solid() && P::GRADIENT == GradientColors::Dithered {
+                    let color = color_to_rgba(brush.color_at(Point::new(0.0, 0.0)));
+                    self.blend_solid_rows(color, runs);
+                } else if brush.has_uniform_rows() {
                     self.fill_uniform_rows(runs);
                 } else if brush.has_uniform_columns()
                     && brush.is_opaque()
@@ -48,6 +51,25 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 } else {
                     self.paint(runs, |_| Coverage::of(1.0));
                 }
+            }
+        }
+    }
+
+    // Paints a fill of a solid color that blends: every pixel takes the
+    // one paint, so a table keeps what it left over each byte it met before.
+    // The pixels are those [`Self::fill_uniform_rows`] paints.
+    #[inline(never)]
+    fn blend_solid_rows(self, color: [f32; 4], runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        if color[3] <= 0.0 {
+            return;
+        }
+        let paint = P::paint(color, self.draw.blend_mode);
+        let mut table = None;
+        let bounds = self.clip_bounds;
+        for py in bounds.min_y..bounds.max_y {
+            for (start, end) in runs(py as f32 + 0.5, bounds.min_x, bounds.max_x) {
+                let pixels = self.target.row(py, start, end);
+                P::blend_run(pixels, paint, &mut table, self.diagnostics);
             }
         }
     }
@@ -69,10 +91,6 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
         } = self;
         let brush = BrushSampler::new(&draw.brush, rect);
         let columns = DitherAxis::new(dither_origin.x);
-        // A solid brush paints every pixel alike: one table keeps what it
-        // left over each byte it met before.
-        let solid = brush.is_solid();
-        let mut table = None;
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
             let row_runs = runs(center_y, clip_bounds.min_x, clip_bounds.max_x);
@@ -95,18 +113,12 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 _ => None,
             };
             let paints = colors.map(|color| P::paint(color, draw.blend_mode));
-            // A solid brush's one translucent paint blends through the table.
-            let blends_whole = solid & cells[0].is_none() & (colors[0][3] > 0.0);
             for (start, end) in row_runs {
                 let pixels = target.row(py, start, end);
                 if let Some(pattern) = opaque
                     && let Some(first) = columns.stepping_cell(start, end)
                 {
                     P::fill_pattern(pixels, [0, 1, 2, 3].map(|step| pattern[(first + step) & 3]));
-                    continue;
-                }
-                if blends_whole {
-                    P::blend_run(pixels, paints[0], &mut table, diagnostics);
                     continue;
                 }
                 for (px, dst) in (start..).zip(pixels) {
