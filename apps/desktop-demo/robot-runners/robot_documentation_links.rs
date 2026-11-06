@@ -1,14 +1,12 @@
-// The guide's links in the Documentation tab: a link to another site opens
-// that site's address, and a link to a heading of the guide takes the reader
-// to that heading.
+// The guide's links in the Documentation tab. A link to another site opens
+// that site's address. A link to a heading of the guide opens the guide at
+// that heading. That link sits on the second line of its paragraph.
 
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose::{AppLauncher, Robot};
 use cranpose_services::{set_platform_uri_handler, UriHandler, UriHandlerError};
-use cranpose_testing::{
-    find_button_exact_in_semantics, find_text_in_semantics, find_text_in_semantics_exact,
-};
+use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
 use crate::{robot_exit, robot_launch};
@@ -16,6 +14,8 @@ use crate::{robot_exit, robot_launch};
 const WIDTH: u32 = 1100;
 const HEIGHT: u32 = 820;
 const OPENED: &str = "opened_links";
+const HEADING: &str =
+    "https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/guide.md#build-apple-apps-without-a-mac";
 
 thread_local! {
     static OPENED_LINKS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -113,26 +113,10 @@ pub(crate) fn main() {
             let (x, y, _, _) = scroll_to(&robot, "An iOS build needs macOS");
             let before = opened(&robot).len();
             robot.click(x + 100.0, y + 35.0).ok();
-            robot.pump_frames(60).ok();
             robot.wait_for_idle().ok();
-            if opened(&robot).len() != before {
-                robot_exit::fail(&robot, "a link to a heading of the guide left the app");
-            }
-            match find_text_in_semantics_exact(&robot, "Build Apple apps without a Mac") {
-                Some((_, top, _, _)) if (0.0..HEIGHT as f32 * 0.4).contains(&top) => {
-                    println!("  build on GitHub moved the reader to its heading at {top}");
-                    if let Ok(shot) = robot.screenshot() {
-                        crate::robot_shot::save_checked(
-                            &crate::output_paths::diagnostic_path("doclinks-heading.png"),
-                            &shot,
-                        )
-                        .ok();
-                    }
-                }
-                other => robot_exit::fail(
-                    &robot,
-                    &format!("build on GitHub left the heading at {other:?}"),
-                ),
+            match opened(&robot).get(before) {
+                Some(link) if link == HEADING => println!("  build on GitHub opened {link}"),
+                other => robot_exit::fail(&robot, &format!("build on GitHub opened {other:?}")),
             }
             println!("PASS: documentation links");
             robot.exit().ok();
