@@ -109,7 +109,8 @@ class DisplayLegTest(unittest.TestCase):
 
         args = SimpleNamespace(browser=None, max_others=1.5, output=Path('results'), tier=16, run=10.0)
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', lambda _: None), \
-                patch.object(desktop, 'fresh_install', lambda name, stage, label: 'installed'):
+                patch.object(desktop, 'fresh_install', lambda name, stage, label: 'installed'), \
+                patch.object(desktop, 'wait_for_program_checks', lambda stage: 0.0):
             found = desktop.undisturbed_leg('flutter', args, 'page', Path('stage'), 'flutter-1-first', [], [],
                                             Path('profile'), 'first', 0.5, [])
         self.assertEqual(measured, ['flutter-1-first-1', 'flutter-1-first-2'])
