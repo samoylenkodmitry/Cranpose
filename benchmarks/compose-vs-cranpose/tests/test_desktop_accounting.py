@@ -77,7 +77,12 @@ class DesktopRoundsTest(unittest.TestCase):
         self.programs = []
 
         def install(name, stage, label):
+            self.programs.append(f'install {label}')
             return f'installs/{label}/{name}'
+
+        def wait_for_checks(stage):
+            self.programs.append('wait')
+            return 2.5
 
         def measure(name, args, work, page, stage, label, earlier, profile, program=None):
             measured.append(label)
@@ -99,6 +104,7 @@ class DesktopRoundsTest(unittest.TestCase):
                                release=None, tier=16, run=3.0, browser=browser)
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
                 patch.object(desktop, 'fresh_install', install), \
+                patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
                 patch.object(desktop, 'idle_others', return_value=idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, [app], 'page', Path('stage'))
@@ -114,10 +120,14 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(scenario['starts']['second']['summary']['fyne']['fps'], 30.25)
 
     def test_each_first_start_runs_a_fresh_install_and_the_second_start_runs_the_same(self):
-        self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2)
-        self.assertEqual(self.programs, ['installs/fyne-1-first-1/fyne', 'installs/fyne-1-first-1/fyne',
-                                         'installs/fyne-2-first-1/fyne', 'installs/fyne-2-first-1/fyne'],
-                         'macOS checks a program the first time it runs, as after an install')
+        _, scenario = self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2)
+        self.assertEqual(self.programs, ['wait', 'install fyne-1-first-1', 'installs/fyne-1-first-1/fyne',
+                                         'installs/fyne-1-first-1/fyne',
+                                         'wait', 'install fyne-2-first-1', 'installs/fyne-2-first-1/fyne',
+                                         'installs/fyne-2-first-1/fyne'],
+                         'macOS checks a program the first time it runs, as after an install, once the '
+                         'checks queued before it are done')
+        self.assertEqual([leg.get('program_checks_waited_s') for leg in scenario['legs']], [2.5, None] * 2)
 
     def test_a_leg_far_off_the_earlier_ones_of_its_start_is_measured_once_more_and_the_median_decides(self):
         measured, scenario = self.rounds([24.3, 30.0, 60.1, 24.6, 30.5], rounds=2)
@@ -264,6 +274,21 @@ class FreshInstallTest(unittest.TestCase):
             self.assertEqual(len({self.signature(path, 'CDHash') for path in libraries}), 3)
             for path in installs:
                 self.assertEqual(subprocess.run([path]).returncode, 7)
+
+    def test_a_first_start_waits_while_new_programs_start_slower_than_a_checked_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            with patch.multiple(desktop, CHECKED_IN_S=0.0, CHECK_QUEUE_WAIT_S=1.5):
+                waited = desktop.wait_for_program_checks(stage)
+            self.assertGreaterEqual(waited, 1.5)
+            self.assertGreater(len(list((stage / 'probes').glob('*/probe'))), 1)
+
+    def test_a_first_start_goes_on_once_a_new_program_starts_as_a_checked_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            with patch.multiple(desktop, CHECKED_IN_S=60.0, CHECK_QUEUE_WAIT_S=120.0):
+                desktop.wait_for_program_checks(stage)
+            self.assertEqual(len(list((stage / 'probes').glob('*/probe'))), 1)
 
 
 if __name__ == '__main__':
