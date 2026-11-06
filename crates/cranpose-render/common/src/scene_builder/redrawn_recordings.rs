@@ -30,6 +30,17 @@ struct Kept {
     drawn: u64,
 }
 
+// When the command of a recording that a lowered node gives back draws
+// again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Redraw {
+    // In this update: the node of a kept head lowers again.
+    Now,
+    // When the updates before say: a command drawn in two updates in a row
+    // draws in the next.
+    AsBefore,
+}
+
 // What a command keeps to the next update to record into.
 enum RedrawnBuffers {
     // Its recording, to record into again.
@@ -61,11 +72,17 @@ impl RedrawnRecordings {
 
     // Keeps `recording`, the command `id` drew in this update, when no
     // reader holds it any more: until the next update, when the command
+    // draws again now, as the node of a kept head that lowers again does, or
     // drew in the update before as well, so that a command drawn each update
     // records into the buffers it filled; else only its room. With little
     // memory left only a small recording stays to the next update: a canvas
     // drawn each frame then holds what one drawn once does.
-    pub(crate) fn keep(&mut self, id: DrawCommandId, recording: Rc<CommandRecording>) {
+    pub(crate) fn keep(
+        &mut self,
+        id: DrawCommandId,
+        recording: Rc<CommandRecording>,
+        redraw: Redraw,
+    ) {
         if Rc::strong_count(&recording) != 1 || Rc::weak_count(&recording) != 0 {
             return;
         }
@@ -77,7 +94,8 @@ impl RedrawnRecordings {
         if kept.drawn != update {
             self.kept_now += 1;
         }
-        let again = kept.drawn == update.wrapping_sub(1) || kept.drawn == update;
+        let again =
+            redraw == Redraw::Now || kept.drawn == update.wrapping_sub(1) || kept.drawn == update;
         let keeps = again && (!self.tight || recording.pod_heap_bytes() <= TIGHT_KEPT_BYTES);
         match &mut kept.buffers {
             buffers if keeps => *buffers = Some(RedrawnBuffers::Recording(recording)),

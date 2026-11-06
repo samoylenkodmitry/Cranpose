@@ -54,7 +54,7 @@ mod node_layer;
 mod node_layout;
 mod redrawn_recordings;
 use node_layout::NodeLayout;
-pub(crate) use redrawn_recordings::RedrawnRecordings;
+pub(crate) use redrawn_recordings::{Redraw, RedrawnRecordings};
 mod space_fragment;
 use node_layer::{
     AbsOrigin, LayerHead, PlacedGeometry, assign_layer, children_context,

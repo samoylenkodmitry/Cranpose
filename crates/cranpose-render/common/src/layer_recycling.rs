@@ -8,9 +8,12 @@ use std::rc::Rc;
 
 use cranpose_ui_graphics::CommandRecording;
 
-use crate::graph::{
-    DrawCommandId, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode,
-    TextPrimitiveNode,
+use crate::{
+    graph::{
+        DrawCommandId, InlineNode, LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode,
+        TextPrimitiveNode,
+    },
+    scene_builder::Redraw,
 };
 
 #[derive(Default)]
@@ -138,12 +141,27 @@ pub(crate) fn recycle_node(node: RenderNode) {
 /// items a renderer took, into the pool the next lowered nodes take theirs
 /// from, and keeps the recordings of its draws for their next draws.
 pub fn recycle_lowered(node: RenderNode) {
+    recycle_lowered_drawing(node, Redraw::AsBefore);
+}
+
+// Moves the boxes of `node`, the kept head of a node that lowers again in
+// this update, into the pool, and keeps the recordings of its draws for its
+// new draws.
+pub(crate) fn recycle_to_redraw(node: RenderNode) {
+    recycle_lowered_drawing(node, Redraw::Now);
+}
+
+// Moves the boxes of `node` into the pool and keeps the recordings of its
+// draws, whose commands draw again as `redraw` says.
+fn recycle_lowered_drawing(node: RenderNode, redraw: Redraw) {
     crate::thread_state::with(|state| {
         let mut redrawn = state.redrawn.borrow_mut();
         state
             .layer_pool
             .borrow_mut()
-            .recycle_keeping(node, &mut |id, recording| redrawn.keep(id, recording));
+            .recycle_keeping(node, &mut |id, recording| {
+                redrawn.keep(id, recording, redraw);
+            });
     });
 }
 

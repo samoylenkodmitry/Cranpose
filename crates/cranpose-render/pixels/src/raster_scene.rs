@@ -671,10 +671,11 @@ impl RasterScene {
         true
     }
 
-    // Lets go the head the old record `at` keeps.
+    // Lets go the head the old record `at` keeps, before its node lowers
+    // again: the new draws record into the recordings the head held.
     pub(crate) fn drop_head(&mut self, at: usize) {
         if let Some(head) = self.take_head(at) {
-            head.recycle();
+            head.recycle_to_redraw();
         }
     }
 

@@ -391,7 +391,7 @@ impl<'a> LayoutWalk<'a> {
     ) {
         // A child an update pushes keeps its node, lowered alone, in its
         // record for the next updates, as `keeps_head` says.
-        let keeps_head = self.keeps_head((node, place));
+        let keeps_head = self.keeps_head(place);
         let index = scene.next_record();
         let lowered = lower_node_alone(self.applier, (node, place), lower_context, |lowered| {
             let LoweredNode {
@@ -480,25 +480,18 @@ impl<'a> LayoutWalk<'a> {
             None => populate_draws_from_graph(subtree, scene, context, &mut None, None),
         }
         match KeptHead::new(layer, lower_context) {
-            Ok(head) if self.keeps_head((node, place)) => scene.keep_head(index, head),
+            Ok(head) if self.keeps_head(place) => scene.keep_head(index, head),
             Ok(head) => head.recycle(),
             Err(draw) => recycle_lowered(draw),
         }
     }
 
-    // Whether `node` at `place`, which an update lowers, keeps its head for
-    // the next updates: a child whose draws did not change, which a later
-    // update may push again from the head, moved or with a new layer. A node
-    // whose draws or content changed keeps none: they mostly change again
-    // before an update could push the node as it was, and the recordings its
-    // head held would take room meanwhile.
-    fn keeps_head(&self, (node, place): (NodeId, NodePlace)) -> bool {
-        place == NodePlace::Child
-            && self.marks.from_update
-            && matches!(
-                self.marks.update_of(self.applier, node),
-                None | Some(NodeUpdate::Moved | NodeUpdate::Layer)
-            )
+    // Whether a node at `place`, which an update lowers, keeps its head for
+    // the next updates: a child, which a later update may push again from
+    // the head, moved or with a new layer, or lower again into the head's
+    // boxes and recordings, as a retained graph lowers into its node's.
+    fn keeps_head(&self, place: NodePlace) -> bool {
+        place == NodePlace::Child && self.marks.from_update
     }
 
     // Pushes `subtree`, the layer of `node`, with the children `inner` lowers

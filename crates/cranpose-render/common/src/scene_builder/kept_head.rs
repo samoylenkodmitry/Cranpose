@@ -127,10 +127,20 @@ impl KeptHead {
 
     /// Lets the node go, as [`recycle_lowered`] lets a lowered node go.
     pub fn recycle(self) {
-        recycle_lowered(match self.node {
+        recycle_lowered(self.into_node());
+    }
+
+    /// Lets the node go before it lowers again in this update: its new
+    /// draws record into the recordings it held.
+    pub fn recycle_to_redraw(self) {
+        crate::layer_recycling::recycle_to_redraw(self.into_node());
+    }
+
+    fn into_node(self) -> RenderNode {
+        match self.node {
             KeptNode::Layer(layer) => RenderNode::Layer(layer),
             KeptNode::Inline(inline) => RenderNode::Inline(inline),
-        });
+        }
     }
 }
 
