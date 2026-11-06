@@ -78,3 +78,83 @@ fn integration_local_http_client_overrides_current() {
     let current = Arc::clone(captured.borrow().as_ref().expect("client captured"));
     assert!(Arc::ptr_eq(&current, &custom_client));
 }
+
+// The server holds its answer for at most this long, so a request that
+// blocked the UI thread fails the test and does not hang it.
+#[cfg(feature = "http-native")]
+const HELD: std::time::Duration = std::time::Duration::from_secs(5);
+
+// A request awaited in an effect. The server holds its answer while the UI
+// thread drains its work. The answer then reaches the effect.
+#[cfg(feature = "http-native")]
+#[test]
+fn an_effect_awaits_a_request_while_the_ui_thread_stays_free() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
+    use cranpose_core::LaunchedEffect;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local server");
+    let address = listener.local_addr().expect("local server address");
+    let (arrived, request_arrived) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept the request");
+        let mut request = [0_u8; 1024];
+        let read = stream.read(&mut request).expect("read the request");
+        assert!(read > 0, "the request came empty");
+        arrived.send(()).expect("note the request");
+        // The answer goes out on release, or after `HELD` once the test failed.
+        let _held: Result<(), mpsc::RecvTimeoutError> = released.recv_timeout(HELD);
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\npage"
+        )
+        .expect("write the answer");
+    });
+
+    let text = Rc::new(RefCell::new(None::<String>));
+    let sink = Rc::clone(&text);
+    let url = format!("http://{address}");
+    let mut composition = Composition::new(MemoryApplier::new());
+    let started = Instant::now();
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            let (sink, url) = (Rc::clone(&sink), url.clone());
+            let client = cranpose_services::default_http_client();
+            LaunchedEffect((), async move |_| {
+                let page = client.get_text(&url).await.expect("the page");
+                *sink.borrow_mut() = Some(page);
+            });
+        })
+        .expect("render succeeds");
+    let runtime = composition.runtime_handle();
+
+    while request_arrived.try_recv().is_err() && started.elapsed() < HELD * 2 {
+        runtime.drain_ui();
+        std::thread::yield_now();
+    }
+    for _ in 0..10 {
+        runtime.drain_ui();
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the UI thread waited for the network"
+    );
+    assert!(
+        text.borrow().is_none(),
+        "the effect finished before the server answered"
+    );
+
+    release.send(()).expect("release the answer");
+    assert!(crate::composition_support::pump_until(
+        &mut composition,
+        || { text.borrow().is_some() }
+    ));
+    assert_eq!(text.borrow().as_deref(), Some("page"));
+    server.join().expect("join the server");
+}
