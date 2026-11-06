@@ -10,8 +10,8 @@ use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        KeptHead, LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment,
-        has_children, kept_child_placement, lower_moved_subtree, lower_node_alone,
+        ChildPlacement, KeptHead, LowerContext, LoweredNode, NodePlace, RecordingStore,
+        SpaceFragment, has_children, kept_child_placement, lower_moved_subtree, lower_node_alone,
         lower_space_fragment, placed_child_position, recycle_lowered, release_lowered,
         visit_kept_node, visit_lowered_children,
     },
@@ -77,11 +77,6 @@ impl DirtyMarks {
     // Whether neither `node` nor a node beneath it changed.
     pub(crate) fn is_clean(&self, applier: &MemoryApplier, node: NodeId) -> bool {
         self.marks.get(applier, node) == 0
-    }
-
-    // Whether `node` itself changed.
-    pub(crate) fn changed(&self, applier: &MemoryApplier, node: NodeId) -> bool {
-        decode(self.marks.get(applier, node)).is_some()
     }
 
     // The update `node` itself takes, when it changed.
@@ -170,6 +165,16 @@ fn first_child_of_kept(records: &[SubtreeItems], at: usize, node: NodeId) -> Opt
 pub(crate) struct OldChildren {
     cursor: usize,
     end: usize,
+    changes: ChangesBeneath,
+}
+
+// Who pushes again what changed beneath a node's children.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChangesBeneath {
+    // The rewrite of the node, as it pushes the children.
+    Pending,
+    // The update, which walked to each change and pushed it on its own.
+    Pushed,
 }
 
 impl OldChildren {
@@ -181,6 +186,15 @@ impl OldChildren {
         Self {
             cursor: child_record_from(records, own + 1, end),
             end,
+            changes: ChangesBeneath::Pending,
+        }
+    }
+
+    // These children, beneath which the update pushed each change on its own.
+    pub(crate) fn with_changes_pushed(self) -> Self {
+        Self {
+            changes: ChangesBeneath::Pushed,
+            ..self
         }
     }
 
@@ -267,9 +281,21 @@ impl<'a> LayoutWalk<'a> {
         self.marks.is_clean(self.applier, node)
     }
 
-    // Whether `node` itself changed.
-    pub(crate) fn changed(&self, node: NodeId) -> bool {
-        self.marks.changed(self.applier, node)
+    // The update `node` itself takes, when it changed.
+    pub(crate) fn update_of(&self, node: NodeId) -> Option<NodeUpdate> {
+        self.marks.update_of(self.applier, node)
+    }
+
+    // Whether `child`, lowered under `context`, lies as its old record
+    // `record` says: the same layer, placed the same in its parent.
+    pub(crate) fn lies_as(
+        &self,
+        child: NodeId,
+        context: &LowerContext,
+        record: &SubtreeItems,
+    ) -> bool {
+        kept_child_placement(self.applier, child, context)
+            .is_some_and(|placement| lies_at(&placement, record))
     }
 
     // Whether `node` at `place` lowers as a leaf: a child without children.
@@ -857,25 +883,15 @@ impl ChildSlot<'_> {
                 continue;
             };
             let end = scene.subtrees[at].end;
-            let record = &scene.subtrees[at];
-            let mark = walk.marks.marks.get(walk.applier, child);
-            // What changed beneath a child that did not change itself.
-            let beneath = match mark {
-                0 => Some(Beneath::Nothing),
-                _ if decode(mark).is_none() => Some(Beneath::Changed),
-                _ => None,
+            // The update pushed the changes beneath each child on their own:
+            // the child's subtree stays while the owner passes down what it
+            // did.
+            let (beneath, lies_as_before, position) = match old.changes {
+                ChangesBeneath::Pushed if context.same_as_before => {
+                    (Some(Beneath::Nothing), true, None)
+                }
+                _ => self.read_old_child(child, &scene.subtrees[at], context, placed_as_before),
             };
-            // A child whose owner placed it as before lies where it did.
-            let placement = (beneath.is_some() && context.same_as_before && !placed_as_before)
-                .then(|| kept_child_placement(walk.applier, child, self.context))
-                .flatten();
-            let lies_as_before = context.same_as_before
-                && (placed_as_before
-                    || placement.is_some_and(|placement| {
-                        (placement.identity, placement.transform)
-                            == (record.identity, record.transform)
-                    }));
-            let position = placement.map(|placement| placement.position);
             if beneath == Some(Beneath::Nothing)
                 && lies_as_before
                 && let Some(mut rewrite) = scene.rewrite.take()
@@ -902,4 +918,40 @@ impl ChildSlot<'_> {
             old.cursor = end;
         }
     }
+
+    // What changed beneath `child`, whose old record is `record`, when it
+    // did not change itself; whether it lies where it did, under `context`,
+    // as it does when its owner `placed_as_before`; and where it lies in its
+    // owner's content, when this read it.
+    fn read_old_child(
+        &self,
+        child: NodeId,
+        record: &SubtreeItems,
+        context: &RasterTraversalContext<'_>,
+        placed_as_before: bool,
+    ) -> (Option<Beneath>, bool, Option<Point>) {
+        let walk = self.walk;
+        let mark = walk.marks.marks.get(walk.applier, child);
+        let beneath = match mark {
+            0 => Some(Beneath::Nothing),
+            _ if decode(mark).is_none() => Some(Beneath::Changed),
+            _ => None,
+        };
+        let placement = (beneath.is_some() && context.same_as_before && !placed_as_before)
+            .then(|| kept_child_placement(walk.applier, child, self.context))
+            .flatten();
+        let lies_as_before = context.same_as_before
+            && (placed_as_before || placement.is_some_and(|placement| lies_at(&placement, record)));
+        (
+            beneath,
+            lies_as_before,
+            placement.map(|placement| placement.position),
+        )
+    }
+}
+
+// Whether the layer of a child placed at `placement` is the one its old
+// record `record` holds, placed the same in its parent.
+fn lies_at(placement: &ChildPlacement, record: &SubtreeItems) -> bool {
+    (placement.identity, placement.transform) == (record.identity, record.transform)
 }

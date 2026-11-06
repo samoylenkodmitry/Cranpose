@@ -71,18 +71,51 @@ impl WalkedTargets {
 }
 
 // A node whose subtree an update pushes again: where it lies in the layout
-// tree and in the scene, what it lowers with, whether it lowers as a leaf,
-// and once the update lowered it, its layer and what its children lower
-// with when it has children.
+// tree and in the scene, what it lowers with, how much of its subtree it
+// pushes, whether it lowers as a leaf, and once the update lowered it, its
+// layer and what its children lower with when it has children.
 pub(crate) struct PushTarget {
     node: NodeId,
     place: NodePlace,
     context: LowerContext,
     record: usize,
     parent: Option<usize>,
+    span: Span,
     leaf: bool,
     layer: Option<RenderNode>,
     inner: Option<LowerContext>,
+}
+
+// How much of a target's subtree the update pushes again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Span {
+    // The whole subtree.
+    Whole,
+    // The node's own draws: the walk went on to the changes beneath its
+    // children, which lie where they did, and pushed them on their own.
+    Own(Placed),
+}
+
+// How the walk to the changes takes a node it reaches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    // The node did not change: the walk goes on to its children.
+    Still,
+    // The node changed and placed its children as `Placed` says: the walk
+    // pushes its own draws and goes on to its children.
+    Changed(Placed),
+    // The walk pushes the node's whole subtree again.
+    PushedWhole,
+}
+
+// Where a node that changed itself placed its children.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Placed {
+    // Where it did: only state its draws read changed.
+    AsBefore,
+    // Where its layout put them now, which the walk read. The same updates
+    // may place them elsewhere in the next update.
+    Anew,
 }
 
 // Why a walk to a layer stopped.
@@ -175,7 +208,15 @@ impl InPlaceUpdate<'_> {
         // scene's order, in which a host sends them.
         repush.areas[repush.first_area..].reverse();
         let (held, replaced) = (repush.held, repush.replaced);
-        if pushed.is_ok() && replaced == Replaced::Nothing && walk.holds_no_space() {
+        let read_placements = repush
+            .targets
+            .iter()
+            .any(|target| target.span == Span::Own(Placed::Anew));
+        if pushed.is_ok()
+            && replaced == Replaced::Nothing
+            && walk.holds_no_space()
+            && !read_placements
+        {
             if !found_before {
                 walked.updates.clear();
                 walked.updates.extend_from_slice(updates);
@@ -207,46 +248,86 @@ impl Repush<'_> {
         if !names(old.identity, node) {
             return Err(Stop::OtherLayer);
         }
-        // A subtree the scene keeps whole for its 3D space lowers whole.
-        if walk.changed(node) || walk.holds_space(node) {
-            self.defer(walk, (node, place), context, (record, parent));
-            return Ok(());
-        }
+        let whole = (node, place, Span::Whole);
+        // A subtree the scene keeps whole for its 3D space lowers whole. A
+        // node that changed and has no children pushes its own draws alone.
+        let owner = match walk.update_of(node) {
+            _ if walk.holds_space(node) => Owner::PushedWhole,
+            None => Owner::Still,
+            Some(_) if walk.lowers_as_leaf((node, place)) => Owner::PushedWhole,
+            Some(NodeUpdate::Draws) => Owner::Changed(Placed::AsBefore),
+            Some(NodeUpdate::Content) => Owner::Changed(Placed::Anew),
+            Some(_) => Owner::PushedWhole,
+        };
         // A node that wraps its outer draws holds its children in its own
         // layer inside the wrapper.
         let own = OldChildren::own_record(&self.scene.subtrees, record, node);
-        let Some(passed) = self.scene.subtrees[own].passed_down else {
-            self.defer(walk, (node, place), context, (record, parent));
+        let passed = self.scene.subtrees[own].passed_down;
+        let Some(passed) = passed.filter(|_| owner != Owner::PushedWhole) else {
+            self.defer(walk, whole, context, (record, parent));
             return Ok(());
         };
         let deferred = self.targets.len();
+        if let Owner::Changed(placed) = owner {
+            self.defer(
+                walk,
+                (node, place, Span::Own(placed)),
+                context,
+                (record, parent),
+            );
+        }
         let walked = visit_kept_node(walk.applier(), (node, place), context, |children, inner| {
-            let end = self.scene.subtrees[own].end;
-            let mut cursor = child_record_from(&self.scene.subtrees, own + 1, end);
-            for &child in children {
-                let at = OldChildren::find(&self.scene.subtrees, (cursor, end), child)
-                    .ok_or(Stop::OtherLayer)?;
-                if !walk.is_clean(child) {
-                    self.visit_node(walk, (child, NodePlace::Child), inner, (at, Some(passed)))?;
-                }
-                cursor = self.scene.subtrees[at].end;
-            }
-            // Past the last child only the node's own draws may follow.
-            if child_record_from(&self.scene.subtrees, cursor, end) == end {
-                Ok(())
-            } else {
-                Err(Stop::OtherLayer)
-            }
+            self.visit_children(walk, (own, passed), (children, inner), owner)
         })
         .unwrap_or(Err(Stop::OtherLayer));
         if let Err(Stop::OtherLayer) = walked {
             // The node's subtree is pushed again whole, its children's with
             // it.
             self.targets.truncate(deferred);
-            self.defer(walk, (node, place), context, (record, parent));
+            self.defer(walk, whole, context, (record, parent));
             return Ok(());
         }
         walked
+    }
+
+    // Walks the children `children` of `owner`, whose own old record is
+    // `own` and whose entry of what it passed down is `passed`, lowered
+    // under `inner`, to the changes beneath them. A child that a changed
+    // owner placed anew elsewhere than before pushes its subtree again
+    // whole.
+    fn visit_children(
+        &mut self,
+        walk: &LayoutWalk<'_>,
+        (own, passed): (usize, usize),
+        (children, inner): (&[NodeId], &LowerContext),
+        owner: Owner,
+    ) -> Result<(), Stop> {
+        let end = self.scene.subtrees[own].end;
+        let mut cursor = child_record_from(&self.scene.subtrees, own + 1, end);
+        for &child in children {
+            let at = OldChildren::find(&self.scene.subtrees, (cursor, end), child)
+                .ok_or(Stop::OtherLayer)?;
+            let child_at = (at, Some(passed));
+            let moved = owner == Owner::Changed(Placed::Anew)
+                && !walk.lies_as(child, inner, &self.scene.subtrees[at]);
+            if moved {
+                self.defer(
+                    walk,
+                    (child, NodePlace::Child, Span::Whole),
+                    inner,
+                    child_at,
+                );
+            } else if !walk.is_clean(child) {
+                self.visit_node(walk, (child, NodePlace::Child), inner, child_at)?;
+            }
+            cursor = self.scene.subtrees[at].end;
+        }
+        // Past the last child only the node's own draws may follow.
+        if child_record_from(&self.scene.subtrees, cursor, end) == end {
+            Ok(())
+        } else {
+            Err(Stop::OtherLayer)
+        }
     }
 
     // Whether the nodes the walk found for the same updates before still
@@ -267,7 +348,7 @@ impl Repush<'_> {
     fn defer(
         &mut self,
         walk: &LayoutWalk<'_>,
-        (node, place): (NodeId, NodePlace),
+        (node, place, span): (NodeId, NodePlace, Span),
         context: &LowerContext,
         (record, parent): (usize, Option<usize>),
     ) {
@@ -277,6 +358,7 @@ impl Repush<'_> {
             context: *context,
             record,
             parent,
+            span,
             leaf: walk.lowers_as_leaf((node, place)),
             layer: None,
             inner: None,
@@ -316,6 +398,10 @@ impl Repush<'_> {
     ) -> Result<(), Stop> {
         let (node, place) = (target.node, target.place);
         let old = OldChildren::of(&self.scene.subtrees, target.record, node);
+        let old = match target.span {
+            Span::Whole => old,
+            Span::Own(_) => old.with_changes_pushed(),
+        };
         self.rewrite_subtree(
             (target.record, target.parent),
             |scene, context| match target.layer.take() {

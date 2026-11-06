@@ -7,7 +7,7 @@
 use cranpose_core::rememberMutableStateOf;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, MemoryHeadroom, Modifier, Row, RowSpec, Text, TextStyle,
+    Alignment, Box, BoxSpec, Column, ColumnSpec, MemoryHeadroom, Modifier, Text, TextStyle,
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 
@@ -269,36 +269,33 @@ fn MovesThenChangesAtRest(captured: Step) {
     );
 }
 
-// A row whose colour changes each step, over a box whose shadow shows every
-// third step and a box that does not change, which holds a box whose colour
-// changes each step. A step that adds or drops the shadow spills the row's
-// pushes from the first box on: the still box opens again in the spill
-// around its changing child.
+// A box whose colour changes each step and that holds, every third step, a
+// box under a still box, which holds a box whose colour changes each step.
+// The step that adds the first box pushes the owner's subtree again whole,
+// into a spill from the added box on: the still box opens again in the
+// spill around its changing child.
 #[composable]
-fn StillBoxAfterShadow(captured: Step) {
+fn StillBoxAfterAddedBox(captured: Step) {
     let step = rememberMutableStateOf(|| 0u32);
     *captured.borrow_mut() = Some(step);
     let n = step.value();
-    Row(
+    Box(
         Modifier::empty()
             .offset(5.0, 5.0)
             .background(color(n, 16))
             .padding(3.0),
-        RowSpec::default(),
+        BoxSpec::default(),
         move || {
-            let n = step.value();
-            Box(
-                Modifier::empty()
-                    .width(30.0)
-                    .height(30.0)
-                    .graphics_layer(move || GraphicsLayer {
-                        shadow_elevation: if n % 3 == 0 { 4.0 } else { 0.0 },
-                        ..GraphicsLayer::default()
-                    })
-                    .background(color(1, 17)),
-                BoxSpec::default(),
-                || {},
-            );
+            if step.value() % 3 == 0 {
+                Box(
+                    Modifier::empty()
+                        .width(12.0)
+                        .height(40.0)
+                        .background(color(1, 17)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
             Box(
                 Modifier::empty()
                     .width(50.0)
@@ -321,9 +318,43 @@ fn StillBoxAfterShadow(captured: Step) {
     );
 }
 
+// A box that grows wider each step and taller every second step, over a box
+// it centres from top to bottom, which moves only in the steps the outer box
+// grows taller. The updates name the same nodes each step, so the walk that
+// found the box at rest does not hold for the step after it.
+#[composable]
+fn CentredBoxMovesEverySecondStep(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let n = step.value();
+    Box(
+        Modifier::empty()
+            .offset(6.0, 6.0)
+            .width(60.0 + (n % 5) as f32 * 4.0)
+            .height(40.0 + (n.div_ceil(2) % 4) as f32 * 8.0)
+            .background(color(3, 20)),
+        BoxSpec::new().content_alignment(Alignment::CENTER_START),
+        || {
+            Box(
+                Modifier::empty()
+                    .width(24.0)
+                    .height(16.0)
+                    .background(color(4, 21)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn a_centred_box_that_moves_every_second_step_draws_where_it_lies() {
+    kept_frames_match_full_redraws(1.0, CentredBoxMovesEverySecondStep);
+}
+
 #[test]
 fn a_still_box_after_a_spill_keeps_its_draws_around_its_changing_child() {
-    kept_frames_match_full_redraws(1.0, StillBoxAfterShadow);
+    kept_frames_match_full_redraws(1.0, StillBoxAfterAddedBox);
 }
 
 #[test]
