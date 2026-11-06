@@ -235,6 +235,10 @@ impl Rewrite {
                 }
                 record.transform = subtree.transform_to_parent();
                 record.node_size = subtree.node_size();
+                // The node's push keeps its new head when it ends.
+                if let Some(stale) = record.head.take() {
+                    stale.recycle();
+                }
                 record.passed_down = None;
                 record.end = index + 1;
                 record.stop = self.next.items;
@@ -337,12 +341,12 @@ impl Rewrite {
     // Keeps the old subtree of the record `old`, a child of the open
     // record: in its place when it lies where the subtree pushes next,
     // else as a copy in the spill.
-    pub(crate) fn keep(&mut self, scene: &RasterScene, old: usize) {
-        let records = &scene.subtrees;
-        let head = &records[old];
+    pub(crate) fn keep(&mut self, scene: &mut RasterScene, old: usize) {
         let Some((extent, first_entry)) = scene.subtree_span(old) else {
             return;
         };
+        let records = &scene.subtrees;
+        let head = &records[old];
         let entries_fit = extent.passed_down == 0 || first_entry == self.next.passed_down;
         if self.spilled_at.is_none()
             && self.next.records == old
@@ -362,8 +366,9 @@ impl Rewrite {
         }
         let here = self.here();
         let to = (here.items, here.records, here.passed_down);
+        let (end, stop) = (head.end, head.stop);
         self.spill
-            .copy_subtrees_to(scene, old..head.end, (head.stop, first_entry), to);
+            .copy_subtrees_to(scene, old..end, (stop, first_entry), to);
     }
 
     // Sets where the open record's own old items go on after the old
@@ -480,9 +485,12 @@ impl Rewrite {
             self.reach.splice(from.items.order..to.items.order, spilled);
         }
         splice_items(scene, (from.items, to.items), &mut self.spill);
-        scene
+        let removed_records = scene
             .subtrees
             .splice(from.records..to.records, self.spill.subtrees.drain(..));
+        for head in removed_records.filter_map(|record| record.head) {
+            head.recycle();
+        }
         scene.passed_down.splice(
             from.passed_down..to.passed_down,
             self.spill.passed_down.drain(..),

@@ -25,7 +25,7 @@ use super::{ContentStyle, RasterTraversalContext};
 use crate::{
     damage::merge_areas,
     draw::{ClipBounds, TextRaster},
-    layout_walk::{LayoutWalk, OldChildren, child_record_from, names},
+    layout_walk::{ChildPosition, LayoutWalk, OldChildren, child_record_from, names},
     raster_scene::{PassedDown, RasterScene},
     rewrite::{Replaced, Rewrite},
 };
@@ -294,6 +294,14 @@ impl Repush<'_> {
         // small instruction cache between targets.
         for leaves in [false, true] {
             for target in targets.iter_mut().filter(|target| target.leaf == leaves) {
+                // A child that only moved pushes again from the head its
+                // record keeps.
+                if walk.moves_with_head(
+                    (target.node, target.place),
+                    &self.scene.subtrees[target.record],
+                ) {
+                    continue;
+                }
                 let lowered = (&mut target.layer, &mut target.inner);
                 walk.lower((target.node, target.place), &target.context, lowered);
             }
@@ -321,15 +329,23 @@ impl Repush<'_> {
             |scene, context| match target.layer.take() {
                 Some(layer) => {
                     let lowered = (layer, target.inner.as_ref());
-                    walk.push_lowered(node, lowered, (scene, context), Some(old));
+                    let lowered_with = (&target.context, Some(old));
+                    walk.push_lowered((node, place), lowered, (scene, context), lowered_with);
                 }
-                None => walk.push(
-                    (node, place),
-                    &target.context,
-                    (scene, context),
-                    &mut None,
-                    Some(old),
-                ),
+                None => {
+                    let moved = (node, target.record, ChildPosition::AsBefore);
+                    if !(place == NodePlace::Child
+                        && walk.push_moved(moved, &target.context, (scene, context)))
+                    {
+                        walk.push(
+                            (node, place),
+                            &target.context,
+                            (scene, context),
+                            &mut None,
+                            Some(old),
+                        );
+                    }
+                }
             },
         )
     }

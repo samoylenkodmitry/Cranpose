@@ -11,7 +11,7 @@ use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope,
     MemoryHeadroom, Modifier, Text, TextStyle, rememberLazyListState,
 };
-use cranpose_ui_graphics::{Color, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
 
 #[path = "support/kept_frames.rs"]
 mod kept_frames;
@@ -443,4 +443,111 @@ fn rows_that_scroll_in_and_out_of_a_list_draw_right() {
 #[test]
 fn rows_that_come_and_go_before_changing_rows_draw_right() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, ComingAndGoingRows);
+}
+
+// A bar whose width and colour a draw reads from `step`: an update draws it
+// again with no composition.
+fn drawn_bar(row: u32, salt: u32, step: cranpose_core::MutableState<u32>) -> Modifier {
+    Modifier::empty()
+        .fill_max_width()
+        .height(8.0)
+        .draw_behind(move |scope| {
+            let size = scope.size();
+            let n = step.value();
+            let part = ((n * 7 + row * 11 + salt) % 10 + 1) as f32 / 11.0;
+            scope.draw_rect_at(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: size.width * part,
+                    height: size.height,
+                },
+                Brush::solid(color(n + row, salt)),
+            );
+        })
+}
+
+// A row that draws its background before its graphics layer and pads its
+// content inside the layer: a bar, and a padded box around another bar.
+// The wrapper of the row's outer draws holds the layer that places the
+// row's children.
+#[composable]
+fn WrappedBarRow(row: u32, step: cranpose_core::MutableState<u32>) {
+    Column(
+        Modifier::empty()
+            .width(120.0)
+            .background(color(row, 21))
+            .graphics_layer(|| GraphicsLayer {
+                alpha: 0.8,
+                ..GraphicsLayer::default()
+            })
+            .padding(5.0),
+        ColumnSpec::default(),
+        move || {
+            Box(drawn_bar(row, 22, step), BoxSpec::default(), || {});
+            Box(
+                Modifier::empty()
+                    .fill_max_width()
+                    .background(color(row, 23))
+                    .padding(2.0),
+                BoxSpec::default(),
+                move || {
+                    Box(drawn_bar(row, 24, step), BoxSpec::default(), || {});
+                },
+            );
+        },
+    );
+}
+
+// Rows like `WrappedBarRow` in a column that an offset its placement reads
+// moves each step: the column's layer moves, each row pushes again from
+// what its record keeps, and its bar draws again.
+#[composable]
+fn MovingWrappedRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty()
+            .offset_with(move || Point::new(4.0 + (step.value() % 4) as f32 * 3.0, 4.0)),
+        ColumnSpec::default(),
+        move || {
+            for row in 0..3 {
+                WrappedBarRow(row, step);
+            }
+        },
+    );
+}
+
+// A card whose alpha a block reads from `step` over rows like
+// `WrappedBarRow`: the card's layer changes each step, each row pushes again
+// from what its record keeps, and its bar draws again.
+#[composable]
+fn FadingWrappedRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty()
+            .offset(6.0, 6.0)
+            .graphics_layer_block(move |layer| {
+                layer.alpha = 0.3 + (step.value() % 7) as f32 * 0.1;
+            })
+            .background(Color::from_rgb_u8(30, 40, 50))
+            .padding(4.0),
+        ColumnSpec::default(),
+        move || {
+            for row in 0..3 {
+                WrappedBarRow(row, step);
+            }
+        },
+    );
+}
+
+#[test]
+fn wrapped_rows_in_a_moving_column_draw_their_changing_bars_right() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, MovingWrappedRows);
+}
+
+#[test]
+fn wrapped_rows_under_a_fading_card_draw_their_changing_bars_right() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, FadingWrappedRows);
 }

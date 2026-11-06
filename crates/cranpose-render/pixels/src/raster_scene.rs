@@ -6,6 +6,7 @@ use cranpose_render_common::{
     graph::{HitTestNode, InlineNode, LayerNode, ProjectiveTransform, RenderNode},
     layer_shadow::{ShadowLight, ShadowRRect},
     primitive_emit::ShapeDrawParams,
+    scene_builder::KeptHead,
 };
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
@@ -353,6 +354,7 @@ impl<'a> Subtree<'a> {
             end,
             start: counts,
             stop: counts,
+            head: None,
         }
     }
 
@@ -397,7 +399,6 @@ impl HitLayer {
 
 /// The items a layer's subtree pushed into a scene, in a run of each list,
 /// so the next scene can copy them when nothing they depend on changed.
-#[derive(Clone)]
 pub(crate) struct SubtreeItems {
     /// The layer's node and the node whose outer draws it wraps.
     pub identity: (Option<NodeId>, Option<NodeId>),
@@ -417,6 +418,32 @@ pub(crate) struct SubtreeItems {
     pub end: usize,
     pub start: ItemCounts,
     pub stop: ItemCounts,
+    // The node lowered alone, kept after an update pushed it, for the next
+    // updates to push again while the node does not change.
+    pub head: Option<KeptHead>,
+}
+
+impl SubtreeItems {
+    // A copy of the record for another scene, which keeps no head.
+    fn copied(&self) -> Self {
+        Self {
+            identity: self.identity,
+            transform: self.transform,
+            node_size: self.node_size,
+            hits: self.hits.clone(),
+            passed_down: self.passed_down,
+            end: self.end,
+            start: self.start,
+            stop: self.stop,
+            head: None,
+        }
+    }
+
+    // The layout node of the record: its layer's or inline node's, or the
+    // node whose outer draws it wraps. `None` for a draw group.
+    pub(crate) fn node(&self) -> Option<NodeId> {
+        self.identity.0.or(self.identity.1)
+    }
 }
 
 pub(crate) struct RasterScene {
@@ -590,6 +617,42 @@ impl RasterScene {
         at
     }
 
+    // The index of the record that opens next, wherever a rewrite puts it.
+    pub(crate) fn next_record(&self) -> usize {
+        match self.rewrite.as_deref() {
+            Some(rewrite) => rewrite.record_end().0,
+            None => self.subtrees.len(),
+        }
+    }
+
+    // Keeps the old subtree whose record is `at` in the rewrite in progress,
+    // as `Rewrite::keep` does. False without a rewrite.
+    pub(crate) fn keep_old(&mut self, at: usize) -> bool {
+        let Some(mut rewrite) = self.rewrite.take() else {
+            return false;
+        };
+        rewrite.keep(self, at);
+        self.rewrite = Some(rewrite);
+        true
+    }
+
+    // Takes the head the old record `at` keeps.
+    pub(crate) fn take_head(&mut self, at: usize) -> Option<KeptHead> {
+        self.subtrees.get_mut(at)?.head.take()
+    }
+
+    // Keeps `head` with the record `index`, which its node's push opened.
+    pub(crate) fn keep_head(&mut self, index: usize, head: KeptHead) {
+        match self.record_mut(index) {
+            Some(record) => {
+                if let Some(stale) = record.head.replace(head) {
+                    stale.recycle();
+                }
+            }
+            None => head.recycle(),
+        }
+    }
+
     // The record `index`, wherever a rewrite put it.
     fn record_mut(&mut self, index: usize) -> Option<&mut SubtreeItems> {
         match self.rewrite.as_deref_mut() {
@@ -629,8 +692,13 @@ impl RasterScene {
             self.order
                 .extend(order.iter().map(|item| item.moved(from, to)));
         }
-        self.subtrees
-            .extend_from_slice(old.subtrees.get(records).unwrap_or_default());
+        self.subtrees.extend(
+            old.subtrees
+                .get(records)
+                .unwrap_or_default()
+                .iter()
+                .map(SubtreeItems::copied),
+        );
         let passed_down = &mut self.passed_down;
         for record in self.subtrees.get_mut(base..).unwrap_or_default() {
             if !in_place {
@@ -654,7 +722,7 @@ impl RasterScene {
     // entries would start at `to` in the scene it is spliced into.
     pub(crate) fn copy_subtrees_to(
         &mut self,
-        old: &Self,
+        old: &mut Self,
         records: Range<usize>,
         (stop, first_entry): (ItemCounts, usize),
         to: (ItemCounts, usize, usize),
@@ -674,7 +742,9 @@ impl RasterScene {
         let moved = |index: usize, from: usize, to: usize| to + (index - from);
         let first = records.start;
         let mut entries = 0;
-        for record in &old.subtrees[records] {
+        // The old records give way to the copies when the spill is spliced
+        // in: their heads go with the copies.
+        for record in &mut old.subtrees[records] {
             entries += usize::from(record.passed_down.is_some());
             self.subtrees.push(SubtreeItems {
                 end: moved(record.end, first, to_records),
@@ -683,7 +753,8 @@ impl RasterScene {
                 passed_down: record
                     .passed_down
                     .map(|at| moved(at, first_entry, to_entries)),
-                ..record.clone()
+                head: record.head.take(),
+                ..record.copied()
             });
         }
         self.passed_down
