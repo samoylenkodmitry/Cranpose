@@ -13,6 +13,10 @@ import time
 # CoreSimulator on the build fleet cannot create devices or captures on its
 # external build drive. Only the temporary device set uses the internal disk.
 SCRATCH_ROOT = '/Users/Shared'
+SET_PREFIX = 'cranpose-watch-'
+# A device set this old belongs to a session that ended before its cleanup ran:
+# a session lasts minutes.
+STALE_SET_SECONDS = 3600
 
 # What simctl prints on stderr when CoreSimulator itself went away: its service
 # died under a command, the device shut down under a running session, or the
@@ -36,7 +40,7 @@ def command(*args):
 def session(bundle, evidence, repeated):
     info = plistlib.loads((bundle / 'Info.plist').read_bytes())
     evidence.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='cranpose-watch-', dir=SCRATCH_ROOT) as scratch:
+    with tempfile.TemporaryDirectory(prefix=SET_PREFIX, dir=SCRATCH_ROOT) as scratch:
         def sim(*args):
             return command('xcrun', 'simctl', '--set', scratch, *args)
 
@@ -65,13 +69,38 @@ def session(bundle, evidence, repeated):
             (evidence / 'launch.txt').write_text(report)
             print(f'Simulator smoke passed: {launched}', flush=True)
         finally:
-            # Cleanup must not replace the failure that ended the session.
-            for verb in ('shutdown', 'delete'):
-                subprocess.run(['xcrun', 'simctl', '--set', scratch, verb, device], check=False, timeout=60)
+            retire(scratch, device)
+
+
+def retire(scratch, devices):
+    """Shut down and delete `devices` (one device, or `all`) of the device set at
+    `scratch`. Cleanup must not replace the failure that ended a session."""
+    for verb in ('shutdown', 'delete'):
+        try:
+            subprocess.run(['xcrun', 'simctl', '--set', str(scratch), verb, devices], check=False, timeout=60)
+        except subprocess.TimeoutExpired as hung:
+            print(f'simctl {verb} {devices} did not finish: {hung}', file=sys.stderr, flush=True)
+
+
+def sweep_stale_sets():
+    """Shut down and remove the device sets of sessions that ended before their
+    cleanup, as a cancelled job ends: a watch such a session left booted runs
+    on beside the host's other jobs and its benchmarks."""
+    oldest = time.time() - STALE_SET_SECONDS
+    for scratch in Path(SCRATCH_ROOT).glob(f'{SET_PREFIX}*'):
+        try:
+            if scratch.stat().st_mtime > oldest:
+                continue
+        except FileNotFoundError:
+            # Another runner on the host swept it first.
+            continue
+        retire(scratch, 'all')
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def smoke(bundle, evidence):
     """Run one session. If CoreSimulator died under it, run it once more in a new device set."""
+    sweep_stale_sets()
     try:
         session(bundle, evidence, repeated=False)
     except subprocess.CalledProcessError as failure:
