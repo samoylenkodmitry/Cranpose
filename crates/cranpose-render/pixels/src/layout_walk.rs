@@ -754,6 +754,7 @@ impl ChildSlot<'_> {
     ) {
         let walk = self.walk;
         let placed_as_before = self.placed_as_before();
+        let mut moved = scene.records_moved();
         for &child in self.children {
             let found = OldChildren::find(&scene.subtrees, (old.cursor, old.end), child);
             let Some(at) = found else {
@@ -770,10 +771,9 @@ impl ChildSlot<'_> {
             // places, and a child that went away, give way to the child's
             // old subtree, which its pushes then take the places of. A splice
             // moves the old records after it.
-            let moved = scene.records_moved();
+            let found = at;
             let at = scene.rejoin(at);
             let end = scene.subtrees[at].end;
-            let rejoined = scene.records_moved();
             let record = &scene.subtrees[at];
             let mark = walk.marks.marks.get(walk.applier, child);
             let clean = mark == 0;
@@ -814,9 +814,17 @@ impl ChildSlot<'_> {
                     Some(children),
                 );
             }
+            // The splices since the child's old end was read moved it, and
+            // the rejoin with them moved the end of the children.
             let now = scene.records_moved();
-            old.cursor = end.saturating_add_signed(now - rejoined);
-            old.end = old.end.saturating_add_signed(now - moved);
+            if now != moved {
+                let rejoined = at as isize - found as isize;
+                old.cursor = end.saturating_add_signed(now - moved - rejoined);
+                old.end = old.end.saturating_add_signed(now - moved);
+                moved = now;
+            } else {
+                old.cursor = end;
+            }
         }
     }
 }

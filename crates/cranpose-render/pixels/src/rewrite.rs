@@ -386,6 +386,12 @@ impl Rewrite {
         self.records_moved
     }
 
+    // Whether the subtree pushes next in place of the old record `at`.
+    #[inline]
+    pub(crate) fn pushes_next_at(&self, at: usize) -> bool {
+        self.spilled_at.is_none() && self.next.records == at
+    }
+
     // Readies the pushes of the next child, whose old record is `at`, to take
     // the places of its old ones: what the subtree pushed since its pushes
     // last fit their places takes the place of the old records, items and
@@ -401,9 +407,7 @@ impl Rewrite {
     }
 
     // What `rejoin` does for a child whose old record does not lie where the
-    // subtree pushes next. Out of line, as `replace` is.
-    #[cold]
-    #[inline(never)]
+    // subtree pushes next.
     fn splice_before(&mut self, scene: &mut RasterScene, from: Places, at: usize) -> usize {
         let entries = scene.subtrees[from.records..at]
             .iter()

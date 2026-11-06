@@ -567,8 +567,21 @@ impl RasterScene {
 
     // Readies the rewrite in progress to push the child whose old record is
     // `at` over its old places, as `Rewrite::rejoin` does. Returns where
-    // that record now lies.
+    // that record now lies. The check that it lies where the rewrite pushes
+    // next is read in line: a child mostly does.
+    #[inline]
     pub(crate) fn rejoin(&mut self, at: usize) -> usize {
+        match self.rewrite.as_deref() {
+            Some(rewrite) if !rewrite.pushes_next_at(at) => self.rejoin_apart(at),
+            _ => at,
+        }
+    }
+
+    // What `rejoin` does for a child whose old record lies apart from where
+    // the rewrite pushes next.
+    #[cold]
+    #[inline(never)]
+    fn rejoin_apart(&mut self, at: usize) -> usize {
         let Some(mut rewrite) = self.rewrite.take() else {
             return at;
         };
