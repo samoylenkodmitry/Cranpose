@@ -1,14 +1,17 @@
-// A room of the backrooms and, behind its doorways, the rooms beyond them:
-// each a scene behind a doorway of the room before, as deep as the eye
-// sees, the rooms behind its own room's doorways and the rooms behind
-// theirs. The walls, floors and ceilings show their finish alone; the
-// entity's writing, a lever and the things in a room show live content.
-// Every room reads the level and the window's eye from the composition
-// locals the tab provides, so the rooms behind doorways take only where
-// they lie. A composable here that reads a state skips while its arguments
-// stay the same, so a change composes it alone; one that reads none is
-// `no_skip` and composes in its caller's group, as Compose's inline
-// composables do, with no arguments stored.
+// A room of the backrooms and the rooms behind its doorways. Each room is a
+// scene behind a doorway of the room before it, as deep as the eye sees.
+// The walls, floors and ceilings show their finish alone. The writing and
+// the objects in a room show live content. Every room reads the level and
+// the window's eye from the composition locals of the tab. A room takes
+// only its visit and its place as arguments.
+//
+// A composable here that reads a state skips while its arguments stay the
+// same. A change of that state composes it alone. The composables marked
+// `no_skip` read no state. `Room` is their only caller. `Room` composes
+// again only when its own arguments change. Their arguments come from those
+// of `Room` and change with them. A skip check could never pass for them.
+// They store no arguments and compose in the group of `Room`, as Compose's
+// inline composables do.
 
 use std::sync::Arc;
 
