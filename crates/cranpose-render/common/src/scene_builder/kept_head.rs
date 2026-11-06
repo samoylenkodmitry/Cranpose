@@ -7,8 +7,8 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::Point;
 
 use super::{
-    Inherited, Level, LowerContext, publish_layer_window_geometry, read_placed_node_data,
-    recycle_lowered, translate_retained_child,
+    Inherited, Level, LowerContext, Position, publish_layer_window_geometry, read_placed_node_data,
+    recycle_lowered, refresh_layer_properties, translate_retained_child,
 };
 use crate::graph::{InlineNode, LayerNode, RenderNode};
 
@@ -24,6 +24,16 @@ pub struct KeptHead {
 enum KeptNode {
     Layer(Box<LayerNode>),
     Inline(Box<InlineNode>),
+}
+
+/// What changed of a kept node's own layer since the node lowered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OwnLayer {
+    /// Nothing: the node only moved, or lies beneath a node that changed.
+    AsLowered,
+    /// Its graphics-layer properties, while it drew the same and lay where
+    /// it lay.
+    Changed,
 }
 
 /// The node a [`KeptHead`] keeps, placed where it now lies, as its parent's
@@ -51,22 +61,30 @@ impl KeptHead {
         })
     }
 
-    /// Places the head of `node_id`, whose own state did not change since
-    /// it lowered, where it now lies under `context`: at `position` in its
+    /// Places the head of `node_id`, which draws as it drew when it
+    /// lowered, where it now lies under `context`: at `position` in its
     /// parent's content when the parent placed it anew, else where it lay.
-    /// Publishes where its layer lies in its window when the node reads it.
-    /// Returns the node, with what its children lower with for a layer.
-    /// `None` when `context` passes down other state than the head lowered
-    /// with, or the node is gone.
+    /// Takes the graphics-layer properties the node has now when `own_layer`
+    /// changed. Publishes where its layer lies in its window when the node
+    /// reads it. Returns the node, with what its children lower with for a
+    /// layer. `None` when `context` passes down other state than the head
+    /// lowered with, the node is gone, or a node with a new layer no longer
+    /// fits its kept one or draws in its parent's layer.
     pub fn follow(
         &mut self,
         applier: &MemoryApplier,
         node_id: NodeId,
         context: &LowerContext,
-        position: Option<Point>,
+        (position, own_layer): (Option<Point>, OwnLayer),
     ) -> Option<KeptNodeRef<'_>> {
         if Inherited::of(context) != self.lowered_with {
             return None;
+        }
+        if own_layer == OwnLayer::Changed {
+            let KeptNode::Layer(layer) = &mut self.node else {
+                return None;
+            };
+            refresh_layer_properties(applier, layer, (Level::Child, Position::Kept), context)?;
         }
         let offset = context.parent_content_offset;
         let layer = match &mut self.node {
@@ -87,7 +105,7 @@ impl KeptHead {
         let (outer, own) = match layer.wraps {
             Some(_) => {
                 wrapped = context.beneath_layer(layer);
-                (&wrapped, own_layer(layer, node_id)?)
+                (&wrapped, wrapped_layer(layer, node_id)?)
             }
             None => (context, &**layer),
         };
@@ -117,7 +135,7 @@ impl KeptHead {
 }
 
 // The layer of `node_id` inside `wrapper`, the wrapper of its outer draws.
-fn own_layer(wrapper: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
+fn wrapped_layer(wrapper: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
     wrapper.children.iter().find_map(|child| match child {
         RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(&**layer),
         _ => None,

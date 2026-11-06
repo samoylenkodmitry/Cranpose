@@ -298,9 +298,9 @@ impl Repush<'_> {
         // small instruction cache between targets.
         for leaves in [false, true] {
             for target in targets.iter_mut().filter(|target| target.leaf == leaves) {
-                // A child that only moved pushes again from the head its
-                // record keeps.
-                if walk.moves_with_head(
+                // A child that draws as it drew, as it only moved or only its
+                // layer changed, pushes again from the head its record keeps.
+                if walk.pushes_from_head(
                     (target.node, target.place),
                     &self.scene.subtrees[target.record],
                 ) {
@@ -343,7 +343,7 @@ impl Repush<'_> {
                     let moved = (node, target.record, ChildPosition::AsBefore);
                     let update = walk.update_of(node);
                     if !(place == NodePlace::Child
-                        && walk.push_moved(moved, (update, &target.context), (scene, context)))
+                        && walk.push_from_head(moved, (update, &target.context), (scene, context)))
                     {
                         walk.push(
                             (node, place),

@@ -44,7 +44,7 @@ pub use lowered_node::{
 
 pub use crate::layer_recycling::recycle_lowered;
 mod kept_head;
-pub use kept_head::{KeptHead, KeptNodeRef};
+pub use kept_head::{KeptHead, KeptNodeRef, OwnLayer};
 mod moved_subtree;
 use moved_subtree::Inherited;
 pub use moved_subtree::{MovedSubtree, lower_moved_subtree, placed_child_position};
@@ -624,6 +624,24 @@ fn update_layer_properties(
     position: Position,
     ancestors: TranslateAncestorContext,
 ) -> Option<GraphChanges> {
+    refresh_layer_properties(
+        applier,
+        container,
+        (level, position),
+        &LowerContext::beneath(ancestors),
+    )
+}
+
+// Takes into `container`, the layer of a node that draws as it drew when it
+// lowered under `context`, the graphics-layer properties the node has now.
+// Returns how the facts that hit testing reads changed. `None`, with the
+// layer as it was, when the layer no longer fits the node's layout.
+fn refresh_layer_properties(
+    applier: &MemoryApplier,
+    container: &mut LayerNode,
+    (level, position): (Level, Position),
+    context: &LowerContext,
+) -> Option<GraphChanges> {
     let node_id = layer_identity(container)?;
     let wrapping = if container.wraps.is_some() {
         Wrapping::Wrapped
@@ -644,9 +662,8 @@ fn update_layer_properties(
         if !retained_layer_matches_layout(target, &data, placement, wrapping, position) {
             return None;
         }
-        let context = LowerContext::beneath(ancestors);
         let previous = HitGraphState::of(target);
-        let (head, child_context) = prepare_node_layer(node_id, slices, state, &context);
+        let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
         assign_layer(target, head);
         if wrapped {
             target.transform_to_parent = layer_transform_to_parent(

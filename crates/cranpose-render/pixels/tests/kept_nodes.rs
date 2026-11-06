@@ -525,15 +525,15 @@ fn MovingWrappedRows(captured: Step) {
 }
 
 // A card whose alpha a block reads from `step` over rows like
-// `WrappedBarRow`: the card's layer changes each step, each row pushes again
-// from what its record keeps, and its bar draws again.
+// `WrappedBarRow`, with `outside` drawn outside its layer: the card's layer
+// changes each step, each row pushes again from what its record keeps, and
+// its bar draws again.
 #[composable]
-fn FadingWrappedRows(captured: Step) {
-    let step = rememberMutableStateOf(|| 0u32);
-    *captured.borrow_mut() = Some(step);
+fn FadingCard(step: cranpose_core::MutableState<u32>, outside: Modifier) {
     Column(
         Modifier::empty()
             .offset(6.0, 6.0)
+            .then(outside)
             .graphics_layer_block(move |layer| {
                 layer.alpha = 0.3 + (step.value() % 7) as f32 * 0.1;
             })
@@ -548,6 +548,27 @@ fn FadingWrappedRows(captured: Step) {
     );
 }
 
+#[composable]
+fn FadingWrappedRows(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    FadingCard(step, Modifier::empty());
+}
+
+// The card in a border it draws outside its layer: the layer that changes
+// lies in the wrapper of the card's outer draws.
+#[composable]
+fn FadingCardInBorder(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    FadingCard(
+        step,
+        Modifier::empty()
+            .background(Color::from_rgb_u8(90, 30, 60))
+            .padding(3.0),
+    );
+}
+
 #[test]
 fn wrapped_rows_in_a_moving_column_draw_their_changing_bars_right() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, MovingWrappedRows);
@@ -556,4 +577,9 @@ fn wrapped_rows_in_a_moving_column_draw_their_changing_bars_right() {
 #[test]
 fn wrapped_rows_under_a_fading_card_draw_their_changing_bars_right() {
     kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, FadingWrappedRows);
+}
+
+#[test]
+fn rows_under_a_fading_card_in_a_border_draw_their_changing_bars_right() {
+    kept_frames_match_full_redraws_with(1.0, MemoryHeadroom::Ample, FadingCardInBorder);
 }

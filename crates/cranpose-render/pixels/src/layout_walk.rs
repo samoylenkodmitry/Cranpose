@@ -10,8 +10,8 @@ use cranpose_render_common::{
     NodeUpdate, SceneUpdates,
     graph::RenderNode,
     scene_builder::{
-        KeptHead, KeptNodeRef, LowerContext, LoweredNode, NodePlace, RecordingStore, SpaceFragment,
-        has_children, kept_child_placement, lower_moved_subtree, lower_node_alone,
+        KeptHead, KeptNodeRef, LowerContext, LoweredNode, NodePlace, OwnLayer, RecordingStore,
+        SpaceFragment, has_children, kept_child_placement, lower_moved_subtree, lower_node_alone,
         lower_space_fragment, placed_child_position, recycle_lowered, release_lowered,
         visit_kept_node, visit_lowered_children,
     },
@@ -294,15 +294,19 @@ impl<'a> LayoutWalk<'a> {
         self.marks.changed(self.applier, node)
     }
 
-    // Whether `node` at `place`, a child whose old record is `record`, only
-    // moved and the record keeps its head: it pushes again from the head.
-    pub(crate) fn moves_with_head(
+    // Whether `node` at `place`, a child whose old record is `record`, draws
+    // as it drew, as it only moved or only its layer changed, and the record
+    // keeps its head: it pushes again from the head.
+    pub(crate) fn pushes_from_head(
         &self,
         (node, place): (NodeId, NodePlace),
         record: &SubtreeItems,
     ) -> bool {
         place == NodePlace::Child
-            && self.marks.update_of(self.applier, node) == Some(NodeUpdate::Moved)
+            && matches!(
+                self.marks.update_of(self.applier, node),
+                Some(NodeUpdate::Moved | NodeUpdate::Layer)
+            )
             && record.head.is_some()
     }
 
@@ -483,16 +487,17 @@ impl<'a> LayoutWalk<'a> {
     }
 
     // Whether `node` at `place`, which an update lowers, keeps its head for
-    // the next updates: a child whose own state did not change, which a
-    // later update may push again as it was. A node whose own state changed
-    // keeps none: it mostly changes again before an update could push it as
-    // it was, and the recordings its head held would take room meanwhile.
+    // the next updates: a child whose draws did not change, which a later
+    // update may push again from the head, moved or with a new layer. A node
+    // whose draws or content changed keeps none: they mostly change again
+    // before an update could push the node as it was, and the recordings its
+    // head held would take room meanwhile.
     fn keeps_head(&self, (node, place): (NodeId, NodePlace)) -> bool {
         place == NodePlace::Child
             && self.marks.from_update
             && matches!(
                 self.marks.update_of(self.applier, node),
-                None | Some(NodeUpdate::Moved)
+                None | Some(NodeUpdate::Moved | NodeUpdate::Layer)
             )
     }
 
@@ -565,15 +570,16 @@ impl<'a> LayoutWalk<'a> {
         pushed == Some(true)
     }
 
-    // Pushes under `context` the subtree of `child`, whose own state did not
-    // change, over its old subtree at the record `at`, from the head the
-    // record keeps: its own items from the head, at `position` in its
-    // parent's content, or where its layout now places it when it moved, and
-    // its children from their old records. False, with nothing pushed, when
-    // the child changed more than its place, the record keeps no head the
-    // child can take, the child is no longer placed, or the subtree holds a
-    // 3D space, which the walk lowers as any other.
-    pub(crate) fn push_moved(
+    // Pushes under `context` the subtree of `child`, which draws as it drew,
+    // over its old subtree at the record `at`, from the head the record
+    // keeps: its own items from the head, with the layer the child has now
+    // when its update changed only that, at `position` in its parent's
+    // content, or where its layout now places it when it moved, and its
+    // children from their old records. False, with nothing pushed, when the
+    // child changed more than its place or its layer, the record keeps no
+    // head the child can take, the child is no longer placed, or the subtree
+    // holds a 3D space, which the walk lowers as any other.
+    pub(crate) fn push_from_head(
         &self,
         (child, at, position): (NodeId, usize, ChildPosition),
         (update, lower_context): (Option<NodeUpdate>, &LowerContext),
@@ -583,8 +589,8 @@ impl<'a> LayoutWalk<'a> {
             return false;
         }
         let position = match (update, position) {
-            (None, ChildPosition::AsBefore) => None,
-            (None | Some(NodeUpdate::Moved), ChildPosition::Anew(read)) => {
+            (None | Some(NodeUpdate::Layer), ChildPosition::AsBefore) => None,
+            (None | Some(NodeUpdate::Moved | NodeUpdate::Layer), ChildPosition::Anew(read)) => {
                 let Some(position) = read.or_else(|| placed_child_position(self.applier, child))
                 else {
                     return false;
@@ -603,7 +609,11 @@ impl<'a> LayoutWalk<'a> {
             return false;
         };
         let index = scene.next_record();
-        match head.follow(self.applier, child, lower_context, position) {
+        let own_layer = match update {
+            Some(NodeUpdate::Layer) => OwnLayer::Changed,
+            _ => OwnLayer::AsLowered,
+        };
+        match head.follow(self.applier, child, lower_context, (position, own_layer)) {
             // A node drawn in its parent's layer has no children.
             Some(KeptNodeRef::Inline(inline)) => {
                 populate_draws_from_graph(Subtree::Inline(inline), scene, context, &mut None, None);
@@ -901,8 +911,8 @@ impl ChildSlot<'_> {
                         || (kept
                             && lies_as_before
                             && walk.push_through((child, at), self.context, (scene, context)))
-                        || (matches!(update, None | Some(NodeUpdate::Moved))
-                            && walk.push_moved(
+                        || (matches!(update, None | Some(NodeUpdate::Moved | NodeUpdate::Layer))
+                            && walk.push_from_head(
                                 (child, at, position),
                                 (update, self.context),
                                 (scene, context),
@@ -937,7 +947,7 @@ impl ChildSlot<'_> {
                 |scene, at| {
                     let mark = walk.marks.marks.get(walk.applier, child);
                     (context.same_as_before && mark == 0 && scene.keep_old(at))
-                        || walk.push_moved(
+                        || walk.push_from_head(
                             (child, at, ChildPosition::AsBefore),
                             (decode(mark), self.context),
                             (scene, context),
