@@ -75,6 +75,12 @@ impl FixedPipeline {
         None
     }
 
+    /// The pipeline once created, whether or not the browser compiled it.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn created(&self) -> Option<&wgpu::RenderPipeline> {
+        self.resource.get()
+    }
+
     /// The pipeline when it is built: on WebGPU, once the browser compiled
     /// it, which it does in the background once the page asks it to.
     pub(crate) fn built(&self) -> Option<&wgpu::RenderPipeline> {

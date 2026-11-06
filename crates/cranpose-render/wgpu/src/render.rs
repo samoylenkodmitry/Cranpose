@@ -1442,6 +1442,39 @@ impl GpuRenderer {
         });
     }
 
+    /// Builds, ahead of every other pipeline, what draws take while their
+    /// own compile (see [`crate::instant_triangles`]), and a future that
+    /// resolves once the browser compiled both; `None` when they draw
+    /// already.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn build_stand_ins(&mut self) -> Option<impl Future<Output = ()> + 'static> {
+        let pipelines = &self.pipelines;
+        let (device, format, depth) = (&pipelines.device, pipelines.composition_format, PassDepth::Off);
+        let mesh = &pipelines.mesh_pipelines[depth.index()];
+        mesh.build_ahead(
+            &pipelines.recorder,
+            pipelines.adapter_backend,
+            crate::mesh_fallback::mesh_pipeline_job(device, pipelines.pipeline_cache.clone(), format, depth),
+        );
+        let instant = pipelines.instant.pipeline(depth);
+        instant.build_ahead(
+            &pipelines.recorder,
+            pipelines.adapter_backend,
+            pipelines
+                .instant
+                .job(device, pipelines.pipeline_cache.clone(), format, depth),
+        );
+        let compiling: Vec<_> = [mesh, instant]
+            .into_iter()
+            .filter_map(|pipeline| pipeline.created().and_then(wgpu::RenderPipeline::compiled))
+            .collect();
+        (!compiling.is_empty()).then(|| async move {
+            for compiled in compiling {
+                compiled.await;
+            }
+        })
+    }
+
     /// Builds here, ahead of the first frame, the pipelines named by the
     /// first screens in `records` that this renderer's backend drew (see
     /// [`crate::WgpuRenderer::build_first_screen_pipelines`]).

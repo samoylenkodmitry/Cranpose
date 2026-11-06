@@ -840,6 +840,7 @@ impl CanvasPresenter {
                     }
                     _ => request_redraw(),
                 });
+            discovery.wake_with(Rc::clone(&draw_now));
             Self {
                 surface,
                 config,

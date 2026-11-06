@@ -66,6 +66,9 @@ pub(crate) struct GpuTarget {
 enum Stage {
     /// No frame drew yet.
     Cold,
+    /// The browser compiles what draws take while their own pipelines
+    /// compile: no frame draws until it has, so none leaves a draw out.
+    AwaitingStandIns,
     /// The first frame is drawing to learn its pipelines.
     Discovering,
     /// The browser compiles the pipelines the first frame created.
@@ -91,6 +94,8 @@ pub(crate) struct PipelineDiscovery {
     /// Whether pipelines compiled in the background landed since the last
     /// frame, which drew without them.
     landed: Rc<std::cell::Cell<bool>>,
+    /// What draws a frame at once, once the stand-ins compiled.
+    wake: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
 }
 
 impl PipelineDiscovery {
@@ -102,6 +107,7 @@ impl PipelineDiscovery {
             stage: Rc::new(RefCell::new(Stage::Cold)),
             recording: std::cell::Cell::new(recording),
             landed: Rc::default(),
+            wake: Rc::default(),
         }
     }
 
@@ -114,6 +120,31 @@ impl PipelineDiscovery {
                 FIRST_SCREEN_PIPELINES,
                 self.target.borrow().surface_size,
             );
+        } else if self.target.borrow().device.compile_pipelines_in_background() {
+            // The stand-ins compile first, then the recorded first screen's
+            // pipelines: the first frame draws once the stand-ins compiled,
+            // and each draw takes its own pipeline from the frame after it
+            // landed.
+            renderer.compile_pipelines_in_background();
+            let stand_ins = renderer.build_stand_ins();
+            renderer.build_first_screen_pipelines(
+                FIRST_SCREEN_PIPELINES,
+                self.target.borrow().surface_size,
+            );
+            let Some(compiling) = stand_ins else {
+                *self.stage.borrow_mut() = Stage::Done;
+                return;
+            };
+            *self.stage.borrow_mut() = Stage::AwaitingStandIns;
+            let (stage, wake) = (Rc::clone(&self.stage), Rc::clone(&self.wake));
+            wasm_bindgen_futures::spawn_local(async move {
+                compiling.await;
+                *stage.borrow_mut() = Stage::Done;
+                let wake = wake.borrow().clone();
+                if let Some(wake) = wake {
+                    wake();
+                }
+            });
         } else if !FIRST_SCREEN_PIPELINES.is_empty()
             && self.target.borrow().device.begin_pipeline_discovery()
         {
@@ -155,7 +186,16 @@ impl PipelineDiscovery {
     }
 
     pub(crate) fn may_draw(&self) -> bool {
-        !matches!(*self.stage.borrow(), Stage::Compiling)
+        !matches!(
+            *self.stage.borrow(),
+            Stage::Compiling | Stage::AwaitingStandIns
+        )
+    }
+
+    /// Hands discovery what draws a frame at once, which it calls once the
+    /// stand-ins compiled.
+    pub(crate) fn wake_with(&self, draw_now: Rc<dyn Fn()>) {
+        *self.wake.borrow_mut() = Some(draw_now);
     }
 
     /// Prepares the frame about to draw with `renderer`: the first frame on
@@ -182,7 +222,7 @@ impl PipelineDiscovery {
                 Stage::Done
             }
             Stage::Redrawing { .. } | Stage::Done => Stage::Done,
-            current @ (Stage::Discovering | Stage::Compiling) => current,
+            current @ (Stage::Discovering | Stage::Compiling | Stage::AwaitingStandIns) => current,
         };
         if matches!(*stage, Stage::Discovering | Stage::Redrawing { .. }) {
             renderer.begin_discovery_frame();
@@ -254,7 +294,7 @@ impl PipelineDiscovery {
                     });
                 }
             }
-            Stage::Cold | Stage::Compiling | Stage::Landed(_) => {}
+            Stage::Cold | Stage::AwaitingStandIns | Stage::Compiling | Stage::Landed(_) => {}
         }
     }
 }

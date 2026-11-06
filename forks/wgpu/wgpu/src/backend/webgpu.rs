@@ -1452,6 +1452,9 @@ pub struct WebRenderPipeline {
     /// Empty for a pipeline created during pipeline discovery, which never
     /// draws, and for one compiling in the background until it compiled.
     pub(crate) inner: Rc<OnceCell<webgpu_sys::GpuRenderPipeline>>,
+    /// The promise that settles once the pipeline compiled in the background
+    /// or failed; `None` for one that drew from its creation or never draws.
+    pub(crate) compiling: Option<Promise>,
     /// Whether a pass left out a draw while the pipeline compiled in the
     /// background.
     left_out: Rc<Cell<bool>>,
@@ -2539,6 +2542,7 @@ impl dispatch::DeviceInterface for WebDevice {
         // compiled.
         let render_pipeline = Rc::new(OnceCell::new());
         let left_out = Rc::new(Cell::new(false));
+        let mut background = None;
         if let Some(pending) = self.pipeline_discovery.borrow().as_ref() {
             pending.push(&self.inner.create_render_pipeline_async(&mapped_desc));
         } else if let Some(pending) = self.background_pipelines.borrow_mut().as_mut() {
@@ -2548,14 +2552,16 @@ impl dispatch::DeviceInterface for WebDevice {
             let settling = Rc::clone(&settled);
             let compiles = Rc::clone(&self.background_compiles);
             compiles.set(compiles.get() + 1);
+            let promise = wasm_bindgen_futures::future_to_promise(async move {
+                let pipeline = wasm_bindgen_futures::JsFuture::from(compiling).await;
+                settling.set(true);
+                compiles.set(compiles.get() - 1);
+                let _ = compiled.set(pipeline?.unchecked_into());
+                Ok(JsValue::UNDEFINED)
+            });
+            background = Some(promise.clone());
             pending.push(BackgroundPipeline {
-                compiling: wasm_bindgen_futures::future_to_promise(async move {
-                    let pipeline = wasm_bindgen_futures::JsFuture::from(compiling).await;
-                    settling.set(true);
-                    compiles.set(compiles.get() - 1);
-                    let _ = compiled.set(pipeline?.unchecked_into());
-                    Ok(JsValue::UNDEFINED)
-                }),
+                compiling: promise,
                 settled,
                 left_out: Rc::clone(&left_out),
             });
@@ -2565,6 +2571,7 @@ impl dispatch::DeviceInterface for WebDevice {
 
         WebRenderPipeline {
             inner: render_pipeline,
+            compiling: background,
             left_out,
             ident: crate::cmp::Identifier::create(),
         }

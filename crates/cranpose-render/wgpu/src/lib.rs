@@ -962,6 +962,18 @@ impl WgpuRenderer {
             .and_then(|renderer| renderer.pipelines.first_screen_pipelines())
     }
 
+    /// Builds, ahead of every other pipeline, what draws take while their
+    /// own pipelines compile, and a future that resolves once the browser
+    /// compiled them; `None` when they draw already. A frame drawn before it
+    /// resolves leaves out what they would draw.
+    #[cfg(target_arch = "wasm32")]
+    pub fn build_stand_ins(&mut self) -> Option<impl Future<Output = ()> + 'static> {
+        match &mut self.backend {
+            PresentBackend::Sync(sync) => sync.renderer.build_stand_ins(),
+            _ => None,
+        }
+    }
+
     /// Builds now the pipelines one set in `records` names: sets
     /// [`Self::first_screen_pipelines`] wrote, one after another, each at the
     /// size its first frame drew. A web page calls this as its renderer

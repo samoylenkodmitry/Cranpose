@@ -41,6 +41,23 @@ impl RenderPipeline {
         true
     }
 
+    /// A future that resolves once the browser compiled this pipeline, or
+    /// failed to, when it compiles in the background
+    /// ([`Device::compile_pipelines_in_background`]); `None` for one that
+    /// draws already, one pipeline discovery created, and on every other
+    /// backend.
+    #[cfg(webgpu)]
+    pub fn compiled(&self) -> Option<impl core::future::Future<Output = ()> + 'static> {
+        let pipeline = self.inner.as_webgpu_opt()?;
+        if pipeline.inner.get().is_some() {
+            return None;
+        }
+        let compiling = pipeline.compiling.clone()?;
+        Some(async move {
+            let _ = wasm_bindgen_futures::JsFuture::from(compiling).await;
+        })
+    }
+
     #[cfg(custom)]
     /// Returns custom implementation of RenderPipeline (if custom backend and is internally T)
     pub fn as_custom<T: custom::RenderPipelineInterface>(&self) -> Option<&T> {
