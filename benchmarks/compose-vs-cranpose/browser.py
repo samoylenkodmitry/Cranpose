@@ -158,6 +158,16 @@ class BrowserServer:
         """A place in what was heard, for `wait_for` to count from."""
         return len(self.heard)
 
+    def check_device(self, since=0):
+        """Raises when a page logged a `[gpu-device]` error since `since`.
+        Cranpose logs one when it loses its GPU device or its WebGL context,
+        or when a wgpu call fails: the run measured a page without its
+        device. The script posts no other line that holds the tag."""
+        with self.condition:
+            lost = next((line for _, line in self.heard[since:] if '[gpu-device]' in line), None)
+        if lost:
+            raise RuntimeError(f'the page lost its GPU device: {lost[:300]}')
+
     def wait_for(self, text, timeout, since=0):
         """Waits until a page has reported a line holding `text`; the page's
         own error, if it reports one first, ends the wait."""

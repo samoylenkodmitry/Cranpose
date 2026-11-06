@@ -311,6 +311,13 @@ def app_log(device, app):
     return device.adb('logcat', '-d', '-s', 'PerfCompare:I', *APPS[app].get('log_tags', []))
 
 
+def focused_window(device):
+    """The package of the window with the input focus, or the window's own
+    name when no package owns it; None when no window has the focus."""
+    match = re.search(r'mCurrentFocus=Window\{\S+ u\d+ ([^/}]+)', device.shell('dumpsys', 'window'))
+    return match.group(1) if match else None
+
+
 def layer_names(device):
     """SurfaceFlinger's layers by name. Newer Android lists each layer as
     `RequestedLayerState{name ...}`."""
@@ -759,9 +766,11 @@ class PageTarget:
         # The page downloads, compiles and draws inside the run.
         return start_times(out, started), self.pids(device)
 
-    def drew(self):
-        """Whether the page logged its first frame since its launch."""
-        return self.server.wait_for('PERF first_frame', 0, self.mark)
+    def check_page(self):
+        """Raises when the page logged no first frame since its launch, or a
+        GPU device error."""
+        self.server.wait_for('PERF first_frame', 0, self.mark)
+        self.server.check_device(self.mark)
 
     def pids(self, device):
         """Chrome's processes, the browser's own first; the zygote that
@@ -794,7 +803,8 @@ class PageTarget:
         return total
 
     def log(self, device):
-        return '\n'.join(line for _, line in self.server.heard)
+        """What the page said since its launch."""
+        return '\n'.join(line for _, line in self.server.heard[self.mark:])
 
     def reset(self, device):
         """Leaves Chrome as its install did, for the page's first visit."""
@@ -833,8 +843,11 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     whole_cpu, whole_threads = parse_snap(lines[whole_index + 1:])
     if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
         raise RuntimeError(f'{target.package} exited or restarted during the run')
+    focused = focused_window(device)
+    if focused != target.package:
+        raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
     if isinstance(target, PageTarget):
-        target.drew()
+        target.check_page()
     elapsed = t1 - launched
     frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock

@@ -1,7 +1,8 @@
 """Chrome on a phone against a stand-in `adb`: `reset_chrome` passes the
 screens of Chrome's first run that newer Chrome shows (the choice of a
-search engine, then the question about notifications), and a page's
-surface is found under the name newer Android gives it."""
+search engine, then the question about notifications), a page's surface is
+found under the name newer Android gives it, and the window with the focus
+at a run's end is read as each device prints it."""
 
 import os
 import stat
@@ -29,6 +30,7 @@ case "$*" in
     listing=$(cat "$ADB_CALLS.listing" 2>/dev/null || echo 0)
     echo $((listing + 1)) > "$ADB_CALLS.listing"
     cat "$LAYERS/$listing.txt" 2>/dev/null || cat "$LAYERS/last.txt" ;;
+  *" dumpsys window"*) cat "$LAYERS/window.txt" ;;
 esac
 """
 
@@ -103,6 +105,20 @@ class ChromeFirstRunTest(unittest.TestCase):
         layers = {'last': 'com.android.chrome/ChromeChildSurface#0\n'}
         layer, _ = self.run_with([], layers, measure.PageTarget(None, 'cranpose', 8).layer)
         self.assertEqual(layer, 'com.android.chrome/ChromeChildSurface#0')
+
+    def test_the_focused_window_is_read_as_each_device_prints_it(self):
+        # As the Mate (Android 10) and the Galaxy Tab S7+ (Android 13) print it.
+        forms = {
+            'mCurrentFocus=Window{819eb59 u0 com.android.chrome/com.google.android.apps.chrome.Main}':
+                'com.android.chrome',
+            'mCurrentFocus=Window{702bd44 u0 com.sec.android.app.desktoplauncher/com.android.launcher3.Launcher}':
+                'com.sec.android.app.desktoplauncher',
+            'mCurrentFocus=Window{1f2e3d u0 NotificationShade}': 'NotificationShade',
+            'mCurrentFocus=null': None,
+        }
+        for line, focused in forms.items():
+            found, _ = self.run_with([], {'window': f'  mFocusedDisplay=0\n  {line}\n'}, measure.focused_window)
+            self.assertEqual(found, focused, line)
 
 
 if __name__ == '__main__':
